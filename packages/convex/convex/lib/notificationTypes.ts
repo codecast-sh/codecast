@@ -73,6 +73,9 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("cause_reopened"),
   // A task assigned to the recipient is unblocked and no session owns it.
   v.literal("task_unblocked"),
+  // The mirror: a wait on a task assigned to the recipient can no longer
+  // clear, so the task needs a new plan and no session owns it.
+  v.literal("task_blocked"),
   // Someone outside a decision's people answered it for them.
   v.literal("decision_answered_for_you"),
   // Finding a team by work email: a request to its admins, then the approval.

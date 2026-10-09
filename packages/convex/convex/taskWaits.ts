@@ -46,11 +46,13 @@ import {
   failedWaitAdvice,
   isWaitId,
   newWaitId,
+  noWaitOnLine,
   parseBlockerRef,
   prRef,
   isPrWaitTarget,
   prWords,
   sameWaitTarget,
+  STORED_WAIT_WORDS,
   waitClause,
   waitFailedCause,
   waitFailedWord,
@@ -59,7 +61,9 @@ import {
   waitLine,
   waitMetCause,
   waitMetNote,
+  waitTimeRef,
   type PrWaitTarget,
+  type TimeWaitTarget,
   type StatusOf,
   type TaskWait,
   type WaitLabelOptions,
@@ -74,15 +78,28 @@ type PR = Doc<"pull_requests">;
 /** Who signs what codecast writes on a task on its own: the waits' and the
  *  graph's comments and notices. */
 export const SENDER = "codecast";
-/** Stored text about a wait is read later, in other zones (TG11). */
-const STORED = { absolute: true } as const;
+/** Stored text about a wait is read later, in other zones (TG11). The words
+ *  are the shared ones, so this and the claim's skip reason (taskFrontier)
+ *  cannot drift from the client twin agents read them beside. */
+const STORED = STORED_WAIT_WORDS;
+
+/** The repositories of a task's work, read at most once however many callers
+ *  in one mutation ask for them: taskRepositories walks the directory mappings
+ *  and up to twenty of the task's sessions, and one addWait asks twice (a bare
+ *  `#42` resolving its repository, then the words its history is stored in). */
+type TaskRepos = () => Promise<string[]>;
+
+function taskReposOnce(ctx: Ctx, task: Task): TaskRepos {
+  let read: Promise<string[]> | undefined;
+  return () => (read ??= taskRepositories(ctx, task));
+}
 
 /** STORED for `task`'s own text. It is also read away from any checkout, so a
  *  PR outside the task's one repository (taskRepositories) is named in full. */
-async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? []): Promise<WaitLabelOptions> {
+async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? [], repos = taskReposOnce(ctx, task)): Promise<WaitLabelOptions> {
   if (!waits.some(isPrWaitTarget)) return STORED;
-  const repos = await taskRepositories(ctx, task);
-  return { ...STORED, ...prWords(repos.length === 1 ? repos[0] : null) };
+  const named = await repos();
+  return { ...STORED, ...prWords(named.length === 1 ? named[0] : null) };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,19 +114,31 @@ async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits 
  * written and the words its waits are stored in (storedWords), for the
  * caller's own text about them.
  */
-export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: TaskChangeBy, now = Date.now()): Promise<{ task: Task; words: WaitLabelOptions }> {
+export async function writeWaits(
+  ctx: Ctx,
+  task: Task,
+  next: TaskWait[],
+  by: TaskChangeBy,
+  now = Date.now(),
+  repos = taskReposOnce(ctx, task),
+): Promise<{ task: Task; words: WaitLabelOptions }> {
   const prev = task.waits ?? [];
   const waiting_since = next.some((w) => w.state === "waiting") ? (task.waiting_since ?? now) : undefined;
   await patchTask(ctx, task, { waits: next, waiting_since, updated_at: now });
 
   const before = new Map(prev.map((w) => [w.id, w]));
   const kept = new Set(next.map((w) => w.id));
-  const words = await storedWords(ctx, task, [...prev, ...next]);
-  // Both sides of a line are rendered in today's words, so a wait left as it
-  // was renders the same twice and recordTaskChange writes nothing for it.
+  const gone = prev.filter((w) => !kept.has(w.id));
+  const moved = next.filter((w) => before.get(w.id) !== w);
+  // The words are what a wait's history line is stored in, so they are read
+  // only when a line can move; a write that left every wait as it was reads
+  // the task's repositories for nothing. Both sides of a line are rendered in
+  // today's words, so a wait rebuilt unchanged renders the same twice and
+  // recordTaskChange writes nothing for it.
+  const words = gone.length || moved.length ? await storedWords(ctx, task, [...prev, ...next], repos) : STORED;
   const changes: TaskFieldChange[] = [
-    ...prev.filter((w) => !kept.has(w.id)).map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
-    ...next.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
+    ...gone.map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
+    ...moved.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
   ];
   await recordTaskChange(ctx, task._id, by, changes, now);
 
@@ -124,8 +153,10 @@ export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: Tas
   return { task: { ...task, waits: next, waiting_since, updated_at: now }, words };
 }
 
-/** Add `taskId` to a wait target's back reference. */
-async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
+/** Add `taskId` to a wait target's back reference. Exported for the one-off
+ *  that links the PR waits set before PR rows carried one
+ *  (migrations.linkPrWaits); every live write of it is writeWaits's. */
+export async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
   const linked = target.waiting_task_ids ?? [];
   if (linked.some((id) => String(id) === String(taskId))) return false;
   await ctx.db.patch(target._id, { waiting_task_ids: [...linked, taskId] });
@@ -200,7 +231,7 @@ function targetFromInput(raw: any): UnresolvedTarget {
 }
 
 /** The target `input` names, with a bare `#42` given its repository. */
-async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number): Promise<WaitTarget> {
+async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number, repos: TaskRepos): Promise<WaitTarget> {
   let target: UnresolvedTarget;
   if (input.target) target = targetFromInput(input.target);
   else {
@@ -215,7 +246,7 @@ async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: A
   if (target.kind === "decision" || target.kind === "time") return target;
   const repository = target.repository
     ? normalizeRepository(target.repository)
-    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository));
+    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository), repos);
   return { kind: target.kind, repository, pr_number: target.pr_number };
 }
 
@@ -250,8 +281,8 @@ async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
  * sees PR #42; still several, or none, the caller's checkout settles it when
  * it is one of them, else it fails with the candidates.
  */
-async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback?: string): Promise<string> {
-  const fromProject = await taskRepositories(ctx, task);
+async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback: string | undefined, repos: TaskRepos): Promise<string> {
+  const fromProject = await repos();
   const candidates = fromProject.length ? fromProject : fallback ? [normalizeRepository(fallback)] : [];
   if (!candidates.length) throw new Error(`#${n}: ${task.short_id} names no repository to find it in. Write owner/repo#${n}.`);
   if (candidates.length === 1) return candidates[0];
@@ -335,7 +366,8 @@ export async function addWaitCore(
 ): Promise<AddWaitResult> {
   const now = Date.now();
   const task = await writableTask(ctx, userId, shortId);
-  const target = await resolveTarget(ctx, userId, task, input, now);
+  const repos = taskReposOnce(ctx, task);
+  const target = await resolveTarget(ctx, userId, task, input, now, repos);
   const waits = task.waits ?? [];
   const id = str(input.id);
   const own = id ? waits.find((w) => w.id === id) : undefined;
@@ -361,7 +393,7 @@ export async function addWaitCore(
   const { created_by: _createdBy, ...changeBy } = by;
   const replaced = waits.filter((w) => waitIsReplaceable(w) && sameWaitTarget(w, target));
   const wasUnblocked = replaced.length && check.met ? await isTaskUnblocked(ctx, task) : true;
-  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now);
+  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now, repos);
   if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
     await onUnblocked(ctx, after, waitMetCause(wait, words), unblockBy(changeBy, `met:${wait.id}`));
   }
@@ -392,20 +424,40 @@ export async function removeWaitCore(
     // A met time wait stays as history, so its time may be past.
     const p = parseBlockerRef(ref, { timeZone: str(which.time_zone), allowPast: true });
     if (!p.ok) throw new Error(p.error);
+    // Refused where it is parsed, symmetric to resolveTarget on the way in: a
+    // task ref matches no wait, and the refusal below would then point at a
+    // list of waits that could never hold it.
+    if (p.kind === "task") throw new Error(`${p.ref} is a task: remove it as a dependency (blocked_by), not a wait`);
     byTime = p.kind === "time";
     // A bare `#42` has no repository, which sameWaitTarget matches in any.
     const { ok: _ok, ...target } = p;
-    match = (w) => target.kind !== "task" && sameWaitTarget(w, target as WaitTarget);
+    // A bare `#42`'s repository is unset, which is the match-in-any case.
+    match = (w) => sameWaitTarget(w, target as WaitTarget);
   } else throw new Error("Name the wait to remove: its id or what it waits on");
   const removed = waits.filter(match);
   // By id is the web's dispatch, whose retry finds its wait already gone.
   if (!removed.length && str(which.wait_id)) return { removed };
   if (!removed.length) {
     // A relative time ("2h") names a new moment each time it is read, so a
-    // time wait is removed by its id or the absolute time it names.
-    const times = byTime ? waits.filter((w) => w.kind === "time").map((w) => `${w.id} (${waitLabel(w, STORED)})`) : [];
-    const hint = times.length ? `. Remove a time wait by its id: ${times.join(", ")}` : "";
-    throw new Error(`${task.short_id} has no wait on ${ref ?? which.wait_id}${hint}`);
+    // time wait is removed by its id or the moment it names. The moment is
+    // offered as the ref the flag takes, pinned to UTC: a bare time is read as
+    // wall time in the caller's zone, so an agent shown the stored absolute
+    // ("Oct 9, 2026 05:02 UTC") and writing it back bare is the usual way to
+    // land here off UTC, and a hint spelling that same clock time again would
+    // name what was just refused (TG11).
+    const times = byTime
+      ? waits
+        .filter((w): w is TaskWait & TimeWaitTarget => w.kind === "time")
+        .map((w) => `${w.id} (${waitLabel(w, STORED)}; as a ref ${waitTimeRef(w.at)})`)
+      : [];
+    // The sentence is shared with the CLI's own version of this refusal
+    // (noWaitRemovedLine): both exit non-zero, so both say where to look
+    // (TG12). Only the time-wait tail is this path's own.
+    throw new Error(noWaitOnLine(
+      task.short_id,
+      `on ${ref ?? which.wait_id}`,
+      times.length ? `. Remove a time wait by its id, or by the moment in UTC: ${times.join(", ")}` : undefined,
+    ));
   }
   const wasUnblocked = await isTaskUnblocked(ctx, task);
   const { task: after, words } = await writeWaits(ctx, task, waits.filter((w) => !match(w)), by);
@@ -530,8 +582,12 @@ async function settleWaits(ctx: Ctx, task: Task, settle: (w: TaskWait) => Settle
   if (!settled.length) return task;
   const { task: after, words } = await writeWaits(ctx, task, next, bySystem, now);
   if (isTerminalTaskStatus(after.status)) return after;
+  // One event can fail several of a task's waits at once (a PR that closes
+  // without merging fails both a merge wait and a checks wait on it), and the
+  // task needs one new plan, not one per wait: the failed side is told in a
+  // single comment and a single wake, as the met side is.
   const failed = settled.filter((w) => w.state === "failed");
-  for (const w of failed) await onWaitFailed(ctx, after, w, words, by.conversationId);
+  if (failed.length) await onWaitFailed(ctx, after, failed, words, now, by.conversationId);
   if (!failed.length && (await isTaskUnblocked(ctx, after))) {
     await onUnblocked(ctx, after, settled.map((w) => waitMetCause(w, words)).join(", "), { ...by, key: `met:${settled.map((w) => w.id).join(",")}@${now}` });
   }
@@ -596,30 +652,6 @@ export const settlePr = internalMutation({
   },
 });
 
-/** One-off: link the PR waits set before PR rows carried `waiting_task_ids`,
- *  and settle each linked PR as it now stands. Idempotent; run until it
- *  reports `done`, then delete it (ct-58147 tracks both). */
-export const linkPrWaits = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  handler: async (ctx, { cursor }) => {
-    const page = await ctx.db
-      .query("tasks")
-      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
-      .paginate({ cursor: cursor ?? null, numItems: 200 });
-    let linked = 0;
-    for (const task of page.page) {
-      for (const w of task.waits ?? []) {
-        if (w.state !== "waiting" || !isPrWaitTarget(w)) continue;
-        const pr = await prByNumber(ctx, w.repository, w.pr_number);
-        if (!pr || !(await linkTask(ctx, pr, task._id))) continue;
-        linked++;
-        await ctx.scheduler.runAfter(0, internal.taskWaits.settlePr, { pr_id: pr._id });
-      }
-    }
-    return { linked, cursor: page.continueCursor, done: page.isDone };
-  },
-});
-
 /** The tasks a decision's waits sit on, through its back reference. */
 async function tasksWaitingOn(ctx: Ctx, row: Doc<"session_decisions">): Promise<Task[]> {
   const rows = await Promise.all((row.waiting_task_ids ?? []).map((id) => ctx.db.get(id)));
@@ -681,7 +713,11 @@ async function restateAnswer(
  *  proposals' card withdraw): its waits settle in a job of their own, so a
  *  failure there never rolls back the answer. */
 export async function scheduleDecisionSettle(
-  ctx: Ctx,
+  // Only the scheduler, so the decision modules, which type their ctx
+  // structurally, reach the one scheduler of a settle without `ctx as any`
+  // erasing the check on a boundary that goes on to write task rows,
+  // comments, notifications and session wakes.
+  ctx: Pick<Ctx, "scheduler">,
   row: Doc<"session_decisions">,
   by: { user_id?: Id<"users">; via?: Id<"conversations"> } = {},
 ): Promise<void> {
@@ -745,6 +781,87 @@ export const settleTimeWait = internalMutation({
     if (!task) return;
     const hit = (w: TaskWait) => w.id === args.wait_id && w.kind === "time" && w.at === args.at && w.state === "waiting";
     await settleWaits(ctx, task, (w) => (hit(w) ? { state: "met", note: waitMetNote("time") } : undefined));
+  },
+});
+
+/**
+ * What the state of a still-waiting wait's own target makes of it now. This is
+ * the settle the dedicated jobs run, reached from the target rather than from
+ * an event: `prSettle` against the PR row as it stands (the same read
+ * `settlePr` makes), the decision's current verdict (the same read
+ * `settleDecision` makes), and the clock for a time wait. A target that cannot
+ * be read lends no verdict, and a PR whose events no longer reach the task is
+ * left to `settlePr` on its next move rather than failed here, so the sweep
+ * invents no outcome of its own.
+ */
+async function overdueSettle(ctx: Ctx, task: Task, w: TaskWait, now: number): Promise<Settle | undefined> {
+  if (isPrWaitTarget(w)) {
+    const pr = await prByNumber(ctx, w.repository, w.pr_number);
+    return pr && (await prReachesTask(ctx, pr, task)) ? prSettle(pr, w) : undefined;
+  }
+  if (w.kind === "decision") {
+    const row = await decisionByShortId(ctx, w.decision);
+    const verdict = row && verdictOfRow(row);
+    if (!row || !verdict) return undefined;
+    return verdict.status === "answered"
+      ? { state: "met", note: await answeredNote(ctx, row, verdict, task) }
+      : { state: "failed", note: waitFailedWord("decision", verdict.status) };
+  }
+  return w.kind === "time" && w.at <= now ? { state: "met", note: waitMetNote("time") } : undefined;
+}
+
+/**
+ * The recovery for a wait whose settle never completed. Every kind settles
+ * from exactly one scheduled job — `settleTimeWait` at the moment addWaitCore
+ * queues, `settlePr` on a PR's state or checks move, `settleDecision` on a
+ * decision resolving — and Convex does not retry a scheduled mutation that
+ * threw. The settle commits the waits patch, the history rows, the task
+ * comment, the notification and the owner's wake in one transaction, so a
+ * throw anywhere downstream rolls the whole settle back. Nothing then looks at
+ * the wait again: a resolved decision has no later resolution to settle from,
+ * and a merged PR makes no further move for patchPullRequest to schedule on.
+ * The wait stays `waiting` for good, holding the task and every dependent of
+ * it on something no event can clear — TG2's rule is that a wait which cannot
+ * settle is a trap.
+ *
+ * So the sweep reads each still-waiting wait's own target and settles it the
+ * way its job would (`overdueSettle`). That is idempotent by construction: it
+ * sees only waits that still wait, and a target it cannot read or that has not
+ * moved yet lends no verdict, so a run where every job did fire writes
+ * nothing. `tasks.by_waiting_since` is sparse — writeWaits keeps the field set
+ * exactly while a wait is open — so a page holds tasks with open waits and
+ * nothing else.
+ */
+export const settleOverdueWaits = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { cursor }) => {
+    const now = Date.now();
+    const page = await ctx.db
+      .query("tasks")
+      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
+      .paginate({ cursor: cursor ?? null, numItems: 200 });
+    let settled = 0;
+    for (const task of page.page) {
+      // One task at a time, each from its own targets: a decision's settle
+      // walks every task in its waiting_task_ids in one transaction, so one
+      // bad row there strands all of them, and the recovery must not repeat
+      // that coupling.
+      const decided = new Map<string, Settle>();
+      for (const w of task.waits ?? []) {
+        if (w.state !== "waiting") continue;
+        const s = await overdueSettle(ctx, task, w, now);
+        if (s) decided.set(w.id, s);
+      }
+      if (!decided.size) continue;
+      // A wait id is stable within its task, so the settle lands on the waits
+      // these verdicts were read for.
+      await settleWaits(ctx, task, (w) => (w.state === "waiting" ? decided.get(w.id) : undefined));
+      settled++;
+    }
+    // The whole index in one pass, a page at a time: a cron carries no cursor
+    // from one firing to the next, so the run hands its own cursor on.
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.taskWaits.settleOverdueWaits, { cursor: page.continueCursor });
+    return { settled, done: page.isDone };
   },
 });
 
@@ -822,10 +939,19 @@ export async function tellReleased(ctx: Ctx, pending: PendingRelease[], by: Task
 }
 
 /** Nothing in blocked_by is open and every wait is met, reading blockers from
- *  the database. `override` answers for rows the caller knows better. */
+ *  the database. `override` answers for rows the caller knows better, and
+ *  speaks for a ref only when it answers something: `undefined` (not looked
+ *  up) falls through to the database, while `null` (looked up, gone) stands,
+ *  as StatusOf defines them. */
 export async function isTaskUnblocked(ctx: Ctx, task: Task, override?: StatusOf): Promise<boolean> {
   const { statusOf } = await taskLookups(ctx, task);
-  return isUnblocked(task, override ? (r) => override(r) ?? statusOf(r) : statusOf);
+  const lookup: StatusOf = override
+    ? (r) => {
+      const known = override(r);
+      return known === undefined ? statusOf(r) : known;
+    }
+    : statusOf;
+  return isUnblocked(task, lookup);
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +985,23 @@ async function wakeOwner(ctx: Ctx, task: Task, key: string, content: string, ski
  *  session's prompt, so it stays one escaped line. */
 const taskName = (task: Task) => `${task.short_id}${task.title ? ` ("${inlineForeignText(task.title).replace(/"/g, "'").slice(0, 80)}")` : ""}`;
 
+/** The person to tell when no live session could be woken: the task's
+ *  assignee, when the assignee names a user rather than an agent label
+ *  ("agent:codex") or a bot. Null when there is nobody, or when the task is
+ *  ephemeral bookkeeping, which rings nobody (TG9).
+ *
+ *  The task's own comment is not a substitute for this. A comment reaches
+ *  people through taskThreadParticipants, and taskThreadMembership admits the
+ *  assignee only on a human task or from an assignee row a human wrote, so on
+ *  an agent-filed task whose assignee an agent set the comment reaches nobody
+ *  at all. */
+async function assigneeToTell(ctx: Ctx, task: Task): Promise<Doc<"users"> | null> {
+  if (task.ephemeral || !task.assignee) return null;
+  const assignee = ctx.db.normalizeId("users", task.assignee);
+  const person = assignee ? await ctx.db.get(assignee) : null;
+  return !person || person.is_bot ? null : person;
+}
+
 /**
  * The task's last open blocker just cleared (TG2): a comment on the task, then
  * the owning session is woken to continue, or else a person it is assigned to
@@ -874,10 +1017,9 @@ export async function onUnblocked(ctx: Ctx, task: Task, cause: string, by: Unblo
     `${taskName(task)} is unblocked: ${cause}. Nothing it waits on is open any more, so continue the work.`,
     [by.conversationId, by.told],
   );
-  if (woke || task.ephemeral || !task.assignee) return;
-  const assignee = ctx.db.normalizeId("users", task.assignee);
-  const person = assignee ? await ctx.db.get(assignee) : null;
-  if (!person || person.is_bot) return;
+  if (woke) return;
+  const person = await assigneeToTell(ctx, task);
+  if (!person) return;
   await emitNotification(ctx, {
     event_type: "task_unblocked",
     actor_name: SENDER,
@@ -902,17 +1044,40 @@ export async function onBlockedAgain(ctx: Ctx, task: Task, cause: string, by: Un
   );
 }
 
-/** A wait that can no longer be met keeps blocking; the task needs a new
- *  plan, so the task says so and its owner is woken. */
-async function onWaitFailed(ctx: Ctx, task: Task, w: TaskWait, words: WaitLabelOptions, skip?: Id<"conversations">): Promise<void> {
-  // The full ref, so the comment renders the PR as a live pill.
-  const what = waitFailedCause(w, { ...words, fullRef: true });
-  await insertTaskComment(ctx, task._id, { author: SENDER, text: `Still blocked: ${what}, so this wait can no longer clear.`, comment_type: "blocker" });
-  await wakeOwner(
+/** Waits that can no longer be met keep blocking; the task needs a new plan,
+ *  so the task says so and its owner is woken. Every wait one event failed is
+ *  told at once, keyed on the set, so the owner spends one turn on it and
+ *  reads one message rather than a near-identical one per wait. */
+async function onWaitFailed(ctx: Ctx, task: Task, failed: TaskWait[], words: WaitLabelOptions, now: number, skip?: Id<"conversations">): Promise<void> {
+  // The full ref, so the comment renders each PR as a live pill.
+  const what = failed.map((w) => waitFailedCause(w, { ...words, fullRef: true })).join(", ");
+  const one = failed.length === 1;
+  await insertTaskComment(ctx, task._id, {
+    author: SENDER,
+    text: `Still blocked: ${what}, so ${one ? "this wait" : "these waits"} can no longer clear.`,
+    comment_type: "blocker",
+  });
+  const woke = await wakeOwner(
     ctx,
     task,
-    `failed:${w.id}:${w.settled_at}`,
-    `${taskName(task)} is still blocked: ${what}, so that wait can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, [w])}`,
+    `failed:${failed.map((w) => w.id).join(",")}@${now}`,
+    `${taskName(task)} is still blocked: ${what}, so ${one ? "that wait" : "those waits"} can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, failed)}`,
     [skip],
   );
+  // The failure path needs a person more than any other wake does: the wait
+  // keeps blocking, so the task is off `cast task ready` until somebody
+  // re-plans it, and no later event can clear it. The other wakes here say
+  // "hold work" about a state that still settles on its own, so they leave
+  // the task's comment to carry them rather than ring a person's phone.
+  if (woke) return;
+  const person = await assigneeToTell(ctx, task);
+  if (!person) return;
+  await emitNotification(ctx, {
+    event_type: "task_blocked",
+    actor_name: SENDER,
+    entity_type: "task",
+    entity_id: String(task._id),
+    message: `${task.short_id} is still blocked: ${what}, so ${one ? "that wait" : "those waits"} can no longer clear`,
+    recipient_ids: [person._id],
+  });
 }

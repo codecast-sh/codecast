@@ -4364,6 +4364,10 @@ export default defineSchema({
       // The last blocker of a task assigned to the recipient cleared and no
       // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
       v.literal("task_unblocked"),
+      // The other end of that path: a wait on the task can no longer clear,
+      // so it keeps blocking until somebody re-plans the task
+      // (taskWaits.onWaitFailed, task-graph.md TG2).
+      v.literal("task_blocked"),
       // Someone outside a decision's people answered or dismissed it for
       // them (sessionDecisions.noticeAnsweredForPeople).
       v.literal("decision_answered_for_you"),
