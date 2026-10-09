@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { browserHome } from "./profile.js";
+import { isRemoteDevice } from "../remote/device.js";
 import iconAsset from "./assets/cast-agent-chrome.png" with { type: "file" };
 
 declare const CODECAST_MAC_ICON_HELPER: string;
@@ -14,7 +15,10 @@ export function shouldBrandBrowser(binary: string, headless: boolean, platform =
 
 export function prepareBrowserApp(binary: string, headless: boolean): { binary: string; branded: boolean } {
   const unchanged = { binary, branded: false };
-  if (!shouldBrandBrowser(binary, headless)) return unchanged;
+  // The icon tells the agent's Chrome apart from the human's in their dock. A
+  // remote device has no human's Chrome, and the first branding copies all of
+  // Chrome.app: minutes on a cloud Mac's cold disk, past the helper's timeout.
+  if (!shouldBrandBrowser(binary, headless) || isRemoteDevice()) return unchanged;
   if (typeof CODECAST_MAC_ICON_HELPER !== "string" || !CODECAST_MAC_ICON_HELPER) return unchanged;
   const helper = Buffer.from(CODECAST_MAC_ICON_HELPER, "base64");
   const icon = fs.readFileSync(path.isAbsolute(iconAsset) ? iconAsset : fileURLToPath(new URL(iconAsset, import.meta.url)));

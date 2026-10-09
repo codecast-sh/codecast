@@ -44,6 +44,7 @@ import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
 import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
+import { keychainSigningIdentity } from "../computer/helperApp.js";
 import { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT } from "./hostScreen.js";
 export { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT };
 
@@ -368,6 +369,19 @@ export function buildLinuxCast(onProgress: (m: string) => void): { distDir: stri
   return buildHostCast(onProgress, "linux");
 }
 
+/**
+ * A Mac host's computer helper signed by the release team, so the
+ * Accessibility and Screen Recording grants the host holds for
+ * `sh.codecast.computer` cover every build put on it. An ad-hoc helper is a
+ * new app to TCC on each update and drives nothing until someone clicks
+ * through System Settings on the box again.
+ */
+function macHelperSigning(platform: "linux" | "darwin"): { CODECAST_SIGN_IDENTITY?: string } {
+  if (platform !== "darwin" || process.env.CODECAST_SIGN_IDENTITY) return {};
+  const identity = keychainSigningIdentity();
+  return identity ? { CODECAST_SIGN_IDENTITY: identity } : {};
+}
+
 export function buildHostCast(onProgress: (m: string) => void, platform: "linux" | "darwin"): { distDir: string; indexJs: string; daemonJs: string } {
   const cliRoot = cliSourceRoot();
   const entry = path.join(cliRoot, "src", "index.ts");
@@ -385,7 +399,7 @@ export function buildHostCast(onProgress: (m: string) => void, platform: "linux"
     // the daemon's utility QoS clamp and ran past its timeout under load.
     execFileSync("bun", [path.join(cliRoot, "scripts", "run-interactive.ts"), "--", "bun", "run", "build", "--outdir", distDir], {
       cwd: cliRoot,
-      env: { ...process.env, CODECAST_BUNDLE_PLATFORM: platform },
+      env: { ...process.env, CODECAST_BUNDLE_PLATFORM: platform, ...macHelperSigning(platform) },
       stdio: ["ignore", "ignore", "pipe"],
       timeout: platform === "darwin" ? 900_000 : 300_000,
     });

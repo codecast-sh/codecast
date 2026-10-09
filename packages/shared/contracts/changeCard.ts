@@ -348,10 +348,21 @@ export function isLineRun(nodes: ReadonlyArray<{ node_id: string }> | undefined)
 }
 
 /** The latest end station a line run completed and when, or null when it reached none. */
+/** A run that went on past a card nobody answered (its decide gate failed)
+ *  and still reached ship. Nothing approved it, so nothing after the card is
+ *  a ship, on any graph. */
+export function passedUnansweredCard(nodes: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null }> | undefined): boolean {
+  // An answered gate records the chosen key as its outcome ("s"); only a gate
+  // that came back with no answer records "failure".
+  const decide = nodes?.find((n) => n.node_id === CARD_GATE_NODE_ID);
+  const ship = nodes?.find((n) => n.node_id === "ship");
+  return decide?.outcome === "failure" && ship?.status === "completed";
+}
+
 export function lineRunOutcome(
   nodes: ReadonlyArray<{ node_id: string; status: string; started_at?: number; completed_at?: number }> | undefined,
 ): { kind: LineRunEnd; at: number } | null {
-  if (!nodes || !isLineRun(nodes)) return null;
+  if (!nodes || !isLineRun(nodes) || passedUnansweredCard(nodes)) return null;
   let best: { kind: LineRunEnd; at: number } | null = null;
   for (const n of nodes) {
     const kind = LINE_END_NODES[n.node_id];
@@ -559,7 +570,7 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     },
     risk: {
       class: risk,
-      reason: task.risk_reason?.trim() || (task.risk ? `Ground rated it ${risk}.` : "Not grounded yet, so it gets a careful look."),
+      reason: task.risk_reason?.trim() || (task.risk ? `An agent rated it ${risk === "review" ? "worth a human review" : `${risk} risk`}.` : "Not grounded yet, so it gets a careful look."),
     },
     recommend: input.recommend ?? ({ verdict: "", why: "" } as unknown as ChangeCard["recommend"]),
     cost: {
