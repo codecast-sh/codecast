@@ -1,4 +1,4 @@
-import { Hash, BellOff, Clock, PhoneCall } from "lucide-react";
+import { Hash, BellOff, Clock, PhoneCall, X } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import type { ChatToastTier } from "../../lib/chatTimeline";
 import "./chat.css";
@@ -41,6 +41,7 @@ export function ChatToast({
   onOpen,
   onMuteChannel,
   onSnooze,
+  onDismiss,
 }: {
   data: ChatToastData;
   onOpen: (d: ChatToastData) => void;
@@ -49,6 +50,7 @@ export function ChatToast({
    *  and never come back. */
   onMuteChannel?: (channelId: string) => void;
   onSnooze?: (minutes: number) => void;
+  onDismiss?: () => void;
 }) {
   const where = data.isDm
     ? data.inThread ? "thread · direct message" : "direct message"
@@ -98,7 +100,7 @@ export function ChatToast({
         )}
       </div>
 
-      {(onMuteChannel || onSnooze) && (
+      {(onMuteChannel || onSnooze || onDismiss) && (
         <div className="ch-toast-actions">
           {onMuteChannel && (
             <button
@@ -124,6 +126,20 @@ export function ChatToast({
               }}
             >
               <Clock className="w-3 h-3" />
+            </button>
+          )}
+          {onDismiss && (
+            <button
+              type="button"
+              className="ch-toast-action"
+              title="Close"
+              aria-label="Close"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss();
+              }}
+            >
+              <X className="w-3 h-3" />
             </button>
           )}
         </div>
