@@ -14,6 +14,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useSyncProjectTasks } from "../../hooks/useSyncTasks";
 import { isLineCard, lineRollup, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
 import { useLineProject } from "./LineProjects";
+import { useLineAdmissions } from "./map/useLineAdmission";
 
 const RUNS_FEED = { limit: 200 };
 
@@ -54,7 +55,8 @@ export function useLineFloor(project?: string | null, workspace?: string | null)
   // One project's line (LP1): the roll-up counts every line, the switcher
   // picks one.
   const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
-  const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
+  const admissions = useLineAdmissions(projects);
+  const rollup = useMemo(() => lineRollup(lineRows, projects, now, undefined, admissions), [lineRows, projects, now, admissions]);
   const line = useLineProject(rollup, projects, project);
   return { now, tasks, projects, lineRows, rollup, line };
 }

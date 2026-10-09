@@ -4,7 +4,7 @@
 // answers; open, the records behind it as numbered sentences, twenty at a
 // time. One answer per group: the rows carry no controls, and the number a
 // row shows is the one a person writes back with ("leave out #3").
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { OrgChangeStatus, OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { cn } from "../../lib/utils";
@@ -12,6 +12,7 @@ import { useOrgHover } from "./proposalContexts";
 import type { RecordGroupCard, RecordRow } from "./proposalSubjects";
 import { AnswerControls, AT, Clamp, FailNote, LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerWord, LedgerYou, Sentence, SLOT, StateWord, useAnswerField, useFocusScroll, type LedgerLayout, type SubjectAnswer } from "./ProposalSubjectCard";
 import { StagedBand, stagedWash } from "./StagedBand";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export const RECORD_PAGE = 20;
 
@@ -65,7 +66,7 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
   useFocusScroll(rootRef, focusAt >= 0);
   const [shown, setShown] = useState(RECORD_PAGE);
   // The focused record is paged in and the group opened once, when the focus lands.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (focusAt < 0) return;
     setShown((s) => Math.max(s, Math.ceil((focusAt + 1) / RECORD_PAGE) * RECORD_PAGE));
     onOpen(true);

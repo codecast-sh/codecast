@@ -5,9 +5,10 @@
 // a friend just said, and a change from the moment it is asked to the moment
 // it is live, where the asker is looking. A landing it could not show (tucked,
 // or showing something else) is announced by a toast instead.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import type { MessageView } from "../../convex/messages";
 import { clock, plural } from "../lib/format";
+import { useOffline } from "../lib/connection";
 import { useIdentity } from "../lib/identity";
 import { load, save } from "../lib/storage";
 import { useLinger } from "../lib/useLinger";
@@ -15,7 +16,8 @@ import { useMedia } from "../lib/useMedia";
 import { nameFor, reverseOf, versionLine } from "../lib/versionCopy";
 import { Blob } from "../ui/Blob";
 import { Button } from "../ui/Button";
-import { Face } from "../ui/Face";
+import { Face, type Person } from "../ui/Face";
+import { useTyping } from "../data/presence";
 import { FaceStack } from "../ui/FaceStack";
 import { BuildLine } from "../ui/BuildLine";
 import { ChatIcon, CheckIcon, TimelineIcon } from "../ui/icons";
@@ -24,7 +26,7 @@ import { Spinner } from "../ui/Spinner";
 import { useTip } from "../ui/Tip";
 import { LiveToastText, useToast } from "../ui/Toast";
 import { useAppState, useComposer, useHereState, useStream } from "./appState";
-import { ReverseButton, TryIt, useReverse, useSummary } from "./BuildCard";
+import { ReverseButton, TryIt, useReverse, useSummary } from "./versionActions";
 import { changePhase, useBusy, useBuildTicker, type ChangePhase } from "./buildTicker";
 import s from "./Capsule.module.css";
 
@@ -37,8 +39,10 @@ const TUCK_PAST = 40;
 
 /** `onTimeline` is desktop's: on a phone the timeline lives in the room.
  *  `lift`: a dock along the bottom edge the capsule must sit above. */
-export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot: boolean; onTimeline?: () => void; lift?: number; focusRef?: RefObject<HTMLButtonElement | null> }) {
-  const { setRoomOpen, setReveal, cheer } = useAppState();
+export const Capsule = memo(function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot: boolean; onTimeline?: () => void; lift?: number; focusRef?: RefObject<HTMLButtonElement | null> }) {
+  const { setRoomOpen, setReveal, cheer, prepare } = useAppState();
+  // Reaching for the room or the timeline starts loading it.
+  const reach = (part: "room" | "timeline") => ({ onPointerEnter: () => prepare(part), onFocus: () => prepare(part) });
   const here = useHereState();
   const stream = useStream();
   const composer = useComposer();
@@ -52,6 +56,10 @@ export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot
   const [snapFrom, setSnapFrom] = useState<{ dx: number; dy: number } | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const timelineTip = useTip(<>Timeline <Keys keys={["T"]} /></>, place.corner[0] === "t" ? "below" : "above");
+  // Offline, nobody knows who is here: the count gives way to a muted dot.
+  const offline = useOffline();
+  const offlineTip = useTip("Reconnecting. Messages send once it's back.", place.corner[0] === "t" ? "below" : "above");
+  const hereLabel = offline ? "Reconnecting" : `${plural(here.people.length, "person", "people")} here`;
 
   const commit = (p: Placement) => {
     setPlace(p);
@@ -122,10 +130,10 @@ export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot
         className={`${s.tab} ${s[side]}`}
         style={{ top: Math.min(y, innerHeight - 100) }}
         onClick={() => commit({ corner: `${y < innerHeight / 2 ? "t" : "b"}${side === "left" ? "l" : "r"}` as Corner, tucked: null })}
-        aria-label={`${plural(here.people.length, "person", "people")} here${heard.unread ? `, ${plural(heard.unread, "new message")}` : ""}. Show the capsule`}
+        aria-label={`${hereLabel}${heard.unread ? `, ${plural(heard.unread, "new message")}` : ""}. Show the capsule`}
       >
         {people[0] && <Face person={people[0]} size={24} />}
-        <span className={s.count}>{here.people.length}</span>
+        {offline ? <i className={s.offlineDot} aria-hidden /> : <span className={s.count}>{here.people.length}</span>}
         {heard.unread > 0 && <span className={s.badge} aria-hidden>{heard.unread}</span>}
         {building && <Spinner />}
       </button>
@@ -158,17 +166,24 @@ export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot
       <button
         className={s.people}
         onClick={openRoom}
-        aria-label={`${plural(here.people.length, "person", "people")} here${heard.unread ? `, ${plural(heard.unread, "new message")}` : ""}${errorDot && !onTimeline ? ". The app hit an error" : ""}. Open the room`}
+        {...reach("room")}
+        aria-label={`${hereLabel}${heard.unread ? `, ${plural(heard.unread, "new message")}` : ""}${errorDot && !onTimeline ? ". The app hit an error" : ""}. Open the room`}
+        {...(offline ? offlineTip.describedBy : {})}
       >
-        <FaceStack people={people} max={narrow ? 3 : 4} size={24} typing={here.typing} hop={cheer} />
-        <span className={s.here}>{here.people.length} here</span>
+        <HereFaces people={people} max={narrow ? 3 : 4} hop={cheer} />
+        {offline ? (
+          <span className={s.offline}><i className={s.offlineDot} aria-hidden />Offline</span>
+        ) : (
+          <span className={s.here}>{here.people.length} here</span>
+        )}
+        {offline && offlineTip.tip}
         {heard.unread > 0 && <span className={s.badge} aria-hidden>{heard.unread}</span>}
         {errorDot && !onTimeline && <ErrorDot />}
       </button>
       {onTimeline && (
         <>
           <i className={s.divider} />
-          <button className={s.tool} onClick={onTimeline} aria-label={errorDot ? "Timeline. The app hit an error" : "Timeline"} aria-keyshortcuts="T" {...timelineTip.describedBy}>
+          <button className={s.tool} onClick={onTimeline} {...reach("timeline")} aria-label={errorDot ? "Timeline. The app hit an error" : "Timeline"} aria-keyshortcuts="T" {...timelineTip.describedBy}>
             <TimelineIcon />
             {errorDot && <ErrorDot />}
             {timelineTip.tip}
@@ -179,6 +194,7 @@ export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot
         ref={focusRef}
         className={`${s.change} on-dark`}
         aria-keyshortcuts="/"
+        {...reach("room")}
         onClick={() => {
           composer.setMode("change");
           composer.focus();
@@ -213,7 +229,7 @@ export function Capsule({ errorDot, onTimeline, lift = 0, focusRef }: { errorDot
       )}
     </div>
   );
-}
+});
 
 const SAID_MS = 5000;
 const LIVE_MS = 5000;
@@ -373,6 +389,13 @@ function useLandingToast(presented: number | null) {
       },
     }), TOAST_AFTER_MS);
   }, [cheer, versionByNumber, toast, restore, setRoomOpen, setReveal]);
+}
+
+/** The faces in the capsule, dotted while they type: the one part that
+ *  ticks with the typing clock. */
+function HereFaces({ people, max, hop }: { people: Person[]; max: number; hop: number }) {
+  const { app } = useAppState();
+  return <FaceStack people={people} max={max} size={24} typing={useTyping(app.id)} hop={hop} />;
 }
 
 function ErrorDot() {

@@ -109,6 +109,8 @@ describe("parseDuration", () => {
     expect(parseDuration("2hours")).toBe(2 * 3_600_000);
     expect(parseDuration("1 day")).toBe(86_400_000);
     expect(parseDuration("90sec")).toBe(90_000);
+    expect(parseDuration("1w")).toBe(7 * 86_400_000);
+    expect(parseDuration("2 weeks")).toBe(14 * 86_400_000);
   });
 
   test("refuses what is not a duration, naming the input", () => {
