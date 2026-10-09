@@ -1480,6 +1480,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       sort_order: fields.sort_order,
       duplicate_of: fields.duplicate_of,
       from_call: fields.from_call,
+      // The provenance link the create guessed, repointed from the task page
+      // (TG5); "" clears it.
+      found_during: fields.found_during,
       model: fields.model,
       effort: fields.effort,
       ephemeral: fields.ephemeral,
@@ -1493,17 +1496,27 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Task blockers (task-graph.md TG4, TG12): the task page's add-blocker
   // palette and the Blocked by row's remove, through the same core as
   // `cast task dep`. The store patches both rows' mirrors on the draft.
+  //
+  // Every removal here tolerates an edge or link already gone (`missing:
+  // "ignore"`), because a dispatch side effect is replayed: the durable outbox
+  // re-drives an entry whose ack never arrived (a tab closed mid-flight), and
+  // a removal that DID commit would otherwise fail on every boot — counting
+  // against the give-up cap, rolling the draft back so the removed line
+  // reappears, and showing the person "no such dependency" for a write that
+  // succeeded. The adds are idempotent already, as are addWait, createTask and
+  // removeWait by id (taskWaits.removeWaitCore).
   addBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
     addDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
   removeBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
-    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
+    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }, undefined, { missing: "ignore" }),
   removeBlocks: async (ctx, userId, [shortId, dependent]: [string, string]) =>
-    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocks: String(dependent) }),
+    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocks: String(dependent) }, undefined, { missing: "ignore" }),
 
   // Task links that do not block (task-graph.md TG5). The store's relateTasks
   // and unrelateTasks patch both rows' related on the draft.
   relateTasks: async (ctx, userId, [shortId, other]: [string, string]) => relateCore(ctx as any, userId, shortId, other, "add"),
-  unrelateTasks: async (ctx, userId, [shortId, other]: [string, string]) => relateCore(ctx as any, userId, shortId, other, "remove"),
+  unrelateTasks: async (ctx, userId, [shortId, other]: [string, string]) =>
+    relateCore(ctx as any, userId, shortId, other, "remove", undefined, { missing: "ignore" }),
 
   // Delegate to tasks.webCreate so every workspace rule lives in one place:
   // team_id membership enforcement (createDataContext.resolveWorkspace),

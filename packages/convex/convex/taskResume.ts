@@ -58,6 +58,9 @@ export const context = query({
     // caller may read lends its title. Status always ships, as readiness does.
     const { statusOf } = await taskLookups(ctx, task);
     const blockers: TaskResumeContext["blockers"] = [];
+    // A closed task holds nothing, which blockersHoldingBack itself decides
+    // (TG1), so a session still bound to a task somebody else closed is never
+    // told to park on a blocker nothing can settle.
     for (const b of blockersHoldingBack(task, statusOf)) {
       const row = b.kind === "task" ? statusOf(b.ref) : null;
       const found = row && typeof row === "object" ? (row as Doc<"tasks">) : null;

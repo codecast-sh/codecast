@@ -7,7 +7,8 @@
 
 import { escapeForeignControlChars, fenceForeignText, fenceNonce, inlineForeignText, FOREIGN_TEXT_TRUNCATION_MARKER } from "../contracts/fence";
 import { formatRelative } from "../time";
-import { blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, taskBlockerLine, taskRefLine, type Blocker, type WaitLabelOptions } from "./graph";
+import { AGENT_WAIT_WORDS, blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, taskBlockerLine, taskRefLine, type Blocker, type WaitLabelOptions } from "./graph";
+import { isTaskBeingWorked } from "./statuses";
 
 /** The SessionStart sources that lose the conversation the task lived in. */
 const TASK_RESUME_SOURCES = ["compact", "resume"] as const;
@@ -88,21 +89,34 @@ const holds = (c: TaskResumeContext) => !!c.held || (c.held === undefined && !c.
 
 /** Work on the task has started: a session may take a blocked task and get
  *  far with it, so its blockers no longer order it to stop. */
-const underway = (c: TaskResumeContext) => c.task.status === "in_progress" || c.task.status === "in_review";
+const underway = (c: TaskResumeContext) => isTaskBeingWorked(c.task.status);
 
 /** What a session holding a blocked task does with it, from what holds it
  *  (after compaction, and after `cast task start`). A failed wait never
  *  clears, and an open task blocker nobody works may not either, so parking
- *  on either could wait forever. `underway` makes parking the session's call. */
-export function parkingLine(blockers: readonly Blocker[], id: string, opts: { underway?: boolean } = {}): string {
+ *  on either could wait forever. `underway` makes parking the session's call.
+ *  The rest of `opts` names the blockers the way the surrounding output does
+ *  (`checkoutWords`): the agent is told to copy the `cast state` line
+ *  verbatim, so a bare "#42" in it would read as this checkout's PR. A time
+ *  wait inside the pin is absolute, in UTC, whatever the caller asked for
+ *  (AGENT_WAIT_WORDS, TG11): the pin is stored and read later, by other
+ *  sessions in other zones and after the day has turned, where a bare "until
+ *  12:53" names no moment and a local "12:53 GMT+5:30" names it in a zone no
+ *  other surface writes. The lines
+ *  around it keep the reader's clock, which is right for words read once. */
+export function parkingLine(blockers: readonly Blocker[], id: string, opts: WaitLabelOptions & { underway?: boolean } = {}): string {
   const failed = blockers.filter(isFailedWait);
   if (failed.length) return `A failed wait will never clear: ${failedWaitAdvice(id, failed)}`;
-  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0])}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
-  const until = opts.underway ? "If the work cannot go on until it clears," : "Until it clears,";
+  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0], { ...opts, ...AGENT_WAIT_WORDS })}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
+  // The pin lists one blocker and counts the rest, so the sentence around it
+  // has to agree in number with the list above it: a session told "until it
+  // clears" while two blockers hold the task reads as waiting on one of them.
+  const clears = blockers.length > 1 ? "they clear" : "it clears";
+  const until = opts.underway ? `If the work cannot go on until ${clears},` : `Until ${clears},`;
   const park = `${until} run cast state --status dormant "${what}" and end your turn; this session is woken when the last blocker clears.`;
   const idle = blockers.flatMap((b) => (b.kind === "task" && "status" in b && b.status === "open" ? [b.ref] : []));
   if (!idle.length) return park;
-  return `${park} Nobody may be working ${idle.join(", ")}: check with cast task show ${idle[0]}, and if it is unowned, ask in the plan or do it in another session (cast spawn --subagent).`;
+  return `${park} Nobody may be working on ${idle.join(", ")} yet: check with cast task show ${idle[0]}, and if it is unowned, ask in the plan or do it in another session (cast spawn --subagent).`;
 }
 
 /** The closing line's next action: progress on a held task, else other work.
@@ -140,7 +154,7 @@ export function formatTaskResume(c: TaskResumeContext, opts: WaitLabelOptions & 
     lines.push("Blocked by:");
     for (const b of c.blockers.slice(0, MAX_BLOCKERS)) lines.push(`- ${blockerLine(b, { ...opts, now })}`);
     if (c.blockers.length > MAX_BLOCKERS) lines.push(`- and ${c.blockers.length - MAX_BLOCKERS} more`);
-    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { underway: underway(c) }));
+    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { ...opts, now, underway: underway(c) }));
   }
   if (c.subtasks?.items.length) {
     lines.push("Open subtasks:");

@@ -53,6 +53,17 @@ describe("standingSessionLine", () => {
     expect(stripAnsi(standingSessionLine(role, { state: "working", state_status: null, state_line: null }, 0))).toBe("  standing session: jx7b88a · working");
     expect(stripAnsi(standingSessionLine({ standing_short_id: null, routine: null }, null, 0))).toBe("  standing session: none · no trigger yet");
   });
+
+  test("the next check reads forward and rounds UP, so it never promises a check sooner than it runs", () => {
+    const now = Date.UTC(2026, 9, 9, 12);
+    const at = (ms: number) => ({ standing_short_id: "jx7b88a", routine: { short_id: "tr-1151", status: "scheduled", run_at: now + ms } });
+    const line = (ms: number) => stripAnsi(standingSessionLine(at(ms), null, now));
+    expect(line(7_140_000)).toContain("next check in 2h (tr-1151)"); // 1h59m
+    expect(line(5_400_000)).toContain("next check in 2h (tr-1151)"); // 1h30m
+    expect(line(90_000)).toContain("next check in 2m (tr-1151)");
+    expect(line(30_000)).toContain("next check due now (tr-1151)");
+    expect(line(-60_000)).toContain("next check due now (tr-1151)");
+  });
 });
 
 // How the role's check runs (org-staffing.md S38): read off the trigger, with
