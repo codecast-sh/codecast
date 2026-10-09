@@ -11,11 +11,11 @@ import { LedgerWord, type SubjectAnswer } from "./ProposalSubjectCard";
 
 /** The band's words: the first word in the verdict's ink, the rest quiet. */
 export function stagedWords(answer: SubjectAnswer, retry = false): [string, string] {
-  if (answer.verdict === "reject") return ["Rejected.", "Sent when you send."];
-  if (answer.verdict === "note") return ["Replied.", "Sent when you send."];
-  if (retry) return ["Retry.", "Runs again when you send."];
-  if (answer.leave_sessions) return ["Approved,", "and the sessions stay where they are. Applies when you send."];
-  return ["Approved.", "Applies when you send."];
+  if (answer.verdict === "reject") return ["Rejection added to your reply.", "Goes out when you send it."];
+  if (answer.verdict === "note") return ["Note added to your reply.", "Goes out when you send it."];
+  if (retry) return ["Retry added to your reply.", "Runs again when you send it."];
+  if (answer.leave_sessions) return ["Approval added to your reply,", "leaving the sessions where they are. Nothing changes until you send it."];
+  return ["Approval added to your reply.", "Nothing changes until you send it."];
 }
 
 const WASH: Record<SubjectAnswer["verdict"], string> = {

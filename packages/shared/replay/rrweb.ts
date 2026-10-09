@@ -236,9 +236,18 @@ function networkEvent(r: any, t: number, pageUrl?: string): ReplayEvent | undefi
   const method = typeof r.method === "string" ? r.method.toUpperCase() : "GET";
   // A resource with no status that PostHog reports from the performance API is
   // not a failure: the browser hides cross-origin statuses. Only a fetch or
-  // xhr with no status is.
+  // xhr with no status may be.
   const initiator = typeof r.initiatorType === "string" ? r.initiatorType : undefined;
   if (status === 0 && initiator && initiator !== "fetch" && initiator !== "xmlhttprequest") return undefined;
+  // A browser without PerformanceResourceTiming.responseStatus (Safari) leaves
+  // the field off every entry, so a missing field says nothing. Such a fetch
+  // failed only when its detailed timings are visible (same origin, or
+  // Timing-Allow-Origin: requestStart is set) and show no response arrived;
+  // a cross-origin entry zeroes them all and cannot be judged.
+  if (statusRaw === undefined && r.entryType !== undefined) {
+    const answered = [r.responseStart, r.transferSize, r.encodedBodySize, r.decodedBodySize].some((n) => typeof n === "number" && n > 0);
+    if (answered || !(typeof r.requestStart === "number" && r.requestStart > 0)) return undefined;
+  }
   const e: ReplayEvent = { type: "network", t, method, url: cleanUrl(url, pageUrl), status, ms: Math.max(0, Math.round(msRaw)) };
   return isFailedRequest(e) || isSlowRequest(e) ? e : undefined;
 }
