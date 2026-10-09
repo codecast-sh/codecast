@@ -85,26 +85,43 @@ async function claimantOf(ctx: ReadCtx, userId: Id<"users">, conversationId: str
   return { userId: String(userId), conv, session: conv ? String(conv._id) : null };
 }
 
+/** Why a claim may not take a ready task: each reason, or null when it is no
+ *  obstacle (see `claimRefusal`). */
+type ClaimRefusal = { stale: string | null; other: string | null };
+
 /**
- * Why a claim may not take this ready task, or null when it may. A claim
- * picks the task for the caller, so it takes only what is already theirs to
- * pick up: unassigned work, or work assigned to the caller or the role its
- * session works for. A teammate's task is theirs, and a blocking decision
- * holds a task for everyone, a person included (a person moves past a hold
- * only by starting the task by name). Whose ephemeral task is whose is
+ * Why a claim may not take this ready task: `stale` when nothing has touched
+ * it in 30 days and `--stale` was not passed, `other` when it is somebody
+ * else's or a decision holds it. Both in one pass, judged against one `now`,
+ * because the caller needs each answer separately (a row only `--stale` would
+ * unlock is counted, not refused outright) and a second pass would read the
+ * holding decision and the assignee names again.
+ *
+ * A claim picks the task for the caller, so it takes only what is already
+ * theirs to pick up: unassigned work, or work assigned to the caller or the
+ * role its session works for. A teammate's task is theirs, and a blocking
+ * decision holds a task for everyone, a person included (a person moves past
+ * a hold only by starting the task by name). Whose ephemeral task is whose is
  * readiness's rule (`ownsEphemeral`), applied by both steps' readiness reads.
  */
-async function claimRefusal(ctx: ReadCtx, task: Doc<"tasks"> & { assignee_name?: string }, claimant: Claimant, stale: boolean | undefined): Promise<string | null> {
-  if (!stale && isStaleTask(task, Date.now())) return `${STALE_TASK_WORDS} (claim with --stale)`;
+async function claimRefusal(
+  ctx: ReadCtx,
+  task: Doc<"tasks"> & { assignee_name?: string },
+  claimant: Claimant,
+  o: { stale: boolean | undefined; now: number },
+): Promise<ClaimRefusal> {
+  const stale = !o.stale && isStaleTask(task, o.now) ? `${STALE_TASK_WORDS} (claim with --stale)` : null;
   const assignee: string | undefined = task.assignee || undefined;
+  let other: string | null = null;
   // Work handed to agents is any session's to take, never a person's claim.
   if (assignee?.startsWith("agent:")) {
-    if (!claimant.conv) return "assigned to an agent";
+    if (!claimant.conv) other = "assigned to an agent";
   } else if (assignee && assignee !== claimant.userId && assignee !== roleOf(claimant.conv)) {
-    return `assigned to ${task.assignee_name ?? (await assigneeNamesFor(ctx, [assignee]))[assignee] ?? assignee}`;
+    other = `assigned to ${task.assignee_name ?? (await assigneeNamesFor(ctx, [assignee]))[assignee] ?? assignee}`;
   }
+  if (other) return { stale, other };
   const hold = await holdingDecisionFor(ctx, task, "in_progress");
-  return hold ? heldError(hold).message : null;
+  return { stale, other: hold ? heldError(hold).message : null };
 }
 
 /** The frontier rows this caller may claim, in frontier order. */
@@ -121,10 +138,14 @@ export const claimCandidates = internalQuery({
     const candidates: string[] = [];
     let stale_passed = 0;
     let others_passed = 0;
+    // One clock for the whole frontier, as orderFrontier is given one: rows of
+    // one read must not be judged stale against different moments.
+    const now = Date.now();
     for (const row of frontier) {
-      if (await claimRefusal(ctx, row, claimant, stale)) {
+      const refusal = await claimRefusal(ctx, row, claimant, { stale, now });
+      if (refusal.stale || refusal.other) {
         // Stale only when `--stale` alone would have let the claim take it.
-        if (!stale && row.stale && !(await claimRefusal(ctx, row, claimant, true))) stale_passed++;
+        if (refusal.stale && !refusal.other) stale_passed++;
         else others_passed++;
         continue;
       }
@@ -148,12 +169,17 @@ export const claimNextReady = internalMutation({
     for (const row of rows) if (row && (await canAccessTask(ctx, auth.userId, row))) visible.push(row);
     const lookupsFor = await readinessLookups(ctx, visible);
     const skipped: ClaimResult["skipped"] = [];
+    const now = Date.now();
     for (const task of visible) {
       const verdict = readinessOf(task, { ...lookupsFor(task), viewer: claimant.userId, viewerSession: claimant.session, includeSubtasks: args.include_subtasks });
-      // Stored nowhere, but read away from any checkout: PRs named in full.
-      const reason = verdict.ready
-        ? await claimRefusal(ctx, task, claimant, args.stale)
-        : notReadyLabel(task, verdict, { absolute: true, fullRef: true });
+      let reason: string | null;
+      if (verdict.ready) {
+        const refusal = await claimRefusal(ctx, task, claimant, { stale: args.stale, now });
+        reason = refusal.stale ?? refusal.other;
+      } else {
+        // Stored nowhere, but read away from any checkout: PRs named in full.
+        reason = notReadyLabel(task, verdict, { absolute: true, fullRef: true });
+      }
       if (reason) {
         skipped.push({ short_id: task.short_id, reason });
         continue;

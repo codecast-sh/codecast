@@ -71,6 +71,64 @@ describe("synced task fields are written only through patchTask", () => {
   }
 });
 
+// The same risk on the graph fields, which the type system cannot hold either
+// (docs/architecture/task-graph.md TG2, TG11): `waits`/`waiting_since` have
+// one writer, `writeWaits`, and the edges and links have `writeEdges` and
+// `writeLink`. A write that sets `waits` itself skips the `waiting_since`
+// recompute, the PR's or decision's `waiting_task_ids` back reference — so the
+// wait becomes a trap that can never settle — and the history row; one that
+// sets an edge or a link skips its history. This reads the source for a write
+// that names a graph field, whether it patches the row directly or hands the
+// field to patchTask, and for a field assigned into an `updates` bag.
+//
+// It does not read `ctx.db.insert`: a create stores the edges it was given
+// with its own history row, which is not a second writer of an existing row.
+
+const GRAPH = /\b(waits|waiting_since|blocked_by|blocks|related|found_during|superseded_by)\s*:/;
+const GRAPH_BAG = /\bupdates\.(waits|waiting_since|blocked_by|blocks|related|found_during|superseded_by)\s*=/g;
+const GRAPH_FILES = ["taskWaits.ts", "taskLinks.ts", "lib/taskGraph.ts", "tasks.ts", "plans.ts"];
+
+/** The deliberate exceptions: the one writer itself, and the overwrite bag
+ *  TG11 sanctions. Calls are `function(target)`, bag writes `function.field`. */
+const GRAPH_ALLOWED: Record<string, string[]> = {
+  "taskWaits.ts": [
+    "writeWaits(ctx)",      // the one writer of waits/waiting_since: this IS the call
+  ],
+  "tasks.ts": [
+    // `tasks.update` overwrites these in the single bag it patches and builds
+    // their history itself (its `trackFields`), which the spec sanctions.
+    "update.blocked_by",
+    "update.blocks",
+    "update.found_during",
+  ],
+};
+
+describe("graph fields are written only through writeWaits/writeEdges/writeLink", () => {
+  for (const file of GRAPH_FILES) {
+    test(file, () => {
+      const src = readFileSync(join(import.meta.dir, file), "utf8").replace(/\/\/[^\n]*/g, "");
+      const allowed = GRAPH_ALLOWED[file] ?? [];
+      const offenders: string[] = [];
+      for (const m of src.matchAll(/(?:ctx\.db\.patch|patchTask)\(/g)) {
+        const text = callText(src, m.index! + m[0].length - 1);
+        if (!GRAPH.test(text)) continue;
+        const key = `${enclosingName(src, m.index!)}(${text.slice(1, text.indexOf(",")).trim()})`;
+        if (allowed.includes(key)) continue;
+        offenders.push(`${key}: ${text.replace(/\s+/g, " ").slice(0, 100)}`);
+      }
+      for (const m of src.matchAll(GRAPH_BAG)) {
+        const key = `${enclosingName(src, m.index!)}.${m[1]}`;
+        if (allowed.includes(key)) continue;
+        offenders.push(`${key}: ${m[0]}`);
+      }
+      expect(
+        offenders,
+        `raw graph-field writes in ${file}; route waits through taskWaits.writeWaits and edges/links through lib/taskGraph.writeEdges/writeLink`,
+      ).toEqual([]);
+    });
+  }
+});
+
 describe("changedExternalFields", () => {
   const task = { title: "a", status: "open", labels: ["x", "y"], priority: "high" };
   test("names only the synced fields the patch really moves", () => {

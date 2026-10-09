@@ -15,13 +15,13 @@ import {
   webList as webTaskList,
   webMentionList as webTaskMentionList,
   webPromote as webTaskPromote,
-  getReadyTasks,
   getDependencyChain,
   webCreate as webTaskCreate,
   webUpdate as webTaskUpdate,
   webGet as webTaskGet,
   update as updateTaskForCLI,
   create as createTaskForCLI,
+  list as taskListForCLI,
   addDep,
   addComment as addTaskComment,
   recalcPlanProgress,
@@ -254,21 +254,34 @@ describe("Phase 0 task boundary", () => {
     expect((testCtx.db as any)._patched).toHaveLength(0);
   });
 
-  test("ready-plan and dependency queries reject foreign roots", async () => {
+  test("the dependency chain query rejects a foreign root", async () => {
     const token = "test-token";
     const tables = baseTables({
       api_tokens: [{ _id: "token_1", user_id: STRANGER, token_hash: await hashToken(token) }],
-      plans: [{ _id: "plan_1", short_id: "pl-1", user_id: OWNER, team_id: TEAM, task_ids: ["task_1"] }],
       tasks: [{ _id: "task_1", short_id: "ct-1", user_id: OWNER, team_id: TEAM, status: "open" }],
     });
-    await expect((getReadyTasks as any)._handler(ctx(null, tables), {
-      api_token: token,
-      plan_id: "pl-1",
-    })).rejects.toThrow("Plan not found");
     await expect((getDependencyChain as any)._handler(ctx(null, tables), {
       api_token: token,
       short_id: "ct-1",
     })).rejects.toThrow("Task not found");
+  });
+
+  test("the task list refuses a plan the caller cannot read", async () => {
+    const token = "test-token";
+    const tables = baseTables({
+      api_tokens: [{ _id: "token_1", user_id: STRANGER, token_hash: await hashToken(token) }],
+      plans: [{ _id: "plan_1", short_id: "pl-1", user_id: OWNER, team_id: TEAM, task_ids: ["task_1"] }],
+      tasks: [
+        { _id: "task_1", short_id: "ct-1", user_id: OWNER, team_id: TEAM, status: "open" },
+        { _id: "task_2", short_id: "ct-2", user_id: STRANGER, status: "open" },
+      ],
+    });
+    // The plan is a named read key, so it is refused outright rather than
+    // answered with the empty intersection of a foreign task_ids list.
+    await expect((taskListForCLI as any)._handler(ctx(null, tables), {
+      api_token: token,
+      plan_id: "pl-1",
+    })).rejects.toThrow("Plan not found");
   });
 
   test("task creation and updates reject foreign project relationships", async () => {
@@ -318,8 +331,8 @@ describe("Phase 0 task boundary", () => {
     const tables = baseTables({
       api_tokens: [{ _id: "token_task_relation", user_id: MEMBER, token_hash: await hashToken(token) }],
       tasks: [
-        { _id: "task_personal", short_id: "ct-personal", user_id: MEMBER, status: "open", blocks: [] },
-        { _id: "task_team", short_id: "ct-team", user_id: OWNER, team_id: TEAM, status: "open", blocked_by: [] },
+        { _id: "task_personal", short_id: "ct-7001", user_id: MEMBER, status: "open", blocks: [] },
+        { _id: "task_team", short_id: "ct-7002", user_id: OWNER, team_id: TEAM, status: "open", blocked_by: [] },
       ],
       conversations: [{ _id: "conv_team", session_id: "team-session", user_id: OWNER, team_id: TEAM, is_private: false }],
       task_comments: [],
@@ -327,18 +340,18 @@ describe("Phase 0 task boundary", () => {
     const testCtx = ctx(null, tables);
     await expect((addDep as any)._handler(testCtx, {
       api_token: token,
-      short_id: "ct-personal",
-      blocks: "ct-team",
+      short_id: "ct-7001",
+      blocks: "ct-7002",
     })).rejects.toThrow("Forbidden");
     // create and update refuse the same edge: readiness never reads across
     // workspaces, so it would hold the personal task forever.
-    await expect((createTaskForCLI as any)._handler(testCtx, { api_token: token, title: "x", blocked_by: ["ct-team"] }))
+    await expect((createTaskForCLI as any)._handler(testCtx, { api_token: token, title: "x", blocked_by: ["ct-7002"] }))
       .rejects.toThrow("dependency task belongs to another workspace");
-    await expect((updateTaskForCLI as any)._handler(testCtx, { api_token: token, short_id: "ct-personal", blocked_by: ["ct-team"] }))
+    await expect((updateTaskForCLI as any)._handler(testCtx, { api_token: token, short_id: "ct-7001", blocked_by: ["ct-7002"] }))
       .rejects.toThrow("dependency task belongs to another workspace");
     await (addTaskComment as any)._handler(testCtx, {
       api_token: token,
-      short_id: "ct-personal",
+      short_id: "ct-7001",
       text: "report from another workspace",
       conversation_id: "team-session",
     });
