@@ -67,7 +67,7 @@ import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { roleRoutineFor } from "./lib/orgRoutine";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
-import { handTask, recalcPlanProgress, resolveStatusWrite } from "./tasks";
+import { handTask, recalcPlanProgress, releaseBoundSessions, resolveStatusWrite } from "./tasks";
 import { afterStatusEdges } from "./taskLinks";
 import { mintProjectShortId } from "./lib/projectShortId";
 
@@ -1604,12 +1604,10 @@ export async function setTaskStatus(
   const before = { ...task };
   await ctx.db.patch(task._id, patch);
   await afterStatusEdges(ctx as any, before, next, release);
-  if (closing) {
-    for (const convId of task.conversation_ids ?? []) {
-      const conv = await ctx.db.get(convId);
-      if (conv && String(conv.active_task_id ?? "") === String(task._id)) await ctx.db.patch(convId, { active_task_id: undefined });
-    }
-  }
+  // One release path for every close (tasks.releaseBoundSessions, reached by
+  // afterStatusMove for the writers that go through it): the binding ends and
+  // a session held only for it returns to its starter (S35).
+  if (closing) await releaseBoundSessions(ctx as any, task);
   if (task.plan_id) await recalcPlanProgress(ctx, task.plan_id, task._id, next);
 }
 

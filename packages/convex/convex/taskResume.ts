@@ -58,7 +58,13 @@ export const context = query({
     // caller may read lends its title. Status always ships, as readiness does.
     const { statusOf } = await taskLookups(ctx, task);
     const blockers: TaskResumeContext["blockers"] = [];
-    for (const b of blockersHoldingBack(task, statusOf)) {
+    // A closed task holds nothing — the guard `tasks.list` applies to
+    // `open_blockers` and the CLI's `holdingBlockers` applies to the same
+    // section. Without it a session still bound to a task somebody else closed
+    // reads "Blocked by: PR #42 to merge" and is told to park, and nothing can
+    // ever wake it: every unblock path (settleWaits, releaseDependents) stops
+    // at a terminal status.
+    for (const b of isTerminalTaskStatus(task.status) ? [] : blockersHoldingBack(task, statusOf)) {
       const row = b.kind === "task" ? statusOf(b.ref) : null;
       const found = row && typeof row === "object" ? (row as Doc<"tasks">) : null;
       // Older rows name a blocker by its Convex id; the agent needs the short id.
