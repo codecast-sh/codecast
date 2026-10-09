@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation } from "convex/react";
+import type { DeviceSnippetChange } from "@codecast/shared/contracts";
+import { useInboxStore } from "../../store/inboxStore";
 import { toast } from "sonner";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useDevices } from "../DeviceBadge";
 import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
 
@@ -17,10 +17,14 @@ import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
  * answers, and on a device with no daemon of its own, it falls back to the
  * most recently seen online machine.
  */
+/** One device's snippet or machine setting, through the store's action. */
+function setSnippet({ device_id, ...change }: { device_id: string } & DeviceSnippetChange) {
+  return useInboxStore.getState().setDeviceSnippet(device_id, change);
+}
+
 export function useDeviceSettingsPanel() {
   const { devices, mostRecentOnlineLocal } = useDevices();
   const localDeviceId = useLocalDeviceId(true);
-  const setSnippet = useMutation(api.devices.setDeviceSnippet);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
 

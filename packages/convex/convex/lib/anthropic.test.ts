@@ -8,22 +8,21 @@ import { anthropicBody, callModel, CHEAP_MODEL, type SurfaceRequest } from "./an
 const CASES: Array<{ args: Parameters<typeof callModel>[0]; request: SurfaceRequest; golden: string }> = [
   {
     args: { prompt: 'Name this session.\nLine two with "quotes".', max_tokens: 200, label: "a" },
-    request: { model: CHEAP_MODEL, prompt: 'Name this session.\nLine two with "quotes".', max_tokens: 200, temperature: 0 },
+    request: { model: CHEAP_MODEL, prompt: 'Name this session.\nLine two with "quotes".', max_tokens: 200 },
     golden:
-      '{"model":"claude-haiku-4-5-20251001","max_tokens":200,"temperature":0,"messages":[{"role":"user","content":"Name this session.\\nLine two with \\"quotes\\"."}]}',
+      '{"model":"claude-haiku-5-5","max_tokens":200,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"Name this session.\\nLine two with \\"quotes\\"."}]}',
   },
   {
     args: { prompt: "Answer from the sessions.", system: "You answer questions.", max_tokens: 1500, model: "claude-sonnet-5-5", label: "b" },
-    // Sonnet 5.5 refuses any temperature, so callModel defaults it only for the cheap model.
     request: { model: "claude-sonnet-5-5", system: "You answer questions.", prompt: "Answer from the sessions.", max_tokens: 1500 },
     golden:
       '{"model":"claude-sonnet-5-5","max_tokens":1500,"system":"You answer questions.","messages":[{"role":"user","content":"Answer from the sessions."}]}',
   },
   {
-    args: { prompt: "Brief the next session.", system: "", max_tokens: 1200, temperature: 0.3, label: "c" },
-    request: { model: CHEAP_MODEL, system: "", prompt: "Brief the next session.", max_tokens: 1200, temperature: 0.3 },
+    args: { prompt: "Brief the next session.", system: "Be brief.", max_tokens: 1200, label: "c" },
+    request: { model: CHEAP_MODEL, system: "Be brief.", prompt: "Brief the next session.", max_tokens: 1200 },
     golden:
-      '{"model":"claude-haiku-4-5-20251001","max_tokens":1200,"temperature":0.3,"messages":[{"role":"user","content":"Brief the next session."}]}',
+      '{"model":"claude-haiku-5-5","max_tokens":1200,"thinking":{"type":"disabled"},"system":"Be brief.","messages":[{"role":"user","content":"Brief the next session."}]}',
   },
 ];
 
@@ -58,10 +57,10 @@ describe("anthropicBody", () => {
     });
   }
 
-  test("an undefined temperature is left out, so the API default applies", () => {
-    // The shape the insight and call summary sites post today.
+  test("the cheap model is sent no temperature and no thinking", () => {
+    // It refuses any temperature, and thinking would spend the reply's max_tokens.
     expect(JSON.stringify(anthropicBody({ model: CHEAP_MODEL, prompt: "p", max_tokens: 1200 }))).toBe(
-      '{"model":"claude-haiku-4-5-20251001","max_tokens":1200,"messages":[{"role":"user","content":"p"}]}',
+      '{"model":"claude-haiku-5-5","max_tokens":1200,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"p"}]}',
     );
   });
 });

@@ -13,21 +13,21 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { answerKeyAllowed } from "../decisions/ChangeCardView";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
-import { APPROVAL_ANSWERS, ROUTINE_SHOWS_UP, approvalButtonLabel } from "@codecast/shared/contracts/assistant";
+import { APPROVAL_ANSWERS, approvalButtonLabel } from "@codecast/shared/contracts/assistant";
 import { RoutineNotifyLine } from "./RoutineNotifyLine";
 import type { QueueItem } from "../../lib/decisionQueue";
 import { useDecisionAnswer } from "../../hooks/useDecisionAnswer";
 import { useOverflows } from "../../hooks/useOverflows";
-import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
+import { APPROVAL_REFUSED, useOneAnswer } from "../../hooks/useOneAnswer";
+export { APPROVAL_REFUSED, useOneAnswer } from "../../hooks/useOneAnswer";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { clipFade } from "../CollapsibleBody";
 import { cn } from "@/lib/utils";
+import { approvalSettledWords, isRoutineYes, planForCard, yesWords } from "../../lib/hostedApproval";
+export { approvalSettledWords, isHostedApproval, planForCard } from "../../lib/hostedApproval";
 
 const BUTTON = "inline-flex h-8 items-center rounded-[var(--radius,8px)] px-3.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-orange/40 disabled:opacity-60";
 
-/** Said when the server turned an answer away for good, so the card is live
- *  again rather than a row of dead buttons. */
-export const APPROVAL_REFUSED = "That answer didn't go through. Try again.";
 
 /** The plan scrolls past this share of the window; the cut fades while more
  *  of it is below. */
@@ -36,28 +36,6 @@ const PLAN_MAX_VH = 0.4;
 /** An answer the body can draw: its stored label, its note, its index. */
 type ApprovalOption = { label: string; description?: string; index: number };
 
-/** Whether a decision is an approval the engine wrote (a Yes and a Not now),
- *  which hosted mode draws as HostedApprovalBody wherever it shows. */
-export function isHostedApproval(options: ReadonlyArray<{ label: string }>): boolean {
-  return options.some((o) => o.label === APPROVAL_ANSWERS.approve) && options.some((o) => o.label === APPROVAL_ANSWERS.decline);
-}
-
-const CADENCE_WORDS = /\b(every|each|daily|weekly|monthly|weekdays?|weekends?|mornings?|evenings?|nights?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)\b/i;
-const WHEN_LINE = /^\*\*When:\*\*\s*/;
-
-/** The plan as the card shows it. A routine's summary usually says its
- *  cadence already ("Every weekday at 7 AM I'll remind you"), and the yes line
- *  says when it starts, so a "When" line on top said the time a third time:
- *  it is left out then. Where it stays it reads as a quiet label, not bold. */
-export function planForCard(contextMd: string): string {
-  const blocks = contextMd.split(/\n{2,}/);
-  const when = blocks.findIndex((b) => WHEN_LINE.test(b.trim()));
-  if (when < 0) return contextMd;
-  const summary = blocks.filter((_, i) => i !== when).join(" ");
-  const said = CADENCE_WORDS.test(summary) && /\d/.test(summary);
-  return (said ? blocks.filter((_, i) => i !== when) : blocks.map((b, i) => (i === when ? b.trim().replace(WHEN_LINE, "When: ") : b)))
-    .join("\n\n");
-}
 
 /** The plan an approval shows (approvalContext: "What I'll do", "When").
  *  `clamp` holds it to a share of the window with a fade at the cut, for the
@@ -177,24 +155,6 @@ export function HostedApprovalBody({
   );
 }
 
-/** One answer per card: the row leaves the store when the server settles
- *  it, and a second click meanwhile would answer twice. A refusal lets go of
- *  the hold and says so; any other failure is a write still on its way. */
-export function useOneAnswer(answer: (index: number) => Promise<unknown> | undefined | void) {
-  const [answered, setAnswered] = useState(false);
-  const [refused, setRefused] = useState(false);
-  const pick = (index: number) => {
-    if (answered) return;
-    setAnswered(true);
-    setRefused(false);
-    answer(index)?.catch((error: unknown) => {
-      if (!isRefusedDispatchError(error)) return;
-      setAnswered(false);
-      setRefused(true);
-    });
-  };
-  return { answered, refused, pick };
-}
 
 export function HostedApprovalCard({ item, keys = false }: { item: QueueItem; keys?: boolean }) {
   const { question, options, answer } = useDecisionAnswer(item);
@@ -206,29 +166,6 @@ export function HostedApprovalCard({ item, keys = false }: { item: QueueItem; ke
       </div>
     </div>
   );
-}
-
-/** What the settled card says between an answer and the turn moving on: the
- *  answer in the card's own words, then that the work is under way (or, for
- *  a no, that it is wrapping up). */
-export function approvalSettledWords(label: string): string {
-  if (label === APPROVAL_ANSWERS.decline) return "You said not now. Wrapping up…";
-  if (label === APPROVAL_ANSWERS.always) return "You said always allow. On it…";
-  return "You said yes. On it…";
-}
-
-/** A routine's yes says where it arrives (ROUTINE_SHOWS_UP). Cards asked
- *  before that line stopped promising notifications still carry the old
- *  words, which are read as the new. */
-const LEGACY_SHOWS_UP = "You'll get it in your inbox, and as a notification when those are on.";
-
-function yesWords(description: string): string {
-  return description.replace(LEGACY_SHOWS_UP, ROUTINE_SHOWS_UP);
-}
-
-/** Whether a yes sets up a routine: its words say where the runs arrive. */
-function isRoutineYes(description: string): boolean {
-  return description.includes(ROUTINE_SHOWS_UP) || description.includes(LEGACY_SHOWS_UP);
 }
 
 /** The answered card, held in place until the transcript moves on, so the

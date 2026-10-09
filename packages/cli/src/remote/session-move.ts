@@ -763,6 +763,26 @@ export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
 }
 
 /**
+ * When the host's checkout of a repository is busy, a move lands in its own
+ * clone beside it (`<checkout>-mv-<batch>`, migrate/io.ts). The clone stands in
+ * for that checkout the way a worktree does: the session belongs to the same
+ * repository, so its root (and the project the app names it by) is the
+ * checkout's, not the clone folder's.
+ */
+export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
+
+export function moveClonePath(main: string, batchId: string): string {
+  return `${main}-mv-${batchId.replace(/^mg-/, "").slice(0, 8)}`;
+}
+
+/** The checkout a move clone stands in for, or `root` itself when it is not one (or that checkout is gone). */
+export function checkoutOfMoveClone(root: string, exists: (p: string) => boolean = (p) => fs.existsSync(path.join(p, ".git"))): string {
+  if (!MOVE_CLONE_RE.test(root)) return root;
+  const main = root.replace(MOVE_CLONE_RE, "");
+  return exists(main) ? main : root;
+}
+
+/**
  * Push a local session to the remote Mac. Returns the remote placement.
  *
  * `skipTree`: the working tree at this session's cwd was already pushed to
