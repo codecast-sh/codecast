@@ -4,7 +4,7 @@
 // label change writes task_history through one helper (TG11).
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { addDep, create, getReadyTasks, list, removeDep, update, webList } from "./tasks";
+import { addDep, create, get, list, removeDep, update, webList } from "./tasks";
 import { get as getPlan, webGet as webGetPlan } from "./plans";
 import { readinessLookups, stampGraphStatus } from "./lib/taskGraph";
 import { isUnblocked } from "@codecast/shared/tasks";
@@ -142,18 +142,6 @@ describe("ready (TG1)", () => {
     ]);
   });
 
-  test("getReadyTasks applies the same rule", async () => {
-    const { ctx } = await makeCtx([
-      task("ct-1", { status: "done" }),
-      task("ct-2", { blocked_by: ["ct-1"] }),
-      task("ct-3", { blocked_by: ["ct-2"] }),
-      task("ct-4", { triage_status: "suggested" }),
-      task("ct-5", { status: "in_review" }),
-      task("ct-6", { parent_id: "task_ct-5" }),
-    ]);
-    expect(ids(await call(getReadyTasks, ctx, {}))).toEqual(["ct-2"]);
-  });
-
   // A page can mix workspaces (the web's team view holds a viewer's private
   // rows routed to the team): an edge into another workspace stays unknown
   // even when the page holds the row, so every viewer judges it alike.
@@ -170,6 +158,38 @@ describe("ready (TG1)", () => {
     expect(page[2].graph_status).toEqual([{ ref: "ct-1", short_id: "ct-1", status: "done" }]);
     const lookupsFor = await readinessLookups(ctx, page);
     expect([isUnblocked(page[1], lookupsFor(page[1]).statusOf), isUnblocked(page[2], lookupsFor(page[2]).statusOf)]).toEqual([false, true]);
+  });
+
+  // A start that is told what still holds the task (TG1) must answer for the
+  // edges the SAME write stored: `task` is the row as read before the patch,
+  // so reading it alone omits a blocker this call just added.
+  test("a start that also adds a blocker reports the blocker it wrote", async () => {
+    const { ctx } = await makeCtx([
+      task("ct-1"),
+      task("ct-2"),
+    ]);
+    const result = await call(update, ctx, { short_id: "ct-2", status: "in_progress", blocked_by: ["ct-1"] });
+    expect(result.open_blockers).toEqual([{ kind: "task", ref: "ct-1", status: "open" }]);
+  });
+
+  // Which half of the parking pair the CLI prints depends on whether the work
+  // was already in flight: a re-start or re-bind of a task this session has
+  // been working is not told to go dormant now (TG11).
+  test("a start says whether the work was already underway", async () => {
+    const { ctx } = await makeCtx([task("ct-1"), task("ct-2", { status: "in_progress" })]);
+    expect((await call(update, ctx, { short_id: "ct-1", status: "in_progress" })).resumed).toBe(false);
+    expect((await call(update, ctx, { short_id: "ct-2", status: "in_progress" })).resumed).toBe(true);
+    // Nothing to say on an update that is not a start.
+    expect((await call(update, ctx, { short_id: "ct-1", priority: "high" })).resumed).toBeUndefined();
+  });
+
+  test("a start of a task whose only blocker finished reports none", async () => {
+    const { ctx } = await makeCtx([
+      task("ct-1", { status: "done", blocks: ["ct-2"] }),
+      task("ct-2", { blocked_by: ["ct-1"] }),
+    ]);
+    const result = await call(update, ctx, { short_id: "ct-2", status: "in_progress" });
+    expect(result.open_blockers).toEqual([]);
   });
 
   test("webList ready reads the finished blocker its status filter dropped", async () => {
@@ -211,8 +231,9 @@ describe("edges that cannot loop (TG4)", () => {
   test("a finished task in the chain holds nothing back, so the edge is allowed", async () => {
     const tasks = chain();
     tasks[1].status = "done";
-    const { ctx } = await makeCtx(tasks);
+    const { ctx, tables } = await makeCtx(tasks);
     await call(addDep, ctx, { short_id: "ct-1", blocked_by: "ct-3" });
+    expect(tables.tasks.find((t) => t.short_id === "ct-1").blocked_by).toContain("ct-3");
   });
 
   test("update refuses a loop through blocked_by and through blocks", async () => {
@@ -240,6 +261,29 @@ describe("edges that cannot loop (TG4)", () => {
     await expect(call(update, ctx, { short_id: "ct-1", blocked_by: ["ct-9"] })).rejects.toThrow(FORBIDDEN);
     await expect(call(update, ctx, { short_id: "ct-1", blocks: ["ct-9"] })).rejects.toThrow(FORBIDDEN);
     await call(update, ctx, { short_id: "ct-1", blocked_by: ["ct-404"] });
+  });
+
+  // A row minted before the backfill carries no stored `workspace`, so its
+  // access key IS its team_id (workspaceForResource's fallback): one update
+  // that moves the team and names a blocker in the same write must judge the
+  // edge against the key the write LEAVES, or it stores an edge that crosses
+  // the moment the move lands — which readiness then holds as `unknown`
+  // forever, and nothing recomputes on a team change.
+  test("an update that moves the team judges a new edge by the key it leaves", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { team_id: "team_a" }),
+      task("ct-2", { team_id: "team_a" }),
+      task("ct-3", { team_id: "team_b" }),
+    ]);
+    tables.team_memberships = [
+      { _id: "tm_a", user_id: USER, team_id: "team_a", role: "member" },
+      { _id: "tm_b", user_id: USER, team_id: "team_b", role: "member" },
+    ];
+    await expect(call(update, ctx, { short_id: "ct-1", team_id: "team_b", blocked_by: ["ct-2"] }))
+      .rejects.toThrow("dependency task belongs to another workspace");
+    await call(update, ctx, { short_id: "ct-1", team_id: "team_b", blocked_by: ["ct-3"] });
+    const moved = tables.tasks.find((t) => t.short_id === "ct-1");
+    expect([moved.team_id, moved.blocked_by]).toEqual(["team_b", ["ct-3"]]);
   });
 
   // A stored ref that names no task reads as missing and blocks nothing, so
@@ -308,5 +352,43 @@ describe("history (TG11)", () => {
     await call(update, ctx, { short_id: "ct-1", status: "in_progress" });
     const [row] = rows(tables, "status");
     expect(row).toMatchObject({ task_id: "task_ct-1", user_id: USER, actor_type: "user", action: "updated", old_value: "open", new_value: "in_progress" });
+  });
+});
+
+describe("what one edge answers (TG1)", () => {
+  // A finished blocker holds nothing, and the CLI says so rather than
+  // "blocked". On the --blocks side the blocker is the task named on the
+  // command line, so its own status is the one the caller has to be told.
+  test("addDep answers the status of whichever task is the blocker", async () => {
+    const { ctx } = await makeCtx([task("ct-1", { status: "done" }), task("ct-2")]);
+    expect(await call(addDep, ctx, { short_id: "ct-1", blocks: "ct-2" })).toMatchObject({ task_status: "done" });
+    const live = await makeCtx([task("ct-1"), task("ct-2")]);
+    expect(await call(addDep, live.ctx, { short_id: "ct-1", blocks: "ct-2" })).toMatchObject({ task_status: "open" });
+    // The blocked_by side is unchanged: there the blocker is the other task.
+    const other = await makeCtx([task("ct-1"), task("ct-2", { status: "dropped" })]);
+    expect(await call(addDep, other.ctx, { short_id: "ct-1", blocked_by: "ct-2" }))
+      .toMatchObject({ blocker_status: "dropped" });
+  });
+});
+
+describe("who holds the task (TG2)", () => {
+  // The parking line asks the server who holds the task rather than reading
+  // the local pulse: nothing clears a pulse when another session takes the
+  // task over (`--take`, a board handoff), and a clearing wakes the holder
+  // alone, so a stale pulse is what promises a wake that never comes.
+  const heldBy = async (sessionId: string, activeTaskId: string | undefined) => {
+    const { ctx, tables } = await makeCtx([task("ct-1")]);
+    tables.conversations = [{ _id: "conv_1", user_id: USER, session_id: "sess-1", short_id: "sess-1", active_task_id: activeTaskId }];
+    return (await call(get, ctx, { short_id: "ct-1", conversation_id: sessionId })).held;
+  };
+
+  test("held is the binding on the asking session, and unsaid when none asked", async () => {
+    expect(await heldBy("sess-1", "task_ct-1")).toBe(true);
+    expect(await heldBy("sess-1", "task_other")).toBe(false);
+    expect(await heldBy("sess-1", undefined)).toBe(false);
+    // A session this caller does not own says nothing about who holds it.
+    expect(await heldBy("sess-other", "task_ct-1")).toBe(false);
+    const { ctx } = await makeCtx([task("ct-1")]);
+    expect("held" in (await call(get, ctx, { short_id: "ct-1" }))).toBe(false);
   });
 });
