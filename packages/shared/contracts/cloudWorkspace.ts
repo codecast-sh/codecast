@@ -88,6 +88,9 @@ export interface CheckoutMatch {
   excludeId?: string;
   /** Rows that share the checkout with the claimer by design (siblings moved together from one laptop folder). */
   sharedWith?: readonly string[];
+  /** The claimer works in the checkout as it stands (a moved session merged in, a start in the host's own folder),
+   * the way sessions share a laptop folder: only a SHARED row, which holds the checkout on a branch of its own, occupies it. */
+  merging?: boolean;
 }
 
 /** The last path segment (trailing slashes ignored): the repo name a checkout is keyed by. */
@@ -107,7 +110,8 @@ export function posixRepoBasename(p: string): string {
  *   (b) legacy: any other alive row whose `project_path` is exactly P — a
  *       session moved onto the root, or a row placed there before the stamp
  *       existed. A shared row is judged by (a) alone, so a failed pending
- *       one cannot re-occupy the root through its path.
+ *       one cannot re-occupy the root through its path. A `merging` claimer
+ *       is judged by (a) alone too: it shares the checkout with those rows.
  */
 export function sharedCheckoutOccupant(
   rows: CheckoutOccupantRow[],
@@ -126,7 +130,7 @@ export function sharedCheckoutOccupant(
       }
       continue;
     }
-    if (match.projectPath && row.project_path === match.projectPath) return row;
+    if (!match.merging && match.projectPath && row.project_path === match.projectPath) return row;
   }
   return null;
 }
