@@ -17,6 +17,7 @@ import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
+import { claudeProjectDirName } from "../projectPathResolver.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -136,7 +137,7 @@ async function executeCommand(
 
 function findNewestSessionId(cwd: string, afterMs: number): string | null {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDirName = claudeProjectDirName(cwd);
   const projectDir = path.join(claudeProjectsDir, projectDirName);
   if (!fs.existsSync(projectDir)) return null;
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
@@ -466,6 +467,9 @@ async function executeSessionNode(
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
       context["last_error"] = pinnedText.slice(0, 2000);
+      // A station that pinned blocked waits on a person: the run stops here,
+      // whatever its json says: the loop checks this before any edge.
+      context["station_blocked"] = node.id;
       return "failure";
     }
     console.log(`  ${c.green}✓ settled${c.reset} ${c.dim}(${state})${c.reset}`);
@@ -821,7 +825,7 @@ function contextVar(context: Record<string, string>, key: string): string | unde
   return lookupContextVar(context, key);
 }
 
-function buildNodePrompt(
+export function buildNodePrompt(
   node: WorkflowNode,
   graph: WorkflowGraph,
   context: Record<string, string>
@@ -957,6 +961,11 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // handoff (an inline question, a decision, a crash) reads as none and no
   // edge fires, which is the failure path.
   context["handoff"] = String(task.status || "") === "in_review" ? String(task.execution_status || "none") : "none";
+  // What a hand that stopped (blocked, needs_context) said in its handoff: the
+  // question the line's ask gate puts to a person.
+  context["handoff_note"] = context["handoff"] === "blocked" || context["handoff"] === "needs_context"
+    ? capForeignText(escapeForeignControlChars(String(task.verification_evidence || "")), FOREIGN_TEXT_CAPS.descriptionChars)
+    : "";
   // The ground node's fields (the-line-end-to-end.md LE5), which the line's
   // edges route on; empty until ground writes them.
   context["goal_ref"] = inlineForeignText(task.goal_ref || "");
@@ -982,7 +991,7 @@ async function loadPlanContext(options: RunOptions, context: Record<string, stri
   );
   context["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
     .map((c: string) => inlineForeignText(c)).join("\n- ");
-  const { open, ready } = planReadiness<any>(plan.tasks || []);
+  const { open, ready } = planReadiness<any>(plan.tasks || [], plan.graph_outside);
   context["ready_tasks"] = String(ready.length);
   context["open_tasks"] = String(open.length);
 }
@@ -1147,9 +1156,11 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
   // puts in the inbox on its own, so the blocker leads straight there.
   const card = taskStopCard(graph, state, options.taskId);
   let text = card.body ? `${card.summary}\n\n${card.body}` : card.summary;
-  // A hand that handed off blocked already parked the task in review.
-  if (!parkedByHand) {
-    await cliCall(options, "/cli/work/update", exhausted
+  // A hand that handed off blocked already parked the task in review; a
+  // station that only pinned blocked did not, so the run parks it.
+  const stationBlocked = !!state.context["station_blocked"];
+  if (!parkedByHand || stationBlocked) {
+    await cliCall(options, "/cli/work/update", exhausted || stationBlocked
       ? { short_id: options.taskId, status: "in_review", execution_status: "blocked" }
       : { short_id: options.taskId, status: "open" });
   }
@@ -1244,7 +1255,7 @@ async function reportGate(
 ): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
   try {
-    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/gate`, {
+    const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/gate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1255,6 +1266,13 @@ async function reportGate(
         choices,
       }),
     });
+    const asked = await resp.json().catch(() => null) as { error?: string } | null;
+    // Nobody was asked: stop here so the failure path says why, rather than
+    // wait on an answer that cannot come.
+    if (asked?.error) {
+      console.log(`  ${c.red}gate not asked${c.reset}: ${asked.error}`);
+      return null;
+    }
   } catch {
     return null;
   }
@@ -1262,10 +1280,14 @@ async function reportGate(
 }
 
 /** Wait on the run's open gate: its answer, or null when the run stops waiting. */
+// A gate waits on a person for as long as they take: hours, or days. It ends
+// only with an answer or when the run leaves "paused" (withdrawn, cancelled);
+// a clock ending the wait would read as an answer nobody gave.
 async function pollGate(options: RunOptions): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
-  for (let i = 0; i < 3600; i++) {
-    await new Promise(r => setTimeout(r, 3000));
+  const interval = options.pollIntervalMs ?? 3000;
+  for (;;) {
+    await new Promise(r => setTimeout(r, interval));
     try {
       const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/poll-gate`, {
         method: "POST",
@@ -1277,7 +1299,6 @@ async function pollGate(options: RunOptions): Promise<string | null> {
       if (data.status !== "paused") return null;
     } catch {}
   }
-  return null;
 }
 
 // Library entry point — returns the run's terminal outcome instead of touching
@@ -1663,10 +1684,34 @@ async function runNodeLoop(
     //           retry_target on failure with no edge > abort
     // A fanout's branches already ran inside executeFanout; the run continues
     // at the fanin they converge on, never down one branch again.
-    const next = current.type === "parallel_fanout" && outcome === "success"
-      ? findFanin(current, graph)
-      : resolveHumanGateTarget(current, graph, state.context)
-        || resolveNextNode(graph, current, state.context);
+    // A station that pinned blocked waits on a person: it routes only on an
+    // edge for a blocked handoff (the line's ask gate), never on its json, and
+    // without one the run stops here.
+    const stationBlocked = outcome === "failure" && state.context["station_blocked"] === current.id;
+    if (stationBlocked) {
+      state.context["handoff"] = "blocked";
+      state.context["handoff_note"] = state.context["last_error"] || "";
+    }
+    // A gate that came back without an answer (its question taken back,
+    // dismissed, or timed out) follows none of its choices: its labelled edges
+    // are the person's answers, and nobody gave one. Only an edge conditioned
+    // on that outcome routes it; without one the run stops here.
+    const unanswered = current.type === "human" && outcome === "failure";
+    const next = stationBlocked
+      ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
+      : unanswered
+        ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || (!e.label && !!e.condition)) }, current, state.context)
+      : current.type === "parallel_fanout" && outcome === "success"
+        ? findFanin(current, graph)
+        : resolveHumanGateTarget(current, graph, state.context)
+          || resolveNextNode(graph, current, state.context);
+    if (stationBlocked && next) delete state.context["station_blocked"];
+    if (stationBlocked && !next) {
+      console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
+      state.failed = true;
+      state.failReason = `${current.id} is waiting on a person`;
+      break;
+    }
 
     if (!next) {
       if (outcome === "failure") {
