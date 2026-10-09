@@ -12,7 +12,8 @@ import type { OrgRole } from "../org/orgTypes";
 import { watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
 import { RoleAvatar } from "../org/avatars";
 import { RoleHoverCard } from "../identity";
-import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, roleHref, type CharterPriority, type OrgRoles } from "./charterMeta";
+import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, type CharterPriority, type OrgRoles } from "./charterMeta";
+import { objectHref } from "../../lib/entityLinks";
 
 /** A chip with a menu under it. The trigger is the chip; the list floats
  *  below and a fixed backdrop closes it on a click outside. Keyboard: Escape
@@ -36,7 +37,7 @@ function ChipMenu({ open, onClose, trigger, children }: { open: boolean; onClose
     list[next]?.focus();
   };
   return (
-    <span ref={wrap} className="relative inline-flex" onKeyDown={onKeyDown}>
+    <span ref={wrap} className="relative inline-flex min-w-0 max-w-full" onKeyDown={onKeyDown}>
       {trigger}
       {open && (
         <>
@@ -166,15 +167,18 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
   const named = !!role || watchers.length > 0;
   const editable = !!onChange || !!onHire;
   if (!named && !editable && noun === "owner") return null;
-  const color = role ? "var(--sol-violet)" : watchers.length ? "var(--sol-yellow)" : "var(--sol-text-dim)";
+  // A lead is a settled fact, drawn in the owner style a goal's owner wears
+  // (face and name, no colour of its own): violet is a proposal's alone.
+  // Two roles that only watch are a question, in yellow.
+  const color = role ? "var(--sol-text-secondary)" : watchers.length ? "var(--sol-yellow)" : "var(--sol-text-dim)";
   const px = size === "xs" ? 12 : 14;
   const cls = cn(
-    "inline-flex items-center gap-1.5 rounded-md border font-medium whitespace-nowrap max-w-[220px]",
-    size === "xs" ? "h-[18px] px-1.5 text-[10px]" : "h-[22px] px-2 text-[11px]",
+    "inline-flex min-w-0 max-w-[min(220px,100%)] items-center gap-1.5 rounded-md border border-transparent whitespace-nowrap",
+    size === "xs" ? "h-[18px] px-1 text-[11px]" : "h-[22px] px-1.5 text-[11.5px]",
     !named && "italic",
     className,
   );
-  const style = { color, borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, background: `color-mix(in srgb, ${color} ${named ? 12 : 0}%, transparent)` };
+  const style = { color };
   // The face and the name open the role's card (session-characters.md S4);
   // closed while the menu is open so the two never stack.
   const inner = role ? (
@@ -201,7 +205,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
   // Read only: the chip IS the link to the role. Roles that only watch have
   // no one page to open, so the chip is plain and each face carries its card.
   if (!editable) {
-    if (role) return <Link href={roleHref(role)} className={cn(cls, "hover:underline")} style={style} title={`${role.name}: ${words.holds}`} data-owner={role.short_id}>{inner}</Link>;
+    if (role) return <Link href={objectHref("role", role.short_id)} className={cn(cls, "hover:underline")} style={style} title={`${role.name}: ${words.holds}`} data-owner={role.short_id}>{inner}</Link>;
     return <span className={cls} style={style} title={watchers.length ? watchersTitle : undefined} data-owner={watchers.length ? "watchers" : "none"}>{inner}</span>;
   }
   // Editable with no menu to show (no roles and no way to hire): the chip is
@@ -226,7 +230,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
       trigger={
         <button
           type="button"
-          className={cn(cls, blocked ? "cursor-default opacity-70" : "transition-colors hover:brightness-110")}
+          className={cn(cls, blocked ? "cursor-default opacity-70" : "transition-colors hover:border-[color-mix(in_srgb,var(--sol-border)_60%,transparent)] hover:bg-sol-bg-highlight/50")}
           style={style}
           title={role ? `${role.name}: ${words.holds}. Click to change` : watchers.length ? `${watchersTitle}. Click to name one` : blocked ? reason : words.pick}
           data-owner={role?.short_id ?? (watchers.length ? "watchers" : "none")}
@@ -242,8 +246,8 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
       }
     >
         {role && (
-          <Link href={roleHref(role)} role="menuitem" className={cn(MENU_ITEM, "text-sol-text")} onClick={() => setOpen(false)}>
-            <Briefcase className="w-3 h-3" style={{ color: "var(--sol-violet)" }} />
+          <Link href={objectHref("role", role.short_id)} role="menuitem" className={cn(MENU_ITEM, "text-sol-text")} onClick={() => setOpen(false)}>
+            <Briefcase className="w-3 h-3" style={{ color: "var(--sol-text-muted)" }} />
             <span className="truncate">Open @{role.handle}</span>
           </Link>
         )}

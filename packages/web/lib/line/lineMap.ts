@@ -14,13 +14,14 @@
 // cause task's watch fields for what happened after ship. The queue, the watch
 // and a finder's silence come from buildLineFlow, so the map and the /line
 // columns can never disagree.
-import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, lineRunOutcome, verdictOfOption, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, lineRunOutcome, passedUnansweredCard, verdictOfOption, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import type { LineFinderDecl } from "@codecast/shared/contracts/lineProfile";
 import { DAY, WEEK, ageShort, buildLineFlow, isUndeclaredSource, quietWatchEnd, silentText, type LineAdmission, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "../lineFlow";
 import type { LineEdge, LineNode } from "./lineStations";
-import { choiceWords, isMainStation, phaseOfStation, runPath, type LinePhaseKey, type ReportRun, type StepState } from "./runReport";
+import { choiceWords, isMainStation, plainStepWords, phaseOfStation, runPath, type LinePhaseKey, type ReportRun, type StepState } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
+import { plainStepName, stationWho, stepLabel, type GraphEnd, type StationWho } from "./lineGraphs";
 
 // ── the rows the map reads ───────────────────────────────────────────────────
 
@@ -57,8 +58,15 @@ export type MapDecision = LineDecision & {
   card?: { headline?: string | null; change?: string | null; recommend?: { verdict: string; why?: string } | null } | null;
 };
 
-/** The graph the project's line runs: the shipped line or its own copy. */
-export type LineGraph = { nodes: Array<Pick<LineNode, "id" | "label" | "type">>; edges: LineEdge[] };
+/** The graph the project's line runs: the shipped line, its own copy, or a
+ *  repo's own graph (lineGraphs graphForMap). `phase` places a station a
+ *  foreign graph names; `ends` folds its terminal steps into the map's ends,
+ *  and says how a run that reached one ended. */
+export type LineGraph = {
+  nodes: Array<Pick<LineNode, "id" | "label" | "type"> & { shape?: string; phase?: LinePhaseKey }>;
+  edges: LineEdge[];
+  ends?: Record<string, GraphEnd>;
+};
 
 // ── what the map is ──────────────────────────────────────────────────────────
 
@@ -139,6 +147,10 @@ export type MapNode = {
   /** A source node's name as signals carry it. */
   source?: string;
   end?: MapEnd;
+  /** Who does a station's work: an agent, a script, or a person answering. */
+  who?: StationWho;
+  /** The station's plain words when its graph label is shop talk ("Record the cause" for Stamp). */
+  plainLabel?: string;
 };
 
 export type MapEdgeKind = "flow" | "branch" | "loop";
@@ -166,7 +178,7 @@ export const endNodeId = (end: MapEnd) => `end:${end}`;
 
 export const END_LABEL: Record<MapEnd, string> = { held: "Held", reopened: "Reopened", dissolved: "Dissolved", dropped: "Dropped", stopped: "Stopped" };
 /** Where a run that ended at an end station goes on the map. */
-const END_OF_RUN: Record<LineRunEnd, string | null> = { dissolved: endNodeId("dissolved"), dropped: endNodeId("dropped"), parked: CAUSES_NODE, shipped: null };
+const END_OF_RUN: Record<LineRunEnd | "stopped", string | null> = { dissolved: endNodeId("dissolved"), dropped: endNodeId("dropped"), parked: CAUSES_NODE, shipped: null, stopped: endNodeId("stopped") };
 
 const kindOf = (id: string): MapNodeKind => (id === CARD_GATE_NODE_ID ? "decide" : id === "ship" || id === "merge" ? "ship" : LINE_END_NODES[id] === "shipped" ? "watch" : "station");
 const isGraphEnd = (n: Pick<LineNode, "id" | "type">) => n.type === "start" || n.type === "exit" || n.id === "start" || n.id === "exit";
@@ -187,9 +199,11 @@ export type RunVisit = {
 };
 
 type Adjacency = Map<string, string[]>;
-const adjacency = (graph: LineGraph): Adjacency => {
+/** The graph's edges by station; with `own`, only the stations a run's own graph had. */
+const adjacency = (graph: LineGraph, own?: Set<string> | null): Adjacency => {
   const adj: Adjacency = new Map();
-  for (const e of graph.edges) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
+  const has = (id: string) => !own || id === "start" || id === "exit" || own.has(id);
+  for (const e of graph.edges) if (has(e.from) && has(e.to)) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
   return adj;
 };
 
@@ -225,8 +239,14 @@ function between(adj: Adjacency, from: string, to: string, reached: Set<string>)
  * gets its earlier rounds back: each answer's branch, round to the gate again.
  */
 export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decisions: ReadonlyArray<MapDecision> = []): RunVisit[] {
-  const adj = adjacency(graph);
+  // A run is drawn through the stations its own graph had: a station the line
+  // gained after it ran (rebase, the ask gate) is never inferred into its path.
+  const own = run.graph_nodes?.length ? new Set(run.graph_nodes.map((n) => n.id)) : null;
+  const adj = adjacency(graph, own);
   const states = stepStates(run, graph);
+  // A person's step answered with a key ends "failed" with the key as its
+  // outcome on any graph: that is an answer, not a failure.
+  const asked = new Set(graph.nodes.filter((g) => stationWho(g) === "person").map((g) => g.id));
   const statuses = (run.node_statuses ?? []).filter((n) => n.node_id !== "start" && n.node_id !== "exit" && (n.started_at != null || n.status !== "pending"));
   const timed = [...statuses].sort((a, b) => (a.started_at ?? Infinity) - (b.started_at ?? Infinity) || (a.completed_at ?? Infinity) - (b.completed_at ?? Infinity));
   const live = run.status === "running" || run.status === "paused" || run.status === "pending";
@@ -239,7 +259,7 @@ export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decision
     at: n.started_at ?? n.completed_at ?? run.updated_at,
     startedAt: n.started_at ?? null,
     completedAt: n.completed_at ?? null,
-    state: states.get(n.node_id) ?? (n.status === "failed" ? "failed" : n.status === "running" ? "live" : "done"),
+    state: asked.has(n.node_id) && n.status === "failed" && n.outcome ? "done" : states.get(n.node_id) ?? (n.status === "failed" ? "failed" : n.status === "running" ? "live" : "done"),
     inferred: false,
     ...(n.outcome ? { outcome: n.outcome } : {}),
   });
@@ -358,7 +378,7 @@ export function buildLineMap(input: LineMapInput): LineMap {
   const { now, windowMs } = input;
   const from = now - windowMs;
   const inWindow = (t: number | null | undefined) => typeof t === "number" && t >= from && t <= now;
-  const graph = input.graph?.nodes?.length ? input.graph : SHIPPED_LINE;
+  const graph: LineGraph = input.graph?.nodes?.length ? input.graph : SHIPPED_LINE;
   const label = windowLabel(windowMs);
   const flow = buildLineFlow({
     signals: input.signals, tasks: input.tasks, runs: input.runs as LineFlowRun[], decisions: input.decisions,
@@ -396,13 +416,15 @@ export function buildLineMap(input: LineMapInput): LineMap {
   add({ id: CAUSES_NODE, kind: "causes", label: "Causes", phase: "admit", col: 3, main: true });
 
   // The graph's stations, with the exit split into the ends it means.
-  const stations = graph.nodes.filter((n) => !isGraphEnd(n));
+  const folded = graph.ends ?? {};
+  const stations = graph.nodes.filter((n) => !isGraphEnd(n) && !folded[n.id]);
   const stationIds = new Set(stations.map((n) => n.id));
   const graphEdges: Array<{ from: string; to: string; label?: string }> = [];
   for (const e of graph.edges) {
     const from = e.from === "start" ? CAUSES_NODE : e.from;
     if (from !== CAUSES_NODE && !stationIds.has(from)) continue;
-    const label = e.label ? choiceWords(e.label) : undefined;
+    const label = e.label ? plainStepWords(choiceWords(e.label)) : undefined;
+    if (folded[e.to]) { graphEdges.push({ from, to: foldedTarget(folded[e.to]), ...(label ? { label } : {}) }); continue; }
     if (e.to !== "exit") { if (stationIds.has(e.to)) graphEdges.push({ from, to: e.to, ...(label ? { label } : {}) }); continue; }
     const end = LINE_END_NODES[from];
     if (end === "shipped") graphEdges.push({ from, to: endNodeId("held") }, { from, to: endNodeId("reopened") });
@@ -412,7 +434,9 @@ export function buildLineMap(input: LineMapInput): LineMap {
   const main = mainStations(stations.map((n) => n.id), graphEdges);
   const base = 3;
   for (const n of stations) {
-    add({ id: n.id, kind: kindOf(n.id), label: n.label || n.id, phase: phaseOfStation(n.id) ?? "build", col: base + (cols.get(n.id) ?? 1), main: main.has(n.id) });
+    const label = stepLabel(n);
+    const plain = plainStepName(n.id, label);
+    add({ id: n.id, kind: kindOf(n.id), label, ...(plain ? { plainLabel: plain } : {}), phase: (n.phase as LinePhaseKey | undefined) ?? phaseOfStation(n.id) ?? "build", col: base + (cols.get(n.id) ?? 1), main: main.has(n.id), who: stationWho(n) });
   }
   const endsUsed = new Set(graphEdges.map((e) => e.to).filter((id) => id.startsWith("end:")));
   for (const end of ["held", "reopened", "dissolved", "dropped", "stopped"] as MapEnd[]) {
@@ -474,12 +498,15 @@ export function buildLineMap(input: LineMapInput): LineMap {
   const unscopedMark = input.admission?.noProject && flow.causes.state.kind === "paused" ? causes.marks[causes.marks.length - 1] : undefined;
 
   // ── the runs, station by station ──
-  const lineRuns = input.runs.filter((r) => (r.task_id && taskById.get(r.task_id)?.cause) || isLineRun(r.node_statuses));
+  const foreign = !!graph.ends;
+  const lineRuns = input.runs.filter((r) => foreign || (r.task_id && taskById.get(r.task_id)?.cause) || isLineRun(r.node_statuses));
   const durations = new Map<string, number[]>();
   const stalled = new Set(flow.build.items.filter((b) => b.stalled).map((b) => b.run._id));
   for (const run of lineRuns) {
     const task = run.task_id ? taskById.get(run.task_id) : undefined;
-    const visits = runVisits(run, graph, input.decisions);
+    // A foreign graph's terminal steps are its ends, not stations on the map.
+    const visits = runVisits(run, graph, input.decisions).filter((v) => !folded[v.node]);
+    const runEnd = foreign ? graphRunEnd(run, graph) : lineRunOutcome(run.node_statuses);
     const live = run.status === "running" || run.status === "paused" || run.status === "pending";
     for (const v of visits) if (!v.inferred && v.startedAt != null && v.completedAt != null && v.state !== "live" && v.state !== "waiting") {
       durations.set(v.node, [...(durations.get(v.node) ?? []), v.completedAt - v.startedAt]);
@@ -499,7 +526,7 @@ export function buildLineMap(input: LineMapInput): LineMap {
       prev = v.node;
       const node = nodes.get(v.node);
       if (!node) continue;
-      const left = leftOf(v, visits[i + 1], live);
+      const left = leftOf(v, visits[i + 1], live, foreign ? runEnd : undefined);
       if (inWindow(v.at)) {
         node.through++;
         if (v.state === "failed") node.failed++;
@@ -508,7 +535,7 @@ export function buildLineMap(input: LineMapInput): LineMap {
     }
     const last = visits[visits.length - 1];
     if (last && !live) {
-      const end = lineRunOutcome(run.node_statuses);
+      const end = runEnd;
       const to = end ? END_OF_RUN[end.kind] : endNodeId("stopped");
       const at = end?.at ?? run.updated_at;
       if (to && inWindow(at)) {
@@ -607,11 +634,38 @@ function bump(node: MapNode | undefined) {
   if (node) node.through++;
 }
 
-/** How a visit left its station: on to the next visit, or the run's end. */
-function leftOf(v: RunVisit, next: RunVisit | undefined, live: boolean): { left: MapLeft; to: string | null } {
+/** Where a foreign graph's terminal step leads on the map. */
+const foldedTarget = (end: GraphEnd): string => (end === "parked" ? CAUSES_NODE : end === "shipped" ? endNodeId("held") : endNodeId(end));
+
+/** How a run of a foreign graph ended: the latest terminal step it completed
+ *  (lineGraphs terminalSteps), watch meaning it shipped. A run stopped short
+ *  of any reads as null, the way lineRunOutcome reads one. */
+export function graphRunEnd(run: Pick<MapRun, "node_statuses">, graph: LineGraph): { kind: LineRunEnd | "stopped"; at: number } | null {
+  // A run that went on past a card nobody answered shipped nothing, on any graph.
+  if (passedUnansweredCard(run.node_statuses)) return null;
+  const ends: Record<string, GraphEnd> = { ...(graph.ends ?? {}), ...(graph.nodes.some((n) => n.id === "watch") ? { watch: "shipped" as const } : {}), ...(graph.nodes.some((n) => n.id === "drop") ? { drop: "dropped" as const } : {}) };
+  let best: { kind: LineRunEnd | "stopped"; at: number } | null = null;
+  for (const n of run.node_statuses ?? []) {
+    const kind = ends[n.node_id];
+    if (!kind || n.status !== "completed") continue;
+    const at = n.completed_at ?? n.started_at ?? 0;
+    if (!best || at >= best.at) best = { kind, at };
+  }
+  return best;
+}
+
+/** How a visit left its station: on to the next visit, or the run's end.
+ *  `runEnd` is a foreign graph's own end for the run (graphRunEnd). */
+function leftOf(v: RunVisit, next: RunVisit | undefined, live: boolean, runEnd?: { kind: LineRunEnd | "stopped" } | null): { left: MapLeft; to: string | null } {
   if (next) return { left: v.state === "failed" ? "failed" : "moved", to: next.node };
   if (live) return { left: "live", to: null };
   if (v.state === "failed") return { left: "failed", to: endNodeId("stopped") };
+  if (runEnd !== undefined) {
+    const kind = runEnd?.kind ?? "stopped";
+    if (kind === "parked") return { left: "parked", to: CAUSES_NODE };
+    if (kind === "dissolved" || kind === "dropped" || kind === "stopped") return { left: kind, to: endNodeId(kind) };
+    if (v.node !== "watch") return { left: "moved", to: endNodeId("held") };
+  }
   const end = LINE_END_NODES[v.node];
   if (end === "parked") return { left: "parked", to: CAUSES_NODE };
   if (end === "dissolved" || end === "dropped") return { left: end, to: endNodeId(end) };
@@ -619,12 +673,31 @@ function leftOf(v: RunVisit, next: RunVisit | undefined, live: boolean): { left:
   return { left: "stopped", to: endNodeId("stopped") };
 }
 
-/** The edges that go back: found by a walk from Causes, an edge to a station
- *  still on the walk's path closes a loop. */
+/** The edges that go back. An edge to a station nearer Causes (fewer steps
+ *  from it) that can reach the edge's start again closes a loop: so two
+ *  stations that stand in for each other (prove and prove_line, both a step
+ *  after analyze) each get their own loop back from red, whichever a walk
+ *  would meet first. Any cycle that rule leaves, a walk from Causes breaks:
+ *  an edge to a station still on the walk's path closes it. */
 function backEdges(edges: Array<{ from: string; to: string }>): Set<string> {
   const adj = new Map<string, string[]>();
   for (const e of edges) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
+  const stepsFrom = (seed: string) => {
+    const d = new Map<string, number>([[seed, 0]]);
+    const queue = [seed];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const m of adj.get(cur) ?? []) if (!d.has(m)) { d.set(m, d.get(cur)! + 1); queue.push(m); }
+    }
+    return d;
+  };
+  const dist = stepsFrom(CAUSES_NODE);
   const out = new Set<string>();
+  for (const e of edges) {
+    const [a, b] = [dist.get(e.from), dist.get(e.to)];
+    if (a != null && b != null && b < a && stepsFrom(e.to).has(e.from)) out.add(`${e.from}->${e.to}`);
+  }
+  for (const [from, tos] of adj) adj.set(from, tos.filter((to) => !out.has(`${from}->${to}`)));
   const state = new Map<string, 1 | 2>();
   const walk = (n: string) => {
     state.set(n, 1);
