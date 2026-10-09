@@ -74,6 +74,11 @@ export function taskEditLabel(state: any, task: any, subject: string, fields: Re
     return fields.assignee ? `Assigned ${subject} to ${assigneeName(state, String(fields.assignee))}` : `Unassigned ${subject}`;
   }
   if (fields.parent !== undefined) return fields.parent ? `Moved ${subject} under ${fields.parent}` : `Moved ${subject} to the top level`;
+  // The provenance link (TG5): set or repointed from the task page's Found
+  // during row, cleared by its remove.
+  if (fields.found_during !== undefined) {
+    return fields.found_during ? `Marked ${subject} as found during ${fields.found_during}` : `Cleared where ${subject} was found`;
+  }
   if (fields.title !== undefined) return `Renamed ${subject}`;
   if (fields.priority !== undefined) return `Set ${subject} to ${fields.priority} priority`;
   if (fields.labels !== undefined) return `Changed the labels of ${subject}`;

@@ -6,7 +6,7 @@
 // Both are plain functions over plain rows, so the page's arithmetic is
 // testable without a DOM and the components stay layout only.
 
-import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEvents";
+import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEventRules";
 import { checkLabel } from "@codecast/shared/contracts";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import {
