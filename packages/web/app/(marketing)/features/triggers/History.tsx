@@ -1,102 +1,54 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { SOL } from "../../blog/blogChrome";
 import { Body, C, Section } from "./ui";
+import { Shot } from "../decisions/kit";
 
-const ok = (msg: string, id = "tr-43") => (
-  <span><span style={{ color: SOL.green }}>ok</span> {msg}: <span style={{ color: SOL.cyan }}>{id}</span>{"\n"}</span>
-);
-const mute = (s: ReactNode) => <span style={{ color: SOL.base01 }}>{s}</span>;
-
-/** Each verb, its one-line purpose, and what it prints. Output follows the CLI's own format strings. */
-const VERBS: { verb: string; cmd: string; what: string; out: ReactNode }[] = [
-  {
-    verb: "ls", cmd: "cast trigger ls", what: "Active triggers with their next run and last result. --all adds finished ones, --json the full rows.",
-    out: (
-      <span>
-        {"  "}<span style={{ color: SOL.cyan }}>tr-41</span>  <span style={{ color: SOL.yellow }}>scheduled </span>  Check if CI is green on main  {mute("in 12m")}  {mute("inline")}{"\n"}
-        {"  "}<span style={{ color: SOL.cyan }}>tr-43</span>  <span style={{ color: SOL.green }}>running   </span>  Review open PRs and summarize findings  {mute("every 8h")}  {mute("claude/default")}{"\n"}
-        {"           "}{mute("last: Two PRs went green overnight. Summary filed.")}{"\n"}
-        {"  "}<span style={{ color: SOL.cyan }}>tr-44</span>  <span style={{ color: SOL.yellow }}>scheduled </span>  Rebuild the docs index if main moved  {mute("every 1h")}  {mute("claude/sonnet")}{"\n"}
-        {"  "}<span style={{ color: SOL.cyan }}>tr-45</span>  <span style={{ color: SOL.base01 }}>paused    </span>  Respond to new PR review comments  {mute("on pr_comment in acme/web#482")}  {mute("inline")}{"\n"}
-        {mute("\n4 trigger(s)")}{"\n"}
-      </span>
-    ),
-  },
-  {
-    verb: "update", cmd: "cast trigger update tr-43 --every 8h", what: "Edit in place: --prompt, --title, --in, --every, --on, --model, --safe and more. The run history stays attached.",
-    out: <span><span style={{ color: SOL.green }}>ok</span> Updated <span style={{ color: SOL.cyan }}>tr-43</span>: interval_ms (see `cast trigger history tr-43`){"\n"}</span>,
-  },
-  {
-    verb: "history", cmd: "cast trigger history tr-43", what: "Every version, newest first: who changed which field, from what to what, and from where.",
-    out: (
-      <span>
-        <span style={{ color: SOL.cyan }}>tr-43</span> <span className="font-bold" style={{ color: SOL.base2 }}>Review open PRs and summarize findings</span> {mute("v3, 2 edit(s)")}{"\n\n"}
-        <span style={{ color: SOL.yellow }}>v2 -&gt; v3</span>  {mute("10/3/2026, 9:12:04 AM")}  Dana {mute("via cli")}{"\n"}
-        {"  "}interval_ms: 4h {mute("->")} 8h{"\n\n"}
-        <span style={{ color: SOL.yellow }}>v1 -&gt; v2</span>  {mute("10/1/2026, 6:40:11 PM")}  Dana {mute("via web")}{"\n"}
-        {"  "}prompt: &quot;Review open PRs and summarize findings&quot; {mute("->")} &quot;Review open PRs. Flag any with a failing check...&quot;{"\n"}
-        {"  "}model: {mute("(none)")} {mute("->")} sonnet{"\n"}
-      </span>
-    ),
-  },
-  {
-    verb: "log", cmd: "cast trigger log tr-43", what: "The last run's conversation, when it ran, and its summary. For a gated trigger, the last skip too.",
-    out: (
-      <span>
-        Last run conversation: <span style={{ color: SOL.cyan }}>jx7f2qa9c81kd0v6n3t5wq2e7x8c1r4m</span> {mute("(Review open PRs and summarize findings)")}{"\n"}
-        {mute("Ran 41m ago")}{"\n"}
-        Two PRs went green overnight. #507 still waits on a reviewer. Summary filed.{"\n"}
-        Use: cast read jx7f2qa9c81kd0v6n3t5wq2e7x8c1r4m{"\n"}
-      </span>
-    ),
-  },
-  { verb: "run", cmd: "cast trigger run tr-43", what: "Fire it now, outside its schedule. A precheck does not apply to a manual run.", out: ok("Queued for immediate run") },
-  { verb: "pause", cmd: "cast trigger pause tr-43", what: "Stop firing without losing anything. cast trigger resume picks it back up.", out: ok("Paused") },
-  { verb: "cancel", cmd: "cast trigger cancel tr-43", what: "Done with it. The history and every past run stay readable.", out: ok("Cancelled") },
+/** The verbs on a trigger's page, in the order its button row shows them. */
+const VERBS: { name: string; does: ReactNode }[] = [
+  { name: "Run now", does: "Queue a run immediately. The regular cadence does not shift, and a precheck does not apply." },
+  { name: "Pause", does: <>Skip every fire until you press <b>Resume</b>. Nothing is lost.</> },
+  { name: "Cancel", does: "Retire it, after a confirm. The run history stays readable." },
+  { name: "Reactivate", does: "On a finished or cancelled trigger: arm it again, one cycle from now." },
+  { name: "Edit", does: "Change the prompt, title or schedule in the same form that made it." },
 ];
 
 export function History() {
-  const [i, setI] = useState(2);
-  const v = VERBS[i];
   return (
     <Section
       id="history"
       tint
-      title="Edits are versions, not overwrites"
-      lede={<>A trigger that runs for weeks gets tuned. <C>cast trigger update</C> writes a new version and keeps the old one, so you can always see what the prompt said when a given run fired. Every trigger also has a page in the web app, and the same verbs work there.</>}
+      title="Every trigger has a page"
+      lede={<>Open one from the Triggers list, or from the pill on the conversation that set it. The page holds the schedule, the controls, the precheck if there is one, every run so far, and the prompt in full.</>}
     >
-      <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-        <div role="tablist" aria-label="Trigger commands" className="flex gap-1.5 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
-          {VERBS.map((x, k) => (
-            <button
-              key={x.verb}
-              role="tab"
-              aria-selected={k === i}
-              type="button"
-              onClick={() => setI(k)}
-              className="shrink-0 rounded-lg px-3 py-2 text-left font-mono text-[13px] transition-colors"
-              style={k === i ? { backgroundColor: SOL.base03, color: SOL.base3 } : { backgroundColor: SOL.base3, color: SOL.base01, border: `1px solid ${SOL.base2}` }}
-            >
-              <span style={{ color: k === i ? SOL.orange : SOL.base1 }}>cast trigger</span> {x.verb}
-            </button>
+      <Shot
+        src="/features/triggers/trigger-page.webp"
+        alt="A trigger's page in codecast: Evals: prompts changed, every 2h, next fire in 49m, buttons for Run now, Pause, Cancel and Edit, a Precheck panel showing the last skip, and a run history of skipped firings beside the briefing"
+        w={1600}
+        h={1026}
+        caption={<>One of codecast&apos;s own triggers. It runs every two hours, but its precheck skips the run unless a prompt changed, so most of its history reads <b>skipped</b>.</>}
+      />
+      <div className="mt-10 grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <dl className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
+          {VERBS.map((v, i) => (
+            <div key={v.name} className="grid grid-cols-[110px_minmax(0,1fr)] gap-4 px-4 py-3" style={{ borderTop: i ? `1px solid ${SOL.base2}` : undefined }}>
+              <dt className="font-mono text-[13px] font-semibold" style={{ color: SOL.base02 }}>{v.name}</dt>
+              <dd className="text-[14px] leading-6" style={{ color: SOL.base01 }}>{v.does}</dd>
+            </div>
           ))}
-        </div>
-        <div className="min-w-0">
-          <div className="rounded-2xl overflow-hidden shadow-xl" style={{ backgroundColor: SOL.base03, border: "1px solid #094959" }}>
-            <div className="flex items-center gap-2 px-4 py-2.5" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #094959" }}>
-              {[SOL.red, SOL.yellow, SOL.green].map((col) => <span key={col} className="h-3 w-3 rounded-full" style={{ backgroundColor: col }} />)}
-              <span className="ml-2 font-mono text-[12px]" style={{ color: SOL.base01 }}>~/src/acme</span>
-            </div>
-            <div className="overflow-x-auto">
-              <pre key={v.verb} className="tg-fade min-h-[200px] p-4 font-mono text-[12px] leading-relaxed" style={{ color: SOL.base0 }}>
-                <span style={{ color: SOL.green }}>$</span> <span style={{ color: SOL.base1 }}>{v.cmd}</span>{"\n"}
-                {v.out}
-              </pre>
-            </div>
-          </div>
-          <Body className="mt-4">{v.what}</Body>
+        </dl>
+        <div className="space-y-4">
+          <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>Edits are versions, not overwrites</h3>
+          <Body>
+            A trigger that runs for weeks gets tuned. Every edit, from the page or from an agent, writes a new version and keeps the old one, so you can always see what the prompt said when a given run fired.
+          </Body>
+          <Body>
+            In the Triggers list each row carries the same controls inline (<b>Run now</b>, <b>Edit</b>), plus <b>Duplicate</b> and <b>Copy prompt</b>, and opens its run history in place.
+          </Body>
+          <Body className="!text-[14px]" >
+            Reading the version history is in the CLI today: <C>cast trigger history tr-43</C> lists who changed which field, from what to what, and whether it came from the web or a session.
+          </Body>
         </div>
       </div>
     </Section>

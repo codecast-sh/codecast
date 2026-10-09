@@ -13,6 +13,7 @@ export const lineFinderValidator = v.object({
   kind: v.union(v.literal("any"), v.array(v.string())),
   fingerprint: v.string(),
   runs: v.optional(v.string()),
+  opens_causes: v.optional(v.boolean()),
 });
 
 // The repo's own line (line-map.md LX5): its parsed stations and routes ride

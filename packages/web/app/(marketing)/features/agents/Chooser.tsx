@@ -7,17 +7,18 @@ import { Whole } from "../kit";
 
 /**
  * "Which one do I want?" The rule codecast teaches its agents is ownership:
- * who reads the result. Each situation maps to one command and the three
- * facts that decide it: what history the new session starts with, where it
+ * who reads the result. Each situation maps to where you start it in the app
+ * (with its command as a footnote) and the three facts that decide it: what history the new session starts with, where it
  * shows up, and who hears back.
  */
-type Choice = { situation: string; shape: Shape; cmd: string; history: string; lands: string; reports: string; anchor: string };
+type Choice = { situation: string; shape: Shape; how: string; cmd: string; history: string; lands: string; reports: string; anchor: string };
 
 const CHOICES: Choice[] = [
   {
     situation: "Hand off a piece and get the result back",
     shape: "worker",
     anchor: "workers",
+    how: "Ask your agent to hand it to a worker",
     cmd: 'cast spawn --subagent -- "<task>"',
     history: "None. The brief you write is all it knows, so make it self-contained.",
     lands: "Nested under your session. It stays out of the inbox and out of top-level lists.",
@@ -27,6 +28,7 @@ const CHOICES: Choice[] = [
     situation: "Try two approaches to the same problem",
     shape: "fork",
     anchor: "fork",
+    how: "Fork from here, on any message",
     cmd: 'cast fork "<approach A>" "<approach B>"',
     history: "Everything up to the fork point. By default the fork request itself stays out.",
     lands: "This thread takes the first direction. Each other direction is a live session in the inbox.",
@@ -36,6 +38,7 @@ const CHOICES: Choice[] = [
     situation: "Keep going on another agent or model",
     shape: "switch",
     anchor: "switch",
+    how: "Switch agent, in the agent menu",
     cmd: "cast switch --agent codex",
     history: "The same conversation. The id does not change.",
     lands: 'The same thread, with a "now using Codex" divider where the agent changed.',
@@ -45,6 +48,7 @@ const CHOICES: Choice[] = [
     situation: "Stop here and continue fresh",
     shape: "handoff",
     anchor: "handoff",
+    how: "Hand off to, in the agent menu",
     cmd: "cast handoff --to codex",
     history: "A brief the server writes: goal, decisions, what is verified, open questions, next steps.",
     lands: "A new inbox card in the same directory, linked to this one and bound to its task or plan.",
@@ -54,6 +58,7 @@ const CHOICES: Choice[] = [
     situation: "Get one answer inside a script",
     shape: "exec",
     anchor: "exec",
+    how: "From a script. There is no app surface, by design",
     cmd: 'git diff | cast exec --agent codex "review this"',
     history: "Only the prompt and whatever you pipe in.",
     lands: "stdout. The exit code is the agent's. No inbox card.",
@@ -63,6 +68,7 @@ const CHOICES: Choice[] = [
     situation: "Open a separate thread a person will steer",
     shape: "spawn",
     anchor: "workers",
+    how: "New session, from the sidebar or the composer",
     cmd: 'cast spawn "<task>"',
     history: "None.",
     lands: "Its own card in the inbox, even when an agent runs the command.",
@@ -108,7 +114,8 @@ export function Chooser() {
           </div>
           <div className="min-w-0">
             <div className="text-[13px]" style={{ color: SOL.base1 }}>{c.situation}</div>
-            <code className="mt-1 block font-mono text-[15px] sm:text-[16px] font-semibold" style={{ color: SOL.base03 }}><Whole text={c.cmd} /></code>
+            <div className="mt-1 text-[16px] sm:text-[17px] font-semibold leading-snug" style={{ color: SOL.base03 }}>{c.how}</div>
+            <code className="mt-1.5 block font-mono text-[12px]" style={{ color: SOL.base1 }}><Whole text={c.cmd} /></code>
           </div>
         </div>
         <dl className="mt-6 grid grid-cols-1 gap-4">

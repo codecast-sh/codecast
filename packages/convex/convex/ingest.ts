@@ -1298,6 +1298,8 @@ export const promote = internalAction({
     const signal = promotionSignal(source, group, args.transition, args.fingerprint);
     if (!signal) return { skipped: "transition does not promote" };
     const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal });
+    // A held signal (no finder converts this source, LE4) reached no cause yet.
+    if (!result.task_id) return { skipped: "held as a signal" };
     await ctx.runMutation(internal.ingest.linkSignal, { group_id: group._id, task_id: result.task_id, external_event_id: args.external_event_id });
     return { task_id: result.task_id };
   },

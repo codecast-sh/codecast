@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { SOL } from "../../blog/blogChrome";
-import { KeyCap } from "@/components/KeyboardShortcutsHelp";
-import { BLOCKED_APPS, CURSOR_ORANGE, DO_PLAN, DO_RESULTS, DO_WORDS, ERRORS, FLAGS, GRANTS, OUTCOMES, PERMISSIONS_OUT, ROUTES, VERB_GROUPS } from "./data";
+import { BLOCKED_APPS, CURSOR_ORANGE, DO_PLAN, DO_RESULTS, DO_WORDS, ERRORS, FLAGS, GRANTS, OUTCOMES, ROUTES, VERB_GROUPS } from "./data";
 import { AgentCursorGlyph, C, HumanCursorGlyph, Lights, Term, TermLineView } from "./parts";
 
 /** Backticks in a recovery line become inline code. */
@@ -170,32 +169,8 @@ export function StepWords() {
 export function Guardrails() {
   return (
     <div className="grid-cols-1 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {/* Blocked apps */}
-      <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-        <div className="font-mono text-[12px]" style={{ color: SOL.red }}>app_blocked</div>
-        <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
-        <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
-          The helper itself refuses these, under any name you pass. The CLI is not the line of defence, so no flag turns it off.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {BLOCKED_APPS.map((a) => (
-            <span key={a} className="font-mono text-[12px] px-2 py-1 rounded-md line-through decoration-[1.5px]" style={{ backgroundColor: "rgba(220,50,47,0.12)", color: "#f08c8a", textDecorationColor: SOL.red }}>{a}</span>
-          ))}
-        </div>
-      </div>
-
-      {/* Redaction */}
-      <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-        <div className="font-mono text-[12px]" style={{ color: SOL.cyan }}>[redacted]</div>
-        <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
-        <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
-          A password, passcode or one-time code field shows as <span className="font-mono" style={{ color: SOL.base2 }}>[redacted]</span> in every tree, so its value never reaches the agent&apos;s context or your transcript.
-        </p>
-        <div className="mt-4 rounded-lg px-3 py-2.5 font-mono text-[12px] leading-[1.7]" style={{ backgroundColor: SOL.base03 }}>
-          <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>14</span> text field Email, Value: sam@example.com</div>
-          <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>15</span> secure text field Password, Value: <span style={{ color: SOL.cyan }}>[redacted]</span></div>
-        </div>
-      </div>
+      <BlockedAppsCard />
+      <RedactedCard />
 
       {/* stdin */}
       <div className="md:col-span-2 lg:col-span-1 rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
@@ -218,16 +193,58 @@ export function Guardrails() {
             Every agent with codecast installed carries the same standing instruction: do not push, submit a form, send a message, buy anything, delete data or change account settings unless you asked for that action. In an app holding sensitive content, read only what you were asked to read.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-px rounded-xl overflow-hidden font-mono text-[12.5px]" style={{ backgroundColor: "rgba(147,161,161,0.18)" }}>
-          <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
-          <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
-          {[["read a window", "send a message"], ["find a button", "submit a form"], ["write a draft", "buy anything"], ["take a screenshot", "delete data"], ["report what it saw", "change settings"]].map(([a, b]) => (
-            <div key={a} className="contents">
-              <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: SOL.green }}>✓ {a}</div>
-              <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: "#f08c8a" }}>✕ {b}</div>
-            </div>
-          ))}
+        <ReadVsMark />
+      </div>
+    </div>
+  );
+}
+
+/** What an agent does on its own, against what waits for the person to ask. */
+export function ReadVsMark() {
+  return (
+    <div className="grid grid-cols-2 gap-px rounded-xl overflow-hidden font-mono text-[12.5px]" style={{ backgroundColor: "rgba(147,161,161,0.18)" }}>
+      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
+      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
+      {[["read a window", "send a message"], ["find a button", "submit a form"], ["write a draft", "buy anything"], ["take a screenshot", "delete data"], ["report what it saw", "change settings"]].map(([a, b]) => (
+        <div key={a} className="contents">
+          <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: SOL.green }}>✓ {a}</div>
+          <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: "#f08c8a" }}>✕ {b}</div>
         </div>
+      ))}
+    </div>
+  );
+}
+
+/** The helper's refusal of password managers, by name. */
+export function BlockedAppsCard() {
+  return (
+    <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
+      <div className="font-mono text-[12px]" style={{ color: SOL.red }}>refused</div>
+      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
+      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
+        The helper itself refuses these, under any name an agent tries. No setting or instruction turns it off.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {BLOCKED_APPS.map((a) => (
+          <span key={a} className="font-mono text-[12px] px-2 py-1 rounded-md line-through decoration-[1.5px]" style={{ backgroundColor: "rgba(220,50,47,0.12)", color: "#f08c8a", textDecorationColor: SOL.red }}>{a}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A secret field as it reads in a tree. */
+export function RedactedCard() {
+  return (
+    <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
+      <div className="font-mono text-[12px]" style={{ color: SOL.cyan }}>[redacted]</div>
+      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
+      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
+        A password, passcode or one-time code field shows as <span className="font-mono" style={{ color: SOL.base2 }}>[redacted]</span> in every tree, so its value never reaches the agent&apos;s context or your transcript.
+      </p>
+      <div className="mt-4 rounded-lg px-3 py-2.5 font-mono text-[12px] leading-[1.7]" style={{ backgroundColor: SOL.base03 }}>
+        <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>14</span> text field Email, Value: sam@example.com</div>
+        <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>15</span> secure text field Password, Value: <span style={{ color: SOL.cyan }}>[redacted]</span></div>
       </div>
     </div>
   );
@@ -257,27 +274,39 @@ export function ErrorList() {
 /* ── Setup ─────────────────────────────────────────────────────────────── */
 
 export function SetupPanel() {
+  const b = (t: string) => <b style={{ color: SOL.base02 }}>{t}</b>;
   return (
     <div className="grid-cols-1 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
+      <div className="space-y-4">
+        <img
+          src="/features/computer/agent-features-computer.webp"
+          alt="The Computer card on the Agent features page: a Preview window read as numbered lines with the agent's orange pointer on button Share, the New and On badges and the card's switch, and the line Agents can use native Mac apps for you, in the background."
+          width={856}
+          height={575}
+          loading="lazy"
+          className="block w-full h-auto rounded-2xl"
+          style={{ border: `1px solid ${SOL.base2}` }}
+        />
+        <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
+          In {b("Agent features")}, switch on the {b("Computer")} card. It lists the two grants still missing, and its {b("Open System Settings")} button opens the pane for the next one. When both land, the card reads {b("Permissions granted")}.
+        </p>
+        <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
+          In the desktop app, {b("Settings")}, {b("Desktop")}, {b("Permissions")} shows them under {b("Agent computer use")} as Computer control and Computer screenshots. If an agent reaches for an app before they are granted, the same steps appear as a card under its step in the conversation, with {b("Tell the agent to continue")} once they are done.
+        </p>
+      </div>
       <div className="space-y-4">
         {GRANTS.map((g, i) => (
           <div key={g.id} className="rounded-2xl p-5 flex gap-4" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
             <span className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-mono text-[14px] font-bold" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>{i + 1}</span>
             <div>
-              <div className="font-mono font-bold text-[16px]" style={{ color: SOL.base02 }}>{g.name} <span className="font-normal text-[12px] whitespace-nowrap" style={{ color: SOL.base1 }}>--id {g.id}</span></div>
+              <div className="font-mono font-bold text-[16px]" style={{ color: SOL.base02 }}>{g.name}</div>
               <p className="mt-1.5 text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>{g.why}</p>
             </div>
           </div>
         ))}
-        <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
-          <C>cast computer setup</C> is the human&apos;s one command for both. It explains each grant, asks before anything appears, opens only the pane that is still missing and waits for the grant to land. A machine that is already granted goes through it without a window moving. Interrupt it with <KeyCap>Ctrl</KeyCap> <KeyCap>C</KeyCap>.
+        <p className="text-[14px] leading-relaxed" style={{ color: SOL.base01 }}>
+          From a terminal, <C>cast computer setup</C> walks through both grants the same way, and <C>cast computer permissions</C> reads them without opening anything.
         </p>
-      </div>
-      <div className="space-y-4">
-        <Term label="silent read: shows nothing on screen">
-          <TermLineView line={{ t: "cmd", s: "cast computer permissions" }} />
-          {PERMISSIONS_OUT.map((l, i) => <TermLineView key={i} line={{ t: i ? "dim" : "ok", s: l }} />)}
-        </Term>
         <div className="rounded-2xl p-5" style={{ backgroundColor: "#f6efda", border: `1px solid ${SOL.base2}` }}>
           <div className="font-mono font-bold text-[15px]" style={{ color: SOL.base02 }}>Linux hosts</div>
           <p className="mt-1.5 text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>

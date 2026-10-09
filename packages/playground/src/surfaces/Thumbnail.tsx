@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { STILL_VIEWPORT } from "../../convex/lib/limits";
 import { Blob } from "../ui/Blob";
+import { useMaybeIdentity } from "../lib/identity";
 import { PreviewFrame } from "./PreviewFrame";
 import s from "./Thumbnail.module.css";
 /** Live previews at once: two on a phone, with data saver, or on a small device. */
@@ -58,7 +59,9 @@ export function Thumbnail({ appId, slug, name, version, still, busy, hovered }: 
   const [visible, setVisible] = useState(false);
   const [imageShown, setImageShown] = useState(false);
   const [painted, setPainted] = useState(false);
-  const wants = visible && (hovered || busy || !still);
+  // The live app needs a visitor to watch it with; until then, the still.
+  const known = !!useMaybeIdentity();
+  const wants = known && visible && (hovered || busy || !still);
 
   useEffect(() => {
     const el = box.current;

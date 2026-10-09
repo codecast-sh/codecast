@@ -12,7 +12,7 @@ import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { SITE_LINKS } from "@/lib/siteLinks";
 import { NATIVE_APP_LINKS } from "@/lib/nativeApps";
 import { AppBadge } from "@/components/marketing/AppBadges";
-import { BROWSER_EXTENSION_SETUP_COMMAND } from "@codecast/shared/contracts";
+import { agentFeatureHref } from "@/lib/agentFeatureHref";
 import { Chrome, ExternalLink } from "lucide-react";
 
 // The server 302s the Mac link to the pinned dmg on dl.codecast.sh (release.sh bumps the pin).
@@ -292,10 +292,12 @@ export default function DownloadPage() {
           <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#002b36] px-4 py-2.5 text-sm font-medium text-[#fdf6e3] hover:bg-[#073642]">
             Add to Chrome <ExternalLink className="h-3.5 w-3.5" />
           </a>
-          <p className="mt-5 text-sm text-[#657b83]">Then pair it from a terminal on the same computer:</p>
-          <code className="mt-2 block break-words rounded-md bg-[#eee8d5] p-3 font-mono text-sm text-[#002b36]">{BROWSER_EXTENSION_SETUP_COMMAND}</code>
+          <p className="mt-5 text-sm text-[#657b83]">
+            Then switch on <strong className="text-[#002b36]">Browser</strong> in <Link href={agentFeatureHref("browser")} className="text-[#2aa198] underline underline-offset-2">Agent features</Link> and
+            click <strong className="text-[#002b36]">Pair</strong> on its card.
+          </p>
           <p className="mt-3 text-xs leading-relaxed text-[#657b83]">
-            Requires desktop Chrome and the Codecast CLI. Chrome keeps the extension up to date.{" "}
+            Requires desktop Chrome and codecast on the same computer. Chrome keeps the extension up to date.{" "}
             <Link href="/documentation/browser" className="text-[#2aa198] underline underline-offset-2">Setup guide</Link>
           </p>
         </div>
