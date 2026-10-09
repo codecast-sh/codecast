@@ -31,6 +31,16 @@ export const MAC_REACH_SCRIPT = `if ! pkgutil --pkgs='org\\.fuse-t\\.core.*' >/d
 fi
 ${SSHD_KEEPALIVE_SCRIPT}`;
 
+/** The browser `cast browser` drives. A stock AWS macOS image has none. */
+const MAC_CHROME_SCRIPT = `if [ ! -d "/Applications/Google Chrome.app" ]; then
+  chromedir=$(mktemp -d)
+  curl -fsSL -o "$chromedir/chrome.dmg" https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg
+  hdiutil attach -nobrowse -readonly -mountpoint "$chromedir/mnt" "$chromedir/chrome.dmg" >/dev/null
+  sudo -n ditto "$chromedir/mnt/Google Chrome.app" "/Applications/Google Chrome.app"
+  hdiutil detach "$chromedir/mnt" -quiet
+  rm -rf "$chromedir"
+fi`;
+
 export const MAC_HOST_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
 
 export function macServiceLabel(user: string): string {
@@ -56,6 +66,7 @@ for agent in .codex .claude .gemini .grok; do
     exit 1
   fi
 done
+${MAC_CHROME_SCRIPT}
 ${MAC_REACH_SCRIPT}
 echo MAC-BASE-OK`;
 }
