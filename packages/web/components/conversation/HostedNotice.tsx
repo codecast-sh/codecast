@@ -7,21 +7,20 @@ import { useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { PENDING_HOSTED_GRACE_MS } from "./pendingSend";
 import { RotateCcw, ArrowRight, Mail, Repeat } from "lucide-react";
-import { APPROVAL_ANSWERS, replyAsksPerson, type NoticeKind } from "@codecast/shared/contracts/assistant";
-import { NOTICE_DOT } from "../../lib/hostedNotice";
+import type { NoticeKind } from "@codecast/shared/contracts/assistant";
+import { NOTICE_DOT, noticeMove, noticeWords } from "../../lib/hostedNotice";
 import { TopUpLink } from "../plan/TopUpLink";
-export { hostedNoticeKind, lastNoticeKind, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
+export { hostedNoticeKind, lastNoticeKind, NOTICE_ROW_WORD, noticeWords } from "../../lib/hostedNotice";
 import { cn } from "@/lib/utils";
 import { sendToSession } from "../../lib/sendToSession";
 import { useInboxStore } from "../../store/inboxStore";
 import { useLaneMailAbilities } from "../simple/useLaneMail";
 import { useUpgradesOpen } from "../simple/billing";
 import { usePlanMeter } from "../simple/usePlanFigures";
-import { LANE_COPY } from "../simple/lane";
+import { LANE_COPY, approvalAnswerWords } from "../simple/lane";
+import { UseWhiskNow } from "../simple/UseWhiskNow";
 import { useThinkingAvailable } from "../simple/assistantPromise";
-
-/** What the person types for them when they press the notice's action. */
-const KEEP_GOING = "Keep going";
+import { EMAIL_PROOF_DIGITS, useEmailProof } from "../simple/useEmailProof";
 
 export type NoticeAction = { label: string; icon: typeof RotateCcw; run: () => void; busy?: string };
 
@@ -29,20 +28,17 @@ export type NoticeAction = { label: string; icon: typeof RotateCcw; run: () => v
  *  button, and the inbox's "Try these again" over every stopped row
  *  (GlobalSessionPanel RetryStoppedButton), so the two never disagree. */
 export function actionFor(kind: NoticeKind, conversationId: string | undefined, retryText: string | undefined, upgradesOpen: boolean): NoticeAction | null {
-  if (!conversationId) return null;
-  switch (kind) {
-    case "error":
-    case "unavailable":
-      return retryText ? { label: kind === "unavailable" ? "Try now" : "Try again", busy: "Trying again…", icon: RotateCcw, run: () => sendToSession(conversationId, retryText) } : null;
-    case "time":
-      return { label: KEEP_GOING, busy: "Going on…", icon: ArrowRight, run: () => sendToSession(conversationId, KEEP_GOING) };
-    case "budget":
-      // Until a plan can be bought, Plan has nothing to offer: the notice says
-      // when the allowance comes back instead (BudgetReturn).
-      return upgradesOpen ? { label: "Open Plan", icon: ArrowRight, run: () => useInboxStore.getState().openSettingsModal("plan") } : null;
-    case "safety":
-      return null;
-  }
+  const move = conversationId ? noticeMove(kind, retryText, upgradesOpen) : null;
+  if (!move || !conversationId) return null;
+  const { send } = move;
+  return {
+    label: move.label,
+    busy: move.busy,
+    icon: kind === "error" || kind === "unavailable" ? RotateCcw : ArrowRight,
+    // A budget stop's move opens Plan; until a plan can be bought it has
+    // none, and the notice says when the allowance comes back (BudgetReturn).
+    run: send ? () => sendToSession(conversationId, send) : () => useInboxStore.getState().openSettingsModal("plan"),
+  };
 }
 
 export function HostedNotice({ kind, content, conversationId, retryText, live, retries = 0 }: {
@@ -70,20 +66,32 @@ export function HostedNotice({ kind, content, conversationId, retryText, live, r
     const t = window.setTimeout(() => setSent(false), PENDING_HOSTED_GRACE_MS);
     return () => window.clearTimeout(t);
   }, [sent]);
-  const words = noticeWords(content, retries, !!action);
+  // A stop that later turns moved past is history: one quiet line in the
+  // reply column, without the invitation to try again that no longer applies.
+  const words = noticeWords(content, retries, !!action || !live);
+  if (!live) {
+    return (
+      <div className="mx-auto conv-col px-2 sm:px-4 py-1" data-hosted-notice={kind} data-hosted-notice-past="">
+        <p className="flex items-start gap-2 text-[12.5px] leading-relaxed text-sol-text-dim">
+          <span aria-hidden className={cn("mt-[8px] h-1 w-1 shrink-0 rounded-full opacity-70", NOTICE_DOT[kind])} />
+          <span className="min-w-0">{words}</span>
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="mx-auto conv-col px-2 sm:px-4 py-1.5" data-hosted-notice={kind}>
       <div className={cn(
         // The dot sits on the first line, and on a phone the action takes its
         // own row under the words so the sentence keeps the card's width.
         "flex flex-wrap items-start gap-x-3 gap-y-2.5 rounded-[var(--radius,8px)] border border-sol-border bg-sol-bg-alt/60 px-3.5 py-2.5",
-        !live && "opacity-70",
       )}>
         <span aria-hidden className={cn("mt-[13px] h-1.5 w-1.5 shrink-0 rounded-full", NOTICE_DOT[kind])} />
         <p className="min-w-0 flex-1 py-[5px] text-[13.5px] leading-relaxed text-sol-text-muted">
           {words}
-          {kind === "budget" && live && !upgradesOpen && <BudgetReturn />}
+          {kind === "budget" && !upgradesOpen && <BudgetReturn />}
         </p>
+        {kind === "verify" && <EmailProofForm conversationId={conversationId} />}
         {action && (
           <div className="shrink-0 max-[479px]:basis-full max-[479px]:pl-[18px]">
           <button
@@ -102,12 +110,40 @@ export function HostedNotice({ kind, content, conversationId, retryText, live, r
   );
 }
 
-/** A notice's sentence as drawn. Beside a button, the engine's closing
- *  invitation to ask again says what the button already does, so it goes;
- *  a stop that repeated is one line with the count. */
-export function noticeWords(content: string, retries: number, hasAction: boolean): string {
-  if (retries > 0) return `Still can't get through after ${retries + 1} tries. The trouble is on our side, not yours.`;
-  return hasAction ? content.replace(/\s*You can ask me to try again\.?\s*$/i, "") : content;
+const FIELD = "h-8 rounded-[var(--radius,8px)] border border-sol-border bg-sol-card px-2.5 text-[13px] text-sol-text placeholder:text-sol-text-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/40";
+
+/** The `verify` stop's move: the mailed code, entered here, proves the
+ *  address and the stopped ask picks up by itself (useEmailProof). */
+function EmailProofForm({ conversationId }: { conversationId: string | undefined }) {
+  const proof = useEmailProof(conversationId);
+  if (proof.phase === "done") {
+    return <p className="basis-full pl-[18px] text-[13px] text-sol-text-muted" data-email-proof-done>Thanks, your email is confirmed. Picking this up now.</p>;
+  }
+  return (
+    <form
+      className="flex basis-full flex-wrap items-center gap-x-3 gap-y-2 pl-[18px]"
+      onSubmit={(e) => { e.preventDefault(); void proof.submit(); }}
+      data-email-proof
+    >
+      <input
+        value={proof.code}
+        onChange={(e) => proof.setCode(e.target.value)}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        placeholder="6-digit code"
+        maxLength={EMAIL_PROOF_DIGITS}
+        aria-label="Code from the email"
+        className={cn(FIELD, "w-32 font-mono tracking-[0.2em] placeholder:font-sans placeholder:tracking-normal")}
+      />
+      <button type="submit" disabled={!proof.ready} className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius,8px)] border border-sol-border bg-sol-card px-3 text-[13px] font-medium text-sol-text transition-colors hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/40 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-sol-card">
+        {proof.phase === "checking" ? "Checking…" : "Confirm"}
+      </button>
+      <button type="button" onClick={() => void proof.resend()} disabled={proof.phase === "sending"} className="text-[12.5px] text-sol-text-dim underline-offset-2 hover:text-sol-text hover:underline disabled:opacity-60">
+        {proof.phase === "sending" ? "Sending…" : proof.phase === "sent" ? "Sent. Check your email" : "Send a new code"}
+      </button>
+      {proof.error && <p className="basis-full text-[12.5px] text-sol-red" role="alert">{proof.error}</p>}
+    </form>
+  );
 }
 
 /** When a used-up month comes back, in the composer's own sentence. */
@@ -116,20 +152,9 @@ function BudgetReturn() {
   return wallet && resets ? <span className="block pt-1 text-sol-text-dim">{LANE_COPY.plan.allowanceOut(resets)} <TopUpLink /></span> : null;
 }
 
-/** What the person answered an approval, as a receipt says it. */
-function approvalAnswerWords(answer: string): string {
-  if (answer === APPROVAL_ANSWERS.approve) return "You said yes";
-  if (answer === APPROVAL_ANSWERS.always) return "You said yes, and not to ask again";
-  if (answer === APPROVAL_ANSWERS.decline) return "You said no";
-  return `You said: “${answer}”`;
-}
 
-/** Whether an answer says something the step's receipt cannot: a plain yes
- *  or no is already in the receipt ("you said no"), while "don't ask again"
- *  and an answer in the person's own words are not. */
-export function approvalAnswerAddsToReceipt(answer: string): boolean {
-  return answer !== APPROVAL_ANSWERS.approve && answer !== APPROVAL_ANSWERS.decline;
-}
+
+export { approvalAnswerAddsToReceipt } from "../simple/lane";
 
 /** A hosted conversation's answer to an approval: a quiet receipt line on
  *  the person's side, not a chat bubble, since the card asked and the step's
@@ -145,42 +170,8 @@ export function ApprovalAnswerLine({ answer, question }: { answer: string; quest
   );
 }
 
-/** Whether a reply offers to connect mail and calendar (the tool set's note
- *  asks the assistant to, when they are not connected). */
-export function offersMailConnect(text: string | null | undefined): boolean {
-  return /\b(?:re)?connect\b[^.?!\n]{0,40}\b(?:mail|email|calendar)\b/i.test(text ?? "");
-}
-
-export type RoutineOffer = { label: string; ask: string };
-
-/** Errands that are worth repeating, each with the cadence its offer names.
- *  An errand that matches none (a note, a trip, a comparison, a draft) is
- *  done once, and offering it weekly would read as a misunderstanding. */
-const REPEATABLE: readonly { shape: RegExp; when: string }[] = [
-  { shape: /\b(news|headlines|weather|forecast|digest|briefing|summar(?:y|ise|ize))\b/i, when: "every morning" },
-  // The week's planning itself, not a list that happens to be inside an
-  // errand ("a short checklist for the night before" is part of one trip).
-  { shape: /\b(plan (?:my|the) week|weekly review|review my (?:to-?dos?|list)|what'?s (?:still )?open)\b/i, when: "every Monday" },
-  { shape: /\b(prices?|deals?|sales?|check (?:on|for|if|whether)|keep an eye|track|status of)\b/i, when: "every week" },
-];
-
-/** An errand tied to one date or one event happens once, whatever words it
- *  shares with a repeating one. */
-const ONE_OFF = /\b(trip|vacation|holiday|party|wedding|birthday|event|move|moving|tomorrow|tonight|this (?:weekend|week|month)|next (?:week|month|weekend)|(?:in|on|for) (?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\b/i;
-
-/** The follow-up a first finished answer offers, or null: the same errand as
- *  a routine, worded with the cadence the errand suggests ("Do this every
- *  morning?"). Offered only after the conversation's first answer, finished,
- *  not asking the person anything in its last paragraph, for an errand that
- *  repeats and was not already about a schedule. */
-export function routineOffer(reply: string | null | undefined, asked: string | undefined, personTurns: number, working: boolean): RoutineOffer | null {
-  const text = reply?.trim() ?? "";
-  if (working || personTurns !== 1 || !text || replyAsksPerson(text)) return null;
-  const errand = asked ?? "";
-  if (/\b(every|each|daily|weekly|weekday|routine|remind)\b/i.test(errand) || ONE_OFF.test(errand)) return null;
-  const match = REPEATABLE.find((r) => r.shape.test(errand));
-  return match ? { label: `Do this ${match.when}?`, ask: `Do this for me ${match.when}.` } : null;
-}
+export { offersMailConnect, routineOffer, type RoutineOffer } from "../../lib/hostedOffers";
+import type { RoutineOffer } from "../../lib/hostedOffers";
 
 const CHIP = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius,8px)] border border-sol-border bg-sol-card px-3 text-[13px] font-medium text-sol-text transition-colors hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/40";
 
@@ -203,7 +194,11 @@ export function MailConnectChip() {
   // Offered to connect where it can work, and to reconnect a connection
   // Whisk stopped accepting (the assistant tells them to; this is the button).
   const reconnect = mail.connected && mail.needsReconnect;
-  if (!mail.known || (mail.connected && !reconnect) || (!reconnect && mail.available !== true)) return null;
+  if (!mail.known || (mail.connected && !reconnect)) return null;
+  if (!reconnect && mail.available === false) {
+    return <div className="-mt-3 pb-3" data-hosted-mail-whisk><UseWhiskNow /></div>;
+  }
+  if (!reconnect && mail.available !== true) return null;
   return (
     <div className="-mt-3 pb-3" data-hosted-mail-connect>
       <button

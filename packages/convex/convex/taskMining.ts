@@ -1,6 +1,5 @@
-import { insertTaskComment } from "./tasks";
 import { v } from "convex/values";
-import { internalMutation, internalQuery, internalAction, action, query } from "./functions";
+import { internalMutation, internalQuery, internalAction, query } from "./functions";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
@@ -8,13 +7,14 @@ import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
-import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
 import { liveConversationIdSet } from "./lib/liveSessions";
 import { docRelatesToTask } from "@codecast/shared/tasks";
+import { graphNeighbors } from "./lib/taskGraph";
 
-// Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
+// Called after generateSessionInsight saves a new insight: extracts the
+// markdown files the session wrote as docs.
 export const mineConversationAfterInsight = internalAction({
   args: {
     user_id: v.id("users"),
@@ -23,64 +23,9 @@ export const mineConversationAfterInsight = internalAction({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
-    const internalApi = internal as any;
-
-    // Mine tasks from this single insight
-    const insight = await ctx.runQuery(internalApi.taskMining.getInsightById, { insight_id: args.insight_id });
-    if (insight) {
-      await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
-        user_id: args.user_id,
-        team_id: args.team_id,
-        insights: [insight],
-      });
-    }
-
-    // Mine raw markdown docs from this conversation's messages
-    let afterCreation: number | undefined;
-    for (let page = 0; page < 20; page++) {
-      const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
-        conversation_id: args.conversation_id,
-        after_creation: afterCreation,
-      });
-      if (batch.writes.length > 0) {
-        await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
-          user_id: args.user_id,
-          team_id: args.team_id,
-          conversation_id: args.conversation_id,
-          docs: batch.writes,
-        });
-      }
-      if (!batch.hasMore) break;
-      afterCreation = batch.lastCreation;
-    }
+    await extractConversationDocs(ctx, args.user_id, args.team_id, args.conversation_id, 20);
   },
 });
-
-// Retrieve a single insight by ID for targeted mining
-export const getInsightById = internalQuery({
-  args: { insight_id: v.id("session_insights") },
-  handler: async (ctx, args) => {
-    const insight = await ctx.db.get(args.insight_id);
-    if (!insight) return null;
-    const conv = await ctx.db.get(insight.conversation_id);
-    return {
-      _id: insight._id,
-      conversation_id: insight.conversation_id,
-      generated_at: insight.generated_at,
-      summary: insight.summary,
-      goal: insight.goal,
-      what_changed: insight.what_changed,
-      outcome_type: insight.outcome_type,
-      blockers: insight.blockers,
-      next_action: insight.next_action,
-      themes: insight.themes || [],
-      confidence: insight.confidence,
-      is_private: conv?.is_private,
-      team_visibility: conv?.team_visibility,
-    };
-  },
-});
-
 
 function normalizeTitle(title: string): string[] {
   return title
@@ -103,325 +48,35 @@ export function titleSimilarity(a: string, b: string): number {
 }
 
 export const DEDUP_SIMILARITY_THRESHOLD = 0.5;
-const PLAN_REFRESH_SIMILARITY_THRESHOLD = 0.25;
-
-// Every insight should produce at least one task. We extract:
-// 1. The goal itself (shipped = done feature, progress = in_progress task, blocked = blocked bug)
-// 2. next_action as a follow-up task
-// (Blockers become signals instead: signals.ingestInsightBlockers.)
-export const mineTasksFromInsights = internalMutation({
-  args: {
-    user_id: v.id("users"),
-    team_id: v.optional(v.id("teams")),
-    insights: v.array(
-      v.object({
-        _id: v.id("session_insights"),
-        conversation_id: v.id("conversations"),
-        generated_at: v.optional(v.number()),
-        actor_name: v.optional(v.string()),
-        summary: v.string(),
-        goal: v.optional(v.string()),
-        what_changed: v.optional(v.string()),
-        outcome_type: v.string(),
-        blockers: v.optional(v.array(v.string())),
-        next_action: v.optional(v.string()),
-        themes: v.array(v.string()),
-        confidence: v.optional(v.number()),
-        is_private: v.optional(v.boolean()),
-        team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    let tasksCreated = 0;
-    let tasksDeduped = 0;
-    let plansCreated = 0;
-    let plansUpdated = 0;
-
-    const existingTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) =>
-        q.or(
-          q.eq(q.field("status"), "open"),
-          q.eq(q.field("status"), "in_progress"),
-          q.eq(q.field("status"), "done"),
-        )
-      )
-      .collect();
-
-    const existingPlans = args.team_id
-      ? await ctx.db
-          .query("plans")
-          .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
-          .filter((q) =>
-            q.or(
-              q.eq(q.field("status"), "draft"),
-              q.eq(q.field("status"), "active"),
-            )
-          )
-          .collect()
-      : (await Promise.all([
-          ctx.db
-            .query("plans")
-            .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "active"))
-            .filter((q) => q.eq(q.field("team_id"), undefined))
-            .collect(),
-          ctx.db
-            .query("plans")
-            .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "draft"))
-            .filter((q) => q.eq(q.field("team_id"), undefined))
-            .collect(),
-        ])).flat();
-
-    function findSimilarTask(title: string) {
-      let bestMatch: (typeof existingTasks)[0] | null = null;
-      let bestScore = 0;
-      for (const task of existingTasks) {
-        const score = titleSimilarity(title, task.title);
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = task;
-        }
-      }
-      return bestScore >= DEDUP_SIMILARITY_THRESHOLD ? bestMatch : null;
-    }
-
-    function findSimilarPlan(title: string, summary?: string) {
-      let bestMatch: (typeof existingPlans)[0] | null = null;
-      let bestScore = 0;
-      for (const plan of existingPlans) {
-        let score = titleSimilarity(title, plan.title);
-        if (plan.goal) score = Math.max(score, titleSimilarity(title, plan.goal));
-        // Also check insight summary against plan title for broader matching
-        if (summary) score = Math.max(score, titleSimilarity(summary.slice(0, 150), plan.title));
-        if (score > bestScore) { bestScore = score; bestMatch = plan; }
-      }
-      return bestScore >= PLAN_REFRESH_SIMILARITY_THRESHOLD ? bestMatch : null;
-    }
-
-    const newTaskIds: Id<"tasks">[] = [];
-    const newTaskThemes: string[][] = [];
-    const newTaskTeams: (Id<"teams"> | undefined)[] = [];
-
-    for (const insight of args.insights) {
-      const ts = insight.generated_at || Date.now();
-      const labels = insight.themes.length ? insight.themes : undefined;
-      const conv = await ctx.db.get(insight.conversation_id);
-      const base = {
-        user_id: args.user_id,
-        // Mined tasks from private sessions stay personal — team_id on a task
-        // grants the whole team read access, so only team-visible source
-        // sessions may hand their team over.
-        team_id: teamVisibleConvTeam(conv),
-        // ACCESS key alongside the routing tag. Same rule, stored once so no
-        // read has to re-derive it (lib/access computeWorkspaceKey).
-        workspace: computeWorkspaceKey({ user_id: args.user_id } as any, conv as any),
-        labels,
-        conversation_ids: [insight.conversation_id],
-        created_from_conversation: insight.conversation_id,
-        created_from_insight: insight._id,
-        source: "insight" as const,
-        triage_status: "suggested" as const,
-        confidence: insight.confidence,
-        is_private: insight.is_private,
-        team_visibility: insight.team_visibility,
-        project_path: conv?.project_path || conv?.git_root,
-      };
-
-      const alreadyMined = await ctx.db
-        .query("tasks")
-        .withIndex("by_user_insight", (q) => q.eq("user_id", args.user_id).eq("created_from_insight", insight._id))
-        .first();
-      if (alreadyMined) {
-        const ts = insight.generated_at || Date.now();
-        if (alreadyMined.plan_id) {
-          // Fast path: follow task → plan link directly
-          const plan = await ctx.db.get(alreadyMined.plan_id);
-          if (plan && ts > plan.updated_at) {
-            await ctx.db.patch(plan._id, { updated_at: ts });
-            plansUpdated++;
-          }
-        } else {
-          // Fallback: match by title/summary similarity (covers promoted plans with no task links)
-          const title = insight.goal || insight.summary?.slice(0, 200);
-          if (title) {
-            const matchedPlan = findSimilarPlan(title, insight.summary);
-            if (matchedPlan && ts > matchedPlan.updated_at) {
-              await ctx.db.patch(matchedPlan._id, { updated_at: ts });
-              plansUpdated++;
-            }
-          }
-        }
-        continue;
-      }
-
-      // 1. Primary task from the goal/summary
-      if (insight.goal || insight.summary) {
-        const title = insight.goal || insight.summary.slice(0, 200);
-
-        const similarTask = findSimilarTask(title);
-        const similarPlan = findSimilarPlan(title);
-
-        if (similarTask) {
-          // Through the one comment writer so the task row gets its
-          // last_comment_at stamp — the replica's only signal that a joined
-          // comment changed (sync-log-cargo E7).
-          await insertTaskComment(ctx, similarTask._id, {
-            author: "mining",
-            text: `Related session insight: ${insight.summary.slice(0, 300)}`,
-            conversation_id: insight.conversation_id,
-            comment_type: "note",
-          });
-          const matchedPlan = similarTask.plan_id
-            ? await ctx.db.get(similarTask.plan_id)
-            : findSimilarPlan(title, insight.summary);
-          if (matchedPlan && ts > matchedPlan.updated_at) {
-            await ctx.db.patch(matchedPlan._id, { updated_at: ts });
-            plansUpdated++;
-          }
-          tasksDeduped++;
-          continue;
-        }
-
-        if (similarPlan) {
-          if (ts > similarPlan.updated_at) {
-            await ctx.db.patch(similarPlan._id, { updated_at: ts });
-            plansUpdated++;
-          }
-          tasksDeduped++;
-          continue;
-        }
-
-        let status: "done" | "in_progress" | "open" = "open";
-        let taskType: "feature" | "bug" | "task" = "task";
-        let priority: "high" | "medium" | "low" = "medium";
-
-        if (insight.outcome_type === "shipped") {
-          status = "done";
-          taskType = "feature";
-        } else if (insight.outcome_type === "progress") {
-          status = "in_progress";
-          taskType = "task";
-        } else if (insight.outcome_type === "blocked") {
-          status = "open";
-          taskType = "bug";
-          priority = "high";
-        }
-
-        const taskId = await ctx.db.insert("tasks", {
-          ...base,
-          short_id: await nextShortId(ctx.db, "ct"),
-          title,
-          description: insight.what_changed || insight.summary,
-          task_type: taskType,
-          status,
-          priority,
-          attempt_count: status === "in_progress" ? 1 : 0,
-          last_attempted_at: status === "in_progress" ? ts : undefined,
-          closed_at: status === "done" ? ts : undefined,
-          created_at: ts,
-          updated_at: ts,
-        });
-        existingTasks.push({ ...base, _id: taskId, title, status, task_type: taskType, priority, short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
-        newTaskIds.push(taskId);
-        newTaskThemes.push(insight.themes);
-        newTaskTeams.push(base.team_id);
-        tasksCreated++;
-      }
-
-      // 2. Blockers are not mined here, by design: the insight generator files
-      // each new one as a signal (signals.ingestInsightBlockers), the one door
-      // causes open through (the-line-end-to-end.md LE3). The bulk routes
-      // (webMineAll, the 6-hourly backfillAllTeams) re-read the same insights
-      // every pass, and a signal whose fingerprint hits a closed cause reopens
-      // it, so filing from here would reopen fixed bugs four times a day.
-      // Insights from before the door are not backfilled as signals.
-
-      // next_action as a follow-up task (dedup against existing)
-      if (insight.next_action && insight.next_action !== insight.goal) {
-        if (!findSimilarTask(insight.next_action)) {
-          const taskId = await ctx.db.insert("tasks", {
-            ...base,
-            short_id: await nextShortId(ctx.db, "ct"),
-            title: insight.next_action,
-            description: insight.goal ? `Follow-up from: ${insight.goal}` : undefined,
-            task_type: "task",
-            status: "open",
-            priority: "medium",
-            attempt_count: 0,
-            created_at: ts,
-            updated_at: ts,
-          });
-          existingTasks.push({ ...base, _id: taskId, title: insight.next_action, status: "open", task_type: "task", priority: "medium", short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
-          tasksCreated++;
-        } else {
-          tasksDeduped++;
-        }
-      }
-    }
-
-    // Group related new tasks into a draft plan if 3+ share overlapping themes
-    if (newTaskIds.length >= 3 && args.team_id) {
-      const themeCounts = new Map<string, number[]>();
-      for (let i = 0; i < newTaskThemes.length; i++) {
-        for (const theme of newTaskThemes[i]) {
-          if (!themeCounts.has(theme)) themeCounts.set(theme, []);
-          themeCounts.get(theme)!.push(i);
-        }
-      }
-
-      const grouped = new Set<number>();
-      let dominantTheme: string | null = null;
-      for (const [theme, indices] of themeCounts) {
-        if (indices.length >= 3 && indices.length > grouped.size) {
-          dominantTheme = theme;
-          grouped.clear();
-          for (const idx of indices) grouped.add(idx);
-        }
-      }
-
-      if (dominantTheme && grouped.size >= 3) {
-        const groupedTaskIds = [...grouped].map((i) => newTaskIds[i]);
-        // The auto-grouped plan follows its tasks: it may carry the team only
-        // when every grouped task is team-scoped. One private-session task in
-        // the group keeps the whole plan personal.
-        const planTeamId = [...grouped].every(
-          (i) => newTaskTeams[i] && String(newTaskTeams[i]) === String(args.team_id)
-        ) ? args.team_id : undefined;
-        const now = Date.now();
-        const planId = await ctx.db.insert("plans", {
-          user_id: args.user_id,
-          team_id: planTeamId,
-          short_id: await nextShortId(ctx.db, "pl"),
-          title: `${dominantTheme.charAt(0).toUpperCase() + dominantTheme.slice(1)} tasks`,
-          goal: `Auto-grouped ${groupedTaskIds.length} related tasks around "${dominantTheme}"`,
-          status: "draft",
-          source: "insight",
-          owner_id: args.user_id,
-          task_ids: groupedTaskIds,
-          progress: { total: groupedTaskIds.length, done: 0, in_progress: 0, open: groupedTaskIds.length },
-          progress_log: [],
-          decision_log: [],
-          discoveries: [],
-          context_pointers: [],
-          entries: [],
-          session_ids: [],
-          created_at: now,
-          updated_at: now,
-        });
-        for (const taskId of groupedTaskIds) {
-          await ctx.db.patch(taskId, { plan_id: planId });
-        }
-        plansCreated++;
-      }
-    }
-
-    return { tasks_created: tasksCreated, tasks_deduped: tasksDeduped, plans_created: plansCreated, plans_updated: plansUpdated };
-  },
-});
 
 const internalApi = internal as any;
+
+// Extracts the markdown files one conversation wrote as docs, a page of
+// writes at a time.
+async function extractConversationDocs(
+  ctx: any, userId: Id<"users">, teamId: Id<"teams"> | undefined, conversationId: Id<"conversations">, maxPages: number,
+): Promise<number> {
+  let created = 0;
+  let afterCreation: number | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
+      conversation_id: conversationId,
+      after_creation: afterCreation,
+    });
+    if (batch.writes.length > 0) {
+      const result: any = await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
+        user_id: userId,
+        team_id: teamId,
+        conversation_id: conversationId,
+        docs: batch.writes,
+      });
+      created += result.docs_created;
+    }
+    if (!batch.hasMore) break;
+    afterCreation = batch.lastCreation;
+  }
+  return created;
+}
 
 export const getUserTeamId = internalQuery({
   args: { user_id: v.id("users") },
@@ -429,14 +84,6 @@ export const getUserTeamId = internalQuery({
     const user = await ctx.db.get(args.user_id);
     if (!user) return null;
     return user.active_team_id || null;
-  },
-});
-
-// Get all teams (for cron backfill)
-export const getAllTeams = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    return await ctx.db.query("teams").collect();
   },
 });
 
@@ -458,85 +105,6 @@ export const getTeamMembers = internalQuery({
 });
 
 // Mine tasks and docs for ALL team members, not just current user
-export const webMineAll = action({
-  args: {},
-  handler: async (ctx, _args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthorized");
-
-    const team_id = await ctx.runQuery(internalApi.taskMining.getUserTeamId, {
-      user_id: userId,
-    }) as Id<"teams"> | null;
-
-    if (!team_id) return { tasks_created: 0, docs_created: 0, insights_processed: 0, members_processed: 0 };
-
-    const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id });
-    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
-
-    let totalTasksCreated = 0;
-    let totalInsights = 0;
-
-    for (const member of members) {
-      const insights: any[] = await ctx.runQuery(
-        internalApi.taskMining.getTeamInsights,
-        { team_id, since: ninetyDaysAgo }
-      );
-
-      const memberInsights = insights.filter((i: any) => i.actor_user_id === member._id);
-      if (memberInsights.length === 0) continue;
-      totalInsights += memberInsights.length;
-
-      const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
-      const conversations: any[] = await ctx.runQuery(
-        internalApi.taskMining.getConversationsByIds,
-        { conversation_ids: conversationIds }
-      );
-
-      const BATCH_SIZE = 25;
-
-      // Mine tasks
-      for (let i = 0; i < memberInsights.length; i += BATCH_SIZE) {
-        const batch = memberInsights.slice(i, i + BATCH_SIZE);
-        const result: any = await ctx.runMutation(
-          internalApi.taskMining.mineTasksFromInsights,
-          {
-            user_id: member._id,
-            team_id,
-            insights: batch.map((ins: any) => {
-              const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-              return {
-                _id: ins._id,
-                conversation_id: ins.conversation_id,
-                generated_at: ins.generated_at,
-                actor_name: ins.actor_name,
-                summary: ins.summary,
-                goal: ins.goal,
-                what_changed: ins.what_changed,
-                outcome_type: ins.outcome_type,
-                blockers: ins.blockers,
-                next_action: ins.next_action,
-                themes: ins.themes || [],
-                confidence: ins.confidence,
-                is_private: conv?.is_private,
-                team_visibility: conv?.team_visibility,
-              };
-            }),
-          }
-        );
-        totalTasksCreated += result.tasks_created;
-      }
-
-    }
-
-    return {
-      tasks_created: totalTasksCreated,
-      docs_created: 0,
-      insights_processed: totalInsights,
-      members_processed: members.length,
-    };
-  },
-});
-
 // Find Write tool calls to .md files in a batch of messages
 export const findMarkdownWrites = internalQuery({
   args: {
@@ -695,22 +263,7 @@ export const backfillDocsFromMessages = internalAction({
           { user_id: member._id, since, cursor: convCursor }
         );
         for (const conv of convResult.conversations) {
-          let afterCreation: number | undefined;
-          for (let page = 0; page < 50; page++) {
-            const batch: any = await ctx.runQuery(
-              internalApi.taskMining.findMarkdownWrites,
-              { conversation_id: conv._id, after_creation: afterCreation }
-            );
-            if (batch.writes.length > 0) {
-              const result: any = await ctx.runMutation(
-                internalApi.taskMining.insertExtractedDocs,
-                { user_id: member._id, team_id: team_id || undefined, conversation_id: conv._id, docs: batch.writes }
-              );
-              totalDocs += result.docs_created;
-            }
-            if (!batch.hasMore) break;
-            afterCreation = batch.lastCreation;
-          }
+          totalDocs += await extractConversationDocs(ctx, member._id, team_id || undefined, conv._id, 50);
         }
         if (!convResult.hasMore) break;
         convCursor = convResult.lastTs;
@@ -732,40 +285,6 @@ export const getRecentConversations = internalQuery({
       .take(50);
     const lastTs = convs.length > 0 ? convs[convs.length - 1].updated_at : undefined;
     return { conversations: convs.map((c: any) => ({ _id: c._id })), lastTs, hasMore: convs.length === 50 };
-  },
-});
-
-// Get ALL team insights (not filtered by user)
-export const getTeamInsights = internalQuery({
-  args: {
-    team_id: v.id("teams"),
-    since: v.number(),
-  },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("session_insights")
-      .withIndex("by_team_generated_at", (q) =>
-        q.eq("team_id", args.team_id).gt("generated_at", args.since)
-      )
-      .order("desc")
-      .take(1000);
-  },
-});
-
-// Get insights for a user by actor_user_id (not team-scoped, for personal sessions)
-export const getUserInsights = internalQuery({
-  args: {
-    user_id: v.id("users"),
-    since: v.number(),
-  },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("session_insights")
-      .withIndex("by_actor_generated_at", (q) =>
-        q.eq("actor_user_id", args.user_id).gt("generated_at", args.since)
-      )
-      .order("desc")
-      .take(1000);
   },
 });
 
@@ -804,39 +323,6 @@ export const refreshPlanTimestamp = internalMutation({
   args: { plan_id: v.id("plans"), updated_at: v.number() },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.plan_id, { updated_at: args.updated_at });
-  },
-});
-
-// Keep for backward compat
-export const getRecentInsights = internalQuery({
-  args: {
-    user_id: v.id("users"),
-    team_id: v.id("teams"),
-    since: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const insights = await ctx.db
-      .query("session_insights")
-      .withIndex("by_team_generated_at", (q) =>
-        q.eq("team_id", args.team_id).gt("generated_at", args.since)
-      )
-      .order("desc")
-      .take(500);
-    return insights.filter((i) => i.actor_user_id === args.user_id);
-  },
-});
-
-export const getConversationsByIds = internalQuery({
-  args: {
-    conversation_ids: v.array(v.id("conversations")),
-  },
-  handler: async (ctx, args) => {
-    const results = [];
-    for (const id of args.conversation_ids) {
-      const conv = await ctx.db.get(id);
-      if (conv) results.push(conv);
-    }
-    return results;
   },
 });
 
@@ -1396,6 +882,12 @@ export const webGetTaskDetail = query({
       if (p && await canAccessPlan(ctx, userId, p)) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
     }
 
+    const graph = await graphNeighbors(ctx, task);
+    // graphNeighbors keeps rows in the task's workspace; a viewer may read the
+    // task through a grant alone, so only rows they may read ship whole.
+    const graphTasks: Doc<"tasks">[] = [];
+    for (const t of graph.tasks) if (await canAccessTask(ctx, userId, t)) graphTasks.push(t);
+
     return {
       ...task,
       assignee_info,
@@ -1405,6 +897,11 @@ export const webGetTaskDetail = query({
       // list (a session's task chip) draws the same subtask checklist and
       // progress. The client files each into the one tasks collection.
       subtasks: await directSubtasks(ctx, userId, task._id),
+      // The tasks its graph names (blockers, blocks, links), filed the same
+      // way, so Blocked by shows a finished blocker's state, not "unknown",
+      // and the refs that name no task, which it shows as not found.
+      graph_tasks: graphTasks,
+      graph_missing: graph.missing,
       related_docs: relatedDocs,
       source_insight: insight,
       creator,
@@ -1514,106 +1011,23 @@ export const backfillAllTeams = internalAction({
     const internalApi = internal as any;
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
     let totalDocs = 0;
-    let totalTasks = 0;
-    let totalInsights = 0;
     let totalPlansUpdated = 0;
 
-    // Helper: mine tasks + docs for one user given their insights + optional team_id
-    async function mineForUser(userId: Id<"users">, teamId: Id<"teams"> | undefined, insights: any[]) {
-      totalInsights += insights.length;
-      if (insights.length === 0) return;
-      const conversationIds = [...new Set(insights.map((i: any) => i.conversation_id))];
-      const conversations: any[] = await ctx.runQuery(internalApi.taskMining.getConversationsByIds, {
-        conversation_ids: conversationIds,
-      });
-
-      const BATCH_SIZE = 25;
-      for (let i = 0; i < insights.length; i += BATCH_SIZE) {
-        const batch = insights.slice(i, i + BATCH_SIZE).map((ins: any) => {
-          const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-          return {
-            _id: ins._id,
-            conversation_id: ins.conversation_id,
-            generated_at: ins.generated_at,
-            summary: ins.summary,
-            goal: ins.goal,
-            what_changed: ins.what_changed,
-            outcome_type: ins.outcome_type,
-            blockers: ins.blockers,
-            next_action: ins.next_action,
-            themes: ins.themes || [],
-            confidence: ins.confidence,
-            is_private: conv?.is_private,
-            team_visibility: conv?.team_visibility,
-          };
-        });
-        const result: any = await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
-          user_id: userId,
-          team_id: teamId,
-          insights: batch,
-        });
-        totalTasks += result.tasks_created;
-        totalPlansUpdated += result.plans_updated || 0;
-      }
-
-      // Mine raw markdown docs from recent conversations
-      const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
-        user_id: userId,
-        since,
-      });
-      for (const conv of convResult.conversations) {
-        let afterCreation: number | undefined;
-        for (let page = 0; page < 20; page++) {
-          const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
-            conversation_id: conv._id,
-            after_creation: afterCreation,
-          });
-          if (batch.writes.length > 0) {
-            const result: any = await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
-              user_id: userId,
-              team_id: teamId,
-              conversation_id: conv._id,
-              docs: batch.writes,
-            });
-            totalDocs += result.docs_created;
-          }
-          if (!batch.hasMore) break;
-          afterCreation = batch.lastCreation;
-        }
-      }
-    }
-
-    // Part 1: Mine team-scoped sessions
-    const teams: any[] = await ctx.runQuery(internalApi.taskMining.getAllTeams);
-    for (const team of teams) {
-      const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id: team._id });
-      const teamInsights: any[] = await ctx.runQuery(internalApi.taskMining.getTeamInsights, {
-        team_id: team._id,
-        since,
-      });
-      for (const member of members) {
-        const memberInsights = teamInsights.filter((i: any) => i.actor_user_id === member._id);
-        await mineForUser(member._id, team._id, memberInsights);
-      }
-    }
-
-    // Part 2: Mine personal (no-team) sessions for ALL users
-    // Uses by_actor_generated_at index — finds insights with no team_id too
+    // Part 1: docs from the markdown each user's recent sessions wrote
     const allUsers: any[] = await ctx.runQuery(internalApi.taskMining.getAllUsers);
     for (const user of allUsers) {
-      const allUserInsights: any[] = await ctx.runQuery(internalApi.taskMining.getUserInsights, {
+      const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
         user_id: user._id,
         since,
       });
-      // Only process insights that have no team_id (personal sessions)
-      const personalInsights = allUserInsights.filter((i: any) => !i.team_id);
-      await mineForUser(user._id, undefined, personalInsights);
+      for (const conv of convResult.conversations) {
+        totalDocs += await extractConversationDocs(ctx, user._id, undefined, conv._id, 20);
+      }
     }
 
-    // Part 3: Refresh plan updated_at via session_ids → session_insights
+    // Part 2: Refresh plan updated_at via session_ids → session_insights
     // This covers promoted plans with no task links but with linked sessions
-    const allUsers2: any[] = await ctx.runQuery(internalApi.taskMining.getAllUsers);
-    for (const user of allUsers2) {
+    for (const user of allUsers) {
       const stalePlans: any[] = await ctx.runQuery(internalApi.taskMining.getStalePlansWithSessions, {
         user_id: user._id,
         stale_before: since,
@@ -1636,7 +1050,7 @@ export const backfillAllTeams = internalAction({
       }
     }
 
-    return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length, insights_processed: totalInsights, plans_updated: totalPlansUpdated };
+    return { docs_created: totalDocs, plans_updated: totalPlansUpdated };
   },
 });
 
