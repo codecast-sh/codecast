@@ -99,7 +99,9 @@ test("asking for the install command counts as choosing the machine", async () =
 test("hosted mode offers only the assistant", async () => {
   withLane("simple");
   await render();
-  expect(text()).toContain("Ask the Codecast assistant");
+  // The hosted inbox starts the way /welcome does (LANE_COPY.home).
+  expect(text()).toContain("What can I take off your plate?");
+  expect(text()).not.toContain("How would you like to start?");
   expect(text()).not.toContain("Connect your coding tools");
   expect(button("Generate install command")).toBeUndefined();
 });

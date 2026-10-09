@@ -6,6 +6,9 @@ const crons = cronJobs();
 
 crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
 
+// The session lifecycle trail keeps 60 days (conversationEvents.ts).
+crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});
+
 // Summarize hosted conversations' history past the replayed window
 // (assistant/longHistory.ts): bounded by its own deadline and spend caps.
 crons.interval("summarize long assistant conversations", { minutes: 10 }, internal.assistant.longHistory.compress, {});
@@ -137,9 +140,9 @@ crons.interval(
 );
 
 crons.interval(
-  "backfill docs and tasks from sessions",
+  "refresh plan timestamps from session insights",
   { hours: 6 },
-  internal.taskMining.backfillAllTeams
+  internal.taskMining.refreshPlanTimestamps
 );
 
 crons.interval(

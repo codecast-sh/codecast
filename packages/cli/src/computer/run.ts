@@ -28,7 +28,8 @@ import { fmt, icons } from "../colors.js";
 import { readStdinBody } from "../sendBody.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { writeShotFile } from "../browser/shotFile.js";
-import { asComputerError, ComputerError } from "./errors.js";
+import { agentSetupLines } from "@codecast/shared/contracts";
+import { asComputerError, ComputerError, grantSetupLines } from "./errors.js";
 import { formatAction, formatApps, formatCapabilities, formatSnapshot, formatWindows, jsonChanges } from "./format.js";
 import { diffTrees, filterTree, formatDiff, resolveElement, type TreeFilter } from "./tree.js";
 import { ensureScreenshotDir, rewriteScreenshotForJson, screenshotFileName, sweepScreenshots } from "./screenshotFile.js";
@@ -490,6 +491,8 @@ function fail(err: unknown, o: ComputerOptions, deps: ComputerRunDeps): never {
     console.error(`${fmt.error(icons.cross)} ${error.message}`);
     for (const line of error.toJSON().recovery) console.error(`  ${fmt.muted(line)}`);
   }
+  // On stderr either way, so a --json reader's stdout stays one document.
+  for (const line of grantSetupLines(error)) console.error(line);
   return (deps.exit ?? process.exit)(1) as never;
 }
 
@@ -727,4 +730,8 @@ async function runPermissions(o: ComputerOptions, deps: ComputerRunDeps): Promis
       : await api.readPermissionStatus(permissionId);
   if (o.json) printJson(consoleSink, result as unknown as Record<string, unknown>);
   else for (const line of api.formatPermissionsReport(result)) console.log(line);
+  // A Mac missing a grant only a person can give: the transcript shows the setup card.
+  if (result.platform === "darwin" && !result.helperUnavailableReason && result.permissions.some((p) => p.status === "not-granted")) {
+    for (const line of agentSetupLines("computer")) console.error(line);
+  }
 }

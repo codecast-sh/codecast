@@ -61,25 +61,15 @@ export function Label({ children, color = SOL.base1 }: { children: ReactNode; co
   return <div className="font-mono text-[12px] mb-3" style={{ color }}>{children}</div>;
 }
 
-/** A dark Solarized shell block without the window chrome. Lines wrap on a phone the way a narrow terminal would; `wrap` keeps wrapping at every width. */
-export function Shell({ children, className = "", wrap = false }: { children: ReactNode; className?: string; wrap?: boolean }) {
+/** A screenshot of the real app, with a caption under it. */
+export function Shot({ src, alt, w, h, caption, className = "" }: { src: string; alt: string; w: number; h: number; caption?: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl overflow-hidden border ${className}`} style={{ backgroundColor: SOL.base03, borderColor: "#094959" }}>
-      <div className="overflow-x-auto">
-        <pre className={`p-4 sm:p-5 font-mono text-[12px] sm:text-[12.5px] leading-[1.7] ${wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "whitespace-pre-wrap [overflow-wrap:anywhere] sm:whitespace-pre sm:[overflow-wrap:normal]"}`} style={{ color: SOL.base0 }}>{children}</pre>
-      </div>
-    </div>
+    <figure className={className}>
+      <img src={src} alt={alt} width={w} height={h} loading="lazy" className="w-full h-auto rounded-xl border" style={{ borderColor: "rgba(147,161,161,.35)", boxShadow: "0 18px 40px -28px rgba(0,43,54,.45)" }} />
+      {caption && <figcaption className="mt-3 text-[13px] leading-6" style={{ color: SOL.base00 }}>{caption}</figcaption>}
+    </figure>
   );
 }
-
-/** Shell line pieces. */
-export const sh = {
-  prompt: (text: ReactNode) => (<><span style={{ color: SOL.green }}>$ </span><span style={{ color: SOL.base2 }}>{text}</span></>),
-  flag: (text: ReactNode) => <span className="whitespace-nowrap" style={{ color: SOL.yellow }}>{text}</span>,
-  str: (text: ReactNode) => <span style={{ color: SOL.cyan }}>{text}</span>,
-  dim: (text: ReactNode) => <span style={{ color: SOL.base01 }}>{text}</span>,
-  ok: (text: ReactNode) => <span style={{ color: SOL.green }}>{text}</span>,
-};
 
 /** The product's state dot: a pulsing yellow for a blocking ask on a live session, dim when the session is not running, blue for advisory. */
 export function Dot({ tier, still = false }: { tier: 1 | 2 | 3 | "ok"; still?: boolean }) {
