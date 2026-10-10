@@ -5,7 +5,7 @@
 //
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id>
 //        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>] [--then <file>]
-//        [--account <profile>] [--max-output-tokens N] [--claude-md <file>]
+//        [--account <profile>] [--max-output-tokens N] [--claude-md <file>] [--cwd <dir>] [--read-only]
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> --call
 //        [--system <file>] [--max-output-tokens N]
 //
@@ -102,6 +102,16 @@
 // later wakes are replayed after its opening. A turn that fails ends the run.
 // The config dir is removed after the last turn.
 //
+// `--cwd <dir>` runs the agent in that directory (default: the run dir), so a
+// replayed station reads the checkout it would have read. `--read-only` makes
+// the sandbox refuse every file write outside the run dir (and /dev, and the
+// per-user temp root Claude Code and bun keep caches in), and every connection
+// but the loopback: the model is reached through an egress proxy here that
+// opens tunnels to Anthropic alone, so a station holding a gh or git sign-in
+// still cannot open a pull request or push. A replay in a real checkout
+// leaves it, and everything it could reach, exactly as it was: the line
+// workspace's Try runs that way (line-workspace.md LW4, cli lineTry.ts).
+//
 // `--claude-md <file>` installs the file as the run's user-level CLAUDE.md
 // (in the private config dir, where ~/.claude/CLAUDE.md would be) and lets
 // the agent load user-scope sources, so an agent run carries the global
@@ -111,6 +121,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import * as net from "node:net";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
 import { accountTokenFilePath, fleetStoreDir, fleetStoreEnabled } from "../src/ccAccounts.ts";
 
@@ -135,10 +146,15 @@ function credentialDirs(): string[] {
  *  process outside the run can be driven from it (a tmux server's socket
  *  under /tmp, Apple events to Terminal). Paths arrive as -D parameters, so no
  *  path is ever quoted into the profile. */
-function scratchProfile(hidden: number): string {
+function scratchProfile(hidden: number, readOnly = false): string {
   return [
     "(version 1)",
     "(allow default)",
+    ...(readOnly ? [
+      '(deny file-write* (subpath "/"))', '(allow file-write* (subpath "/dev") (regex #"^/private/var/folders/"))',
+      // Only the loopback: the broker and the egress proxy (startEgressProxy) live there.
+      "(deny network-outbound (remote ip))", '(allow network-outbound (remote ip "localhost:*"))',
+    ] : []),
     '(deny file-read* file-write* (regex #"^/private/(var/)?tmp/"))',
     '(deny network-outbound (remote unix-socket (path-regex #"^/private/(var/)?tmp/")))',
     "(deny appleevent-send)",
@@ -150,7 +166,7 @@ function scratchProfile(hidden: number): string {
 }
 
 /** The argv prefix that runs a command with private scratch, and the env it needs. */
-function scratchSandbox(run: string, readable: { guard: string; serve?: string }) {
+function scratchSandbox(run: string, readable: { guard: string; serve?: string }, readOnly = false) {
   const scratch = path.join(run, "tmp");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   const real = (p: string) => (fs.existsSync(p) ? fs.realpathSync(p) : p);
@@ -158,19 +174,23 @@ function scratchSandbox(run: string, readable: { guard: string; serve?: string }
   const prefix = [
     "sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`,
     ...hidden.flatMap((dir, i) => ["-D", `HIDDEN_${i}=${dir}`]),
-    "-p", scratchProfile(hidden.length),
+    "-p", scratchProfile(hidden.length, readOnly),
   ];
   return { prefix, hidden, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch } };
 }
 
 /** Whether the sandbox applies here and does what it claims: a write to /tmp
  *  is refused while one to the run's scratch lands. Null when it does, else why not. */
-function scratchIsolationGap(run: string, guard: string): string | null {
+function scratchIsolationGap(run: string, guard: string, readOnlyIn?: string): string | null {
   if (process.platform !== "darwin") return `no sandbox-exec on ${process.platform}`;
-  const sb = scratchSandbox(run, { guard });
-  const probe = `p=/tmp/.dry-run-probe-$$; if ( : > "$p" ) 2>/dev/null; then rm -f "$p"; exit 3; fi; : > "$TMPDIR/probe" || exit 4; rm -f "$TMPDIR/probe"; for d in "$@"; do [ -e "$d" ] && ls "$d" >/dev/null 2>&1 && exit 5; done; exit 0`;
-  const r = spawnSync(sb.prefix[0], [...sb.prefix.slice(1), "/bin/sh", "-c", probe, "probe", ...sb.hidden], { env: { ...process.env, ...sb.env }, encoding: "utf8" });
+  const sb = scratchSandbox(run, { guard }, !!readOnlyIn);
+  // With --read-only, a write in the agent's directory and a connection off the machine must be refused too.
+  const ro = readOnlyIn ? `q="$RO_DIR/.dry-run-probe-$$"; if ( : > "$q" ) 2>/dev/null; then rm -f "$q"; exit 6; fi; if /usr/bin/nc -z -G 3 1.1.1.1 443 >/dev/null 2>&1; then exit 7; fi; ` : "";
+  const probe = `${ro}p=/tmp/.dry-run-probe-$$; if ( : > "$p" ) 2>/dev/null; then rm -f "$p"; exit 3; fi; : > "$TMPDIR/probe" || exit 4; rm -f "$TMPDIR/probe"; for d in "$@"; do [ -e "$d" ] && ls "$d" >/dev/null 2>&1 && exit 5; done; exit 0`;
+  const r = spawnSync(sb.prefix[0], [...sb.prefix.slice(1), "/bin/sh", "-c", probe, "probe", ...sb.hidden], { env: { ...process.env, ...sb.env, ...(readOnlyIn ? { RO_DIR: readOnlyIn } : {}) }, encoding: "utf8" });
   if (r.status === 0) return null;
+  if (r.status === 6) return "sandbox-exec ran but the agent's directory stayed writable";
+  if (r.status === 7) return "sandbox-exec ran but a connection off the machine went through";
   if (r.status === 3) return "sandbox-exec ran but /tmp stayed writable";
   if (r.status === 4) return "sandbox-exec refused the run's own scratch dir";
   if (r.status === 5) return "sandbox-exec ran but the sign-in directories stayed readable";
@@ -211,6 +231,10 @@ const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
 const thenFiles = process.argv.flatMap((a, i) => (a === "--then" && process.argv[i + 1] ? [path.resolve(process.argv[i + 1])] : []));
 for (const f of thenFiles) if (!fs.existsSync(f)) refuse(`--then: no such file ${f}`);
 const claudeMdFile = arg("claude-md") ? path.resolve(arg("claude-md")!) : undefined;
+const readOnly = process.argv.includes("--read-only");
+const agentCwd = arg("cwd") ? path.resolve(arg("cwd")!) : undefined;
+if (agentCwd && !fs.existsSync(agentCwd)) refuse(`--cwd: no such directory ${agentCwd}`);
+if (readOnly && call) refuse("--read-only does not apply to --call: a call has no tools to write with");
 if (claudeMdFile && call) refuse("--claude-md does not apply to --call: a call carries no CLAUDE.md");
 if (claudeMdFile && !fs.existsSync(claudeMdFile)) refuse(`--claude-md: no such file ${claudeMdFile}`);
 
@@ -260,12 +284,12 @@ if (claudeMdFile) fs.copyFileSync(claudeMdFile, path.join(configDir, "CLAUDE.md"
 // A --call run has no tools, so nothing in it can write scratch or reach a
 // sign-in. An agent run without its sandbox could read the codecast sign-in
 // and write around the guard, so it does not start.
-const isolationGap = call ? null : scratchIsolationGap(runDir, guardDir);
+const isolationGap = call ? null : scratchIsolationGap(runDir, guardDir, readOnly ? fs.realpathSync(agentCwd ?? os.homedir()) : undefined);
 if (isolationGap) { fs.rmSync(pidFile, { force: true }); refuse(`an agent run needs its sandbox, and this machine cannot give it one (${isolationGap}): without it the agent could read the codecast sign-in and write around the guard`); }
-const sandbox = call ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir });
+const sandbox = call ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir }, readOnly);
 const isolation = call ? null : "sandbox-exec";
 
-fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation, claudeMd: claudeMdFile ?? null }, null, 1) + "\n");
+fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation, claudeMd: claudeMdFile ?? null, cwd: agentCwd ?? null, readOnly }, null, 1) + "\n");
 
 // CLAUDE_CODE_MAX_OUTPUT_TOKENS reaches the child only from --max-output-tokens,
 // never inherited, so args.json says every cap the run had.
@@ -320,6 +344,46 @@ function startBroker(): string {
   return `http://127.0.0.1:${server.port}/read`;
 }
 if (!call) env.DRY_RUN_BROKER = startBroker();
+
+/** The hosts a --read-only agent may open a tunnel to: the model's API and Claude Code's own sign-in. */
+const EGRESS_ALLOWED = /^(?:[a-z0-9-]+\.)*(?:anthropic\.com|claude\.ai)$/i;
+
+/**
+ * The one way off the machine a --read-only agent has: an HTTP CONNECT proxy
+ * on the loopback that opens tunnels to Anthropic on 443 and answers anything
+ * else 403. The sandbox refuses every other connection, so gh, a git remote
+ * or curl reach nothing whatever sign-in they hold; tools that read the proxy
+ * env are told no, the rest are refused by the kernel. Lives as long as this
+ * process, like the broker.
+ */
+async function startEgressProxy(): Promise<string> {
+  const server = net.createServer((client) => {
+    client.once("data", (head) => {
+      const line = head.toString("latin1").split("\r\n", 1)[0];
+      const m = /^CONNECT ([^\s:]+):(\d+) HTTP\/1\.[01]$/.exec(line);
+      if (!m || m[2] !== "443" || !EGRESS_ALLOWED.test(m[1])) {
+        client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+      }
+      const upstream = net.connect(443, m[1], () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      upstream.on("error", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+    });
+    client.on("error", () => {});
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+}
+if (readOnly && !call) {
+  const proxy = await startEgressProxy();
+  for (const k of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy"]) env[k] = proxy;
+  // The broker is on the loopback, and nothing else is reachable there anyway.
+  env.NO_PROXY = env.no_proxy = "127.0.0.1,localhost";
+}
 
 /**
  * The guard answers before any agent starts. A guard that cannot reach the
@@ -413,7 +477,7 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
       "--model", model!,
       "--output-format", "stream-json", "--verbose",
       ...(call ? ["--include-partial-messages"] : []),
-    ], { cwd: runDir, env, stdio: [stdin, out, err], detached: true });
+    ], { cwd: agentCwd ?? runDir, env, stdio: [stdin, out, err], detached: true });
     const watchdog = watchChild(child.pid);
     liveChild = child.pid ?? null;
     child.on("exit", (exitCode) => {

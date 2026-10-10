@@ -88,6 +88,10 @@ export type ClientLayouts = {
   inbox?: { main: number; sidebar: number };
   conversation_diff?: { content: number; diff: number };
   file_diff?: { tree: number; content: number };
+  /** A scope page's seam between its conversation and the panel beside it, in percent. */
+  org?: { conversation: number; company: number };
+  /** The Org screen's detail panel beside the canvas, in percent of the screen's width. */
+  org_detail?: { detail: number };
 };
 
 export type ClientDismissed = {
