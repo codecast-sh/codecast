@@ -9,7 +9,7 @@ import { AskLayer, ContextLayer } from "./Ask";
 import { BlameLayer, ImpactLayer } from "./Blame";
 import { DecisionsLayer, TeachLayer } from "./Teach";
 import { Scenarios, Limits, Reference, Closing } from "./Closing";
-import { useStillMode, CopyCommand } from "../kit";
+import { useStillMode } from "../kit";
 
 /**
  * /features/memory. The page reads as a core sample: the code on top, and the
@@ -39,9 +39,9 @@ export default function MemoryPage() {
 }
 
 const DIG = [
-  { cmd: "cast blame", what: "a line to its session" },
-  { cmd: "cast read --ask", what: "a session to its answer" },
-  { cmd: "cast search", what: "a file, commit or PR to its sessions" },
+  { where: "Blame: Sessions", what: "a line of a file to the session that wrote it" },
+  { where: "Ask this session", what: "a session to its answer, with the messages cited" },
+  { where: "Search", what: "a file, commit or pull request to its sessions" },
 ];
 
 function Hero() {
@@ -61,19 +61,18 @@ function Hero() {
             </span>
           </h1>
           <p className="mm-anim mm-rise text-[17px] sm:text-[19px] leading-[1.6] mb-8 max-w-xl" style={{ color: SOL.base01, "--d": ".12s" } as CSSProperties}>
-            Codecast keeps every session your team runs, from any agent on any machine. Search it by the file, commit or pull request it touched. Ask one session a question and get an answer that cites its messages. Blame a line and the author column names the session that wrote it.
+            Codecast keeps every session your team runs, from any agent on any machine. Search it by the file, commit or pull request it touched. Ask one session a question and get an answer that cites its messages. Open a file with blame set to Sessions and every line names the session that wrote it. Your agents read the same record before they start.
           </p>
           <ol className="mm-anim mm-rise space-y-2 mb-9" style={{ "--d": ".2s" } as CSSProperties}>
             {DIG.map((d, i) => (
-              <li key={d.cmd} className="flex flex-wrap items-baseline gap-x-3 font-mono text-[13.5px]">
+              <li key={d.where} className="flex flex-wrap items-baseline gap-x-3 font-mono text-[13.5px]">
                 <span className="tabular-nums text-[11px] w-5 shrink-0" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
-                <span className="font-semibold whitespace-nowrap" style={{ color: VIOLET }}>{d.cmd}</span>
+                <span className="font-semibold whitespace-nowrap" style={{ color: VIOLET }}>{d.where}</span>
                 <span style={{ color: SOL.base01 }}>{d.what}</span>
               </li>
             ))}
           </ol>
           <div className="mm-anim mm-rise flex flex-wrap items-center gap-3" style={{ "--d": ".28s" } as CSSProperties}>
-            <CopyCommand cmd="cast blame src/webhooks/retry.ts:5" />
             <a href="#install" className="font-mono text-[13px] px-4 py-2 rounded-lg font-semibold" style={{ backgroundColor: VIOLET, color: SOL.base3 }}>Install codecast</a>
           </div>
         </div>

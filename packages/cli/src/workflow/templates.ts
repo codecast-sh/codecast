@@ -7,7 +7,9 @@ import lineGround from "./templates/line/ground.md" with { type: "text" };
 import linePlan from "./templates/line/plan.md" with { type: "text" };
 import lineAnalyze from "./templates/line/analyze.md" with { type: "text" };
 import lineProve from "./templates/line/prove.md" with { type: "text" };
+import lineProveLine from "./templates/line/prove_line.md" with { type: "text" };
 import lineImplement from "./templates/line/implement.md" with { type: "text" };
+import lineImplementLine from "./templates/line/implement_line.md" with { type: "text" };
 import lineReview from "./templates/line/review.md" with { type: "text" };
 import lineCardWrite from "./templates/line/card_write.md" with { type: "text" };
 import linePark from "./templates/line/park.sh" with { type: "text" };
@@ -16,8 +18,12 @@ import lineGreen from "./templates/line/green.sh" with { type: "text" };
 import lineEval from "./templates/line/eval.sh" with { type: "text" };
 import lineShip from "./templates/line/ship.sh" with { type: "text" };
 import lineDissolve from "./templates/line/dissolve.sh" with { type: "text" };
+import lineRebase from "./templates/line/rebase.sh" with { type: "text" };
+import lineDiagnose from "./templates/line/diagnose.md" with { type: "text" };
+import judgeReviewCast from "./templates/judge-review.cast" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
+import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -31,7 +37,9 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "line/plan.md": linePlan,
   "line/analyze.md": lineAnalyze,
   "line/prove.md": lineProve,
+  "line/prove_line.md": lineProveLine,
   "line/implement.md": lineImplement,
+  "line/implement_line.md": lineImplementLine,
   "line/review.md": lineReview,
   "line/card_write.md": lineCardWrite,
   "line/park.sh": linePark,
@@ -40,6 +48,10 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "line/eval.sh": lineEval,
   "line/ship.sh": lineShip,
   "line/dissolve.sh": lineDissolve,
+  "line/rebase.sh": lineRebase,
+  // The diagnosis of a wrong finding, which the line runs beside its causes
+  // (judge-review.cast, learning-loop.md LL11).
+  "line/diagnose.md": lineDiagnose,
 };
 
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
@@ -53,6 +65,7 @@ export function inlineTemplateFiles(source: string, files: Readonly<Record<strin
 
 export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   line: inlineTemplateFiles(lineCast, LINE_TEMPLATE_FILES),
+  [JUDGE_REVIEW_GRAPH]: inlineTemplateFiles(judgeReviewCast, LINE_TEMPLATE_FILES),
   feature: featureCast,
   "plan-autopilot": planAutopilotCast,
 };

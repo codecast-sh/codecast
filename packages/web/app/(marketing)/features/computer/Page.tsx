@@ -9,7 +9,6 @@ import { ReadingDemo } from "./Reading";
 import { BatchDemo, ErrorList, Guardrails, OutcomesDemo, Reference, RoutesTable, SetupPanel, StepWords, TwoCursors } from "./Sections";
 import { AgentCursorGlyph, C, Section, useStillMode } from "./parts";
 import "./computer.css";
-import { CopyCommand } from "../kit";
 
 /**
  * /features/computer. The page reads like the tree cast computer prints: each
@@ -25,35 +24,9 @@ export default function ComputerPage() {
       <UseCases />
 
       <Section
-        id="read"
-        index={3}
-        role="split group"
-        tone="paper"
-        title="One window, read as an indexed tree."
-        lede={<>An agent names an app and gets back one window as text: every element on its own line, with an index, a role, a name and the actions it advertises. This is a real Finder tree, with the file names changed.</>}
-      >
-        <ReadingDemo>
-          <p><b style={{ color: SOL.base02 }}>Cheap to narrow.</b> <C>find &quot;Sign&quot;</C> prints only the matches and their ancestors. <C>--under 31</C> prints one subtree. Both take a <C>/regex/</C>.</p>
-          <p><b style={{ color: SOL.base02 }}>Sparse on purpose.</b> The tree drops noise, so indexes skip. An agent never counts its way to one; it reads the number off the line.</p>
-          <p><b style={{ color: SOL.base02 }}>Stale by design.</b> An index belongs to the tree it came from. A stale one fails as <C>element_not_found</C> instead of clicking whatever sits there now.</p>
-        </ReadingDemo>
-      </Section>
-
-      <Section
-        id="changes"
-        index={7}
-        role="tab group"
-        title="Every action says what it changed."
-        lede={<>An action prints one sentence saying what was attempted, by which route and whether it was verified, then the lines of the tree that moved. The agent gets the indexes for its next step without taking another snapshot, and finds out right away when an app ignored it.</>}
-      >
-        <OutcomesDemo />
-      </Section>
-
-      <Section
         id="screen"
-        index={12}
+        index={3}
         role="group"
-        tone="paper"
         title="You keep your screen, your mouse and your keyboard."
         lede={<>Every verb works on a background window. The agent&apos;s keys go to the app it is driving, never to the one you are typing in. No verb brings a window forward on its own.</>}
       >
@@ -75,19 +48,39 @@ export default function ComputerPage() {
       </Section>
 
       <Section
-        id="batch"
-        index={18}
-        role="list"
-        title="Many steps, one process."
-        lede={<>Each separate command pays a second or more to start the CLI. <C>cast computer do</C> runs a whole flow against one app over one helper connection. It stops at the first failing step and reports what ran and what never did; <C>--keep-going</C> carries on.</>}
+        id="read"
+        index={7}
+        role="split group"
+        tone="paper"
+        title="One window, read as an indexed tree."
+        lede={<>An agent names an app and gets back one window as text: every element on its own line, with an index, a role, a name and the actions it advertises. In the conversation it shows as the step&apos;s output, with a picture of the window beside it once Screen Recording is granted. This is a real Finder tree, with the file names changed.</>}
       >
-        <BatchDemo />
-        <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] items-start">
-          <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
-            Steps read the way the window does, and each takes the single command&apos;s flags. A bare <C>click</C> or <C>action</C> after a <C>find</C> acts on what it found.
-          </p>
-          <StepWords />
-        </div>
+        <ReadingDemo>
+          <p><b style={{ color: SOL.base02 }}>Cheap to narrow.</b> <C>find &quot;Sign&quot;</C> prints only the matches and their ancestors. <C>--under 31</C> prints one subtree. Both take a <C>/regex/</C>.</p>
+          <p><b style={{ color: SOL.base02 }}>Sparse on purpose.</b> The tree drops noise, so indexes skip. An agent never counts its way to one; it reads the number off the line.</p>
+          <p><b style={{ color: SOL.base02 }}>Stale by design.</b> An index belongs to the tree it came from. A stale one fails as <C>element_not_found</C> instead of clicking whatever sits there now.</p>
+        </ReadingDemo>
+      </Section>
+
+      <Section
+        id="changes"
+        index={12}
+        role="tab group"
+        title="Every action says what it changed."
+        lede={<>An action prints one sentence saying what was attempted, by which route and whether it was verified, then the lines of the tree that moved. The agent gets the indexes for its next step without taking another snapshot, and finds out right away when an app ignored it.</>}
+      >
+        <OutcomesDemo />
+      </Section>
+
+      <Section
+        id="setup"
+        index={18}
+        role="sheet"
+        tone="paper"
+        title="Turn it on: two grants, once, to a helper that holds nothing else."
+        lede={<>macOS asks a person to grant Accessibility and Screen Recording by hand. Until then the agent cannot read a window, and says so. Codecast signs a small helper app and asks for both on its behalf, so neither Codecast nor your terminal holds them.</>}
+      >
+        <SetupPanel />
       </Section>
 
       <Section
@@ -102,24 +95,30 @@ export default function ComputerPage() {
       </Section>
 
       <Section
-        id="errors"
+        id="batch"
         index={29}
+        role="list"
+        title="Many steps, one process."
+        lede={<>This one is the agent&apos;s side, about speed. Each separate command pays a second or more to start the CLI. <C>cast computer do</C> runs a whole flow against one app over one helper connection. It stops at the first failing step and reports what ran and what never did; <C>--keep-going</C> carries on.</>}
+      >
+        <BatchDemo />
+        <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] items-start">
+          <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
+            Steps read the way the window does, and each takes the single command&apos;s flags. A bare <C>click</C> or <C>action</C> after a <C>find</C> acts on what it found.
+          </p>
+          <StepWords />
+        </div>
+      </Section>
+
+      <Section
+        id="errors"
+        index={34}
         role="outline"
+        tone="paper"
         title="Every failure names its way out."
         lede={<>A failure carries a code and the recovery for it: in <C>--json</C> as <C>code</C> and <C>recovery</C>, printed under the message otherwise. The rule they share: change something before retrying, never rerun unchanged. These are the recoveries word for word.</>}
       >
         <ErrorList />
-      </Section>
-
-      <Section
-        id="setup"
-        index={34}
-        role="sheet"
-        tone="paper"
-        title="Two grants, once, to a helper that holds nothing else."
-        lede={<>macOS asks a person to grant Accessibility and Screen Recording by hand. Until then every verb fails and says so. Codecast signs a small helper app and asks for both on its behalf, so your terminal never needs them.</>}
-      >
-        <SetupPanel />
       </Section>
 
       <Section
@@ -128,8 +127,8 @@ export default function ComputerPage() {
         role="table"
         tone="dark"
         wide
-        title="Command reference."
-        lede={<>From <C>cast computer --help</C>. <C>cast computer help &lt;verb&gt;</C> prints one verb&apos;s flags from the binary about to run them, so an agent never works from a stale list.</>}
+        title="For scripts and agents: every command."
+        lede={<>Agents learn these from their instructions; you only need them to script it yourself. From <C>cast computer --help</C>. <C>cast computer help &lt;verb&gt;</C> prints one verb&apos;s flags from the binary about to run them, so an agent never works from a stale list.</>}
       >
         <Reference />
       </Section>
@@ -152,10 +151,10 @@ function Hero() {
           </h1>
           <div>
             <p className="cx-in text-[17px] sm:text-[18px] leading-[1.65]" style={{ color: SOL.base00, animationDelay: "120ms" }}>
-              <span className="font-mono" style={{ color: SOL.magenta }}>cast computer</span> reads a native window as an indexed accessibility tree, acts on it by name, and reports exactly what changed. It works on windows behind the one you are using, so Preview, Slack, System Settings or your own desktop build are in reach without the agent taking your screen.
+              Ask your agent for something you would otherwise click through in a Mac app. It reads the window as a list of named controls, acts on them, and shows you in the conversation exactly what changed. It works on windows behind the one you are using, so Preview, Slack, System Settings or your own desktop build are in reach without the agent taking your screen.
             </p>
             <div className="cx-in mt-6 flex flex-wrap items-center gap-x-4 gap-y-3" style={{ animationDelay: "220ms" }}>
-              <CopyCommand cmd="cast computer get-app-state --app com.apple.Preview" />
+              <a href="#setup" className="inline-flex h-11 items-center rounded-lg px-4 font-mono text-[14px] font-semibold text-white" style={{ backgroundColor: SOL.magenta }}>Turn it on</a>
               <a href="#read" className="font-mono text-[13px] underline underline-offset-4" style={{ color: SOL.base01 }}>how it reads a window</a>
             </div>
           </div>
@@ -203,7 +202,7 @@ const LIMITS: { q: string; a: React.ReactNode }[] = [
   { q: "What about apps that draw their own UI?", a: <>A canvas, a game or a drawing exposes little to accessibility, so the tree says little. Coordinate clicks and screenshots still work, and the CLI says when a change may sit outside what the tree shows.</> },
   { q: "Is “attempted” a failure?", a: <>No. It means the helper delivered the action but could not read back proof, which is normal for a press. The diff under it is the evidence; <C>verified</C> appears only when the change was read back.</> },
   { q: "When does it need my screen?", a: <>Only for a real mouse event: <C>--mouse</C>, <C>drag</C>, or a control with no accessibility press. macOS drops those on a background window, so the command fails with <C>window_not_focused</C> unless the agent passes <C>--restore-window</C>.</> },
-  { q: "Is this for web pages too?", a: <>Use <Link href={featureHref("browser")} className="underline underline-offset-2">cast browser</Link> inside a page: it holds your logins and speaks the page&apos;s own structure. <C>cast computer</C> is for native apps and for what a page cannot reach, such as the address bar, a file picker or a permission sheet.</> },
+  { q: "Is this for web pages too?", a: <>Inside a page, agents use the <Link href={featureHref("browser")} className="underline underline-offset-2">browser</Link>: it holds your logins and speaks the page&apos;s own structure. Computer is for native apps and for what a page cannot reach, such as the address bar, a file picker or a permission sheet.</> },
 ];
 
 function Limits() {
@@ -254,7 +253,7 @@ function Closing() {
               Install codecast. Grant two permissions. Hand it a window.
             </h2>
             <p className="mt-4 text-[16px] leading-[1.7] max-w-lg" style={{ color: SOL.base00 }}>
-              Every agent you run through codecast learns <C>cast computer</C> from its instructions. Run <C>cast computer setup</C> once, then ask for the thing you would otherwise click through yourself.
+              Every agent you run through codecast already knows how. Switch on Computer in Agent features, grant the two permissions it asks for, then ask for the thing you would otherwise click through yourself.
             </p>
           </div>
           <InstallTabs location="feature_computer" />

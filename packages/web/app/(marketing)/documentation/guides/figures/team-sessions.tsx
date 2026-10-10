@@ -2,89 +2,21 @@
 
 import { SOL } from "../../../blog/blogChrome";
 import { PanelHead, Stage, t } from "../../../blog/figureKit";
-import { Box, Label, Sheet, type Ink } from "../figureParts";
+import { Sheet, type Ink } from "../figureParts";
 
 /**
- * Figures for the team sessions guide. Transcript roots are the ones in
- * shared/contracts/agentClients.ts; the sharing rule is resolveTeamForPath in
- * convex/privacy.ts.
+ * Figures for the team sessions guide. The sharing rule is resolveTeamForPath
+ * in convex/privacy.ts, in the words Settings uses for it.
  */
-
-// ─── The daemon: files the agents already write, synced as they grow ───────
-
-const ROOTS: { agent: string; path: string; ink: Ink }[] = [
-  { agent: "Claude Code", path: "~/.claude/projects/*.jsonl", ink: "orange" },
-  { agent: "Codex", path: "~/.codex/sessions/*.jsonl", ink: "violet" },
-  { agent: "Cursor", path: "~/.cursor/chats (sqlite)", ink: "base02" },
-  { agent: "OpenCode", path: "~/.local/share/opencode/opencode.db", ink: "cyan" },
-  { agent: "pi, Grok, Gemini", path: "~/.pi, ~/.grok, ~/.gemini", ink: "blue" },
-];
-
-/** Agents write their own history; the daemon reads it and syncs each line as it lands. */
-export function DaemonSyncFigure() {
-  const rowY = (i: number) => 34 + i * 44;
-  const D = { x: 322, y: 108, w: 124, h: 66 };
-  const WS = { x: D.x + D.w + 52, w: 104 };
-  const OX = WS.x + WS.w + 30;
-  const OUT = [
-    { y: 70, title: "feed", sub: "newest first" },
-    { y: 172, title: "inbox", sub: "by who acts next" },
-  ];
-  return (
-    <Stage minWidth={680}>
-      <Sheet w={760} h={262} label="Each agent writes its transcript to disk; the codecast daemon watches those files and syncs every conversation to the team's workspace">
-        {(arrow) => (
-          <>
-            <text x={16} y={16} fontSize="10" fill={SOL.base1}>on each teammate's machine</text>
-            {ROOTS.map((r, i) => {
-              const y = rowY(i);
-              const at = 0.15 + i * 0.12;
-              return (
-                <g key={r.agent}>
-                  <g className="bj-rise" style={t(at)}>
-                    <rect x={16} y={y} width={244} height={34} rx={6} fill={SOL.base3} stroke={SOL.base2} />
-                    <rect x={16} y={y} width={3} height={34} rx={1.5} fill={SOL[r.ink]} />
-                    <text x={28} y={y + 14} fontSize="11" fontWeight={700} fill={SOL.base02}>{r.agent}</text>
-                    <text x={28} y={y + 27} fontSize="9.5" fill={SOL.base01}>{r.path}</text>
-                  </g>
-                  {/* new lines landing in the file */}
-                  {[0, 1, 2].map((k) => (
-                    <rect key={k} x={232 + k * 7} y={y + 9} width={4} height={16} rx={1} fill={SOL[r.ink]} opacity={0.5} className="bj-pop" style={t(1.0 + i * 0.2 + k * 0.35)} />
-                  ))}
-                  <path d={`M262 ${y + 17}C300 ${y + 17} 300 ${D.y + D.h / 2} ${D.x - 6} ${D.y + D.h / 2}`} pathLength={1} fill="none" stroke={SOL.base1} strokeWidth={1.2} strokeDasharray="3 3" className="bj-fade" style={t(0.8 + i * 0.1)} />
-                </g>
-              );
-            })}
-            {/* a message travelling the whole way, live */}
-            <circle r={4} fill={SOL.orange} className="bj-fade" style={t(2.6)}>
-              <animateMotion dur="2.4s" repeatCount="indefinite" begin="2.6s" path={`M262 51C300 51 300 141 ${D.x - 6} 141H${WS.x - 8}`} />
-            </circle>
-            <Box x={D.x} y={D.y} w={D.w} h={D.h} title="cast daemon" sub="watches the files" ink="base02" bold={1.5} className="bj-pop" style={t(0.7)} />
-            <Label x={D.x + D.w / 2} y={D.y + D.h + 20} anchor="middle" lines={["no change to how", "anyone runs an agent"]} size={9.5} ink="base1" className="bj-fade" style={t(1.2)} />
-
-            <path d={`M${D.x + D.w + 4} ${D.y + D.h / 2}H${WS.x - 6}`} pathLength={1} stroke={SOL.base02} strokeWidth={1.5} markerEnd={arrow("base02")} className="bj-draw" style={t(1.3, 0.4)} />
-            <Box x={WS.x} y={D.y + 4} w={WS.w} h={58} title="workspace" sub="team or private" ink="cyan" fill={`${SOL.cyan}12`} className="bj-pop" style={t(1.7)} />
-            {OUT.map((o, i) => (
-              <g key={o.title}>
-                <path d={`M${WS.x + WS.w + 4} ${D.y + D.h / 2}C${OX - 16} ${D.y + D.h / 2} ${OX - 24} ${o.y + 22} ${OX - 6} ${o.y + 22}`} pathLength={1} fill="none" stroke={SOL.base1} strokeWidth={1.3} markerEnd={arrow("base1")} className="bj-draw" style={t(2.0 + i * 0.2, 0.35)} />
-                <Box x={OX} y={o.y} w={112} h={44} title={o.title} sub={o.sub} ink="base1" className="bj-pop" style={t(2.3 + i * 0.2)} />
-              </g>
-            ))}
-          </>
-        )}
-      </Sheet>
-    </Stage>
-  );
-}
 
 // ─── Who sees a session: the rule, in the order it is applied ──────────────
 
 const CASES: { path: string; rule: string; why: string; team: boolean }[] = [
-  { path: "~/src/product/api", rule: "~/src/product → Acme, share", why: "longest path prefix", team: true },
-  { path: "~/src/product/scratch", rule: "~/src/product/scratch → never share", why: "the longer path wins, and it says never", team: false },
-  { path: "~/.codex/worktrees/a1f3", rule: "repo github.com/acme/product", why: "no path rule: the clone's repository", team: true },
-  { path: "~/src/product/api", rule: "started before the share date", why: "share_since keeps old work private", team: false },
-  { path: "~/personal/experiments", rule: "no rule", why: "private is the default", team: false },
+  { path: "~/src/product/api", rule: "product shared with Acme", why: "the folder it runs in is shared", team: true },
+  { path: "~/src/product/scratch", rule: "scratch set to Never share", why: "the closer folder wins", team: false },
+  { path: "~/.codex/worktrees/a1f3", rule: "a copy of the product repo", why: "a clone follows its repository", team: true },
+  { path: "~/src/product/api", rule: "started before you shared", why: "From today on keeps old work private", team: false },
+  { path: "~/personal/experiments", rule: "nothing shared", why: "private is the default", team: false },
 ];
 
 /** Five sessions on one account, resolved the way the server does when each is created. */
@@ -95,7 +27,7 @@ export function VisibilityRuleFigure() {
       <Sheet w={760} h={284} label="Sharing is decided per directory: the longest matching path rule wins, a repository rule covers clones outside it, and everything else stays private">
         {(arrow) => (
           <>
-            {[["session's directory", 16], ["matching rule", 250], ["outcome", 610]].map(([h, x]) => (
+            {[["where the session runs", 16], ["what applies", 250], ["outcome", 610]].map(([h, x]) => (
               <text key={h as string} x={x as number} y={24} fontSize="10" fill={SOL.base1}>{h as string}</text>
             ))}
             {CASES.map((c, i) => {
@@ -163,13 +95,13 @@ export function FeedInboxFigure() {
     <Stage>
       <div className="grid grid-cols-1 *:min-w-0 md:grid-cols-2">
         <div className="border-b md:border-b-0 md:border-r pb-4" style={{ borderColor: SOL.base2 }}>
-          <PanelHead title="/feed" sub="Every session the team can see, newest activity first." color={SOL.blue} />
+          <PanelHead title="Feed" sub="Every session the team can see, newest activity first." color={SOL.blue} />
           <div className="px-4 pt-3 space-y-1.5">
             {feed.map((r, i) => <Card key={r.title} r={r} at={0.2 + i * 0.12} />)}
           </div>
         </div>
         <div className="pb-4">
-          <PanelHead title="/inbox" sub="The same sessions, filed by who has to act next." color={SOL.yellow} />
+          <PanelHead title="Inbox" sub="Your sessions, filed by who has to act next." color={SOL.yellow} />
           <div className="px-4 pt-3 space-y-2">
             {groups.map((g) => (
               <div key={g}>

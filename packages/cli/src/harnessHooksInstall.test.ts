@@ -111,6 +111,32 @@ describe("a hook that belongs to an Agent Features entry", () => {
     syncHarnessHooks({ state_enabled: true, hooks_enabled: false });
     expect(readSettings().hooks).toBeUndefined();
   });
+
+  test("the task context hook brings its Codex twin along, only where Codex hooks are already on", () => {
+    const claudeHook = path.join(home, ".claude", "hooks", "task-context.sh");
+    const codexHook = path.join(home, ".codecast", "hooks", "task-context-codex.sh");
+    const codexHooks = path.join(home, ".codex", "hooks.json");
+    const codexConfig = path.join(home, ".codex", "config.toml");
+    syncHarnessHooks({ work_enabled: true });
+    expect(commandsFor(readSettings(), "SessionStart")).toContain(claudeHook);
+    expect(fs.existsSync(codexHooks)).toBe(false);
+
+    // Codex with its hooks flag off: the flag is global, so Tasks never turns it on.
+    fs.mkdirSync(path.join(home, ".codex"));
+    syncHarnessHooks({ work_enabled: true });
+    expect(fs.existsSync(codexHooks)).toBe(false);
+    expect(fs.existsSync(codexConfig)).toBe(false);
+
+    fs.writeFileSync(codexConfig, "[features]\nhooks = true\n");
+    syncHarnessHooks({ work_enabled: true });
+    expect(commandsFor(JSON.parse(fs.readFileSync(codexHooks, "utf-8")), "SessionStart")).toEqual([codexHook]);
+    expect(fs.readFileSync(codexHook, "utf-8")).toContain("_task-context --client codex");
+
+    syncHarnessHooks({ work_enabled: false });
+    expect(commandsFor(readSettings(), "SessionStart")).not.toContain(claudeHook);
+    expect(commandsFor(JSON.parse(fs.readFileSync(codexHooks, "utf-8")), "SessionStart")).toEqual([]);
+    expect(fs.existsSync(codexHook)).toBe(false);
+  });
 });
 
 describe("removeHarnessHooks", () => {

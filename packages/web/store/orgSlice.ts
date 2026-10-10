@@ -15,6 +15,7 @@
 // agrees with it: the server's own recompute is the acknowledgement. The same
 // apply function serves the draft and the merge, so there is one definition
 // of what each edit does to a tree.
+import { create, current, isDraft } from "mutative";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import {
   countStates,
@@ -1201,6 +1202,38 @@ export function fillRolesOnlyTree(incoming: any, current: OrgTree | null | undef
   } as OrgTree;
 }
 
+/**
+ * Settle the journal against a pushed collection and replay the intents still
+ * open onto it. The pushed table lands on the store draft as a frozen plain
+ * whole (inboxStore.syncTable), which mutative does not draft: an edit written
+ * into its rows would change rows the previous state still holds, and an
+ * intent's stamp read off the draft would land in them as a proxy that is
+ * revoked at commit, so the next read of the row throws. The replay therefore
+ * runs in a draft of its own over the table, from plain intents, and the
+ * result replaces the table.
+ */
+function replayOntoPush<F extends "orgProposalChanges" | "orgProposals" | "orgLog">(
+  draft: any,
+  field: F,
+  replay: (rows: NonNullable<OrgDraft[F]>, intent: OrgIntent) => void,
+): void {
+  if (!draft?.orgIntents?.length) return;
+  const intents: OrgIntent[] = isDraft(draft.orgIntents) ? current(draft.orgIntents) : draft.orgIntents;
+  const table = draft[field] ?? {};
+  let settled = intents;
+  let notice = draft.orgIntentNotice;
+  const next = create(table, (rows: any) => {
+    const view = { orgTree: draft.orgTree, orgProposalChanges: draft.orgProposalChanges, orgProposals: draft.orgProposals, orgLog: draft.orgLog, orgIntents: intents, orgIntentNotice: notice, [field]: rows };
+    pruneOrgIntents(view);
+    settled = view.orgIntents;
+    notice = view.orgIntentNotice;
+    for (const i of settled) replay(rows, i);
+  });
+  if (settled !== intents) draft.orgIntents = settled;
+  if (notice !== draft.orgIntentNotice) draft.orgIntentNotice = notice;
+  if (next !== table) draft[field] = Object.freeze(next);
+}
+
 export const ORG_SYNC_REGISTRY = {
   // The server stamps generated_at on every execution; strip it so an
   // unchanged tree doesn't wake subscribers on every no-op push. The merge
@@ -1239,13 +1272,9 @@ export const ORG_SYNC_REGISTRY = {
     // A hand entry replaces the registry's derived opts for its key, so the
     // window semantics (clientSyncRegistry `sync`) are restated here.
     isDelta: true,
-    transform: (draft: any) => {
-      if (!draft?.orgIntents?.length) return;
-      pruneOrgIntents(draft);
-      for (const i of draft.orgIntents as OrgIntent[]) {
-        if (i.kind === "decideChange" || i.kind === "noteChange") applyOrgChangeIntent(draft.orgProposalChanges, i);
-      }
-    },
+    transform: (draft: any) => replayOntoPush(draft, "orgProposalChanges", (rows, i) => {
+      if (i.kind === "decideChange" || i.kind === "noteChange") applyOrgChangeIntent(rows, i);
+    }),
   },
   // The list row's pending protection: a list push that started before the
   // withdraw landed still says open, one before a whole-proposal note landed
@@ -1253,13 +1282,9 @@ export const ORG_SYNC_REGISTRY = {
   orgProposals: {
     kind: "collection" as const,
     isDelta: true,
-    transform: (draft: any) => {
-      if (!draft?.orgIntents?.length) return;
-      pruneOrgIntents(draft);
-      for (const i of draft.orgIntents as OrgIntent[]) {
-        if (i.kind === "withdraw" || i.kind === "noteProposal") applyOrgProposalIntent(draft.orgProposals, i);
-      }
-    },
+    transform: (draft: any) => replayOntoPush(draft, "orgProposals", (rows, i) => {
+      if (i.kind === "withdraw" || i.kind === "noteProposal") applyOrgProposalIntent(rows, i);
+    }),
   },
   // An undo's pending protection (S21): a list push that started before the
   // undo landed still shows the entry standing; replay the open mark onto it,
@@ -1267,13 +1292,9 @@ export const ORG_SYNC_REGISTRY = {
   orgLog: {
     kind: "collection" as const,
     isDelta: true,
-    transform: (draft: any) => {
-      if (!draft?.orgIntents?.length) return;
-      pruneOrgIntents(draft);
-      for (const i of draft.orgIntents as OrgIntent[]) {
-        if (i.kind === "undoChange") applyOrgUndoIntent(draft.orgLog, i);
-      }
-    },
+    transform: (draft: any) => replayOntoPush(draft, "orgLog", (rows, i) => {
+      if (i.kind === "undoChange") applyOrgUndoIntent(rows, i);
+    }),
   },
   // Same stamp, same reason: a no-op health push must not wake the pane.
   orgHealth: {
