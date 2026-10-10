@@ -5,7 +5,7 @@
 // graph's shape stays the shipped one, so "reset" always has a station to
 // read back from. Pure, so the fork, diff and reset rules test without React.
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf } from "@codecast/shared/contracts/orgProposal";
-import { REPO_LINE_REL_DIR, REPO_LINE_REL_PATH, REPO_LINE_SLUG, type LineStationEdit, type PublishedRepoLine } from "@codecast/shared/contracts/lineProfile";
+import { REPO_LINE_REL_DIR, REPO_LINE_REL_PATH, isRepoLineSlug, type LineStationEdit, type PublishedRepoLine } from "@codecast/shared/contracts/lineProfile";
 
 export type LineNode = {
   id: string;
@@ -83,7 +83,7 @@ export function lineRunKind<P extends ProjectRef>(
   const project = slug ? forks.get(slug) : undefined;
   if (project) return { kind: "customized", project };
   // A run of a repo's own line (line-map.md LX5) pushes under its own slug.
-  if (slug === REPO_LINE_SLUG) return { kind: "repo" };
+  if (slug && isRepoLineSlug(slug)) return { kind: "repo" };
   if (slug === DEFAULT_LINE_SLUG || (!slug && run.workflow_name === DEFAULT_LINE_SLUG)) return { kind: "shipped" };
   return null;
 }

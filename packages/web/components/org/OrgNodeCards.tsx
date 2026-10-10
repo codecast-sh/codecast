@@ -6,18 +6,23 @@
 import { memo, type ReactNode } from "react";
 import { ShortId } from "../ShortId";
 import { ProjectLeadMark } from "../charter/ProjectLeadChip";
-import Link from "next/link";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Clock, Sparkles, AlertTriangle } from "lucide-react";
 import { Avatar } from "../tasks/TaskCommentStream";
+import { PersonHoverCard } from "../identity/PersonHoverCard";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
 import { isHeadOfPeople } from "../../lib/retireRole";
 import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
-import { GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
+import { GHOST, ORG_STATE_META, PRESENCE_COLOR, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
+import { OrgObjectLink } from "./company/OrgObjectLink";
+import { StandingLine, StateWords } from "./stateWords";
+// The state words and the standing line live in their own light module, so a
+// company line or a hover card can say them without loading the map.
+export { StandingLine, StateWords };
 import { useZoomLevel } from "./orgZoom";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle, stateWords } from "./orgMeta";
@@ -26,7 +31,7 @@ import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import { isHeadOfPeopleRole, roleWords } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
-import { ORG_SIZES, roleMetaLine, runningSessions, seatRowHeight } from "./orgLayout";
+import { ORG_SIZES, charterFirstLine, roleMetaLine, runningSessions, seatRowHeight, sessionLineCount, type OrgSessionDetail } from "./orgLayout";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 import { RoleWeekBody } from "./orgFlowViz";
@@ -202,7 +207,8 @@ export function Frame({
   children, selected, dropTarget, dragging, className, style, accent, kind,
 }: {
   children: ReactNode; selected?: boolean; dropTarget?: boolean; dragging?: boolean; className?: string; style?: React.CSSProperties;
-  /** The colour the selection ring and the drop halo take. */
+  /** The colour the drop halo takes. The selection ring is always cyan: it
+   *  ties a card to its open sheet, so it never borrows a state colour. */
   accent?: string;
   /** What the card is, for the tours to point at (data-org-node): me, person,
    *  head, role, session, ghost. */
@@ -211,7 +217,7 @@ export function Frame({
   const ring = dropTarget
     ? `0 0 0 2px var(--sol-bg), 0 0 0 4px ${accent ?? "var(--sol-cyan)"}, 0 12px 28px -12px ${accent ?? "var(--sol-cyan)"}`
     : selected
-      ? `0 0 0 2px var(--sol-bg), 0 0 0 3.5px ${accent ?? "var(--sol-cyan)"}`
+      ? "0 0 0 2px var(--sol-bg), 0 0 0 3.5px var(--sol-cyan)"
       : dragging
         ? "0 18px 40px -14px rgba(0,0,0,0.45)"
         : "0 1px 0 rgba(0,0,0,0.04), 0 6px 18px -14px rgba(0,0,0,0.25)";
@@ -249,55 +255,15 @@ function CollapseToggle({ collapsed, hidden, onClick }: { collapsed: boolean; hi
   );
 }
 
-/** One line for a standing agent: a dot and word in its declared colour, then
- *  its pinned line. The role card, the anchor card and the panels share it. */
-export function StandingLine({ standing, className, size = "sm" }: { standing: OrgStandingState | null | undefined; className?: string; size?: "sm" | "md" }) {
-  const line = standingLineOf(standing);
-  if (!line) return null;
-  return (
-    <div className={cn("flex items-center gap-1.5 min-w-0", size === "sm" ? "text-[10.5px]" : "text-[11.5px]", className)} title={line.text ?? undefined}>
-      <span className="shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: line.color }} aria-hidden />
-      <span className="shrink-0 font-medium" style={{ color: line.color }}>{line.label}</span>
-      {line.text && (
-        <>
-          <span aria-hidden style={{ color: "var(--sol-text-dim)" }}>·</span>
-          <span className="truncate" style={{ color: "var(--sol-text-muted)" }}>{line.text}</span>
-        </>
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- person
 
 export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean; hidden: number; overflow: number };
+
 
 /** "+174 · 60 needs input · 4 working": what the stack does not draw, and
  *  what in the whole set needs a human or is live. The state words come from
  *  ORG_STATE_META so this card, the anchor card, the panel chip and the inbox
  *  never name one state two ways. Nothing when everything is drawn. */
-/** The full tally for a title: every state with its count. */
-const countsTitle = (counts: StateCounts) => ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0).map((k) => `${counts[k]} ${ORG_STATE_META[k].label}`).join(" · ") || "no sessions";
-
-/** A card's sessions in words (orgMeta.stateWords): the states a person acts
- *  on first, each in its colour, the whole tally on hover. Dots alone say
- *  nothing to a person who has not learned the colours. */
-export function StateWords({ counts, max = 2, lead, className }: { counts: StateCounts; max?: number; /** A first part before the words ("+3", for what a stack does not draw). */ lead?: string; className?: string }) {
-  const words = stateWords(counts, max);
-  if (!lead && words.length === 0) return null;
-  const color = (w: string) => (w.includes("need") ? ORG_STATE_META.needs_input.color : w.endsWith("working") ? ORG_STATE_META.working.color : undefined);
-  return (
-    <span className={cn("inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap", className)} style={{ color: "var(--sol-text-dim)" }} title={countsTitle(counts)} data-state-words>
-      {[...(lead ? [lead] : []), ...words].map((w, i) => (
-        <span key={w} className="inline-flex items-center gap-1">
-          {i > 0 && <span aria-hidden>·</span>}
-          <span style={{ color: color(w) }}>{w}</span>
-        </span>
-      ))}
-    </span>
-  );
-}
-
 export function OverflowTally({ overflow, counts }: { overflow: number; counts: StateCounts }) {
   if (overflow <= 0) return null;
   // "+N" counts what the stack under the card does not draw; when nothing is
@@ -349,11 +315,7 @@ function LevelChips({ data, close }: { data: CardData; close: boolean }) {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-const PRESENCE: Record<NonNullable<OrgPerson["presence"]>, string> = {
-  online: "var(--sol-green)",
-  away: "var(--sol-yellow)",
-  offline: "color-mix(in srgb, var(--sol-border) 50%, transparent)",
-};
+const PRESENCE = PRESENCE_COLOR;
 
 export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<PersonNodeData>>) {
   const { person: p, collapsed, hidden, overflow } = data;
@@ -384,7 +346,9 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
         <div className="relative shrink-0">
           <div className="rounded-full p-[2px]" style={{ background: p.is_me ? "linear-gradient(135deg, var(--sol-cyan), var(--sol-blue))" : "color-mix(in srgb, var(--sol-border) 45%, transparent)" }}>
             <div className="rounded-full p-[2px]" style={{ background: "var(--sol-card)" }}>
-              <Avatar name={p.name} image={p.image} size="md" />
+              <PersonHoverCard person={{ userId: p.user_id, name: p.name, image: p.image }} side="right" triggerClassName="inline-flex">
+                <Avatar name={p.name} image={p.image} size="md" />
+              </PersonHoverCard>
             </div>
           </div>
           {p.presence && (
@@ -465,7 +429,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       <Frame selected={data.selected} dropTarget={data.dropTarget && !ghost} dragging={data.dragging} accent="var(--sol-violet)" className="px-3 py-2.5" kind={ghost && !ghost.solid ? "ghost" : isHeadOfPeople(r) ? "head" : "role"} style={frameStyle}>
         <Ports />
         {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} />}
-        <FarBody name={roleWords(r).name} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} />
+        <FarBody name={roleWords(r).subtitle} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} />
       </Frame>
     );
   }
@@ -491,15 +455,16 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           @{r.handle}
         </span>
       ) : (
-        <Link
-          href={`/org/${r.short_id}`}
-          onClick={(e) => e.stopPropagation()}
+        <OrgObjectLink
+          kind="role"
+          objRef={r.short_id}
+          stop
           className="nodrag absolute -top-[11px] left-3 flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium hover:brightness-110"
-          style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}
-          title="Open its page"
+          style={{ background: "var(--sol-text-muted)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}
+          title="Open its sheet"
         >
           @{r.handle}
-        </Link>
+        </OrgObjectLink>
       )}
       {/* Only the name and the body copy take the ghost's 55%: the tags and
           the scope chips say WHAT is proposed and stay readable. */}
@@ -513,11 +478,11 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
         </RoleHoverCard>
         <div className="min-w-0 flex-1">
           <div className={cn("text-[14px] leading-tight font-semibold tracking-tight", close ? "line-clamp-2" : "truncate")} style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>
-            <RoleHoverCard role={r} side="right" disabled={!!ghost || !!data.dragging} triggerClassName="inline">{roleWords(r).name}</RoleHoverCard>
+            <RoleHoverCard role={r} side="right" disabled={!!ghost || !!data.dragging} triggerClassName="inline">{roleWords(r).subtitle}</RoleHoverCard>
           </div>
           {!close && <div className="mt-[3px] text-[10.5px] flex items-center gap-1.5 whitespace-nowrap overflow-hidden" style={{ color: "var(--sol-text-dim)" }}>
-            {/* The role is the subtitle (S30): "Head of People", "Growth lead", "Executive Assistant, global". */}
-            <span className="shrink-0 truncate max-w-[62%]" style={{ opacity: dim ? GHOST.opacity : 1 }} data-role-title>{roleWords(r).subtitle}</span>
+            {/* The card is named by the role's title; its persona name is the quiet word under it. */}
+            <span className="shrink-0 truncate max-w-[62%]" style={{ opacity: dim ? GHOST.opacity : 1 }} data-role-persona>{roleWords(r).name}</span>
             {paused && <span className="px-1 rounded-sm" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             {ghost && <GhostTag quiet label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} />}
             {data.retire && <GhostTag quiet label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" />}
@@ -597,14 +562,15 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       {!ghost && (
         <div className="mt-2 flex items-center gap-2">
           <StateBar counts={r.counts} className="flex-1" />
-          <OverflowTally overflow={overflow} counts={r.counts} />
+          {/* Close reads every state's count; further out, what the stack under it does not draw. */}
+          {close ? <span data-role-counts><StateTally counts={r.counts} /></span> : <OverflowTally overflow={overflow} counts={r.counts} />}
         </div>
       )}
       </div>
       <LevelChips data={data} close={close} />
       {/* The close card (orgZoom): what the seat is for, in its own words, what its area holds, and what runs under it now. */}
-      {close && r.charter?.trim() && (
-        <p className="mt-1.5 line-clamp-2 text-[10px] leading-[14px]" style={{ height: ORG_SIZES.charterRows - 6, color: "var(--sol-text-muted)", opacity: dim ? GHOST.opacity : 1 }} title={r.charter} data-role-charter>{r.charter}</p>
+      {close && charterFirstLine(r.charter) && (
+        <p className="mt-1.5 line-clamp-2 text-[10px] leading-[14px]" style={{ height: ORG_SIZES.charterRows - 6, color: "var(--sol-text-muted)", opacity: dim ? GHOST.opacity : 1 }} title={r.charter} data-role-charter>{charterFirstLine(r.charter)}</p>
       )}
       {close && !ghost && (
         <div className="flex min-w-0 items-center gap-1.5 text-[10px] tabular-nums whitespace-nowrap" style={{ height: ORG_SIZES.workRow, color: "var(--sol-text-muted)" }} data-role-work={data.ledger ? `${data.ledger.open_tasks}/${data.ledger.in_flight}/${data.ledger.active_plans}` : "unknown"}>
@@ -626,13 +592,13 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
 
 // ---------------------------------------------------------------- session
 
-export type SessionNodeData = CardData & { session: OrgSession; parent: OrgParentRef };
+export type SessionNodeData = CardData & { session: OrgSession; parent: OrgParentRef; /** The close card's detail (orgSessionDetail); the layout booked its rows. */ detail?: OrgSessionDetail };
 
 // ---------------------------------------------------------------- role, in health mode
 
 export type HealthRoleNodeData = { role: OrgRole; selected?: boolean; flow: RoleFlow; days: string[] };
 
-/** A role on the health map (HealthBoard): its week instead of its sessions.
+/** A role on the map's This week (OrgMap): its week instead of its sessions.
  *  The top rule takes the area's status colour, so a stuck or overloaded seat
  *  reads across the whole chart before any number does. */
 export const HealthRoleCard = memo(function HealthRoleCard({ data }: NodeProps<Node<HealthRoleNodeData>>) {
@@ -692,8 +658,11 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       </Frame>
     );
   }
+  // Close (orgZoom): under the middle card's row, where the session stands and the task it is bound to.
+  const detail = level === "close" ? data.detail : undefined;
+  const lines = sessionLineCount(detail?.line);
   return (
-    <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 flex items-center gap-2 overflow-hidden" style={{ borderRadius: 10 }} kind="session">
+    <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-1.5 overflow-hidden" style={{ borderRadius: 10 }} kind="session">
       <Ports />
       <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: st.color, opacity: s.state === "idle" ? 0.4 : 1 }} aria-hidden />
       {s.state === "working" && (
@@ -701,6 +670,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       )}
       {/* Who the session is (session-characters.md S3), the agent brand on
           its corner; a session nobody personified keeps the brand alone. */}
+      <div className="flex items-center gap-2" style={{ height: ORG_SIZES.session.h - 14 /* py-1.5 and the 1px border */ }}>
       <SessionMark session={s as any} size={20} iconClassName="w-4 h-4" className="shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 text-[13px] leading-[1.25]" title={s.title}>
@@ -731,6 +701,16 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
         )}
         <span className="text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - s.updated_at)}</span>
       </div>
+      </div>
+      {lines > 0 && (
+        <p className="overflow-hidden text-[10.5px]" style={{ marginTop: ORG_SIZES.sessionLineGap, height: lines * ORG_SIZES.sessionLine, lineHeight: `${ORG_SIZES.sessionLine}px`, color: "var(--sol-text-muted)", display: "-webkit-box", WebkitLineClamp: lines, WebkitBoxOrient: "vertical" }} title={detail!.line!} data-session-line>{detail!.line}</p>
+      )}
+      {detail?.task && (
+        <div className="flex min-w-0 items-center gap-1.5 text-[10px]" style={{ height: ORG_SIZES.sessionTaskRow, color: "var(--sol-text-muted)" }} title={`${detail.task.short_id} ${detail.task.title}`} data-session-task={detail.task.short_id}>
+          <span className="shrink-0 font-mono" style={{ color: "var(--sol-cyan)" }}>{detail.task.short_id}</span>
+          <span className="min-w-0 truncate">{detail.task.title}</span>
+        </div>
+      )}
     </Frame>
   );
 });

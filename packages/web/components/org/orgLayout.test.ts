@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { layoutOrgTree, rectsOverlap, personNodeId, roleNodeId, sessionNodeId, clusterNodeId, ORG_SIZES, ORG_STACK_VISIBLE, type OrgLayoutNode } from "./orgLayout";
+import { layoutOrgTree, rectsOverlap, personNodeId, roleNodeId, sessionNodeId, clusterNodeId, ORG_SIZES, ORG_STACK_VISIBLE, charterFirstLine, sessionCloseHeight, sessionLineCount, type OrgLayoutNode } from "./orgLayout";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "./orgFixture";
 import { sortOrgSessions } from "./orgTypes";
 
@@ -135,5 +135,48 @@ describe("orgLayout", () => {
     expect(stack.length).toBe(8);
     const cluster = byId(nodes).get(clusterNodeId(me))!;
     if (cluster.kind === "cluster") expect(cluster.remaining).toBe(22 - 8);
+  });
+
+  it("at close a session card books its detail line and its task; further out every card keeps the middle height; nothing overlaps", () => {
+    const mine = ORG_FIXTURE.people.find((p) => p.is_me)!.sessions;
+    const [a, b, c] = mine;
+    const long = "Rewriting the sync applier so a follower window never re-pushes a whole collection on a heartbeat";
+    const sessionDetails = {
+      [a._id]: { line: "Waiting on review", task: { short_id: "ct-12", title: "Fix the applier" } },
+      [b._id]: { line: long, task: null },
+      [c._id]: { line: null, task: { short_id: "ct-13", title: "Ship it" } },
+    };
+    const view = { collapsed: new Set<string>(), expanded: {}, sessionDetails };
+    const close = layoutOrgTree(ORG_FIXTURE, view, undefined, "close");
+    const m = byId(close.nodes);
+    const h = (id: string) => m.get(sessionNodeId(id))!.h;
+    const { session, sessionLine, sessionLineGap, sessionTaskRow } = ORG_SIZES;
+    expect(h(a._id)).toBe(session.h + sessionLineGap + sessionLine + sessionTaskRow);
+    // A long line takes the card's two lines, never more.
+    expect(h(b._id)).toBe(session.h + sessionLineGap + 2 * sessionLine);
+    expect(h(c._id)).toBe(session.h + sessionTaskRow);
+    expect(sessionLineCount(long)).toBe(2);
+    // The node carries the detail the card draws, so the two cannot disagree.
+    const na = m.get(sessionNodeId(a._id))!;
+    expect(na.kind === "session" && na.detail).toEqual(sessionDetails[a._id]);
+    for (let i = 0; i < close.nodes.length; i++) for (let j = i + 1; j < close.nodes.length; j++) expect(rectsOverlap(close.nodes[i], close.nodes[j])).toBe(false);
+    // The stack below the taller cards moves down with them.
+    const stack = close.nodes.filter((n) => n.kind === "session" && n.parent.kind === "user" && n.parent.user_id === "fixture-user-me").sort((x, y) => x.y - y.y);
+    for (let i = 1; i < stack.length; i++) expect(stack[i].y).toBe(stack[i - 1].y + stack[i - 1].h + ORG_SIZES.stackGap);
+    for (const level of ["mid", "far"] as const) {
+      const out = layoutOrgTree(ORG_FIXTURE, view, undefined, level);
+      for (const n of out.nodes) if (n.kind === "session") { expect(n.h).toBe(session.h); expect(n.detail).toBeUndefined(); }
+    }
+  });
+
+  it("a session row with nothing to say keeps the middle height at close", () => {
+    expect(sessionCloseHeight(undefined)).toBe(ORG_SIZES.session.h);
+    expect(sessionCloseHeight({ line: null, task: null })).toBe(ORG_SIZES.session.h);
+  });
+
+  it("a role's close card books its charter's first line, headings dropped", () => {
+    expect(charterFirstLine("\n# Owns billing\nand everything after")).toBe("Owns billing");
+    expect(charterFirstLine("   \n  ")).toBeNull();
+    expect(charterFirstLine(undefined)).toBeNull();
   });
 });
