@@ -8,8 +8,9 @@ import { conversationCommandRows, type SessionCommandRow } from "../lib/sessionC
 
 // A row still waiting on its daemon, keyed by a request id (a row keyed by its
 // command id came from forConversation and is already the server's). A line
-// edit's daemon answers twice: the write, then the republish it ran after.
-const republishing = (row: any) => row.kind === "line_edit" && typeof row.result === "string" && row.result.includes('"ok":"pending"');
+// edit's daemon answers twice: the write, then the republish it ran after (a
+// graph step's save the same: the write, then the push).
+const republishing = (row: any) => (row.kind === "line_edit" || row.kind === "line_graph_edit") && typeof row.result === "string" && row.result.includes('"ok":"pending"');
 const awaitingResult = (row: any) => (!row.executed_at || republishing(row)) && row._id !== row.command_id;
 const unsettledSig = makeCollectionSig((row: any) => (awaitingResult(row) ? row._id : ""));
 

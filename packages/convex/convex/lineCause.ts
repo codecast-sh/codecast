@@ -66,7 +66,7 @@ export async function fileLineCauseCore(ctx: any, userId: Id<"users">, clientKey
 }
 
 /** The role whose line runs a project's causes: the project's lead (LP1). */
-async function leadRoleOf(ctx: any, project: Doc<"projects">): Promise<any | null> {
+export async function leadRoleOf(ctx: any, project: Doc<"projects">): Promise<any | null> {
   const ws = parseWorkspaceKey(project.workspace);
   if (!ws) return null;
   const roles = await allRolesInBoundary(ctx, ws.type === "team" ? { team_id: ws.teamId } : { scope_user_id: ws.userId });

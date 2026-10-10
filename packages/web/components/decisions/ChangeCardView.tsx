@@ -163,9 +163,20 @@ function GoalName({ goalRef }: { goalRef: string }) {
   return <>{useGoalChip(goalRef).label}</>;
 }
 
+/** Why a change carries its risk, in a reader's words. Older cards stored
+ *  the grounding agent's verdict as "Ground rated it review."; that reads as
+ *  what it means. */
+const RATED: Record<string, string> = { review: "worth a human review", low: "low risk", medium: "medium risk", high: "high risk" };
+export const riskReason = (risk: { reason?: string }) => {
+  const r = risk.reason?.trim() ?? "";
+  const m = r.match(/^Ground rated it (\w+)\.?$/i);
+  return m ? `An agent rated it ${RATED[m[1].toLowerCase()] ?? m[1]}.` : r;
+};
+
 /** The asker's own question beside a card, or null when it only repeats the change. */
 export const cardAskedQuestion = (card: ChangeCard, question: string | undefined) => {
-  const q = question?.trim();
+  // A source's internal cluster key ("for C117") means nothing to a reader.
+  const q = question?.trim().replace(/\s+(?:for|on|in)\s+[A-Z]{1,3}\d+\b/g, "");
   if (!q || q === card.change.trim() || (card.headline && q.includes(card.headline.trim()))) return null;
   return q;
 };
@@ -179,11 +190,23 @@ export const cardAskedQuestion = (card: ChangeCard, question: string | undefined
  * line: the title and the row's facts). `href` makes a
  * row's change its link; `folded` keeps only the change.
  */
-export function ChangeCardHeadline({ card, question, size = "title", facts, href, folded = false, className = "" }: { card: ChangeCard; question?: string; size?: "title" | "card" | "row"; facts?: SepItem[]; href?: string; folded?: boolean; className?: string }) {
+/** `questionFirst`: the decision page, where the question asked is the
+ *  headline ("Ship the fix for C117?") and the change reads under it. */
+export function ChangeCardHeadline({ card, question, size = "title", facts, href, folded = false, questionFirst = false, className = "" }: { card: ChangeCard; question?: string; size?: "title" | "card" | "row"; facts?: SepItem[]; href?: string; folded?: boolean; questionFirst?: boolean; className?: string }) {
   const asked = cardAskedQuestion(card, question);
   // A card written for a cold reader leads with its plain headline and the one
   // sentence saying what the affected part is; older cards lead with the change.
   const title = card.headline || card.change;
+  if (questionFirst && asked && size === "title" && !folded) {
+    return (
+      <div className={`cc-head cc-head-title ${className}`}>
+        <h1 className="cc-change cc-change-title" data-card-question>{asked}</h1>
+        <p className="cc-change-sub" data-card-change>{title}</p>
+        {card.context && <p className="cc-context" data-card-context>{card.context}</p>}
+        <ChangeCardCause card={card} brief={false} facts={facts} />
+      </div>
+    );
+  }
   const change = size === "title" ? <h1 className="cc-change cc-change-title">{title}</h1>
     : size === "card" ? <p className="cc-change">{title}</p>
     : href ? <Link href={href} className="cc-line-change" title={title}>{title}</Link>
@@ -236,7 +259,7 @@ export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "opti
   const when = whenTail(decision.resolved_at, now);
   if (decision.status === "withdrawn" || decision.status === "dismissed") {
     const head = decision.status === "withdrawn" ? "Withdrawn" : "Dismissed";
-    const tail = decision.status === "withdrawn" ? `by the agent${when}` : decision.answered_by ? `by ${by}${when}` : when.replace(/^ · /, "");
+    const tail = decision.status === "withdrawn" ? `with no answer${when}` : decision.answered_by ? `by ${by}${when}` : when.replace(/^ · /, "");
     return { tone: "dim", verdict: head, pill: `${head} ${tail}`.trim(), line: outcomeLine("dim", head, tail) };
   }
   if (decision.status !== "answered" || decision.answer_index === undefined) return null;
@@ -345,6 +368,30 @@ function ProofPair({ before, after }: { before: boolean; after: boolean }) {
  * fixed case keeps its before and after values on its line; several keep
  * theirs on hover.
  */
+/** A test runner's tally in its own output ("4 pass 2 fail", "6 passed, 0 failed"), the last one it printed. */
+export function runnerTally(text: string | undefined): { pass: number; fail: number } | null {
+  const all = [...(text ?? "").matchAll(/(\d+)\s+pass(?:ed)?\b[\s,]*(\d+)\s+fail(?:ed)?\b/gi)];
+  const m = all[all.length - 1];
+  return m ? { pass: Number(m[1]), fail: Number(m[2]) } : null;
+}
+
+/** A case whose before and after are a test runner's whole log reads as its
+ *  counts ("2 failing → 6 of 6 passing"); null when either side is not one. */
+export function runnerChange(before: string | undefined, after: string | undefined): string | null {
+  const b = runnerTally(before);
+  const a = runnerTally(after);
+  if (!b || !a) return null;
+  return `${b.fail} failing \u2192 ${a.pass} of ${a.pass + a.fail} passing`;
+}
+
+/** A proof case named by the command that ran it ("unit: cd backend && bun
+ *  test tests/unit/repro-x.test.ts") reads as what it is ("Repro test"); the
+ *  command moves into its Test output. Null when the name is already words. */
+export function commandCaseName(name: string): string | null {
+  if (!/(&&|\b(?:cd|bun|npm|npx|pnpm|yarn|pytest|go|cargo|make)\s)/.test(name)) return null;
+  return /\brepro/i.test(name) ? "Repro test" : /^unit:/i.test(name) ? "Unit tests" : "Tests";
+}
+
 function ProofStrip({ card, summarized }: { card: ChangeCard; summarized: boolean }) {
   const summary = proofSummary(card.proof);
   const after = new Map(card.proof.after.map((c) => [c.name, c]));
@@ -361,25 +408,46 @@ function ProofStrip({ card, summarized }: { card: ChangeCard; summarized: boolea
   };
   const empty = red.length === 0 && !broke.length;
   const bad = still.length + broke.length;
+  // One fixed case whose runner counts show on its row says its count once there.
+  const soleCounts = fixed.length === 1 && !bad && !!runnerChange(fixed[0].detail, after.get(fixed[0].name)?.detail);
   return (
     <section className="cc-section" data-cc-proof>
       <div className="cc-label-row">
         <h3 className="cc-label">Proof</h3>
-        {!empty && <ProofDots card={card} />}
+        {/* One case draws its before and after on its own row; the heading's dots would repeat it. */}
+        {red.length + broke.length > 1 && <ProofDots card={card} />}
         {/* An empty strip has no dots to stand for it, so it always says so. */}
-        {(!summarized || empty) && <span className={`cc-proof-label ${bad ? "cc-text-red" : summary.red ? "cc-text-green" : "text-sol-text-dim"}`}>{summary.evidence}</span>}
+        {(!summarized || empty) && !soleCounts && <span className={`cc-proof-label ${bad ? "cc-text-red" : summary.red ? "cc-text-green" : "text-sol-text-dim"}`}>{summary.evidence}</span>}
       </div>
       {!empty && (
         <ol className="cc-proof">
-          {fixed.map((b, i) => (
-            <li key={b.name} className="cc-proof-row is-fixed" style={{ ["--i" as any]: i }} data-cc-proof-fixed>
-              <ProofPair before={false} after />
-              <span className="cc-proof-fixed-name">
-                <span className="cc-proof-name" title={[b.name, values(b)].filter(Boolean).join(": ")}>{names.split(b.name).leaf}</span>
-                {fixed.length === 1 && values(b) && <span className="cc-proof-fixed-vals" data-cc-proof-values>{values(b)}</span>}
-              </span>
-            </li>
-          ))}
+          {fixed.map((b, i) => {
+            // A runner's log reads as its counts, the log itself one click away.
+            const counts = runnerChange(b.detail, after.get(b.name)?.detail);
+            const command = counts ? commandCaseName(b.name) : null;
+            return (
+              <li key={b.name} className="cc-proof-row is-fixed" style={{ ["--i" as any]: i }} data-cc-proof-fixed>
+                <ProofPair before={false} after />
+                <span className="cc-proof-fixed-name">
+                  <span className="cc-proof-name" title={counts ? b.name : [b.name, values(b)].filter(Boolean).join(": ")}>{command ?? names.split(b.name).leaf}{command && ":"}</span>
+                  {counts ? <span className="cc-proof-fixed-vals" data-cc-proof-counts>{counts}</span>
+                    : fixed.length === 1 && values(b) && <span className="cc-proof-fixed-vals" data-cc-proof-values>{values(b)}</span>}
+                </span>
+                {counts && (
+                  <details className="cc-proof-log" data-cc-proof-log>
+                    <summary>Test output</summary>
+                    <div className="cc-proof-log-body">
+                      {command && <><div className="cc-proof-log-head">Command</div><pre>{b.name.replace(/^\w+:\s*/, "")}</pre></>}
+                      <div className="cc-proof-log-head">Before the change</div>
+                      <pre>{b.detail}</pre>
+                      <div className="cc-proof-log-head">After</div>
+                      <pre>{after.get(b.name)?.detail}</pre>
+                    </div>
+                  </details>
+                )}
+              </li>
+            );
+          })}
           {still.map((b, i) => {
             const a = after.get(b.name);
             // A row still red says so once, in its own words: red to red
@@ -512,6 +580,29 @@ export function ExamplePair({ ex, clamp = false }: { ex: ChangeCard["examples"][
   );
 }
 
+/** The cause's earlier shipped fixes beside this change (line-workspace.md
+ *  LW5): what each changed, when it went live, and whether the problem came
+ *  back after it, so a person never approves the same fix twice unknowingly. */
+function EarlierFixes({ earlier }: { earlier: NonNullable<ChangeCard["earlier"]> }) {
+  return (
+    <section className="cc-section" data-cc-earlier>
+      <div className="cc-label-row"><h3 className="cc-label">Shipped before</h3></div>
+      <ol className="cc-earlier">
+        {earlier.map((f) => (
+          <li key={f.attempt} className={f.back ? "is-back" : f.held ? "is-held" : undefined}>
+            <span className="cc-label">Attempt {f.attempt}{f.ref ? ` · ${f.ref}` : ""}</span>
+            <p className="cc-wrong">{f.change}</p>
+            <p className="cc-fact-sub">
+              {f.live}
+              {f.back ? <> · <span className="cc-text-red">{f.back}</span></> : f.held ? ` · ${f.held}` : null}
+            </p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summarized, diffAnchor, guide }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean; summarized: boolean; diffAnchor?: string; guide?: ChangeGuide | null }) {
   const [allExamples, setAllExamples] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
@@ -546,6 +637,9 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
           <p className="cc-wrong" data-card-change>{card.change}</p>
         </>}
       </div>
+
+      {/* What was tried before, beside what is proposed now (LW5). */}
+      {card.earlier?.length ? <EarlierFixes earlier={card.earlier} /> : null}
 
       {/* Proof, then examples, stacked on every card at every width, so the
           examples are always in the same place. */}
@@ -602,7 +696,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
               {summarized && card.risk.reason ? (
                 <span className="cc-risk" title={riskLabel(card.risk)}>
                   <span className={`cc-risk-dot cc-tone-${RISK_TONE[card.risk.class]}`} aria-hidden />
-                  <span className="cc-risk-reason is-only">{card.risk.reason}</span>
+                  <span className="cc-risk-reason is-only">{riskReason(card.risk)}</span>
                 </span>
               ) : (
                 <>
@@ -610,20 +704,21 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
                     <span className={`cc-risk-dot cc-tone-${RISK_TONE[card.risk.class]}`} aria-hidden />
                     <span className={`cc-text-${RISK_TONE[card.risk.class]}`}>{riskLabel(card.risk)}</span>
                   </span>
-                  {card.risk.reason && <div className="cc-fact-sub cc-risk-reason">{card.risk.reason}</div>}
+                  {card.risk.reason && <div className="cc-fact-sub cc-risk-reason">{riskReason(card.risk)}</div>}
                 </>
               )}
             </dd>
           </div>
           <div className="cc-fact">
-            <dt className="cc-label">Cost</dt>
+            {/* A card that recorded no spend says its agent time alone, never "$0.00". */}
+            <dt className="cc-label">{card.cost.usd > 0 ? "Cost" : "Agent time"}</dt>
             <dd>
-              <span className="cc-nowrap">${card.cost.usd.toFixed(2)}</span>
+              {/* Agent time is summed over the run's sessions, not the run's wall time. */}
+              <span className="cc-nowrap">{card.cost.usd > 0 ? `$${card.cost.usd.toFixed(2)}` : `${card.cost.minutes} min`}</span>
               <SepRow className="cc-fact-sub" items={[
                 // A card that recorded no tokens says nothing rather than "0 tokens".
                 ...(card.cost.tokens > 0 ? [{ key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` }] : []),
-                // Agent time summed over the run's sessions, not the run's wall time.
-                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` },
+                ...(card.cost.usd > 0 ? [{ key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` }] : []),
               ]} />
             </dd>
           </div>
@@ -737,7 +832,7 @@ function ChangeCardLine({ card, recommend, story, folded = false, dots = true }:
           { key: "proof", className: "items-center", node: <span className="cc-line-proof">{dots && <ProofDots card={card} />}<span className={!summary.red ? "text-sol-text" : summary.broke.length ? "cc-text-red" : summary.stillRed.length ? "cc-text-yellow" : "cc-text-green"} data-cc-line-proof>{folded && summary.red ? `${summary.fixed} of ${summary.red} fixed` : summary.evidence}</span></span> },
           // A folded card keeps the proof; checks and risk are said when it opens.
           ...(checks.length && !folded ? [{ key: "checks", className: `cc-nowrap ${checksOk ? "text-sol-text-muted cc-line-quiet" : "cc-text-red"}`, node: checksLabel(checks) }] : []),
-          ...(folded ? [] : [{ key: "risk", className: `cc-nowrap ${card.risk.class === "low" ? "text-sol-text-dim" : `cc-text-${riskTone}`}`, title: card.risk.reason ? `${riskLabel(card.risk)}: ${card.risk.reason}` : riskLabel(card.risk), node: <span className="cc-line-risk" data-cc-line-risk><span className={`cc-risk-dot cc-tone-${riskTone}`} aria-hidden />{riskLabel(card.risk, true)}</span> }]),
+          ...(folded ? [] : [{ key: "risk", className: `cc-nowrap ${card.risk.class === "low" ? "text-sol-text-dim" : `cc-text-${riskTone}`}`, title: card.risk.reason ? `${riskLabel(card.risk)}: ${riskReason(card.risk)}` : riskLabel(card.risk), node: <span className="cc-line-risk" data-cc-line-risk><span className={`cc-risk-dot cc-tone-${riskTone}`} aria-hidden />{riskLabel(card.risk, true)}</span> }]),
           ...(recommend ? [{ key: "verdict", plain: true, end: true, node: <span className={`cc-line-verdict cc-tone-${tone}`}>recommends {verdictLabel(card.recommend.verdict)}</span> }] : []),
         ]}
       />
