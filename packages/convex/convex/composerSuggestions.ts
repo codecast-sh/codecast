@@ -741,12 +741,12 @@ ${excerpt}`;
 // The Anthropic request the suggester and the miner send. The evals replay
 // the same object, so what they measure is what prod posts.
 export function haikuRequest(prompt: string, maxTokens: number): SurfaceRequest {
-  return { model: CHEAP_MODEL, prompt, max_tokens: maxTokens, temperature: 0.3 };
+  return { model: CHEAP_MODEL, prompt, max_tokens: maxTokens };
 }
 
 // One completion call, either provider. The suggester picks its provider from
 // the SUGGESTIONS_PROVIDER env var ("openai" → GPT-5.6 Luna, anything else →
-// Haiku 4.5), so an A/B flip is an env change, not a deploy. Luna quirks:
+// Haiku), so an A/B flip is an env change, not a deploy. Luna quirks:
 // temperature is rejected (fixed at 1) and the token cap is
 // max_completion_tokens, which also feeds its hidden reasoning tokens — cap
 // generously or long prompts return empty content with the budget consumed.

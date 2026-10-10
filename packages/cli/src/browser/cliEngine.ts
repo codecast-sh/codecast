@@ -38,7 +38,7 @@ import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktop
 import { grantTab } from "./bridge/host.js";
 import { readCdpJson, listTargets } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
-import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
+import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
 import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
 import { ensurePinnedTab, pinnedTabBrowser, recoverGoneTab, touchBoundTarget } from "./pinnedTab.js";
@@ -1684,8 +1684,10 @@ sessions' tabs).`,
   // session is kept: the daemon drives no tab of its own.
   br.command("reap", { hidden: true })
     .description("Close engine browsers whose agent is gone")
-    .action(async () => {
-      const swept = describeReap(await reapEngineOrphans({ keep: null }));
+    .option("--ended <session id>", "This agent session was just killed: close its tabs now")
+    .action(async (o: { ended?: string }) => {
+      const live = o.ended ? withEndedSession(scanLiveOwners(), o.ended) : undefined;
+      const swept = describeReap(await reapEngineOrphans({ keep: null, force: !!o.ended, live }));
       if (swept) console.log(swept);
     });
 

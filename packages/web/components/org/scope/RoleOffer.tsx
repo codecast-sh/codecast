@@ -10,15 +10,15 @@
 // the thread itself, where the role posts it.
 //
 // Store-fed: the trigger from the seat's triggers, the seat's work state from
-// the org tree, the proposals from the orgProposals collection. A press is
-// the store's triggerAction, so the row moves in the same tick.
+// the org tree, the proposals from the orgProposals collection (fed once for
+// the whole app by HostFeeders). A press is the store's triggerAction, so the
+// row moves in the same tick.
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Play } from "lucide-react";
 import { ORG_REVIEW_FOCUSES } from "@codecast/shared/contracts/orgReview";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
-import { useSyncOrgProposals } from "../../../hooks/useSyncOrgProposals";
 import { useSeatTriggers } from "../../../hooks/useSyncTriggers";
 import { useCollectionRows } from "../../../hooks/useCollectionRows";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -86,7 +86,6 @@ function RoleOfferRow({ tree, role, conversationId }: { tree: OrgTree; role: Org
   const now = useCoarseNow(30_000);
   const faked = useSyncExternalStore(subscribeFake, readFake, readFake);
   const tasks = useSeatTriggers(conversationId);
-  useSyncOrgProposals();
   const workspace = tree.workspace;
   const inWorkspace = useCallback((p: OrgProposalListRow) => sameWorkspace(proposalWorkspace(p), workspace), [workspace.kind, workspace.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const proposals = useCollectionRows<OrgProposalListRow>("orgProposals", { where: inWorkspace, sig: proposalSig });

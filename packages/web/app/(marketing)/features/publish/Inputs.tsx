@@ -107,9 +107,10 @@ export function Inputs() {
   return (
     <Section
       id="inputs"
-      n="01"
+      n="05"
+      tone="sand"
       title="Three kinds of input, one kind of link."
-      lede={<>Point <C>cast publish</C> at whatever the agent already wrote. A file or folder path is the page&apos;s identity: publish the same path again and you update the same page.</>}
+      lede={<>The agent publishes whatever it already wrote. A file or folder is the page&apos;s identity: when the agent publishes the same one again, the same page updates.</>}
     >
       <div className="divide-y rounded-2xl border bg-white/60" style={{ borderColor: "rgba(88,110,117,.2)" }}>
         {ROWS.map((r) => (
