@@ -103,6 +103,8 @@ export type RecordRow = {
   subjectSpan: [number, number] | null;
   status: OrgChangeStatus;
   reason: string;
+  /** What the change points at: a pull request, a run, a page. */
+  evidence: OrgEvidenceLink[];
   /** The record is being closed (done, dropped, abandoned): drawn struck. */
   closed: boolean;
   failed?: string;
@@ -126,7 +128,7 @@ export type RecordGroupCard = {
 
 // ---------------------------------------------------------------- words
 
-const PURPOSE = "the purpose";
+const PURPOSE = "the mission";
 const bare = (handle: string) => handle.replace(/^@/, "").trim().toLowerCase();
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -289,7 +291,7 @@ export function recordGroupCards(changes: readonly OrgProposalChange[], names?: 
       const change = editedOrgChange(c.change, c.edits);
       const w = changeWords(change, { names, seq: c.seq });
       const closing = (change.kind === "task_status" || change.kind === "plan_status" || change.kind === "project_status") && CLOSING_ACTS.has(recordAct(change));
-      return { seq: c.seq, change: c, sentence: w.sentence, subjectSpan: w.subjectSpan, status: c.status, reason: w.reason ?? "", closed: closing, ...(c.status === "failed" ? { failed: c.applied_note?.trim() ?? "" } : {}) };
+      return { seq: c.seq, change: c, sentence: w.sentence, subjectSpan: w.subjectSpan, status: c.status, reason: w.reason ?? "", evidence: c.evidence ?? [], closed: closing, ...(c.status === "failed" ? { failed: c.applied_note?.trim() ?? "" } : {}) };
     });
     const title = group.kind === "loose" ? (lone ? `All ${members.length} records` : "Not under a project") : group.title ?? group.ref ?? group.key;
     return {
@@ -354,7 +356,7 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
     roles: all.map(edited).flatMap((ch) => (ch.kind === "role" ? [{ handle: ch.handle, name: ch.name }] : [])),
     sessions: (ref) => offered.get(ref),
   })!;
-  // A goal named as a parent reads as "the purpose" when it is the one (the subject's own name is always passed in).
+  // A goal named as a parent reads as "the mission" when it is the one (the subject's own name is always passed in).
   const names: OrgAskNames = { ...base, initiative: (ref) => (purposeId !== null && goals.find((row) => refMatches(ref, row))?.id === purposeId ? PURPOSE : base.initiative?.(ref)) };
   const fieldNames = (c: OrgProposalChange): OrgAskNames => (seated.has(c._id) ? { ...names, session: (ref) => offered.get(ref) ?? seated.get(c._id) } : names);
   const projectName = (ref: string) => names.project?.(ref) ?? ref;

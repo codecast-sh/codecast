@@ -1,10 +1,10 @@
-import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar } from "lucide-react";
+import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar, Network } from "lucide-react";
 import type { ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { sessionCardTitle } from "../lib/sessionCard";
+import { paletteRowTime, sessionCardTitle } from "../lib/sessionCard";
 import { useHostedMode, useSurface } from "../lib/surfaces";
 import { paletteSearchValue, paletteSessionValue } from "../lib/paletteRowValues";
 import { AvatarImg } from "../lib/avatarCache";
@@ -12,7 +12,6 @@ import { getProjectName } from "../store/inboxStore";
 import { useLabelColor } from "../lib/labelColors";
 import { itemClass } from "./paletteStyles";
 import { ShortId } from "./ShortId";
-import { formatDateSmart } from "@codecast/shared/time";
 import { parseSessionQuery } from "@codecast/shared/search";
 import { stripMarkdown } from "@codecast/shared/contracts/plainText";
 import { highlightMatch, getSnippet } from "../lib/searchHighlight";
@@ -66,6 +65,9 @@ export function NavIcon({ type, className }: { type: string; className?: string 
       return <Clock className={c} />;
     case "workflow":
       return <Waypoints className={c} />;
+    // The Org screen, drawn as the rail draws it.
+    case "network":
+      return <Network className={c} />;
     case "cpu":
       return <Cpu className={c} />;
     case "link":
@@ -166,6 +168,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
   const gitShown = useSurface("gitChips");
   const machineShown = useSurface("machineChips");
   const shelfShown = useSurface("triageBar");
+  const hostedTime = useHostedMode();
   const isTeam = conv.isOwn === false;
   const project = getProjectName(conv.git_root, conv.project_path);
   const shelved = !!standing?.shelf;
@@ -218,7 +221,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
       {isTeam && authorFirst && (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
       )}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={paletteRowTime(hostedTime)} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -254,6 +257,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
   const terms = query ? parseSessionQuery(query).text : "";
   const row = identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) });
   const internals = useSurface("search.internals");
+  const hostedTime = useHostedMode();
   // Hosted mode reads a hit's words as prose: no markdown marks, no escaped
   // line breaks.
   const found = result.matches?.[0]?.content;
@@ -296,7 +300,7 @@ export function PaletteSearchResultRow({ result, query = "", onSelect }: {
           // An operator-only query (file:, pr:, ...) matches the session, not a message.
           : "filter"}
       </span>}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={paletteRowTime(hostedTime)} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -318,17 +322,19 @@ export function PaletteSearchBar({ children, trailing }: { children: ReactNode; 
 export type PaletteTaskRowTask = { _id: string; title?: string; short_id?: string; updated_at: number; [key: string]: unknown };
 
 /** A "Tasks" row: the task glyph, title, status, short id, age. */
-export function PaletteTaskRow({ task, status, onSelect }: {
+export function PaletteTaskRow({ task, status, onSelect, valuePrefix = "__entity__" }: {
   task: PaletteTaskRowTask;
   status: { label: string; color: string } | undefined;
   onSelect: () => void;
+  /** PALETTE_KIND when the query named to-dos by their word. */
+  valuePrefix?: string;
 }) {
   // A task's id is machinery in hosted mode; its title and state name it.
   const hosted = useHostedMode();
   return (
     <CommandPrimitive.Item
     data-palette-type="task" data-palette-id={task._id} data-palette-title={task.title} data-palette-short-id={task.short_id}
-      value={`__entity__ ${task.title} ${task.short_id}|||${task._id}`}
+      value={`${valuePrefix} ${task.title} ${task.short_id}|||${task._id}`}
       onSelect={onSelect}
       className={itemClass}
     >
@@ -340,7 +346,7 @@ export function PaletteTaskRow({ task, status, onSelect }: {
         ? task.status === "done" && <span className="text-[10px] flex-shrink-0 text-sol-text-muted">Done</span>
         : <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>)}
       {!hosted && <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={paletteRowTime(hosted)} /></span>
     </CommandPrimitive.Item>
   );
 }

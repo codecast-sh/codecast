@@ -3,6 +3,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
+import { Button } from "./ui/button";
 
 // The one shell every "create" dialog wears: task, doc, plan, channel.
 //
@@ -113,19 +114,14 @@ export function CreateDialog({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSubmit}
-            className="sol-btn-solid inline-flex items-center gap-2 rounded-lg border border-transparent bg-sol-cyan py-1.5 pl-3 pr-1.5 text-xs font-semibold text-sol-bg disabled:cursor-not-allowed disabled:border-sol-border/60 disabled:bg-sol-bg-alt disabled:text-sol-text-dim"
-          >
+          <Button type="button" variant="cyan" size="sm" onClick={submit} disabled={!canSubmit}>
             {submitLabel}
             <span className="inline-flex gap-0.5 opacity-80">
               {(submitOnEnter ? ["↵"] : [isMac ? "⌘" : "Ctrl", "↵"]).map((k) => (
                 <KeyCap key={k} size="xs">{k}</KeyCap>
               ))}
             </span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>
