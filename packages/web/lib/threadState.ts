@@ -93,7 +93,7 @@ export const THREAD_STATE_STATUS_META: Record<
 };
 
 /** The compact age as a phrase: "4m ago", and "just now" on its own (never "just now ago"). */
-export const agoOf = (ms: number): string => { const age = compactAge(ms); return age === "just now" ? age : `${age} ago`; };
+const agoOf = (ms: number): string => { const age = compactAge(ms); return age === "just now" ? age : `${age} ago`; };
 
 /** "4m" / "2h" / "3d" — the compact age used across the inbox chrome. */
 export function compactAge(ms: number): string {

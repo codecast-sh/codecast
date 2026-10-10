@@ -14,7 +14,7 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { callModel, parseJsonBlock, STRONG_MODEL } from "./lib/anthropic";
+import { callModel, parseJsonBlock, STRONG_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { patchTask } from "./lib/taskWrite";
 import { insertTaskComment } from "./tasks";
 import { causeBrief } from "./goals";
@@ -22,6 +22,7 @@ export { causeBrief };
 import {
   briefGoalRefs,
   groundCausePrompt,
+  groundedWords,
   LINE_CATEGORIES,
   parseGroundReply,
   type GoalsBrief,
@@ -31,13 +32,19 @@ import {
 
 /** Causes one pass grounds; a full pass schedules the next at once. */
 export const GROUND_BATCH = 8;
-const SIGNALS_SHOWN = 20;
-const COMMENTS_SHOWN = 10;
+export const SIGNALS_SHOWN = 20;
+export const COMMENTS_SHOWN = 10;
 export const GROUND_AUTHOR = "ground";
 // The strong model thinks before it answers and its thinking counts toward
 // max_tokens (as changesProse.ts notes): at 400 a cause that took any thought
 // came back as JSON cut off before its note. Only tokens used are billed.
 export const GROUND_MAX_TOKENS = 2000;
+
+/** The request one cause's ground call posts; ./evals replays exactly it. */
+export function groundRequest(cause: GroundCauseInput, brief: GoalsBrief, now: number): SurfaceRequest {
+  const { system, prompt } = groundCausePrompt(cause, brief, now);
+  return { model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS };
+}
 
 /** An open cause no one has grounded and no run holds. */
 export function isUngroundedCause(task: Doc<"tasks"> | null): task is Doc<"tasks"> {
@@ -100,7 +107,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
     await insertTaskComment(ctx, task._id, {
       author: GROUND_AUTHOR,
       comment_type: "note",
-      text: `Grounded: goal ${f.goal_ref}, ${f.category}, risk ${f.risk}, ${f.readiness.replace("_", " ")}.${f.readiness_note ? ` ${f.readiness_note}` : ""}`,
+      text: groundedWords(f),
     });
     return "grounded";
   }
@@ -139,8 +146,7 @@ export const sweep = internalAction({
     const now = Date.now();
     const result: GroundSweepResult = { grounded: 0, unreadable: 0, unanswered: 0 };
     await Promise.all(jobs.map(async (job) => {
-      const { system, prompt } = groundCausePrompt(job.cause, job.brief, now);
-      const reply = await callModel({ model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS, label: "Line ground", timeout_ms: 60_000 });
+      const reply = await callModel({ ...groundRequest(job.cause, job.brief, now), label: "Line ground", timeout_ms: 60_000 });
       if (!reply?.text) { result.unanswered++; return; }
       const outcome = parseGroundReply(parseJsonBlock(reply.text), briefGoalRefs(job.brief));
       const status: string = await ctx.runMutation(internal.lineGround.record, "fields" in outcome ? { task_id: job.task_id, fields: outcome.fields } : { task_id: job.task_id, error: outcome.error });

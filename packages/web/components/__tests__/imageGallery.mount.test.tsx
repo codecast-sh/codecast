@@ -171,3 +171,18 @@ test("clicking a point of the picture pins a note there, and a click before writ
   expect(pins().map((c) => c.image?.point)).toEqual([{ x: 0.75, y: 0.75 }, { x: 0.5, y: 0.5 }]);
   expect(lightbox()!.textContent).toContain("2 notes on your next message");
 });
+
+test("an image still mounted when the conversation id arrives stays clickable", async () => {
+  // Cached messages can paint before the conversation row, so the provider's
+  // id goes undefined -> "A" under images that never remount.
+  const images = [{ src: "a1" }, { src: "a2" }];
+  const view = (conversationId: string | undefined) => (
+    <ImageGalleryProvider conversationId={conversationId}>
+      {images.map((i) => <Registered key={i.src} {...i} />)}
+    </ImageGalleryProvider>
+  );
+  await mount(view(undefined));
+  await act(() => root!.render(view("A")));
+  await clickSrc("a2");
+  expect(counter()).toBe("2 / 2");
+});

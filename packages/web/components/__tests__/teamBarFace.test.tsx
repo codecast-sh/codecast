@@ -42,6 +42,7 @@ mock.module("../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk:
 let openedDms: string[][] = [];
 mock.module("../../hooks/useOpenDm", () => ({
   useOpenDm: () => (ids: string[]) => openedDms.push(ids),
+  useOpenChatPath: () => () => {},
 }));
 
 const nav = { pushed: [] as string[] };
@@ -351,7 +352,7 @@ describe("the one card under a face", () => {
     expect(h.all("[data-member-card] .face-action-word").map((w) => w.textContent)).toEqual(["Talk", "Huddle", "Message"]);
     // The profile door.
     await h.fire(card.querySelector("[data-door]")!, "click");
-    expect(nav.pushed).toEqual(["/team/ann"]);
+    expect(nav.pushed).toEqual(["/org/@ann"]);
     expect(h.q("[data-member-card]")).toBeNull();
   });
 

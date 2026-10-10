@@ -4,18 +4,18 @@ import { getGuideContent } from "./guideContent";
 import { RELEASES } from "../../changelog/changelogData";
 import { allSnippetSlugs } from "@codecast/shared/contracts";
 
-// Every guide that documents an installable feature names its `cast install`
-// slug. The invariant is NOT "the slug is in SNIPPET_CATALOG": `stable` is a
-// SessionStart hook with a tri-state mode, deliberately outside the catalog,
-// and asserting catalog membership would force it in or force the guide to
-// lie. The rule is: a catalog slug, or the literal "stable".
-describe("guide installSlug invariant", () => {
-  test("every installSlug is a catalog slug or the literal stable", () => {
+// Every guide that documents a feature people switch on in Agent features
+// names its slug, and the guide links there. The invariant is NOT "the slug is
+// in SNIPPET_CATALOG": `stable` is a SessionStart hook with a tri-state mode,
+// deliberately outside the catalog, and Agent features opens it by that name.
+// The rule is: a catalog slug, or the literal "stable".
+describe("guide feature invariant", () => {
+  test("every feature is a catalog slug or the literal stable", () => {
     const valid = new Set([...allSnippetSlugs(), "stable"]);
     for (const guide of GUIDES) {
-      if (guide.installSlug === undefined) continue;
-      expect(valid.has(guide.installSlug),
-        `${guide.slug} names installSlug "${guide.installSlug}", which is neither a catalog slug nor "stable"`,
+      if (guide.feature === undefined) continue;
+      expect(valid.has(guide.feature),
+        `${guide.slug} names feature "${guide.feature}", which is neither a catalog slug nor "stable"`,
       ).toBe(true);
     }
   });
