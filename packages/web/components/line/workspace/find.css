@@ -1,0 +1,70 @@
+/* The loop's Find band (FindBand.tsx, learning-loop.md LL1). */
+
+.lw-find { position: relative; z-index: 4; display: flex; flex-direction: column; gap: 8px; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lw-find-head { display: flex; align-items: baseline; gap: 10px; }
+.lw-find-head b { color: var(--lw-ink); font-size: 15px; font-weight: 750; letter-spacing: -.01em; }
+.lw-find-head span { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.lw-find-cols { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.lw-find-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lw-find-col[data-col="judge"] { flex: 1 1 0; }
+.lw-find-col[data-col="expect"], .lw-find-col[data-col="group"] { flex: 0 1 auto; max-width: 30%; }
+.lw-find-col-h { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); letter-spacing: .02em; }
+.lw-find-col-b { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lw-find-arrow { width: 14px; height: 14px; color: var(--lw-ink-3); margin-top: 26px; flex: none; }
+.lw-find-into { display: flex; align-items: center; gap: 6px; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+
+.lw-find-host { display: inline-flex; }
+.lw-find-step {
+  display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%;
+  padding: 3px 9px; border-radius: var(--lw-r); border: 1px solid var(--lw-rule);
+  background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-sm); cursor: pointer; text-align: left;
+  transition: border-color var(--lw-fast), background var(--lw-fast);
+}
+.lw-find-step:hover, .lw-find-step[aria-expanded="true"] { border-color: var(--lw-ink-3); }
+.lw-find-step[data-tone="quiet"] .lw-find-name, .lw-find-step[data-tone="new"] .lw-find-name { color: var(--lw-ink-2); }
+.lw-find-step[data-tone="failing"] { border-color: color-mix(in srgb, var(--lw-bad) 55%, var(--lw-rule)); }
+.lw-find-name { font-weight: 650; white-space: nowrap; }
+.lw-find-health { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30ch; }
+.lw-find-where {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+  color: var(--lw-ink-2); background: color-mix(in srgb, var(--lw-ink-3) 16%, transparent);
+}
+.lw-find-where[data-where="codecast"] { color: var(--lw-agent); background: color-mix(in srgb, var(--lw-agent) 14%, transparent); }
+.lw-find-where[data-where="product"] { color: var(--lw-person); background: color-mix(in srgb, var(--lw-person) 14%, transparent); }
+.lw-find-where[data-where="shadow"] { color: var(--lw-warn); background: color-mix(in srgb, var(--lw-warn) 14%, transparent); }
+.lw-find-none { display: inline-flex; align-items: center; gap: 8px; color: var(--lw-ink-3); }
+.lw-find-more { font-size: var(--lw-fs-xs); }
+
+/* the card a step opens */
+.lw-find-card { left: 0; right: auto; width: min(440px, 80vw); padding: 12px 14px; gap: 8px; transform-origin: top left; }
+.lw-find-card-h { display: flex; align-items: center; gap: 8px; color: var(--lw-ink); font-size: var(--lw-fs-base); }
+.lw-find-card-p { margin: 0; color: var(--lw-ink-2); line-height: 1.45; }
+.lw-find-card-h2 { margin: 0; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.lw-find-card-h2[data-tone="failing"] { color: var(--lw-bad); }
+.lw-find-decisions { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--lw-rule-2); }
+.lw-find-decisions li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--lw-rule-2); }
+.lw-find-decisions li[data-verdict="wrong"] .lw-find-d-words { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--lw-bad) 60%, transparent); }
+.lw-find-d-words { color: var(--lw-ink); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lw-find-d-when { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); white-space: nowrap; }
+.lw-find-decisions .lw-act[aria-pressed="true"] { color: var(--lw-bad); border-color: color-mix(in srgb, var(--lw-bad) 50%, var(--lw-rule)); }
+.lw-find-card-foot { display: flex; align-items: center; gap: 10px; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); padding-top: 2px; }
+
+/* In the Graph: a row above the lanes. */
+.lw-graph-col { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.lw-graph-col > .lw-find { padding: 10px var(--lw-s5) 8px; border-bottom: 1px solid var(--lw-rule-2); background: var(--lw-paper); }
+.lw-graph-col > .lwg-wrap { position: relative; flex: 1; min-height: 0; }
+
+/* In the Notebook's rail: the first section, steps stacked. */
+.lw-find[data-layout="rail"] { padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--lw-rule-2); gap: 10px; }
+.lw-find[data-layout="rail"] .lw-find-cols { flex-direction: column; gap: 10px; }
+.lw-find[data-layout="rail"] .lw-find-col { width: 100%; }
+.lw-find[data-layout="rail"] .lw-find-col-b { flex-direction: column; align-items: stretch; }
+.lw-find[data-layout="rail"] .lw-find-host, .lw-find[data-layout="rail"] .lw-find-step { width: 100%; }
+.lw-find[data-layout="rail"] .lw-find-step { justify-content: space-between; }
+.lw-find[data-layout="rail"] .lw-find-none { flex-direction: column; align-items: flex-start; }
+.lw-find[data-layout="rail"] .lw-find-more { align-self: flex-start; }
+
+.lw-find-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.lw-find-group > .lw-find-where { margin-right: 2px; }
+.lw-find[data-layout="rail"] .lw-find-group { flex-direction: column; align-items: stretch; }
+.lw-find[data-layout="rail"] .lw-find-group > .lw-find-where { align-self: flex-start; }

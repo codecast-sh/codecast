@@ -17,7 +17,7 @@ import { useStillMode } from "../kit";
 /**
  * /features/triggers. The page follows one night of triggers: the hero plays
  * it, each section then takes one part of what happened (how it fired, where it
- * ran, what it skipped, how it reported) and teaches the flag behind it.
+ * ran, what it skipped, how it reported) and shows where you see it in the app.
  * `?static` renders every animation at its end state.
  */
 export default function TriggersPage() {
