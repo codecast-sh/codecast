@@ -16,6 +16,38 @@ import {
   type ReplicationUpdate,
 } from "./replication";
 
+/**
+ * Run `fn` on a later turn of the event loop; returns a cancel. A snapshot goes
+ * out one chunk per turn so the host stays responsive between chunks. Not a
+ * timer: a browser throttles chained timers in a hidden tab (Chrome to once a
+ * second, and to once a minute after five minutes hidden), and the host of a
+ * set of background windows is usually hidden. Paced by timers, one snapshot
+ * outlived the follower's hello retry, which restarted it from chunk 0, so the
+ * follower never synced and ran solo for good (2026-10-09). A MessageChannel
+ * message yields the same way and is not throttled.
+ */
+export function nextTurn(fn: () => void): () => void {
+  if (typeof MessageChannel === "undefined") {
+    const timer = setTimeout(fn, 0);
+    return () => clearTimeout(timer);
+  }
+  const { port1, port2 } = new MessageChannel();
+  let live = true;
+  const close = () => {
+    port1.close();
+    port2.close();
+  };
+  port1.onmessage = () => {
+    close();
+    if (live) fn();
+  };
+  port2.postMessage(null);
+  return () => {
+    live = false;
+    close();
+  };
+}
+
 export type ReplicationChannel = {
   post: (msg: ReplicationMessage) => void;
   /** Subscribe; returns unsubscribe. Delivery must be in-order per sender. */
@@ -71,11 +103,11 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
   };
   refreshShadows(opts.getState());
 
-  const snapshots = new Map<string, ReturnType<typeof setTimeout>>();
+  // The rest of each follower's snapshot, as a cancel for its next chunk.
+  const snapshots = new Map<string, () => void>();
 
   const sendSnapshot = (to: string, request: string) => {
-    const pending = snapshots.get(to);
-    if (pending) clearTimeout(pending);
+    snapshots.get(to)?.();
     snapshots.delete(to);
     const position = seq;
     const batches = snapshotBatches(opts.getState(), opts.replicatedKeys, opts.isCollectionKey);
@@ -87,7 +119,7 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
       const updates = next.value ?? [];
       next = batches.next();
       channel.post({ type: "snapshotChunk", hostId, seq: position, to, request, index: index++, done: !!next.done, updates });
-      if (!next.done) snapshots.set(to, setTimeout(send, 0));
+      if (!next.done) snapshots.set(to, nextTurn(send));
     };
     send();
   };
@@ -140,7 +172,7 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
     seq: () => seq,
     stop() {
       stopped = true;
-      for (const timer of snapshots.values()) clearTimeout(timer);
+      for (const cancel of snapshots.values()) cancel();
       snapshots.clear();
       unsubscribe();
     },

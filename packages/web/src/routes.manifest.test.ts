@@ -462,3 +462,4 @@ describe("the simple lane's old addresses lead to routes", () => {
     expect(settingsSectionForPath(BILLING_RETURN.path)?.section).toBe("plan");
   });
 });
+
