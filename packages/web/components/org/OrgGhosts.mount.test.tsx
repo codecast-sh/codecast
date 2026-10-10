@@ -28,7 +28,8 @@ async function verifyGhostCards() {
   const { createRoot } = await import("react-dom/client");
   const { ReactFlowProvider } = await import("@xyflow/react");
   const { PersonCard, RoleCard, SessionCard } = await import("./OrgNodeCards");
-  const { ghostsFor, layoutOrgTree, personNodeId, roleNodeId, sessionNodeId, ORG_SIZES } = await import("./orgLayout");
+  const { ghostsFor, layoutOrgTree, personNodeId, roleNodeId, sessionNodeId } = await import("./orgLayout");
+  const { CARD } = await import("./orgCardModel");
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH } = await import("./orgStaffingFixture");
   const { healthFlagsByNode } = await import("./orgMeta");
@@ -92,9 +93,9 @@ async function verifyGhostCards() {
   const sentence = "This is Market growth mandate, which has run for 34 days with 391 helper sessions. Naming it changes nothing about how it works and gives it a place on the chart.";
   assert.equal(seatRole.querySelector("[data-ghost-seat='jx7b88a']")?.textContent?.trim(), sentence);
   assert.equal(ghostRole.querySelector("[data-ghost-seat]"), null, "a role with a fresh session says nothing about naming");
-  const rows = Math.ceil(sentence.length / ORG_SIZES.seatChars);
-  assert.equal(node(roleNodeId("c-role-seat")).h - node(roleNodeId("c-role")).h, 6 + rows * ORG_SIZES.seatLine, "the layout books the sentence's height");
-  assert.equal((seatRole.querySelector("[data-ghost-seat]") as HTMLElement).style.height, `${rows * ORG_SIZES.seatLine}px`);
+  const rows = Math.ceil(sentence.length / CARD.seatChars);
+  assert.equal(node(roleNodeId("c-role-seat")).h - node(roleNodeId("c-role")).h, 6 + rows * CARD.seatLine, "the layout books the sentence's height");
+  assert.equal((seatRole.querySelector("[data-ghost-seat]") as HTMLElement).style.height, `${6 + rows * CARD.seatLine}px`);
   // An accepted stub is solid: the accepted tag, no proposed one.
   const solid = q("[data-card='solid-role']")!;
   assert.ok(solid.querySelector("[data-ghost-tag='accepted']"), "accepted tag on the solid role");

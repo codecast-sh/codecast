@@ -5,7 +5,8 @@
 import { describe, expect, it } from "bun:test";
 import { reparentToastLine, reparentTreeParent } from "../../store/orgSlice";
 import { roleTenureChip } from "./orgMeta";
-import { layoutOrgTree, ORG_SIZES } from "./orgLayout";
+import { layoutOrgTree } from "./orgLayout";
+import { CARD } from "./orgCardModel";
 import { orgRolesSig } from "../../hooks/useOrgRoles";
 import { ORG_FIXTURE } from "./orgFixture";
 import type { OrgTree } from "./orgTypes";
@@ -110,7 +111,7 @@ describe("the layout carries the tenure chip to the card (S10)", () => {
     const before = (layoutOrgTree(tree, view).nodes.find((n) => n.kind === "role") as { h: number }).h;
     tree.roles[0].tenure = { kind: "program", ends: { date: Date.UTC(2030, 0, 2) }, then: "review" };
     const after = (layoutOrgTree(tree, view).nodes.find((n) => n.kind === "role") as { h: number }).h;
-    expect(after - before).toBe(ORG_SIZES.tenureRow);
+    expect(after - before).toBe(CARD.tenureRow);
   });
 });
 

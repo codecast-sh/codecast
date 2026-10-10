@@ -4,9 +4,8 @@ import Link from "next/link";
 import { SOL } from "../../blog/blogChrome";
 import { NightShift } from "./NightShift";
 import { ACCENT } from "./ui";
-import { Whole } from "../kit";
 
-/** The opening: what a trigger is, the first command, and one night of them working. */
+/** The opening: what a trigger is, where you set one, and one night of them working. */
 export function Hero() {
   return (
     <header className="relative overflow-hidden" style={{ backgroundColor: SOL.base3 }}>
@@ -33,12 +32,9 @@ export function Hero() {
             </p>
           </div>
           <div className="tg-rise space-y-3" style={{ animationDelay: "0.24s" }}>
-            <div className="rounded-xl px-4 py-3 font-mono text-[13px]" style={{ backgroundColor: SOL.base03, color: SOL.base1 }}>
-              <pre className="whitespace-pre-wrap break-words">
-                <span style={{ color: SOL.green }}>$</span> <Whole text={'cast trigger add "Check if CI is green on main" --in 30m'} />{"\n"}
-                <span style={{ color: SOL.green }}>+</span> Trigger <span style={{ color: SOL.cyan }}>tr-41</span> in 30m: <span className="font-semibold" style={{ color: SOL.base2 }}>Check if CI is green on main</span>
-              </pre>
-            </div>
+            <p className="text-[15px] leading-7" style={{ color: SOL.base01 }}>
+              Set one from the <span className="font-semibold" style={{ color: SOL.base02 }}>Triggers</span> page with <span className="font-semibold" style={{ color: SOL.base02 }}>New trigger</span>, or ask the agent you are talking to. Agents set their own follow-ups too, like checking CI half an hour after a push.
+            </p>
             <div className="flex flex-wrap gap-2 text-[14px]">
               <a href="#install" className="rounded-lg px-4 py-2 font-medium transition-transform hover:-translate-y-0.5" style={{ backgroundColor: ACCENT, color: SOL.base3 }}>
                 Install codecast

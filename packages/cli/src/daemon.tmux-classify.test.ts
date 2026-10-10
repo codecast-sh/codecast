@@ -576,6 +576,19 @@ complete:13: command not found: compdef
     expect(paneContentAfterLaunchEcho(pane)).toBe(pane);
   });
 
+  // A launch longer than the typed-line cap goes through a launch script, so the
+  // pane echoes `. '<dir>/launch-scripts/<uuid>.sh'` and never `env -u CLAUDECODE`.
+  // Real capture from the cloud Mac (2026-10-09): every resume of a migrated
+  // session read the rc noise as a crash and the session restarted without its history.
+  test("strips rc noise above a launch-script echo", () => {
+    const pane = `/Users/codecast/.claude/hooks/peon-ping/completions.bash:28: command not found: complete
+complete:13: command not found: compdef
+codecast@ip-172-31-36-163 codecast-mv-a9dad4b2 % . '/Users/codecast/.codecast/launch-scripts/34fa668d-fbd4-4b4c-9d0e-0c7a1f7f4a11.sh'
+`;
+    expect(paneContentAfterLaunchEcho(pane)).not.toContain("command not found");
+    expect(paneContentAfterLaunchEcho(pane + "No conversation found with session ID x\n")).toContain("No conversation found");
+  });
+
   test("returns empty when the echo is the last line (command not yet executed)", () => {
     const pane = `~: env -u CLAUDECODE claude --resume abc`;
     expect(paneContentAfterLaunchEcho(pane)).toBe("");
