@@ -1109,3 +1109,31 @@ export const teamBoardProbe = internalQuery({
   },
 });
 
+
+// TEMPORARY: a bare `cast sync` (from a mistyped `cast sync ls`) re-uploaded
+// old transcripts on 2026-10-07, and addMessage stamped each row's updated_at
+// with the upload time, so weeks-old sessions sorted as minutes old. Resets
+// updated_at to the newest message's own time for rows still carrying an
+// upload-window stamp that no message explains.
+export const repairReuploadedActivity = internalMutation({
+  args: { user_id: v.id("users"), from: v.number(), to: v.number(), dryRun: v.boolean() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", args.user_id).gte("updated_at", args.from).lte("updated_at", args.to))
+      .collect();
+    const fixed: Array<{ id: string; title?: string; from: number; to: number }> = [];
+    for (const conv of rows) {
+      const newest = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .first();
+      const to = Math.max(newest?.timestamp ?? 0, conv.started_at ?? 0);
+      if (!to || to > conv.updated_at - 3600_000) continue;
+      fixed.push({ id: conv._id, title: conv.title, from: conv.updated_at, to });
+      if (!args.dryRun) await ctx.db.patch(conv._id, { updated_at: to });
+    }
+    return { scanned: rows.length, fixed: fixed.length, rows: fixed };
+  },
+});

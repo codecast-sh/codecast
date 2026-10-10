@@ -14,6 +14,7 @@ import {
   performRunHere,
   performRetryFailed,
   planMigration,
+  reissueWaitingMigrations,
   STALE_MIGRATION_MS,
   summarizeBatch,
 } from "./sessionMigrations";
@@ -68,7 +69,7 @@ describe("planMigration", () => {
   ];
   const base = { session_id: "s", agent_type: "claude_code", status: "active" };
 
-  test("laptop → cloud: the owner executes (it holds the files); an offline owner's row is refused; an unowned row goes to the freshest online laptop", () => {
+  test("laptop → cloud: the owner executes (it holds the files), an offline owner's row waits for it, and an unowned row goes to the freshest online laptop", () => {
     const { rows, skipped } = planMigration({
       conversations: [
         { ...base, _id: "a", owner_device_id: LAPTOP },
@@ -77,20 +78,22 @@ describe("planMigration", () => {
       ],
       devices, targetDeviceId: BOX, now: NOW,
     });
-    expect(skipped).toEqual([expect.objectContaining({ conversation_id: "b", reason: "Desk is offline — it holds the session's files" })]);
-    expect(rows.map((r) => [r.conversation_id, r.direction, r.executor_device_id])).toEqual([
-      ["a", "to_cloud", LAPTOP],
-      ["c", "to_cloud", LAPTOP],
+    expect(skipped).toEqual([]);
+    expect(rows.map((r) => [r.conversation_id, r.direction, r.executor_device_id, r.waits_for])).toEqual([
+      ["a", "to_cloud", LAPTOP, undefined],
+      ["b", "to_cloud", LAPTOP2, "Desk"],
+      ["c", "to_cloud", LAPTOP, undefined],
     ]);
   });
 
-  test("cloud → laptop: the destination executes and must be online", () => {
+  test("cloud → laptop: the destination executes, and an offline destination's row waits for it", () => {
     const ok = planMigration({ conversations: [{ ...base, _id: "x", owner_device_id: BOX }], devices, targetDeviceId: LAPTOP, now: NOW });
     expect(ok.rows).toHaveLength(1);
     expect(ok.rows[0]).toMatchObject({ direction: "to_local", executor_device_id: LAPTOP, from_device_id: BOX });
+    expect(ok.rows[0].waits_for).toBeUndefined();
     const offline = planMigration({ conversations: [{ ...base, _id: "x", owner_device_id: BOX }], devices, targetDeviceId: LAPTOP2, now: NOW });
-    expect(offline.rows).toEqual([]);
-    expect(offline.skipped[0].reason).toContain("offline");
+    expect(offline.skipped).toEqual([]);
+    expect(offline.rows[0]).toMatchObject({ direction: "to_local", executor_device_id: LAPTOP2, waits_for: "Desk" });
   });
 
   test("an ended session never goes out to a host, but one that ended on a host can come home", () => {
@@ -138,17 +141,53 @@ describe("planMigration", () => {
     expect(skipped.map((s) => s.reason)).toEqual([expect.stringContaining("already on"), expect.stringContaining("two cloud hosts")]);
   });
 
-  test("no online laptop means nothing can go to the cloud", () => {
+  test("with no laptop online, an owned row waits for its owner and an unowned one has nobody to run it", () => {
     const { rows, skipped } = planMigration({
       conversations: [{ ...base, _id: "a", owner_device_id: LAPTOP }, { ...base, _id: "unowned" }],
       devices: [{ device_id: LAPTOP, label: "MacBook", last_seen: OFFLINE }, { device_id: BOX, is_remote: true, last_seen: ONLINE }],
       targetDeviceId: BOX, now: NOW,
     });
-    expect(rows).toEqual([]);
-    expect(skipped.map((s) => s.reason)).toEqual([
-      "MacBook is offline — it holds the session's files",
-      expect.stringContaining("no online local machine"),
-    ]);
+    expect(rows.map((r) => [r.conversation_id, r.waits_for])).toEqual([["a", "MacBook"]]);
+    expect(skipped.map((s) => s.reason)).toEqual([expect.stringContaining("no online local machine")]);
+  });
+});
+
+describe("a row planned onto an offline machine runs when it comes back", () => {
+  test("its runner command expired; the machine's first beat back issues a fresh one, once", async () => {
+    const db = fixtures({ devices: [
+      { _id: "d1", user_id: ME, device_id: LAPTOP, label: "MacBook", last_seen: OFFLINE },
+      { _id: "d3", user_id: ME, device_id: BOX, label: "Linux box", is_remote: true, last_seen: ONLINE },
+    ] });
+    const created = await performCreateBatch({ db }, ME as any, { conversation_ids: ["c3"], to_device_id: LAPTOP }, NOW);
+    expect(created.rows[0].waits_for).toBe("MacBook");
+    expect(created.skipped).toEqual([]);
+    // The laptop stayed away past the command's TTL: the queue expired it.
+    for (const c of commands(db)) Object.assign(c, { executed_at: NOW + 1, error: "expired_ttl" });
+    const later = NOW + 3 * 60 * 60 * 1000;
+    const issued = await reissueWaitingMigrations({ db }, ME as any, LAPTOP, later);
+    expect(issued).toHaveLength(1);
+    const fresh = commands(db).find((c) => c.executed_at === undefined)!;
+    expect(fresh).toMatchObject({ command: "migrate_sessions", target_device_id: LAPTOP });
+    expect(JSON.parse(fresh.args).batch_id).toBe(created.batch_id);
+    // A second beat while that command is still live adds nothing.
+    expect(await reissueWaitingMigrations({ db }, ME as any, LAPTOP, later + 1000)).toEqual([]);
+  });
+
+  test("a cancelled batch, a finished row and another machine's rows are left alone", async () => {
+    const db = fixtures({ devices: [
+      { _id: "d1", user_id: ME, device_id: LAPTOP, label: "MacBook", last_seen: OFFLINE },
+      { _id: "d2", user_id: ME, device_id: LAPTOP2, label: "Desk", last_seen: OFFLINE },
+      { _id: "d3", user_id: ME, device_id: BOX, label: "Linux box", is_remote: true, last_seen: ONLINE },
+    ] });
+    const created = await performCreateBatch({ db }, ME as any, { conversation_ids: ["c3"], to_device_id: LAPTOP }, NOW);
+    for (const c of commands(db)) Object.assign(c, { executed_at: NOW + 1 });
+    expect(await reissueWaitingMigrations({ db }, ME as any, LAPTOP2, NOW + 10_000)).toEqual([]);
+    rowsOf(db)[0].status = "done";
+    expect(await reissueWaitingMigrations({ db }, ME as any, LAPTOP, NOW + 10_000)).toEqual([]);
+    rowsOf(db)[0].status = "queued";
+    await performCancelBatch({ db }, ME as any, created.batch_id!, NOW + 5_000);
+    rowsOf(db)[0].status = "queued";
+    expect(await reissueWaitingMigrations({ db }, ME as any, LAPTOP, NOW + 10_000)).toEqual([]);
   });
 });
 
