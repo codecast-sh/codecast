@@ -45,7 +45,7 @@ export function registerGoalsCommand(program: Command, deps: PublishDeps): void 
     .option("--brief", "The compact shape a prompt reads: no descriptions")
     .option("--json", "The raw rows and the principles text")
     .option("--project <ref>", "One project's charter and the initiatives carrying it: id, short id or title (default: the repo profile's [line] project, else the whole workspace)")
-    .option("--task <ct>", "The brief this cause is grounded against: its own project's, else its workspace's (replaces --project and --team)")
+    .option("--task <ct>", "The brief this problem is grounded against: its own project's, else its workspace's (replaces --project and --team)")
     .option("--team <name|id|personal>", "Workspace to read (default: the repo profile's [line] team, else the session's team, else the directory's mapping)")
     .action(async (options: { brief?: boolean; json?: boolean; project?: string; task?: string; team?: string }) => {
       const cwd = process.env.CODECAST_CWD || process.cwd();

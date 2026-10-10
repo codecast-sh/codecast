@@ -151,9 +151,10 @@ function PlainNextRun({ task, cadence }: { task: TaskRow; cadence: string }) {
 function relativeDayTime(at: number, now: number): string {
   const day = (t: number) => new Date(t).toDateString();
   const time = new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (day(at) === day(now)) return `today ${time}`;
-  if (day(at) === day(now - 86_400_000)) return `yesterday ${time}`;
-  return `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+  // "at" as the Next line says it (firstRunWords: "tomorrow at 8:00 AM").
+  if (day(at) === day(now)) return `today at ${time}`;
+  if (day(at) === day(now - 86_400_000)) return `yesterday at ${time}`;
+  return `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })} at ${time}`;
 }
 
 function firstLine(text: string): string {

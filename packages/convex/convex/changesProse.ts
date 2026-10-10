@@ -280,7 +280,7 @@ export function storyPromptInput(
   };
 }
 
-const PROMPT_IMAGES = 6;
+const PROMPT_IMAGES = 10;
 const PROMPT_EDITS = 3;
 const PROMPT_EMBEDS = 4;
 
@@ -405,8 +405,8 @@ Fields:
 - dek: one short line, not a summary of the work (aim for under ${DEK_TARGET} characters): the stated reason when there is one, otherwise the one fact the headline most needs; "" when the headline says it all. Further detail belongs in the body.
 - body: markdown, "" when the headline and dek say it all, and never repeating them. An article, at most about ${BODY_WORDS} words, that a reader can scan:
   - Open with a lead paragraph that says what changed, and why when an input says so. Then give each part of the change its own section under a "###" heading that names it, with "####" subheadings when a part has distinct pieces. A heading names its part, never a generic label such as "What changed" or "Why".
-  - Place a screenshot where it shows the change, as ![what it shows](img1) with a ref from the list and a caption a reader can take in without the image. A screenshot earns its place by showing the product as its users see it, or a result the words cannot carry; a terminal, a log or code shows the reader nothing new. Use only listed refs.
-  - When a session made a page or a canvas that shows the work better than words can (a report, a comparison, a diagram), embed it on a line of its own as embed: page1, after a sentence saying what it shows.
+  - The reader should see the work, not only read about it. Place every listed screenshot that shows the product, a page, a report or a result of this work as ![what it shows](img1) beside the text it illustrates, with a caption a reader can take in without the image. Leave one out only when it shows a terminal, a log or code, or work other than this change. Use only listed refs.
+  - Embed every page or canvas a session made about this work (a report, a design, a comparison, a diagram) on a line of its own as embed: page1, after a sentence saying what it shows.
   - When the work changes how an agent behaves (an edit to a prompt, a skill or an agent guide), say what the agent now does differently, quote the instruction briefly as it read before and after, and give any measured result an input states.
 - kind: one of ${KINDS.join(", ")}.
 - importance: 1 to 5, how much a teammate needs to know this today. 5 is a change everyone will notice, 1 is housekeeping.
@@ -416,6 +416,10 @@ Fields:
 {"headline": "...", "dek": "...", "body": "...", "kind": "...", "importance": 3, "why_source": "...", "risk_lines": {}}`;
   return { model: PROSE_MODEL, max_tokens: STORY_MAX_TOKENS, system: STORY_SYSTEM, prompt };
 }
+
+/** The story's screenshots as images the model can see, each under its ref. */
+export const storyImages = (input: Pick<StoryPromptInput, "images" | "image_urls">) =>
+  input.images.map((img) => ({ label: img.ref, url: input.image_urls[img.ref] })).filter((img) => !!img.url);
 
 export type StoryProse = {
   headline: string;
@@ -767,18 +771,39 @@ export const mediaAudit = internalQuery({
 });
 
 /** A pending story with the sessions that pass the gate now and its pull requests; null once it is no longer pending. */
+async function loadStoryRead(ctx: { db: any; storage?: any }, story: Doc<"change_stories">): Promise<StoryRead> {
+  const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, story);
+  const prs: StoryRead["prs"] = [];
+  for (const prId of story.pr_ids) {
+    const pr = await ctx.db.get(prId);
+    if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: clipToSentence(pr.body ?? "", PR_BODY_CHARS) });
+  }
+  return { story, sessions, prs };
+}
+
 export const readStory = internalQuery({
   args: { story_id: v.id("change_stories") },
   handler: async (ctx, args): Promise<StoryRead | null> => {
     const story = await ctx.db.get(args.story_id);
     if (!story || story.prose_status !== "pending") return null;
-    const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, story);
-    const prs: StoryRead["prs"] = [];
-    for (const prId of story.pr_ids) {
-      const pr = await ctx.db.get(prId);
-      if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: clipToSentence(pr.body ?? "", PR_BODY_CHARS) });
+    return await loadStoryRead(ctx, story);
+  },
+});
+
+/** The prompt input any story would be written from now, written or not. Read-only, for replaying real stories in prompt ablations. */
+export const storyInputAudit = internalQuery({
+  args: { story_key: v.string() },
+  handler: async (ctx, args) => {
+    const story: Doc<"change_stories"> | null = await ctx.db.query("change_stories").withIndex("by_story_key", (q) => q.eq("story_key", args.story_key)).first();
+    if (!story) return null;
+    const { sessions, prs } = await loadStoryRead(ctx, story);
+    const commits: ChangeCommit[] = [];
+    for (const sha of new Set(story.commit_shas)) {
+      const rows = await ctx.db.query("commits").withIndex("by_sha", (q) => q.eq("sha", sha)).take(10);
+      const row = rows.find((c) => String(c.team_id) === String(story.team_id) && normalizeRepository(c.repository) === normalizeRepository(story.repository));
+      if (row) commits.push(projectCommit(row));
     }
-    return { story, sessions, prs };
+    return { story_key: story.story_key, headline: story.headline, input: storyPromptInput(story, commits, sessions, prs) };
   },
 });
 
