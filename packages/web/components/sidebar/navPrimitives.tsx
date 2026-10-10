@@ -142,6 +142,7 @@ export function NavSection({
   popped,
   expanded,
   onToggle,
+  alwaysOpen,
 }: {
   label: string;
   href: string;
@@ -169,6 +170,9 @@ export function NavSection({
   popped?: DesktopApp;
   expanded?: boolean;
   onToggle?: () => void;
+  /** The rows under it are views of this section, not a list it holds: they
+   *  always show, with no chevron to fold them and nothing to open on click. */
+  alwaysOpen?: boolean;
 }) {
   const inOtherWindow = usePoppedOut(popped);
   // Only the wide rail nests children; the narrow rail stays icon-only, and
@@ -186,7 +190,7 @@ export function NavSection({
             // Going into a section opens its list: landing on a channel while
             // the channels stay folded reads as broken. Only opens, never folds;
             // the chevron is the fold control.
-            if (hasChildren && !expanded) onToggle?.();
+            if (hasChildren && !alwaysOpen && !expanded) onToggle?.();
             // On a SPLIT stage a plain click is ambiguous — which pane? Hand
             // the choice to the user (StagePickLayer) instead of guessing.
             // Modified clicks keep their browser meaning.
@@ -195,6 +199,7 @@ export function NavSection({
             }
           }}
           data-nav-row
+          aria-current={isActive ? "page" : undefined}
           // A section is a pane waiting to happen: drag it onto the stage to
           // split it in beside whatever is there (lib/stage).
           draggable
@@ -206,7 +211,7 @@ export function NavSection({
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
         </Link>
         {!isNarrow && headerAction}
-        {hasChildren && (
+        {hasChildren && !alwaysOpen && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(); }}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
@@ -237,8 +242,17 @@ export function NavSection({
         )}
         {!isNarrow && <span className="w-4 flex-shrink-0" aria-hidden="true" />}
       </div>
+      {/* Views of the section: plain rows on a guide line from this row's
+          icon, text aligned with the label above. */}
+      {hasChildren && alwaysOpen && (
+        <div className="ml-[27px] mb-0.5 border-l border-sol-border/60">
+          {items!.map((child) => (
+            <SectionRow key={child.id} row={child} className="pl-[14px]" />
+          ))}
+        </div>
+      )}
       {/* Nested rows — a slide-open list aligned under this row's icon. */}
-      {hasChildren && (
+      {hasChildren && !alwaysOpen && (
         // A grid whose single row animates 0fr → 1fr opens to the list's own
         // height, so a section with twenty channels shows twenty. The old
         // max-height capped it at 384px and hid the rest behind a second
@@ -286,6 +300,7 @@ export function InboxNavRow({ active, isNarrow, badge, onClick }: {
       onClick={onClick}
       className={railRowClass(active, isNarrow)}
       title="Inbox"
+      data-nav-page="/inbox"
     >
       <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 10h16M4 14h16M4 18h16" />

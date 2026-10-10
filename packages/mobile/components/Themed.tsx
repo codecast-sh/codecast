@@ -13,10 +13,15 @@ import {
   TextInput as DefaultTextInput,
   View as DefaultView,
 } from 'react-native';
-import { forwardRef } from 'react';
+import { createContext, forwardRef, useContext } from 'react';
 
-import { Theme, useActiveScheme, useTheme } from '@/constants/Theme';
-import { monoStyle, useLateFacesLoaded } from '@/constants/fonts';
+import { Theme, useActiveLook, useActiveScheme, useTheme } from '@/constants/Theme';
+import { monoStyle, namedFaceGroup, useLateFacesLoaded, type FaceGroup } from '@/constants/fonts';
+
+// The face group a Text names outright, handed to the Text nested in it: RN
+// nests Text the way the DOM nests spans, and a span that names no family
+// keeps its parent's (a bold run inside a reply set in the reading face).
+const InheritedFace = createContext<FaceGroup | undefined>(undefined);
 
 type ThemeProps = {
   lightColor?: string;
@@ -40,7 +45,10 @@ export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref)
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   const late = useLateFacesLoaded();
-  return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late)} />;
+  const inherited = useContext(InheritedFace);
+  const text = <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, undefined, inherited)} />;
+  const named = namedFaceGroup(style);
+  return named && named !== inherited ? <InheritedFace.Provider value={named}>{text}</InheritedFace.Provider> : text;
 });
 
 export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function TextInput(props, ref) {
@@ -48,10 +56,13 @@ export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function T
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   const late = useLateFacesLoaded();
+  // The family look's caret is ink, as on the web, not the system blue.
+  const family = useActiveLook() === 'family';
   return (
     <DefaultTextInput
       ref={ref}
       placeholderTextColor={Theme.inputPlaceholder}
+      selectionColor={family ? Theme.text : undefined}
       {...otherProps}
       style={monoStyle([{ color }, style], late)}
     />

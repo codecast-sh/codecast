@@ -48,7 +48,7 @@ async function run(driver: "engine" | "builtin", args: string[], codecastDir?: s
     mock.module(${modulePath("engineReap.ts")}, () => ({
       ...reap,
       closeSessionTab: async () => { console.log("CLOSE_TAB"); },
-      reapEngineOrphans: async () => { console.log("REAP_CLONE"); return { closed: [], killed: 0, tmpDirsRemoved: 0 }; },
+      reapEngineOrphans: async () => { console.log("REAP_CLONE"); return { closed: [], idled: [], killed: 0, tmpDirsRemoved: 0 }; },
     }));
     const real = await import(${modulePath("bridge/real.ts")});
     if (${JSON.stringify(sticky) ?? "undefined"}) real.setStickyTarget("session:default-test", ${JSON.stringify(sticky) ?? "undefined"});
