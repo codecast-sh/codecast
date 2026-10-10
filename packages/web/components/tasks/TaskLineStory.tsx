@@ -17,14 +17,14 @@ import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { lineTabHref } from "../../lib/lineSettings";
+import { expectationsHref } from "../../lib/expectations/view";
 import { lineTraceHref } from "../../lib/line/lineMapUrl";
 import type { TaskItem } from "../../store/inboxStore";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useGoalChip } from "../../hooks/useGoalChip";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { ageShort, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
+import { ageShort, findingJudgeWords, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
 import { cardName, causeWhere, choiceWords, runPath, shortDay, type ReportRun, type ReportTask } from "../../lib/line/runReport";
 import { CauseRunList, PhaseStrip, ReportChip, answerTone, useCauseRuns } from "../line/RunReport";
 import { cn } from "../../lib/utils";
@@ -79,7 +79,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   const whereLine = (
     <span className="inline-flex items-baseline gap-3 min-w-0">
       <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>
-      <Link href={lineTraceHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Follow this cause through the line, step by step" data-cause-trace>Trace<ArrowUpRight className="w-3 h-3" /></Link>
+      <Link href={lineTraceHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Follow this problem through the line, step by step" data-cause-trace>Trace<ArrowUpRight className="w-3 h-3" /></Link>
     </span>
   );
   // Readiness is about admission: once the cause is closed it has no more to say.
@@ -97,7 +97,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
       <div className="px-4 pb-3 pt-1 space-y-3">
         {(goal || kind || readiness || cited.length > 0) && (
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1 text-[12px]" data-cause-ground>
-            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
+            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" || goal.kind === "line" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
             {cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | undefined)?.find((l) => l.id === id)} />)}
             {kind && <><dt className="text-sol-text-dim">Kind</dt><dd className="text-sol-text-muted">{kind}</dd></>}
             {readiness && <><dt className="text-sol-text-dim">Readiness</dt><dd className={readiness === "ready" ? "text-sol-text-muted" : "text-sol-yellow"} title={task.readiness_note ?? undefined} data-cause-readiness>{readinessWords(readiness, task.readiness_note)}</dd></>}
@@ -108,7 +108,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
         {task.cause && (signals.length > 0 || task.cause.signal_count > 0) && (
           <div data-cause-signals>
             <div className="text-[12px] text-sol-text-muted">
-              {task.cause.signal_count} {task.cause.signal_count === 1 ? "signal" : "signals"} since {shortDay(task.cause.first_seen)}
+              {task.cause.signal_count} {task.cause.signal_count === 1 ? "report" : "reports"} since {shortDay(task.cause.first_seen)}
               {sources.length > 0 && <span className="text-sol-text-dim"> · from {sources.join(", ")}</span>}
             </div>
             <ul className="mt-1 space-y-0.5">
@@ -150,7 +150,7 @@ function ExpectationRow({ id, line }: { id: string; line?: ExpectationLine }) {
       <dd className="min-w-0 flex items-baseline gap-2" data-cause-expectation={id}>
         {line && <span className="min-w-0 text-sol-text leading-snug">{line.text}{line.status === "retired" && <span className="text-sol-text-dim"> (retired since)</span>}</span>}
         {line
-          ? <Link href={`${lineTabHref(line.project_short_id ?? line.project_id)}#${id}`} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
+          ? <Link href={expectationsHref(line.project_short_id ?? line.project_id, id)} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
           : <span className={chip}>{id}</span>}
       </dd>
     </>
@@ -168,11 +168,13 @@ function readinessWords(readiness: string, note?: string | null): string {
 /** A signal behind the cause: the row opens its trace (line-map.md LX4), and
  *  the arrow goes back to where it was seen. */
 function SignalRow({ s, now }: { s: LineSignal; now: number }) {
+  const judged = findingJudgeWords(s);
   return (
     <li className="flex items-baseline gap-1 rounded hover:bg-sol-bg-alt/60 min-w-0" data-cause-signal={s.short_id ?? s._id}>
-      <Link href={lineTraceHref(s.short_id || s._id)} className="flex-1 flex items-baseline gap-2 px-1 py-0.5 text-[12px] min-w-0" title="Trace this signal through the line" data-signal-trace>
+      <Link href={lineTraceHref(s.short_id || s._id)} className="flex-1 flex items-baseline gap-2 px-1 py-0.5 text-[12px] min-w-0" title="Trace this finding through the line" data-signal-trace>
         <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
         <span className="min-w-0 truncate text-sol-text">{s.title}</span>
+        {judged && <span className="shrink-0 text-sol-text-dim" data-signal-judge>{judged}</span>}
         {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
         <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
       </Link>
