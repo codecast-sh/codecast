@@ -178,7 +178,7 @@ test("a settled card says what happened in place of the recommendation", async (
 
 test("a withdrawn or dismissed card ends on that, muted, not on the recommendation", async () => {
   const withdrawn = cardOutcome({ ...decision, status: "withdrawn", resolved_at: Date.now() - 9 * 60_000 }, "Ashot", Date.now())!;
-  expect(withdrawn.pill).toBe("Withdrawn by the agent · 9m ago");
+  expect(withdrawn.pill).toBe("Withdrawn with no answer · 9m ago");
   expect(withdrawn.tone).toBe("dim");
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={withdrawn.line} />);
   expect(container.querySelector("article [data-cc-recommended]")).toBeNull();
@@ -441,4 +441,23 @@ test("a card without a guide draws no walkthrough", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} />);
   expect(container.querySelector("[data-change-guide]")).toBeNull();
   await unmount();
+});
+
+// LW5: the earlier shipped fix reads beside the new change, red when the problem came back.
+test("a card for a new attempt shows the cause's earlier shipped fixes and whether each held", async () => {
+  const earlier = [
+    { attempt: 1, ref: null, change: "Reword the follow-up block", live: "Merged Sep 2; no deploy recorded since", held: "The watch after it ended quiet.", back: null },
+    { attempt: 2, ref: "sd-9", change: "Pin the persona on the thread's first send", live: "Deployed to backend Oct 13", held: null, back: "Came back 2 times after the deploy of Oct 13." },
+  ];
+  const { container, unmount } = await mount(<ChangeCardView card={{ ...card, earlier }} />);
+  const section = container.querySelector("[data-cc-earlier]")!;
+  expect(section.querySelector(".cc-label")!.textContent).toBe("Shipped before");
+  const rows = Array.from(section.querySelectorAll("li"));
+  expect(rows.map((r) => r.className)).toEqual(["is-held", "is-back"]);
+  expect(rows[1].textContent).toContain("Attempt 2 · sd-9");
+  expect(rows[1].querySelector(".cc-text-red")!.textContent).toBe("Came back 2 times after the deploy of Oct 13.");
+  await unmount();
+  const plain = await mount(<ChangeCardView card={card} />);
+  expect(plain.container.querySelector("[data-cc-earlier]")).toBeNull();
+  await plain.unmount();
 });

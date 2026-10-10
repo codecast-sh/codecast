@@ -8,6 +8,7 @@
 // on the task, the eval station's eval-result.json (evalResult.ts), the
 // verify, review and PR evidence on the task, and the run's cost.
 
+import type { EarlierFix } from "./causeHistory";
 import type { EvalResult, EvalSurfaceResult } from "./evalResult";
 
 export type ChangeVerdict = "ship" | "revise" | "drop";
@@ -48,6 +49,8 @@ export interface ChangeCard {
   risk: { class: RiskClass; reason: string };
   recommend: { verdict: ChangeVerdict; why: string };
   cost: { tokens: number; usd: number; minutes: number };
+  /** The cause's earlier shipped fixes, oldest first, so a person sees what was tried beside what is proposed now, and whether it held (line-workspace.md LW5). Absent when nothing shipped before. */
+  earlier?: EarlierFix[];
 }
 
 // ── validation ───────────────────────────────────────────────────────────────
@@ -219,6 +222,18 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     count("cost.minutes", cost.minutes);
   }
 
+  if (c.earlier !== undefined) {
+    if (!Array.isArray(c.earlier)) err("earlier", `expected an array, got ${show(c.earlier)}`);
+    else c.earlier.forEach((f, i) => {
+      const p = `earlier[${i}]`;
+      if (!isObj(f)) return err(p, `expected { attempt, change, live, held, back }, got ${show(f)}`);
+      count(`${p}.attempt`, f.attempt);
+      str(`${p}.change`, f.change);
+      str(`${p}.live`, f.live);
+      for (const k of ["ref", "held", "back"] as const) if (f[k] !== null && typeof f[k] !== "string") err(`${p}.${k}`, `expected a string or null, got ${show(f[k])}`);
+    });
+  }
+
   return errors.length ? { ok: false, errors } : { ok: true, card: input as unknown as ChangeCard };
 }
 
@@ -348,10 +363,21 @@ export function isLineRun(nodes: ReadonlyArray<{ node_id: string }> | undefined)
 }
 
 /** The latest end station a line run completed and when, or null when it reached none. */
+/** A run that went on past a card nobody answered (its decide gate failed)
+ *  and still reached ship. Nothing approved it, so nothing after the card is
+ *  a ship, on any graph. */
+export function passedUnansweredCard(nodes: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null }> | undefined): boolean {
+  // An answered gate records the chosen key as its outcome ("s"); only a gate
+  // that came back with no answer records "failure".
+  const decide = nodes?.find((n) => n.node_id === CARD_GATE_NODE_ID);
+  const ship = nodes?.find((n) => n.node_id === "ship");
+  return decide?.outcome === "failure" && ship?.status === "completed";
+}
+
 export function lineRunOutcome(
   nodes: ReadonlyArray<{ node_id: string; status: string; started_at?: number; completed_at?: number }> | undefined,
 ): { kind: LineRunEnd; at: number } | null {
-  if (!nodes || !isLineRun(nodes)) return null;
+  if (!nodes || !isLineRun(nodes) || passedUnansweredCard(nodes)) return null;
   let best: { kind: LineRunEnd; at: number } | null = null;
   for (const n of nodes) {
     const kind = LINE_END_NODES[n.node_id];
@@ -423,6 +449,8 @@ export interface CardAssemblyInput {
   wrong?: string;
   change?: string;
   recommend?: { verdict: ChangeVerdict; why: string } | null;
+  /** The cause's earlier shipped fixes (causeHistory earlierFixes). */
+  earlier?: EarlierFix[] | null;
 }
 
 /** The judge's first sentence: the verdict a reader needs, before the reasoning. */
@@ -559,7 +587,7 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     },
     risk: {
       class: risk,
-      reason: task.risk_reason?.trim() || (task.risk ? `Ground rated it ${risk}.` : "Not grounded yet, so it gets a careful look."),
+      reason: task.risk_reason?.trim() || (task.risk ? `An agent rated it ${risk === "review" ? "worth a human review" : `${risk} risk`}.` : "Not grounded yet, so it gets a careful look."),
     },
     recommend: input.recommend ?? ({ verdict: "", why: "" } as unknown as ChangeCard["recommend"]),
     cost: {
@@ -567,5 +595,6 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       usd: Math.round(((input.cost?.usd ?? 0) + (evalResult?.costUsd ?? 0)) * 100) / 100,
       minutes: Math.round(input.cost?.minutes ?? 0),
     },
+    ...(input.earlier?.length ? { earlier: input.earlier } : {}),
   };
 }

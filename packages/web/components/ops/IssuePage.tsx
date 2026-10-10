@@ -8,7 +8,7 @@ import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, ExternalLink, Wand2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { byRef, detailGone, groupSha, useOpsEvents, useOpsGroups, useOpsReplays, useOpsSamples, useOpsSources, useShaCommit, useSyncOpsEvents, useSyncOpsGroup, useSyncShaCommit } from "../../hooks/useSyncOps";
+import { detailGone, groupSha, useOpsEvents, useOpsGroup, useOpsReplays, useOpsSamples, useOpsSources, useShaCommit, useSyncOpsEvents, useSyncOpsGroup, useSyncShaCommit } from "../../hooks/useSyncOps";
 import { useTriggers } from "../../hooks/useSyncTriggers";
 import { useInboxStore } from "../../store/inboxStore";
 import { externalEventStyle, commitPath } from "../../lib/externalEvents";
@@ -26,7 +26,7 @@ import type { OpsGroup, OpsSample } from "./opsTypes";
 export function IssuePage({ id }: { id: string }) {
   const feed = useSyncOpsGroup(id);
   useSyncOpsEvents();
-  const group = byRef(useOpsGroups(), id);
+  const group = useOpsGroup(id);
   const sources = useOpsSources();
   const source = group ? sources.find((s) => s._id === group.source_id) : undefined;
   const samples = useOpsSamples(group?._id);

@@ -95,7 +95,7 @@ export function registerMigrateCommand(program: Command): void {
       });
       if (opts.json) { console.log(JSON.stringify(res, null, 2)); if (!res.batch_id && !res.dry_run) process.exit(1); return; }
       const name = (r: any) => `${(r.short_id ?? r.conversation_id.slice(0, 8)).padEnd(9)} ${r.title ? r.title.slice(0, 60) : ""}`.trimEnd();
-      for (const r of res.rows) console.log(`  ${res.dry_run ? "would move" : "moving"}  ${name(r)}  (${deviceName(devices, r.from_device_id)} → ${deviceName(devices, r.to_device_id)})`);
+      for (const r of res.rows) console.log(`  ${res.dry_run ? "would move" : "moving"}  ${name(r)}  (${deviceName(devices, r.from_device_id)} → ${deviceName(devices, r.to_device_id)})${r.waits_for ? `, starts when ${r.waits_for} comes online` : ""}`);
       for (const s of res.skipped) console.log(`  skip       ${name(s)}: ${s.reason}`);
       if (res.dry_run) {
         console.log(`dry run: ${res.rows.length} would move to ${deviceName(devices, to.device_id)}, ${res.skipped.length} skipped`);

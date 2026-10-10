@@ -10,21 +10,34 @@
 // with the rows still travelling laid over it (lib/lineSettings
 // liveLineProfile), so a refusal or a lost machine takes nothing back from
 // the project row: the row simply stops counting.
-import { asyncAction } from "./mutativeMiddleware";
+import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { stampSessionCommand } from "./sessionCommandStamp";
 import type { LineProfileEdit } from "@codecast/shared/contracts/lineProfile";
 import { editKey } from "../lib/lineSettings";
 import { LINE_CAUSE_CATEGORY, type LineCauseFields } from "../lib/line/lineCause";
 import { taskCreateStub, taskStubId } from "./taskStub";
+import { lineLabelKey, type LabelVerdict } from "../lib/line/lineLabels";
+import type { LineChatSend } from "../lib/line/lineChat";
 
 export type LineSliceActions = {
   editLineProfile: (requestId: string, projectId: string, edits: LineProfileEdit[]) => Promise<{ command_id: string } | null | undefined>;
   fileLineCause: (clientKey: string, projectId: string, fields: LineCauseFields) => Promise<{ task_id: string; task_short_id: string } | null | undefined>;
   startLineCause: (taskId: string) => Promise<{ run_id: string; role_handle: string } | null | undefined>;
   resumeLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
+  labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
+  // Local echoes of sendLineChat, by project id. Ephemeral: the chat's feed
+  // retires each once the server row carries its client id.
+  lineChatSends: Record<string, LineChatSend[]>;
+  /** A person's words to the session that answers a project's line. Resolves with the server's answer; a refusal comes back as { error }. */
+  sendLineChat: (projectId: string, text: string, clientId: string, graph: string | null, focus: string | null) => Promise<unknown>;
+  dropLineChatSend: (projectId: string, clientId: string) => void;
 };
 
 type Tasks = { tasks: Record<string, any> };
+type Labels = { lineLabels: Record<string, any>; workflowRuns: Record<string, any>; pending: Record<string, any>; currentUser?: { _id: string } | null };
+
+/** A label painted before the server has it: keyed by its natural key, which the server row supersedes (registry altKey). */
+export const lineLabelStubId = (key: string) => `label:${key}`;
 
 export function createLineSlice(): LineSliceActions {
   return {
@@ -65,5 +78,56 @@ export function createLineSlice(): LineSliceActions {
       const run = this.workflowRuns[runId];
       if (run) { const now = Date.now(); run.resume_requested_at = now; run.updated_at = now; }
     }) as LineSliceActions["resumeLineRun"],
+
+    // A decision marked right or wrong, with a note (line-workspace.md LW4);
+    // a null verdict takes the viewer's label back. One label per person per
+    // decision, living where the run lives; the dispatch of the same name
+    // writes it (convex lineWorkspace.label).
+    labelDecision: action(function (this: Labels, runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) {
+      const me = String(this.currentUser?._id ?? "");
+      if (!me) return;
+      const key = lineLabelKey(runId, nodeId, me);
+      const mine = Object.values(this.lineLabels).find((l: any) => l.key === key);
+      if (verdict === null) {
+        if (mine) {
+          delete this.lineLabels[mine._id];
+          this.pending[`lineLabels:${mine._id}`] = { type: "exclude", ts: Date.now() };
+        }
+        return;
+      }
+      const text = note?.trim() || undefined;
+      if (mine) {
+        mine.verdict = verdict;
+        mine.note = text;
+        mine.at = Date.now();
+        return;
+      }
+      const run = this.workflowRuns[runId];
+      const id = lineLabelStubId(key);
+      this.lineLabels[id] = {
+        _id: id, key, run_id: runId, node_id: nodeId, verdict, ...(text ? { note: text } : {}), by: me, at: Date.now(),
+        ...(run?.workspace ? { workspace: run.workspace } : {}), ...(run?.team_id ? { team_id: String(run.team_id) } : {}),
+      };
+    }) as LineSliceActions["labelDecision"],
+
+    lineChatSends: {},
+
+    // The line's chat (line-workspace.md LW4, convex lineChat.ts): the words
+    // paint at once as a local echo, the sendLineChat side effect delivers
+    // them to the session that answers the line (starting one when nobody
+    // leads the project), and the chat feed's row carrying the same client id
+    // retires the echo. A refusal is returned, not thrown, so the caller takes
+    // the echo back (lib/decisionDiscussion settleEchoedSend).
+    sendLineChat: asyncAction(function (this: { lineChatSends: Record<string, LineChatSend[]> }, projectId: string, text: string, clientId: string, _graph: string | null, _focus: string | null) {
+      const sends = (this.lineChatSends[projectId] ??= []);
+      if (!sends.some((x) => x.client_id === clientId)) sends.push({ client_id: clientId, text: text.trim(), at: Date.now() });
+    }) as LineSliceActions["sendLineChat"],
+    dropLineChatSend: sync(function (this: { lineChatSends: Record<string, LineChatSend[]> }, projectId: string, clientId: string) {
+      const sends = this.lineChatSends[projectId];
+      if (!sends) return;
+      const kept = sends.filter((x) => x.client_id !== clientId);
+      if (kept.length) this.lineChatSends[projectId] = kept;
+      else delete this.lineChatSends[projectId];
+    }) as LineSliceActions["dropLineChatSend"],
   };
 }

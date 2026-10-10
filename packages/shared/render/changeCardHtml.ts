@@ -91,6 +91,17 @@ function examples(card: ChangeCard): string {
   return `<section class="block"><h2>Before and after</h2>${items}</section>`;
 }
 
+/** The cause's earlier shipped fixes beside this change (line-workspace.md LW5): what each changed, when it went live, and whether it held. */
+function earlierBlock(card: ChangeCard): string {
+  if (!card.earlier?.length) return "";
+  const items = card.earlier.map((f) => {
+    const state = f.back ? "back" : f.held ? "held" : "";
+    const after = [esc(f.live), f.back ? `<b>${esc(f.back)}</b>` : f.held ? esc(f.held) : ""].filter(Boolean).join(" · ");
+    return `<li class="${state}"><span class="lbl">Attempt ${f.attempt}${f.ref ? ` · ${esc(f.ref)}` : ""}</span><p>${esc(f.change)}</p><p class="after">${after}</p></li>`;
+  }).join("");
+  return `<section class="block"><h2>Shipped before <span class="count">${card.earlier.length === 1 ? "one earlier fix" : `${card.earlier.length} earlier fixes`}</span></h2><ul class="earlier">${items}</ul></section>`;
+}
+
 function checksList(checks: CardCheck[]): string {
   if (!checks.length) return "";
   const rows = checks.map((c) => `<li>${mark(c.ok)}<span class="cname">${esc(c.name)}</span><span class="cdetail">${esc(c.detail)}</span></li>`).join("");
@@ -145,6 +156,12 @@ h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.015em;margin:
 .say.wrong .lbl{color:var(--red)} .say.change .lbl{color:var(--green)}
 .say p{margin:0;font-size:17px;line-height:1.5}
 .block{margin-top:32px}
+.earlier{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.earlier li{border-left:3px solid var(--rule);padding:2px 0 2px 14px}
+.earlier li.back{border-color:var(--red)} .earlier li.held{border-color:var(--green)}
+.earlier .lbl{display:block;font-size:12.5px;font-weight:650;color:var(--muted)}
+.earlier p{margin:2px 0 0;font-size:15px;line-height:1.45}
+.earlier .after{font-size:13.5px;color:var(--muted)} .earlier li.back .after b{color:var(--red);font-weight:600}
 h2{font-size:15px;font-weight:650;margin:0 0 12px;display:flex;align-items:baseline;gap:12px}
 h2 .count{font-weight:500;color:var(--muted);font-size:14px}
 h3{font-size:13px;font-weight:650;color:var(--muted);margin:0 0 6px}
@@ -248,6 +265,7 @@ export function renderChangeCardHtml(card: ChangeCard): string {
   <div class="say wrong"><span class="lbl">What is wrong</span><p>${esc(card.wrong)}</p></div>
   <div class="say change"><span class="lbl">What this changes</span><p>${esc(card.change)}</p></div>
 </div>
+${earlierBlock(card)}
 ${proofBlock}
 ${examples(card)}
 ${checksList(honestChecks(card.checks))}

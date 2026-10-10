@@ -121,13 +121,15 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   if (!task?.short_id) fail(`Task not found: ${options.task}`);
   const optional = (p: Promise<any>) => p.catch(() => null);
   const goalRef: string | undefined = task.goal_ref && task.goal_ref !== "none" ? task.goal_ref : undefined;
-  const [evidence, runs, signals, brief] = await Promise.all([
+  const [evidence, runs, signals, brief, history] = await Promise.all([
     optional(apiPost(deps, "/cli/work/evidence", { task_id: task.short_id }, { read: true, exitOnError: false })),
     optional(apiPost(deps, "/cli/workflow-runs/list", { task_id: task.short_id }, { read: true, exitOnError: false })),
     // The finders behind the cause, and the goal its ref names: the task
     // carries the ref and the signal count, the card says them in words.
     optional(apiPost(deps, "/cli/signal/ls", { task: task.short_id, limit: 200 }, { read: true, exitOnError: false })),
     goalRef ? optional(apiPost(deps, "/cli/goals/brief", taskWorkspaceScope(task), { read: true, exitOnError: false })) : null,
+    // The cause's earlier shipped fixes, shown beside this change (line-workspace.md LW5).
+    optional(apiPost(deps, "/cli/work/history", { short_id: task.short_id }, { read: true, exitOnError: false })),
   ]);
   const goal = goalRef && brief?.projects ? goalRefLabel(brief as GoalsBrief, goalRef) : null;
   const sources = [...new Set<string>((signals?.signals ?? []).map((sg: { source: string }) => sg.source))];
@@ -161,6 +163,7 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
     wrong: options.wrong,
     change: options.change,
     recommend: options.recommend ? { verdict: options.recommend as ChangeVerdict, why: options.why?.trim() ?? "" } : null,
+    earlier: Array.isArray(history?.earlier) ? history.earlier : null,
   });
 
   const validation = validateChangeCard(card);

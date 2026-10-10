@@ -140,8 +140,20 @@ is_read() {
     # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
     stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
-    # A project's expectations; propose, apply and drop write.
-    expectations) [ "${2:-}" = show ] ;;
+    # A project's expectations; propose, apply and drop write. `routine` prints a pass.
+    expectations) [ "${2:-}" = show ] || [ "${2:-}" = routine ] ;;
+    # The line's reads (learning-loop.md LL4, LL7): the setup pass, the profile
+    # unpublished, moments listed, the budget unset, and a judge's request
+    # printed without sending (a sent try spends the team's budget).
+    line) case "${2:-}" in
+        judging) return 0 ;;
+        profile) ! has_flag --publish "$@" ;;
+        moments) [ "${3:-}" = ls ] || [ "${3:-}" = show ] ;;
+        budget) ! has_flag --set "$@" ;;
+        judges) [ "${3:-}" = try ] && has_flag --prompt "$@" ;;
+        *) return 1 ;;
+      esac ;;
+    sources) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
     *) return 1 ;;
   esac
 }

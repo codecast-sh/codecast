@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { Button } from "./ui/button";
 import { useFollowScroll, useFollowSurface } from "../hooks/useFollowSurface";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -210,20 +211,22 @@ export function ReviewView({ prId }: { prId: string }) {
           </div>
 
           <div className="flex items-center gap-3">
-            <button
+            <Button
+              variant="green"
+              size="sm"
               onClick={handleApprove}
               disabled={isSubmitting}
-              className="sol-btn sol-btn-solid bg-sol-green text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? "Submitting..." : "Approve"}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="red"
+              size="sm"
               onClick={handleRequestChanges}
               disabled={isSubmitting}
-              className="sol-btn sol-btn-solid bg-sol-red text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? "Submitting..." : "Request Changes"}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -342,19 +345,21 @@ export function ReviewView({ prId }: { prId: string }) {
                           rows={3}
                         />
                         <div className="flex gap-2 mt-2">
-                          <button
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={handleCommentSubmit}
-                            className="sol-btn-primary"
                             disabled={!commentDraft.content.trim()}
                           >
                             Add comment
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={handleCommentCancel}
-                            className="sol-btn-ghost"
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     )}
