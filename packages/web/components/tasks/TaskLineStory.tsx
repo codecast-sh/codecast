@@ -9,24 +9,30 @@
 // the signals, the runs, the decision); the card itself stays in the task's
 // decisions below, so it is drawn once. A task the line never ran on gets the
 // strip alone.
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { useInboxStore } from "../../store/inboxStore";
+import { findingStepId } from "../../lib/line/loopSteps";
+import { lineLabelKey } from "../../lib/line/lineLabels";
 import { StationStrip } from "./StationStrip";
 import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { lineTabHref } from "../../lib/lineSettings";
-import { lineTraceHref } from "../../lib/line/lineMapUrl";
+import { expectationsHref } from "../../lib/expectations/view";
+import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import type { TaskItem } from "../../store/inboxStore";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useGoalChip } from "../../hooks/useGoalChip";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { ageShort, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
+import { admissionHold, ageShort, findingJudgeWords, findingReviewWords, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
+import { finderWords } from "../../lib/line/lineTrace";
 import { cardName, causeWhere, choiceWords, runPath, shortDay, type ReportRun, type ReportTask } from "../../lib/line/runReport";
 import { CauseRunList, PhaseStrip, ReportChip, answerTone, useCauseRuns } from "../line/RunReport";
+import { useLineAdmission } from "../line/map/useLineAdmission";
+import { LineStartSwitch } from "../line/map/LineStartSwitch";
 import { cn } from "../../lib/utils";
 
 type StoryTask = TaskItem & LineCauseTask & ReportTask & { review_verdict?: { verdict: string } | null };
@@ -57,7 +63,12 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   // Reopened: a signal flagged as reopening the cause after its newest ship.
   const lastShip = runs.map((r) => lineRunOutcome(r.node_statuses as any)).find((o) => o?.kind === "shipped")?.at ?? 0;
   const reopened = signals.some((s) => s.reopened && s.created_at > lastShip);
-  const where = causeWhere(task, latest, reopened, now);
+  // A line that starts nothing until a person acts says so, with its switch at hand (LL5).
+  const admit = useLineAdmission(task.project_id ?? null);
+  const stopped = admit.admission ? admissionHold(admit.admission)?.stopped ?? null : null;
+  const where = causeWhere(task, latest, reopened, now, stopped);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const offLine = !!stopped && !!admit.admission?.role && !admit.admission.role.paused && !admit.admission.on && where.text.startsWith("Not started");
 
   // The goal row says what the project chip above does not: a goal that is
   // the project itself is already said there.
@@ -79,7 +90,12 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   const whereLine = (
     <span className="inline-flex items-baseline gap-3 min-w-0">
       <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>
-      <Link href={lineTraceHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Follow this cause through the line, step by step" data-cause-trace>Trace<ArrowUpRight className="w-3 h-3" /></Link>
+      {(offLine || switchOpen) && (
+        <button type="button" onClick={() => setSwitchOpen((o) => !o)} aria-expanded={switchOpen} className="shrink-0 text-[11.5px] text-sol-blue hover:underline" data-cause-start-switch>
+          {switchOpen ? "Hide the switch" : "Start problems on their own"}
+        </button>
+      )}
+      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="This problem's life on its line: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
     </span>
   );
   // Readiness is about admission: once the cause is closed it has no more to say.
@@ -94,11 +110,16 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
           <div>{whereLine}</div>
         </div>
       )}
+      {switchOpen && admit.admission?.role && (
+        <div className="mx-4 mb-2 mt-1 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-3 py-2" data-cause-switch-panel>
+          <LineStartSwitch admit={admit} compact />
+        </div>
+      )}
       <div className="px-4 pb-3 pt-1 space-y-3">
         {(goal || kind || readiness || cited.length > 0) && (
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1 text-[12px]" data-cause-ground>
-            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
-            {cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | undefined)?.find((l) => l.id === id)} />)}
+            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" || goal.kind === "line" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
+            {lines !== undefined && cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | null)?.find((l) => l.id === id)} />)}
             {kind && <><dt className="text-sol-text-dim">Kind</dt><dd className="text-sol-text-muted">{kind}</dd></>}
             {readiness && <><dt className="text-sol-text-dim">Readiness</dt><dd className={readiness === "ready" ? "text-sol-text-muted" : "text-sol-yellow"} title={task.readiness_note ?? undefined} data-cause-readiness>{readinessWords(readiness, task.readiness_note)}</dd></>}
           </dl>
@@ -108,7 +129,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
         {task.cause && (signals.length > 0 || task.cause.signal_count > 0) && (
           <div data-cause-signals>
             <div className="text-[12px] text-sol-text-muted">
-              {task.cause.signal_count} {task.cause.signal_count === 1 ? "signal" : "signals"} since {shortDay(task.cause.first_seen)}
+              {task.cause.signal_count} {task.cause.signal_count === 1 ? "report" : "reports"} since {shortDay(task.cause.first_seen)}
               {sources.length > 0 && <span className="text-sol-text-dim"> · from {sources.join(", ")}</span>}
             </div>
             <ul className="mt-1 space-y-0.5">
@@ -141,7 +162,8 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
 type ExpectationLine = { id: string; text: string; status: "active" | "retired"; project_id: string; project_short_id?: string; project_title: string };
 
 /** The line a cause breaks: its words, and its id opening it among the
- *  project's expectations. Until the words arrive the id stands alone. */
+ *  project's expectations. Drawn once the words are read; a bare id says
+ *  nothing to a person (LL6), so a line that is gone says so instead. */
 function ExpectationRow({ id, line }: { id: string; line?: ExpectationLine }) {
   const chip = "shrink-0 font-mono text-[11px] text-sol-text-dim";
   return (
@@ -150,8 +172,8 @@ function ExpectationRow({ id, line }: { id: string; line?: ExpectationLine }) {
       <dd className="min-w-0 flex items-baseline gap-2" data-cause-expectation={id}>
         {line && <span className="min-w-0 text-sol-text leading-snug">{line.text}{line.status === "retired" && <span className="text-sol-text-dim"> (retired since)</span>}</span>}
         {line
-          ? <Link href={`${lineTabHref(line.project_short_id ?? line.project_id)}#${id}`} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
-          : <span className={chip}>{id}</span>}
+          ? <Link href={expectationsHref(line.project_short_id ?? line.project_id, id)} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
+          : <span className="text-sol-text-dim" title={id}>Expectation not found</span>}
       </dd>
     </>
   );
@@ -165,22 +187,66 @@ function readinessWords(readiness: string, note?: string | null): string {
   return `Not ready${why ? `: ${why.charAt(0).toLowerCase()}${why.slice(1)}` : ""}.`.replace(/\.\.$/, ".");
 }
 
-/** A signal behind the cause: the row opens its trace (line-map.md LX4), and
- *  the arrow goes back to where it was seen. */
+/** A finding behind the problem: the row opens its trace (line-map.md LX4),
+ *  and the arrow goes back to where it was seen. A judge's finding also says,
+ *  under its title, what the judge saw in its own words, and where a finding
+ *  marked wrong stands (learning-loop.md LL3, LL11). */
 function SignalRow({ s, now }: { s: LineSignal; now: number }) {
+  const judged = findingJudgeWords(s);
+  const said = s.judge ? finderWords(s.detail_md, isExpectationId(s.subject) ? s.subject! : null) : null;
+  const review = findingReviewWords(s);
   return (
     <li className="flex items-baseline gap-1 rounded hover:bg-sol-bg-alt/60 min-w-0" data-cause-signal={s.short_id ?? s._id}>
-      <Link href={lineTraceHref(s.short_id || s._id)} className="flex-1 flex items-baseline gap-2 px-1 py-0.5 text-[12px] min-w-0" title="Trace this signal through the line" data-signal-trace>
-        <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
-        <span className="min-w-0 truncate text-sol-text">{s.title}</span>
-        {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
-        <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
+      <Link href={lineRefHref(s.short_id || s._id)} className="flex-1 min-w-0 px-1 py-0.5 text-[12px]" title="This finding's problem on its line" data-signal-trace>
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
+          <span className="min-w-0 truncate text-sol-text">{s.title}</span>
+          {judged && <span className="shrink-0 text-sol-text-dim" data-signal-judge>{judged}</span>}
+          {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
+          <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
+        </span>
+        {said && <span className="block pl-[5.5rem] truncate text-[11.5px] text-sol-text-muted" title={said} data-signal-said>{said}</span>}
+        {review && <span className={cn("block pl-[5.5rem] text-[11.5px] leading-snug", s.judge_review?.state === "failed" ? "text-sol-red" : s.judge_review?.state === "diagnosed" ? "text-sol-text-muted" : "text-sol-yellow")} data-signal-review>{review}</span>}
       </Link>
+      {s.judge && !s.case_of && <WrongControl s={s} />}
       {s.evidence_url && (
         <a href={s.evidence_url} target="_blank" rel="noreferrer" className="shrink-0 px-1 text-sol-text-dim hover:text-sol-blue" title="Where it was seen" data-signal-evidence>
           <ArrowUpRight className="w-3 h-3" />
         </a>
       )}
     </li>
+  );
+}
+
+/** Marks a judge's finding wrong (learning-loop.md LL4): the finding is the
+ *  judge step's decision, so this is the line's own label on it
+ *  (labelDecision, line-workspace.md LW4), which starts the judge's diagnosis.
+ *  Once the finding carries a review, its line under the title says where it
+ *  stands, so the control steps aside unless the mark is this person's to undo. */
+function WrongControl({ s }: { s: LineSignal }) {
+  const step = findingStepId(s);
+  const me = useInboxStore((st) => (st as { currentUser?: { _id: string } | null }).currentUser?._id ?? null);
+  const key = me ? lineLabelKey(s._id, step, me) : null;
+  const mine = useInboxStore((st) => {
+    if (!key) return null;
+    const labels = (st as { lineLabels?: Record<string, { key: string; verdict: string }> }).lineLabels ?? {};
+    for (const l of Object.values(labels)) if (l.key === key) return l.verdict;
+    return null;
+  });
+  const label = (verdict: "wrong" | null) => useInboxStore.getState().labelDecision(s._id, step, verdict);
+  const btn = "shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-blue/40";
+  if (mine === "wrong") {
+    return (
+      <span className="shrink-0 inline-flex items-baseline gap-1 text-[11px]" data-signal-marked>
+        <span className="text-sol-yellow">Marked wrong</span>
+        <button type="button" onClick={() => label(null)} className={btn}>Undo</button>
+      </span>
+    );
+  }
+  if (s.judge_review && s.judge_review.state !== "failed") return null;
+  return (
+    <button type="button" onClick={() => label("wrong")} className={cn(btn, "opacity-0 group-hover/signal:opacity-100 focus-visible:opacity-100")} title={`The ${s.judge} judge got this one wrong: a session finds out why and fixes the judge`} data-signal-wrong>
+      Wrong
+    </button>
   );
 }

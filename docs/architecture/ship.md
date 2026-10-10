@@ -1,7 +1,7 @@
 # One Ship control
 
-One standard way to land a change, pressed from four places: a task in review,
-a session page with changes on a branch, a pull request page, and a line run's
+One standard way to land a change, pressed from three places: a task in review,
+a pull request page, and a line run's
 change card. `cast ship run` is the same press from a terminal. Every press
 reaches one server action, `startShipCore` in `packages/convex/convex/ship.ts`.
 
@@ -57,10 +57,12 @@ check), or done.
 
 ## Where it renders
 
+Ship is a team feature (`teams.features.ship`, off by default, toggled in
+team settings). In an off workspace none of the controls below render; the
+personal workspace follows the viewer's teams.
+
 - Task page: `TaskShipStation`, at the review station (status in review, or
   any task with a ship run).
-- Session header: `SessionShipButton`, when the session has a branch with
-  uncommitted changes or commits ahead, and is not itself a ship session.
 - PR page: beside the merge menu, for an open PR.
 - Change card: its Ship verdict calls the store's `startShip` with the card,
   which answers the card on the decision rail and records the run.

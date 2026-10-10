@@ -17,6 +17,7 @@ import { highlightCode, languageForPath } from "../../lib/codeLanguage";
 import { vaultAssetUrl } from "../../lib/vault/client";
 import { useVaultStore } from "../../store/vaultStore";
 import { VaultFileHeader, RevealButton } from "./VaultFileHeader";
+import { buttonVariants } from "../ui/button";
 
 /** Bytes, in the unit a person would say out loud. */
 function formatSize(bytes: number): string {
@@ -52,7 +53,7 @@ function NoPreview({
       {canReveal && (
         <RevealButton
           path={path}
-          className="sol-btn text-xs px-3 py-1.5 mt-2"
+          className={buttonVariants({ variant: "outline", size: "xs", className: "mt-2" })}
         >
           Show in Finder
         </RevealButton>

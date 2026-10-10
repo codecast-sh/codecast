@@ -13,9 +13,14 @@ import { ORG_STAFFING_FIXTURE_HEALTH } from "./orgStaffingFixture";
 const change = (id: string, seq: number, c: OrgProposalChange["change"], status: OrgProposalChange["status"] = "proposed", proposal_id = "fixture-goals-proposal", rationale = "The work already points at this; the record does not hold it yet."): OrgProposalChange =>
   ({ _id: id, proposal_id, seq, change: c, rationale, evidence: [], status });
 
+/** The fixture's projects with the short refs their addresses take
+ *  (`/org/pj-org`), so the dev preview opens each one's sheet beside the map. */
+const PROJECT_REFS: Record<string, string> = { "proj-org": "pj-org", "proj-inbox": "pj-inbox", "proj-billing": "pj-billing" };
+export const GOALS_FIXTURE_PROJECTS = FIXTURE_PROJECTS.map((p) => ({ ...p, short_id: PROJECT_REFS[p._id] }));
+
 export const GOALS_FIXTURE_DATA: { initiatives: typeof FIXTURE_INITIATIVES; projects: GoalProject[] } = {
   initiatives: FIXTURE_INITIATIVES,
-  projects: FIXTURE_PROJECTS.map((p) => ({ _id: p._id, title: p.title, status: p.status, owner_role_id: (p as { owner_role_id?: string }).owner_role_id })),
+  projects: GOALS_FIXTURE_PROJECTS.map((p) => ({ _id: p._id, short_id: p.short_id, title: p.title, status: p.status, owner_role_id: (p as { owner_role_id?: string }).owner_role_id })),
 };
 
 export const GOALS_FIXTURE_CHANGES: OrgProposalChange[] = [
@@ -26,7 +31,7 @@ export const GOALS_FIXTURE_CHANGES: OrgProposalChange[] = [
   change("g-measure", 5, { kind: "initiative_shape", initiative: "in-3", metrics: [{ name: "Paying teams", target: "25" }] }),
 ];
 
-/** The same changes as a proposal row, for the dev preview (`/org?preview=1&proposal=op-8&lens=goals`). */
+/** The same changes as a proposal row, for the dev preview (`/org?preview=1&proposal=op-8`). */
 export const ORG_GOALS_FIXTURE_PROPOSAL: OrgProposalRow = {
   _id: "fixture-goals-proposal",
   short_id: "op-8",
@@ -127,7 +132,7 @@ export const UNION_GOALS_CHANGES: OrgProposalChange[] = [
   u("leads", 11, { kind: "initiative_shape", initiative: "in-1", parent: PURPOSE }, "The leads goal exists but hangs off nothing; it serves the purpose like the rest."),
 ];
 
-/** The proposal row, for the dev preview (`/org?preview=1&proposal=op-54&lens=goals`) and the rig. */
+/** The proposal row, for the dev preview (`/org?preview=1&proposal=op-54`) and the rig. */
 export const UNION_GOALS_PROPOSAL: OrgProposalRow = {
   _id: "fixture-union-goals-proposal",
   short_id: "op-54",
