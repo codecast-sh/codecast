@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hasLineControlChars, isLineCount, lineProfileContentKey, lineProfileUnchanged, splitFinderKind, type PublishedLineProfile } from "./lineProfile";
+import { hasLineControlChars, isLineCount, isRepoLineSlug, repoLineSlug, lineProfileContentKey, lineProfileUnchanged, splitFinderKind, type PublishedLineProfile } from "./lineProfile";
 
 // The "unchanged = no write" rule signals.publishProfile applies to every field.
 const row: PublishedLineProfile = {
@@ -45,5 +45,17 @@ describe("value rules", () => {
     expect(splitFinderKind("bug, regression")).toEqual(["bug", "regression"]);
     expect(splitFinderKind("prompt_miss, bug or request")).toEqual(["prompt_miss", "bug", "request"]);
     expect(splitFinderKind("bug regression")).toEqual(["bug", "regression"]);
+  });
+});
+
+describe("repoLineSlug", () => {
+  test("two repositories' own lines get two slugs, the same repo's checkouts one", () => {
+    expect(repoLineSlug("git@github.com:union-ai/union-mobile.git")).toBe("line-repo-union-ai-union-mobile");
+    expect(repoLineSlug("https://github.com/union-ai/union-mobile")).toBe("line-repo-union-ai-union-mobile");
+    expect(repoLineSlug("git@github.com:codecast-sh/codecast.git")).toBe("line-repo-codecast-sh-codecast");
+    expect(repoLineSlug("")).toBe("line-repo");
+    expect(isRepoLineSlug("line-repo")).toBe(true);
+    expect(isRepoLineSlug("line-repo-codecast-sh-codecast")).toBe(true);
+    expect(isRepoLineSlug("line")).toBe(false);
   });
 });
