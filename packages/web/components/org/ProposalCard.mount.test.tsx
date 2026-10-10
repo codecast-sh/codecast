@@ -321,8 +321,8 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   expect(alone.querySelector("[data-field]")).toBeNull();
   expect(alone.textContent).not.toMatch(/wakes|tokens|caps|limit/i);
   expect(alone.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 to decide");
-  // One card is the whole decision: its own Approve is the frame's filled button, the body has no totals line, and the foot adds no "Approve the rest".
-  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.style.background).toBe("var(--sol-violet)");
+  // One card is the whole decision: its Approve is an outline like any other, the body has no totals line, and the foot adds no "Approve the rest".
+  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.style.background).toBe("");
   expect(alone.querySelector("[data-approve-rest], [data-proposal-totals], [data-subject-ordinal]")).toBeNull();
   click(alone.querySelector("[data-subject-approve]")!);
   expect(batch()).toEqual([["role:growth", "approve", "", [1], ["c4-limit"], 1, "Head of Growth"]]);
