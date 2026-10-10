@@ -99,10 +99,12 @@ describe("reorientationNotice", () => {
       newCwd: "/Users/m1/src/app",
       oldCwd: "/Users/ashot/src/app on laptop",
       machineChanged: true,
-      verification: "branch main at 1a2b3c4d, destination HEAD matches, clean working tree",
+      verification: "branch main at 1a2b3c4d, destination HEAD matches, working tree identical to the source's",
     })!;
     expect(n).toContain("Verification: branch main at 1a2b3c4d");
-    expect(n).toContain("wip snapshot");
+    // The work arrives uncommitted, never as a commit the agent must explain.
+    expect(n).toContain("still uncommitted here");
+    expect(n).not.toContain("pushed");
     // The SSH move pushed the tree itself, so no clone warning belongs here.
     expect(n).not.toContain("fresh clone");
     expect(n).toContain("Processes, ports");

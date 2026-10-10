@@ -25,41 +25,7 @@ export function TabGroupSection() {
       title="Your Chrome, your logins. Agents get one tab group."
       lede={<>The codecast extension lets agent sessions open tabs in the Chrome you already use. Every agent tab opens in the background, inside a red <strong style={{ color: CAST_RED }}>Cast</strong> group. Your own tabs, windows and focus stay where you left them.</>}
     >
-      <div className="rounded-2xl p-4 sm:p-7" style={{ background: "linear-gradient(180deg, #e9ecf0, #dfe3e8)" }}>
-        {/* The strip, drawn large. */}
-        <div className="overflow-x-auto -mx-1 px-1 pb-1">
-          <div className="flex items-end sm:min-w-[760px]">
-            {HUMAN_TABS.map((t, i) => (
-              <span key={t.title} className={i === 1 ? "flex min-w-0" : "hidden sm:flex min-w-0"}>
-                <ChromeTab title={t.title} fav={t.fav} active={i === 1} width={170} />
-              </span>
-            ))}
-            <span className="self-center mx-1.5"><GroupChip label="Cast" /></span>
-            {AGENT_TABS.map((t) => (
-              <ChromeTab key={t.title} title={t.title} fav={t.fav} groupColor={CAST_RED} badge width={170} />
-            ))}
-          </div>
-        </div>
-        {/* Who is in each tab. */}
-        <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
-          <div className="rounded-lg bg-white/70 px-4 py-3">
-            <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
-            <div style={{ color: INK }}>Mail, a doc, a pull request. Never touched, never closed, never brought forward by an agent.</div>
-          </div>
-          <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
-            <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
-            <div className="space-y-1.5">
-              {AGENT_TABS.map((t) => (
-                <div key={t.title} className="flex items-center gap-2 min-w-0">
-                  <span className="shrink-0 font-medium" style={{ color: t.agentColor }}>{t.agent}</span>
-                  <span className="truncate" style={{ color: INK }}>{t.task}</span>
-                  <span className="ml-auto shrink-0 hidden sm:inline" style={{ color: DIM }}>{t.title}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      <CastTabStrip />
 
       <div className="mt-12 grid md:grid-cols-2 gap-x-14 gap-y-9">
         <Fact title="No clone, no copied cookies">
@@ -76,6 +42,47 @@ export function TabGroupSection() {
         </Fact>
       </div>
     </Section>
+  );
+}
+
+/** Chrome's tab strip: the person's tabs, then the red Cast group holding one tab per agent session. */
+export function CastTabStrip() {
+  return (
+    <div className="rounded-2xl p-4 sm:p-7" style={{ background: "linear-gradient(180deg, #e9ecf0, #dfe3e8)" }}>
+      {/* The strip, drawn large. */}
+      <div className="overflow-x-auto -mx-1 px-1 pb-1">
+        <div className="flex items-end sm:min-w-[760px]">
+          {HUMAN_TABS.map((t, i) => (
+            <span key={t.title} className={i === 1 ? "flex min-w-0" : "hidden sm:flex min-w-0"}>
+              <ChromeTab title={t.title} fav={t.fav} active={i === 1} width={170} />
+            </span>
+          ))}
+          <span className="self-center mx-1.5"><GroupChip label="Cast" /></span>
+          {AGENT_TABS.map((t) => (
+            <ChromeTab key={t.title} title={t.title} fav={t.fav} groupColor={CAST_RED} badge width={170} />
+          ))}
+        </div>
+      </div>
+      {/* Who is in each tab. */}
+      <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
+        <div className="rounded-lg bg-white/70 px-4 py-3">
+          <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
+          <div style={{ color: INK }}>Mail, a doc, a pull request. Never touched, never closed, never brought forward by an agent.</div>
+        </div>
+        <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
+          <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
+          <div className="space-y-1.5">
+            {AGENT_TABS.map((t) => (
+              <div key={t.title} className="flex items-center gap-2 min-w-0">
+                <span className="shrink-0 font-medium" style={{ color: t.agentColor }}>{t.agent}</span>
+                <span className="truncate" style={{ color: INK }}>{t.task}</span>
+                <span className="ml-auto shrink-0 hidden sm:inline" style={{ color: DIM }}>{t.title}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -109,7 +116,7 @@ export function RefsSection() {
       color={REF_BLUE}
       tone="sand"
       title="Read the page as a list of things to press, then press one."
-      lede={<>A snapshot is the page&apos;s accessibility tree, cut down to what an agent can act on. Each element gets a ref like <C>#e7</C>, and every acting verb takes one. No pixel guessing, no brittle selectors. Hover a row to see what it points at.</>}
+      lede={<>From here down is the agent&apos;s side: commands it runs, so you never type them. A snapshot is the page&apos;s accessibility tree, cut down to what an agent can act on. Each element gets a ref like <C>#e7</C>, and every acting verb takes one. No pixel guessing, no brittle selectors. Hover a row to see what it points at.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-6 items-stretch">
         <TermShell label="cast browser snapshot -i -s main" bodyClassName="p-0">
@@ -252,10 +259,10 @@ export function EvidenceSection() {
   return (
     <Section
       id="evidence"
-      label="shot"
+      label="in the thread"
       color={SOL.yellow}
       title="What the agent saw ends up in the conversation."
-      lede="You should not have to ask an agent for proof. Screenshots render under the command that took them, and a failing step brings its own context."
+      lede="You should not have to ask an agent for proof. Screenshots render under the step that took them, and a failing step brings its own context."
     >
       <div className="grid lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-8 items-start">
         {/* The conversation */}
@@ -290,20 +297,20 @@ export function EvidenceSection() {
 
         {/* What each piece is */}
         <div className="space-y-7">
-          <Evidence cmd="shot" title="A screenshot, inline">
-            Renders under the command in the thread. <C>-s &lt;sel&gt;</C> captures one element, <C>--full</C> the whole scroll height, <C>--share</C> uploads it and prints a link you can paste anywhere.
+          <Evidence title="A screenshot, inline" agent="shot">
+            Renders under the step that took it, in the thread. It can be one element, the whole scroll height, or a link the agent uploads so you can paste it anywhere.
           </Evidence>
-          <Evidence cmd="shot --annotate" title="Refs drawn on the picture">
-            Numbers every interactive element on the image, so you and the agent can talk about &quot;#e7&quot; and mean the same button.
+          <Evidence title="Numbers drawn on the picture" agent="shot --annotate">
+            Every button and field on the image gets a number, so you and the agent can talk about &quot;7&quot; and mean the same button.
           </Evidence>
-          <Evidence cmd="viewport mobile" title="The same page at another size">
-            Emulates a device (<C>desktop</C>, <C>laptop</C>, <C>wide</C>, <C>tablet</C>, <C>mobile</C>, <C>mobile-small</C>) or an exact size, so the next shot shows what a phone shows. <C>viewport --reset</C> puts it back.
+          <Evidence title="The same page at another size" agent="viewport mobile">
+            The agent can show you the page as a phone, a tablet or an exact size sees it, then put the tab back.
           </Evidence>
-          <Evidence cmd="failure context" title="Errors arrive with the failure">
-            When a command fails, cast prints the page&apos;s console errors and failed requests, newest first, and a screenshot of what the screen showed. <C>--no-capture</C> skips it.
+          <Evidence title="Errors arrive with the failure">
+            A step that fails comes back with the page&apos;s console errors and failed requests, newest first, and a picture of what the screen showed. You see why without asking.
           </Evidence>
-          <Evidence cmd="console · errors · network" title="Ask the page directly">
-            <C>network requests --status 4xx</C>, <C>network har start</C>, <C>console</C>, <C>vitals</C>, <C>a11y</C> and <C>record start demo.webm</C> cover the rest of a debugging session.
+          <Evidence title="Each row has its controls" >
+            <b style={{ color: INK }}>open tab</b> brings the agent&apos;s tab forward in your Chrome. <b style={{ color: INK }}>watch live</b> streams it into a pane beside the thread.
           </Evidence>
         </div>
       </div>
@@ -319,7 +326,7 @@ function ThreadRow({ cmd, summary, failed = false, children }: { cmd: string; su
         <span className="truncate" style={{ color: MUTED }}>{summary}</span>
         <span className="ml-auto hidden sm:flex gap-1">
           <RowPill>{OPEN_TAB_ICON} open tab</RowPill>
-          <RowPill>{EYE_ICON} watch</RowPill>
+          <RowPill>{EYE_ICON} watch live</RowPill>
         </span>
       </div>
       {children}
@@ -337,14 +344,15 @@ function MiniShot({ w, h, className = "", narrow = false }: { w: number; h: numb
   );
 }
 
-function Evidence({ cmd, title, children }: { cmd: string; title: string; children: ReactNode }) {
+/** One thing the person sees in the thread; `agent` names the command behind it, as a quiet aside. */
+function Evidence({ title, agent, children }: { title: string; agent?: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[3px_1fr] gap-4">
       <span className="rounded-full" style={{ backgroundColor: SOL.yellow }} />
       <div>
-        <div className="font-mono text-[12px]" style={{ color: SOL.yellow }}>{cmd}</div>
-        <h3 className="mt-0.5 font-mono font-bold text-[15.5px]" style={{ color: INK }}>{title}</h3>
+        <h3 className="font-mono font-bold text-[15.5px]" style={{ color: INK }}>{title}</h3>
         <p className="mt-1.5 text-[15px] leading-7" style={{ color: SOL.base01 }}>{children}</p>
+        {agent && <div className="mt-1 font-mono text-[11.5px]" style={{ color: DIM }}>the agent runs <span style={{ color: MUTED }}>{agent}</span></div>}
       </div>
     </div>
   );
@@ -370,7 +378,7 @@ const SCENARIOS: Scenario[] = [
       $(<>snapshot -i -s main</>),
       $(<>do &quot;click {ref("#e12")}&quot; &quot;wait --text Saved&quot; shot</>),
     ],
-    lands: <>A screenshot of the toast under the <C>do</C> row, or, if &quot;Saved&quot; never shows, the console errors and failed requests that explain why.</>,
+    lands: <>A screenshot of the toast under the agent&apos;s browser row, or, if &quot;Saved&quot; never shows, the console errors and failed requests that explain why.</>,
   },
   {
     key: "signin",
@@ -381,7 +389,7 @@ const SCENARIOS: Scenario[] = [
       $(<>get text &quot;[role=main] section.plan&quot;</>),
       <>{note("no token, no API client: your Chrome is already signed in")}</>,
     ],
-    lands: <>The text it read, quoted in the agent&apos;s answer. The visit shows up in <C>cast browser audit</C> as one origin.</>,
+    lands: <>The text it read, quoted in the agent&apos;s answer. The visit is recorded on the machine&apos;s audit trail as one origin.</>,
   },
   {
     key: "repro",
@@ -441,13 +449,13 @@ export function ScenariosSection() {
         </div>
         <div key={sc.key} className="bx-fade min-w-0">
           <p className="font-sans text-[17px] leading-7" style={{ color: INK }}>{sc.ask}</p>
-          <TermShell label="claude · what it ran" className="mt-4" bodyClassName="px-4 py-3.5 space-y-1">
-            {sc.lines.map((l, i) => <div key={i} className="whitespace-pre-wrap break-words">{l}</div>)}
-          </TermShell>
           <div className="mt-4 flex gap-3 items-start text-[15px] leading-7" style={{ color: SOL.base01 }}>
             <span className="mt-[9px] h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: SOL.yellow }} />
             <p><strong className="font-semibold" style={{ color: INK }}>In the conversation:</strong> {sc.lands}</p>
           </div>
+          <TermShell label="what the agent ran" className="mt-5 text-[12px]" bodyClassName="px-4 py-3 space-y-1">
+            {sc.lines.map((l, i) => <div key={i} className="whitespace-pre-wrap break-words">{l}</div>)}
+          </TermShell>
         </div>
       </div>
     </Section>
@@ -519,13 +527,13 @@ export function WheelSection() {
         </div>
         <div className="space-y-7">
           <Step n="1" title="Watch it live">
-            The <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>watch</span> pill on any browser row streams the agent&apos;s tab into a pane beside the thread, with the agent&apos;s cursor drawn where each click lands. It only streams while you are looking.
+            The <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>watch live</span> pill on any browser row streams the agent&apos;s tab into a pane beside the thread, with the agent&apos;s cursor drawn where each click lands. It only streams while you are looking.
           </Step>
           <Step n="2" title="Take the wheel">
             Your clicks and typing go to the page. The agent keeps its session and hears none of it. <KeyCap size="xs">Esc</KeyCap> hands the page back. Try the button on the left.
           </Step>
           <Step n="3" title="Or bring the tab forward">
-            <C>cast browser show</C> raises the session&apos;s tab to the front of your screen. Agents run it once, when you asked to see the page or must act in it, and never on a loop. The <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>open tab</span> pill does the same from the thread.
+            The <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>open tab</span> pill on the row raises the agent&apos;s tab to the front of your Chrome. An agent can do the same once, when you asked to see the page or must act in it, and never on a loop.
           </Step>
         </div>
       </div>
@@ -579,7 +587,7 @@ export function SafetySection() {
         <div>
           <h3 className="font-mono font-bold text-[16px]" style={{ color: SOL.base2 }}>Every origin, recorded</h3>
           <p className="mt-2 mb-4 text-[15px] leading-7" style={{ color: SOL.base1 }}>
-            The audit trail is always on. It keeps origins, never full URLs, because paths and query strings carry tokens. A refused navigation is on the trail too.
+            The audit trail is always on. It keeps origins, never full URLs, because paths and query strings carry tokens. A refused navigation is on the trail too. The app has no view of it yet; read it in a terminal.
           </p>
           <TermShell label="cast browser audit" bodyClassName="px-4 py-3 text-[11.5px] overflow-x-auto">
             <div className="min-w-[560px] whitespace-pre">
@@ -650,13 +658,13 @@ export function ElsewhereSection() {
   return (
     <Section
       id="elsewhere"
-      label="sync"
+      label="cloud"
       color={SOL.magenta}
       title="Sessions on a cloud host can borrow your sign-in."
-      lede={<>A session on your cloud host has no Chrome of yours. <C>cast browser sync &lt;site&gt;</C> asks your laptop to carry that site&apos;s login across, over SSH, into the host&apos;s browser.</>}
+      lede={<>A session on your cloud host has no Chrome of yours. When it needs a site you are signed in to, the agent asks your laptop to carry that one login across, over SSH, into the host&apos;s browser. There is no button for this; the agent does it.</>}
     >
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8 items-start [&>*]:min-w-0">
-        <TermShell label="on the cloud host" bodyClassName="px-4 py-3.5">
+        <TermShell label="what the agent runs on the host" bodyClassName="px-4 py-3.5">
           <div><span style={{ color: SOL.green }}>$</span> <span style={{ color: SOL.base1 }}>cast browser sync https://grafana.acme.dev</span></div>
           <div style={{ color: SOL.base01 }}># your most recently seen online laptop carries it</div>
           <div><span style={{ color: SOL.green }}>$</span> <span style={{ color: SOL.base1 }}>cast browser sync --via &lt;device-id&gt; --wait 60 &lt;url&gt;</span></div>
@@ -666,7 +674,7 @@ export function ElsewhereSection() {
           <li><Strong>Cookies are never printed.</Strong> The request carries the site&apos;s origin and the answer carries counts.</li>
           <li><Strong>Google is the exception.</Strong> It signs in on its own and cannot be carried.</li>
           <li><Strong>Datacenter IPs get challenged.</Strong> Google and DuckDuckGo may bot-block a host; Bing works.</li>
-          <li><Strong>In the desktop app,</Strong> <C>cast browser pane &lt;url&gt;</C> offers a page to you as a pane beside the session.</li>
+          <li><Strong>In the desktop app,</Strong> an agent can offer you a page as a pane beside the session.</li>
         </ul>
       </div>
     </Section>
@@ -736,7 +744,7 @@ const REFERENCE: { group: string; color: string; rows: [string, string][] }[] = 
 
 export function ReferenceSection() {
   return (
-    <Section id="reference" label="--help" color={SOL.base01} tone="sand" title="The command, all of it." lede={<>Every verb is <C>cast browser &lt;verb&gt;</C>. <C>cast browser help &lt;verb&gt;</C> prints its flags.</>}>
+    <Section id="reference" label="for scripts" color={SOL.base01} tone="sand" title="For scripts and agents: every command." lede={<>Agents learn these from their instructions; you only need them to script it yourself. Every verb is <C>cast browser &lt;verb&gt;</C>, and <C>cast browser help &lt;verb&gt;</C> prints its flags.</>}>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-10">
         {REFERENCE.map((g) => (
           <div key={g.group}>
@@ -765,7 +773,7 @@ export function ReferenceSection() {
 const LIMITS: { q: string; a: ReactNode }[] = [
   {
     q: "What does it need?",
-    a: <>Desktop Chrome 116 or later, the <a className="underline" href="https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd" target="_blank" rel="noreferrer">Codecast extension</a> installed in the profile you want agents to use, and <C>cast browser extension setup</C> run once in a terminal on the same computer. Chrome has to be running.</>,
+    a: <>Desktop Chrome 116 or later, the <a className="underline" href="https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd" target="_blank" rel="noreferrer">Codecast extension</a> installed in the profile you want agents to use, and paired once with the computer: click <b>Pair</b> on the Browser card in Agent features, or on the setup card that appears under an agent&apos;s step when Chrome is not connected. Chrome has to be running.</>,
   },
   {
     q: "Which pages can it not drive?",
@@ -773,7 +781,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Why is it sometimes slow?",
-    a: <>Chrome throttles background tabs, and on a busy machine a hidden tab can go quiet for tens of seconds. Commands narrate what they are waiting on rather than hang silently. <C>cast browser chrome restart</C> restarts Chrome with the switch that keeps agent tabs at normal priority. Batching with <C>do</C> removes most of the rest.</>,
+    a: <>Chrome throttles background tabs, and on a busy machine a hidden tab can go quiet for tens of seconds. Steps say what they are waiting on rather than hang silently. Restarting Chrome through codecast (<C>cast browser chrome restart</C>) adds the switch that keeps agent tabs at normal priority, and agents batch steps to cut the rest.</>,
   },
   {
     q: "Can an agent read my other tabs?",
@@ -785,7 +793,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Is there a separate agent browser?",
-    a: <>Only if you explicitly ask for one. Your Chrome is the default for every command, including before pairing and after restarts; a missing extension produces a setup step, never a quiet switch to another browser.</>,
+    a: <>Only if you explicitly ask for one. Your Chrome is the default every time, including before pairing and after restarts; a missing extension shows you a setup card, never a quiet switch to another browser.</>,
   },
 ];
 

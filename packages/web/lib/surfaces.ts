@@ -9,7 +9,7 @@ import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
 import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
 import { HOSTED_ACTION_WORDS as HOSTED_ACTION_WORDS_OF, MODE_WORDS, actionSurface as actionSurfaceOf, shownFor, surfaceMode, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
-export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
+export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, hiddenPageRedirect, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
 /** The slice of store state the registry reads. */
 export type SurfaceState = Pick<DefaultAgentState, "clientState" | "machineRoster" | "machineRosterLive">;

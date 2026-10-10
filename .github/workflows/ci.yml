@@ -361,29 +361,14 @@ jobs:
         run: scripts/vendor-platform.sh --check-manifest
 
       - name: Unit tests (vendored platform packages)
-        # The mirror is not a bun workspace member (the root workspaces glob is
-        # packages/*), so resolution from platform/packages walks up to a root
-        # node_modules that never held these deps: @platform/engine's
-        # zustand/mutative/dexie and @platform/auth's @auth/core resolve nowhere
-        # without a per-package install. Each package already declares what it
-        # needs, so one install per package is the whole fix.
-        run: |
-          set -euo pipefail
-          ran=0
-          for pkg in $(scripts/vendor-platform.sh --list-with-tests); do
-            dir="platform/packages/$pkg"
-            echo "::group::$dir"
-            (cd "$dir" && bun install --silent && bun test)
-            echo "::endgroup::"
-            ran=$((ran + 1))
-          done
-          echo "ran tests in $ran vendored platform packages"
-          # A loop that silently matched nothing is the failure this job exists
-          # to prevent, so an empty run is a red, not a green.
-          if [ "$ran" -eq 0 ]; then
-            echo "::error::no vendored platform package tests ran"
-            exit 1
-          fi
+        # The mirror is a workspace of its own (platform/package.json, written
+        # by the vendor run from the canonical repo's root), not a member of
+        # this repo's. --test installs it there once, as the canonical repo
+        # installs, so a package's @platform peer resolves to its mirrored
+        # sibling instead of npm and the suites get the shared test tooling.
+        # It runs every package's tests, names each red one, and fails a run
+        # in which no suite was found.
+        run: scripts/vendor-platform.sh --test
 
   # The whole shared package. Its contracts are read by the CLI, the daemon,
   # Convex and the browser, so a regression here is a regression everywhere:
