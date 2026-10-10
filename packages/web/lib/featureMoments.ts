@@ -59,14 +59,42 @@ export function hasLocalHtmlPath(text: string): boolean {
   return LOCAL_HTML.test(text.replace(/https?:\/\/\S+/g, ""));
 }
 
-/** Ends by asking the human something: the last line of prose is a question. */
-export function endsWithQuestion(text: string): boolean {
-  const lines = withoutCode(text)
+function proseLines(text: string): string[] {
+  return withoutCode(text)
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
-  const last = lines[lines.length - 1] ?? "";
-  return /\?[*_)"'”]*$/.test(last);
+}
+
+/** Ends by asking the human something: the last line of prose is a question. */
+export function endsWithQuestion(text: string): boolean {
+  const lines = proseLines(text);
+  return /\?[*_)"'”]*$/.test(lines[lines.length - 1] ?? "");
+}
+
+/** Two or more lines that open as labelled options: (a) (b), a) b), 1. 2., Option A. */
+const OPTION_LINE = /^(?:[-*]\s*)?(?:\*\*)?(?:\(?[a-e]\)|\(?[1-5][.)]|option\s+[a-e1-5]\b)/i;
+
+/** "X or Y?": two alternatives in the question itself, not a yes/no with a
+ *  trailing escape ("…or not?", "…or something else?"). */
+const TWO_ALTERNATIVES = /\S\s+or\s+(?!not\b|something\b|anything\b|else\b|other\b|should i\b|do you\b|would you\b)\S/i;
+
+/** Asking for permission or a check-in, not a choice between paths. */
+const CHECK_IN = /^(?:want me to|do you want me to|shall i|should i (?:go ahead|proceed|continue|keep|start|commit|ship|push|deploy|merge)|ready (?:for|to)|does (?:this|that) (?:look|sound|work)|sound good|ok(?:ay)?\b|anything else|any (?:thoughts|questions)|let me know)/i;
+
+/**
+ * Ends on a judgment call the human must make between named alternatives:
+ * the closing question offers two paths ("Redis or in memory?"), or the
+ * message lays the options out as a labelled list. A yes/no permission
+ * question ("Want me to proceed?") is a check-in, never a decision.
+ */
+export function asksForChoice(text: string): boolean {
+  if (!endsWithQuestion(text)) return false;
+  const lines = proseLines(text);
+  const question = lines[lines.length - 1].replace(/^[*_>\s]+/, "");
+  const listed = lines.slice(-15).filter((l) => OPTION_LINE.test(l)).length >= 2;
+  if (listed) return true;
+  return !CHECK_IN.test(question) && TWO_ALTERNATIVES.test(question);
 }
 
 /** A visual some agent drew in the thread. */
@@ -90,7 +118,7 @@ export interface MomentContext {
 export function momentForMessage(text: string, ctx: MomentContext): FeatureMoment | null {
   const missing = (slug: MomentFeature): FeatureMoment => ({ slug, kind: "missing", reason: REASONS[slug] });
   const shown = (slug: MomentFeature): FeatureMoment => ({ slug, kind: "shown", reason: SHOWN[slug]! });
-  if (ctx.isLast && ctx.needsInput && endsWithQuestion(text)) return missing("decide");
+  if (ctx.isLast && ctx.needsInput && asksForChoice(text)) return missing("decide");
   if (hasLocalHtmlPath(text)) return missing("publish");
   if (hasTextChart(text)) return missing("visual");
   if (hasPublishedPage(text)) return shown("publish");

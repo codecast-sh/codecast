@@ -15,6 +15,12 @@ export interface LineFinder {
   kind: SignalKind[] | "any";
   fingerprint: string;
   runs?: string;
+  /**
+   * The explicit step that turns this finder's signals into work: a signal no
+   * open cause holds opens a new cause only when its finder says so (LE4).
+   * Absent or false, its signals stay signals until a cause holds their key.
+   */
+  opens_causes?: boolean;
   /** The project its signals go to, when not the profile's. */
   project?: string;
 }
@@ -171,7 +177,7 @@ export function lineProfileNotes(profile: Pick<LineProfile, "commands" | "projec
   if (!profile.commands.prove) notes.push("no prove command: the prove station passes with a note");
   if (!profile.commands.eval) notes.push("no eval command: the eval station passes with a note");
   if (!profile.commands.ship) notes.push("no ship command: the ship station runs Ship, which opens a pull request and merges only under [line.merge] auto or the line's role's merge grant");
-  if (!profile.project) notes.push("no project: signals filed here go to the workspace, not a project, unless --project names one");
+  if (!profile.project) notes.push("no project: findings filed here go to the workspace, not a project, unless --project names one");
   return notes;
 }
 
