@@ -73,7 +73,7 @@ export function SourcesSection() {
     <SettingsSection
       title={<span id="product-sources">Product sources</span>}
       icon={Radio}
-      description="What your running product sends: errors, failed jobs, checks, deploys and replays. They show on the Ops page, wake triggers and file causes on the line."
+      description="What your running product sends: errors, failed jobs, checks, deploys and replays. They show on the Ops page, wake triggers and file problems on the line."
       actions={
         !adding && (
           <button type="button" className="ops-btn" onClick={() => { setAdding("sdk"); setReveal(null); }}>
@@ -211,7 +211,7 @@ function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kin
         <button type="button" className="ops-btn" onClick={onCancel}>Cancel</button>
       </div>
       <div className="text-[11.5px] text-sol-text-dim">
-        The name is how triggers and the CLI pick it (<span className="ops-mono">--source {name.trim().toLowerCase() || "web"}</span>). New and regressed errors file causes on the line by default.
+        The name is how triggers and the CLI pick it (<span className="ops-mono">--source {name.trim().toLowerCase() || "web"}</span>). New and regressed errors file problems on the line by default.
         {provider === "sentry" && " It reads the organization of the Sentry connection; list project slugs to narrow it, comma separated."}
         {provider === "posthog" && " It reads the project of the PostHog connection."}
         {provider === "app" && " Codecast calls the routes the app declares at <base url>/codecast/manifest and signs every call, so there is no secret to paste or set. Next you commit a codecast.json to the app."}
