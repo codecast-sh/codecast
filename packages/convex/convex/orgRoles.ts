@@ -1,4 +1,5 @@
 import { internalMutation, mutation, query } from "./functions";
+import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
@@ -47,6 +48,7 @@ import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSe
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
+import { performReparentSessionToDevice } from "./devices";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
@@ -1191,7 +1193,7 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
     // A teammate's session the team can see, seated by someone who may
     // reshape the role, on a role its own runner hosts (R2: the analyzer names
     // a session somebody else has run for weeks and an admin accepts it).
-    if (access === "team" && String(c.user_id) === String(role.host_user_id) && await roleMayHoldSession(ctx, role, c) && await userCanAdminRole(ctx, userId, role)) return true;
+    if (access === "team" && String(c.user_id) === String(await roleRunner(ctx, role)) && await roleMayHoldSession(ctx, role, c) && await userCanAdminRole(ctx, userId, role)) return true;
     const anchor = c.anchor_id && !c.standing_role_id ? await ctx.db.get(c.anchor_id) : null;
     return !!anchor && anchor.status !== "decommissioned" && (await userCanAdminAnchor(ctx, userId, anchor));
   });
@@ -1438,7 +1440,7 @@ export async function performStaff(
     : await performProvisionRole(ctx, userId, {
       role_id: String(role._id),
       adopt_conversation_id: adoptId,
-      project_path: args.project_path ?? anchor?.project_path ?? undefined,
+      project_path: args.project_path ?? (anchor?.conversation_id ? (await ctx.db.get(anchor.conversation_id))?.project_path : undefined) ?? undefined,
       model: args.model,
       announce: seatingNote(role, workspaceName),
     });
@@ -1798,6 +1800,20 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
   return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
 }
 
+// move — run a role on the caller's machine: its standing session is pulled
+// onto the caller's device the way `cast pull` does it, and across accounts
+// it then runs and bills under the caller. Nothing on the role or its anchor
+// changes: who runs the role and in which folder are read from that session
+// (lib/seatPlace), and the destination daemon resolves the folder to its own
+// checkout of the same repo.
+export async function performMoveRole(ctx: any, userId: Id<"users">, args: { role_id: string; device_id: string }): Promise<any> {
+  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  const standing = await standingConversationOf(ctx, role);
+  if (!standing) throw new Error("This role has no standing session yet (cast role provision seats one)");
+  const moved = await performReparentSessionToDevice(ctx, userId, { session_id: String(standing._id), device_id: args.device_id });
+  return { role_id: role._id, handle: role.handle, conversation_id: standing._id, label: moved.label, device_id: moved.device_id, cross_user: moved.cross_user };
+}
+
 // The switch (org-staffing.md S23.1): Starts work on its own. Human only,
 // logged on the charter as a doc entry. `on` is the switch; `trust` is the
 // stage word one release of clients still sends, read through the same
@@ -1839,11 +1855,11 @@ async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrust
   return { ...updated, on, previous_on: previousOn, previous_trust: previous };
 }
 
-export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; cards?: number; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
+export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; cards?: number; line_on?: boolean; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "budget" }, () => performSetCapsCore(ctx, userId, args));
 }
 
-async function performSetCapsCore(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; cards?: number; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
+async function performSetCapsCore(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; cards?: number; line_on?: boolean; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
   await refuseUnlessHuman(ctx, args, "Cap");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const caps = capsFor(role);
@@ -1857,6 +1873,8 @@ async function performSetCapsCore(ctx: any, userId: Id<"users">, args: { role_id
     wakes_per_day: pos(args.wakes, "--wakes") ?? caps.wakes_per_day,
     tokens_per_day: pos(args.tokens, "--tokens") ?? caps.tokens_per_day,
     ...(args.cards !== undefined || role.caps?.cards !== undefined ? { cards: pos(args.cards, "--cards") ?? role.caps?.cards } : {}),
+    // The line's start switch (learning-loop.md LL5), kept as stored unless a person sets it.
+    ...(args.line_on !== undefined || role.caps?.line_on !== undefined ? { line_on: args.line_on ?? role.caps?.line_on } : {}),
   };
   await ctx.db.patch(role._id, { caps: next, updated_at: Date.now() });
   await recordAuthorityEvent(ctx, {
@@ -2146,6 +2164,10 @@ export const restart = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string() },
   handler: async (ctx, { api_token, ...args }) => performRestartRole(ctx, await requireCaller(ctx, api_token), args),
 });
+export const move = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), device_id: v.string() },
+  handler: async (ctx, { api_token, ...args }) => performMoveRole(ctx, await requireCaller(ctx, api_token), args),
+});
 export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.optional(v.boolean()), trust: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
@@ -2160,7 +2182,7 @@ export const setAuthority = mutation({
   handler: async (ctx, { api_token, ...args }) => performSetAuthority(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const setCaps = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()), cards: v.optional(v.number()), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()), cards: v.optional(v.number()), line_on: v.optional(v.boolean()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetCaps(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const wake = mutation({
