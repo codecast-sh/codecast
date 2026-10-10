@@ -24,6 +24,8 @@ const queries = {
   // The same query with no team named answers with the caller's own installs.
   personalGithubInstallations: api.githubApp.listInstallations,
   agentBoxes: api.devices.listAgentBoxes,
+  // The team's monthly model budget (learning-loop.md LL10), for its settings section. Read on demand.
+  teamBudget: api.modelCalls.budgetForTeam,
 };
 
 export type SettingsDataName = keyof typeof queries;

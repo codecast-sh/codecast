@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "./ui/button";
 import { Forward, Link as LinkIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
@@ -226,14 +227,10 @@ export function SharePopover({
         {(link || (chatOn && (forwardUrl || pageUrl))) && (
           <div className="flex gap-2 border-t border-sol-border bg-sol-bg-alt/40 px-3.5 py-2.5">
             {link && (
-              <button
-                onClick={handleCopyLink}
-                title={link}
-                className="sol-btn-solid flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-semibold text-sol-base03"
-              >
-                <LinkIcon className="w-3.5 h-3.5" />
+              <Button variant="cyan" size="xs" onClick={handleCopyLink} title={link} className="flex-1">
+                <LinkIcon />
                 Copy link
-              </button>
+              </Button>
             )}
             {chatOn && (forwardUrl || pageUrl) && (
               <button

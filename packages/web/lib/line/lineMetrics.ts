@@ -42,7 +42,7 @@ export function explainedShare(signals: ReadonlyArray<Pick<LineSignal, "created_
   let opened = 0;
   for (const s of signals) {
     if (!inWindow(s.created_at, w)) continue;
-    if (s.attach === "fingerprint" || s.attach === "judge") explained++;
+    if (s.attach === "fingerprint" || s.attach === "judge" || s.attach === "similar") explained++;
     else if (s.attach === "new") opened++;
   }
   return { explained, opened, share: ratio(explained, explained + opened) };

@@ -6,17 +6,18 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
-import { formatRunDuration } from "../../../../lib/workflowRun";
+import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
 import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../components/WorkflowGraphView";
 import { ChangeCardView, answererNameOf } from "../../../../components/decisions/ChangeCardView";
+import { DecisionDiscussion } from "../../../../components/decisions/DecisionDiscussion";
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
 import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
 import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
-import { lineTabHref } from "../../../../lib/lineSettings";
-import { lineTraceHref } from "../../../../lib/line/lineMapUrl";
+import { lineRefHref, lineWorkspaceHref, type LineSelectionPatch } from "../../../../lib/line/lineWorkspaceUrl";
+import { graphKeyOf, type GraphRun } from "../../../../lib/line/lineGraphs";
 import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { useForeignWorkspace } from "../../../../hooks/useForeignWorkspace";
@@ -37,6 +38,8 @@ interface WorkflowRun {
   current_node_id?: string;
   node_statuses: any[];
   primary_session_id?: string;
+  primary_conversation_id?: string;
+  total_tokens?: number;
   goal_override?: string;
   gate_prompt?: string;
   gate_decision_id?: string;
@@ -102,6 +105,11 @@ function RunDetailContent({ runId }: { runId: string }) {
   // viewer is in another one (that page asks to switch there).
   const project = useInboxStore((s) => (task?.project_id ? ((s.projects as Record<string, { _id: string; short_id?: string; workspace?: string | null; team_id?: string | null }>)[task.project_id] ?? null) : null));
   const projectForeign = useForeignWorkspace(project);
+  // The session that ran it, by its title when this device holds the row.
+  const hostTitle = useInboxStore((s) => {
+    const id = run?.primary_conversation_id;
+    return id ? ((s.conversations as Record<string, { title?: string }>)[id]?.title ?? (s.sessions as Record<string, { title?: string }>)[id]?.title ?? null) : null;
+  });
   const projectTitle = useInboxStore((s) => (task?.project_id ? ((s.projects as Record<string, { title?: string }>)[task.project_id]?.title ?? null) : null));
 
   // Local-first (store respondToGate): the run flips to running on the press.
@@ -155,11 +163,17 @@ function RunDetailContent({ runId }: { runId: string }) {
   // One duration: the card's agent minutes when the run has a card (its foot
   // says the same), else the wall time.
   const agentMin = card?.cost.minutes ?? null;
+  // Another workflow's run reads as its sessions (WorkflowRunNodes), the
+  // same rows a conversation's run chip opens; the line keeps its report.
+  const counts = line ? null : runNodeCounts(runNodeRows(run, workflow));
+  // The project's line workspace on this run's graph, when the run's project is known.
+  const lineHere = projectId ? (patch: LineSelectionPatch) => lineWorkspaceHref(project?.short_id ?? projectId, { graph: graphKeyOf(run as GraphRun), ...patch }) : null;
+  const hostHref = run.primary_conversation_id ? `/conversation/${run.primary_conversation_id}` : run.primary_session_id ? `/conversation/${run.primary_session_id}` : null;
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
       <div ref={titlebarRef} className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
-        <Link href={line ? "/line" : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to the line" : "Back to workflows"}>
+        <Link href={line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/line") : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to the line" : "Back to workflows"}>
           <ChevronLeft className="w-4 h-4" />
         </Link>
         <div className="min-w-0 flex-1">
@@ -177,8 +191,10 @@ function RunDetailContent({ runId }: { runId: string }) {
           </div>
           {/* What ran, and how long and what it cost unless the card below says so. */}
           <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
-            {line ? `Line run${projectTitle ? ` on ${projectTitle}` : ""}` : `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}`}
+            {line ? `Line run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}` : "Workflow run"}
             {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
+            {counts && counts.sessions > 0 && <span> · {counts.sessions} {counts.sessions === 1 ? "session" : "sessions"}</span>}
+            {!line && run.total_tokens ? <span title="Tokens across the run's sessions"> · {wfFmtTokens(run.total_tokens)} tok</span> : null}
             {!card && (agentMin != null && !isActive
               ? <span title="Agent time summed over the run's sessions"> · {agentMin} agent min</span>
               : <span title="Wall time, start to end"> · {duration}</span>)}
@@ -196,6 +212,7 @@ function RunDetailContent({ runId }: { runId: string }) {
               <RunOutcomeText run={run as ReportRun} task={task} />
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
               {taskRef && <ReportChip href={`/tasks/${taskRef}`} title={run.task_title ?? task?.title}>{taskRef}{(run.task_title ?? task?.title) ? ` · ${run.task_title ?? task?.title}` : ""}</ReportChip>}
               {/* One chip for the card: it scrolls to the card below, which links its decision. */}
               {cardChip && (
@@ -207,11 +224,15 @@ function RunDetailContent({ runId }: { runId: string }) {
               {card && (prUrl
                 ? <ReportChip href={prUrl} external title="The change on GitHub">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>
                 : <ReportChip href="#run-card-diff" title="The change's diff, on the card below">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>)}
-              {/* The cause's whole story, this run one part of it (line-map.md LX4). */}
-              {line && run.task_id && <ReportChip href={lineTraceHref(run._id)} title="Follow this cause through the line: its signals, every run, the card, the ship and the watch">Trace</ReportChip>}
+              {/* This run played step by step, and its problem's whole life, in the project's line workspace (line-workspace.md LW1). */}
               {line && (
-                <ReportChip href={projectId ? lineTabHref(project?.short_id ?? projectId) : "/line"} title={`This project's line: its flow, stations and versions${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
-                  {projectId ? "Line tab" : "the line"}
+                <ReportChip href={lineHere ? lineHere({ view: "replay", run: run._id, case: run.task_id ?? null }) : lineRefHref(run._id)} title={`Play this run through the line, step by step${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
+                  Replay
+                </ReportChip>
+              )}
+              {line && run.task_id && (
+                <ReportChip href={lineHere ? lineHere({ view: "timeline", case: run.task_id }) : lineRefHref(run.task_id)} title="This problem's life on one time axis: its reports, every attempt to fix it, ships, deploys and what came back">
+                  Timeline
                 </ReportChip>
               )}
             </div>
@@ -264,9 +285,13 @@ function RunDetailContent({ runId }: { runId: string }) {
             </div>
           )}
 
-          <ReportSection title="The path">
-            <RunPathView phases={phases} ended={ended} />
-          </ReportSection>
+          {line ? (
+            <ReportSection title="The path">
+              <RunPathView phases={phases} ended={ended} />
+            </ReportSection>
+          ) : (
+            <WorkflowRunNodes run={run} workflow={workflow} headings="page" className="-mx-2 space-y-7" />
+          )}
 
           {card && (
             <ReportSection
@@ -277,16 +302,17 @@ function RunDetailContent({ runId }: { runId: string }) {
               {/* Who answered is the path's Decide row and what shipped is the
                   outcome above, so an answered card carries no footer. */}
               <ChangeCardView card={card} density="inline" recommend={decision?.status !== "answered"} diffAnchor="run-card-diff" />
+              {run.gate_decision_id && <div className="mt-4"><DecisionDiscussion decisionId={run.gate_decision_id} /></div>}
             </ReportSection>
           )}
 
           {earlier.length > 0 && (
-            <ReportSection title={`${earlier.some((r) => r.created_at > run.created_at) ? "Other" : "Earlier"} runs on ${taskRef ?? "this cause"}`}>
+            <ReportSection title={`${earlier.some((r) => r.created_at > run.created_at) ? "Other" : "Earlier"} runs on ${taskRef ?? "this problem"}`}>
               <CauseRunList runs={earlier} current={run._id} newest={Math.max(run.created_at, ...earlier.map((r) => r.created_at))} />
             </ReportSection>
           )}
 
-          <section data-run-graph>
+          {(line || graph) && <section data-run-graph>
             <button type="button" onClick={() => setGraphOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim hover:text-sol-text-muted" aria-expanded={graphOpen} data-run-graph-toggle>
               <ChevronRight className={`w-3 h-3 transition-transform ${graphOpen ? "rotate-90" : ""}`} />
               {graphOpen ? "Hide the graph" : "Show the graph"}
@@ -298,16 +324,18 @@ function RunDetailContent({ runId }: { runId: string }) {
                     <WorkflowGraphView nodes={graph.nodes as WFNode[]} edges={(graph.edges ?? []) as any} nodeStatuses={nodeStatuses} currentNodeId={isActive ? run.current_node_id : undefined} fitPadding={0.08} fitLayers={6} fitAround={isActive ? run.current_node_id : undefined} minimap={false} />
                   </div>
                 )}
-                <div className="border border-sol-border/20 bg-sol-bg-alt rounded-xl overflow-hidden">
-                  <WorkflowRunNodes run={run} workflow={workflow} className="p-2 space-y-2" />
-                </div>
+                {line && (
+                  <div className="border border-sol-border/20 bg-sol-bg-alt rounded-xl overflow-hidden">
+                    <WorkflowRunNodes run={run} workflow={workflow} className="p-2 space-y-2" />
+                  </div>
+                )}
               </div>
             )}
-          </section>
+          </section>}
 
           <div className="flex items-center justify-between text-[11px] text-sol-text-dim pb-2">
             <span title={new Date(run.created_at).toLocaleString()}>started {shortDay(run.created_at)}, {new Date(run.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
-            {run.primary_session_id && (
+            {line && run.primary_session_id && (
               <Link href={`/conversation/${run.primary_session_id}`} className="flex items-center gap-1 hover:text-sol-cyan transition-colors">
                 <ExternalLink className="w-3 h-3" />
                 primary session

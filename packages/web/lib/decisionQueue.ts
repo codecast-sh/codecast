@@ -250,13 +250,6 @@ export function optionPageSlugs(options: ReadonlyArray<Pick<DecisionOption, "pag
   return options.map((o) => o.page_slug).filter((slug): slug is string => !!slug);
 }
 
-/** The transcript card links to the document page when there is more to
- *  read than the card shows: a doc body, an option page, or a kind whose
- *  controls need the page's room. */
-export function needsDocumentPage(item: Pick<QueueItem, "docId" | "options" | "kind">): boolean {
-  return !!item.docId || optionPageSlugs(item.options).length > 0 || (item.kind !== undefined && item.kind !== "single");
-}
-
 /** What a PERSON must answer: the queue minus the rows a lead holds. */
 export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
   return items.filter((i) => !i.heldByRole);
@@ -429,6 +422,20 @@ export function questionAsStatement(question: string): string {
   // Curly quotes, as the rest of hosted mode's words set a name.
   const q = question.trim().replace(/\?+$/, "").replace(/"([^"]*)"/g, "\u201c$1\u201d");
   return /^[A-Z][a-z]/.test(q) ? q[0].toLowerCase() + q.slice(1) : q;
+}
+
+/** An answered yes or no said back as one phrase, with no colon in it: the
+ *  question's verb gives way to what it was about ("Set up the routine "X"?"
+ *  answered no reads 'You said no to the routine “X”'). A question that names
+ *  no thing by a quoted name, or any other answer, keeps "answer: question". */
+export function answeredLine(label: string, question: string): string {
+  const said = answerSaid(label);
+  const statement = questionAsStatement(question);
+  const yesOrNo = label === APPROVAL_ANSWERS.approve || label === APPROVAL_ANSWERS.decline;
+  // Only a thing named by its quoted name ("the routine “X”"): "a page on
+  // example.com" read after "You said yes to" says less than the question.
+  const thing = statement.match(/^[a-z]+(?: (?:up|out|off|on|in|back|over|away|down))?\s+((?:the|a|an|this|that|your|my)\s[^\u201c]*\u201c[^\u201d]+\u201d)$/);
+  return yesOrNo && thing ? `${said} to ${thing[1]}` : `${said}: ${statement}`;
 }
 
 /** Whether the person said no to one of this conversation's approvals after
