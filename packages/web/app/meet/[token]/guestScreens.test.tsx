@@ -247,8 +247,8 @@ describe("the lobby and the door", () => {
     expect(t).toContain("live now");
     expect(t).toContain("This call is transcribed");
     expect(t).toContain("Ask to join");
-    // The app's solid button finish, not a hand-rolled hover.
-    expect(lobby("ask")).toContain("sol-btn-solid");
+    // The app's Button in its cyan face, not a hand-rolled fill.
+    expect(lobby("ask")).toContain("cc-btn-cyan");
     expect(lobby("ask")).not.toMatch(/#[0-9a-f]{6}/i);
   });
 

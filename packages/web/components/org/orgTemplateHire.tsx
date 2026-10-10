@@ -20,6 +20,7 @@ import { useTemplateActions, useTemplateCatalog } from "../../hooks/useTemplateH
 import { LearningSwitch } from "./TemplateSections";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { Button } from "../ui/button";
 
 // Hiring from a template (docs/architecture/org-hire.md H3): the catalog this
 // workspace may hire from, the template's inputs as a form, the lead rule, a
@@ -93,7 +94,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         </div>
         <div className="flex items-center justify-end gap-2">
           <button type="button" onClick={onClose} className="h-8 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
-          <a href={`/org?proposal=${posted.short_id}`} className="inline-flex h-8 items-center rounded-lg bg-sol-violet px-3.5 text-[12.5px] font-semibold text-sol-bg">Open the proposal</a>
+          <Button asChild variant="violet" size="sm" className="rounded-lg"><a href={`/org?proposal=${posted.short_id}`}>Open the proposal</a></Button>
         </div>
       </div>
     );
@@ -223,7 +224,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       {error && <p role="alert" className="text-[11.5px] text-sol-red">{error}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onClose} className="h-8 shrink-0 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
-        <button type="submit" disabled={!spec || posting} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-sol-violet px-3.5 text-[12.5px] font-semibold text-sol-bg disabled:opacity-50">{posting ? "Proposing…" : "Propose the hire"}</button>
+        <Button type="submit" variant="violet" size="sm" disabled={!spec || posting} className="shrink-0 rounded-lg">{posting ? "Proposing…" : "Propose the hire"}</Button>
       </div>
     </form>
   );
