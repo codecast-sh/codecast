@@ -47,22 +47,41 @@ describe("the simple lane's addresses lead into the main app", () => {
 });
 
 describe("a renamed page's old address leads to the new one", () => {
-  it("sends /initiatives and everything under it to /goals, id, query and fragment kept", () => {
+  it("sends the old goal addresses to Goals, id, query and fragment kept", () => {
     expect(pageAliasTarget("/initiatives")).toBe("/goals");
-    expect(pageAliasTarget("/initiatives/")).toBe("/goals");
     expect(pageAliasTarget("/initiatives/in-7", "?tab=tasks", "#updates")).toBe("/goals/in-7?tab=tasks#updates");
+    expect(pageAliasTarget("/roadmap")).toBe("/goals");
     expect(pageAliasTarget("/initiativesx")).toBeNull();
+    // Goals and projects are pages of their own.
+    expect(pageAliasTarget("/goals")).toBeNull();
     expect(pageAliasTarget("/goals/in-7")).toBeNull();
+    expect(pageAliasTarget("/projects")).toBeNull();
+    expect(pageAliasTarget("/projects/pj-abc")).toBeNull();
   });
 
-  it("keeps the old root outside the tab shell, so the router runs the redirect", () => {
-    expect(PAGE_ALIAS_SEGMENTS).toContain("initiatives");
+  it("sends the team directory and the company document to Org, and keeps the pages under them", () => {
+    expect(pageAliasTarget("/team")).toBe("/org");
+    expect(pageAliasTarget("/company")).toBe("/org");
+    expect(pageAliasTarget("/team/samvit")).toBeNull();
+    expect(pageAliasTarget("/team/activity")).toBeNull();
+  });
+
+  it("keeps each old address outside the tab shell, so the router runs the redirect", () => {
+    for (const seg of ["initiatives", "team", "company", "roadmap"]) expect(PAGE_ALIAS_SEGMENTS).toContain(seg);
+    for (const seg of ["goals", "projects"]) expect(PAGE_ALIAS_SEGMENTS).not.toContain(seg);
     expect(isNonTabRoute("/initiatives/in-7")).toBe(true);
+    expect(isNonTabRoute("/team")).toBe(true);
+    expect(isNonTabRoute("/goals")).toBe(false);
     expect(isNonTabRoute("/goals/in-7")).toBe(false);
+    expect(isNonTabRoute("/projects")).toBe(false);
+    expect(isNonTabRoute("/projects/pj-abc")).toBe(false);
+    expect(isNonTabRoute("/team/samvit")).toBe(false);
   });
 
-  it("moves a saved tab on the old address to the new one", () => {
+  it("moves a saved tab on an old address to the new one", () => {
     expect(shellTabPath("/initiatives/in-7?tab=tasks")).toBe("/goals/in-7?tab=tasks");
-    expect(shellTabPath("/initiatives")).toBe("/goals");
+    expect(shellTabPath("/goals")).toBe("/goals");
+    expect(shellTabPath("/projects")).toBe("/projects");
   });
 });
+

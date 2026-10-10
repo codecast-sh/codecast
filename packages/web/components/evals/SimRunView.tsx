@@ -19,6 +19,7 @@ import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, splitRow
 import "./sim.css";
 import { PLAY_STEP_MS } from "./simModel";
 import { isJobStalled, type JobState } from "./simJobState";
+import { Button } from "../ui/button";
 
 export type ShrinkState = JobState;
 
@@ -326,10 +327,10 @@ function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal
         </span>
       ) : (
         <>
-          <button type="button" className="ev-btn ev-btn--lg ev-btn--go sol-btn-solid" onClick={onShrink} data-evs-shrink-button>
+          <Button type="button" variant="cyan" size="sm" onClick={onShrink} data-evs-shrink-button>
             <Scissors />
             {minimal ? "Shrink again" : "Shrink"}
-          </button>
+          </Button>
           <span className="evs-note">
             {minimal
               ? "The shrink's minimal order is above; a new one replaces it."
