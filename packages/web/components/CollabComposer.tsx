@@ -7,6 +7,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock } from "lucide-react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useRunnerSilence } from "../hooks/useRunnerSilence";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
 import { composerPresenceEnabled, typingRows, presenceMember, setCoPresent } from "../lib/composerPresence";
@@ -215,6 +216,9 @@ export const CollabComposer = memo(function CollabComposer({
     : (access?.level as SendLevel) ?? "shared";
   const canSend = level === "granted" || level === "team" || level === "owner";
   const owner = ownerLabel(conversation);
+  // A session whose machine stopped beating is not live: what is sent waits
+  // in the queue until that machine is back, so the strip says where it waits.
+  const runnerSilence = useRunnerSilence(conversation._id.toString(), canSend && isConvexId(conversation._id.toString()));
 
   // Announce myself in the shared box and watch the owner (and any other
   // collaborator) form their draft live.
@@ -278,6 +282,7 @@ export const CollabComposer = memo(function CollabComposer({
     switch (level) {
       case "granted":
       case "team":
+        if (runnerSilence) return { tone: "muted", icon: <Send className="w-3 h-3" />, text: <>What you send waits for <b>{owner}</b>'s machine: {runnerSilence}.</> };
         return { tone: "cyan", icon: <Send className="w-3 h-3" />, text: <>You can send into <b>{owner}</b>'s live session — they run as commands.</> };
       case "requested":
         return { tone: "amber", icon: <Loader2 className="w-3 h-3 animate-spin" />, text: <>Waiting for <b>{owner}</b> to allow you to send…</> };

@@ -6,7 +6,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import { agentSpawnPath } from "../agentSpawnPath.js";
 import { readHosts, upsertHost, type CloudHost } from "../browser/cloudHost.js";
-import { aws, cloneResetUserData, IMAGE_TAG, listImages } from "./image.js";
+import { aws, BASE_IMAGE_LOGIN, cloneResetUserData, IMAGE_TAG, latestBaseImage, listImages } from "./image.js";
 
 export interface CreateHostOptions {
   name: string;
@@ -60,7 +60,7 @@ export function registerHostCreateCommand(hosts: Command): void {
   hosts.command("create <platform>")
     .description("Launch an AWS Linux or Mac instance, register it, and set it up for sessions")
     .requiredOption("--name <name>", "Unique machine name; rerunning reuses its existing instance")
-    .option("--image <ami>", "Ubuntu 24.04 x86_64 AMI, or macOS AMI matching the dedicated host (default: the newest image from cast hosts image)")
+    .option("--image <ami>", "Ubuntu 24.04 x86_64 AMI, or macOS AMI matching the dedicated host (default: the newest image from cast hosts image, else codecast's public base image)")
     .requiredOption("--key <path>", "Local SSH private key")
     .requiredOption("--key-name <name>", "Matching AWS key pair name")
     .requiredOption("--subnet <id>", "Subnet with public internet access")
@@ -74,11 +74,20 @@ export function registerHostCreateCommand(hosts: Command): void {
     .option("--dry-run", "Print the launch plan without creating or changing anything")
     .option("--no-provision", "Register the instance without installing Codecast")
     .action(async (platform: string, options: CreateHostOptions) => {
+      let fromBase = false;
       if (!options.image) {
-        const latest = listImages(options, platform === "mac" ? "darwin" : "linux")[0];
-        if (!latest) throw new Error("No codecast image yet: pass --image <ami>, or capture a prepared host with cast hosts image <id>");
-        options.image = latest.id;
-        console.log(`Launching from ${latest.name} (${latest.id}), captured ${latest.created}${latest.source ? ` from ${latest.source}` : ""}`);
+        const imagePlatform = platform === "mac" ? "darwin" : "linux";
+        const latest = listImages(options, imagePlatform)[0];
+        const base = latest ? null : latestBaseImage(options, imagePlatform);
+        if (!latest && !base) throw new Error("No codecast image yet: pass --image <ami>, or capture a prepared host with cast hosts image <id>");
+        if (latest) {
+          options.image = latest.id;
+          console.log(`Launching from ${latest.name} (${latest.id}), captured ${latest.created}${latest.source ? ` from ${latest.source}` : ""}`);
+        } else {
+          options.image = base!.id;
+          fromBase = true;
+          console.log(`Launching from codecast's base image ${base!.name} (${base!.id})`);
+        }
       }
       const plan = createHostPlan(platform, options);
       const keyPath = path.resolve(options.key.replace(/^~(?=\/)/, os.homedir()));
@@ -109,6 +118,7 @@ export function registerHostCreateCommand(hosts: Command): void {
         profile: options.profile, platform: plan.platform, keyPath, user: options.user ?? (platform === "mac" ? "ec2-user" : "ubuntu"), address: instance.PublicIpAddress };
       upsertHost(host);
       console.log(`Registered ${host.id}. Resume setup with: cast hosts provision ${host.id}`);
-      if (options.provision !== false) await hosts.parseAsync(["provision", host.id], { from: "user" });
+      // The base image's desktop, grants and autologin belong to its managed login.
+      if (options.provision !== false) await hosts.parseAsync(["provision", host.id, ...(fromBase && platform === "mac" ? ["--service-user", BASE_IMAGE_LOGIN] : [])], { from: "user" });
     });
 }
