@@ -31,6 +31,7 @@ import { isMac } from "../../shortcuts";
 import { MemoryConflict, useMemoryStore } from "../../store/memoryStore";
 import { TYPE_TONE, formatBytes, toneCss, typeKey } from "./memoryView";
 import { BudgetMeter, MemoryLinkChip, ReachBadge } from "./parts";
+import { Button } from "../ui/button";
 
 export const NEW_MEMORY = "__new__";
 type BodyMode = "edit" | "preview" | "raw";
@@ -177,9 +178,10 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
             <div>{conflict.current === null ? "This file was deleted on disk since you opened it." : "This file changed on disk since you opened it, probably from another session."}</div>
             <div className="flex gap-2">
               {conflict.current !== null && (
-                <button
+                <Button
                   type="button"
-                  className="sol-btn text-xs px-2.5 py-1"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => {
                     setBase({ raw: conflict.current!, mtime: conflict.mtime });
                     setDraft(conflict.current!);
@@ -187,11 +189,11 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
                   }}
                 >
                   Use the disk version
-                </button>
+                </Button>
               )}
-              <button type="button" className="sol-btn text-xs px-2.5 py-1 text-sol-orange" onClick={() => void doSave(conflict)}>
+              <Button type="button" variant="amber" size="xs" onClick={() => void doSave(conflict)}>
                 {conflict.current === null ? "Write it back" : "Overwrite with mine"}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -300,13 +302,14 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
                   ) : (
                     <>
                       <span className="text-sol-text-dim">Not in MEMORY.md.</span>
-                      <button
+                      <Button
                         type="button"
-                        className="sol-btn text-[11px] px-2 py-0.5"
+                        variant="ghost"
+                        size="xs"
                         onClick={() => addLine(file).then(() => toast.success("Added to MEMORY.md"), (e) => toast.error(e instanceof Error ? e.message : String(e)))}
                       >
                         Add a line
-                      </button>
+                      </Button>
                     </>
                   )}
                 </Related>
@@ -345,12 +348,12 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
               <input type="checkbox" checked={confirmDelete.unindex} onChange={(e) => setConfirmDelete({ unindex: e.target.checked })} className="accent-sol-cyan" />
               Also remove its MEMORY.md line
             </label>
-            <button type="button" onClick={() => setConfirmDelete(null)} className="sol-btn text-xs px-2.5 py-1">
+            <Button type="button" variant="ghost" size="xs" onClick={() => setConfirmDelete(null)}>
               Keep it
-            </button>
-            <button type="button" onClick={() => void doDelete()} className="sol-btn text-xs px-2.5 py-1 text-sol-red border-sol-red/50">
+            </Button>
+            <Button type="button" variant="red" size="xs" onClick={() => void doDelete()}>
               Move to trash
-            </button>
+            </Button>
           </>
         ) : (
           <>
@@ -360,11 +363,11 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
-            <button type="button" onClick={() => void doSave()} disabled={!dirty && !isNew} className="sol-btn sol-btn-primary text-xs px-3 py-1 inline-flex items-center gap-1.5 disabled:opacity-50">
+            <Button type="button" variant="secondary" size="xs" onClick={() => void doSave()} disabled={!dirty && !isNew}>
               {isNew ? "Create" : "Save"}
               <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
               <KeyCap size="xs">S</KeyCap>
-            </button>
+            </Button>
           </>
         )}
       </footer>

@@ -17,7 +17,7 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { Surface, useHostedMode, useModeWords, useSurface } from "../../../lib/surfaces";
+import { Surface, useHostedMode, useModeWords, useSimpleModeAllowed, useSurface } from "../../../lib/surfaces";
 import { Sparkles, User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
@@ -54,6 +54,7 @@ export default function IntegrationsPage() {
   const notice = useConnectorReturn();
   const words = useModeWords();
   const hosted = useHostedMode();
+  const assistant = useSimpleModeAllowed();
   // Hosted mode lists only the services the assistant reaches, so a card
   // never promises it mail or chat it cannot read.
   const devApps = useSurface("settings.devIntegrations");
@@ -94,9 +95,11 @@ export default function IntegrationsPage() {
       {/* The assistant's own connection: mail and calendar through Whisk,
           personal, and first because it is what hosted mode runs on. When it
           is the page's only section its heading would repeat the subtitle. */}
-      <SettingsSection title={onlyWhisk ? undefined : "Assistant"} icon={Sparkles}>
-        <WhiskCard />
-      </SettingsSection>
+      {assistant && (
+        <SettingsSection title={onlyWhisk ? undefined : "Assistant"} icon={Sparkles}>
+          <WhiskCard />
+        </SettingsSection>
+      )}
 
       <Surface name="settings.browserExtension">
         <BrowserExtensionSetup />

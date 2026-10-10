@@ -12,8 +12,6 @@ import { editedOrgChange, isOrgQuietChange, seatSentence, type OrgRoleSeat } fro
 import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
 import type { ZoomLevel } from "./orgZoom";
 
-export type OrgNodeKind = "person" | "role" | "session" | "cluster";
-
 // ---------------------------------------------------------------- ghosts
 // Open proposal changes drawn INTO the tree (docs/architecture/org-staffing.md
 // S5). `ghostsFor` merges them into a copy of the tree (a proposed role is a
@@ -44,15 +42,13 @@ export type OrgGhostPlan = {
   chips: Record<string, OrgGhostChip[]>;
 };
 
-export const EMPTY_GHOSTS: Readonly<Omit<OrgGhostPlan, "merged">> = { stubs: {}, retires: {}, moves: [], chips: {} };
-
 type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhostMove; chips?: OrgGhostChip[] };
 
 export type OrgLayoutNode =
   // `h` is the card's height at the zoom level the layout was asked for (orgZoom).
   | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
   | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
-  | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
+  | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef; /** What the close card adds (orgSessionDetail), when the layout was asked for close. */ detail?: OrgSessionDetail } & GhostDecor)
   | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
 
 /** `ghost`: a proposed edge into a stub, or a proposed move's edge to the new
@@ -75,7 +71,15 @@ export type OrgLayoutView = {
   /** False keeps the tree layout but draws no session stack under a card: its
    *  sessions are its counts and state dots (the map, org-staffing.md S40). */
   sessionCards?: boolean;
+  /** What each session's close card says beyond its title, by conversation id
+   *  (orgSessionDetail.sessionDetailsOf, from the store's inbox rows). The close
+   *  layout books each card's height from it; absent, a session card keeps its
+   *  middle height at every level. */
+  sessionDetails?: Readonly<Record<string, OrgSessionDetail>>;
 };
+
+/** A session's close card detail: where it stands (one or two lines) and the task it is bound to. */
+export type OrgSessionDetail = { line: string | null; task: { short_id: string; title: string } | null };
 
 export const ORG_SIZES = {
   person: { w: 232, h: 84 },
@@ -119,6 +123,14 @@ export const ORG_SIZES = {
   closeMetaChars: 32,
   /** A role's open work at close: the tasks and plans its area holds (org.health's ledger). */
   workRow: 17,
+  /** A session's close card (orgSessionDetail): its detail line, up to two
+   *  lines of 14px under a 4px gap, wrapped at this many characters (10.5px in
+   *  196px), and the row naming its task. */
+  sessionLine: 14,
+  sessionLineGap: 4,
+  sessionLineChars: 34,
+  sessionLineMax: 2,
+  sessionTaskRow: 17,
   siblingGap: 40,
   levelGap: 56,
   stackGap: 8,
@@ -167,9 +179,11 @@ export function wrappedLines(text: string, chars: number): number {
   return Math.min(3, lines);
 }
 
-/** A role's line under its name, as the close card prints it whole: its title, whether its seat is started, its sessions. */
+/** A role's line under its title, as the close card prints it whole: its persona name, whether its seat is started, its sessions. */
 export const roleMetaLine = (r: OrgRole, ghost?: boolean): string =>
-  [roleWords(r).subtitle, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
+  [roleWords(r).name, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
+/** The first line of a role's charter, its heading marks dropped: what the close card prints of it. */
+export const charterFirstLine = (charter: string | undefined): string | null => charter?.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).find(Boolean) ?? null;
 /** How many lines a card's changes take as quiet lines: one each up to the cap, then one more for the rest. */
 export const quietChipLines = (n: number) => (n <= ORG_SIZES.quietChipMax ? n : ORG_SIZES.quietChipMax + 1);
 /** At close a card's changes are lines instead of a row of chips: what that adds to the chips row. */
@@ -178,7 +192,7 @@ const closeChipsExtra = (n: number) => (n ? Math.max(0, quietChipLines(n) * ORG_
  *  name on its own row, its changes as lines, its charter, its open work and
  *  its running sessions. */
 const roleCloseExtra = (r: OrgRole, chips: number, ghost: boolean) =>
-  ORG_SIZES.closeMetaRow + (wrappedLines(roleMetaLine(r, ghost), ORG_SIZES.closeMetaChars) - 1) * ORG_SIZES.closeMetaLine + closeChipsExtra(chips) + (r.charter?.trim() ? ORG_SIZES.charterRows : 0) + (ghost ? 0 : ORG_SIZES.workRow) + runningRows(r);
+  ORG_SIZES.closeMetaRow + (wrappedLines(roleMetaLine(r, ghost), ORG_SIZES.closeMetaChars) - 1) * ORG_SIZES.closeMetaLine + closeChipsExtra(chips) + (charterFirstLine(r.charter) ? ORG_SIZES.charterRows : 0) + (ghost ? 0 : ORG_SIZES.workRow) + runningRows(r);
 const personCloseExtra = (p: OrgPerson, chips: number) => ORG_SIZES.closeMetaRow + closeChipsExtra(chips) + runningRows(p);
 
 type Branch = {
@@ -243,15 +257,29 @@ export function seatRowHeight(seat: OrgRoleSeat | undefined): number {
   return seat ? 6 + Math.ceil(seatSentence(seat).length / ORG_SIZES.seatChars) * ORG_SIZES.seatLine : 0;
 }
 
-/** A session row's height: an adopt stub carries a second line. */
-function sessionHeight(conversationId: string, stubs: Stubs): number {
-  return stubs?.[sessionNodeId(conversationId)]?.kind === "adopt" ? ORG_SIZES.session.h + ORG_SIZES.adoptRow : ORG_SIZES.session.h;
+/** How many lines the close card gives a session's detail line (the card clamps at the same count). */
+export const sessionLineCount = (line: string | null | undefined): number => (line ? Math.min(ORG_SIZES.sessionLineMax, wrappedLines(line, ORG_SIZES.sessionLineChars)) : 0);
+
+/** A session's close card height: the middle card, its detail line's rows and its task row. */
+export function sessionCloseHeight(d: OrgSessionDetail | undefined): number {
+  if (!d) return ORG_SIZES.session.h;
+  const lines = sessionLineCount(d.line);
+  return ORG_SIZES.session.h + (lines ? ORG_SIZES.sessionLineGap + lines * ORG_SIZES.sessionLine : 0) + (d.task ? ORG_SIZES.sessionTaskRow : 0);
 }
 
-function stackHeight(stack: NonNullable<Branch["stack"]>, stubs: Stubs): number {
+/** What a session card carries at this level: its close detail, or nothing. */
+type SessionSizing = { stubs: Stubs; details?: Readonly<Record<string, OrgSessionDetail>> };
+
+/** A session row's height: an adopt stub carries a second line; at close a session says where it stands and its task. */
+function sessionHeight(conversationId: string, sz: SessionSizing): number {
+  if (sz.stubs?.[sessionNodeId(conversationId)]?.kind === "adopt") return ORG_SIZES.session.h + ORG_SIZES.adoptRow;
+  return sessionCloseHeight(sz.details?.[conversationId]);
+}
+
+function stackHeight(stack: NonNullable<Branch["stack"]>, sz: SessionSizing): number {
   const n = stack.sessions.length + (stack.hasMoreNode ? 1 : 0);
   if (n === 0) return 0;
-  const rows = stack.sessions.reduce((h, s) => h + sessionHeight(s._id, stubs) + ORG_SIZES.stackGap, 0);
+  const rows = stack.sessions.reduce((h, s) => h + sessionHeight(s._id, sz) + ORG_SIZES.stackGap, 0);
   return rows + (stack.hasMoreNode ? ORG_SIZES.cluster.h + ORG_SIZES.stackGap : 0) - ORG_SIZES.stackGap;
 }
 
@@ -343,19 +371,19 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
 
 // ---------------------------------------------------------------- measure + place
 
-function measure(b: Branch, stubs: Stubs): void {
-  for (const c of b.children) measure(c, stubs);
+function measure(b: Branch, sz: SessionSizing): void {
+  for (const c of b.children) measure(c, sz);
   const parts: number[] = b.children.map((c) => c.width);
   if (b.stack) parts.push(ORG_SIZES.session.w);
   const childrenWidth = parts.length ? parts.reduce((a, w) => a + w, 0) + ORG_SIZES.siblingGap * (parts.length - 1) : 0;
   b.width = Math.max(b.w, childrenWidth);
   const childHeights = b.children.map((c) => c.height);
-  if (b.stack) childHeights.push(stackHeight(b.stack, stubs));
+  if (b.stack) childHeights.push(stackHeight(b.stack, sz));
   const below = childHeights.length ? Math.max(...childHeights) : 0;
   b.height = b.h + (below > 0 ? ORG_SIZES.levelGap + below : 0);
 }
 
-function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], stubs: Stubs): void {
+function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): void {
   const x = left + (b.width - b.w) / 2;
   const y = top;
   if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
@@ -368,7 +396,7 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
   let cx = left + (b.width - childrenWidth) / 2;
   const cy = y + b.h + ORG_SIZES.levelGap;
   for (const c of b.children) {
-    place(c, cx, cy, out, edges, stubs);
+    place(c, cx, cy, out, edges, sz);
     edges.push({ id: `e:${b.id}->${c.id}`, source: b.id, target: c.id, kind: "tree" });
     cx += c.width + ORG_SIZES.siblingGap;
   }
@@ -378,8 +406,9 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
     let prev = b.id;
     st.sessions.forEach((s, i) => {
       const id = sessionNodeId(s._id);
-      const h = sessionHeight(s._id, stubs);
-      out.push({ id, kind: "session", x: cx, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent });
+      const h = sessionHeight(s._id, sz);
+      const detail = sz.details?.[s._id];
+      out.push({ id, kind: "session", x: cx, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent, ...(detail ? { detail } : {}) });
       edges.push({ id: `e:${prev}->${id}`, source: prev, target: id, kind: i === 0 ? "tree" : "stack" });
       prev = id;
       sy += h + ORG_SIZES.stackGap;
@@ -406,13 +435,15 @@ export type OrgLayout = { nodes: OrgLayoutNode[]; edges: OrgLayoutEdge[]; width:
 export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan, /** The zoom level the cards are sized for (orgZoom); the close card is the tallest. */ level: ZoomLevel = "close"): OrgLayout {
   if (view.structureOnly && !ghosts) return layoutOrgColumns(buildBranches(tree, view));
   const roots = buildBranches(ghosts?.merged ?? tree, view, ghosts, level);
-  for (const r of roots) measure(r, ghosts?.stubs);
+  // Only the close card says more than the title, so only the close layout books the room.
+  const sz: SessionSizing = { stubs: ghosts?.stubs, details: level === "close" ? view.sessionDetails : undefined };
+  for (const r of roots) measure(r, sz);
   const nodes: OrgLayoutNode[] = [];
   const edges: OrgLayoutEdge[] = [];
   let x = 0;
   let height = 0;
   for (const r of roots) {
-    place(r, x, 0, nodes, edges, ghosts?.stubs);
+    place(r, x, 0, nodes, edges, sz);
     x += r.width + ORG_SIZES.rootGap;
     height = Math.max(height, r.height);
   }
