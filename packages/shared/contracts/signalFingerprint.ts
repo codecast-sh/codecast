@@ -14,16 +14,6 @@ export function evalsSignalFingerprint(surface: string, ref: string): string {
   return `evals:${surface.trim()}:${ref.trim()}`;
 }
 
-/**
- * A blocker a session insight recorded. The text is a model's sentence, so it
- * is folded before hashing (case, whitespace, punctuation at the ends): the
- * same blocker restated with a trailing period is one fingerprint.
- */
-export function insightSignalFingerprint(conversationShortId: string, blocker: string): string {
-  const folded = blocker.toLowerCase().replace(/\s+/g, " ").trim().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
-  return `insight:${conversationShortId.trim()}:${fnv1a32(folded).toString(16).padStart(8, "0")}`;
-}
-
 // ── Ingested groups (docs/architecture/external-data.md X3, X6) ──
 //
 // A group's fingerprint is `<segment>:<fp>`, stable per source; the signal it

@@ -557,7 +557,7 @@ export function createHistory(deps: HistoryDeps): History & { compressOnce(opts:
         const key = `${b.partition}\u0000${scopeKey(b.scope)}\u0000${blockKey(parent)}`;
         let pending = building.get(key);
         if (!pending) {
-          pending = buildBlock({ store, summarizer: deps.summarizer, logger }, b.scope, b.partition, parent, left, right).finally(() => building.delete(key));
+          pending = buildBlock({ store, summarizer: deps.summarizer, logger, config: { ...DEFAULT_COMPRESS, ...deps.compress } }, b.scope, b.partition, parent, left, right).finally(() => building.delete(key));
           building.set(key, pending);
         }
         await pending;

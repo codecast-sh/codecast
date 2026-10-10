@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decisionQueueItems, needsDocumentPage, optionPageSlugs } from "../decisionQueue";
+import { decisionQueueItems, optionPageSlugs } from "../decisionQueue";
 
 // The transcript card (the-line.md L10) carries the kind, the form, the
 // category and the option extras (body, cost, risk, evidence, page) so it
@@ -31,14 +31,7 @@ describe("decisionQueueItems carries the document fields", () => {
   });
 });
 
-describe("needsDocumentPage", () => {
-  test("a doc body, an option page, or a kind beyond single links to the page", () => {
-    expect(needsDocumentPage({ options: [{ label: "A" }] })).toBe(false);
-    expect(needsDocumentPage({ options: [{ label: "A" }], kind: "single" })).toBe(false);
-    expect(needsDocumentPage({ options: [{ label: "A" }], docId: "d" })).toBe(true);
-    expect(needsDocumentPage({ options: [{ label: "A", page_slug: "p" }] })).toBe(true);
-    expect(needsDocumentPage({ options: [{ label: "A" }], kind: "multi" })).toBe(true);
-  });
+describe("optionPageSlugs", () => {
   test("optionPageSlugs keeps option order and drops options without a page", () => {
     expect(optionPageSlugs([{ label: "A" }, { label: "B", page_slug: "b" }, { label: "C", page_slug: "c" }])).toEqual(["b", "c"]);
   });

@@ -18,7 +18,8 @@ import {
 import { PresenceBadge } from "../presence/PresenceBadge";
 import { STRAY_WORKSPACE, isStrayWorkspace } from "../people/peopleRoster";
 import { channelDisplayName, chatViewRoomKey, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
-import { joinCall, ringInto, startHuddle } from "../../lib/calls/callManager";
+import { ringInto } from "../../lib/calls/callManager";
+import { requestHuddleStart } from "../../lib/calls/huddleStart";
 import { MAX_ROOM_MEMBERS, dmRoomKey } from "@codecast/shared/contracts";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import type { ChatChannelView } from "./chatTypes";
@@ -170,7 +171,7 @@ export function NewMessageModal({
     if (huddle) {
       // Context lines for people rooms are server-derived per recipient.
       if (liveRoomKey) void ringInto(liveRoomKey, ids);
-      else void startHuddle({ roomKey: dmRoomKey(String(viewer), ...ids), toUserIds: ids });
+      else requestHuddleStart({ roomKey: dmRoomKey(String(viewer), ...ids), toUserIds: ids });
       return;
     }
     openDm(ids);
@@ -189,10 +190,11 @@ export function NewMessageModal({
       const c = cand.channel;
       const roomKey = chatViewRoomKey(c, String(viewer), teamMembers);
       if (cand.type === "group") {
-        void startHuddle({ roomKey, toUserIds: c.dmMemberIds ?? [] });
+        requestHuddleStart({ roomKey, toUserIds: c.dmMemberIds ?? [] });
       } else {
-        // Picking a person and pressing Enter is as deliberate as a join gets.
-        void joinCall(roomKey, { intent: "deliberate" });
+        // A live room is joined at once; an empty one goes through the
+        // start dialog like every other huddle start.
+        requestHuddleStart({ roomKey });
       }
     } else {
       onClose();
