@@ -1,5 +1,5 @@
 /** Feeds that answer for one team and take `{ team_id }`. */
-export const TEAM_SCOPED_SETTINGS = new Set(["teamMembers", "githubInstallations", "team"]);
+export const TEAM_SCOPED_SETTINGS = new Set(["teamMembers", "githubInstallations", "team", "teamBudget"]);
 
 export function settingsDataKey(name: string, userId?: string | null, teamId?: string | null): string | null {
   if (!userId) return null;

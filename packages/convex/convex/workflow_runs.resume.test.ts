@@ -73,3 +73,15 @@ describe("liveRunsForDevice", () => {
     expect((await handler(ctx, { api_token: TOKEN, device: "dev-other" })).runs).toEqual([]);
   });
 });
+
+describe("cancelRunByPerson", () => {
+  test("a person stops a line run: the run ends and its task reads blocked, saying why", async () => {
+    const { ctx, tables } = await seed({ task_id: "tasks_cause" });
+    tables.tasks = [{ _id: "tasks_cause", short_id: "ct-9", title: "A problem", status: "in_progress", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: NOW, updated_at: NOW }];
+    tables.task_history = [];
+    const { cancelRunByPerson } = await import("./workflow_runs");
+    await cancelRunByPerson(ctx, HOST, RUN, NOW + 1);
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user" });
+    expect(tables.tasks[0]).toMatchObject({ execution_status: "blocked", execution_concerns: "Cancelled by user" });
+  });
+});

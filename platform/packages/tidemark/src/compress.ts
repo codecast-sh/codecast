@@ -5,7 +5,7 @@ import type { RuntimeLogger } from './run';
 import { scopeKey, type Partition, type Scope, type ScopeRegistry, type ScopeType } from './scope';
 import type { HistoryStore } from './store';
 import { summaryText, type Summarizer } from './summarize';
-import { blockChildren, blockKey, blockSpan, completeMerges, leafPrefixCount, pendingMerges, type TreeBlock } from './tree';
+import { blockChildren, blockKey, blockSpan, completeMerges, coverSpan, leafPrefixCount, pendingMerges, resolveBlocks, type TreeBlock } from './tree';
 
 export interface CompressConfig {
   /** Activities younger than this stay raw. Default 2 hours. */
@@ -41,6 +41,15 @@ export interface CompressConfig {
    *   smaller budget falls back to finer blocks until `zoomOut` builds them.
    */
   merges: 'complete' | 'cover';
+  /**
+   * Context each summary call is shown: a cover of the scope's history before
+   * the block being written, built only from blocks that exist, at most this
+   * many lines (default 16) and `contextChars` characters, newest kept
+   * first (default 16,000: room for the lines at about a thousand each). It lets the model resolve references; it is never
+   * content to add. 0 sends none.
+   */
+  contextLines: number;
+  contextChars: number;
 }
 
 export const DEFAULT_COMPRESS: CompressConfig = {
@@ -53,6 +62,8 @@ export const DEFAULT_COMPRESS: CompressConfig = {
   rawWindowMs: 14 * 24 * 60 * 60 * 1000,
   coverLines: 32,
   merges: 'complete',
+  contextLines: 16,
+  contextChars: 16_000,
 };
 
 export interface PhaseReport {
@@ -193,6 +204,8 @@ export async function leafWindow(store: HistoryStore, scope: Scope, partition: P
 
 async function compressScopeLeaves(deps: CompressDeps, scope: Scope, partition: Partition, olderThan: Activity['at'], maySpend: MaySpend, report: CompressReport): Promise<void> {
   const { store, summarizer, logger, config } = deps;
+  // The scope's block positions, read once and kept as leaves land, for each leaf's context.
+  let index: Map<string, string> | undefined;
   try {
     for (;;) {
       let tip = await store.leafTip(scope, partition);
@@ -205,7 +218,10 @@ async function compressScopeLeaves(deps: CompressDeps, scope: Scope, partition: 
       const window = await leafWindow(store, scope, partition, tip.end, olderThan, config.maxActivities, config.minActivities);
       if (window.length < config.minActivities) return;
       if (!maySpend()) return;
-      const content = summaryText(await summarizer.leaf({ scope, lines: window.map((a) => `[${formatStamp(a.atMs)}] ${a.kind}: ${a.summary}`) }), 'leaf');
+      index ??= await blockIndex(store, scope, partition);
+      const context = await historyContext(store, index, tip.lastIndex === null ? 0 : tip.lastIndex + 1, config);
+      const lines = window.map((a) => `[${formatStamp(a.atMs)}] ${a.kind}: ${a.summary}`);
+      const content = summaryText(await summarizer.leaf({ scope, lines, activities: window, context }), 'leaf');
       const leaf = await store.appendLeaf(
         scope,
         partition,
@@ -214,6 +230,7 @@ async function compressScopeLeaves(deps: CompressDeps, scope: Scope, partition: 
       );
       // Another run appended this scope's next leaf first; it owns the scope for this pass.
       if (!leaf) return;
+      index.set(blockKey({ level: 0, index: leaf.index ?? (tip.lastIndex ?? -1) + 1 }), leaf.id);
       report.leaves++;
       report.activities += window.length;
     }
@@ -299,7 +316,7 @@ async function buildMerges(
         return false;
       }
       built++;
-      const block = await buildBlock(deps, p.scope, p.partition, at, left, right);
+      const block = await buildBlock(deps, p.scope, p.partition, at, left, right, p.idByKey);
       if (block) {
         p.idByKey.set(blockKey(at), block.id);
         report.merged++;
@@ -369,18 +386,29 @@ async function buildMerges(
  * Write one merged block from its two halves. Null when the store refused it
  * (the slot is taken or a half is gone); undefined when the summary failed.
  */
-export async function buildBlock(deps: Pick<CompressDeps, 'store' | 'summarizer' | 'logger'>, scope: Scope, partition: Partition, at: TreeBlock, leftId: string, rightId: string): Promise<Block | null | undefined> {
+export async function buildBlock(
+  deps: Pick<CompressDeps, 'store' | 'summarizer' | 'logger'> & { config?: Pick<CompressConfig, 'contextLines' | 'contextChars'> },
+  scope: Scope,
+  partition: Partition,
+  at: TreeBlock,
+  leftId: string,
+  rightId: string,
+  /** The scope's block positions, when the caller holds them; read from the store otherwise. */
+  index?: ReadonlyMap<string, string>,
+): Promise<Block | null | undefined> {
   const { store, summarizer, logger } = deps;
   try {
     const halves = await store.blocks([leftId, rightId]);
     const left = halves.find((b) => b.id === leftId);
     const right = halves.find((b) => b.id === rightId);
     if (!left || !right) return null;
+    const context = await historyContext(store, index ?? (await blockIndex(store, scope, partition)), blockSpan(at)[0], deps.config ?? DEFAULT_COMPRESS);
     const content = summaryText(
       await summarizer.merge({
         scope,
         earlier: { range: dayRange(left.startMs, left.endMs), content: left.content },
         later: { range: dayRange(right.startMs, right.endMs), content: right.content },
+        context,
       }),
       'merge',
     );
@@ -389,4 +417,40 @@ export async function buildBlock(deps: Pick<CompressDeps, 'store' | 'summarizer'
     logger.warn('history merge failed', { scope: scopeKey(scope), partition, level: at.level, index: at.index, error });
     return undefined;
   }
+}
+
+/**
+ * The history a summary call reads as context: the cover of the scope's
+ * leaves before `beforeLeaf`, each missing merge opened into what exists,
+ * as `[days] summary` lines oldest first. Only built blocks: a call never
+ * sees a placeholder or the stretch it is writing. Bounded by lines, then by
+ * characters from the newest end, so the stretch just before the block, where
+ * most references point, is the last to go.
+ */
+export async function historyContext(store: HistoryStore, idByKey: ReadonlyMap<string, string>, beforeLeaf: number, config: Pick<CompressConfig, 'contextLines' | 'contextChars'>): Promise<string[]> {
+  const lines = Math.max(0, Math.floor(config.contextLines) || 0);
+  if (lines === 0 || beforeLeaf <= 0) return [];
+  // Missing merges open into finer blocks; past the line budget the newest win.
+  const ids = resolveBlocks(coverSpan(0, beforeLeaf, lines), (b) => idByKey.has(blockKey(b)))
+    .flatMap((b) => idByKey.get(blockKey(b)) ?? [])
+    .slice(-lines);
+  const byId = new Map((await store.blocks(ids)).map((b) => [b.id, b]));
+  const out: string[] = [];
+  let left = Math.max(0, config.contextChars);
+  for (let i = ids.length - 1; i >= 0; i--) {
+    const b = byId.get(ids[i]);
+    if (!b) continue;
+    const line = `[${dayRange(b.startMs, b.endMs)}] ${b.content.replace(/\s*\n\s*/g, ' ')}`;
+    if (line.length > left) break;
+    left -= line.length;
+    out.unshift(line);
+  }
+  return out;
+}
+
+/** A scope's block ids by position (blockKey), for historyContext. */
+export async function blockIndex(store: HistoryStore, scope: Scope, partition: Partition): Promise<Map<string, string>> {
+  const idByKey = new Map<string, string>();
+  for (const r of await store.treeIndex(scope, partition, {})) if (r.index !== null) idByKey.set(blockKey({ level: r.level, index: r.index }), r.id);
+  return idByKey;
 }
