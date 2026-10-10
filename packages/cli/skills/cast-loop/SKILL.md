@@ -19,17 +19,20 @@ that are not before starting, or the loop produces eight half answers.
 
 ```bash
 cast trigger add - --every <interval> --spawn --title "Loop: <name>" \
-  --precheck 'test -n "$(cast task ready --plan <id> --json | jq -r ".[0].short_id")"' <<'BRIEF'
-Take the highest priority ready task from `cast task ready --plan <id>`, claim it with
-`cast task start`, work in a worktree (`cast ws acquire <task id>`), and run
+  --precheck 'cast task ready --plan <id> --json | jq -e "any(.[]; (.stale | not) and ((.assignee // \"agent:\") | startswith(\"agent:\")))" >/dev/null' <<'BRIEF'
+Claim the next ready task with `cast task ready --plan <id> --claim` (it starts the
+task and binds this session, so two overlapping runs never take the same one; if
+it claims nothing, complete the run saying so), work in a worktree (`cast ws acquire <task id>`), and run
 /cast-verify before closing it. Commit on the task's branch and open a pull
 request with /cast-ship; do not merge. Queue anything that needs a person with
 `cast decide`. Finish with `cast trigger complete <trigger id> --summary "<what landed>"`.
 BRIEF
 ```
 
-The precheck runs before every firing and skips the run when nothing is
-ready, so an idle loop costs no session. The brief is the run's entire
+The precheck runs before every firing and skips the run unless a ready task
+is one the run's claim can take (touched in the last 30 days, and unassigned
+or handed to agents), so an idle loop costs no session. A run claims rather than reads the
+top of the list because the next firing can start before this one finishes. The brief is the run's entire
 context; a spawned session has none of this thread.
 
 ## Watch and stop

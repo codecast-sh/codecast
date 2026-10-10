@@ -91,14 +91,48 @@ export async function loadHistoryWindow(ctx: QueryCtx, conversationId: Id<"conve
     .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversationId))
     .order("desc")
     .take(HISTORY_MAX_ROWS);
-  // A stop notice is for the person: the model works from what was said and
-  // done, so a retry or a "try again" starts from the person's words.
-  const said = newest.reverse().filter((doc) => !isNoticeUuid(doc.message_uuid));
+  // A stop notice is for the person; the model reads it as one stop line, or
+  // not at all before a retry (replayNotices).
+  const said = replayNotices(newest.reverse());
   const replayed = await withHostedReplay(ctx, said);
   const rows = replayed.map((doc) => toMessageRow(doc as unknown as Record<string, unknown>));
   const start = rows.findIndex(isPersonRow);
   if (start < 0) return { rows: [], start: null };
   return { rows: rows.slice(start), start: { timestamp: said[start].timestamp, creationTime: said[start]._creationTime } };
+}
+
+/** What the model reads where a turn stopped, in the assistant's voice. It
+ *  must not read the stopped ask as still open: with two person rows in a row
+ *  and no reply between them, it treats both as pending and quietly redoes
+ *  the first, which the notice promised to do only on request. */
+export const STOPPED_TURN_LINE = "(That request stopped before I finished it, so it was not done. I'll only pick it up again if you ask me to.)";
+
+type ReplayDoc = { role: string; content?: string; message_uuid?: string; tool_results?: unknown[] | null };
+
+/** A transcript's rows with its stop notices replaced for the model. A notice
+ *  followed by the same words the person said before it is a retry ("Try
+ *  again" resends them), so it drops and the retry reads as the one ask. Any
+ *  other notice becomes STOPPED_TURN_LINE, so a new, unrelated ask is read
+ *  alone, and a run of them (retries that stopped too) reads as one. A
+ *  trailing notice with nothing after it drops too. */
+export function replayNotices<T extends ReplayDoc>(docs: readonly T[]): T[] {
+  const isPerson = (doc: ReplayDoc) => doc.role === "user" && !doc.tool_results?.length && !!doc.content?.trim();
+  const out: T[] = [];
+  let lastAsk: string | null = null;
+  for (let i = 0; i < docs.length; i++) {
+    const doc = docs[i];
+    if (!isNoticeUuid(doc.message_uuid)) {
+      if (isPerson(doc)) lastAsk = doc.content!.trim();
+      out.push(doc);
+      continue;
+    }
+    const next = docs.slice(i + 1).find((d) => !isNoticeUuid(d.message_uuid));
+    if (!next || (isPerson(next) && lastAsk !== null && next.content!.trim() === lastAsk)) continue;
+    // Retries that stopped too leave a notice each; the model reads one line.
+    if (out[out.length - 1]?.content === STOPPED_TURN_LINE) continue;
+    out.push({ ...doc, content: STOPPED_TURN_LINE });
+  }
+  return out;
 }
 
 /** The conversation's newest rows, as loadHistoryWindow reads them. */

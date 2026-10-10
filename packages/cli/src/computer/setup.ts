@@ -26,6 +26,7 @@
 
 import type { EventEmitter } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
+import { agentSetupLines } from "@codecast/shared/contracts";
 import { ComputerError } from "./errors.js";
 import type { ComputerPermissionApi } from "./run.js";
 import type { ComputerPermissionId, ComputerPermissionStatusResult } from "./types.js";
@@ -195,6 +196,7 @@ async function allowed(
   if (!deps.isTty()) {
     say("This is not a terminal, so there is nobody here to confirm, and nothing will be opened.");
     say("Run `cast computer setup` in a terminal, or pass --yes to open the panes without asking.");
+    for (const line of agentSetupLines("computer")) say(line);
     return false;
   }
   return await deps.confirm(`Open System Settings so you can grant ${list(missing)}? [y/N] `);
