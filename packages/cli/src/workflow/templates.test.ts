@@ -18,7 +18,7 @@ import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, inlineTemplateFiles, r
 import type { WorkflowGraph } from "./types";
 
 const TEMPLATE_DIR = path.join(import.meta.dir, "templates");
-const AGENT_NODES = ["ground", "plan", "analyze", "prove", "implement", "review", "card_write"];
+const AGENT_NODES = ["ground", "plan", "analyze", "prove", "prove_line", "implement", "implement_line", "review", "card_write"];
 const from = (graph: WorkflowGraph, id: string) => graph.edges.filter((e) => e.from === id).map((e) => `${e.to}:${e.condition ?? ""}`);
 
 // Union's profile as it is committed in its repo (line-profile.md LP2), and a
@@ -56,9 +56,9 @@ describe("line.cast template", () => {
     expect(graph.name).toBe("line");
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
-      "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "red", "dissolve",
-      "implement", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
-      "decide", "reopen", "drop", "ship", "watch",
+      "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "prove_line", "red", "dissolve",
+      "implement", "implement_line", "ask", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
+      "decide", "reopen", "drop", "rebase", "ship", "watch",
     ]);
     expect(graph.nodes.get("verify")?.type).toBe("command");
     expect(graph.nodes.get("verify")?.script).toContain("bash -c $line.commands.check");
@@ -93,9 +93,9 @@ describe("line.cast template", () => {
       expect(node.agent).toBe("claude");
       expect(node.prompt).toBe(LINE_TEMPLATE_FILES[`line/${id}.md`]);
     }
-    expect(graph.nodes.get("prove")?.isolated).toBe(true);
-    expect(graph.nodes.get("implement")?.isolated).toBe(true);
+    for (const id of ["prove", "prove_line", "implement", "implement_line"]) expect(graph.nodes.get(id)?.isolated).toBe(true);
     expect(graph.nodes.get("implement")?.max_visits).toBe(3);
+    expect(graph.nodes.get("implement_line")?.max_visits).toBe(3);
     for (const id of ["ground", "plan", "analyze", "review", "card_write"]) expect(graph.nodes.get(id)?.isolated).toBeUndefined();
   });
 
@@ -120,7 +120,7 @@ describe("line.cast template", () => {
     // gates); <node>.output|json|outcome for nodes in this graph.
     const known = new Set([
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
-      "review_verdict", "review_note", "handoff", "goal_ref", "category", "risk", "readiness", "readiness_note",
+      "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
       "run_dir", ...Object.keys(EMPTY_VARS),
     ]);
@@ -163,7 +163,7 @@ describe("line.cast template", () => {
 
   test("the gates offer valid options: every edge labeled, unique keys, each with what happens", () => {
     const gates = [...graph.nodes.values()].filter((n) => n.type === "human");
-    expect(gates.map((g) => g.id)).toEqual(["plan_gate", "decide"]);
+    expect(gates.map((g) => g.id)).toEqual(["plan_gate", "ask", "decide"]);
     const options = (id: string) => graph.edges.filter((e) => e.from === id).map((e) => ({ ...parseGateEdgeLabel(e.label ?? ""), to: e.to, condition: e.condition }));
     for (const gate of gates) {
       const opts = options(gate.id);
@@ -173,9 +173,12 @@ describe("line.cast template", () => {
       expect(gate.category).toBeTruthy();
     }
     expect(options("plan_gate").map((o) => `${o.key}:${o.to}`)).toEqual(["A:analyze", "R:plan", "D:drop"]);
-    expect(options("decide").map((o) => `${o.key}:${o.to}`)).toEqual(["S:ship", "R:reopen", "D:drop"]);
+    // A builder's question: the answer goes back to the builder, or the cause closes.
+    expect(options("ask").map((o) => `${o.key}:${o.to}`)).toEqual(["A:reopen", "D:drop"]);
+    // Ship goes through the rebase station first: a card waits while the default branch moves.
+    expect(options("decide").map((o) => `${o.key}:${o.to}`)).toEqual(["S:rebase", "R:reopen", "D:drop"]);
     expect(graph.nodes.get("decide")?.card).toBe("$run_dir/card.json");
-    expect(from(graph, "reopen")).toEqual(["implement:"]);
+    expect(from(graph, "reopen")).toEqual(["implement:category != line", "implement_line:category = line"]);
     expect(from(graph, "drop")).toEqual(["exit:"]);
   });
 
@@ -218,12 +221,28 @@ describe("line.cast template", () => {
     expect(fired("red", {})).toEqual(["prove"]);
   });
 
+  test("a change to the line itself takes its own prove and build stations, and every way back to the builder finds implement_line", () => {
+    const line = { category: "line" };
+    expect(fired("analyze", { category: "code" })).toEqual(["prove"]);
+    expect(fired("analyze", line)).toEqual(["prove_line"]);
+    expect(fired("prove_line", { ...line, "prove_line.json": '{"reproduced":true}' })).toEqual(["red"]);
+    expect(fired("prove_line", { ...line, "prove_line.json": '{"reproduced":false}' })).toEqual(["dissolve"]);
+    expect(fired("red", { ...line, "red.json": '{"red":true}' })).toEqual(["implement_line"]);
+    expect(fired("red", { ...line, "red.json": '{"red":false}' })).toEqual(["prove_line"]);
+    expect(from(graph, "implement_line")).toEqual(["verify:handoff = done", "ask:handoff = needs_context or handoff = blocked"]);
+    expect(fired("verify", { ...line, outcome: "failure" })).toEqual(["implement_line"]);
+    expect(fired("green", { ...line, outcome: "failure" })).toEqual(["implement_line"]);
+    expect(fired("eval", { ...line, outcome: "failure", "eval.exit_code": "1" })).toEqual(["implement_line"]);
+    expect(fired("review", { ...line, review_verdict: "changes" })).toEqual(["implement_line"]);
+    expect(fired("reopen", line)).toEqual(["implement_line"]);
+    expect(fired("rebase", { ...line, outcome: "failure", "rebase.exit_code": "1" })).toEqual(["implement_line"]);
+  });
+
   test("after verify: code proves green, then every change meets the eval station, which owns its scope", () => {
     expect(fired("verify", { outcome: "success", category: "code" })).toEqual(["green"]);
     expect(fired("verify", { outcome: "success", category: "prompt" })).toEqual(["eval"]);
-    // A change to the line itself has no reproduction to rerun: eval judges it (line-map.md LX6).
-    expect(fired("verify", { outcome: "success", category: "line" })).toEqual(["eval"]);
-    expect(fired("verify", { outcome: "failure", category: "line" })).toEqual(["implement"]);
+    // A change to the line itself proves green when prove left a check to rerun, then meets eval (line-map.md LX6).
+    expect(fired("verify", { outcome: "success", category: "line" })).toEqual(["green"]);
     expect(fired("verify", { outcome: "failure", category: "code" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "failure" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "success" })).toEqual(["eval"]);
@@ -234,8 +253,8 @@ describe("line.cast template", () => {
   });
 
   test("review keeps its verdict routing; approve goes to the card; a refused card goes back to its writer", () => {
-    expect(from(graph, "implement")).toEqual(["verify:handoff = done"]);
-    expect(from(graph, "review")).toEqual(["card_draft:review_verdict = approve", "implement:review_verdict = changes", "exit:review_verdict = reject"]);
+    expect(from(graph, "implement")).toEqual(["verify:handoff = done", "ask:handoff = needs_context or handoff = blocked"]);
+    expect(from(graph, "review")).toEqual(["card_draft:review_verdict = approve", "implement:review_verdict = changes and category != line", "implement_line:review_verdict = changes and category = line", "exit:review_verdict = reject"]);
     expect(graph.nodes.get("review")?.reviewer).toBe(true);
     expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
     expect(from(graph, "card_draft")).toEqual(["card_write:"]);
@@ -324,9 +343,11 @@ describe("line.cast template", () => {
     expect(review).toContain("cast task verdict $task_id approve|changes|reject --note -");
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
     expect(graph.nodes.get("implement")?.prompt).toContain("cast task handoff $task_id");
-    // A line cause (LX6): the builder knows the line's own files are the change, and P9 holds a station prompt.
-    for (const f of [".codecast/line.toml", ".codecast/line/line.cast", "cast expectations propose", "P9"]) expect(graph.nodes.get("implement")?.prompt).toContain(f);
-    expect(graph.nodes.get("prove")?.prompt).toContain("For line:");
+    // A line cause (LX6) has its own prompts: the builder knows the line's own files are the change, and prove leaves a proof the line checks.
+    for (const f of [".codecast/line.toml", ".codecast/line/line.cast", "cast expectations propose", "line-proof.json"]) expect(graph.nodes.get("implement_line")?.prompt).toContain(f);
+    expect(graph.nodes.get("prove_line")?.prompt).toContain("$run_dir/line-proof.json");
+    for (const id of ["prove", "implement"]) expect(graph.nodes.get(id)?.prompt).not.toMatch(/category `line`|For line:|line-proof/);
+    expect(graph.nodes.get("prove")?.prompt).toContain("$run_dir/judge-defects.json");
   });
 
   test("script variables expand shell-quoted and leave $( alone; $human_message is empty when there is no note", () => {
@@ -385,11 +406,20 @@ describe("line.cast station scripts", () => {
     expect(calls()).toEqual([]);
   });
 
-  test("red for a line cause: the prove comment names the recorded runs, so it passes with that note", () => {
-    const line = run("red", { category: "line" });
-    expect(line.code).toBe(0);
-    expect(line.json).toEqual({ red: true, dir: runDir(), why: "a line cause: the prove comment names the recorded runs that show it" });
-    expect(calls()).toEqual([]);
+  test("red for a line cause: the recorded runs prove_line names must hold against the records, and a rerunnable check must fail", () => {
+    // `cast line proof-check` holds when the proof file exists here; the real check is lineProof.test.ts.
+    fs.writeFileSync(path.join(tmp, "bin", "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nif [ "$1 $2" = "line proof-check" ]; then [ -f "$3" ] && { echo "holds: 1 recorded run shows it"; exit 0; }; echo "no $3"; exit 1; fi\n`, { mode: 0o755 });
+    const missing = run("red", { category: "line" });
+    expect(missing.code).toBe(0);
+    expect(missing.json.red).toBe(false);
+    expect(missing.json.why).toStartWith("the line proof does not hold: no ");
+    fs.mkdirSync(runDir(), { recursive: true });
+    fs.writeFileSync(path.join(runDir(), "line-proof.json"), '{"runs":[]}');
+    expect(run("red", { category: "line" }).json).toEqual({ red: true, dir: runDir(), why: "holds: 1 recorded run shows it" });
+    fs.writeFileSync(path.join(runDir(), "repro.sh"), "exit 0\n");
+    expect(run("red", { category: "line" }).json.red).toBe(false);
+    fs.writeFileSync(path.join(runDir(), "repro.sh"), "echo 'prove has no failure edge'; exit 1\n");
+    expect(run("red", { category: "line" }).json).toEqual({ red: true, dir: runDir(), why: "repro.sh fails" });
   });
 
   test("red for a prompt: the project's prove command shows the miss, run with the run's values; without one it passes with a note", () => {
@@ -427,6 +457,26 @@ describe("line.cast station scripts", () => {
     expect(run("red", prove).json.why).toBe("the worktree has uncommitted changes, so it cannot go to the base to show the miss");
   });
 
+  test("red for code on a rerun: the test prove added comes along to the base, the fix does not, and the branch comes back whole", () => {
+    const git = (...a: string[]) => spawnSync("git", ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...a], { encoding: "utf-8" }).stdout.trim();
+    fs.writeFileSync(path.join(repo, "sum.sh"), "echo 3\n");
+    git("add", "."); git("commit", "-qm", "base"); git("branch", "-M", "main");
+    git("checkout", "-qb", "codecast/line-ct-1");
+    // Round one: prove commits a new test; the builder fixes the code it checks.
+    fs.writeFileSync(path.join(repo, "sum.test.sh"), '[ "$(bash sum.sh)" = 4 ] || { echo "expected 4, got $(bash sum.sh)"; exit 1; }\n');
+    git("add", "."); git("commit", "-qm", "test");
+    fs.writeFileSync(path.join(repo, "sum.sh"), "echo 4\n");
+    git("commit", "-qam", "fix");
+    fs.mkdirSync(runDir(), { recursive: true });
+    fs.writeFileSync(path.join(runDir(), "repro.sh"), "bash sum.test.sh\n");
+    // Run on the branch, the test passes; on the base with the test, it fails as the cause describes.
+    expect(run("red", { category: "code", branch: "codecast/line-ct-1" }).json).toEqual({ red: true, dir: runDir(), why: "repro.sh fails" });
+    expect(fs.readFileSync(path.join(runDir(), "red.log"), "utf-8")).toBe("expected 4, got 3\n");
+    expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-ct-1");
+    expect(git("status", "--porcelain")).toBe("");
+    expect(fs.readFileSync(path.join(repo, "sum.sh"), "utf-8")).toBe("echo 4\n");
+  });
+
   test("green: writes proof.json red then green for the card, and fails while the reproduction still fails", () => {
     const dir = runDir();
     fs.mkdirSync(dir, { recursive: true });
@@ -444,6 +494,22 @@ describe("line.cast station scripts", () => {
       after: [{ name: "sum adds two numbers", ok: true, detail: "ok" }],
     });
     expect(proofSummary(proof)).toMatchObject({ red: 1, fixed: 1, stillRed: [], broke: [] });
+  });
+
+  test("green for a line cause: its red names the recorded runs the line checked; with no check to rerun it writes no proof", () => {
+    const dir = runDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "line-proof.log"), "holds: 2 recorded runs show it: ct-9 run th7abcd: prove failed\n");
+    const none = run("green", { category: "line" });
+    expect(none.code).toBe(0);
+    expect(none.out).toContain("recorded runs only");
+    expect(fs.existsSync(path.join(dir, "proof.json"))).toBe(false);
+    fs.writeFileSync(path.join(dir, "repro.name"), "prove has a failure edge\n");
+    fs.writeFileSync(path.join(dir, "repro.sh"), "exit 0\n");
+    expect(run("green", { category: "line" }).code).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "proof.json"), "utf-8")).before).toEqual([
+      { name: "prove has a failure edge", ok: false, detail: "holds: 2 recorded runs show it: ct-9 run th7abcd: prove failed" },
+    ]);
   });
 
   test("eval runs the project's eval command in the worktree, then cast line eval-result over the reps it wrote", () => {
@@ -656,9 +722,11 @@ describe("line.cast offline run through the session path", () => {
     expect(gate).toMatchObject({ node_id: "decide", prompt: "Ship this change? Add the thing", category: "review" });
     expect(gate.stack).toMatch(/^Line · infra-lead · \d{4}-\d{2}-\d{2}$/);
     expect(gate.doc_md).toBe("X.\n\nWhat is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
-    expect(gate.choices.map((c: any) => [c.key, c.target])).toEqual([["S", "ship"], ["R", "reopen"], ["D", "drop"]]);
+    expect(gate.choices.map((c: any) => [c.key, c.target])).toEqual([["S", "rebase"], ["R", "reopen"], ["D", "drop"]]);
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
-    expect(ran.slice(-3)).toEqual(["ship", "watch", "exit"]);
+    // Offline there is no worktree to rebase: the station says it could not, and ship decides.
+    const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status !== "running").map((c) => c.body.node_id);
+    expect(ended.slice(-4)).toEqual(["rebase", "ship", "watch", "exit"]);
   }, 30000);
 
   test("the runner loads the repo's profile once: a project with a ship command ships and watches without the merge step", async () => {
@@ -800,16 +868,41 @@ describe("line.cast offline run through the session path", () => {
     expect(review).not.toContain("session_id");
   }, 30000);
 
-  test("a blocked handoff stops the run, keeps the task in review, and queues a decision to the run's owner", async () => {
-    effects.implement = () => { task = { ...task, status: "in_review", execution_status: "blocked" }; };
-    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ spawnerSession: "owner-sess" }));
-    expect(outcome).toBe("failed");
+  // A builder that stops to ask reaches the person who answers for the
+  // project as one decision on the gate rail (the run's spawner is the
+  // project's lead when it was started outside a session), and the answer
+  // resumes the run with the builder.
+  for (const status of ["needs_context", "blocked"] as const) {
+    test(`a ${status} handoff asks one decision with the builder's words; Answer sends the note back to the builder`, async () => {
+      let visits = 0;
+      effects.implement = () => {
+        visits++;
+        task = visits === 1
+          ? { ...task, status: "in_review", execution_status: status, verification_evidence: "Which base should the fix target: main or the release branch?" }
+          : { ...task, status: "in_review", execution_status: "done", verification_evidence: "Built on main." };
+      };
+      gateAnswers = ["A: target main", "S"];
+      const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
+      expect(outcome).toBe("completed");
+      expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "review", "card_write"]);
+      const gates = calls.filter((c) => c.route === "/cli/workflow-runs/gate").map((c) => c.body);
+      expect(gates.map((g) => g.node_id)).toEqual(["ask", "decide"]);
+      expect(gates[0]).toMatchObject({ prompt: `The builder stopped on Add the thing (${status}) and needs an answer to go on.`, doc_md: "Which base should the fix target: main or the release branch?", category: "approach" });
+      expect(gates[0].choices.map((c: any) => [c.key, c.target])).toEqual([["A", "reopen"], ["D", "drop"]]);
+      expect(spawns()[4].prompt).toContain("# Human Instructions\ntarget main");
+      // One rail: no failure decision, no blocker comment, the run never stopped.
+      expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
+      expect(calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
+    }, 30000);
+  }
+
+  test("a builder's question answered Drop closes the cause", async () => {
+    effects.implement = () => { task = { ...task, status: "in_review", execution_status: "needs_context", verification_evidence: "Is this still wanted?" }; };
+    gateAnswers = ["D: no longer wanted"];
+    expect(await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }))).toBe("completed");
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
-    expect(calls.some((c) => c.route === "/cli/work/update")).toBe(false); // left where the hand parked it
-    const decision = calls.find((c) => c.route === "/cli/decide")?.body;
-    expect(decision).toMatchObject({ session_id: "owner-sess", task: "ct-7", blocking: true });
-    expect(decision.question).toContain("Add the thing");
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("handed off blocked");
+    const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
+    expect(ended.slice(-3)).toEqual(["ask", "drop", "exit"]);
   }, 30000);
 
   test("a hand that ends with no handoff returns the task to open", async () => {

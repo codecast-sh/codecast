@@ -1,24 +1,23 @@
 "use client";
-// The charter block at the top of a project page and a plan page
-// (docs/architecture/org-staffing.md S7): goal, success metrics, priority,
-// owner role, non goals, risks, and the advisory budget line. Every field
+// The charter of a project (folded on its sheet) and of a plan
+// (docs/architecture/org-staffing.md S7): what it is for, the signs it works,
+// priority, owner role, non goals and risks. The
+// schema calls the first field `goal`; the screen never does, because a goal
+// is a company goal (cohesive build spec §7). Every field
 // edits inline; the caller turns each patch into the store action
 // (updateProject / updatePlan) so the row paints first and the dispatch side
 // effect carries the write. Empty: one line and the ask to the head of people.
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { useState } from "react";
 import Link from "next/link";
-import { Compass, Flag, ListChecks, Ban, AlertTriangle, Coins, Plus, X, Sparkles, UserRoundPlus } from "lucide-react";
+import { Compass, Flag, ListChecks, Ban, AlertTriangle,  Plus, X, Sparkles, UserRoundPlus } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { InlineEdit } from "../org/scope/ScopeEditors";
 import { OwnerRoleChip, PriorityPill } from "./CharterChips";
 import {
   headOfPeopleOf,
-  cleanBudget,
-  composeCharterHref,
-  formatTokens,
-  hasCharter,
-  parseTokens,
+  composeCharterHref, 
+  hasCharter, 
   PRIORITY_META,
   type CharterFields,
   type CharterKind,
@@ -45,6 +44,10 @@ export type CharterBlockProps = {
    *  ProjectLeadChip): the block then leaves the owner chip out rather than
    *  naming the same role twice within one screen. */
   hideOwner?: boolean;
+  /** The surface edits "What it is for" itself (a project's sheet, above its fold). */
+  hideGoal?: boolean;
+  /** Inside a fold that already says Charter: no card and no label of its own. */
+  plain?: boolean;
   className?: string;
 };
 
@@ -52,7 +55,7 @@ export type CharterBlockProps = {
  *  edit; saving a row empty removes it; the last row adds. */
 function ListField({ label, singular, icon: Icon, items, canEdit, onChange, placeholder, marker }: {
   label: string;
-  /** Names one row for a screen reader: "Success metric 2", "Risk 1". */
+  /** Names one row for a screen reader: "Sign it works 2", "Risk 1". */
   singular: string;
   icon: typeof Flag;
   items: string[];
@@ -99,43 +102,8 @@ function ListField({ label, singular, icon: Icon, items, canEdit, onChange, plac
 
 /** Advisory: what the owner role should spend on this line per day. Written
  *  on the project; the role's caps still bound the actual spend. */
-function BudgetLine({ budget, canEdit, onChange }: { budget: CharterFields["budget"]; canEdit: boolean; onChange: (b: NonNullable<CharterFields["budget"]> | null) => void }) {
-  const tokens = budget?.tokens_per_day;
-  const hands = budget?.hands_per_day;
-  if (!tokens && !hands && !canEdit) return null;
-  // Built through the server's own cleaner so the draft is the echo's JSON
-  // (sorted keys, as Convex returns them): the field lock compares by
-  // JSON.stringify, and a budget whose second field was appended after the
-  // first would otherwise hold a different key order and not retire.
-  const set = (patch: Partial<NonNullable<CharterFields["budget"]>>) => onChange(cleanBudget({ ...(budget ?? {}), ...patch }) ?? null);
-  return (
-    <div className="flex items-center gap-1.5 text-[11.5px] flex-wrap" style={{ color: "var(--sol-text-muted)" }} data-charter-budget>
-      <Coins className="w-3 h-3 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
-      <span style={{ color: "var(--sol-text-dim)" }}>Daily limit</span>
-      <InlineEdit
-        canEdit={canEdit}
-        value={tokens ? formatTokens(tokens) : ""}
-        placeholder="tokens"
-        ariaLabel="Daily limit tokens per day"
-        onSave={(v) => { if (!v) set({ tokens_per_day: undefined }); else { const n = parseTokens(v); if (n !== null) set({ tokens_per_day: n }); } }}
-        className="text-[11.5px] font-mono !w-auto"
-      />
-      <span style={{ color: "var(--sol-text-dim)" }}>tokens/day ·</span>
-      <InlineEdit
-        canEdit={canEdit}
-        value={hands ? String(hands) : ""}
-        placeholder="hands"
-        ariaLabel="Daily limit hands per day"
-        onSave={(v) => { if (!v) set({ hands_per_day: undefined }); else { const n = Number(v); if (Number.isInteger(n) && n >= 0) set({ hands_per_day: n }); } }}
-        className="text-[11.5px] font-mono !w-auto"
-      />
-      <span style={{ color: "var(--sol-text-dim)" }}>hands/day</span>
-      <span className="text-[10px] uppercase tracking-[0.08em] ml-1 px-1.5 h-[16px] inline-flex items-center rounded border" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)" }} title="A guide for the owner role and the head of people; the role's own limits still bound it">advisory</span>
-    </div>
-  );
-}
 
-export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, onHire, ownerBlockedReason, hideOwner, className }: CharterBlockProps) {
+export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, onHire, ownerBlockedReason, hideOwner, hideGoal, plain, className }: CharterBlockProps) {
   // "No charter yet" until someone opens the fields or a value lands.
   const [opened, setOpened] = useState(false);
   const filled = hasCharter(charter);
@@ -155,7 +123,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
   const hires = rolesLoaded && !head;
   const askLabel = head ? `Ask @${head.handle} to draft one` : hires ? "Hire a Head of People to draft one" : "Ask the Head of People to draft one";
   const AskIcon = hires ? UserRoundPlus : Sparkles;
-  if (!filled && !opened) {
+  if (!filled && !opened && !plain) {
     return (
       <div className={cn("flex items-center gap-2 text-[12px] flex-wrap", className)} data-charter="empty">
         <Compass className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
@@ -183,18 +151,20 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
 
   return (
     <section
-      className={cn("relative rounded-lg border pl-4 pr-3.5 py-3", className)}
-      style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: "color-mix(in srgb, var(--sol-card) 60%, transparent)" }}
+      className={cn("relative", !plain && "rounded-lg border pl-4 pr-3.5 py-3", className)}
+      style={plain ? undefined : { borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: "color-mix(in srgb, var(--sol-card) 60%, transparent)" }}
       data-charter={kind}
       aria-label="Charter"
     >
       {/* The rule carries the priority colour: the block reads at a glance from across the room. */}
-      <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: accent }} />
+      {!plain && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full" style={{ background: accent }} />}
 
       <div className="flex items-center gap-2 flex-wrap mb-2">
-        <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
-          <Compass className="w-3 h-3" /> Charter
-        </span>
+        {!plain && (
+          <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
+            <Compass className="w-3 h-3" /> Charter
+          </span>
+        )}
         <PriorityPill priority={charter.priority} onChange={canEdit ? (p) => onChange({ priority: p }) : undefined} />
         {showOwner && (
           <OwnerRoleChip
@@ -205,36 +175,33 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
             blockedReason={ownerBlockedReason}
           />
         )}
-        {kind === "project" && (
-          <div className="ml-auto">
-            <BudgetLine budget={charter.budget} canEdit={canEdit} onChange={(b) => onChange({ budget: b })} />
-          </div>
-        )}
       </div>
 
-      <div data-charter-goal>
-        <InlineEdit
-          value={charter.goal ?? ""}
-          canEdit={canEdit}
-          multiline
-          placeholder={kind === "project" ? "What this project is for, in one paragraph a new hire could act on." : "What this plan delivers and how you will know it landed."}
-          onSave={(v) => onChange({ goal: v })}
-          ariaLabel="Goal"
-          className="text-[13.5px] leading-relaxed whitespace-pre-wrap"
-          style={{ color: "var(--sol-text)" }}
-        />
-      </div>
+      {!hideGoal && (
+        <div data-charter-goal>
+          <InlineEdit
+            value={charter.goal ?? ""}
+            canEdit={canEdit}
+            multiline
+            placeholder={kind === "project" ? "What this project is for, in one paragraph a new hire could act on." : "What this plan delivers and how you will know it landed."}
+            onSave={(v) => onChange({ goal: v })}
+            ariaLabel="What it is for"
+            className="text-[13.5px] leading-relaxed whitespace-pre-wrap"
+            style={{ color: "var(--sol-text)" }}
+          />
+        </div>
+      )}
 
       {(metrics.length + nonGoals.length + risks.length > 0 || canEdit) && (
-        <div className="mt-3 grid gap-x-6 gap-y-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+        <div className={cn(!hideGoal && "mt-3", "grid gap-x-6 gap-y-3")} style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
           <ListField
-            label="Success metrics"
-            singular="Success metric"
+            label="Signs it works"
+            singular="Sign it works"
             icon={ListChecks}
             items={metrics}
             canEdit={canEdit}
             onChange={(next) => onChange({ success_metrics: next })}
-            placeholder="Add a metric"
+            placeholder="Add a sign it works"
             marker={() => <span className="inline-block w-3 h-3 rounded-[3px] border" style={{ borderColor: "color-mix(in srgb, var(--sol-green) 70%, transparent)" }} />}
           />
           <ListField

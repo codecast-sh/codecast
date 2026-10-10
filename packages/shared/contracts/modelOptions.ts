@@ -37,6 +37,11 @@ export interface ModelOption {
 // (opus-4-8), so the Claude 5 family and Opus 4.8 all hold a million. Haiku 4.5
 // is the documented 200k. A figure that is wrong shows up as a share over 100%,
 // which is why measuring beats guessing here.
+/** The small Claude model codecast's own calls run on: titles, summaries,
+ *  briefs, ask, triage, and the Free plan's assistant. It refuses any
+ *  temperature, and it thinks by default inside max_tokens. */
+export const CHEAP_MODEL = "claude-haiku-5-5";
+
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model" },
   { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable", contextWindow: 1_000_000 },
@@ -45,9 +50,10 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "haiku", label: "Haiku", hint: "Fastest for quick answers", cliAlias: "haiku", contextWindow: 200_000 },
 ];
 
-// The stops Claude Code's `/effort <x>` one-shot accepts (session-only:
-// "Set effort level to max (this session only)", no settings.json write).
-export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
+// The stops Claude Code's `--effort` flag and `/effort <x>` one-shot accept
+// (session-only: "Set effort level to max (this session only)", no
+// settings.json write).
+export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
