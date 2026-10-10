@@ -8,6 +8,7 @@
 // Pure: no node or convex imports. The CLI, the browser SDK and the Convex
 // runtime all load it, which is why the key helpers use globalThis.crypto.
 import type { SignalKind } from "./signalFingerprint";
+import { MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
 
 // ── Sources ──
 
@@ -37,7 +38,7 @@ export const POSTHOG_PROJECT_ID = /^\d{1,12}$/;
  * server's check both come from this list.
  */
 export interface SourceConfigField {
-  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins";
+  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins" | "moment_storage";
   flag: string;
   list: boolean;
   providers: readonly SourceProvider[];
@@ -54,6 +55,9 @@ export const SOURCE_CONFIG_FIELDS: readonly SourceConfigField[] = [
   { key: "project_id", flag: "project-id", list: false, providers: ["posthog"], help: "PostHog project id, when not the connection's", pattern: POSTHOG_PROJECT_ID, what: "a PostHog project id (a number)" },
   { key: "environments", flag: "environments", list: true, providers: SOURCE_PROVIDERS, help: "Only these environments" },
   { key: "allowed_origins", flag: "allowed-origins", list: true, providers: KEYED_SOURCE_PROVIDERS, help: "Origins a browser SDK may post from" },
+  // learning-loop.md LL7: a moment can carry customer conversations, so its
+  // body stays on the extractor's host unless a person chooses codecast.
+  { key: "moment_storage", flag: "moment-storage", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "Where moment bodies are kept: host (the default) or codecast (30 days)", pattern: new RegExp(`^(${MOMENT_STORAGES.join("|")})$`), what: `one of ${MOMENT_STORAGES.join(", ")}` },
 ];
 
 /**
@@ -376,10 +380,12 @@ export type IngestItem =
       chunks?: number;
       counts?: { clicks?: number; errors?: number; failed_requests?: number };
       at: number;
-    };
+    }
+  /** Something worth judging happened (learning-loop.md LL7): kept and coalesced into a moment, never counted only. */
+  | MomentEventItem;
 
 export type IngestItemType = IngestItem["type"];
-export const INGEST_ITEM_TYPES: readonly IngestItemType[] = ["error", "log", "job_failed", "check", "event", "deploy", "replay"];
+export const INGEST_ITEM_TYPES: readonly IngestItemType[] = ["error", "log", "job_failed", "check", "event", "deploy", "replay", "moment"];
 
 export interface IngestEnvelope {
   sdk: { name: string; version: string };
@@ -578,6 +584,8 @@ function validateItem(raw: unknown, now: number): IngestItem | string {
         at,
       };
     }
+    case "moment":
+      return validateMomentEvent(raw, at);
     default:
       return `unknown item type ${JSON.stringify(raw.type)?.slice(0, 40) ?? "undefined"}`;
   }

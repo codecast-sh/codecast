@@ -5,7 +5,7 @@ import { SOL } from "../../blog/blogChrome";
 import { VIOLET } from "./kit";
 
 /**
- * The hero's signature visual: `cast blame` on a file, one line selected, and
+ * The hero's signature visual: session blame on a file, one line selected, and
  * a core drilled from that line down through the sessions underneath the code
  * (newest on top, like sediment) until it reaches the session that wrote it
  * and opens on the message where the value was decided, plus the later
@@ -62,12 +62,12 @@ function Stop({ d }: { d: number }) {
 
 export function HeroStrata() {
   return (
-    <div className="relative select-none" role="img" aria-label="cast blame on retry.ts: line 5 traced through three sessions to the session that wrote it, opened on message 88 where the retry cap was set to 3 and the later message that raised it to 5">
+    <div className="relative select-none" role="img" aria-label="Session blame on retry.ts: line 5 traced through three sessions to the session that wrote it, opened on message 88 where the retry cap was set to 3 and the later message that raised it to 5">
       {/* The file */}
       <div className="mm-anim mm-rise relative rounded-t-xl overflow-hidden" style={{ backgroundColor: SOL.base03, border: "1px solid #0a4352", "--d": ".1s" } as CSSProperties}>
         <div className="flex items-center gap-2 px-4 py-2" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #0a4352" }}>
-          <span className="text-[11px] font-mono" style={{ color: SOL.green }}>$</span>
-          <span className="text-[11px] font-mono truncate" style={{ color: SOL.base1 }}>cast blame src/webhooks/retry.ts -L 3,8</span>
+          <span className="text-[11px] font-mono truncate" style={{ color: SOL.base1 }}>src/webhooks/retry.ts</span>
+          <span className="ml-auto shrink-0 text-[11px] font-mono" style={{ color: SOL.base01 }}>Blame: <span style={{ color: "#c9cbff" }}>Sessions</span></span>
         </div>
         <div className="relative pt-2 font-mono text-[11px] sm:text-[11.5px] leading-[1.95]">
           <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-14 z-10" style={{ background: `linear-gradient(90deg, transparent, ${SOL.base03})` }} />

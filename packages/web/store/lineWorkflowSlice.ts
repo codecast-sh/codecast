@@ -19,13 +19,23 @@ type LineWorkflowDraft = { workflows: Record<string, any>; currentUser?: { _id: 
 /** The stub id a fork paints under before the server row has an id. */
 export const lineWorkflowStubId = (slug: string) => `wf:${slug}`;
 
-const idOfSlug = (workflows: Record<string, any>, slug: string) =>
-  Object.keys(workflows ?? {}).find((id) => workflows[id]?.slug === slug);
+/** A `workflows` row is the viewer's own. The collection also holds rows
+ *  other people own (workflow_runs.graphOfRun: the graph a teammate's run
+ *  ran, drawn on the line map), which no list of the viewer's workflows, slug
+ *  lookup or edit may take for theirs. Before the viewer is known, every row
+ *  counts, as does a row that names no owner. */
+export function isViewersWorkflow(row: { user_id?: unknown } | null | undefined, viewerId: unknown): boolean {
+  if (!row) return false;
+  return !viewerId || !row.user_id || String(row.user_id) === String(viewerId);
+}
+
+const idOfSlug = (draft: LineWorkflowDraft, slug: string) =>
+  Object.keys(draft.workflows ?? {}).find((id) => draft.workflows[id]?.slug === slug && isViewersWorkflow(draft.workflows[id], draft.currentUser?._id));
 
 export function createLineWorkflowSlice(): LineWorkflowSliceActions {
   return {
     saveLineWorkflow: action(function (this: LineWorkflowDraft, wf: LineWorkflow, opts?: { create?: boolean }) {
-      const id = idOfSlug(this.workflows, wf.slug);
+      const id = idOfSlug(this, wf.slug);
       const row = id ? this.workflows[id] : null;
       // A create over a row this window already holds paints nothing; the
       // server refuses it the same way.
@@ -46,7 +56,7 @@ export function createLineWorkflowSlice(): LineWorkflowSliceActions {
     }),
 
     removeLineWorkflow: action(function (this: LineWorkflowDraft, slug: string) {
-      const id = idOfSlug(this.workflows, slug);
+      const id = idOfSlug(this, slug);
       if (id) delete this.workflows[id];
     }),
   };

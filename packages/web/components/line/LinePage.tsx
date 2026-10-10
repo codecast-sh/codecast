@@ -1,37 +1,27 @@
 "use client";
-// The line page (docs/architecture/line-map.md LX1): one project's line as
-// its map (LineMapView), from what the world reported to a held fix, with the
-// headline and the week's figures above it. Paints from the store
-// (useLineFloor): signals, tasks with a `cause`, runs and the decision queue;
-// lib/lineFlow derives the headline and the throughput strip, lib/line/lineMap
-// the map. One project's line at a time (line-profile.md LP1): LineProjects
-// holds the switcher and the "all projects" roll-up, and scopeLine narrows the
-// rows. A workspace with no line yet teaches the first step.
-import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+// The line page (docs/architecture/line-workspace.md LW1): every project's
+// line at once, each card opening that project's workspace, `/line/<project>`.
+// Above the cards, the week across every line: what shipped, how fast, what
+// came back. Problems filed under no project have no workspace, so the page
+// lists them itself. A workspace with no line yet teaches the first step.
+// Paints from the store (useLineFloor); lib/lineFlow derives every number.
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronDown, Copy, SlidersHorizontal } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
-import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
-import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import { useInitiatives } from "../../hooks/useInitiatives";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { LINE_STATION_SETTINGS, lineSettingsHref, lineTabHref } from "../../lib/lineSettings";
+import { hasOpenModal } from "../../shortcuts";
+import { LINE_STATION_SETTINGS, lineSettingsHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { cn } from "../../lib/utils";
-import { copyText } from "../../lib/copyText";
-import {
-  buildLineFlow, lineHeadline, scopeLine, ALL_PROJECTS, NO_PROJECT,
-  type HeadlinePart, type LineProject, type GoalRow,
-} from "../../lib/lineFlow";
-import { LINE_SETTINGS_NODE } from "../../lib/line/lineMapUrl";
+import { buildLineFlow, isCause, scopeLine, ALL_PROJECTS, NO_PROJECT, type LineProject } from "../../lib/lineFlow";
+import { lineWorkspaceHref } from "../../lib/line/lineWorkspaceUrl";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
-import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
+import { LineOverview, LineProjectSwitcher, lineKeys } from "./LineProjects";
 import { useLineFloor } from "./useLineFloor";
 import { LineSetup } from "./LineSetup";
-import { LineMapView, useLineMapUrl } from "./map/LineMapView";
-import { useLineAdmission } from "./map/useLineAdmission";
 import "./line.css";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -40,144 +30,83 @@ const ago = (from: number | null | undefined, now: number) => (from == null ? nu
 const compactElapsed = (ms: number) => ago(0, ms) ?? "";
 
 type StationKey = "sense" | "causes" | "build" | "awaiting" | "watching" | "closed";
-/** what and cmd teach an empty station: what feeds it, and the command. */
-type Station = { key: StationKey; name: string; short: string; sub?: string; wide?: boolean; slim?: boolean; tail?: boolean; what: string; cmd: string };
+/** `what` teaches an empty station: what it is for, in plain words. */
+type Station = { key: StationKey; name: string; what: string };
 
 const STATIONS: Station[] = [
-  { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", slim: true, what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
-  { key: "causes", name: "Causes", short: "Causes", what: "A signal opens a cause, or joins the open one that shares its fingerprint.", cmd: "cast signal ls" },
-  { key: "build", name: "In build", short: "In build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
-  { key: "awaiting", name: "Awaiting you", short: "Yours", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
-  { key: "watching", name: "Watching", short: "Watching", tail: true, what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
-  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", tail: true, what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
+  { key: "sense", name: "Sources report", what: "Sentry, PostHog, evals, an agent watching your agents, or a person: each report is a finding." },
+  { key: "causes", name: "Problems", what: "Findings about the same thing join one problem. Problems wait their turn, the most important first." },
+  { key: "build", name: "Worked on", what: "Agents and scripts take the top problem through the line's steps: find why it happens, prove it, build a fix, check it." },
+  { key: "awaiting", name: "You decide", what: "Each finished fix comes to you with its proof. You ship it, send it back, or drop it." },
+  { key: "watching", name: "Watched", what: "A shipped fix is watched. If the problem comes back, it opens again; a quiet watch closes it." },
+  { key: "closed", name: "Closed", what: "Problems fixed and shipped, closed without a change, or resolved in the last seven days." },
 ];
 
-/** The first command a new line needs: file one signal by hand. */
-const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What you saw"`;
+export function LinePage() {
+  const { now, projects, lineRows, rollup, line } = useLineFloor();
+  // A project's card or pill opens its workspace; the roll-up and the problems under no project stay here.
+  const router = useRouter();
+  const openLine = (key: string) => {
+    if (key === NO_PROJECT || key === ALL_PROJECTS) { line.select(key); return; }
+    router.push(lineWorkspaceHref(rollup.find((r) => r.key === key)?.short_id ?? key));
+  };
+  const flow = useMemo(() => buildLineFlow({ ...lineRows, initiatives: [], projects, now }), [lineRows, projects, now]);
+  const unfiled = useMemo(() => scopeLine(lineRows, NO_PROJECT).tasks.filter(isCause), [lineRows]);
+  const showUnfiled = line.key === NO_PROJECT;
+  const rollupView = !showUnfiled && rollup.length > 0;
 
-/** `project` pins the page to one project's line: the project's Line tab
- *  embeds it with no switcher, and links out to the whole /line. One
- *  project's line is its map (line-map.md LX1, LX2): the stations of its
- *  actual graph with the window's data over them, and a panel per node. The
- *  roll-up across projects only counts. */
-export function LinePage({ project: pinned, workspace }: { project?: string; workspace?: string | null } = {}) {
-  const initiatives = useInitiatives();
-  const { now, projects, lineRows, rollup, line } = useLineFloor(pinned, workspace);
-  const mapUrl = useLineMapUrl(pinned ? null : line.param);
-  // Settings belong to one project's line; on the map they are a panel.
-  const settingsProject = line.key === ALL_PROJECTS || line.key === NO_PROJECT ? null : line.param;
-  const openSettings = () => mapUrl.set({ node: LINE_SETTINGS_NODE });
-  useShortcutContext("line");
-  useShortcutAction("line.settings", () => { if (!settingsProject) return false; openSettings(); return true; });
-  // With no line anywhere the roll-up has nothing to count: the page teaches instead.
-  const rollupView = !pinned && line.key === ALL_PROJECTS && rollup.length > 0;
-  // One project's line lives on its project's Line tab too (LM7).
-  const tabHref = settingsProject && !pinned ? lineTabHref(line.key) : null;
-  const lineProfile = useMemo(() => projects.find((p) => p._id === line.key)?.line_profile, [projects, line.key]);
-  const finders = lineProfile?.finders;
-  const findersSince = lineProfile?.changed_at;
-
-  const scoped = useMemo(() => scopeLine(lineRows, line.key), [lineRows, line.key]);
-  // Whether the line may start its next cause: why nothing starts, and the switch and slots that decide it.
-  const admit = useLineAdmission(line.key === ALL_PROJECTS ? null : line.key);
-  const flow = useMemo(() => buildLineFlow({
-    ...scoped,
-    initiatives: initiatives.map((i: InitiativeRow) => ({ short_id: i.short_id, title: i.title, priority: i.priority as GoalRow["priority"] })),
-    projects,
-    now,
-    finders,
-    findersSince,
-    admission: admit.admission,
-  }), [scoped, initiatives, projects, now, finders, findersSince, admit.admission]);
-
-  // Nothing anywhere on this line: the map still draws its stations, with the first step above them.
-  const allEmpty = flow.sense.items.length === 0 && flow.causes.count === 0 && flow.build.count === 0 && flow.awaiting.count === 0 && flow.watching.count === 0 && flow.closed.count === 0;
-  const onMap = line.key !== ALL_PROJECTS;
-
-  // Brackets walk the lines: the roll-up, then each project.
+  // Brackets walk the pills: the roll-up, then each line.
   useWatchEffect(() => {
-    if (pinned || rollup.length === 0) return;
+    if (rollup.length === 0) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal() || keyBelongsElsewhere(e.target)) return;
       if (e.key !== "[" && e.key !== "]") return;
       e.preventDefault();
       const keys = lineKeys(rollup);
       const idx = Math.max(0, keys.indexOf(line.key));
-      line.select(keys[(idx + (e.key === "]" ? 1 : -1) + keys.length) % keys.length]);
+      openLine(keys[(idx + (e.key === "]" ? 1 : -1) + keys.length) % keys.length]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pinned, rollup, line]);
-
-  // The headline speaks for the selected line only, so it names it, and a
-  // card waiting in another project is one click away (LX1).
-  const scopeName = useMemo(() => rollup.find((r) => r.key === line.key)?.title ?? null, [rollup, line.key]);
-  const elsewhere = useMemo(() => {
-    const others = rollup.filter((r) => r.key !== line.key && r.awaiting > 0).sort((a, b) => b.awaiting - a.awaiting);
-    return others.length ? { key: others[0].key, title: others[0].title, count: others.reduce((n, r) => n + r.awaiting, 0), projects: others.length } : null;
-  }, [rollup, line.key]);
-
-  // With a card elsewhere the all-clear says "here", against the link to there;
-  // the project switcher right above already names this line.
-  const headline = useMemo(() => {
-    const parts = headlineLead(lineHeadline(flow, now, elsewhere ? null : scopeName));
-    return elsewhere ? parts.map((p) => (p.tone === "clear" ? { ...p, text: "nothing waiting on you here" } : p)) : parts;
-  }, [flow, now, scopeName, elsewhere]);
-  const panelOpen = !!(mapUrl.state.node || mapUrl.state.edge);
-
-  // A headline part that names a station opens that node's panel on the map.
-  const onStation = (key: NonNullable<HeadlinePart["station"]>) => {
-    const node = key === "causes" ? "causes" : key === "awaiting" ? CARD_GATE_NODE_ID : key === "watching" ? "watch" : flow.build.items[0]?.run.current_node_id ?? "implement";
-    mapUrl.set({ node });
-  };
+  }, [rollup, line]);
 
   return (
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
-      {/* The project's Line tab sits under the project's own header: the map
-          leads, its window and counts in the map's own bar. /line names itself
-          and switches lines; settings live once, in the map's bar. */}
-      {!pinned && (
-        <header className="shrink-0 px-4 sm:px-6 pt-4 pb-2.5 flex flex-col gap-2.5">
-          <div className="flex items-baseline gap-3 min-w-0">
-            <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
-            <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
-            {tabHref && (
-              <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
-                Line tab
-              </Link>
-            )}
-          </div>
-          <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => line.select(k)} />
-          {onMap && !allEmpty && <Throughput t={flow.throughput} brief={panelOpen} lead={<Headline parts={headline} onStation={onStation} elsewhere={elsewhere} onElsewhere={() => elsewhere && line.select(elsewhere.key)} />} />}
-        </header>
-      )}
+      <header className="shrink-0 px-4 sm:px-6 pt-4 pb-2.5 flex flex-col gap-2.5">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
+          <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">every problem your sources find, worked through to a shipped, watched fix</span>
+        </div>
+        <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={openLine} />
+        {rollupView && <Throughput t={flow.throughput} />}
+      </header>
 
-      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => line.select(k)} />
-        : !onMap ? <Onboarding projects={projects} />
-        : (
-          <div className={cn("flex-1 min-h-0", !pinned && "border-t border-sol-border/30")} data-line-flow>
-            <LineMapView
-              projectId={line.key === NO_PROJECT ? null : line.key}
-              rows={scoped}
-              flow={flow}
-              now={now}
-              note={allEmpty ? <FirstSignal /> : undefined}
-              lineParam={pinned ? null : line.param}
-              admit={admit}
-              footEnd={<FooterLinks projectsKeys={rollup.length > 0 && !pinned} />}
-              barEnd={pinned ? (
-                <Link href={line.href} className="shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>All lines</Link>
-              ) : undefined}
-            />
-          </div>
-        )}
+      {showUnfiled ? <Unfiled causes={unfiled} />
+        : rollupView ? <LineOverview rollup={rollup} onSelect={openLine} />
+        : <Onboarding projects={projects} />}
 
-      {/* On the map its key row carries these, one line, and the map keeps the height. */}
-      {(rollupView || !onMap) && (
-        <footer className="shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
-          <FooterLinks projectsKeys={rollup.length > 0 && !pinned} />
-        </footer>
-      )}
+      <footer className="shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
+        <FooterLinks projectsKeys={rollup.length > 0} />
+      </footer>
+    </div>
+  );
+}
+
+/** Problems filed under no project: they have no line of their own, so each opens its task. */
+function Unfiled({ causes }: { causes: ReadonlyArray<{ _id: string; short_id?: string; title?: string; status?: string }> }) {
+  if (!causes.length) return <p className="flex-1 px-4 sm:px-6 py-6 text-[12.5px] text-sol-text-dim" data-line-unfiled="">Every problem is filed under a project.</p>;
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5" data-line-unfiled={causes.length}>
+      <p className="py-2 text-[12px] text-sol-text-dim max-w-[64ch]">These problems are filed under no project, so no project's line works them. File one under a project to put it on that line.</p>
+      <ul className="divide-y divide-sol-border/20 border-t border-sol-border/20">
+        {causes.map((c) => (
+          <li key={c._id} className="flex items-baseline gap-3 py-1.5 text-[12.5px]">
+            <span className="shrink-0 font-mono text-[11px] text-sol-text-dim w-[6.5em]">{c.short_id ?? ""}</span>
+            <Link href={`/tasks/${c.short_id ?? c._id}`} className="min-w-0 flex-1 truncate text-sol-text hover:text-sol-blue">{c.title ?? c.short_id}</Link>
+            <span className="shrink-0 text-sol-text-dim">{c.status?.replace(/_/g, " ")}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -195,17 +124,6 @@ function FooterLinks({ projectsKeys }: { projectsKeys: boolean }) {
   );
 }
 
-/** A line nothing has reached yet: the one command that starts it. */
-function FirstSignal() {
-  return (
-    <div className="lmap-note flex flex-wrap items-center gap-x-3 gap-y-2" data-line-first-signal>
-      <span>Nothing has reached this line yet. File the first signal, and watch it move through the map:</span>
-      <div className="w-fit max-w-full"><Cmd cmd={FIRST_SIGNAL} /></div>
-    </div>
-  );
-}
-
-
 /** A footer key hint. Its words drop on a narrow floor (line.css), and the
  *  tooltip keeps saying them. */
 function Hint({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
@@ -216,108 +134,42 @@ function Hint({ label, className, children }: { label: string; className?: strin
   );
 }
 
-// ── Headline and throughput ──
-
-// Color only what needs the founder: cards waiting, a stall, a failure.
-// An all-clear part is plain text.
-const TONE: Record<HeadlinePart["tone"], string> = {
-  ask: "text-sol-yellow",
-  warn: "text-sol-orange",
-  fail: "text-sol-red",
-  live: "",
-  calm: "",
-  clear: "",
-};
-
-/** The headline says only what needs the founder (cards waiting, a stall, a
- *  failure), or that nothing does: the station counts right below carry the
- *  rest, so no number is said twice. */
-const LEAD_TONES = new Set<HeadlinePart["tone"]>(["ask", "warn", "fail", "clear"]);
-const headlineLead = (parts: HeadlinePart[]) => {
-  const lead = parts.filter((p) => LEAD_TONES.has(p.tone));
-  return lead.length ? lead : parts.slice(0, 1);
-};
-
-/** The sentence's counts in bold, so the numbers are what the eye lands on. */
-const boldNumbers = (text: string) => text.split(/(\d+)/).map((t, i) => (i % 2 ? <b key={i} className="font-semibold">{t}</b> : t));
-
-/** The five-second read. A part that names a station links to it: the
- *  cursor moves there and the flow scrolls it into view. */
-type Elsewhere = { key: string; title: string; count: number; projects: number };
-function Headline({ parts, onStation, elsewhere, onElsewhere }: { parts: HeadlinePart[]; onStation: (key: NonNullable<HeadlinePart["station"]>) => void; elsewhere?: Elsewhere | null; onElsewhere?: () => void }) {
-  return (
-    <p className="line-headline text-sol-text" data-line-headline>
-      {parts.map((p, i) => {
-        // A count never ends a line apart from the word it counts, nor an
-        // age apart from the word before it ("oldest 1d").
-        const text = (i === 0 ? p.text.charAt(0).toUpperCase() + p.text.slice(1) : p.text).replace(/(\d+) /g, "$1\u00a0").replace(/ (\d+\w*)$/, "\u00a0$1");
-        const station = p.station;
-        // The comma rides the part before it, so a wrap never opens a line with one.
-        const sep = i < parts.length - 1 ? ", " : "";
-        return (
-          <Fragment key={i}>
-            {p.href
-              ? <Link href={p.href} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-run title="Open the run's report">{boldNumbers(text)}</Link>
-              : station
-              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{boldNumbers(text)}</a>
-              : <span className={TONE[p.tone] || undefined}>{boldNumbers(text)}</span>}
-            {sep}
-          </Fragment>
-        );
-      })}
-      {elsewhere && (
-        <>
-          <span className="line-headline-sep" aria-hidden> · </span>
-          <button type="button" onClick={onElsewhere} className="line-headline-link text-sol-yellow" data-line-headline-elsewhere={elsewhere.key}>
-            {boldNumbers(`${elsewhere.count}\u00a0${elsewhere.count === 1 ? "card waits" : "cards wait"} in ${elsewhere.title}${elsewhere.projects > 1 ? ` and ${elsewhere.projects - 1} more` : ""}`)}
-            <ArrowRight className="inline-block w-[0.8em] h-[0.8em] ml-1 align-[-0.05em]" aria-hidden />
-          </button>
-        </>
-      )}
-    </p>
-  );
-}
-
 /** A week's bars earn their place with three days that moved; fewer is a
  *  few pixels of nothing, and the number alone says it better. */
 const sparkable = (days: number[]) => days.filter((d) => d > 0).length >= 3;
 
-/** The headline, then the week as one dim trailing clause on its row; a
- *  click on the clause opens the week's figures under it. */
-function Throughput({ t, lead: headline, brief }: { t: ReturnType<typeof buildLineFlow>["throughput"]; lead: ReactNode; brief?: boolean }) {
+/** The week across every line as one dim clause; a click opens the week's figures under it. */
+function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }) {
   const [open, setOpen] = useState(false);
-  // A panel open on the map: the status alone, on one line, and the map takes the height.
-  if (brief) return <div className="line-head-row" data-brief="true">{headline}</div>;
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
-    return <div className="line-head-row">{headline}<span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">no signals this week</span></div>;
+    return <div className="line-head-row"><span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">nothing reported this week</span></div>;
   }
   const inWatch = t.shippedInWatch > 0 ? (t.shippedInWatch === t.shipped ? "now in watch" : `${t.shippedInWatch} in watch`) : null;
   const median = t.medianToShip === null ? null : compactElapsed(t.medianToShip);
   // A metric with nothing measured yet stays out, so it never reads as a value.
   const lead: Array<{ label: string; value: string | number; tip: string; spark?: number[]; note?: string | null }> = [
-    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Causes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still in Watching; a ship moves to Closed when its watch ends quiet.` : ""}` },
-    ...(median ? [{ label: "median signal to ship", value: median, tip: "From a cause's first signal to its ship, median over this week's ships" }] : []),
+    { label: "fixes shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Fixes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still being watched; a fix counts as closed once its watch ends quiet.` : ""}` },
+    ...(median ? [{ label: "usual time from first report to ship", value: median, tip: "From a problem's first report to its fix shipping, the median over this week's ships" }] : []),
   ];
   const flowCells: Array<{ label: string; value: string | number; tone?: string; spark?: number[]; tip: string; unit?: string }> = [
-    { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn, tip: "signals in this week, per day" },
-    { label: "causes opened", value: t.opened, spark: t.daily.opened, tip: "causes opened this week, per day" },
-    { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved, tip: "causes dissolved this week, per day" },
-    { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened, tip: "causes reopened this week, per day" },
-    ...(t.tokensPerShip === null ? [] : [{ label: "cost per ship", value: formatTokens(Math.round(t.tokensPerShip)), unit: "tokens", tip: "Cost per shipped change, in run tokens. Runs record tokens, not dollars." }]),
+    { label: "findings reported", value: t.signalsIn, spark: t.daily.signalsIn, tip: "Findings the sources reported this week, per day" },
+    { label: "new problems", value: t.opened, spark: t.daily.opened, tip: "Problems opened this week, per day" },
+    { label: "closed without a change", value: t.dissolved, spark: t.daily.dissolved, tip: "Problems that did not reproduce and closed without a change this week, per day" },
+    { label: "came back after a fix", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened, tip: "Problems that came back after their fix shipped, this week, per day" },
+    ...(t.tokensPerShip === null ? [] : [{ label: "cost per shipped fix", value: formatTokens(Math.round(t.tokensPerShip)), unit: "tokens", tip: "What each shipped fix cost, in tokens. Runs record tokens, not dollars." }]),
   ];
   // The station headers already count signals in and what sits in watch, so
   // the clause says only the week's outcome: what shipped, how fast, and a
   // reopen when there is one.
   const summary: Array<{ n: string | number; words: string; tone?: string }> = [
-    { n: t.shipped, words: " shipped this week" },
-    ...(median ? [{ n: median, words: " median to ship" }] : []),
-    ...(t.reopened ? [{ n: t.reopened, words: " reopened", tone: "text-sol-red" }] : []),
+    { n: t.shipped, words: t.shipped === 1 ? " fix shipped this week" : " fixes shipped this week" },
+    ...(median ? [{ n: median, words: " usually, from first report to ship" }] : []),
+    ...(t.reopened ? [{ n: t.reopened, words: " came back", tone: "text-sol-red" }] : []),
   ];
   return (
     <div className="flex flex-col gap-2 min-w-0">
     <div className="line-head-row">
-    {headline}
     {/* Each figure stays whole and the clause wraps between them; the
         chevron rides the last figure, so a wrap never strands it. */}
     <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary whitespace-nowrap text-[12px] text-sol-text-dim text-right hover:text-sol-text" data-line-throughput-summary title={open ? "Hide the week's figures" : "The week's figures"}>
@@ -374,55 +226,8 @@ function SettingsLink({ href, station }: { href: string; station: StationKey }) 
   );
 }
 
-/** A command split where it may wrap: the words before the first flag, then
- *  each `--flag value` pair whole. Quoted values stay one token. */
-function cmdChunks(cmd: string): string[] {
-  const tokens = cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-  const chunks: string[] = [];
-  for (const t of tokens) {
-    const last = chunks.length - 1;
-    const pairs = last >= 0 && chunks[last].startsWith("--") && !chunks[last].includes(" ") && !t.startsWith("--");
-    if (pairs) chunks[last] += ` ${t}`;
-    else chunks.push(t);
-  }
-  return chunks;
-}
-
-/** A command chip that wraps between words and flag pairs, and splits a pair
- *  at its space only when the pair alone is wider than the chip; a token never
- *  splits, not even at its hyphens. The copy button floats in the first line,
- *  so the lines below it get the chip's full width: shown on hover, or always
- *  when the station holds the cursor. */
-function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: boolean }) {
-  return (
-    <div className={cn("line-cmd group/cmd relative rounded-md min-w-0", primary && "line-cmd-primary")} data-line-cmd>
-      <code className={cn("block whitespace-normal break-normal px-2 py-1.5 leading-[16px]", primary ? "text-[13px] text-sol-text" : "text-[11px] text-sol-text-muted")}>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); void copyText(cmd, "Command copied"); }}
-          title="Copy the command"
-          aria-label="Copy the command"
-          className={cn(
-            "line-cmd-copy float-right ml-1 -mr-1 w-5 h-4 rounded flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-opacity",
-            shown || primary ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-hover/cmd:opacity-100 focus-visible:opacity-100",
-          )}
-        >
-          <Copy className="w-3 h-3" />
-        </button>
-        {cmdChunks(cmd).map((c, i) => (
-          <Fragment key={i}>
-            {i > 0 && " "}
-            <span className="line-cmd-chunk">{c.split(" ").map((t, j) => <Fragment key={j}>{j > 0 && " "}<span className="whitespace-nowrap">{t}</span></Fragment>)}</span>
-          </Fragment>
-        ))}
-      </code>
-    </div>
-  );
-}
-
-/** The line before anything has reached it: the first command, then the six
- *  stations in one row, each saying what will feed it and, on hover or under
- *  the cursor, the command that does. */
+/** The line before anything has reached it: the projects that can start
+ *  one, then how work moves through a line, one step per column. */
 function Onboarding({ projects }: { projects: LineProject[] }) {
   const [focusedCol, onFocus] = useState(0);
   const settingsOf = (station: StationKey) => lineSettingsHref({ section: LINE_STATION_SETTINGS[station]?.section });
@@ -434,12 +239,10 @@ function Onboarding({ projects }: { projects: LineProject[] }) {
       <div className="flex flex-col gap-5 pt-1 pb-4">
       {projects.length > 0 && <ProjectStarts projects={projects} />}
       <div className="line-start shrink-0 rounded-xl p-5 sm:p-6 max-w-[760px]">
-        <div className="line-start-title text-sol-text">File the first signal.</div>
+        <div className="line-start-title text-sol-text">How a line works</div>
         <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
-          A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
-          Sentry, PostHog and evals file their own once connected.
+          A source reports something it saw: a finding. Findings about the same thing make one problem to fix. The line's steps find why it happens, prove it and build a fix, then you decide whether it ships.
         </p>
-        <div className="mt-5 w-fit max-w-full"><Cmd cmd={FIRST_SIGNAL} primary /></div>
       </div>
       <div className="line-ghost-scroll shrink-0">
       <ol className="line-ghost" aria-label="Stations">
@@ -457,7 +260,7 @@ function Onboarding({ projects }: { projects: LineProject[] }) {
               <span className="text-[13px] font-medium text-sol-text whitespace-nowrap">{s.name}</span>
             </div>
             <p className="line-ghost-what mt-2 text-[11px] leading-relaxed text-sol-text-muted" title={s.what}>{s.what}</p>
-            <div className="line-ghost-cmd mt-auto pt-3 flex flex-col gap-2"><Cmd cmd={s.cmd} shown={focusedCol === i} /><SettingsLink href={settingsOf(s.key)} station={s.key} /></div>
+            <div className="line-ghost-cmd mt-auto pt-3 flex flex-col gap-2"><SettingsLink href={settingsOf(s.key)} station={s.key} /></div>
           </li>
         ))}
       </ol>
@@ -478,7 +281,7 @@ function ProjectStarts({ projects }: { projects: LineProject[] }) {
           <li key={p._id} className="flex items-baseline gap-3 py-1.5 text-[12.5px]" data-line-project-start={p.short_id ?? p._id}>
             <span className="min-w-0 flex-1 truncate text-sol-text">{p.title ?? p.short_id}</span>
             {p.line_profile
-              ? <Link href={lineTabHref(p.short_id ?? p._id)} className="shrink-0 text-sol-text-muted hover:text-sol-blue hover:underline">Line tab</Link>
+              ? <Link href={lineWorkspaceHref(p.short_id ?? p._id)} className="shrink-0 text-sol-text-muted hover:text-sol-blue hover:underline">Open its line</Link>
               : <Link href={lineSettingsHref({ project: p })} className="shrink-0 inline-flex items-center gap-1 text-sol-cyan hover:underline" data-line-setup-action>Set up the line<ArrowRight className="w-3 h-3" /></Link>}
           </li>
         ))}
