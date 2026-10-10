@@ -16,7 +16,7 @@
 // Sentry) not imported yet is imported when the page opens it
 // (sources/vendorReplay.importLinked); the import lands in the replay row,
 // whose new chunks the page then reads like any other.
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useAuthToken } from "@convex-dev/auth/react";
 import { useAction } from "convex/react";
@@ -26,7 +26,7 @@ import { needsVendorImport } from "@codecast/shared/contracts/replay";
 import { ChevronRight, Copy, Pause, Play, Wand2 } from "lucide-react";
 import type { ReplayEvent } from "@codecast/shared/contracts/replay";
 import { formatReplayTime, isFailedRequest, isFailure, parseReplayEvents, primaryFailure, sortReplayEvents, toRepro, urlPath } from "@codecast/shared/replay";
-import { byRef, detailGone, useOpsReplays, useOpsReplayTimeline, useOpsSources, useSyncOpsReplay } from "../../hooks/useSyncOps";
+import { detailGone, useOpsReplay, useOpsReplayTimeline, useOpsSources, useSyncOpsReplay } from "../../hooks/useSyncOps";
 import { CONVEX_URL } from "../../lib/convexUrl";
 import { copyText } from "../../lib/copyText";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
@@ -37,7 +37,8 @@ import { OpsEmpty, OpsFeedError, ProviderIcon, pressable } from "./parts";
 import { startOpsFixSession } from "./startFix";
 import type { OpsReplay } from "./opsTypes";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { ReplayPlayerIframe, useReplayPlayerChannel, useReplayPlayerLink } from "./ReplayPlayerFrame";
+import { ReplayPlayerIframe } from "./ReplayPlayerFrame";
+import { useReplayPlayerChannel, useReplayPlayerLink } from "../../hooks/useReplayPlayer";
 
 type Loaded = { state: "loading" } | { state: "ready"; events: ReplayEvent[] } | { state: "failed"; error: string };
 
@@ -100,7 +101,7 @@ function useVendorImport(replay: OpsReplay | undefined): Import {
 
 export function ReplayPage({ id, t }: { id: string; t: number | null }) {
   const feed = useSyncOpsReplay(id);
-  const replay = byRef(useOpsReplays(), id);
+  const replay = useOpsReplay(id);
   const timeline = useOpsReplayTimeline(replay?._id);
   const loaded = useReplayEvents(replay);
   const vendorImport = useVendorImport(replay);
@@ -394,7 +395,7 @@ export function Player({ replay, events, initialT, groupRefs }: { replay: OpsRep
   );
 }
 
-const NO_SIZE = { width: 16, height: 10 };
+const NO_SIZE = { width: 16, height: 10, below: 0 };
 
 /**
  * The recorded page above the scrubber, when the replay kept its capture: the
@@ -405,6 +406,10 @@ const NO_SIZE = { width: 16, height: 10 };
  * with nothing to draw), it says why in one line and the semantic view goes on
  * as it would without a capture.
  */
+/** How long after a seek a stale time post is ignored, and how far from the asked time the player's own echo may land. */
+const SEEK_SETTLE_MS = 300;
+const SEEK_ECHO_SLACK_MS = 50;
+
 function useReplayStage(
   replay: OpsReplay,
   t: number,
@@ -418,18 +423,24 @@ function useReplayStage(
   const hasDom = (replay.dom_chunks ?? 0) > 0;
   const [openedAt] = useState(t);
   const link = useReplayPlayerLink(hasDom ? replay._id : null, hasDom, { t_ms: openedAt, controls: false });
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const [size, setSize] = useState<{ width: number; height: number; below: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const here = useRef({ t, playing, speed });
   here.current = { t, playing, speed };
+  // A time post the player queued before this page's seek can land after it
+  // and pull the scrubber back for a beat. For a moment after a seek only the
+  // player's echo of the seek itself (at the asked time) is followed.
+  const lastSeek = useRef<{ t_ms: number; at: number } | null>(null);
   const channel = useReplayPlayerChannel(link.state === "ready" ? link.origin : null, (msg: ReplayPlayerMessage) => {
     if (msg.type === "ready") {
-      setSize({ width: msg.width, height: msg.height });
+      setSize({ width: msg.width, height: msg.height, below: msg.below_px ?? 0 });
       setError(null);
       const cur = here.current;
       if (cur.speed !== 1) channel.send({ type: "speed", speed: cur.speed });
       channel.send({ type: "seek", t_ms: cur.t, ...(cur.playing ? { play: true } : {}) });
     } else if (msg.type === "time") {
+      const sought = lastSeek.current;
+      if (sought && Date.now() - sought.at < SEEK_SETTLE_MS && Math.abs(msg.t_ms - sought.t_ms) > SEEK_ECHO_SLACK_MS) return;
       setT(Math.min(length, Math.max(0, msg.t_ms)));
       setPlaying(msg.playing);
     } else if (msg.type === "state") {
@@ -441,11 +452,13 @@ function useReplayStage(
   });
   const driven = link.state === "ready" && size !== null && error === null;
   const send = (cmd: Parameters<typeof channel.send>[0]) => {
-    if (driven) channel.send(cmd);
+    if (!driven) return;
+    if (cmd.type === "seek") lastSeek.current = { t_ms: cmd.t_ms, at: Date.now() };
+    channel.send(cmd);
   };
 
   const problem = link.state === "failed" ? link.error : error;
-  let view: React.ReactNode = null;
+  let view: ReactNode = null;
   if (problem) {
     view = (
       <div className="ops-stage-note">
@@ -454,10 +467,13 @@ function useReplayStage(
     );
   } else if (link.state === "opening" || link.state === "ready") {
     const box = size ?? NO_SIZE;
+    // The box keeps the page's shape, and whatever the player draws below the
+    // page (its remote-assets strip) sits in the padding under it, so the
+    // page fills the width edge to edge.
     view = (
-      <div className="ops-stage" style={{ aspectRatio: `${box.width} / ${box.height}` }}>
+      <div className="ops-stage" style={{ aspectRatio: `${box.width} / ${box.height}`, boxSizing: "content-box", paddingBottom: size?.below ?? 0 }}>
         {link.state === "ready" && (
-          <ReplayPlayerIframe frameRef={channel.frameRef} url={link.url} title={`The page recorded in ${replay.short_id}`} style={{ height: "100%", opacity: size ? 1 : 0 }} />
+          <ReplayPlayerIframe frameRef={channel.frameRef} url={link.url} title={`The page recorded in ${replay.short_id}`} style={{ position: "absolute", inset: 0, height: "100%", opacity: size ? 1 : 0 }} />
         )}
         {!size && <div className="ops-stage-wait ops-quiet">Loading the page capture…</div>}
       </div>

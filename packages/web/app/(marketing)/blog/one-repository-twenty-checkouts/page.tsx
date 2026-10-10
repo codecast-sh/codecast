@@ -2,41 +2,13 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code } from "../blogChrome";
+import { BlogNav, Terminal, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
-// Genuine `cast ws` output from the codecast checkout on 2026-10-04. The
-// workspace list is trimmed to its first rows; the acquire and destroy of a
-// demo workspace were run for this post and left nothing behind. Every
-// omission is marked with an editorial "…".
-
-const WS_LS = `NAME                      STATE       BRANCH                            PATH
-deprecate-reconcilers     ready       codecast/deprecate-reconcilers    /Users/ashot/src/codecast/.codecast/worktrees/deprecate-reconcilers
-browser-watch-pane        ready       codecast/browser-watch-pane       /Users/ashot/src/codecast/.codecast/worktrees/browser-watch-pane
-deploy-repo-objects       destroying  codecast/deploy-repo-objects      /Users/ashot/src/codecast/.codecast/worktrees/deploy-repo-objects
-linear-token-deploy       ready       codecast/linear-token-deploy      /Users/ashot/src/codecast/.codecast/worktrees/linear-token-deploy
-safe-query                ready       codecast/safe-query               /Users/ashot/src/codecast/.codecast/worktrees/safe-query
-browser-resident-driver   ready       codecast/browser-resident-driver  /Users/ashot/src/codecast/.codecast/worktrees/browser-resident-driver
-ct-49675                  ready       codecast/ct-49675                 /Users/ashot/src/codecast/.codecast/worktrees/ct-49675
-grok-fork                 broken      codecast/grok-fork                /Users/ashot/src/codecast/.codecast/worktrees/grok-fork
-…  11 more rows, all ready  …
-`;
-
-const WS_STATUS = `safe-query
-  state:   ready
-  path:    /Users/ashot/src/codecast/.codecast/worktrees/safe-query
-  branch:  codecast/safe-query
-  ports:   web=3201
-  updated: 2026-08-11T22:34:58.491Z
-  contract: ok
-    ✓ worktree-exists
-    ✓ git-branch
-    ✓ deps-installed
-    ✓ env-vars
-    ✓ port:web
-    ✓ port-free:web
-`;
+// The workspace config is the codecast repository's own file. The Worktrees
+// screenshot is the repository's Worktrees tab in the codecast web app on
+// 2026-10-09; the counts in the prose are from `cast ws` on 2026-10-04.
 
 const WS_TOML = `[setup]
 copy = [
@@ -51,17 +23,6 @@ install = ["bun install"]
 [ports.web]
 base = 3201
 range = 20
-`;
-
-const WS_ACQUIRE = `created: blog-demo
-  path:    /Users/ashot/src/codecast/.codecast/worktrees/blog-demo
-  branch:  codecast/blog-demo
-  state:   ready
-  ports:   web=3401
-  port pool of 10 indices exhausted; extended the range to indices 10-19 and took index 10 (web=3401)
-`;
-
-const WS_DESTROY = `destroyed: blog-demo
 `;
 
 export default function OneRepositoryTwentyCheckoutsPost() {
@@ -87,7 +48,7 @@ export default function OneRepositoryTwentyCheckoutsPost() {
           <p className="mt-5 text-xl leading-relaxed" style={{ color: SOL.base00 }}>
             Running several agents at once is easy until two of them edit the same file.
             Codecast gives each one its own worktree, with the env files, dependencies and a
-            port of its own, in one command.
+            port of its own, from one switch when you start the session.
           </p>
           <div className="mt-6 flex items-center gap-3 font-mono text-sm" style={{ color: SOL.base1 }}>
             <span>{post?.author ?? "the codecast team"}</span>
@@ -113,100 +74,89 @@ export default function OneRepositoryTwentyCheckoutsPost() {
           everything around the checkout. The ignored files that hold secrets are not copied.
           Dependencies are not installed. The dev server wants port 3200, which the main
           checkout already holds. By the time an agent has fixed all that, it has spent its
-          first ten minutes on plumbing. So codecast made the plumbing one command.
+          first ten minutes on plumbing. So codecast made the plumbing part of starting a
+          session.
         </P>
 
-        <H2>Twenty of them</H2>
+        <H2>One switch</H2>
         <P>
-          Here is the codecast repository&apos;s own list this morning. Every row is a
-          checkout an agent asked for by name, most of them for a feature branch, two for a
-          task by its id:
+          When you start a session from codecast, the new session screen has a switch
+          labelled <em>isolated worktree</em>. Leave it off and the agent works in the
+          checkout you picked, alongside everyone else. Turn it on and the agent gets a
+          checkout of its own: a worktree on a new branch, the secret files copied in, the
+          install run, and a port nobody else holds. The session&apos;s card in the inbox
+          carries the worktree&apos;s name (hover it for <em>Worktree &lt;name&gt;
+          (&lt;branch&gt;)</em>), and the session header shows the same pill, so you can tell
+          at a glance which branch a conversation is editing.
         </P>
 
-        <Terminal label="cast ws ls">
-          <Cmd>cast ws ls</Cmd>
-          {WS_LS}
-        </Terminal>
-
+        <H2>Every checkout in one list</H2>
         <P>
-          Nineteen tracked: seventeen ready, one being torn down, one broken. The broken one
-          is the interesting row. A workspace carries a contract, and codecast checks it rather
-          than assuming it. Ask about one and you get the state and every clause of the
-          contract, verified:
+          Each repository in codecast has a <em>Worktrees</em> tab: every checkout of it on
+          every machine, grouped into the main checkout, codecast&apos;s worktrees, worktrees
+          other agents made, and the rest. Each row says what branch it is on, how far it is
+          from main, which port it was given, and which sessions are working in it:
         </P>
 
-        <Terminal label="cast ws status">
-          <Cmd>cast ws status safe-query</Cmd>
-          {WS_STATUS}
-        </Terminal>
+        <Screenshot
+          wide
+          src="/blog/one-repository-twenty-checkouts/worktrees-tab.png"
+          alt="The Worktrees tab of the codecast repository in the codecast web app: the main checkout on main with uncommitted changes and the sessions working in it, a codecast worktree named line-ct-57659 on its own branch, four commits ahead and three behind main, with a Compare link, its web port 3201 and six sessions, and two release worktrees tagged locked and no cast ws record"
+          caption="The codecast repository's Worktrees tab. Each row names its branch, its port and the sessions working in it."
+        />
 
         <P>
-          The worktree exists, the branch is right, dependencies are installed, the secret
-          files are present, the port is assigned and nothing else is listening on it. When a
-          clause fails, the row reads <em>broken</em> in the list, and <Code>cast ws heal</Code>{" "}
-          reruns the setup to make it true again.
+          On the morning this post was drafted that list held nineteen codecast worktrees:
+          seventeen ready, one being torn down, one broken. By the time we took the screenshot
+          most had been finished and removed, which is what they are for. The broken one was
+          the interesting row. A workspace carries a contract, and codecast checks it rather
+          than assuming it: the worktree exists, the branch is right, dependencies are
+          installed, the secret files are present, the port is assigned and nothing else is
+          listening on it. When a clause fails, the row says <em>setup is broken</em>, and
+          rerunning the setup makes it true again.
         </P>
 
         <H2>What a workspace promises</H2>
         <P>
-          The contract comes from one file in the repository, which <Code>cast ws init</Code>{" "}
-          generates by looking at the project and which the team then edits and commits. Ours
-          is short:
+          The contract comes from one file in the repository, which codecast generates by
+          looking at the project and which the team then edits and commits. Ours is short:
         </P>
 
-        <Terminal label=".codecast/workspace.toml">
-          <Cmd>cat .codecast/workspace.toml</Cmd>
-          {WS_TOML}
-        </Terminal>
+        <Terminal label=".codecast/workspace.toml">{WS_TOML}</Terminal>
 
         <P>
           Three things: which ignored files to copy from the main checkout, what to run after
           the copy, and which ports to hand out. Each workspace gets an index, and its web
           port is the base plus twenty times that index, probed free before it is handed
-          out. The workspace above is index zero, so its status says <Code>web=3201</Code>.
+          out. The worktree in the screenshot is index zero, so its row says{" "}
+          <em>web :3201</em>.
           Two agents can each run a dev server without reading each other&apos;s pages.
         </P>
 
-        <H2>Acquire, work, destroy</H2>
+        <H2>Made, used, removed</H2>
         <P>
-          For this post we asked for a workspace that did not exist, watched it come up, and
-          took it down again. This is the whole lifecycle, as it ran:
+          For this post we asked for a worktree that did not exist, watched it come up, and
+          took it down again. It came up on a new branch with the secret files copied and the
+          install run, and with a port. That last part was the honest surprise: the pool of
+          ten port indices was already spent on the worktrees in the list, so codecast
+          extended it and gave this one index ten, port 3401. A session that restarts lands
+          back in the worktree it had, rather than getting a second one. Teardown runs any
+          teardown hooks, removes the worktree, and drops its state, so the port goes back to
+          the pool and the name is free.
         </P>
-
-        <Terminal label="cast ws acquire" wrap>
-          <Cmd>cast ws acquire blog-demo</Cmd>
-          {WS_ACQUIRE}
-        </Terminal>
-
         <P>
-          A worktree on a new branch, the secret files copied and the install run behind
-          that one word <em>ready</em>, and a port. The last line is the honest part: the
-          pool of ten port indices was already spent on the workspaces above, so the
-          allocator extended it and this one became index ten, port 3401. The command prints
-          the path because a program cannot change your shell&apos;s directory; the next line
-          is always <Code>cd &quot;$(cast ws path blog-demo)&quot;</Code>. An agent that
-          already has a workspace by that name attaches to it instead of making a second one,
-          so a session that restarts lands back where it was.
-        </P>
-
-        <Terminal label="cast ws destroy" wrap>
-          <Cmd>cast ws destroy blog-demo</Cmd>
-          {WS_DESTROY}
-        </Terminal>
-
-        <P>
-          Teardown runs any teardown hooks, removes the worktree, and drops the state, so the
-          port goes back to the pool and the name is free. The list above is as long as it is
-          because agents are better at acquiring than destroying; the one marked{" "}
-          <em>destroying</em> is a teardown in progress.
+          Agents can do all of this themselves from a terminal, which is how most of those
+          nineteen were made: <Code>cast ws acquire &lt;name&gt;</Code> to get one,{" "}
+          <Code>cast ws destroy &lt;name&gt;</Code> to give it back, <Code>cast ws ls</Code>{" "}
+          for the same list the tab shows. Agents turn out to be better at acquiring than
+          destroying, which is why the list ran long.
         </P>
 
         <H2>Where this fits</H2>
         <P>
           A workspace is a checkout, not a sandbox. The agent in it still runs on your
           machine, with your logins and your tools, and its session lands in your inbox like
-          any other, with the checkout named in the session header so you can tell at a
-          glance which branch a conversation is editing. Two agents in two workspaces cannot
+          any other, with its worktree named on the card and in the header. Two agents in two workspaces cannot
           overwrite each other&apos;s files, and they still share everything else codecast
           gives a team: the inbox, search across both sessions, and messages between them
           when the work does need a word.
@@ -214,8 +164,8 @@ export default function OneRepositoryTwentyCheckoutsPost() {
         <P>
           The rule we have settled on is simple. Work that can live on a branch gets a
           workspace. Work that must land in the main checkout, because the human is in it
-          too, stays shared and the agents talk. Both are one command away, and the list
-          tells you which is which.
+          too, stays shared and the agents talk. Both are one switch away, and the Worktrees
+          tab tells you which is which.
         </P>
 
         <blockquote
@@ -240,14 +190,13 @@ export default function OneRepositoryTwentyCheckoutsPost() {
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          All five terminal captures are genuine <Code>cast ws</Code> output from the codecast
-          checkout on 2026-10-04. The list keeps eight of nineteen rows and marks the rest;
-          the status, the config file, the acquire and the destroy are shown in full. The
-          demo workspace was created and removed for this post and nothing else on the
-          machine changed; on a machine carrying 183 registered worktrees and a full load of
-          agents, the acquire took about twenty minutes and the destroy about ten, nearly all
-          of it waiting on git. There is no screenshot: the feature lives in the terminal, and
-          the sessions that use these workspaces belong to other work.
+          The counts of nineteen worktrees, the broken row and the port allocation are from{" "}
+          <Code>cast ws</Code> on the codecast checkout on 2026-10-04; the demo worktree was
+          created and removed for this post and nothing else on the machine changed. On a
+          machine carrying 183 registered worktrees and a full load of agents, creating it
+          took about twenty minutes and removing it about ten, nearly all of it waiting on git.
+          The config file is the repository&apos;s own. The screenshot is the repository&apos;s
+          Worktrees tab in the codecast web app on 2026-10-09, cropped to the content column.
         </p>
       </article>
     </main>

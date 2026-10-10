@@ -52,15 +52,14 @@ export function Live() {
   return (
     <Section
       id="watch"
-      n="02"
-      tone="sand"
+      n="06"
       title="Watch the page while the agent writes it."
-      lede={<>Add <C>--watch</C> and the CLI stays on the file, republishing every time it changes. Open the link with <C>?live=1</C> and the reader&apos;s tab reloads itself on each new version. You review a draft as it forms, at the URL you will send.</>}
+      lede={<>Ask the agent to keep the page live while it works and it republishes on every save. Open the link with <C>?live=1</C> and your tab reloads itself on each new version. You review a draft as it forms, at the URL you will send.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-8 lg:gap-10 items-center">
         <div className="min-w-0">
           <div className="[&>div]:my-0">
-            <Terminal label="~/work/pricing">
+            <Terminal label="what the agent runs">
               <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish proposal.md --watch</span>{"\n"}
               <span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>Pricing page proposal</span>  <span style={{ color: SOL.yellow }}>v1</span> → published{"\n"}
               {"  "}<span style={{ color: CYAN }}>https://{SITE}{SLUG}</span>{"\n\n"}
@@ -86,8 +85,8 @@ export function Live() {
               <C>unchanged</C> and the version number holds.
             </Note>
             <Note>
-              <strong style={{ color: SOL.base02 }}>Gates are set once.</strong> Access flags on the first publish apply to the page; the watch loop republishes
-              content only. Change gates later with <C>cast publish set</C>.
+              <strong style={{ color: SOL.base02 }}>Gates are set once.</strong> Access set on the first publish applies to the page; the live loop republishes
+              content only. Change gates later in Manage sharing.
             </Note>
             <Note>
               <strong style={{ color: SOL.base02 }}>A folder works too.</strong> Watching a bundle is recursive: edit any stylesheet, script or chart inside it
