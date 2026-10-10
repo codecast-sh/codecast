@@ -54,7 +54,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/features",
     title: "Features — Codecast",
     description:
-      "The cast CLI: every Codecast surface as a command. Agents use it to pick up tasks, answer chat threads, own pull requests, queue decisions, publish pages and search the team's history, on any machine.",
+      "Inbox, chat, calls, tasks, docs, pull requests and decisions on the web, the Mac app and the phone, with your coding agents working in every one. One page per capability: what you see and what your agents do.",
   },
   {
     path: "/documentation",

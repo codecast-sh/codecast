@@ -30,7 +30,7 @@ const B = await visitor();
 const room = (who: Creds, id: Id<"apps">) => ({ ...who, app_id: id, paginationOpts: { numItems: 50, cursor: null } });
 
 // 1. An app with four versions, each a different color.
-const made = await A.client.mutation(api.apps.create, { ...A.creds, name: "Timeline check" });
+const made = await A.client.mutation(api.apps.create, { ...A.creds, name: "Timeline check", unlisted: true });
 const appId = made.app_id as Id<"apps">;
 const colors = ["#ff5b3a", "#3b7bff", "#2fd6a0"];
 for (const [i, color] of colors.entries()) {
@@ -50,7 +50,7 @@ await A.client.mutation(api.runtime.insert, { ...runtime, collection: "moons", v
 await A.client.mutation(api.runtime.setShared, { ...runtime, key: "count", value: 7 });
 
 // 3. A restores v2; B is watching.
-const seenLive = B.until("v5 live", api.apps.get, { ...B.creds, slug: made.slug }, (app) => app?.live_version === 5 && app);
+const seenLive = B.until("v5 live", api.apps.get, { slug: made.slug }, (app) => app?.live_version === 5 && app);
 const seenNote = B.until("the restore note", api.messages.list, room(B.creds, appId), (page) =>
   page.page.find((m) => m.note?.type === "restore"),
 );
@@ -80,7 +80,7 @@ const [forkNote, marker] = await Promise.all([seenFork, seenMarker]);
 const forkNoteView = forkNote.value.note;
 check("A sees the fork note", forkNoteView?.type === "fork" && forkNoteView.fork?.slug === fork.slug && forkNoteView.version === 3, forkNoteView);
 check("v3 carries a fork marker", marker.value.forks.length === 1);
-const forked = (await B.client.query(api.apps.get, { ...B.creds, slug: fork.slug }))!;
+const forked = (await B.client.query(api.apps.get, { slug: fork.slug }))!;
 check("the fork links back to v3", forked.forked_from?.app_id === appId && forked.forked_from.version === 3, forked.forked_from);
 const [v3, f1] = await Promise.all([
   B.client.query(api.versions.files, { ...B.creds, app_id: appId, number: 3 }),
