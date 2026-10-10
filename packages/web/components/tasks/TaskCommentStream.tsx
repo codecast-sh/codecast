@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
+import { lineCommentWords } from "@codecast/shared/contracts/lineWords";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { ArrowUp, ImagePlus, MessageSquare } from "lucide-react";
@@ -18,6 +19,7 @@ import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
+import { objectHref } from "../../lib/entityLinks";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -71,7 +73,7 @@ export function UserBadge({ name, image, username }: { name: string; image?: str
     </span>
   );
   if (username) {
-    return <Link href={`/team/${username}`}>{content}</Link>;
+    return <Link href={objectHref("person", username)}>{content}</Link>;
   }
   return content;
 }
@@ -154,7 +156,8 @@ export function TaskCommentItem({
   /** Fold a long body (the Threads reader). */
   clamp?: boolean;
 }) {
-  const body = <MarkdownRenderer content={comment.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
+  // The line's own notes (a run that stopped, a problem grounded) read in plain words, however old (shared lineWords).
+  const body = <MarkdownRenderer content={lineCommentWords(comment.text)} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
   return (
     <div className="py-2.5 relative">
       <div className="flex items-center gap-2 mb-1.5">

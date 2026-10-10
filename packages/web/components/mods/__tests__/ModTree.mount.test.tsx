@@ -14,7 +14,7 @@ const { replaceGlobals } = await import("../../../test-helpers/globals");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { MOD_ELEMENTS } = await import("@codecast/shared/contracts/mods");
 const { ConvexProvider, ConvexReactClient } = await import("convex/react");
-const { ModTree } = await import("../ModTree");
+const { ModTree, modStyle } = await import("../ModTree");
 const { ObjectsPage } = await import("../ObjectsPage");
 const { ObjectPage } = await import("../ObjectPage");
 
@@ -104,6 +104,86 @@ describe("ModTree", () => {
     } finally {
       await m.done();
     }
+  });
+});
+
+describe("ModTree looks native without the author styling it", () => {
+  const noop = () => {};
+  test("a Card with no header keeps its top padding", async () => {
+    const m = await mount(<ModTree tree={{ t: "Card", c: [{ t: "Row", c: [{ t: "Text", c: ["first row"] }, { t: "Button", p: { label: "Track", onPress: fn("k#1") } }] }] }} invoke={noop} navigate={noop} />);
+    try {
+      const body = m.root.querySelector("section > div") as HTMLElement;
+      expect(body.style.paddingTop).toBe("14px");
+    } finally { await m.done(); }
+  });
+
+  test("framed, a root Card is the frame's panel: no border of its own, its title left to the frame", async () => {
+    const tree: any = { t: "Card", p: { title: "Need of Claudio", subtitle: "HeblinGFC" }, c: [{ t: "Text", c: ["body"] }] };
+    const m = await mount(<ModTree tree={tree} invoke={noop} navigate={noop} framed />);
+    try {
+      const section = m.root.querySelector("section") as HTMLElement;
+      expect(section.className).not.toContain("border");
+      expect(m.html).not.toContain("Need of Claudio");
+      expect(m.html).toContain("HeblinGFC");
+    } finally { await m.done(); }
+    const plain = await mount(<ModTree tree={tree} invoke={noop} navigate={noop} />);
+    try {
+      expect((plain.root.querySelector("section") as HTMLElement).className).toContain("border");
+      expect(plain.html).toContain("Need of Claudio");
+    } finally { await plain.done(); }
+  });
+
+  test("a divided list squares its rows so the rules run straight, and links are not underlined", async () => {
+    const m = await mount(<ModTree tree={{ t: "Column", c: [{ t: "List", p: { divided: true }, c: [{ t: "Item", p: { title: "a", onPress: fn("k#2") } }, { t: "Item", p: { title: "b" } }] }, { t: "Link", p: { href: "https://example.com" }, c: ["Admin"] }] }} invoke={noop} navigate={noop} />);
+    try {
+      expect(m.html).toContain("[&amp;>*]:rounded-none");
+      expect((m.root.querySelector("a") as HTMLElement).className).toContain("no-underline");
+    } finally { await m.done(); }
+  });
+});
+
+describe("a mod's own style", () => {
+  test("box and type properties pass; colours only from the theme", () => {
+    expect(modStyle({
+      borderLeft: "2px solid var(--sol-blue)",
+      background: "color-mix(in srgb, var(--sol-green) 12%, transparent)",
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      opacity: 0.7,
+      borderRadius: 12,
+      maxWidth: "min(480px, 100%)",
+    })).toEqual({
+      borderLeft: "2px solid var(--sol-blue)",
+      background: "color-mix(in srgb, var(--sol-green) 12%, transparent)",
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      opacity: 0.7,
+      borderRadius: 12,
+      maxWidth: "min(480px, 100%)",
+    } as any);
+  });
+
+  test("a hard-coded colour, an image or an unknown property is dropped, the rest kept", () => {
+    expect(modStyle({
+      color: "#fff", background: "white", border: "1px solid rgb(0,0,0)", backgroundImage: "url(x)",
+      position: "fixed", padding: "4px 8px", boxShadow: "0 0 0 1px url(javascript:x)",
+    })).toEqual({ padding: "4px 8px" } as any);
+    expect(modStyle("color: red")).toEqual({});
+  });
+});
+
+describe("an interactive Canvas", () => {
+  test("a press on a data-press element calls the mod's handler with the element's data", async () => {
+    const calls: any[] = [];
+    const tree: any = { t: "Canvas", p: { html: '<button data-press="pick" data-id="42">Pick</button>', on: { pick: fn("k#9") } } };
+    const m = await mount(<ModTree tree={tree} invoke={(f, a) => calls.push([f, a])} navigate={() => {}} />);
+    try {
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      const host = [...m.root.querySelectorAll("div")].find((d) => d.shadowRoot)!;
+      const button = host.shadowRoot!.querySelector("button")!;
+      await act(() => { button.dispatchEvent(new (button.ownerDocument.defaultView as any).MouseEvent("click", { bubbles: true, composed: true, button: 0 })); });
+      expect(calls).toEqual([["k#9", [{ id: "42" }]]]);
+    } finally { await m.done(); }
   });
 });
 

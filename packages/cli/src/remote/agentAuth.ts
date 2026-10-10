@@ -239,21 +239,37 @@ function platformPath(darwin: string, other: string) {
   return (home: string) => path.join(home, process.platform === "darwin" ? darwin : other);
 }
 
+// The daemon reads the gh login every minute to notice a change, and
+// `gh auth token` is a synchronous spawn: on a loaded machine it held the event
+// loop for 1 to 15 seconds each time (2026-10-09). A login change rewrites
+// hosts.yml, so the token is reused while that file is unchanged, and asked
+// again after GH_TOKEN_TTL_MS to catch a re-login that left the file as it was.
+const GH_TOKEN_TTL_MS = 30 * 60_000;
+let ghTokenCache: { dir: string; hosts: string; token: string; at: number } | null = null;
+
+function ghKeychainToken(dir: string, hosts: string, env: NodeJS.ProcessEnv, now: number): string {
+  const c = ghTokenCache;
+  if (c && c.dir === dir && c.hosts === hosts && now - c.at < GH_TOKEN_TTL_MS) return c.token;
+  const r = spawnSync("gh", ["auth", "token", "--hostname", "github.com"], {
+    encoding: "utf-8", timeout: 10_000, env: { ...env, PATH: agentSpawnPath() },
+  });
+  const token = r.status === 0 ? (r.stdout ?? "").trim() : "";
+  ghTokenCache = token ? { dir, hosts, token, at: now } : null;
+  return token;
+}
+
 /**
  * gh's hosts.yml as the host must hold it. On a Mac gh keeps the token in the
  * keychain and hosts.yml only names the user, so the token comes from
  * `gh auth token` and the file is written with it inline, gh's own format when
  * no keyring is present (the host has none).
  */
-export function readGhLogin(home: string, env: NodeJS.ProcessEnv): string | null {
+export function readGhLogin(home: string, env: NodeJS.ProcessEnv, now = Date.now()): string | null {
   const dir = env.GH_CONFIG_DIR || path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "gh");
   let hosts = "";
   try { hosts = fs.readFileSync(path.join(dir, "hosts.yml"), "utf-8"); } catch { return null; }
   if (/^\s+oauth_token:\s*\S/m.test(hosts)) return hosts;
-  const r = spawnSync("gh", ["auth", "token", "--hostname", "github.com"], {
-    encoding: "utf-8", timeout: 10_000, env: { ...env, PATH: agentSpawnPath() },
-  });
-  const token = r.status === 0 ? (r.stdout ?? "").trim() : "";
+  const token = ghKeychainToken(dir, hosts, env, now);
   if (!token) return null;
   const user = /^github\.com:[\s\S]*?^\s+user:\s*(\S+)/m.exec(hosts)?.[1];
   const protocol = /^github\.com:[\s\S]*?^\s+git_protocol:\s*(\S+)/m.exec(hosts)?.[1] ?? "https";
