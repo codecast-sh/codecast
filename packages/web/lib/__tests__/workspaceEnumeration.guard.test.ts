@@ -37,13 +37,17 @@ const ALLOWED = new Map<string, string>([
   ["store/chatSlice.ts", "chat rows, scoped by its own channel rules"],
   ["lib/liveEntities.ts", "merges a server snapshot with live rows, no enumeration by workspace"],
   ["lib/taskActions.ts", "short_id LOOKUP for a write the server re-authorizes"],
+  ["lib/universalSearch.ts", "builds the search index; matchEntities passes every row through inActiveWorkspace before anything renders"],
   ["lib/recentVisits.ts", "id LOOKUP to render a title for an already-visited row"],
   ["components/CommandPalette.tsx", "id LOOKUP + parent picker scoped to the target's own workspace"],
   ["app/tasks/[id]/page.tsx", "short_id LOOKUP of the one task the address names"],
   ["components/tasks/SubtasksSection.tsx", "subtree of one already-authorized task (its subtasks share its workspace)"],
   ["store/undo/writers.ts", "id/short_id LOOKUP to name a task in an undo write the server re-authorizes"],
   ["store/opsSlice.ts", "the slice that owns opsGroups, dropping a removed source's rows"],
+  ["store/taskGraphDraft.ts", "short_id LOOKUP: a graph write patches every copy of the one task it names; renders nothing"],
+  ["store/initiativeSlice.ts", "the slice that owns goals, moving a stub project id to its real id in every goal that lists it; renders nothing"],
   ["app/projects/[id]/page.tsx", "short id LOOKUP of the one project the address names (pj-…)"],
+  ["store/lineSlice.ts", "the slice that owns lineLabels, finding the viewer's own label by its natural key for a write the server re-authorizes; renders nothing"],
 ]);
 
 const walk = (dir: string) => walkSources(dir);

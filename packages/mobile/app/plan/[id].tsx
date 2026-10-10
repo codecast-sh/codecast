@@ -11,7 +11,7 @@ import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono } from "@/constants/fonts";
+import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
 import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
@@ -134,7 +134,7 @@ export default function PlanDetailScreen() {
           title: plan.short_id,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>

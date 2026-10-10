@@ -355,6 +355,13 @@ describe("promotion", () => {
     expect(promotionSignal(source, group, "resolved", "f")).toBeNull();
   });
 
+  test("a source routed to a team but private to its owner files into the owner's workspace, never the team's", () => {
+    // The same rule moments.ts uses for a live judge's findings (lib/ingestScope.sourceFilingScope).
+    const filed = promotionSignal({ ...source, workspace: "user:u1" }, group, "new", "f")!;
+    expect(filed.workspace).toBe("personal");
+    expect("team_id" in filed).toBe(false);
+  });
+
   test("the promoting transition and every later one land on the cause task's timeline", async () => {
     const w = world();
     w.db._tables.tasks = [{ _id: "t1", short_id: "ct-1", title: "Boom", user_id: "u1", team_id: "team_1", workspace: "team:team_1", status: "open", created_at: NOW, updated_at: NOW }];
