@@ -217,7 +217,7 @@ describe("a person's status wins (LM3)", () => {
     const { t, ids, read } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
     const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
-    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the cause was dropped by a person" });
+    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was dropped by a person" });
     expect((await read()).task.status).toBe("dropped");
   });
 

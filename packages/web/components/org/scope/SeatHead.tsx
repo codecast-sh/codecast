@@ -20,7 +20,7 @@ export type SeatStall = { word: string; action?: { label: string; onClick: () =>
  *  header opens: a DOM change inside the header's row, which is what makes
  *  the row's squeeze (useSqueezeToFit) measure again. With a stall it carries
  *  the notice; the live status word is hidden then (globals.css), so the row
- *  never says "Connected" beside "unresponsive". */
+ *  never says "Connected" beside "Session error". */
 export function SeatHeadState({ stall }: { stall: SeatStall }) {
   if (!stall) return <span data-seat-label hidden />;
   return (
