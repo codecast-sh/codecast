@@ -61,26 +61,6 @@ export function Label({ children, color = SOL.base1 }: { children: ReactNode; co
   return <div className="font-mono text-[12px] mb-3" style={{ color }}>{children}</div>;
 }
 
-/** A dark Solarized shell block without the window chrome. Lines wrap on a phone the way a narrow terminal would; `wrap` keeps wrapping at every width. */
-export function Shell({ children, className = "", wrap = false }: { children: ReactNode; className?: string; wrap?: boolean }) {
-  return (
-    <div className={`rounded-xl overflow-hidden border ${className}`} style={{ backgroundColor: SOL.base03, borderColor: "#094959" }}>
-      <div className="overflow-x-auto">
-        <pre className={`p-4 sm:p-5 font-mono text-[12px] sm:text-[12.5px] leading-[1.7] ${wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "whitespace-pre-wrap [overflow-wrap:anywhere] sm:whitespace-pre sm:[overflow-wrap:normal]"}`} style={{ color: SOL.base0 }}>{children}</pre>
-      </div>
-    </div>
-  );
-}
-
-/** Shell line pieces. */
-export const sh = {
-  prompt: (text: ReactNode) => (<><span style={{ color: SOL.green }}>$ </span><span style={{ color: SOL.base2 }}>{text}</span></>),
-  flag: (text: ReactNode) => <span className="whitespace-nowrap" style={{ color: SOL.yellow }}>{text}</span>,
-  str: (text: ReactNode) => <span style={{ color: SOL.cyan }}>{text}</span>,
-  dim: (text: ReactNode) => <span style={{ color: SOL.base01 }}>{text}</span>,
-  ok: (text: ReactNode) => <span style={{ color: SOL.green }}>{text}</span>,
-};
-
 /** The product's state dot: a pulsing yellow for a blocking ask on a live session, dim when the session is not running, blue for advisory. */
 export function Dot({ tier, still = false }: { tier: 1 | 2 | 3 | "ok"; still?: boolean }) {
   const color = tier === 1 ? Y : tier === 2 ? SOL.base1 : tier === 3 ? B : SOL.green;

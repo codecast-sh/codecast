@@ -22,10 +22,12 @@ import { cn } from "../../lib/utils";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { Avatar } from "../tasks/TaskCommentStream";
+import { PersonHoverCard } from "../identity/PersonHoverCard";
 import { HealthChip, MetricReadingLine, MetricTile, NextMilestoneChip, UpdateLine } from "../initiatives/InitiativeAtoms";
 import { useZoomLevel } from "./orgZoom";
 import { Frame, GhostChips, Ports, StateBar, StateWords } from "./OrgNodeCards";
 import { GhostTag } from "./ghostChrome";
+import { GoalStateFace } from "./lines/lineAtoms";
 import { RoleFace } from "./RoleFace";
 import { CHIP_STATUS, GHOST, ORG_STATE_META, changeFrameStyle, ghostFrameStyle } from "./orgMeta";
 import { GOALS_SIZES, type GoalGhost, type GoalOwner, type GoalsNode } from "./goalsLayout";
@@ -74,7 +76,7 @@ export const LooseCard = memo(function LooseCard({ data }: NodeProps<Node<LooseN
 
 function OwnerFace({ owner, size = 28 }: { owner: GoalOwner; size?: number }) {
   if (owner.kind === "role") return <RoleFace role={{ handle: owner.handle, name: owner.name, avatar: owner.avatar }} size={size} />;
-  if (owner.kind === "person") return <Avatar name={owner.name} image={owner.image} size={size > 22 ? "md" : "sm"} />;
+  if (owner.kind === "person") return <PersonHoverCard person={{ userId: owner.id, name: owner.name, image: owner.image }} side="right" triggerClassName="inline-flex"><Avatar name={owner.name} image={owner.image} size={size > 22 ? "md" : "sm"} /></PersonHoverCard>;
   return <span className="inline-flex items-center justify-center rounded-full" style={{ width: size, height: size, border: `1px solid ${CHIP_STATUS.failed.color}`, color: CHIP_STATUS.failed.color }}><AlertTriangle className="h-3.5 w-3.5" /></span>;
 }
 
@@ -170,11 +172,11 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
         <span className="mt-[1px] inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md" style={{ background: ghost ? "color-mix(in srgb, var(--sol-violet) 16%, transparent)" : "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: ghost ? GHOST.color : "var(--sol-cyan)" }}><Flag className="h-3 w-3" /></span>
         <div className="min-w-0 flex-1">
           <div className="line-clamp-3 text-[13px] font-semibold leading-[16px]" style={{ color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={g.title} data-goal-title>{g.title}</div>
-          {/* Middle: the health word (the owner is the face). Close: the short id and the owner's name; the health moves to the update line below. */}
+          {/* Middle: the goal's state word, the one its line says (the owner is the face). Close: the short id and the owner's name; the health moves to the update line below. */}
           <div className="mt-[3px] flex min-w-0 items-center gap-1.5 overflow-hidden text-[10.5px] whitespace-nowrap" style={{ color: DIM }}>
             {g.ghost?.tag && <GhostTag quiet label={g.ghost.tag} status={ghostTagStatus(g.ghost)} className="shrink-0" />}
             {close && g.short_id && <span className="shrink-0 font-mono">{g.short_id}</span>}
-            {g.row && !(close && g.row.health !== "none") && <HealthChip health={g.row.health} now={now} className="!text-[10.5px] shrink-0" />}
+            {g.row && !(close && g.row.health !== "none") && <GoalStateFace goal={g.row} now={now} dated={false} className="!text-[10.5px] shrink-0" />}
             {g.owner && (close || !g.row) && <span className="min-w-0 truncate" data-goal-owner={g.owner.id}>{g.owner.name}</span>}
             {!g.owner && <span className="shrink-0 italic" data-goal-owner="none">no owner</span>}
             {/* The root mission carries the company's totals; any other goal how many projects carry it. */}
@@ -234,7 +236,10 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
   );
 });
 
-export type OwnerNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "owner" }>, "owner" | "owns" | "line" | "counts" | "reportsTo" | "ghost" | "retire" | "move" | "was" | "chips">;
+export type OwnerNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "owner" }>, "owner" | "owns" | "line" | "counts" | "reportsTo" | "ghost" | "retire" | "move" | "was" | "chips"> & {
+  /** A dragged role would report here if dropped now. */
+  dropTarget?: boolean;
+};
 export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Node<OwnerNodeData>>) {
   const o = data.owner;
   const level = useZoomLevel();
@@ -244,7 +249,7 @@ export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Nod
   const far = level === "far";
   const frame = stub ? (data.ghost ? ghostFrameStyle(data.ghost) : !stub.solid ? changeFrameStyle(stub.status) : undefined) : retiring ? { opacity: 0.75 } : undefined;
   return (
-    <Frame selected={data.selected} className={cn("px-2.5 flex items-center gap-2 transition-opacity", data.dim && "opacity-45")} style={frame} kind={stub && !stub.solid ? "ghost" : `owner-${o.kind}`} accent={o.kind === "role" ? "var(--sol-violet)" : "var(--sol-cyan)"}>
+    <Frame selected={data.selected} dropTarget={data.dropTarget} className={cn("px-2.5 flex items-center gap-2 transition-opacity", data.dim && "opacity-45")} style={frame} kind={stub && !stub.solid ? "ghost" : `owner-${o.kind}`} accent={o.kind === "role" ? "var(--sol-violet)" : "var(--sol-cyan)"}>
       <Ports />
       {retiring && <div aria-hidden className="pointer-events-none absolute inset-0 rounded-xl" style={{ background: GHOST.hatch }} />}
       <span className="inline-flex shrink-0" style={stub && !stub.solid ? { opacity: 0.8 } : undefined}><OwnerFace owner={o} size={28} /></span>

@@ -130,7 +130,7 @@ export const CHAPTERS: Chapter[] = [
     dek: "No fresh profile and no sign-in walls: each session drives a background tab in your own Chrome, and the evidence lands in the thread.",
     readingMinutes: 5,
     color: "red",
-    cover: "browser-hero.webp",
+    cover: "browser-hero-app.webp",
   },
   {
     slug: "computer",
@@ -140,7 +140,7 @@ export const CHAPTERS: Chapter[] = [
     dek: "Native apps through the accessibility tree, on windows behind yours, with every action read back and verified.",
     readingMinutes: 4,
     color: "magenta",
-    cover: "computer-hero.webp",
+    cover: "computer-hero-app.webp",
   },
   {
     slug: "cloud-hosts",
@@ -150,7 +150,7 @@ export const CHAPTERS: Chapter[] = [
     dek: "Send a session to your own EC2 host from the checkout you are in, uncommitted work included, mirror it back live, and move it home mid-turn.",
     readingMinutes: 6,
     color: "blue",
-    cover: "cloud-hero.webp",
+    cover: "cloud-composer.webp",
   },
   {
     slug: "calls",
