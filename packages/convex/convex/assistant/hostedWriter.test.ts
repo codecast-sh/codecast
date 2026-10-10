@@ -16,7 +16,8 @@ setDefaultTimeout(60_000);
 
 async function hostedConversation() {
   const t = convexTest(schema, modules);
-  const user = await t.run((ctx) => ctx.db.insert("users", {}));
+  // A proven address: the Free plan serves only one (assistant/freeGate.ts).
+  const user = await t.run((ctx) => ctx.db.insert("users", { emailVerificationTime: 1 }));
   const started = await t.withIdentity({ subject: user }).mutation(api.assistant.entry.startConversation, {});
   const write = (message: Record<string, unknown>) =>
     t.mutation(internal.messages.writeHostedMessages, {

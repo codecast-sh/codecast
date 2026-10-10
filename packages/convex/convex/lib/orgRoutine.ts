@@ -53,8 +53,8 @@ export function roleRoutineFor(role: { handle: string; name: string }): { title:
 // about it, and it still reads whole on a run a person starts by hand.
 export const ROLE_NEEDS_INPUT_TITLE = "A session under you needs input";
 export const ROLE_NEEDS_INPUT_PROMPT = [
-  `A session that reports to you is waiting and cannot continue on its own. Read what it needs with \`cast read <its id>\`, and answer it with \`cast send\` when the answer is yours to give. When it posted a decision, read it with \`cast decide show <its id>\` and answer it if you hold the grant, or recommend an option with \`cast decide recommend\`.`,
-  `When it needs a person, raise it here in your own thread with your recommendation. \`cast brief\` lists every session waiting under you.`,
+  `A session that reports to you is waiting and cannot continue on its own. Read what it needs with \`cast read <its id>\`, and answer it with \`cast send\` when the answer is yours to give. When it posted a decision, read it with \`cast decide show <its id>\` and answer it if you hold the grant. Otherwise hand it up to its people on the same card: \`cast decide recommend\` with the option you favour, or \`cast decide pass\` when you favour none, each with a \`--note\` giving the person what you know that the card does not say. A decision you leave alone reaches them after five minutes without your word.`,
+  `When something else needs a person, raise it here in your own thread. \`cast brief\` lists every session waiting under you.`,
 ].join("\n");
 
 /** An event trigger of a role: what fires it, and the words it carries. The
