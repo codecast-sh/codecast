@@ -10,7 +10,7 @@ export const NIGHT_END = 33 * 60;
 
 export type Firing = {
   t: number;
-  /** run: a session ran. skip: the precheck said no. park: hit a usage limit. attention: completed --needs-attention. */
+  /** run: a session ran. skip: the precheck said no. park: hit a usage limit. attention: flagged itself for attention. */
   kind: "run" | "skip" | "park" | "attention";
   /** For a park: when the run resumed (the window reset plus a short grace). */
   until?: number;
@@ -22,7 +22,7 @@ export type Firing = {
 export type Lane = {
   id: string;
   title: string;
-  flags: string;
+  schedule: string;
   where: "here" | "spawn";
   color: string;
   firings: Firing[];
@@ -36,11 +36,11 @@ const hours = (from: number, to: number, step = 1) => {
 
 export const LANES: Lane[] = [
   {
-    id: "tr-41", title: "Check if CI is green on main", flags: "--in 30m", where: "here", color: SOL.blue,
+    id: "tr-41", title: "Check if CI is green on main", schedule: "in 30m", where: "here", color: SOL.blue,
     firings: [{ t: 18 * 60 + 40, kind: "run", note: "CI green on main. The answer lands in the thread that asked.", log: true }],
   },
   {
-    id: "tr-43", title: "Review open PRs and summarize findings", flags: "--every 4h --spawn", where: "spawn", color: SOL.cyan,
+    id: "tr-43", title: "Review open PRs and summarize findings", schedule: "every 4h · fresh session", where: "spawn", color: SOL.cyan,
     firings: hours(20, 32, 4).map((t, i) => ({
       t, kind: "run" as const,
       note: ["Reviewed 3 open PRs. Summary filed under the trigger.", "No new PRs. Clean run, nothing posted.", "No change since the last run.", "Two PRs went green overnight. Summary filed."][i],
@@ -48,7 +48,7 @@ export const LANES: Lane[] = [
     })),
   },
   {
-    id: "tr-44", title: "Rebuild the docs index if main moved", flags: "--every 1h --spawn --precheck '…'", where: "spawn", color: SOL.green,
+    id: "tr-44", title: "Rebuild the docs index if main moved", schedule: "every 1h · fresh session · precheck", where: "spawn", color: SOL.green,
     firings: hours(19, 32).map((t) => {
       const ran = t === 21 * 60 || t === 31 * 60;
       return ran
@@ -57,7 +57,7 @@ export const LANES: Lane[] = [
     }),
   },
   {
-    id: "tr-45", title: "Respond to new PR review comments", flags: "--on pr_comment", where: "here", color: SOL.magenta,
+    id: "tr-45", title: "Respond to new PR review comments", schedule: "on a PR comment", where: "here", color: SOL.magenta,
     firings: [
       { t: 22 * 60 + 47, kind: "run", note: "A reviewer asked for a null check on #482. Fixed, pushed, replied.", log: true },
       { t: 23 * 60 + 12, kind: "run", note: "Follow-up question on the same thread. Answered.", log: false },
@@ -65,12 +65,12 @@ export const LANES: Lane[] = [
     ],
   },
   {
-    id: "tr-46", title: "Audit dependencies for advisories", flags: "--every 1d --spawn --safe", where: "spawn", color: SOL.violet,
+    id: "tr-46", title: "Audit dependencies for advisories", schedule: "every 1d · fresh session · read-only", where: "spawn", color: SOL.violet,
     firings: [{ t: 26 * 60, kind: "park", until: 27 * 60 + 14, note: "Hit a usage limit. Parked until the window reset, then resumed the same session. No advisories.", log: true }],
   },
   {
-    id: "tr-47", title: "Investigate new production errors", flags: "--on error_new --source sentry --spawn", where: "spawn", color: SOL.red,
-    firings: [{ t: 29 * 60 + 20, kind: "attention", note: "New TypeError in checkout, traced to last night's migration. Completed --needs-attention.", log: true }],
+    id: "tr-47", title: "Investigate new production errors", schedule: "on a new Sentry error · fresh session", where: "spawn", color: SOL.red,
+    firings: [{ t: 29 * 60 + 20, kind: "attention", note: "New TypeError in checkout, traced to last night's migration. Flagged for attention.", log: true }],
   },
 ];
 

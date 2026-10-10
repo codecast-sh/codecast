@@ -48,6 +48,12 @@ async function setup() {
   const userId = await t.run(async (ctx) => {
     const id = await ctx.db.insert("users", { name: "Finder" } as any);
     await ctx.db.insert("api_tokens", { user_id: id, token_hash: await hashToken(TOKEN), name: "cli", created_at: T0, last_used_at: T0 } as any);
+    // The explicit conversion step (LE4): a line profile declares sentry's
+    // signals as opening causes. Any other automated source is held.
+    await ctx.db.insert("projects", {
+      user_id: id, workspace: `user:${id}`, short_id: "pr-1", title: "Web", status: "active", created_at: T0, updated_at: T0,
+      line_profile: { finders: [{ id: "errors", source: "sentry", kind: ["bug"], fingerprint: "<group>", opens_causes: true }], changed_at: T0 },
+    } as any);
     return id;
   });
   const add = (fields: Record<string, any>) =>
@@ -72,6 +78,44 @@ describe("signals.ingest", () => {
     expect(cause.cause).toMatchObject({ signal_count: 1, fingerprints: ["err-1"] });
     const signal = await t.run(async (ctx) => await ctx.db.get(out.signal_id));
     expect(signal).toMatchObject({ workspace: `user:${userId}`, task_id: out.task_id, attach: "new", source: "sentry" });
+  });
+
+  test("held: a source no finder converts files a signal and opens no cause", async () => {
+    const { add, t } = await setup();
+    const out = await add({ source: "union.eval", kind: "prompt_miss", fingerprint: "eval:route:1", title: "Route misses a frozen moment" });
+    expect(out.attach).toBe("held");
+    expect(out.task_id).toBeUndefined();
+    expect(stub.state.calls).toHaveLength(0);
+    const tasks = await t.run(async (ctx) => await ctx.db.query("tasks").collect());
+    expect(tasks).toHaveLength(0);
+    const shown = await t.query(api.signals.showForCli, { api_token: TOKEN, signal: out.short_id });
+    expect(shown.signal).toMatchObject({ attach: "held" });
+    expect(shown.signal.task_short_id).toBeUndefined();
+    expect(shown.cause).toBeNull();
+  });
+
+  test("person: a signal a person files opens a cause whatever the profiles declare", async () => {
+    const { add, task } = await setup();
+    const out = await add({ source: "person", kind: "ux", fingerprint: "person:1", title: "The settings sheet hides Save" });
+    expect(out.attach).toBe("new");
+    expect((await task(out.task_id)).source).toBe("signal");
+  });
+
+  test("conversion: once a finder declares opens_causes, its key's held signals join the cause it opens", async () => {
+    const { add, t, task, userId } = await setup();
+    const a = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 });
+    const b = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 + 1000 });
+    expect([a.attach, b.attach]).toEqual(["held", "held"]);
+    await t.run(async (ctx) => {
+      const project = await ctx.db.query("projects").withIndex("by_workspace", (q) => q.eq("workspace", `user:${userId}`)).first();
+      await ctx.db.patch(project!._id, { line_profile: { ...project!.line_profile!, finders: [...project!.line_profile!.finders, { id: "clusters", source: "agentwatch", kind: ["bug"], fingerprint: "cluster:<id>", opens_causes: true }] } });
+    });
+    const c = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 + 2000 });
+    expect(c.attach).toBe("new");
+    const cause = await task(c.task_id);
+    expect(cause.cause).toMatchObject({ signal_count: 3, first_seen: T0, last_seen: T0 + 2000, fingerprints: ["cluster:7"] });
+    const rows = await t.run(async (ctx) => await ctx.db.query("signals").collect());
+    expect(rows.map((r) => r.task_id)).toEqual([c.task_id, c.task_id, c.task_id]);
   });
 
   test("fingerprint: the same fingerprint attaches to the open cause without asking the judge", async () => {
@@ -148,7 +192,7 @@ describe("signals.ingest", () => {
     // A shipped cause is already done: the quiet end keeps it done and says so.
     expect(a).toMatchObject({ status: "done", closed_at: shipAt });
     const quietNotes = await t.run(async (ctx) => (await ctx.db.query("task_comments").collect()).filter((c: any) => c.task_id === shipped.task_id));
-    expect(quietNotes.some((c: any) => c.text.startsWith("Watch ended quiet: no new signal from"))).toBe(true);
+    expect(quietNotes.some((c: any) => c.text.startsWith("Watch ended quiet: no new report from"))).toBe(true);
     const moves = await t.run(async (ctx) => (await ctx.db.query("task_history").collect()).filter((h: any) => h.field === "status" && h.task_id === shipped.task_id));
     expect(moves).toHaveLength(0);
     expect(a.watch_until).toBeUndefined();
@@ -202,6 +246,36 @@ describe("signals.ingest", () => {
     expect(none.signals).toEqual([]);
   });
 
+  test("move: a fingerprint leaves a cause for a new one of its own, and later signals follow it", async () => {
+    // Union 2026-10-07: held call cards (C117) had been attached to a cause
+    // about message openings; a cause is one mechanism, so it gets its own.
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    stub.state.reply = `{"answer": "${from}"}`;
+    await add({ fingerprint: "union:cluster:b", title: "Messages narrate Union's effort" });
+    stub.state.reply = '{"answer":"none"}';
+    const moved = await t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:b", from, title: "Held call cards dial outside calling hours" });
+    expect(moved.moved).toBe(1);
+    expect(moved.created).toBe(true);
+    const target = await t.run(async (ctx) => await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", moved.to)).first()) as any;
+    expect(target.title).toBe("Held call cards dial outside calling hours");
+    expect(target.cause.fingerprints).toEqual(["union:cluster:b"]);
+    const source = (await task(first.task_id)) as any;
+    expect(source.cause.fingerprints).toEqual(["union:cluster:a"]);
+    expect(source.cause.signal_count).toBe(1);
+    const later = await add({ fingerprint: "union:cluster:b", title: "Held call cards dial outside calling hours" });
+    expect(later.attach).toBe("fingerprint");
+    expect((await task(later.task_id)).short_id).toBe(moved.to);
+  });
+
+  test("move refuses a fingerprint the cause does not hold", async () => {
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    await expect(t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:zz", from })).rejects.toThrow();
+  });
+
   test("the web feed carries the fingerprint, the evidence link and the head of the detail (line-map.md LX7)", async () => {
     const { add, t, userId } = await setup();
     const quote = "> Book a time here: http://localhost:3000/book";
@@ -214,6 +288,224 @@ describe("signals.ingest", () => {
     const long = rows.find((r: any) => r.fingerprint === "err-2")!;
     expect(long.detail_md!.length).toBeLessThan(1300);
     expect(long.detail_md).toEndWith("…");
+  });
+});
+
+// Bring findings (learning-loop.md LL3): a product files each finding under
+// its own issue's key, and that key is exactly one problem. Union's
+// AgentWatch clusters are the case: one cause once gathered several clusters.
+describe("issue keys: one product issue is one problem (LL3)", () => {
+  const stub = judgeStub();
+  beforeEach(() => stub.install());
+  afterEach(() => stub.restore());
+
+  const issue = (add: (f: Record<string, any>) => Promise<any>, key: string, title: string, more: Record<string, any> = {}) =>
+    add({ fingerprint: key, title, issue: true, ...more });
+  const byShort = (t: any, short: string) =>
+    t.run(async (ctx: any) => await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short)).first()) as Promise<any>;
+
+  test("one key, one problem: the same key attaches, a near twin under another key opens its own, and the judge is never asked", async () => {
+    const { add, task } = await setup();
+    const a1 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const a2 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    expect(a2.task_id).toBe(a1.task_id);
+    expect(a2.attach).toBe("fingerprint");
+    // Word for word the same problem by text; still another issue.
+    stub.state.reply = `{"answer": "${(await task(a1.task_id)).short_id}"}`;
+    const b = await issue(add, "union:cluster:b", "Messages narrate effort");
+    expect(b.attach).toBe("new");
+    expect(b.task_id).not.toBe(a1.task_id);
+    expect(stub.state.calls).toHaveLength(0);
+    expect((await task(a1.task_id)).cause).toMatchObject({ issue_key: "union:cluster:a", signal_count: 2, fingerprints: ["union:cluster:a"] });
+    expect((await task(b.task_id)).cause).toMatchObject({ issue_key: "union:cluster:b", signal_count: 1 });
+  });
+
+  test("a judge attach never crosses issue keys: a cause that gathered two keys keeps the first issue to reach it, and the other opens its own", async () => {
+    const { add, task } = await setup();
+    // Before keys were exact: the judge put cluster b on cluster a's cause.
+    const legacy = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    stub.state.reply = `{"answer": "${(await task(legacy.task_id)).short_id}"}`;
+    const joined = await add({ fingerprint: "union:cluster:b", title: "Messages narrate Union's effort" });
+    expect(joined.attach).toBe("judge");
+    stub.state.calls.length = 0;
+    const a = await issue(add, "union:cluster:a", "Messages narrate effort");
+    expect(a.task_id).toBe(legacy.task_id);
+    expect((await task(legacy.task_id)).cause.issue_key).toBe("union:cluster:a");
+    const b = await issue(add, "union:cluster:b", "Messages narrate Union's effort");
+    expect(b.attach).toBe("new");
+    expect(b.task_id).not.toBe(legacy.task_id);
+    const b2 = await issue(add, "union:cluster:b", "Messages narrate Union's effort");
+    expect(b2.task_id).toBe(b.task_id);
+    expect(stub.state.calls).toHaveLength(0);
+  });
+
+  test("a finding without an issue key may still join an issue's problem by judgment; the problem keeps its one key", async () => {
+    const { add, task } = await setup();
+    const a = await issue(add, "union:cluster:a", "Booking link points at localhost");
+    stub.state.reply = `{"answer": "${(await task(a.task_id)).short_id}"}`;
+    const report = await add({ source: "person", fingerprint: "slack:localhost-link", title: "Booking link points at localhost again" });
+    expect(report.attach).toBe("judge");
+    expect((await task(a.task_id)).cause).toMatchObject({ issue_key: "union:cluster:a", fingerprints: ["union:cluster:a", "slack:localhost-link"] });
+  });
+
+  test("merge: the merged issue's problem folds into the survivor's, and its key becomes an alias", async () => {
+    const { add, t, task } = await setup();
+    const a = await issue(add, "union:cluster:a", "Messages narrate effort");
+    await issue(add, "union:cluster:a", "Messages narrate effort");
+    const b = await issue(add, "union:cluster:b", "Messages talk about Union's work");
+    const merged = await t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:a", into: "union:cluster:b" });
+    const [pa, pb] = [await task(a.task_id), await task(b.task_id)];
+    expect(merged).toMatchObject({ into: "union:cluster:b", problem: pb.short_id, folded: pa.short_id, moved: 2, already: false });
+    expect(pa).toMatchObject({ status: "dropped", duplicate_of: pb.short_id });
+    expect(pa.cause).toMatchObject({ merged_into: pb._id, signal_count: 0, fingerprints: [] });
+    expect(pa.cause.issue_key).toBeUndefined();
+    expect(pb.cause).toMatchObject({ issue_key: "union:cluster:b", merged_keys: ["union:cluster:a"], signal_count: 3 });
+    expect(pb.cause.fingerprints.sort()).toEqual(["union:cluster:a", "union:cluster:b"]);
+    const notes = await t.run(async (ctx) => await ctx.db.query("task_comments").collect());
+    expect(notes.some((n: any) => n.task_id === pa._id && n.text.includes(`Merged into ${pb.short_id}`))).toBe(true);
+    // The old key keeps resolving to the survivor's problem.
+    const later = await issue(add, "union:cluster:a", "Messages narrate effort");
+    expect(later.task_id).toBe(b.task_id);
+    const row = await t.run(async (ctx) => await ctx.db.get(later.signal_id)) as any;
+    expect(row).toMatchObject({ fingerprint: "union:cluster:a", merged_into: "union:cluster:b" });
+    // Merging again changes nothing; merging back is refused.
+    const again = await t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:a", into: "union:cluster:b" });
+    expect(again).toMatchObject({ already: true, moved: 0, problem: pb.short_id });
+    await expect(t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:b", into: "union:cluster:a" })).rejects.toThrow(/merge the other way/);
+    expect((await byShort(t, pb.short_id)).cause.signal_count).toBe(4);
+  });
+
+  test("merge into an issue with no problem yet: the merged issue's problem becomes the survivor's", async () => {
+    const { add, t, task } = await setup();
+    const a = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const merged = await t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:a", into: "union:cluster:new" });
+    expect(merged).toMatchObject({ problem: (await task(a.task_id)).short_id, moved: 0 });
+    expect((await task(a.task_id)).cause).toMatchObject({ issue_key: "union:cluster:new", merged_keys: ["union:cluster:a"] });
+    const next = await issue(add, "union:cluster:new", "Messages narrate effort");
+    expect(next.task_id).toBe(a.task_id);
+    const alias = await issue(add, "union:cluster:a", "Messages narrate effort");
+    expect(alias.task_id).toBe(a.task_id);
+  });
+
+  test("split: the new issue opens its own problem and takes the findings the product names", async () => {
+    const { add, t, task } = await setup();
+    const a1 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const a2 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    await issue(add, "union:cluster:a", "Messages narrate effort");
+    const split = await t.mutation(api.signals.splitForCli, {
+      api_token: TOKEN, workspace: "personal", from: "union:cluster:a", move: [a2.short_id],
+      source: "agentwatch", kind: "bug", fingerprint: "union:cluster:c", title: "Held call cards dial outside calling hours",
+    });
+    expect(split).toMatchObject({ attach: "new", split_from: "union:cluster:a", moved: 1 });
+    expect(split.task_id).not.toBe(a1.task_id);
+    const [pa, pc] = [await task(a1.task_id), await task(split.task_id)];
+    expect(pc.cause).toMatchObject({ issue_key: "union:cluster:c", split_from: "union:cluster:a", signal_count: 2, fingerprints: ["union:cluster:c"] });
+    expect(pa.cause).toMatchObject({ issue_key: "union:cluster:a", signal_count: 2, fingerprints: ["union:cluster:a"] });
+    const movedRow = await t.run(async (ctx) => await ctx.db.get(a2.signal_id)) as any;
+    expect(movedRow).toMatchObject({ fingerprint: "union:cluster:c", split_from: "union:cluster:a", task_id: split.task_id });
+    // Each key goes on to its own problem.
+    expect((await issue(add, "union:cluster:c", "Held call cards dial outside calling hours")).task_id).toBe(split.task_id);
+    expect((await issue(add, "union:cluster:a", "Messages narrate effort")).task_id).toBe(a1.task_id);
+    // A finding of another issue cannot be split off this one.
+    const other = await issue(add, "union:cluster:z", "Something else");
+    await expect(t.mutation(api.signals.splitForCli, {
+      api_token: TOKEN, workspace: "personal", from: "union:cluster:a", move: [other.short_id],
+      source: "agentwatch", kind: "bug", fingerprint: "union:cluster:d", title: "Another split",
+    })).rejects.toThrow(/not a finding of issue/);
+  });
+
+  test("split with nothing moved: both problems name each other in plain words, never the raw key (LL6)", async () => {
+    const { add, t } = await setup();
+    const a = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const split = await t.mutation(api.signals.splitForCli, {
+      api_token: TOKEN, workspace: "personal", from: "union:cluster:a", move: [],
+      source: "agentwatch", kind: "bug", fingerprint: "union:cluster:c", title: "Held call cards dial outside calling hours",
+    });
+    const notes = await t.run(async (ctx) => await ctx.db.query("task_comments").collect()) as any[];
+    const [pa, pc] = [await byShort(t, a.task_short_id), await byShort(t, split.task_short_id)];
+    const on = (id: string) => notes.filter((n) => n.task_id === id).map((n) => n.text).join("\n");
+    expect(on(pc._id)).toContain(`split this off ${pa.short_id}`);
+    expect(on(pa._id)).toContain(pc.short_id);
+    expect(notes.some((n) => n.text.includes("union:cluster:"))).toBe(false);
+  });
+
+  test("move: an issue key never lands on another issue's problem, and carries its issue to a new one", async () => {
+    const { add, t, task } = await setup();
+    const a = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const b = await issue(add, "union:cluster:b", "Held call cards");
+    const [pa, pb] = [await task(a.task_id), await task(b.task_id)];
+    await expect(t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:a", from: pa.short_id, to: pb.short_id })).rejects.toThrow(/merge the two issues/);
+    const moved = await t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:a", from: pa.short_id });
+    expect((await byShort(t, moved.to)).cause.issue_key).toBe("union:cluster:a");
+    expect((await task(a.task_id)).cause.issue_key).toBeUndefined();
+    expect((await issue(add, "union:cluster:a", "Messages narrate effort")).task_id).not.toBe(a.task_id);
+  });
+
+  test("split: a finding named twice moves once, and a moved row no longer reads as merged elsewhere", async () => {
+    const { add, t, task } = await setup();
+    const a1 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    const a2 = await issue(add, "union:cluster:a", "Messages narrate effort");
+    await t.run(async (ctx) => { await ctx.db.patch(a2.signal_id, { merged_into: "union:cluster:old" } as any); });
+    const split = await t.mutation(api.signals.splitForCli, {
+      api_token: TOKEN, workspace: "personal", from: "union:cluster:a", move: [a2.short_id, a2.short_id],
+      source: "agentwatch", kind: "bug", fingerprint: "union:cluster:c", title: "Held call cards dial outside calling hours",
+    });
+    expect(split.moved).toBe(1);
+    expect((await task(split.task_id)).cause.signal_count).toBe(2);
+    expect((await task(a1.task_id)).cause.signal_count).toBe(1);
+    const row = await t.run(async (ctx) => await ctx.db.get(a2.signal_id)) as any;
+    expect(row.merged_into).toBeUndefined();
+  });
+
+  test("merge into a problem in watch: findings seen after its ship reopen it, older ones leave its outcome alone (LE12)", async () => {
+    for (const late of [true, false]) {
+      const { add, t, task } = await setup();
+      const b = await issue(add, "union:cluster:b", "Messages talk about Union's work");
+      const shipped = Date.now() - 60_000;
+      await t.run(async (ctx) => { await ctx.db.patch(b.task_id, { status: "done", closed_at: shipped, watch_until: Date.now() + 7 * 86_400_000 } as any); });
+      const a = await issue(add, "union:cluster:a", "Messages narrate effort", late ? {} : { observed_at: shipped - 3_600_000 });
+      await t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:a", into: "union:cluster:b" });
+      expect((await task(a.task_id)).status).toBe("dropped");
+      const pb = await task(b.task_id);
+      expect(pb.cause.signal_count).toBe(2);
+      if (late) {
+        expect(pb.status).toBe("open");
+        expect(pb.watch_until).toBeUndefined();
+      } else {
+        expect(pb.status).toBe("done");
+        expect(pb.watch_until).toBeGreaterThan(Date.now());
+      }
+    }
+  });
+
+  test("findings held under a key merged away join the problem its survivor opens: none is left behind", async () => {
+    const { add, t, task } = await setup();
+    // agentwatch converts nothing yet (LE4): its issues' findings are held.
+    const held = (key: string) => issue(add, key, "Messages narrate effort", { source: "agentwatch" });
+    expect((await held("union:cluster:a")).attach).toBe("held");
+    await held("union:cluster:a");
+    await held("union:cluster:b");
+    await t.mutation(api.signals.mergeForCli, { api_token: TOKEN, workspace: "personal", issue: "union:cluster:a", into: "union:cluster:b" });
+    await t.run(async (ctx) => {
+      const p = (await ctx.db.query("projects").first())!;
+      await ctx.db.patch(p._id, { line_profile: { ...p.line_profile!, finders: [...p.line_profile!.finders, { id: "aw", source: "agentwatch", kind: ["bug"], fingerprint: "<cluster>", opens_causes: true }] } } as any);
+    });
+    const opened = await held("union:cluster:b");
+    expect(opened.attach).toBe("new");
+    expect((await task(opened.task_id)).cause.signal_count).toBe(4);
+    const rows = await t.run(async (ctx) => await ctx.db.query("signals").collect()) as any[];
+    expect(rows.filter((r) => !r.task_id)).toHaveLength(0);
+  });
+
+  test("a finding keeps its judge, the judge's version, its severity and the link back to the product", async () => {
+    const { add, t } = await setup();
+    const out = await issue(add, "union:cluster:a", "Messages narrate effort", {
+      judge: "comms", judge_version: "v7", severity: 8, subject: "ex-agent-quality-3",
+      detail_md: "**Narrates effort** (severity 8/10)", evidence_url: "https://admin.example/agent-watch?cluster=a&finding=f-1",
+    });
+    const shown = await t.query(api.signals.showForCli, { api_token: TOKEN, signal: out.short_id });
+    expect(shown.signal).toMatchObject({ judge: "comms", judge_version: "v7", severity: 8, subject: "ex-agent-quality-3", evidence_url: "https://admin.example/agent-watch?cluster=a&finding=f-1" });
+    expect(shown.cause).toMatchObject({ issue_key: "union:cluster:a" });
   });
 });
 
