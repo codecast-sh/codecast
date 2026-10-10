@@ -50,3 +50,16 @@ export interface EncryptedProviderKeyPayload {
 export type ProviderKeyCommand =
   | { op: "set"; payload: EncryptedProviderKeyPayload }
   | { op: "remove"; provider: string };
+
+/** The provider a command is about. */
+export function providerKeyCommandProvider(command: ProviderKeyCommand): string {
+  return command.op === "set" ? command.payload.provider : command.provider;
+}
+
+/** The provider ids a device manages after a command (ids only, never a key):
+ *  what the server mirrors onto the device row and the web paints first. */
+export function managedIdsAfter(prev: readonly string[] | null | undefined, command: ProviderKeyCommand): string[] {
+  const ids = prev ?? [];
+  const provider = providerKeyCommandProvider(command);
+  return command.op === "set" ? Array.from(new Set([...ids, provider])).sort() : ids.filter((p) => p !== provider);
+}
