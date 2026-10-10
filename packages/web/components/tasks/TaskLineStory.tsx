@@ -17,14 +17,15 @@ import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { lineTabHref } from "../../lib/lineSettings";
-import { lineTraceHref } from "../../lib/line/lineMapUrl";
+import { expectationsHref } from "../../lib/expectations/view";
+import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import type { TaskItem } from "../../store/inboxStore";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useGoalChip } from "../../hooks/useGoalChip";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { ageShort, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
+import { ageShort, findingJudgeWords, findingReviewWords, type LineCauseTask, type LineSignal } from "../../lib/lineFlow";
+import { finderWords } from "../../lib/line/lineTrace";
 import { cardName, causeWhere, choiceWords, runPath, shortDay, type ReportRun, type ReportTask } from "../../lib/line/runReport";
 import { CauseRunList, PhaseStrip, ReportChip, answerTone, useCauseRuns } from "../line/RunReport";
 import { cn } from "../../lib/utils";
@@ -79,7 +80,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   const whereLine = (
     <span className="inline-flex items-baseline gap-3 min-w-0">
       <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>
-      <Link href={lineTraceHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Follow this cause through the line, step by step" data-cause-trace>Trace<ArrowUpRight className="w-3 h-3" /></Link>
+      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="This problem's life on its line: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
     </span>
   );
   // Readiness is about admission: once the cause is closed it has no more to say.
@@ -97,7 +98,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
       <div className="px-4 pb-3 pt-1 space-y-3">
         {(goal || kind || readiness || cited.length > 0) && (
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1 text-[12px]" data-cause-ground>
-            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
+            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" || goal.kind === "line" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
             {cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | undefined)?.find((l) => l.id === id)} />)}
             {kind && <><dt className="text-sol-text-dim">Kind</dt><dd className="text-sol-text-muted">{kind}</dd></>}
             {readiness && <><dt className="text-sol-text-dim">Readiness</dt><dd className={readiness === "ready" ? "text-sol-text-muted" : "text-sol-yellow"} title={task.readiness_note ?? undefined} data-cause-readiness>{readinessWords(readiness, task.readiness_note)}</dd></>}
@@ -108,7 +109,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
         {task.cause && (signals.length > 0 || task.cause.signal_count > 0) && (
           <div data-cause-signals>
             <div className="text-[12px] text-sol-text-muted">
-              {task.cause.signal_count} {task.cause.signal_count === 1 ? "signal" : "signals"} since {shortDay(task.cause.first_seen)}
+              {task.cause.signal_count} {task.cause.signal_count === 1 ? "report" : "reports"} since {shortDay(task.cause.first_seen)}
               {sources.length > 0 && <span className="text-sol-text-dim"> · from {sources.join(", ")}</span>}
             </div>
             <ul className="mt-1 space-y-0.5">
@@ -150,7 +151,7 @@ function ExpectationRow({ id, line }: { id: string; line?: ExpectationLine }) {
       <dd className="min-w-0 flex items-baseline gap-2" data-cause-expectation={id}>
         {line && <span className="min-w-0 text-sol-text leading-snug">{line.text}{line.status === "retired" && <span className="text-sol-text-dim"> (retired since)</span>}</span>}
         {line
-          ? <Link href={`${lineTabHref(line.project_short_id ?? line.project_id)}#${id}`} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
+          ? <Link href={expectationsHref(line.project_short_id ?? line.project_id, id)} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
           : <span className={chip}>{id}</span>}
       </dd>
     </>
@@ -165,16 +166,26 @@ function readinessWords(readiness: string, note?: string | null): string {
   return `Not ready${why ? `: ${why.charAt(0).toLowerCase()}${why.slice(1)}` : ""}.`.replace(/\.\.$/, ".");
 }
 
-/** A signal behind the cause: the row opens its trace (line-map.md LX4), and
- *  the arrow goes back to where it was seen. */
+/** A finding behind the problem: the row opens its trace (line-map.md LX4),
+ *  and the arrow goes back to where it was seen. A judge's finding also says,
+ *  under its title, what the judge saw in its own words, and where a finding
+ *  marked wrong stands (learning-loop.md LL3, LL11). */
 function SignalRow({ s, now }: { s: LineSignal; now: number }) {
+  const judged = findingJudgeWords(s);
+  const said = s.judge ? finderWords(s.detail_md, isExpectationId(s.subject) ? s.subject! : null) : null;
+  const review = findingReviewWords(s);
   return (
     <li className="flex items-baseline gap-1 rounded hover:bg-sol-bg-alt/60 min-w-0" data-cause-signal={s.short_id ?? s._id}>
-      <Link href={lineTraceHref(s.short_id || s._id)} className="flex-1 flex items-baseline gap-2 px-1 py-0.5 text-[12px] min-w-0" title="Trace this signal through the line" data-signal-trace>
-        <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
-        <span className="min-w-0 truncate text-sol-text">{s.title}</span>
-        {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
-        <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
+      <Link href={lineRefHref(s.short_id || s._id)} className="flex-1 min-w-0 px-1 py-0.5 text-[12px]" title="This finding's problem on its line" data-signal-trace>
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
+          <span className="min-w-0 truncate text-sol-text">{s.title}</span>
+          {judged && <span className="shrink-0 text-sol-text-dim" data-signal-judge>{judged}</span>}
+          {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
+          <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
+        </span>
+        {said && <span className="block pl-[5.5rem] truncate text-[11.5px] text-sol-text-muted" title={said} data-signal-said>{said}</span>}
+        {review && <span className={cn("block pl-[5.5rem] text-[11.5px] leading-snug", s.judge_review?.state === "failed" ? "text-sol-red" : s.judge_review?.state === "diagnosed" ? "text-sol-text-muted" : "text-sol-yellow")} data-signal-review>{review}</span>}
       </Link>
       {s.evidence_url && (
         <a href={s.evidence_url} target="_blank" rel="noreferrer" className="shrink-0 px-1 text-sol-text-dim hover:text-sol-blue" title="Where it was seen" data-signal-evidence>

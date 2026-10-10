@@ -2,49 +2,13 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
-// Genuine `cast sessions` output captured from the author's account on
-// 2026-08-08. The excerpt is filtered to sessions from the codecast repository;
-// every omission is marked with an editorial "…". The counts in the header line
-// are the real full-inbox counts. Nothing here is reconstructed — including the
-// last row, which is the session that wrote this post.
-
-const SESSIONS_SNAPSHOT = `cast sessions · you  09:49 AM
-needs input 15  ·  working 5  ·  idle 1   (pinned 8, live 18, stashed 20, killed 1)
-
-NEEDS INPUT (15)
-
-● needs input pinned  jx7a9fd  Multicolumn UI redesign
-   12 hours ago  ·  1048 msgs  ·  ~/src/codecast  ·  claude_code
-   pl-217 Layout modes + unified right rail + simple view
-   Implement minimalist multicolumn UI redesign with theme support
-
-● needs input  jx70mgz  Codecast install flow redesign
-   10 min ago  ·  325 msgs  ·  ~/src/codecast  ·  claude_code
-   Instrumented install/auth funnel and deployed PostHog tracking live
-
-● needs input  jx74wkc  Agent image sharing
-   2 hours ago  ·  405 msgs  ·  ~/src/codecast  ·  claude_code
-   Implement 5 image rendering improvements for agent responses
-
-● needs input  jx7dgcj  Analytics setup
-   2 hours ago  ·  347 msgs  ·  ~/src/codecast  ·  claude_code
-   Configure PostHog analytics across all platforms with session replay
-
-…  11 more sessions
-
-WORKING (5)
-
-● working  jx76eg3  Weekly CodeCast blog posts
-   just now  ·  27 msgs  ·  ~/src/codecast  ·  claude_code
-   ct-41733 Weekly blog post: the agent inbox (steer pillar)
-   write a blog post every week that is interesting, relevant and shows off a…
-
-…  4 more sessions
-`;
+// The counts in "One bit per session" are from the author's inbox on
+// 2026-08-08, filtered to the codecast repository. Both screenshots were taken
+// the same morning by the agent session visible in them.
 
 export default function AnInboxForYourAgentsPost() {
   const post = getPost("an-inbox-for-your-agents");
@@ -106,28 +70,26 @@ export default function AnInboxForYourAgentsPost() {
           alone.
         </P>
         <P>
-          That bit is what turns a pile of terminals into an inbox. Not a log of what happened —
-          a queue of what needs you, with everything else out of the way:
+          That bit is what turns a pile of terminals into an inbox. Not a log of what
+          happened, but a queue of what needs you, with everything else out of the way. In the
+          inbox it decides where each card sits: anything that asked you a question goes to
+          the top, then <em>Needs Input</em>, then the sessions that are <em>Working</em>, and
+          below them the <em>Dormant</em> ones, parked until a timer or another session wakes
+          them, each with a line saying what it is waiting for.
         </P>
-
-        <Terminal label="cast sessions">
-          <Cmd>cast sessions</Cmd>
-          {SESSIONS_SNAPSHOT}
-        </Terminal>
-
         <P>
-          This is a genuine capture from the morning this post was written, trimmed to sessions
-          from the codecast repository. Fifteen sessions want attention; five are heads-down.
-          Read the last row carefully: <Code>jx76eg3</Code>, <em>Weekly CodeCast blog posts</em>,
-          is the session writing this post. It filed itself under a task, showed up in its own
-          inbox, and captured this snapshot while it worked.
+          On the morning this post was written, the codecast repository&apos;s share of that
+          inbox read fifteen needing input and five working. One of the five, titled{" "}
+          <em>Weekly CodeCast blog posts</em>, was the session writing this post. It filed
+          itself under a task, showed up in its own inbox, and counted the queue while it
+          worked. (A terminal gets the same grouping from <Code>cast sessions</Code>.)
         </P>
 
         <H2>Every machine, one surface</H2>
         <P>
-          The same queue is a web page. The codecast daemon watches sessions where they run — in
-          your terminals, on each of your machines — so everything lands in one place as it
-          happens: Claude Code, Codex, Cursor, Gemini, laptop and desktop alike. Each card
+          The inbox is the same on the web, on the desktop app and on your phone. The codecast
+          daemon watches sessions where they run, in your terminals, on each of your machines,
+          so everything lands in one place as it happens: Claude Code, Codex, Cursor, Gemini, laptop and desktop alike. Each card
           carries a title and a running summary the agent keeps current, so you can tell from
           the list what happened while you were gone:
         </P>
@@ -169,22 +131,22 @@ export default function AnInboxForYourAgentsPost() {
           agents filing work for other agents, all of it landing in the same queue you triage.
         </P>
         <P>
-          The terminal has the same verbs. <Code>cast read jx70mgz</Code> prints any
-          session&apos;s transcript; <Code>cast send jx70mgz &quot;ship it&quot;</Code> lands a
-          message in that agent&apos;s terminal, wherever it runs. Any session you can see, you
-          can steer.
+          Any session you can see, you can steer. Agents and scripts get the same two verbs
+          from a terminal: <Code>cast read</Code> for a transcript, <Code>cast send</Code> to
+          land a message in another agent&apos;s terminal, wherever it runs.
         </P>
 
-        <H2>Watching is a query too</H2>
+        <H2>Agents watch it too</H2>
         <P>
-          For a fleet you don&apos;t poll — you subscribe. <Code>cast sessions -w</Code> streams
-          one line per state change and prints nothing otherwise. We ran it for ninety seconds
-          while drafting this section; it printed exactly one line, a session flipping from{" "}
-          <Code>needs input</Code> back to <Code>working</Code> the moment it was answered.
-          Add <Code>--json</Code> and the stream becomes machine-readable, which closes an
-          interesting loop: an orchestrating agent spawns workers, watches for{" "}
-          <Code>needs_input</Code> events, reads whichever worker stopped, and sends it the next
-          step. The same inbox that lets you steer five agents lets an agent steer fifty.
+          The inbox is live. A card moves the moment its session changes state: you answer a
+          question and the card slides from <em>Needs Input</em> back to <em>Working</em>{" "}
+          before you have looked away. Agents can subscribe to the same changes. An
+          orchestrating agent watches its workers with <Code>cast sessions -w --json</Code>,
+          which prints one line per state change and nothing otherwise, reads whichever worker
+          stopped, and sends it the next step. We ran that watch for ninety seconds while
+          drafting this section; it printed exactly one line, a session flipping from needs
+          input back to working the moment it was answered. The same inbox that lets you steer
+          five agents lets an agent steer fifty, and their workers nest under its card in yours.
         </P>
         <P>
           Either way, the contract is the same: nothing waits unseen. A fleet of agents is only
@@ -214,11 +176,10 @@ export default function AnInboxForYourAgentsPost() {
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          The terminal output and both screenshots are genuine captures from the author&apos;s
-          account on 2026-08-08, taken by the agent session visible in them. The{" "}
-          <Code>cast sessions</Code> excerpt is filtered to sessions from the codecast
-          repository, with every omission marked <Code>…</Code>; the screenshots are cropped to
-          the app&apos;s content area.
+          Both screenshots and the inbox counts are genuine, from the author&apos;s account on
+          2026-08-08, taken by the agent session visible in them. The counts are filtered to
+          sessions from the codecast repository; the screenshots are cropped to the app&apos;s
+          content area.
         </p>
       </article>
     </main>
