@@ -7,7 +7,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 - `blocked`: a human must act first (answer, grant, decide). Files under **Needs Input** and claims their eyes, so declare it only when true.
 - `done`: delivered, nothing stalled; read at leisure.
-- `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
+- `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
 - `working` (the default): still moving.
 
 `done` and `dormant` cover only the turn that declares them, and a message from the human takes the pin down, so declare again at the end of each turn. Never park an ask in prose and go dormant: queue it with `cast decide`, then declare dormant.
