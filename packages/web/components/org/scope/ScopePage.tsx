@@ -25,7 +25,6 @@ import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { cn } from "../../../lib/utils";
-import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf, stateLineBesideName } from "../../../lib/scopePage";
 import { AnchorOnboarding } from "../../anchor/AnchorConversation";
@@ -40,7 +39,10 @@ import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
-import { ScopeGlance } from "./ScopeGlance";
+import { ObjectLink } from "../company/SheetFrame";
+import { reportsToNamed } from "../company/sheets/sheetModel";
+import { useRoleHead } from "../lines/useHeads";
+import { useTeamRosterIdentity } from "../../../hooks/useTeamRoster";
 import { scopeDefaultTab, scopeTabFromParam, scopeWorkViewFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { RetireRoleConfirm } from "../RetireRoleConfirm";
@@ -190,15 +192,13 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // never wrote a brief still carries from the provisioning template.
   const stripeLine = standingStateLine || treeStateLine || boardLine;
   const headLine = stripeLine ? stateLineBesideName(stripeLine, role?.name ?? "") : null;
-  // The first thing on the page is the agent saying what this area is and
-  // what it is watching, from the rows themselves; the seat's provisioning
-  // prompt and its working turns fold away under it. What the role needs from
-  // the person is in its own thread: its pinned state and its decide cards.
-  const lead = useMemo(() => (
-    tree && (role || anchor)
-      ? <ScopeLead role={role} />
-      : null
-  ), [tree, role, anchor]);
+  // The root's opening line; a role's head says what it looks after, in the strip under its name.
+  const rootSeat = !!anchor;
+  const lead = useMemo(() => (tree && !role && rootSeat ? (
+    <SeatLead data-scope-lead>
+      I look after the whole workspace. Ask me for anything here: I answer, or start a session for the work and tell you which.
+    </SeatLead>
+  ) : null), [tree, role, rootSeat]);
 
   // -------- the conversation is the session page (I3)
   // The same pane the inbox mounts, so its banners, share control, context
@@ -304,28 +304,12 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
           {words && <span className="shrink-0 whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
           {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
-          {stateMeta?.label && (
-            <span className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-[18px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
-              <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
-              {stateMeta.label}
-            </span>
-          )}
           {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
           {/* The state line: the role's pinned line, else the first line of its notes. */}
           {headLine ? (
             <p className={cn("min-w-0 flex-1 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-muted)" }} title={stripeLine ?? undefined} data-scope-stripe>{headLine}</p>
           ) : (
             <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not started yet." : "") : "Everything in the workspace."}</p>
-          )}
-          {role && !phone && (
-            <ShortcutTooltip label={`Reports to ${parentName(tree, role.reports_to)}`} side="bottom">
-              <span className="scope-head-wide shrink-0 inline-flex items-center gap-1 text-[11.5px] whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }} data-scope-reports-to>
-                <span aria-hidden>↑</span>
-                {role.reports_to.kind === "role"
-                  ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="hover:underline" style={{ color: "var(--sol-text-muted)" }}>{parentName(tree, role.reports_to)}</Link>
-                  : <Link href="/org" className="hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
-              </span>
-            </ShortcutTooltip>
           )}
           {role && (
             <DropdownMenu>
@@ -356,7 +340,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
         </div>
       </header>
 
-      {role && !panelOpen && <ScopeGlance role={role} summary={summary} onOpen={openPanelOn} />}
+      {role && <RoleHeadStrip role={role} tree={tree} phone={phone} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />}
 
       {role && (
         <Dialog open={retireOpen} onOpenChange={setRetireOpen}>
@@ -413,18 +397,41 @@ function retireSentence(role: OrgRole, parent: string): string {
   return `${sessions}Roles under it report to ${parent}. Its triggers are cancelled and its thread is kept.`;
 }
 
-/** The role's opening line (F4.1): what it looks after, said from the rows,
- *  not from the transcript. The header already names the role, its state and
- *  who it reports to. */
-export function ScopeLead({ role }: { role: OrgRole | null }) {
-  const { names, whole } = areaOf(role);
-  if (role && isHeadOfPeopleRole(role)) {
-    return <SeatLead data-scope-lead>I keep the org true to how the work runs: who owns what, who reports to whom, and the goals it all serves. Ask me about the structure, a role or a goal.</SeatLead>;
-  }
+/** The role's head under its name (cohesive build spec §5.4): the facts its
+ *  sheet, its line and its hover card say, in the same order (whom it
+ *  reports to, its state, what it carries, since when), and the goals it
+ *  serves. Whom it reports to opens their sheet. While the panel is shut the
+ *  strip opens it on the overview. */
+function RoleHeadStrip({ role, tree, phone, onOpen }: { role: OrgRole; tree: OrgTree; phone: boolean; onOpen?: () => void }) {
+  const head = useRoleHead(role);
+  const members = useTeamRosterIdentity() as Parameters<typeof reportsToNamed>[1];
+  const reportsTo = reportsToNamed(tree, members, role);
+  const keep = (e: React.MouseEvent) => e.stopPropagation();
+  const cells = [
+    reportsTo ? <span key="to" className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo} /></span> : null,
+    head.facts.state, head.lineFacts.measure, head.facts.date,
+  ].filter((c) => c != null && c !== false);
   return (
-    <SeatLead data-scope-lead>
-      {names.length > 0 ? `I look after ${names.join(", ")}.` : whole ? "I look after the whole workspace." : "I have no area of my own: I run my check and answer what I am asked."} Ask me for anything here: I answer, or start a session for the work and tell you which.
-    </SeatLead>
+    <div
+      className={cn("shrink-0 border-b flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]", phone ? "px-2.5 py-1" : "px-4 py-1.5", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/30")}
+      style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", color: "var(--sol-text-muted)" }}
+      onClick={onOpen}
+      title={onOpen ? "Open the overview" : undefined}
+      data-scope-head-facts
+    >
+      {cells.map((c, i) => (
+        <span key={i} className="inline-flex min-w-0 items-center gap-2">
+          {i > 0 && <span aria-hidden className="h-[3px] w-[3px] rounded-full" style={{ background: "var(--sol-text-dim)" }} />}
+          <span className="inline-flex min-w-0 items-center">{c}</span>
+        </span>
+      ))}
+      {head.serves.length > 0 && (
+        <span className="ml-auto inline-flex min-w-0 items-baseline gap-2" onClick={keep} data-scope-serves>
+          <span style={{ color: "var(--sol-text-dim)" }}>Serves</span>
+          {head.serves.map((n) => <ObjectLink key={n.ref} n={n} className="max-w-[220px]" />)}
+        </span>
+      )}
+    </div>
   );
 }
 

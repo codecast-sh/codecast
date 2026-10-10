@@ -131,7 +131,9 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
  * .git/info/exclude (only the host's reserveInputs does). Pathspec excludes
  * keep tracked content under .codecast as HEAD has it and keep the untracked
  * state out. The worktree GC snapshots with the same list, so a setup log on
- * the host never counts as host-made work.
+ * the host never counts as host-made work, and so does every snapshot a move
+ * takes on either side: a checkout's own worktrees sit inside it on both
+ * machines and travel on their own.
  */
 export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
 
@@ -230,9 +232,9 @@ export async function snapshotTree(cwd: string, exclude: string[] = []): Promise
  * null (the caller keeps the plain clone). See createWipSnapshotStrict for
  * the recipe and its properties.
  */
-export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null> {
+export async function createWipSnapshot(cwd: string, opts: { exclude?: string[] } = {}): Promise<WipSnapshot | null> {
   try {
-    return await createWipSnapshotStrict(cwd);
+    return await createWipSnapshotStrict(cwd, opts);
   } catch {
     return null;
   }
@@ -397,14 +399,29 @@ export async function defaultRemote(cwd: string): Promise<string | null> {
  * exactly (commit-tree joins paragraphs with a blank line). The identity is passed
  * inline because a bundle-cloned remote may have no user.* config.
  */
-export function remoteSnapshotScript(opts: { cwd: string; ref: string }): string {
+/**
+ * snapshotTree in shell: the working tree as a tree id, staged into the index
+ * file `index` (a shell word), printed on stdout. The whole checkout whatever
+ * folder of it the shell is in, under .gitignore, minus the `exclude` dirs.
+ * Tracked files and untracked ones are staged apart for the same reason as
+ * there: `git add -A` with an exclude pathspec that names an ignored folder
+ * refuses with "paths are ignored" (git 2.43).
+ */
+export function snapshotTreeShell(index: string, exclude: readonly string[] = []): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const spec = [":/", ...exclude.map((p) => q(`:(top,exclude)${p}`))].join(" ");
+  const env = `GIT_INDEX_FILE="${index}"`;
+  // An empty list must add nothing: `git add --pathspec-from-file` given no paths adds everything.
+  return `${env} git read-tree HEAD && ${env} git add -u -- ${spec} && L=$(mktemp) && ${env} git ls-files -z --others --exclude-standard -- ${spec} > "$L"` +
+    ` && { [ ! -s "$L" ] || ${env} git --literal-pathspecs add --pathspec-from-file="$L" --pathspec-file-nul; } && rm -f "$L" && ${env} git write-tree`;
+}
+
+export function remoteSnapshotScript(opts: { cwd: string; ref: string; exclude?: string[] }): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   return [
     `cd ${q(opts.cwd)}`,
     `IDX=$(mktemp)`,
-    `GIT_INDEX_FILE="$IDX" git read-tree HEAD`,
-    `GIT_INDEX_FILE="$IDX" git add -A`, // respects .gitignore, same as here
-    `TREE=$(GIT_INDEX_FILE="$IDX" git write-tree)`,
+    `TREE=$(${snapshotTreeShell("$IDX", opts.exclude)})`,
     `BR=$(git rev-parse --abbrev-ref HEAD)`,
     // Same date pinning as createWipSnapshot, for the same reason: the commit
     // must be a pure function of tree + parent, not of the second it ran in.
@@ -422,7 +439,7 @@ export type ApplyResult =
   | { ok: true; base: string; branch?: string; appliedWork: boolean; conflicts: string[] }
   | { ok: false; reason: string };
 
-const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
+export const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
 
 /**
  * Bring a session's work home from an already-fetched snapshot of the host
