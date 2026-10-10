@@ -45,8 +45,8 @@ export function lineCauseSignal(clientKey: string, input: LineCauseInput) {
 }
 
 export async function fileLineCauseCore(ctx: any, userId: Id<"users">, clientKey: string, projectId: Id<"projects">, input: LineCauseInput) {
-  if (!clientKey || clientKey.length > 64) throw new ConvexError("A line cause needs its client key");
-  if (!input?.subject?.startsWith(LINE_SUBJECT_PREFIX)) throw new ConvexError("A line cause names a node of the line (line:station:<id>, line:finder:<source>, ...)");
+  if (!clientKey || clientKey.length > 64) throw new ConvexError("A problem in the line needs its client key");
+  if (!input?.subject?.startsWith(LINE_SUBJECT_PREFIX)) throw new ConvexError("A problem in the line names a node of the line (line:station:<id>, line:finder:<source>, ...)");
   const existing: Doc<"tasks"> | null = await ctx.db
     .query("tasks")
     .withIndex("by_client_key", (q: any) => q.eq("user_id", userId).eq("client_key", clientKey))
@@ -66,7 +66,7 @@ export async function fileLineCauseCore(ctx: any, userId: Id<"users">, clientKey
 }
 
 /** The role whose line runs a project's causes: the project's lead (LP1). */
-async function leadRoleOf(ctx: any, project: Doc<"projects">): Promise<any | null> {
+export async function leadRoleOf(ctx: any, project: Doc<"projects">): Promise<any | null> {
   const ws = parseWorkspaceKey(project.workspace);
   if (!ws) return null;
   const roles = await allRolesInBoundary(ctx, ws.type === "team" ? { team_id: ws.teamId } : { scope_user_id: ws.userId });
@@ -76,11 +76,11 @@ async function leadRoleOf(ctx: any, project: Doc<"projects">): Promise<any | nul
 
 export async function startLineCauseCore(ctx: any, userId: Id<"users">, taskId: Id<"tasks">) {
   const task: Doc<"tasks"> | null = await ctx.db.get(taskId);
-  if (!task || !(await canAccessTask(ctx, userId, task))) throw new ConvexError("Cause not found");
+  if (!task || !(await canAccessTask(ctx, userId, task))) throw new ConvexError("Problem not found");
   const project: Doc<"projects"> | null = task.project_id ? await ctx.db.get(task.project_id) : null;
-  if (!project) throw new ConvexError("This cause is in no project, so no line runs it");
+  if (!project) throw new ConvexError("This problem is in no project, so no line runs it");
   const role = await leadRoleOf(ctx, project);
-  if (!role) throw new ConvexError("No role leads this project yet, so no line runs its causes. Name a lead on the project's page.");
+  if (!role) throw new ConvexError("No role leads this project yet, so no line runs its problems. Name a lead on the project's page.");
   if (role.status !== "active") throw new ConvexError(`@${role.handle} is paused, so its line starts nothing`);
   if (!(await userCanAccessRole(ctx, userId, role))) throw new ConvexError("You cannot start this project's line");
   await endStalledRun(ctx, task);
@@ -101,5 +101,5 @@ async function endStalledRun(ctx: any, task: Doc<"tasks">, now = Date.now()) {
   const run: any = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
   if (!run || run.status !== "running" || run.current_node_id !== CARD_GATE_NODE_ID) return;
   if (now - (run.updated_at ?? 0) < STALLED_MS) return;
-  await cancelCore(ctx, run, now, "Nothing drove it after its card was answered, so the line started the cause again");
+  await cancelCore(ctx, run, now, "Nothing drove it after its card was answered, so the line started the problem again");
 }
