@@ -14,7 +14,6 @@ marker="$service_home/.codecast-managed-login"
 if dscl . -read "/Users/$service_user" >/dev/null 2>&1; then
   sudo test -f "$marker" || { echo 'That login already exists and is not managed by Codecast; choose another service username' >&2; exit 1; }
 else
-  [ -s "$HOME/.ssh/authorized_keys" ] || { echo 'The bootstrap login has no SSH authorized_keys to carry to the service login' >&2; exit 1; }
   next_uid=501
   while dscl . -search /Users UniqueID "$next_uid" | grep -q .; do next_uid=$((next_uid + 1)); done
   sudo dscl . -create "/Users/$service_user"
@@ -24,12 +23,19 @@ else
   sudo dscl . -create "/Users/$service_user" UserShell /bin/zsh
   sudo dscl . -create "/Users/$service_user" RealName 'Codecast remote service'
   sudo dscl . -create "/Users/$service_user" Password '*'
+  sudo mkdir -p "$service_home"
+  sudo touch "$marker"
+  sudo chown -R "$service_user:staff" "$service_home"
+fi
+# The codecast base image ships this login with no keys: each host's own
+# launch key, which AWS gives the bootstrap login, is the way in.
+if ! sudo test -s "$service_home/.ssh/authorized_keys"; then
+  [ -s "$HOME/.ssh/authorized_keys" ] || { echo 'The bootstrap login has no SSH authorized_keys to carry to the service login' >&2; exit 1; }
   sudo mkdir -p "$service_home/.ssh"
   sudo cp "$HOME/.ssh/authorized_keys" "$service_home/.ssh/authorized_keys"
   sudo chmod 700 "$service_home/.ssh"
   sudo chmod 600 "$service_home/.ssh/authorized_keys"
-  sudo touch "$marker"
-  sudo chown -R "$service_user:staff" "$service_home"
+  sudo chown -R "$service_user:staff" "$service_home/.ssh"
 fi
 sudo mkdir -p /private/etc/sudoers.d
 rule=$(mktemp)
@@ -123,11 +129,23 @@ user='${user}'
 uid=$(id -u "$user")
 pwfile="/Users/$user/.codecast/desktop-password"
 current=$(sudo defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)
-if [ "$current" != "$user" ]; then
-  if dscl . -read "/Users/$user" AuthenticationAuthority 2>/dev/null | grep -q ShadowHash && ! sudo test -f "/Users/$user/.codecast-managed-login"; then
+managed=$(sudo test -f "/Users/$user/.codecast-managed-login" && echo yes || true)
+# A managed login without its password file came from the public base image,
+# whose password anyone can read out of it: every host sets its own.
+if [ "$current" != "$user" ] || { [ -n "$managed" ] && ! sudo test -s "$pwfile"; }; then
+  if dscl . -read "/Users/$user" AuthenticationAuthority 2>/dev/null | grep -q ShadowHash && [ -z "$managed" ]; then
     echo MAC-DESKTOP-PASSWORD-UNKNOWN; exit 0
   fi
-  sudo dscl . -passwd "/Users/$user" '${password}'
+  old=""
+  if [ "$current" = "$user" ]; then
+    old=$(sudo python3 -c 'k=[${KCPASSWORD_KEY.join(",")}];b=open("/etc/kcpassword","rb").read();print(bytes(x^k[i%11] for i,x in enumerate(b)).split(b"\\0")[0].decode())' 2>/dev/null || true)
+  fi
+  # A login that has signed into the desktop holds a SecureToken, and
+  # macOS then takes a new password only together with the old one.
+  if [ -n "$old" ]; then sudo dscl . -passwd "/Users/$user" "$old" '${password}'; else sudo dscl . -passwd "/Users/$user" '${password}'; fi
+  # The login keychain still opens with the old password; without this the
+  # next boot greets the desktop with a keychain prompt nobody answers.
+  [ -z "$old" ] || sudo -H -u "$user" security set-keychain-password -o "$old" -p '${password}' "/Users/$user/Library/Keychains/login.keychain-db" >/dev/null 2>&1 || true
   echo '${kcpassword(password).toString("base64")}' | base64 -D | sudo tee /etc/kcpassword >/dev/null
   sudo chown root:wheel /etc/kcpassword
   sudo chmod 600 /etc/kcpassword
@@ -135,7 +153,7 @@ if [ "$current" != "$user" ]; then
   sudo -H -u "$user" mkdir -p "/Users/$user/.codecast"
   printf '%s' '${password}' | sudo -H -u "$user" tee "$pwfile" >/dev/null
   sudo chmod 600 "$pwfile"
-  [ -z "$current" ] || echo "MAC-DESKTOP-PREVIOUS $current"
+  [ -z "$current" ] || [ "$current" = "$user" ] || echo "MAC-DESKTOP-PREVIOUS $current"
 fi
 ver=$(sw_vers -productVersion); build=$(sw_vers -buildVersion)
 for key in ${SETUP_ASSISTANT_SEEN.join(" ")}; do

@@ -309,6 +309,9 @@ class Parser {
     if (attrs.doc) node.doc = String(attrs.doc);
     if (attrs.category) node.category = String(attrs.category);
     if (attrs.card) node.card = String(attrs.card);
+    if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
+    if (attrs.system) node.system = String(attrs.system);
+    if (attrs.output) node.output = String(attrs.output) === "text" ? "text" : "json";
 
     return node;
   }
@@ -324,6 +327,7 @@ function shapeToType(shape: NodeShape): NodeType {
     case "component": return "parallel_fanout";
     case "tripleoctagon": return "parallel_fanin";
     case "tab": return "prompt";
+    case "note": return "call";
     default: return "agent";
   }
 }
@@ -379,6 +383,12 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
   for (const node of graph.nodes.values()) {
     if (node.type === "command" && !node.script) {
       errors.push(`Command node '${node.id}' has no script attribute`);
+    }
+    if (node.type === "call" && !node.prompt) {
+      errors.push(`Call node '${node.id}' has no prompt attribute`);
+    }
+    if (node.type === "call" && node.max_tokens !== undefined && !(Number.isInteger(node.max_tokens) && node.max_tokens > 0)) {
+      errors.push(`Call node '${node.id}' has max_tokens ${node.max_tokens}: a whole number above 0`);
     }
     if (node.type === "agent" && !node.prompt) {
       // Warning, not error - agent might be guided by goal
