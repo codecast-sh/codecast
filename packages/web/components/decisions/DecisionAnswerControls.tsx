@@ -1,6 +1,7 @@
 "use client";
 
 import { useHostedMode, useModeWords } from "../../lib/surfaces";
+import { Button } from "../ui/button";
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
@@ -132,10 +133,10 @@ function GenericAnswerControls({
 
   const compact = size !== "full";
   const submitBtn = (
-    <button onClick={submit} className={`flex items-center gap-2 rounded border border-sol-green/40 text-sol-text transition-colors hover:bg-sol-green hover:text-sol-bg ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"}`}>
+    <Button variant="green" size={compact ? "xs" : "default"} onClick={submit}>
       {keys && <KeyCap size="xs">return</KeyCap>}
       <span>{ANSWER_WORDS.send}</span>
-    </button>
+    </Button>
   );
   // The marks after a label: a lead's recommendation, the default the agent
   // is already proceeding with on an advisory ask.

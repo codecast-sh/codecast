@@ -110,6 +110,8 @@
 .lmap-node[data-tone="fail"]::before { background: var(--sol-red); }
 .lmap-node[data-tone="warn"]::before { background: var(--sol-orange); }
 .lmap-node[data-tone="ask"]::before { background: var(--sol-yellow); }
+/* An end is a ringed dot: its lamp carries the tone, a bar would strike through the dot. */
+.lmap-node[data-kind="end"]::before { display: none; }
 .lmap-node[data-tone="ask"] { border-color: color-mix(in srgb, var(--sol-yellow) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-card, var(--sol-bg))); }
 .lmap-node[data-tone="ask"]:not([data-selected]) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
 .lmap-node:hover { border-color: color-mix(in srgb, var(--lmap-belt) 45%, var(--sol-border)); }
@@ -132,10 +134,13 @@
 .lmap-node:not([data-main]) { background: color-mix(in srgb, var(--sol-bg) 55%, var(--sol-card, var(--sol-bg))); }
 
 .lmap-node-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.lmap-node-label { font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* A node is laid out as wide as its whole name (lineMapLayout nameWidth), so the name never cuts. */
+.lmap-node-label { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .lmap-node:not([data-main]) .lmap-node-label { font-weight: 500; color: var(--sol-text-muted); }
+/* A trace's visit count sits on the numbers row, so it never takes room from the name. */
 .lmap-visits {
   margin-left: auto;
+  line-height: 14px;
   font-size: 10px;
   padding: 0 4px;
   border-radius: 4px;
@@ -212,8 +217,8 @@
 
 /* ── a trace: one path lit, the rest stepped back ── */
 [data-tracing="true"] .lmap-node:not([data-on]),
-[data-tracing="true"] .lmap-mark { opacity: 0.28; }
-[data-tracing="true"] .lmap-edge:not([data-on]) .lmap-edge-line { opacity: 0.18; }
+[data-tracing="true"] .lmap-mark { opacity: 0.5; }
+[data-tracing="true"] .lmap-edge:not([data-on]) .lmap-edge-line { opacity: 0.3; }
 [data-tracing="true"] .lmap-edge:not([data-on]) .lmap-edge-label { opacity: 0; }
 [data-tracing="true"] .lmap-edge[data-on] .lmap-edge-line { stroke: var(--lmap-belt); stroke-dasharray: none; opacity: 1; }
 [data-tracing="true"] .lmap-edge[data-on][data-kind="loop"] .lmap-edge-line { stroke: var(--sol-violet); }
@@ -245,7 +250,8 @@
 /* Where work waits now, under the map: one row per node holding work. */
 /* Its basis is zero, so it takes the height the map leaves and shows whole
    rows in it (useWholeRows); "Show all" lets it scroll. */
-.lmap-now { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; padding: 10px 16px 14px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+/* Room for its title and one row on a short window; the map above scrolls. */
+.lmap-now { position: relative; flex: 1 1 0; min-height: 84px; overflow-y: auto; overscroll-behavior: contain; padding: 10px 16px 14px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
 .lmap-now[data-all="true"] { overflow-y: auto; }
 .lmap-now-all { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--sol-blue); }
 .lmap-now-all:hover { text-decoration: underline; }
@@ -267,6 +273,11 @@
 .lmap-now-item { font-size: 11.5px; line-height: 1.4; color: var(--sol-text-muted); padding-left: 13px; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .lmap-note code { color: var(--sol-text); }
+/* The line's three quality numbers over the window, one sentence under the bar. */
+.lmap-quality { margin-top: 0; }
+.lmap-quality b { font-weight: 600; color: var(--sol-text); }
+.lmap-quality [data-empty] { color: var(--sol-text-dim); }
+.lmap-quality-lead, .lmap-quality-sep { color: var(--sol-text-dim); }
 .lmap-trace-bar {
   display: flex; align-items: center; gap: 10px; margin: 2px 16px 6px; padding: 6px 10px;
   border-radius: 8px; font-size: 12px; min-width: 0;
@@ -296,10 +307,17 @@
 .lmap-panel-head { padding: 12px 16px 10px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); display: flex; flex-direction: column; gap: 4px; }
 .lmap-panel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .lmap-panel-title h2 { font-size: 14px; font-weight: 650; color: var(--sol-text); margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lmap-panel-file { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--sol-text-dim); }
+.lmap-panel-sub { font-size: 11px; color: var(--sol-text-dim); margin-top: -2px; }
 .lmap-panel-what { font-size: 12px; color: var(--sol-text-muted); line-height: 1.45; }
 .lmap-panel-nav { display: flex; gap: 2px; padding: 6px 12px 6px; font-size: 11px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
 .lmap-panel-nav a { padding: 2px 7px; border-radius: 5px; color: var(--sol-text-dim); transition: color 120ms ease, background-color 120ms ease; }
 .lmap-panel-nav a:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+/* Only the tab on screen is filled: a tab that keeps focus after a click or a
+   programmatic open must not look picked too; the keyboard gets a ring instead. */
+.lmap-panel-nav a:focus { outline: none; }
+.lmap-panel-nav a:not([aria-current="true"]):not(:hover) { background: transparent; color: var(--sol-text-dim); }
+.lmap-panel-nav a:focus-visible { box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-blue) 55%, transparent); }
 .lmap-panel-nav a[aria-current="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 .lmap-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 16px 28px; }
 .lmap-sec { padding-top: 14px; scroll-margin-top: 8px; }
@@ -329,13 +347,9 @@
 .lmap-item-meta { display: inline-flex; align-items: baseline; gap: 10px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lmap-item-sub { grid-column: 1 / -1; display: flex; gap: 10px; font-size: 11px; color: var(--sol-text-dim); min-width: 0; }
 /* Trace and open wait for hover or focus, so the list reads as titles. */
-/* They float over the row's right end, so a hidden pair takes no width from the title. */
+/* They hold their own place at the row's right end, so revealing them never covers the title. */
 .lmap-item { position: relative; }
-.lmap-item-acts {
-  position: absolute; right: 6px; top: 5px; display: inline-flex; gap: 10px; padding-left: 18px;
-  background: linear-gradient(to right, transparent, var(--sol-bg) 16px);
-  opacity: 0; transition: opacity 120ms ease;
-}
+.lmap-item-acts { display: inline-flex; gap: 10px; opacity: 0; transition: opacity 120ms ease; }
 .lmap-item:hover .lmap-item-acts, .lmap-item:focus-within .lmap-item-acts, .lmap-item[data-active="true"] .lmap-item-acts { opacity: 1; }
 .lmap-item-acts a:hover { color: var(--sol-text); text-decoration: underline; }
 @media (hover: none) { .lmap-item-acts { opacity: 1; } }
@@ -439,3 +453,40 @@
 .lmap-start-top-button:hover { background: color-mix(in srgb, var(--sol-blue) 18%, transparent); }
 .lmap-start-top-button:disabled { opacity: 0.6; cursor: default; }
 .lmap-start-top-error { flex-basis: 100%; margin: 0; color: var(--sol-red); font-size: 11.5px; }
+
+/* The graphs a project's work runs (lineGraphs): one tab each, named by the
+   work that goes through it, above the map they switch. */
+.lmap-graphs { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 8px 16px 2px; min-width: 0; }
+.lmap-graphs-lead { font-size: 11.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.lmap-graphs-tabs { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.lmap-graph-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 10px; border-radius: 8px; text-align: left;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); color: var(--sol-text-muted);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.lmap-graph-tab b { font-size: 12px; font-weight: 600; color: var(--sol-text); }
+.lmap-graph-tab span { font-size: 11px; color: var(--sol-text-dim); }
+.lmap-graph-tab:hover { border-color: var(--sol-border); }
+.lmap-graph-tab[aria-selected="true"] { border-color: color-mix(in srgb, var(--sol-blue) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-blue) 9%, transparent); }
+.lmap-graphs-note { font-size: 11px; color: var(--sol-text-dim); }
+
+/* A station's instructions, rendered as the agent reads them. */
+.lmap-instructions { font-size: 12.5px; line-height: 1.55; color: var(--sol-text); padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--sol-text) 4%, transparent); border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); overflow-wrap: anywhere; }
+.lmap-script { font-family: var(--font-mono), monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 8px 10px; border-radius: 8px; color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.lmap-chip[data-tone="ask"] { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+/* The steps where a person decides: the places you act stand out on the map. */
+.lmap-node[data-who="person"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-card, transparent)); }
+.lmap-you { margin-left: auto; font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; padding: 0 4px; border-radius: 3px; color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+.lmap-instructions :is(p, li, td, th, blockquote) { font-size: 12.5px; line-height: 1.55; }
+.lmap-instructions :is(h1, h2, h3, h4) { font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+.lmap-instructions code { font-size: 11.5px; }
+.lmap-answers { display: flex; flex-direction: column; gap: 4px; }
+.lmap-answers li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--sol-yellow) 30%, var(--sol-border)); }
+.lmap-answers b { font-size: 12.5px; font-weight: 600; color: var(--sol-text); }
+.lmap-answers span { font-size: 11.5px; color: var(--sol-text-muted); }
+
+/* The folded sources: one chip drawn as a small stack of pills, so it reads as several. */
+.lmap-node[data-map-node="sources:more"] {
+  overflow: visible;
+  box-shadow: 3px 3px 0 -1px var(--sol-bg), 3px 3px 0 0 color-mix(in srgb, var(--sol-border) 90%, transparent), 6px 6px 0 -1px var(--sol-bg), 6px 6px 0 0 color-mix(in srgb, var(--sol-border) 60%, transparent);
+}

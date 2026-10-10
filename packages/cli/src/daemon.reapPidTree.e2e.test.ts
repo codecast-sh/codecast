@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { descendantRows, snapshotProcessTableAsync } from "./processTable.js";
 import { killTmuxSessionAndTree } from "./daemon.js";
 import { stillRunning } from "./test-helpers/processLiveness.js";
+import { sessionSocketName } from "./tmuxRoute.js";
 
 const run = promisify(execFile);
 const tmux = (args: string[]): Promise<{ stdout: string }> => run("tmux", args, { timeout: 10_000 });
@@ -68,4 +69,56 @@ describe.skipIf(!hasTmux)("killTmuxSessionAndTree", () => {
     expect(await stillRunning([panePid, ...tree])).toEqual([]);
     await expect(tmux(["has-session", "-t", session])).rejects.toThrow();
   }, 90_000);
+
+  // What leaked on 2026-10-09. The agent's session has a tmux server of its
+  // own, and from inside its pane it opened another tmux session there for a
+  // dev server; `next dev` forked `next-server` and exited, so the server ran
+  // with ppid 1 in the group of the job that launched it. Killing the agent's
+  // session reached neither.
+  test("kills everything on the session's own server, including what left the tree", async () => {
+    fs.writeFileSync(ownScriptPath, OWN_SERVER_SCRIPT, { mode: 0o755 });
+    await ownTmux(["new-session", "-d", "-s", ownSession, "-x", "80", "-y", "24", ownScriptPath]);
+    const serverPid = parseInt((await ownTmux(["display-message", "-p", "-t", ownSession, "#{pid}"])).stdout.trim(), 10);
+    const panePid = parseInt((await ownTmux(["list-panes", "-t", ownSession, "-F", "#{pane_pid}"])).stdout.trim(), 10);
+
+    let detached: number[] = [];
+    let side: number[] = [];
+    for (let i = 0; i < 40 && (detached.length === 0 || side.length === 0); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const procs = await snapshotProcessTableAsync({ timeout: 10_000 });
+      const tree = new Set(descendantRows(procs, panePid).map((p) => p.pid));
+      detached = procs.filter((p) => p.ppid === 1 && p.command.startsWith("sleep 401") && tree.has(p.pgid!)).map((p) => p.pid);
+      side = descendantRows(procs, serverPid).filter((p) => p.command.startsWith("sleep 402")).map((p) => p.pid);
+    }
+    // The shape that escaped: one process outside every pane's tree, one in a
+    // session the kill was not asked about.
+    expect(detached.length).toBe(1);
+    expect(side.length).toBe(1);
+
+    await killTmuxSessionAndTree(ownSession);
+
+    expect(await stillRunning([...detached, ...side, panePid, serverPid])).toEqual([]);
+  }, 90_000);
+});
+
+// `set -m` makes the launcher a job with its own group; inside it, job control
+// is off, so the subshell's `sleep 401` keeps that group after the subshell
+// exits and it reparents to pid 1, the way next-server keeps `bun run dev`'s.
+// `exec` keeps the group's leader alive under the same pid, as the dev script
+// that started next-server was. The bare `tmux` reaches this pane's own server.
+const OWN_SERVER_SCRIPT = `#!/bin/bash
+set -m
+bash -c '(sleep 401 &); exec sleep 400' &
+tmux new-session -d -s side-$$ 'sleep 402'
+sleep 400
+`;
+
+const ownSession = `cc-reap-own-${process.pid}`;
+const ownSocket = sessionSocketName(ownSession);
+const ownScriptPath = path.join(os.tmpdir(), `${ownSession}.sh`);
+const ownTmux = (args: string[]) => tmux(["-L", ownSocket, ...args]);
+
+afterAll(async () => {
+  await ownTmux(["kill-server"]).catch(() => {});
+  fs.rmSync(ownScriptPath, { force: true });
 });
