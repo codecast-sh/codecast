@@ -13,6 +13,10 @@ export function stampSessionCommand(draft: { sessionCommands: Record<string, any
 }
 
 function sameTarget(prev: Record<string, any>, row: Record<string, any>): boolean {
+  // A graph step's save replaces a settled save of the same step; saves in flight all stand.
+  if (row.kind === "line_graph_edit") {
+    return prev.kind === "line_graph_edit" && prev.workflow_id === row.workflow_id && prev.node === row.node && !!prev.executed_at;
+  }
   if (row.kind === "line_edit") {
     return prev.kind === "line_edit" && prev.project_id === row.project_id && !!prev.executed_at
       && (prev.keys ?? []).every((k: string) => (row.keys ?? []).includes(k));

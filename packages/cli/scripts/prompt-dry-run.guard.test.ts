@@ -453,7 +453,7 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("stdin")).toBe("Reply with the word ok.");
     expect(h.recorded("env")).toBe("20\n1\nfake-token\n");
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8"))).toEqual({
-      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null,
+      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null, cwd: null, readOnly: false,
     });
     const out = JSON.parse(fs.readFileSync(path.join(h.runDir, "out.json"), "utf8"));
     expect(out).toMatchObject({ result: "ok", stop_reason: "end_turn", is_error: false });
@@ -548,6 +548,36 @@ describe("prompt-dry-run.ts", () => {
       expect(log).toContain("REFUSED task create Escaped\n");
     } finally {
       fs.rmSync(planted, { force: true });
+    }
+  }, 90_000);
+
+  // The line workspace's Try (cli lineTry.ts) promises nothing ships: a station replayed in a real
+  // checkout writes no file, and reaches no service it could write to (gh, a git remote), only the model.
+  test.if(process.platform === "darwin")("--read-only refuses file writes in the checkout and every connection but the model's and the broker's", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    // Outside the per-user temp root, which the sandbox leaves writable for Claude Code's own caches.
+    const checkout = path.join(import.meta.dir, `.ro-checkout-${process.pid}`);
+    fs.mkdirSync(checkout, { recursive: true });
+    const bash = [
+      `( : > '${checkout}/probe.txt' ) 2>&1 | sed 's/^/write: /'`,
+      `/usr/bin/nc -z -G 3 1.1.1.1 443 2>&1 && echo "direct: connected" || echo "direct: refused"`,
+      `echo "proxy: \${HTTPS_PROXY:-none}"`,
+      `curl -sS -o /dev/null --max-time 10 https://github.com 2>&1 | sed 's/^/github: /'`,
+      "cast task ls 2>&1 | sed 's/^/read: /'",
+    ].join("; ");
+    try {
+      const r = h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--cwd", checkout, "--read-only");
+      expect(r.err).toBe("");
+      expect(r.code).toBe(0);
+      const said = h.recorded("bash")!;
+      expect(said).toMatch(/write: .*Operation not permitted/);
+      expect(fs.existsSync(path.join(checkout, "probe.txt"))).toBe(false);
+      expect(said).toContain("direct: refused");
+      expect(said).toMatch(/proxy: http:\/\/127\.0\.0\.1:\d+/);
+      expect(said).toMatch(/github: .*403/);
+      expect(said).toContain(`read: LIVE task ls dir=${h.state}`);
+    } finally {
+      fs.rmSync(checkout, { recursive: true, force: true });
     }
   }, 90_000);
 

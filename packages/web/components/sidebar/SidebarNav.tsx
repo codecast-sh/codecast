@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { FolderGit2, Globe, Radar, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
+import { Flag, FolderGit2, FolderKanban, Globe, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -40,12 +40,12 @@ export function ThreadsNavRowView({
       <MessagesSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
       {isNarrow ? (
         unread > 0 && !isActive ? (
-          <span className="absolute top-2 right-3 w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label={`${unread} threads with new replies`} />
+          <span className="absolute top-2 right-3 w-1.5 h-1.5 rounded-full bg-sol-red" aria-label={`${unread} threads with new replies`} />
         ) : null
       ) : (
         <>
           <span>Threads</span>
-          {unread > 0 && <NavCount n={unread} tone="bg-sol-cyan text-sol-bg" />}
+          {unread > 0 && <NavCount n={unread} tone="bg-sol-red text-white" />}
         </>
       )}
     </Link>
@@ -116,7 +116,7 @@ export function QuestionsNavRowView({
       {!isNarrow && (
         <>
           <span>{label}</span>
-          {pending > 0 && <NavCount n={pending} tone="bg-sol-violet text-white" />}
+          {pending > 0 && <NavCount n={pending} tone="bg-teal-600 text-white" />}
         </>
       )}
     </Link>
@@ -171,33 +171,43 @@ export function ChatNavSectionView({
   );
 }
 
-/** A section that nests rows under it: the projects under Projects, the saved views under Tasks and Docs. */
+/** A section that nests rows under it: the saved views under Tasks and Docs. */
 export type NavSectionList = { items: SectionRowSpec[]; expanded: boolean; onToggle: () => void };
 
 export type SidebarNavActive = {
-  initiatives: boolean;
-  projects: boolean;
   tasks: boolean;
   docs: boolean;
   code: boolean;
   files: boolean;
   pages: boolean;
   sessions: boolean;
-  workflows: boolean;
   line: boolean;
   triggers: boolean;
   ops: boolean;
+  /** The Org screen (/org and an object opened on it). */
   org: boolean;
+  /** The goals list and a goal (/goals…). */
+  goals?: boolean;
+  /** The projects list and a project's board (/projects…). */
+  projects?: boolean;
   /** Absent where the rail never shows Changes (the marketing hero). */
   changes?: boolean;
   rootAgent: boolean;
   windows: boolean;
 };
 
+/** Which of the Goals, Projects and Org rows a pathname lights. */
+export function orgRowsActive(pathname: string | null | undefined): Pick<SidebarNavActive, "org" | "goals" | "projects"> {
+  const p = pathname ?? "";
+  const under = (base: string) => p === base || p.startsWith(`${base}/`);
+  return { org: under("/org"), goals: under("/goals"), projects: under("/projects") };
+}
+
 /**
  * The rail's groups in order. Conversations takes its rows as rendered
  * elements (each reads its own live count); Work and Agents are the app's
- * fixed sections, with the lists that nest under Projects, Tasks and Docs.
+ * fixed sections, with Org's read views and the saved views under Tasks and
+ * Docs.
  */
 export function SidebarNavView({
   isNarrow,
@@ -211,10 +221,10 @@ export function SidebarNavView({
   calls,
   workAction,
   active,
-  projects,
   tasks,
   docs,
   orgOn,
+  orgBadge,
   changesOn,
   agent,
   mode = DEVELOPER_MODE,
@@ -231,10 +241,11 @@ export function SidebarNavView({
   calls?: ReactNode;
   workAction?: ReactNode;
   active: SidebarNavActive;
-  projects: NavSectionList;
   tasks: NavSectionList;
   docs: NavSectionList;
   orgOn: boolean;
+  /** The Org row's count of what waits on you; renders nothing at zero. */
+  orgBadge?: ReactNode;
   /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
   changesOn?: boolean;
   /** The workspace's agent: its name, its hover title and its face. */
@@ -279,33 +290,42 @@ export function SidebarNavView({
       </div>
 
       </>)}
-      {/* What you are working on. Projects leads: it is the container the rest
-          of this group files into, so the rail reads top-down as project →
-          its tasks → the docs and files around them. */}
+      {/* What you are working on. Org leads: the company the rest of this
+          group files into, then its tasks and the docs and files around them. */}
       <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
       <div className="text-sm">
-        {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
-        {shows("nav.initiatives") && <NavSection
+        {/* Goals and projects are work in their own right: they need no org.
+            Org is the people and agent roles who carry them. */}
+        {showsPage("/goals") && <NavSection
           label={page("/goals", "Goals")}
           href="/goals"
-          isActive={active.initiatives}
+          isActive={!!active.goals}
           popped="work"
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="Goals: what the company is trying to reach"
+          title="Goals: what the company is trying to move"
           icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {showsPage("/projects") && <NavSection
           label={page("/projects", "Projects")}
           href="/projects"
-          isActive={active.projects}
+          isActive={!!active.projects}
           popped="work"
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          items={projects.items}
-          expanded={projects.expanded}
-          onToggle={projects.onToggle}
+          title="Projects: the work that moves the goals"
           icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        />}
+        {shows("nav.org") && <NavSection
+          label={page("/org", "Org")}
+          href="/org"
+          isActive={active.org}
+          popped="work"
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          title="Org: who carries the work, people and agent roles"
+          badge={orgBadge}
+          icon={<Network className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         <NavSection
           label={page("/tasks", "Tasks")}
@@ -372,21 +392,13 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {showsPage("/routines") && <NavSection
-          label={page("/routines", "Workflows")}
-          href="/routines"
-          isActive={active.workflows}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          icon={<Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
         {showsPage("/line") && <NavSection
           label={page("/line", "Line")}
           href="/line"
           isActive={active.line}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="The line: from a signal to a shipped, watched change"
+          title="The line: from a finding to a shipped, watched change"
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {routines}
@@ -399,23 +411,7 @@ export function SidebarNavView({
           title="Ops: your product's errors, checks, replays and metrics"
           icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {orgOn && (<>
-        <NavSection
-          label={page("/org", "Org")}
-          href="/org"
-          isActive={active.org}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          title="Org — who reports to whom"
-          icon={
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="9" y="3" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <rect x="3" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <rect x="15" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V12M12 12H6v4.5M12 12h6v4.5" />
-            </svg>
-          }
-        />
+        {orgOn && (
         <NavSection
           label={agent.label}
           href="/anchor"
@@ -425,7 +421,7 @@ export function SidebarNavView({
           title={agent.title}
           icon={agent.icon}
         />
-        </>)}
+        )}
         {showsPage("/windows") && <NavSection
           label={page("/windows", "Windows")}
           href="/windows"

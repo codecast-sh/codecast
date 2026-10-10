@@ -6,7 +6,7 @@ import { captureException } from "@sentry/react";
 import Link from "next/link";
 import { LogoIcon } from "../../Logo";
 import { useRouter } from "next/navigation";
-import { useRef, useState, useMemo, useCallback, memo, useContext } from "react";
+import { Fragment, useRef, useState, useMemo, useCallback, memo, useContext } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useOverflows } from "../../../hooks/useOverflows";
 import { createPortal } from "react-dom";
@@ -17,14 +17,17 @@ import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "../../DecisionAnswerFooter";
 import { describeSmallToolGroup, describeToolGroup, extractNestedActions, isAgentTool, isAskTool, isPlanModeTool, isPlanWriteToolCall, isTodoTool } from "@codecast/shared/render";
 import { hostedReceipt } from "../../../lib/hostedReceipt";
-import { HostedMadeLine, HostedNoteCard, wordsBeforeName } from "../HostedMadeLine";
+import { HostedMadeLine, HostedNoteCard, madeLineParts } from "../HostedMadeLine";
 import { connectionChipCopy, useAppOffline } from "../../../hooks/useAppOffline";
+import { HostedSources } from "../HostedSources";
+import { hostedConnectionWords, useHostedConnection } from "../HostedConnection";
 import { useThinkingAvailable } from "../../simple/assistantPromise";
 import { stepText } from "@platform/assistant/steps";
 import { entityRoute } from "../../../lib/entityLinks";
 import { toast } from "sonner";
 import { MessageIdentityProvider } from "../../InlineDiff";
 import { MessageReview } from "../../MessageReview";
+import { TOOLBAR_BTN, TOOLBAR_BTN_BASE, TOOLBAR_SHELL } from "../toolbarStyles";
 import { isBackgroundBashToolCall } from "../../monitorRows";
 import { useAction } from "convex/react";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -32,7 +35,8 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { usePendingMessageStatus } from "../../../hooks/useSyncPendingPermissions";
-import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { extractAgentSetup, hasAgentSetupMarker, isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { AgentToolSetupCard } from "./AgentToolSetupCard";
 import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
@@ -41,8 +45,9 @@ import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_R
 import { browserTabOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
+import { useCommentTools } from "../../../hooks/useCommentTools";
 import { BranchSelector } from "../../BranchSelector";
-import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, SquareDashedMousePointer, X } from "lucide-react";
+import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X } from "lucide-react";
 import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
@@ -80,6 +85,13 @@ import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
 const api = _typedApi as any;
 
 const USER_CONTENT_MAX_HEIGHT = 1800;
+
+// A message clipped to a max height fades its own text out at the bottom: a
+// mask rather than a painted overlay, so it reads the same on any background.
+const CLIP_FADE = "linear-gradient(to bottom, #000 calc(100% - 96px), transparent)";
+function clippedStyle(maxHeight: number): React.CSSProperties {
+  return { maxHeight, overflowY: "hidden", maskImage: CLIP_FADE, WebkitMaskImage: CLIP_FADE };
+}
 
 const CONTEXT_TYPE_CONFIG: Record<string, { icon: typeof ListChecks; colorClass: string }> = {
   task: { icon: ListChecks, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
@@ -143,12 +155,20 @@ export function ForkSeedMark({ parentId, parentTitle, parentUsername, convLink }
 }
 
 /** A hosted bubble its assistant has not started on: said in the assistant's
- *  terms, never while the link is down (the status line says that), and
- *  "Back soon" while no provider can think, as the stop notice says it. */
+ *  terms, "Back soon" while no provider can think, as the stop notice says
+ *  it. While the link is down it says what will happen to the message, in
+ *  the status line's words (HostedConnection), and keeps Cancel. */
 function HostedStuckLine({ onRetry, sending, onCancel, cancelling }: { onRetry: () => void; sending: boolean; onCancel: () => void; cancelling: boolean }) {
-  const offline = connectionChipCopy(useAppOffline());
+  const offline = useHostedConnection();
   const down = useThinkingAvailable() === false;
-  if (offline) return null;
+  if (offline) {
+    return (
+      <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
+        <span className="text-xs text-sol-text-muted" title={offline.detail}>{hostedConnectionWords(offline, true)}</span>
+        <CancelPendingButton onClick={onCancel} disabled={cancelling} quiet />
+      </div>
+    );
+  }
   return (
     <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
       <span className="text-xs text-sol-text-muted">Your assistant hasn't started on this yet</span>
@@ -159,19 +179,20 @@ function HostedStuckLine({ onRetry, sending, onCancel, cancelling }: { onRetry: 
       >
         {down ? "Back soon" : sending ? "Sending…" : "Try again"}
       </button>
-      <CancelPendingButton onClick={onCancel} disabled={cancelling} />
+      <CancelPendingButton onClick={onCancel} disabled={cancelling} quiet />
     </div>
   );
 }
 
-function CancelPendingButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+/** `quiet`: hosted mode's ink hover rather than the developer's orange. */
+function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: () => void; disabled?: boolean; quiet?: boolean }) {
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       disabled={disabled}
       data-testid="pending-message-cancel"
-      className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
+      className={`text-[11px] text-sol-text-dim/70 ${quiet ? "hover:text-sol-text" : "hover:text-sol-orange"} underline underline-offset-2 transition-colors disabled:opacity-60`}
       title="Stop trying to send and discard this message"
     >
       {disabled ? "Cancelling…" : "Cancel"}
@@ -179,10 +200,6 @@ function CancelPendingButton({ onClick, disabled }: { onClick: () => void; disab
   );
 }
 
-// One look for every hover action on a message: a raised strip of plain icon buttons.
-const TOOLBAR_SHELL = "flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5";
-const TOOLBAR_BTN_BASE = "p-1.5 rounded hover:bg-sol-bg-alt";
-const TOOLBAR_BTN = `${TOOLBAR_BTN_BASE} text-sol-text-dim hover:text-sol-text-secondary`;
 
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
@@ -564,7 +581,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {displayContent ? <div
         ref={contentRef}
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
-        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
+        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? clippedStyle(USER_CONTENT_MAX_HEIGHT) : undefined}
       >
         {(() => {
           if (jointParts) return <JointParts parts={jointParts} collapsed={!!effectivelyCollapsed} />;
@@ -603,9 +620,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           }
           return <MessageMarkdown content={displayContent} userText />;
         })()}
-        {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
-          <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[color-mix(in_srgb,var(--sol-blue)_10%,var(--sol-bg))]" />
-        )}
       </div> : null}
       {!effectivelyCollapsed && images && images.filter(img => !img.tool_use_id).length > 0 && (
         <div className="pl-8 mt-2">
@@ -972,7 +986,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   // tools behind them show only where a conversation's internals do.
   const internalsShown = useSurface("conversation.internals");
   const hostedSteps = isHostedAgentType(agentType);
-  const { summary, counted, created, madeLine, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
+  const { summary, counted, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
@@ -1003,7 +1017,8 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       summary: hosted?.summary ?? ((actions.length <= 2 && describeSmallToolGroup(actions)) || counted),
       created: hosted?.created ?? [],
       // One step that made one thing reads as one line (HostedMadeLine).
-      madeLine: hosted && hosted.steps === 1 && hosted.created.length === 1 ? wordsBeforeName(hosted.summary) : null,
+      madeLine: hosted && hosted.steps === 1 && hosted.created.length === 1 ? madeLineParts(hosted.summary) : null,
+      sources: hosted?.sources ?? [],
       counted,
       screenshots: shots,
       browserTabs: [...tabs.values()],
@@ -1065,11 +1080,14 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   const noteCards = notes.map((ref) => <HostedNoteCard key={ref} refId={ref} />);
   // Every step here waits on the card drawn below: the card says it.
   if (!expanded && hostedSteps && !summary && !made && !notes.length) return null;
-  if (!expanded && madeLine) return <HostedMadeLine words={madeLine} refId={created[0]} />;
+  if (!expanded && madeLine) return <HostedMadeLine words={madeLine.words} name={madeLine.name} refId={created[0]} />;
   // A hosted receipt keeps the transcript's block gap above the answer under it.
+  // A search's sources ride under its receipt, readable without opening it.
+  const sourceLine = sources.length > 0 ? <HostedSources sources={sources} className={notes.length ? "mt-1.5" : "mt-1.5 mb-3"} /> : null;
   if (!expanded) return (
     <>
-      <div className={`not-prose mt-2 flex flex-wrap items-center gap-2 ${hostedSteps && !notes.length ? "mb-3" : ""}`}>{header}{made}</div>
+      <div className={`not-prose mt-2 flex flex-wrap items-center gap-2 ${hostedSteps && !notes.length && !sourceLine ? "mb-3" : ""}`}>{header}{made}</div>
+      {sourceLine}
       {noteCards}
     </>
   );
@@ -1085,6 +1103,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
                 {internalsShown ? renderTool(tc, entry) : null}
               </li>
             )))}
+            {sources.length > 0 && <li><HostedSources sources={sources} /></li>}
           </ul>
         ) : entries.map((entry) => entry.tools.map((tc) => renderTool(tc, entry)))}
       </div>
@@ -1292,7 +1311,21 @@ function AssistantBlockImpl({
   // this message's own or folded into this row's condensed receipt from a
   // later tool-only message. `src` is the message that actually ran it, so
   // comments, share selection and subagent links attribute correctly.
-  const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => (
+  // A command that needed the Chrome extension or the macOS grants names the
+  // tool on a marker line, whatever renders the row: the marker leaves the
+  // output and the setup card goes under the row.
+  const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => {
+    const setup = result && hasAgentSetupMarker(result.content) ? extractAgentSetup(result.content) : null;
+    const row = renderToolRow(tc, setup ? { ...result!, content: setup.text } : result, src);
+    if (!setup?.tool || !conversationId) return row;
+    return (
+      <Fragment key={tc.id}>
+        {row}
+        <AgentToolSetupCard tool={setup.tool} conversationId={conversationId} />
+      </Fragment>
+    );
+  };
+  const renderToolRow = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => (
     isAgentTool(tc.name) ? (
       <TaskToolBlock
         key={tc.id}
@@ -1357,6 +1390,7 @@ function AssistantBlockImpl({
   }, [fullscreen]);
 
   const chatOn = useTeamFeature("chat");
+  const commentsEnabled = useCommentTools();
   const ctxMenu = useContextMenu<void>();
   // Linking to, sharing and bookmarking single messages are a developer's
   // tools; hosted mode keeps Copy.
@@ -1457,6 +1491,16 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
           </button>}
+          {commentsEnabled && (
+            <button
+              onClick={() => useInboxStore.getState().openCommentThread(messageId)}
+              className={TOOLBAR_BTN}
+              title="Comment for your team"
+              aria-label="Comment for your team"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
+          )}
           {chatOn && (
             <button
               onClick={handleForwardToChat}
@@ -1528,7 +1572,7 @@ function AssistantBlockImpl({
             receipt group below the content instead (own tools and the folded
             tools of absorbed messages alike). Always-visible blocks stay. */}
         {hasToolCalls && toolCalls?.map((tc) => {
-          if (condensed && !isAlwaysVisibleToolCall(tc)) return null;
+          if (condensed && !isAlwaysVisibleToolCall(tc, resultFor(tc))) return null;
           // A delivered file reads as the end of what the agent just said, so
           // its cards go under the content rather than above it.
           if (tc.name === "SendUserFile") return null;
@@ -1544,7 +1588,7 @@ function AssistantBlockImpl({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
+                  style={!contentExpanded && isOverflowing ? clippedStyle(CONTENT_MAX_HEIGHT) : undefined}
                 >
                   {conversationId ? (
                     <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId}>
@@ -1559,13 +1603,23 @@ function AssistantBlockImpl({
                   ) : (
                     renderAssistantBody(displayContent)
                   )}
-                  {!contentExpanded && isOverflowing && (
-                    <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
-                  )}
                 </div>
               )}
             </div>
-            {!parsedApiError && (isOverflowing || !contentExpanded) && (
+            {/* A hosted reply shows in full with no icons under it; folded
+                from its menu, it offers the way back in a word. Fullscreen
+                and folding stay in the message's menu. */}
+            {isHostedAgentType(agentType) ? (!parsedApiError && !contentExpanded && (
+              <button
+                type="button"
+                data-cc-message-overflow
+                onClick={() => setContentExpanded(true)}
+                aria-expanded={false}
+                className="mt-2 text-[12.5px] text-sol-text-dim underline-offset-2 transition-colors hover:text-sol-text hover:underline"
+              >
+                Show more
+              </button>
+            )) : !parsedApiError && (isOverflowing || !contentExpanded) && (
               <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
                 <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen">
                   <FullscreenIcon />
