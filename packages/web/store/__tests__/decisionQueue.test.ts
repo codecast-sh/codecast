@@ -10,7 +10,7 @@ import {
   type QueueItem,
 } from "../../lib/decisionQueue";
 import { buildSingleAnswerPayload, pollKeyForOption } from "../../lib/pollPayload";
-import { useInboxStore, type InboxSession, type SessionDecisionItem } from "../inboxStore";
+import { answersForOthers, useInboxStore, type InboxSession, type SessionDecisionItem } from "../inboxStore";
 
 const convexId = (seed: string) => seed.padEnd(32, "0").slice(0, 32);
 
@@ -294,16 +294,18 @@ describe("answering a decision", () => {
     expect(sent).toBeDefined();
   });
 
-  it("does not adopt a decision the viewer was not asked", () => {
+  // Any reader may answer (the server tells the people who answered for
+  // them); answersForOthers is what the page warns on.
+  it("lets a reader who was not asked answer, flagged as answering for others", () => {
     const row = decision("d5", { holder: { kind: "user", id: "someone" } } as any);
-    useInboxStore.setState({
-      currentUser: { _id: convexId("me") },
-      decisionDetails: { d5: { _id: "d5", decision: row, asked_users: [{ _id: "someone", name: "Jason" }] } },
-    } as any);
+    const detail = { _id: "d5", decision: row, asked_users: [{ _id: "someone", name: "Jason" }] } as any;
+    const me = convexId("me");
+    useInboxStore.setState({ currentUser: { _id: me }, decisionDetails: { d5: detail } } as any);
 
+    expect(answersForOthers(detail, me)).toBe(true);
     useInboxStore.getState().adoptDecision("d5");
     useInboxStore.getState().answerDecision("d5", { index: 0 });
-    expect(useInboxStore.getState().sessionDecisions.d5).toBeUndefined();
+    expect(useInboxStore.getState().sessionDecisions.d5.status).toBe("answered");
   });
 });
 
