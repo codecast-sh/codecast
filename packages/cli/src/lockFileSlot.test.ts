@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireFileSlot } from "./lockFile.js";
+import { acquireFileSlot, listFileSlots } from "./lockFile.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slots-"));
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -33,4 +33,21 @@ test("a full cap with a deadline says so", async () => {
   const held = await acquireFileSlot(dir, 1);
   await expect(acquireFileSlot(dir, 1, { waitMs: 100, describe: "test slots" })).rejects.toThrow("all 1 test slots are taken");
   held();
+});
+
+test("a listing names what holds each slot and what waits, and forgets a waiter once it starts", async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "slots-list-"));
+  const held = await acquireFileSlot(d, 1, { what: "cast spawn --cloud a" });
+  const pending = acquireFileSlot(d, 1, { what: "cast spawn --cloud b" });
+  await Bun.sleep(300);
+  const before = listFileSlots(d);
+  expect(before.holding.map((e) => e.what)).toEqual(["cast spawn --cloud a"]);
+  expect(before.waiting.map((e) => e.what)).toEqual(["cast spawn --cloud b"]);
+  held();
+  const second = await pending;
+  const after = listFileSlots(d);
+  expect(after.holding.map((e) => e.what)).toEqual(["cast spawn --cloud b"]);
+  expect(after.waiting).toEqual([]);
+  second();
+  fs.rmSync(d, { recursive: true, force: true });
 });

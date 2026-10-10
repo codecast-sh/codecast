@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { SOL } from "../../blog/blogChrome";
 import { Body, C, Section, Shell } from "./ui";
-import { Whole } from "../kit";
 
 /** One illustrative day of an hourly trigger: main moved at these hours. */
 const MOVED = new Set([10, 14, 17]);
@@ -51,7 +50,7 @@ export function Precheck() {
     <Section
       id="precheck"
       title="A gate that costs nothing when the answer is no"
-      lede={<>Most repeating jobs ask a question whose usual answer is no. Has main moved? Is the queue empty? Without a gate, a whole agent run is spent finding out. <C>--precheck</C> asks with a shell command first.</>}
+      lede={<>Most repeating jobs ask a question whose usual answer is no. Has main moved? Is the queue empty? Without a gate, a whole agent run is spent finding out. A precheck asks with a shell command first.</>}
     >
       <div className="rounded-2xl p-5 sm:p-6" style={{ backgroundColor: "#fffbf0", border: `1px solid ${SOL.base2}` }}>
         <div className="flex flex-wrap items-baseline justify-between gap-2 font-mono text-[12px]">
@@ -69,26 +68,20 @@ export function Precheck() {
       </div>
       <div className="mt-10 grid gap-x-10 gap-y-6 lg:grid-cols-2">
         <div className="space-y-4">
-          <Shell
-            lines={[`cast trigger add "Review what landed on main" --every 1h --spawn \\\n  --precheck 'test "$(git rev-parse origin/main)" != "$(cat .last-reviewed)"'`]}
-          />
           <Body>
             The command runs in the project directory before each scheduled or repeating firing. Exit 0 runs the trigger. Any other exit, or 60 seconds without an answer, records a skipped run and re-arms on the normal cadence. A skip is not a failure, so it never uses up a retry.
           </Body>
-        </div>
-        <div className="space-y-4">
-          <Shell
-            lines={["cast trigger log tr-44"]}
-            out={
-              <span>
-                Precheck: <span style={{ color: SOL.base01 }}><Whole text={'test "$(git rev-parse origin/main)" != "$(cat .last-reviewed)"'} /></span>{"\n"}
-                <span style={{ color: SOL.yellow }}>skipped</span> 12m ago — precheck exited 1{"\n"}
-              </span>
-            }
-          />
           <Body>
-            Event triggers ignore the gate, since the event is already the reason to run, and so does <C>cast trigger run</C>. The <C>/cast-loop</C> skill uses this to drain a task queue: its precheck fails when <C>cast task ready</C> comes back empty, so an idle loop spends nothing.
+            The trigger&apos;s page shows the precheck in its own panel with when it last skipped, and every skip sits in the run history as a <b>skipped</b> row, so a quiet trigger reads as gated rather than broken. Event triggers and <b>Run now</b> bypass it.
           </Body>
+        </div>
+        <div className="space-y-3">
+          <Body>
+            The New trigger form has no precheck field today. An agent adds one when it sets the trigger, which is how the <C>/cast-loop</C> skill drains a task queue: its precheck fails when no task is ready, so an idle loop spends nothing. From a script it is one flag:
+          </Body>
+          <Shell
+            lines={[`cast trigger add "Review what landed on main" --every 1h --spawn \\\n  --precheck 'test "$(git rev-parse origin/main)" != "$(cat .last-reviewed)"'`]}
+          />
         </div>
       </div>
     </Section>

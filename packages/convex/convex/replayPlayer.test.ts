@@ -9,9 +9,10 @@ import { makeFakeDb, schemaIndexes } from "./testDb";
 import { parseReplayDomChunkKey, replayDomChunkKey } from "./lib/r2";
 import { mintReplayCap, openReplayCap, replayCapKey } from "./lib/replayCap";
 import { chunkDomEvents, chunkObject, playerLink, playerManifestRow, playerTarget, recordReplayChunk, saveImported, saveSummary, storeReplayDom } from "./replays";
-import { replayPlayerManifest, validateReplaySign } from "./replaysHttp";
+import { replayFrameAdmit, replayPlayerManifest, validateReplaySign } from "./replaysHttp";
+import { bump } from "./ipRateLimit";
 import { importVendorRecording } from "./sources/vendorReplay";
-import { REPLAY_DOM_LIMITS, REPLAY_PLAYER_ORIGIN, parseReplayPlayerUrl } from "@codecast/shared/contracts/replayPlayer";
+import { REPLAY_DOM_LIMITS, REPLAY_FRAME_LIMITS, REPLAY_PLAYER_ORIGIN, parseReplayPlayerUrl } from "@codecast/shared/contracts/replayPlayer";
 import { REPLAY_LIMITS } from "@codecast/shared/contracts/replay";
 
 const h = (fn: any) => fn._handler;
@@ -237,5 +238,27 @@ describe("the capability", () => {
     expect(body.dom_urls[0]).toContain("X-Amz-Signature=");
     expect((await call(`${cap.slice(0, -1)}${cap.endsWith("0") ? "1" : "0"}`)).status).toBe(404);
     expect((await call("nonsense")).status).toBe(404);
+  });
+
+  test("a frame request is admitted only on a live capability, and each capability buys a fixed number", async () => {
+    withBucket();
+    const w = world([{ _id: "r1", short_id: "rp-1", dom_chunk_keys: [domKey(0)] }]);
+    const ctx = {
+      runQuery: async (fn: any, args: any) => (expect(getFunctionName(fn)).toBe("replays:playerManifestRow"), h(playerManifestRow)(w.internalCtx, args)),
+      runMutation: async (fn: any, args: any) => (expect(getFunctionName(fn)).toBe("ipRateLimit:bump"), h(bump)({ db: w.db }, args)),
+    };
+    const admit = (cap: string) => h(replayFrameAdmit)(ctx, new Request("https://convex.codecast.sh/cli/replays/frame-admit", { method: "POST", body: JSON.stringify({ cap }) }));
+    const key = (await replayCapKey())!;
+    const { cap } = await mintReplayCap(key, { replay_id: "r1", user_id: "u1", now: Date.now() });
+    expect((await admit("nonsense")).status).toBe(404);
+    const foreign = await mintReplayCap(key, { replay_id: "r1", user_id: "u2", now: Date.now() });
+    expect((await admit(foreign.cap)).status).toBe(404);
+    for (let i = 0; i < REPLAY_FRAME_LIMITS.requests_per_cap; i++) expect((await admit(cap)).status).toBe(204);
+    const spent = await admit(cap);
+    expect(spent.status).toBe(429);
+    expect(Number(spent.headers.get("Retry-After"))).toBeGreaterThan(0);
+    // A fresh capability for the same person has its own budget, up to the person's own.
+    const fresh = await mintReplayCap(key, { replay_id: "r1", user_id: "u1", now: Date.now() + 1 });
+    expect((await admit(fresh.cap)).status).toBe(204);
   });
 });

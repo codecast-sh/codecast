@@ -2,18 +2,15 @@
 // person writes what should change about one node of the project's line, and
 // the change is filed as a cause in the project, category `line`, its subject
 // the node, the person's words its first signal. The line then runs it like
-// any change. This module is the one shape of that filing: the composer on a
-// map panel and "Send through the line" on a station's prompt both build it
+// any change. This module is the one shape of that filing: Ask an agent in the
+// workspace and "Send through the line" on a station's prompt both build it
 // here, and the store paints the same fields the server writes
 // (convex/lineCause.ts).
-import type { MapNode } from "./lineMap";
-
 /** The task category a cause against the line carries. */
 export const LINE_CAUSE_CATEGORY = "line";
 
-/** A node of the map, or the whole line (kind "line", subject `line:whole`), which the map's controls row asks about before any node is chosen. */
-export type LineSubjectNode = Pick<MapNode, "id" | "source"> & { kind: MapNode["kind"] | "line" };
-export const WHOLE_LINE: LineSubjectNode & { label: string } = { id: "whole", kind: "line", label: "the line" };
+/** A part of the line a cause can name: a finder (kind "source"), a station, or the whole line (kind "line", subject `line:whole`). */
+export type LineSubjectNode = { id: string; source?: string | null; kind: "source" | "station" | "decide" | "ship" | "watch" | "signals" | "causes" | "line" };
 
 /** The subject a line cause names its node by: `line:station:prove`,
  *  `line:finder:agentwatch`, `line:profile:watch_days`, `line:signals`. */
