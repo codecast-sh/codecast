@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { defaultHostedWhen, describeHostedCadence, hostedNextWords, hostedSchedule, hostedWhenOf, routineExampleSeed, routineExamples, routineLimitLine } from "./hostedSchedule";
+import { defaultHostedWhen, describeHostedCadence, hostedNextWords, plainNextRun, hostedSchedule, hostedWhenOf, routineExampleSeed, routineExamples, routineLimitLine } from "./hostedSchedule";
 
 const DAY = 24 * 60 * 60 * 1000;
 // A Wednesday, 10:30 local.
@@ -62,6 +62,14 @@ describe("hosted routine schedule", () => {
     expect(hostedNextWords({ schedule_type: "once", run_at: tomorrow }, now)).toBeNull();
     expect(hostedNextWords({ schedule_type: "recurring", interval_ms: DAY, run_at: now + 25 * 60_000 }, now)).toBe("in 25 min");
     expect(hostedNextWords({ schedule_type: "recurring", interval_ms: 3 * 60 * 60_000, run_at: nine }, now)).toMatch(/^next today at /);
+  });
+
+  test("a routine's next run says only the day when its schedule already says the time", () => {
+    const now = new Date(2026, 9, 12, 8, 0).getTime();
+    const tomorrow = new Date(2026, 9, 13, 8, 0).getTime();
+    expect(plainNextRun({ status: "scheduled", schedule_type: "recurring", interval_ms: DAY, run_at: tomorrow }, now)).toBe("Next: tomorrow");
+    expect(plainNextRun({ status: "scheduled", schedule_type: "recurring", interval_ms: 7 * DAY, run_at: tomorrow + 3 * DAY }, now)).toBe("Next: Friday");
+    expect(plainNextRun({ status: "scheduled", schedule_type: "recurring", interval_ms: 3 * 60 * 60_000, run_at: tomorrow }, now)).toMatch(/^Next: tomorrow at /);
   });
 
   test("the empty page's examples need no mail until mail is connected, and each seeds the form's when", () => {
