@@ -1,86 +1,59 @@
-A long session is expensive to re-enter. The transcript holds everything the agent did, in order, which is exactly the wrong shape for the question you actually have when you open it: where does this stand right now? Threads that several sessions have been talking in are worse: half the messages are addressed to somebody else.
+A long session is hard to walk back into. The transcript holds everything the agent did, in order, which is the wrong shape for the question you have when you open it: where does this stand right now?
 
-The pinned thread state answers that question in one place. The agent writes a short standing line about the situation, revises it as the work moves, and clears it when it stops being true. You see it above the composer the moment you open the session, and truncated on the inbox card before you open anything.
+With Thread State on, the agent keeps one short note pinned to the session that answers that question: what it is working on, where things stand, what comes next, and whether anything is yours to decide. It rewrites the note as the work moves and clears it when it stops being true. You see it above the composer the moment you open the session, and on the session's inbox card before you open anything.
 
-```bash
-cast state "Waiting on CI for the auth fix. Nothing to decide yet"
-cast state - <<'EOF'                 # multi-line, exact newlines preserved
-Status: sync layer rewritten, tests green
-Blocked: needs a prod key before the last check
-Next: deploy once the key lands
-EOF
-cast state                           # print the current state
-cast state clear                     # remove it
-cast state show <session_id>         # read another session's state
-```
+![The pinned state above the composer: a Complete chip, the time and messages since it was written, and three lines: Working on, Status and Next](/documentation/thread-state/pinned-panel.webp "A pinned state in a conversation. The chip says who acts next, the counter on the right says how far the thread has moved since the agent wrote it.")
 
-## What the agent is told to write
+## Turn it on
 
-The snippet ([how snippets work](/documentation/agent-snippets)) tells the agent to write for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is the human's to decide. It leads with the situation rather than the history, because the transcript is already the history.
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Thread State**. Sessions that start after that keep a pinned state. Click **How it works** on the card for what you'll see and a request to try.
 
-`Goal:`, `Status:`, `Next:` and `Blocked:` render as bold labels, the same convention session summaries use, so a state written with them reads as a structured card rather than a paragraph.
+You don't need to ask for it once it is on, but you can steer it:
 
-```figure
-PinnedStateFigure
-One write, two surfaces: the panel shows all of it under the first line, and the inbox card keeps only the Status line.
-```
+- "Keep your thread state current while you work through this refactor."
+- "Put the open question about the API key in your pinned state."
+- "Clear your pinned state, the work is done."
 
-The instruction the agent gets is not "write a state" but "keep one true". It rewrites the line whenever the answer changes (a new phase, a new blocker, a decision it needs from you) and clears it when the work is done. A state that says the agent is waiting on something that already arrived is worse than no state at all.
+## What you see
 
-## Declaring who acts next
+**In the conversation**, the note sits in a panel just above the composer:
 
-The text says where the work stands. `--status` says who moves it forward, and that answer decides where the session files in the inbox when the turn ends.
+- A pin and a status chip: **In progress**, **Needs input**, **Complete** or **Dormant**. A note without a status shows **Pinned**.
+- On the right, how old it is in time and in messages, such as *4m ago · 12 messages since*.
+- The body leads with **Working on** and the headline, then lines like **Status:**, **Next:** and **Blocked:** in bold. A long note folds to **Show all**.
+- Click the header to collapse the panel to its first line. The **×** that appears on hover clears the note; a toast reads *Pinned state cleared* with **Undo**.
 
-| `--status` | Meaning | Inbox section |
-|------------|---------|---------------|
-| `working` | Still moving. This is the default | Working |
-| `blocked` | A human must act before the agent can continue | Needs Input |
-| `done` | Delivered, and nothing is stalled. Read it when you have time | Done |
-| `dormant` | A machine wakes the session: a trigger, a background task, a reply from another session | Dormant |
+**On the inbox card**, the note replaces the generated summary with one line: the **Status:** or **Blocked:** line, or the first line when there is neither. A small pin marks it, colored by status, and a chip names a blocked, done or dormant session so you can scan the inbox without opening anything.
 
-```bash
-cast state --status dormant "Waiting on CI run 8841. tr-42 checks again at 3pm"
-cast state --status done "Shipped. All four fixes verified in the browser"
-```
+## Who acts next
 
-A finished turn that declares nothing files under Needs Input. That is the honest default, because nobody said otherwise, and it is also the cost of not declaring: you open the card to learn that it needed nothing.
-
-`done` and `dormant` cover only the turn that declares them. When the wake arrives and the agent finishes that turn, it declares again or the session returns to Needs Input. A dormant state must name its wake in the text. An agent that cannot say what resumes it is blocked, not dormant.
-
-`blocked` is the one status that claims your attention. It returns a stashed session to the inbox, so the snippet tells the agent to declare it only when it is true. A question that can wait goes to the [decision queue](/documentation/decisions) first, and then the session goes dormant.
-
-A message from you takes the pinned state down, text and status together, because you have answered it. The agent pins a new one when it ends that turn. A message from another session or a trigger wake leaves it standing.
+The status on the note decides where the session files in your inbox when the agent's turn ends.
 
 ```figure
 WhoActsNextFigure
-The declaration files the session when the turn ends. Saying nothing files it under Needs Input.
+The status the agent pins decides the inbox section. A turn that says nothing files under Needs Input, so you open it and find out.
 ```
 
-## Staleness is visible, not assumed
+- **Needs input** is the one status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
+- **Complete** and **Dormant** cover only the turn that set them. A dormant note says what will wake the session: a schedule, a background job, a reply from another session.
+- When you send the session a message, the note comes down, because you have answered it. The agent pins a fresh one when its turn ends. A message from another session or a scheduled wake leaves the note standing.
 
-Nothing forces an agent to keep the line current, so the interface never claims it is. Every write stamps the message count of the thread at that moment, and every surface shows the gap since: "4m ago · 12 messages since".
+## A note that has gone stale says so
 
-As that gap grows the state goes through three stages. It is fresh, with a cyan pin, for its first 60 messages. From 60 messages it is aging: the pin and the counter turn yellow. At 200 messages it is stale, and every surface hides it, because a line the thread has run far past is worse than no line. A neglected state therefore never reads as current, which is the only thing that makes a pinned line trustworthy at all. When a state carries a `--status`, the status color owns the panel's bar, and the counter still tells you its age.
-
-Time is the weaker signal and treated as such: a session parked overnight on a CI run has not changed, so the clock ages a state only after 12 hours and hides it after 48. Before the line gets anywhere near aging, the agent's own hook reminds it after 20 messages to rewrite it, and a rewrite starts both counters again.
+Nothing forces an agent to keep the note current, so codecast never pretends it is. Every note shows how far the thread has moved since it was written, and the panel changes as that gap grows.
 
 ```figure
 FreshnessFigure
 Fresh, aging, then hidden, by messages or by hours, whichever comes first.
 ```
 
-## Where it shows
+For its first 60 messages the note is fresh, with a cyan pin. After that the pin and the counter turn yellow. At 200 messages it is hidden everywhere, because a line the thread has run far past is worse than no line. Time counts too, more gently: a session parked overnight on a long test run hasn't changed, so the clock only ages a note after 12 hours and hides it after 48. Each rewrite starts both counts again.
 
-| Surface | What you see |
-|---------|--------------|
-| Conversation, above the composer | The full state, its age, and the message gap. Collapse it to the headline; clear it with the × |
-| Inbox card | The `Status:` or `Blocked:` line, or the first line when there is neither, marked with a pin, in place of the generated session summary |
-| `cast sessions` | The first line, marked, above the generated summary it replaces |
+## When something is off
 
-![The inbox with pinned states on the cards](/documentation/shots/inbox.webp "The inbox files sessions by who acts next. Fix flaky checkout e2e and Upgrade Stripe SDK to v14 show their pinned lines beside a Needs input or Complete chip.")
-
-Clearing from the panel is a local-first write: the panel disappears immediately and a toast offers Undo. The agent can pin a new state at any time; the human clearing it is a statement about this line, not a lock.
-
-## Access
-
-`cast state` writes to the session it is run from. The CLI resolves the current session the same way `cast stash` and `cast label` do. Pass `--for <session>` to write to another session, and `cast state show <session>` to read one. Both are restricted to sessions you run or own, the same rule that governs renaming and stashing.
+| What you notice | What to do |
+|-----------------|------------|
+| No pinned state on new sessions | Check that **Thread State** is on for the computer the session runs on, in **Agent features** |
+| The note says the agent is waiting on something that already happened | Tell the agent. It rewrites the note when it ends that turn |
+| A session sits in Needs Input but needed nothing | The agent ended its turn without saying who acts next. Ask it to keep its pinned state current |
+| You cleared a note by mistake | Click **Undo** on the toast, or ask the agent to pin it again |

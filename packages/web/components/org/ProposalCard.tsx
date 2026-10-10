@@ -17,8 +17,6 @@ import { useOverflows } from "../../hooks/useOverflows";
 import { cn } from "../../lib/utils";
 import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { letterParts } from "./staffingAsks";
-import { openOrgChart } from "./orgChartLink";
-import { useOrgHover } from "./proposalContexts";
 import { proposalProgressWords } from "./proposalSubjects";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import { LEDGER_INKS, LEDGER_STOP, LedgerWord } from "./ProposalSubjectCard";
@@ -114,8 +112,7 @@ export function ProposalBody({ proposal, changes, open, compact, summary, onMap 
 }) {
   const entries = useProposalEntries(proposal, changes);
   const batch = useProposalBatch(proposal);
-  const onScreen = useOrgHover() !== null;
-  const map = onMap ?? (onScreen ? undefined : () => openOrgChart({ proposal: proposal.short_id }));
+  const map = onMap;
   const readonly = !batch.key || proposal.status !== "open";
   // One record group carries the proposal's totals itself.
   const totals = entries.records && entries.groups.length === 1 ? null : entries.totals.line;
