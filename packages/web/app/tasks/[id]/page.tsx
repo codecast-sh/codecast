@@ -23,11 +23,10 @@ import { TaskListContent } from "../page";
 import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
-import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
 import { useTaskIsBlocked } from "../../../hooks/useTaskDecisions";
 import { CollapsibleBody } from "../../../components/CollapsibleBody";
-import { TaskLineStory } from "../../../components/tasks/TaskLineStory";
+import { TaskLineStory, TaskRunPanel } from "../../../components/tasks/TaskLineStory";
 import { TaskLineChip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { TaskShipStation } from "../../../components/ShipControl";
@@ -40,6 +39,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { TaskSessionLink, TaskTimeline } from "../../../components/tasks/TaskTimeline";
+import { SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -71,7 +71,7 @@ import {
   MoreHorizontal,
   CornerDownRight,
 } from "lucide-react";
-import { closeTaskWithGuard, setTaskParent } from "../../../lib/taskActions";
+import { closeTaskWithGuard } from "../../../lib/taskActions";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { DocDates } from "../../../components/DocDates";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
@@ -163,7 +163,7 @@ function OverflowMenu({ children }: { children: ReactNode }) {
 // renders in TaskEvidence (the-line.md L6), never here a second time.
 function ExecutionDetailsSection({ data }: { data: any }) {
   const hasExecution = data.steps?.length || data.acceptance_criteria?.length ||
-    data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
+    (data.execution_concerns && !data.cause) || data.estimated_minutes != null || data.actual_minutes != null;
   if (!hasExecution) return null;
 
   return (
@@ -185,7 +185,8 @@ function ExecutionDetailsSection({ data }: { data: any }) {
           </div>
         )}
 
-        {data.execution_concerns && (
+        {/* On a problem the concern is the engine's own stop line ("hand … killed after 30m"); its story says that in words. */}
+        {data.execution_concerns && !data.cause && (
           <div className="text-sm p-3 rounded-lg bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow">
             {data.execution_concerns}
           </div>
@@ -416,8 +417,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     closeTaskWithGuard(shortId, status);
   }, []);
 
-  // Parent breadcrumb + set-parent state. The parent row resolves live from
-  // the store so a re-parent elsewhere updates the chip instantly.
+  // The parent breadcrumb resolves live from the store, so a re-parent
+  // elsewhere updates the chip instantly.
   const parentRow = useMemo(() => {
     const pid = (data as any)?.parent_id;
     if (!pid) return null;
@@ -480,6 +481,15 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
       } else if (e.key === "l" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmd("labels");
+      } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        openCmd("blocker");
+      } else if (e.key === "t" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        openCmd("parent");
+      } else if (e.key === "k" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        openCmd("related");
       } else if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
         stop();
         startEditTitle();
@@ -596,6 +606,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           </div>
 
           <RepositoryLinks taskId={data._id} conversationIds={linkedIds} sessions={linkedConversations} repository={taskRepository(data) ?? undefined} />
+
+          <SupersededBanner task={data} />
 
           {/* Parent breadcrumb — a subtask never renders context-free */}
           {(data as any).parent_id && (
@@ -726,12 +738,16 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </div>
             )}
 
-            {(data as any).started_at && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-                <span className="text-xs text-sol-text-dim">Started</span>
-                <span className="text-xs text-sol-text-muted" title={formatDateFull((data as any).started_at)}>{formatDate((data as any).started_at)}</span>
-              </div>
-            )}
+            {(data as any).started_at && (() => {
+              // A line problem back in the queue has had a run: "Last run", so the facts agree with the sentence above (learning-loop.md LL6).
+              const stoppedRun = !!(data as any).cause && (data.status === "open" || data.status === "backlog" || data.status === "blocked");
+              return (
+                <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors" data-task-started={stoppedRun ? "stopped" : "started"}>
+                  <span className="text-xs text-sol-text-dim">{stoppedRun ? "Last run" : "Started"}</span>
+                  <span className="text-xs text-sol-text-muted" title={formatDateFull((data as any).started_at)}>{formatDate((data as any).started_at)}</span>
+                </div>
+              );
+            })()}
 
             {/* Confidence — visual bar */}
             {data.confidence != null && (
@@ -759,53 +775,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </div>
             )}
 
-            {/* Blocked by */}
-            {data.blocked_by && data.blocked_by.length > 0 && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-                <span className="text-xs text-sol-text-dim">Blocked by</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {data.blocked_by.map((b: string) => (
-                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-red hover:underline">{b}</Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Blocks */}
-            {data.blocks && data.blocks.length > 0 && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-                <span className="text-xs text-sol-text-dim">Blocks</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {data.blocks.map((b: string) => (
-                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-text-muted hover:underline">{b}</Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Parent — set, change, or detach */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Parent</span>
-              {(data as any).parent_id ? (
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)} className="text-xs font-mono text-sol-cyan hover:underline">
-                    {parentRow?.short_id ?? "…"}
-                  </button>
-                  {parentRow && <span className="text-xs text-sol-text-muted truncate max-w-[16rem]">{parentRow.title}</span>}
-                  <button
-                    onClick={() => { if (data.short_id) { const r = setTaskParent(data.short_id, ""); if (!r.ok) toast.error(r.reason); } }}
-                    className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
-                    title="Remove parent"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ) : (
-                <button onClick={() => openCmd("parent")} className="text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors">
-                  Set parent…
-                </button>
-              )}
-            </div>
+            {/* The task graph (task-graph.md TG12): blockers and waits, then links and the parent */}
+            <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />
           </div>
 
           {/* Decisions bound to this task (D3): open cards, settled ones
@@ -842,18 +813,15 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           {/* The session doing this task, read and answered in place */}
           {ownerSession ? (
             <TaskSessionSection session={ownerSession} task={data} onOpen={openLinkedSession} active={paneActive} rowOnly={isInline} />
-          ) : data.status !== "done" && data.status !== "dropped" && (
+          ) : data.status !== "done" && data.status !== "dropped" && !(data as any).cause && (
+            // A line problem is run by its line (learning-loop.md LL5): the story above says where it stands, and handing it to an agent would skip the start switch.
             <TaskSessionEmpty onStart={() => openCmd("agent_run")} />
           )}
 
           {!blockedOnDecision && <TaskDecisions taskId={data._id} />}
 
           {/* The run (L10): its gate renders the decision card */}
-          {data.workflow_run_id && (
-            <div className="mb-6">
-              <WorkflowContextPanel workflowRunId={data.workflow_run_id as any} />
-            </div>
-          )}
+          <TaskRunPanel task={data as any} />
 
           {/* Evidence at the station (the-line.md L6) */}
           <TaskEvidence task={data as any} />

@@ -1,5 +1,5 @@
 import type { Components } from "react-markdown";
-import { useState, useCallback, Children } from "react";
+import { createContext, useContext, useState, useCallback, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery, useGalleryMessageId } from "../ImageGallery";
 import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
@@ -9,17 +9,26 @@ const MD_IMAGE_COLLAPSED_HEIGHT = 160;
 // takes the column: a strip (a top bar, a timeline) is unreadable at 448px.
 const WIDE_ASPECT = 2;
 
+// A portrait image shown whole stops at this height, so a phone screen reads at a glance.
+const WHOLE_PORTRAIT_MAX_HEIGHT = 440;
+
 /** How an author asked an image to render, through the markdown title slot:
  *  `![caption](url "wide")`. `wide` takes the column and shows the whole image,
- *  `small` is a thumbnail, anything else is auto (narrow, collapsed past
+ *  `small` is a thumbnail, `whole` shows all of it at its own shape (a
+ *  landscape across the column, a portrait at full height up to
+ *  WHOLE_PORTRAIT_MAX_HEIGHT), anything else is auto (narrow, collapsed past
  *  MD_IMAGE_COLLAPSED_HEIGHT, widened for strips). */
-type ImageSize = "auto" | "wide" | "small";
+export type ImageSize = "auto" | "wide" | "small" | "whole";
 
-function imageSizeFromTitle(title?: string | null): ImageSize {
+/** The size an unhinted image takes: auto in a transcript, whole where images are the point (an article). */
+export const MarkdownImageSize = createContext<ImageSize>("auto");
+
+function imageSizeFromTitle(title: string | null | undefined, fallback: ImageSize): ImageSize {
   const hint = title?.trim().toLowerCase();
   if (hint === "wide" || hint === "full") return "wide";
   if (hint === "small") return "small";
-  return "auto";
+  if (hint === "whole") return "whole";
+  return fallback;
 }
 
 /** Alt text worth showing under the image. `cast image` defaults alt to the
@@ -58,6 +67,7 @@ export function CollapsibleImage({
   const [revealed, setRevealed] = useState(false);
   const gallery = useImageGallery();
   const messageId = useGalleryMessageId();
+  const fallbackSize = useContext(MarkdownImageSize);
 
   // A remote http(s) image that the viewer hasn't opted into. Until then we
   // render neither the <img> nor a gallery registration, so the browser issues
@@ -87,14 +97,15 @@ export function CollapsibleImage({
   }
 
   const caption = captionFromAlt(alt);
-  const size = imageSizeFromTitle(title);
-  const fullWidth = size === "wide" || (size === "auto" && aspect !== null && aspect >= WIDE_ASPECT);
+  const size = imageSizeFromTitle(title, fallbackSize);
+  const portrait = size === "whole" && aspect !== null && aspect < 1;
+  const fullWidth = size === "wide" || (size === "whole" && !portrait) || (size === "auto" && aspect !== null && aspect >= WIDE_ASPECT);
   // The frame hugs the image up to the cap, so a short image gets no dead
   // space under it and the fade appears only over a cut-off bottom.
-  const cap = size === "wide" ? undefined : MD_IMAGE_COLLAPSED_HEIGHT;
+  const cap = size === "wide" || size === "whole" ? undefined : MD_IMAGE_COLLAPSED_HEIGHT;
   return (
     <span
-      className={`my-2 block cursor-pointer ${size === "small" ? "max-w-60" : fullWidth ? "max-w-full" : "max-w-md"}`}
+      className={`my-2 block cursor-pointer ${size === "small" ? "max-w-60" : portrait ? "w-fit max-w-full" : fullWidth ? "max-w-full" : "max-w-md"}`}
       onClick={() => gallery?.open(src)}
     >
       {/* Soft borders need explicit color-mix values: Tailwind's /opacity
@@ -111,8 +122,8 @@ export function CollapsibleImage({
         <img
           src={src}
           alt={alt || "Image"}
-          className="block w-full h-auto"
-          style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
+          className={portrait ? "block h-auto w-auto max-w-full" : "block w-full h-auto"}
+          style={loaded ? (portrait ? { maxHeight: WHOLE_PORTRAIT_MAX_HEIGHT } : undefined) : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
           onLoad={(e) => {
             const img = e.currentTarget;
             setAspect(img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1);
