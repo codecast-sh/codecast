@@ -1,6 +1,7 @@
 import { ArrowRight, Sparkles } from "lucide-react";
 import { launchSharingAgent } from "../../lib/sharingAgent";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 
 /** Start the sharing agent and say where it went. */
 /**
@@ -31,14 +32,16 @@ export function SharingAgentCard({ className }: { className?: string }) {
             </p>
           </div>
         </div>
-        <button
+        <Button
           type="button"
+          variant="cyan"
+          size="sm"
           onClick={launchSharingAgent}
-          className="sol-btn-solid inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-base03 sm:self-center"
+          className="shrink-0 self-start sm:self-center"
         >
           Start
-          <ArrowRight className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
-        </button>
+          <ArrowRight className="transition-transform duration-200 group-hover:translate-x-0.5" />
+        </Button>
       </div>
     </div>
   );
