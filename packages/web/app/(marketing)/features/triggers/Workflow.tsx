@@ -122,10 +122,10 @@ export function Workflow() {
       </div>
       <div className="mt-8 grid gap-6 md:grid-cols-2">
         <Body>
-          <C>cast workflow run flow.cast --task ct-4102</C> starts a run. Each agent node is its own session, streamed live with the graph&apos;s progress beside it. A gate holds the run and shows its choices as buttons in the dashboard, with a push notification to your phone and desktop. Your answer goes to the next node.
+          An agent starts a run against a task or plan, and the Workflows page lists every run. Each agent node is its own session, streamed live with the graph&apos;s progress beside it. A gate holds the run and shows its choices as buttons in the dashboard, with a push notification to your phone and desktop. Your answer goes to the next node.
         </Body>
         <Body>
-          The split is simple. A trigger decides when something runs. A workflow decides what runs in what order, with the same steps and the same gates every time. <C>cast workflow list</C> shows the templates, <C>cast workflow runs</C> what is in flight and which gate it waits on.
+          The split is simple. A trigger decides when something runs. A workflow decides what runs in what order, with the same steps and the same gates every time. Writing the graph and starting a run happen from a session or the CLI (<C>cast workflow run flow.cast --task ct-4102</C>); the app is where you watch it and answer its gates.
         </Body>
       </div>
     </Section>

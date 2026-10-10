@@ -1,4 +1,5 @@
 import { useBatchReview } from "./BatchReviewContext";
+import { Button } from "./ui/button";
 
 export function BatchActions() {
   const { prIds, currentPrIndex, reviewedPrs, approveAllRemaining, goToNextPR } = useBatchReview();
@@ -19,19 +20,12 @@ export function BatchActions() {
   return (
     <div className="sol-card p-3 flex items-center gap-3">
       <span className="text-sm text-sol-text-muted">Batch actions:</span>
-      <button
-        onClick={approveAllRemaining}
-        className="sol-btn-secondary text-sm"
-        disabled={remainingCount === 0}
-      >
+      <Button variant="secondary" onClick={approveAllRemaining} disabled={remainingCount === 0}>
         Approve all remaining ({remainingCount})
-      </button>
-      <button
-        onClick={handleSkipToChangesRequested}
-        className="sol-btn-ghost text-sm"
-      >
+      </Button>
+      <Button variant="ghost" onClick={handleSkipToChangesRequested}>
         Skip to next
-      </button>
+      </Button>
     </div>
   );
 }

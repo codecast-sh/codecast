@@ -1,48 +1,48 @@
-There are three different things people mean by "share a session", and they have different answers. You want a teammate to read a conversation that already finished. You want someone to watch a session that is running right now. Or you want the whole team's sessions to be visible by default, without anyone deciding to share each one. Work out which one you need first, because the tool that does one badly does another well.
+"Share this session" can mean three things. You want a teammate to read a conversation that already finished. You want someone to follow one that is still running. Or you want the team's sessions visible without anyone deciding to share each one. Codecast does all three, and each starts from the session itself.
+
+![The Share session popover: Link access set to Restricted or Anyone, with Copy link and Send to chat](/documentation/share-a-session/share-popover.webp "The share button in a conversation's header. For a session in a team workspace, a What the team sees section sits above Link access.")
+
+## Share a session with your team
+
+Open the session and click the share button at the right of its header. In a team workspace, **What the team sees** has three settings:
+
+- **Hidden**: only you can see it, and it stays out of the team feed.
+- **Summary**: the team feed shows the title and a summary of the work, not the conversation.
+- **Full**: the team can read the whole conversation, live while it runs.
+
+If the session lives in a repository you already share, the popover says so (*Shared automatically*) and links to the repository's setting. To share every new session with a team without doing it one by one, use **Share all new sessions in full**, or set it per repository in **Settings → Sync & Privacy** ([Team sessions](/documentation/team-sessions) covers that).
+
+## Share a link
+
+Under **Link access**:
+
+- **Restricted**: only people who can already see the session can open the link. Use it to point a teammate at a session.
+- **Anyone**: anyone with the link can read it, no sign in needed. The share button turns into a globe so you can tell at a glance that the session is public.
+
+Then click **Copy link**, or **Send to chat** to post it in a team chat channel. Someone who opens a public link sees the conversation read only, with no composer, and a **Sign in** button if they have an account.
+
+Before you make a session public, read it for anything private: tokens, customer names, internal links. Agents print what they see.
+
+## Share a few messages
+
+Often one answer is the part worth sending. Hover a message and use **Copy link to message**, or click **Share message** to pick several: tick the messages you want, then **Copy share link** or **Send to chat**. Tick **Link full conversation** if the reader should be able to open the whole thing (this makes the conversation public).
+
+Whoever opens the link sees just those messages, who shared them and when, and the session's title, with **View full conversation** when you linked it.
+
+## Watch a session while it runs
+
+A session you can see in codecast is live: new messages, commands and file changes appear as the agent writes them, on the web, in the Mac app and on your iPhone. So "watch this" is the same link as "read this". If the session needs input, the person who runs it can answer from any of those places.
+
+## How this compares to other tools
 
 ```figure
 ShareNeedsFigure
 Three needs, four tools. Most tools answer one need well and leave the other two blank.
 ```
 
-## Read a finished conversation
+- **Claude Code's own sharing** works for sessions that ran in the cloud at claude.ai/code. You set a session to Team or Public and send the link; the reader sees it as it was when they opened it.
+- **Lore** turns one conversation into a shareable thread, for Claude Code, Codex, Cowork and Amp.
+- **Remote Control** lets you follow and steer one running Claude Code session from claude.ai or the Claude app, while it runs.
+- **Codecast** records every session on every machine as it happens, for the folders you choose, and keeps them afterwards to search and link to.
 
-**Claude Code has this built in**, for sessions that ran in the cloud. Sessions at [claude.ai/code](https://claude.ai/code) carry a visibility toggle: on Team and Enterprise accounts the choice is Private or Team, which makes the session visible to your claude.ai organization; on Pro and Max it is Private or Public, and public means any user signed in to claude.ai can open it. You then send the link. Anthropic's documentation is explicit that the recipient sees the latest state when they open it, and their view does not update live.
-
-Two limits decide whether this covers you. Claude Code on the web is in research preview, for Pro, Max and Team accounts, and for Enterprise accounts with premium seats or Chat and Claude Code seats. And the session has to be a cloud session to appear in that list at all. From the CLI the handoff is one way: `--teleport` pulls a cloud session down to your terminal, and there is no flag that pushes an ordinary terminal session up to the web. The Desktop app's **Continue in** menu can send a local session to the web, so that is the route if you started in your terminal. Check a session for credentials before you make it public; on Pro and Max, repository access verification is off unless you turn it on under Settings, Claude Code, Sharing settings.
-
-**[Lore](https://lore.link/share)** is a dedicated tool for this. You install it as a plugin (`claude plugin marketplace add loredotlink/lore-plugin`) and run `/lore:share` inside Claude Code or Cowork, or `$lore:share` in Codex; it also supports Amp. A thread can be private, visible to your workspace, or public, and a public thread opens without an account. If your need is exactly "turn this conversation into a link a colleague can read", it is the shortest path and it covers agents beyond Claude Code.
-
-## Watch a session that is running
-
-Neither of the above does this. **Remote Control** is Anthropic's answer: run `claude --rc`, or `/rc` inside a session, and the session becomes reachable from claude.ai/code and the Claude mobile app. Execution stays on your machine, and you can answer permission prompts from your phone. It is available on all plans, though on Team and Enterprise an Owner has to turn on the Remote Control toggle in the Claude Code admin settings first.
-
-Remote Control is a live connection to one session, not a record of it.
-
-```figure
-SessionLifeFigure
-The same session through three tools: a link shows it as it was when opened, Remote Control while it runs, codecast both and after.
-```
-
-When you want both, see [Codecast vs Claude Code Remote Control](/compare/codecast-vs-claude-code-remote-control).
-
-## Make every session visible without sharing anything
-
-This is what codecast does, and it is a different model rather than a better link. Every supported agent already writes its conversation to disk: Claude Code keeps history files under `~/.claude/projects/`, and Codex, Cursor, OpenCode, pi, Grok and Gemini keep their own. The codecast daemon watches those files and syncs each conversation as it happens, so nobody decides to share a session and nobody remembers to start anything:
-
-```bash
-curl -fsSL https://codecast.sh/install | sh
-cast login
-```
-
-From then on `codecast.sh/feed` shows every session the team can see, across machines and across those agents, and `codecast.sh/inbox` sorts the same sessions by who has to act next. Visibility is set per directory rather than per session, so `~/src/product` can be visible to your team while `~/personal` stays private, on the same account and the same daemon. Individual links still exist when you want one: a conversation or a single message can be shared by link, the same way you would send a Lore thread.
-
-![The codecast inbox with a team's sessions](/documentation/shots/inbox.webp "Nobody shared these: the inbox lists the team's sessions from every machine, filed under Needs input, Done and Working, with one open beside it.")
-
-The reason to record everything rather than share on demand is what it makes possible afterwards. `cast search "auth refactor"` searches every past session on the team; `cast ask "how did we fix the flaky deploy?"` asks a question across that history; `cast blame src/api.ts:120` traces a line of code back to the conversation that wrote it. Your agents get the same access, so a new session can consult what a teammate's agent already worked out. See [Agent memory](/documentation/memory).
-
-## Choosing
-
-Use Anthropic's built in sharing if you work in Claude Code on the web and want to send one finished session to a colleague, with nothing to install. Use Lore if you want a dedicated sharing tool for individual conversations and want Codex, Cowork or Amp covered too. Use Remote Control when the session is still running and you want to steer it from your phone. Use codecast when the problem is not any single link, but that your team's sessions are scattered across terminals and machines and none of them survive as something you can search later.
-
-They are not exclusive. Remote Control sessions and sessions started from the Desktop app are ordinary Claude Code sessions on your machine, so a codecast daemon records them like any other.
+They work together: a session you steer with Remote Control is still an ordinary Claude Code session on your machine, so codecast records it like any other. For more on that pairing, see [Codecast vs Claude Code Remote Control](/compare/codecast-vs-claude-code-remote-control).

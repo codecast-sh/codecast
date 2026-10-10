@@ -19,7 +19,6 @@ export function Section({ id, title, lede, children, tint = false }: { id?: stri
   );
 }
 
-/** Inline code in body copy. */
 /** Body paragraph sized for side columns. */
 export function Body({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <p className={`text-[15.5px] leading-7 ${className}`} style={{ color: SOL.base01 }}>{children}</p>;
@@ -36,15 +35,6 @@ export function Shell({ lines, out, className = "" }: { lines: string[]; out?: R
         {out}
       </pre>
     </div>
-  );
-}
-
-/** "+ Trigger tr-41 in 30m: Title", the line `cast trigger add` prints. */
-export function Added({ id, when, title }: { id: string; when: string; title: string }) {
-  return (
-    <span>
-      <span style={{ color: SOL.green }}>+</span> Trigger <span style={{ color: SOL.cyan }}>{id}</span> {when}: <span className="font-semibold" style={{ color: SOL.base2 }}>{title}</span>{"\n"}
-    </span>
   );
 }
 
