@@ -1,53 +1,61 @@
-Every Claude Code session your team runs already writes a complete transcript to disk: Claude Code keeps JSONL history files under `~/.claude/projects/`, and Codex, Cursor, OpenCode, pi, Grok and Gemini keep equivalents of their own. The sessions are recorded; they just aren't anywhere anyone can see them. Codecast turns those files into one live dashboard for the whole team.
+Every coding agent your team runs already keeps a full record of its session on the machine that ran it. Claude Code does, and so do Codex, Cursor, OpenCode, pi, Grok and Gemini. The work is recorded; nobody else can see it. Codecast puts those sessions in one place for the whole team, live, without anyone changing how they run their agents.
 
-## The mechanics
+Each teammate installs codecast once ([Getting started](/documentation#getting-started)). From then on, every session they start in a terminal, an editor, tmux or over SSH shows up in codecast as it happens. You choose which of your folders the team can see, and everything else stays yours.
 
-Each teammate runs the installer once:
+![The codecast inbox with a team's sessions](/documentation/shots/inbox.webp "The inbox files sessions under Needs input, Done and Working, from every machine and every agent, with one open beside it.")
 
-```bash
-curl -fsSL https://codecast.sh/install | sh
-cast login
-```
-
-That starts a local daemon that watches the agents' own history files and syncs each conversation to your team's workspace as it happens, with no change to how anyone runs their agents. A session started in a terminal, tmux, an IDE terminal, or over SSH is picked up the same way, because the daemon reads what the agent writes, not how it was launched.
-
-```figure
-DaemonSyncFigure
-The agents keep writing their own history files. The daemon reads them as they grow, and each line reaches the team's workspace live.
-```
-
-From then on, two surfaces answer the question this page is named for:
-
-- **The feed** (`codecast.sh/feed`): every team-visible session, newest first, across all machines and agents. Who is working on what, right now and historically.
-- **The inbox** (`codecast.sh/inbox`): the same sessions sorted by who acts next: needs input, done, working. A session stuck on a permission prompt surfaces at the top, and you can answer it from the web, the desktop app, or the iOS app.
+## Two ways to look at the same sessions
 
 ```figure
 FeedInboxFigure
-One set of sessions, two orders: the feed by recency, the inbox by who has to act.
+The feed answers what is happening across the team. The inbox answers what needs you.
 ```
 
-Opening any session shows the full conversation live (messages, tool calls, diffs) and you can type into it from there, so "looking at a teammate's stuck session" and "unblocking it" are the same motion.
+**Feed**, in the sidebar, is every session the team can see, newest activity first, across machines and agents. Click a teammate's face to see only their sessions, or a repository to narrow it to one project. **Git & issues** mixes in commits, pull requests and issues from GitHub and Linear.
 
-![A teammate's session open beside the inbox](/documentation/shots/conversation.webp "Retry failed webhooks, open live: the agent's edit to src/billing/retry.ts as a diff, the test run, and a reply being typed into the composer.")
+**Inbox** files your sessions by who has to act next:
 
-## What "team-visible" means
+| Section | What is in it |
+|---------|---------------|
+| **Questions** | Decisions agents are waiting on you for ([Decisions](/documentation/decisions)) |
+| **Needs Input** | Blocked on you: a question, a permission prompt, a finished turn to review |
+| **Done** | Delivered. Read it when you have time |
+| **Working** | The agent is still going |
+| **Dormant** | Waiting on something scheduled, such as a test run or a reply |
 
-Visibility is per directory, not all-or-nothing. Each repo path maps to a team (or stays private); a session inherits the mapping of the directory it runs in, and the longest matching path wins. A mapping also remembers the repository it was made for, so a clone or worktree of that repository outside the folder (Codex keeps its worktrees under `~/.codex`) follows the same rule. A share applies from the day you turn it on, so sessions from before it stay private. Work in `~/src/product` can be team-visible while `~/personal/experiments` stays yours: same daemon, same account. Sessions can also be shared individually by link.
+Open any session to read the whole conversation as it unfolds: messages, commands, file changes as diffs. So looking at a teammate's stuck session and helping with it happen in the same place, on the web, in the Mac app or on your iPhone.
+
+## Choose what the team sees
+
+Sharing is set per folder, not per session, so you decide once. Your work repository can be visible to the team while your personal experiments stay private, on the same account.
+
+When you join a team, the **Where you work** step asks which repositories you work in with that team. You can change it any time in **Settings → Sync & Privacy**, under **Sharing**:
+
+- Every repository and folder codecast has seen is listed under the team it is shared with, with how many sessions it holds and when they started. Others sit under **Private — only you** or **Never shared — locked by you**.
+- Click a repository's share control and pick **Only me**, a team, or **Never share**. Before you confirm, codecast tells you exactly who will see what: how many teammates, how many sessions, and over which dates.
+- Choose whether the share covers **Everything, past sessions included**, starts **From today on**, or starts **Since a date**. You can untick individual sessions to keep them private.
+- **Never share** locks a folder, so nothing in it reaches a team even if a broader folder around it is shared.
 
 ```figure
 VisibilityRuleFigure
-The server resolves each session once, when it is created. Anything no rule covers stays private.
+Five sessions on one account. The closest folder setting wins, a clone follows its repository, and anything nothing covers stays private.
 ```
 
-## Beyond watching
+Copies of a repository follow its setting, including the worktrees some agents create outside your project folder. For a single session, the share button in the conversation header sets what the team sees of it: **Hidden**, **Summary** (the title and a summary of the work) or **Full**. See [Share a session](/documentation/share-a-session).
 
-Because every session lands in one place, the record compounds:
+## What sharing makes possible
 
-- `cast search "auth refactor"`: full-text search across every past session on the team.
-- `cast ask "how did we fix the flaky deploy?"`: ask questions across that history.
-- `cast blame src/api.ts:120`: trace a line of code to the conversation that wrote it.
-- Agents themselves get the same access (see [Agent memory](/documentation/memory)), so a fresh session can consult what any teammate's agent already solved.
+Because every session lands in one place, the record keeps paying off after the work is done:
 
-## Scope of the answer
+- Search every past session on the team from **Search sessions** at the top of the app.
+- Ask any agent how the flaky deploy got fixed last month. It searches the team's sessions and answers with links to them ([Agent memory](/documentation/memory)).
+- Trace a line of code back to the conversation that wrote it ([Which session wrote this line](/documentation/which-session-wrote-this-line)).
 
-Codecast's dashboard covers Claude Code, Codex CLI, Cursor, OpenCode, pi, Grok and Gemini sessions on any machine a teammate runs the daemon on. If you need usage analytics (spend, acceptance rates, seat activity), Anthropic's own analytics dashboard (claude.ai/analytics) is the right tool. Codecast is about the sessions themselves: seeing them, steering them, and remembering them.
+## When something is off
+
+| What you notice | What to do |
+|-----------------|------------|
+| Your sessions are missing from the team feed | The feed shows *Share your workspaces with the team*. Click **Set up sharing** and share the repositories you work in |
+| A teammate's sessions are missing | They haven't shared that repository yet, or their computer hasn't connected. Shared sessions appear as soon as their codecast is running |
+| Old sessions showed up after you shared | You picked *Everything, past sessions included*. Open the repository in **Sync & Privacy** and change it to **From today on**, or untick the sessions to keep private |
+| A folder should never reach the team | Set it to **Never share** in **Sync & Privacy** |

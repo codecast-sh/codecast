@@ -32,12 +32,12 @@ function Head({ x, y, dir, color, style }: { x: number; y: number; dir: "l" | "r
 // ─── Figure 1: the map ─────────────────────────────────────────────────────
 
 const LANES: { y: number; name: string; what: string; way: "out" | "both"; color: string }[] = [
-  { y: 92, name: "cast spawn --cloud", what: "your checkout, uncommitted work included", way: "out", color: SOL.blue },
+  { y: 92, name: "run in the cloud", what: "your checkout, uncommitted work included", way: "out", color: SOL.blue },
   { y: 136, name: "home mirror", what: "agent config, instructions, memory", way: "both", color: SOL.cyan },
   { y: 180, name: "logins", what: "one way; the laptop stays the source", way: "out", color: SOL.yellow },
   { y: 224, name: "live sync", what: "every 3 s while the agent works", way: "both", color: SOL.green },
-  { y: 268, name: "cast migrate", what: "running sessions, messages held", way: "both", color: SOL.orange },
-  { y: 312, name: "browser sync · reach · vnc", what: "a site's login, a folder, the screen", way: "both", color: SOL.magenta },
+  { y: 268, name: "move sessions", what: "running sessions, messages held", way: "both", color: SOL.orange },
+  { y: 312, name: "browser · folders · screen", what: "a site's login, a folder, the whole display", way: "both", color: SOL.magenta },
 ];
 
 export function MapFigure() {
@@ -49,14 +49,14 @@ export function MapFigure() {
         <rect x={16} y={56} width={180} height={284} rx={12} fill={PAPER} stroke={PAPER_LINE} className="bj-fade" style={t(0)} />
         <text x={106} y={82} textAnchor="middle" fontSize="13" fontWeight={700} fill={SOL.base02} className="bj-fade" style={t(0)}>your laptop</text>
         <text x={106} y={100} textAnchor="middle" fontSize="10" fill={SOL.base1} className="bj-fade" style={t(0)}>MacBook-Pro</text>
-        {["the checkout you are in", "your logins, keychain", "the host registry", "your Chrome", "your SSH keys"].map((s, i) => (
+        {["the checkout you are in", "your logins, keychain", "your AWS keys", "your Chrome", "your SSH keys"].map((s, i) => (
           <text key={s} x={30} y={150 + i * 34} fontSize="10.5" fill={SOL.base01} className="bj-rise" style={t(0.2 + i * 0.08)}>{s}</text>
         ))}
 
         <rect x={524} y={56} width={180} height={284} rx={12} fill={NIGHT} stroke={NIGHT_LINE} className="bj-fade" style={t(0.1)} />
-        <text x={614} y={82} textAnchor="middle" fontSize="13" fontWeight={700} fill={SOL.base2} className="bj-fade" style={t(0.1)}>your cloud host</text>
+        <text x={614} y={82} textAnchor="middle" fontSize="13" fontWeight={700} fill={SOL.base2} className="bj-fade" style={t(0.1)}>your cloud machine</text>
         <text x={614} y={100} textAnchor="middle" fontSize="10" fill={SOL.base01} className="bj-fade" style={t(0.1)}>EC2, your AWS account</text>
-        {["one worktree per task", "the codecast daemon", "agents in tmux", "Chrome on Xvfb :99", "an idle watchdog"].map((s, i) => (
+        {["one worktree per task", "any of your agents", "its own Chrome", "your config and logins", "sleeps when idle"].map((s, i) => (
           <text key={s} x={538} y={150 + i * 34} fontSize="10.5" fill={SOL.base0} className="bj-rise" style={t(0.3 + i * 0.08)}>{s}</text>
         ))}
 
@@ -79,7 +79,7 @@ export function MapFigure() {
         <path d="M106 340V421H262" pathLength={1} fill="none" stroke={SOL.base1} strokeDasharray="0" strokeWidth={1.3} className="bj-draw" style={t(3.3, 0.5)} />
         <path d="M614 340V421H458" pathLength={1} fill="none" stroke={SOL.base1} strokeWidth={1.3} className="bj-draw" style={t(3.3, 0.5)} />
         <text x={116} y={384} fontSize="9.5" fill={SOL.base01} className="bj-fade" style={t(3.7)}>the laptop does the work</text>
-        <text x={604} y={384} textAnchor="end" fontSize="9.5" fill={SOL.base01} className="bj-fade" style={t(3.7)}>the host asks for it</text>
+        <text x={604} y={384} textAnchor="end" fontSize="9.5" fill={SOL.base01} className="bj-fade" style={t(3.7)}>the machine asks for it</text>
         <text x={360} y={30} textAnchor="middle" fontSize="10" fill={SOL.base1} className="bj-fade" style={t(0)}>files and logins ride SSH from the laptop; codecast carries commands and short-lived tokens</text>
       </svg>
     </Stage>
@@ -180,7 +180,7 @@ export function ArrivalFigure() {
 export function GitFigure() {
   const cols = [
     { x: 90, name: "git on the host", color: SOL.base2, dark: true },
-    { x: 280, name: "cast git-credential", color: SOL.base2, dark: true },
+    { x: 280, name: "credential helper", color: SOL.base2, dark: true },
     { x: 470, name: "codecast", color: SOL.base02, dark: false },
     { x: 640, name: "GitHub App", color: SOL.base02, dark: false },
   ];
