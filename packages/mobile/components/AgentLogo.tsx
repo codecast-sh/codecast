@@ -1,7 +1,7 @@
 import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import Svg, { Path } from 'react-native-svg';
-import { Theme } from '@/constants/Theme';
+import { Theme, useActiveLook } from '@/constants/Theme';
 import { MOBILE_AGENT_LOGO_BG, MUSE_MARK_PATH } from '@codecast/shared/render/mobileSessionStyle';
 import { CODECAST_MARK_ARROW_PATH, CODECAST_MARK_C_PATH, CODECAST_MARK_VIEWBOX } from '@codecast/shared/render/codecastMark';
 import { isHostedAgentType } from '@codecast/shared/contracts';
@@ -17,6 +17,7 @@ export function agentLogoBg(agentType?: string): string {
 
 export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: number }) {
   const bg = agentLogoBg(agentType);
+  const family = useActiveLook() === 'family';
   const iconSize = size * 0.6;
   if (agentType === 'opencode') {
     return (
@@ -65,12 +66,14 @@ export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; siz
     );
   }
   if (isHostedAgentType(agentType)) {
-    // The codecast mark, tight-cropped, in white on the assistant's cyan.
+    // The codecast mark, tight-cropped, in white on the assistant's cyan. In
+    // the family look it is the web's AssistantMark: the glyph knocked out of
+    // a solid ink disc, the one mark the hosted assistant wears everywhere.
     return (
-      <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
-        <Svg width={size * 0.72} height={size * 0.72} viewBox={CODECAST_MARK_VIEWBOX}>
-          <Path d={CODECAST_MARK_C_PATH} fill="white" />
-          <Path d={CODECAST_MARK_ARROW_PATH} fill="white" />
+      <RNView style={{ width: size, height: size, borderRadius: family ? size / 2 : size * 0.2, backgroundColor: family ? Theme.text : bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={size * (family ? 0.56 : 0.72)} height={size * (family ? 0.56 : 0.72)} viewBox={CODECAST_MARK_VIEWBOX}>
+          <Path d={CODECAST_MARK_C_PATH} fill={family ? Theme.bg : 'white'} />
+          <Path d={CODECAST_MARK_ARROW_PATH} fill={family ? Theme.bg : 'white'} />
         </Svg>
       </RNView>
     );

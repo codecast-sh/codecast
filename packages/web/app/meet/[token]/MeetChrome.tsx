@@ -3,17 +3,17 @@ import { AudioLines, Camera, Mic, Volume2 } from "lucide-react";
 import { guestNoticeLines, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 import type { DeviceChoice } from "../../../lib/calls/guestRoom";
 import { LogoMark } from "../../../components/Logo";
+import { buttonVariants } from "../../../components/ui/button";
 
 // The pieces every screen of the guest's page is built from: the shell, the
 // notice about transcription and recording, and the device pickers. One
 // place, so the lobby, the door and the call say the same things the same way.
 
 /** The guest page's main press (Ask to join, Join, Ask again, Copy link):
- *  the app's solid button finish (sol-btn-solid: its hover, press and focus
- *  ring), in the call's cyan, so an outsider's first look at codecast
- *  presses the way the app does. Padding is the caller's, by where it sits. */
-export const GUEST_PRIMARY =
-  "sol-btn-solid rounded-xl bg-sol-cyan text-[14px] font-semibold text-sol-base03 disabled:cursor-not-allowed disabled:opacity-45";
+ *  the app's Button in its cyan face, so an outsider's first look at
+ *  codecast presses the way the app does. Padding is the caller's, by where
+ *  it sits, so no size is applied here. */
+export const GUEST_PRIMARY = buttonVariants({ variant: "cyan", size: null, className: "rounded-xl font-semibold" });
 
 export function MeetShell({ children, bar }: { children: ReactNode; bar?: ReactNode }) {
   // `dark` here, not on <html>: the page is always the call's dark room,

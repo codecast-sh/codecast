@@ -8,7 +8,8 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { fail } from "./lib/errors";
-import { byteLength, contentTypeFor, fileSetProblems, manifestHash, needsTranspile, normalizeFilePath, type FileDraft } from "./lib/files";
+import { isModulePath, type EntryFile } from "./lib/entryPage";
+import { ENTRY_PATH, byteLength, contentTypeFor, fileSetProblems, manifestHash, needsTranspile, normalizeFilePath, type FileDraft } from "./lib/files";
 import { sha256Hex } from "./lib/identity";
 import { TIMELINE_MAX } from "./lib/limits";
 import { transpile } from "./lib/transpile";
@@ -311,6 +312,24 @@ export const served = internalQuery({
       text: blob.text ?? null,
       storage_id: blob.storage_id ?? null,
     };
+  },
+});
+
+/** A version's index.html and its modules, all as served, for the entry
+ *  page (http.ts, lib/entryPage). */
+export const entry = internalQuery({
+  args: { slug: v.string(), number: v.number() },
+  handler: async (ctx, args): Promise<{ html: string; hash: string; files: EntryFile[] } | null> => {
+    const app = await appBySlug(ctx, args.slug);
+    const row = app && (await versionByNumber(ctx, app._id, args.number));
+    if (!row) return null;
+    const rows = await fileRows(ctx, row._id);
+    const served = async (f: Doc<"version_files">) => blobByHash(ctx, f.served_hash ?? f.hash);
+    const index = rows.find((f) => f.path === ENTRY_PATH);
+    const html = index && (await served(index));
+    if (!html?.text) return null;
+    const files = await Promise.all(rows.filter((f) => isModulePath(f.path)).map(async (f) => ({ path: f.path, text: (await served(f))?.text ?? null })));
+    return { html: html.text, hash: html.hash, files };
   },
 });
 
