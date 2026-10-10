@@ -112,7 +112,7 @@ export function IssuesTab({ source }: { source: string | null }) {
               <th style={{ width: 64 }}>Seen</th>
               <th style={{ width: 140 }}>Source</th>
               <th style={{ width: 80 }}>Status</th>
-              <th style={{ width: 150 }}>Cause</th>
+              <th style={{ width: 150 }}>Problem</th>
             </tr>
           </thead>
           <tbody ref={bodyRef}>

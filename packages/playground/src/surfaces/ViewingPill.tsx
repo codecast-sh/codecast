@@ -26,12 +26,12 @@ export function viewingText(n: number, others: { name: string }[]): string {
   return `You and ${others.length} others are viewing v${n}`;
 }
 
-/** Who else is looking, said after the version on the pill's second line. */
-function alsoLooking(others: { name: string }[]): string {
-  if (others.length === 0) return "Nobody else is looking";
-  if (others.length === 1) return `${others[0].name} is looking too`;
-  if (others.length === 2) return `${others[0].name} and ${others[1].name} are looking too`;
-  return `${others.length} others are looking too`;
+/** Who else sees this version, the first half of the pill's second line. */
+function whoSees(others: { name: string }[]): string {
+  if (others.length === 0) return "Only you see this";
+  if (others.length === 1) return `${others[0].name} is here too`;
+  if (others.length === 2) return `${others[0].name} and ${others[1].name} are here too`;
+  return `${others.length} others are here too`;
 }
 
 /** You are looking at the past (DESIGN 6.7): which version and what it was,
@@ -57,7 +57,7 @@ export function ViewingPill({ number, place, compact, nudge, onBack }: { number:
           {entry && <span className={s.summary}>{versionSummary(entry, versionByNumber)}</span>}
         </span>
         <span className={`${s.look} ${nudged ? s.nudged : ""}`}>
-          Looking only. {compact ? alsoLooking(others) : `${alsoLooking(others)}. Make it live or fork it to use it.`}
+          {compact ? whoSees(others) : `${whoSees(others)}. Make it live or fork it to use it.`}
         </span>
       </span>
       {!compact && (
