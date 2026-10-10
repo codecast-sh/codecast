@@ -1,0 +1,264 @@
+/* The Graph view (line-workspace.md LW1): Studio's drawing on the workspace's
+   tokens (workspace.css). Agents warm cards, people blue pills, scripts ink on
+   paper, ends as chips in their outcome's color. Every motion here is a
+   transform or an opacity, and none of it runs under reduced motion. */
+
+/* ── the stage ─────────────────────────────────────────────────────────── */
+
+.lwg { position: absolute; inset: 0; overflow: hidden; background: var(--lw-paper); container-type: size; container-name: lwg; }
+.lwg-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; user-select: none; touch-action: none; }
+.lwg-svg[data-dragging] { cursor: grabbing; }
+.lwg-svg:focus { outline: none; }
+.lwg-dot-grid { fill: var(--lw-grid); }
+
+/* ── lanes ─────────────────────────────────────────────────────────────── */
+
+.lwg-lane { fill: var(--lw-card); fill-opacity: .55; stroke: var(--lw-rule); stroke-width: 1; }
+.lwg-lane[data-half="fix"] { fill: color-mix(in srgb, var(--lw-person) 5%, var(--lw-card)); fill-opacity: .6; }
+.lwg-lane-title { font-family: var(--lw-ui); font-weight: 800; font-size: 26px; letter-spacing: -.03em; fill: var(--lw-ink); }
+.lwg-lane-sub { font-family: var(--lw-ui); font-size: 12.5px; fill: var(--lw-ink-3); }
+.lwg-stage { font-family: var(--lw-ui); font-size: 11.5px; font-weight: 700; fill: var(--lw-ink-2); letter-spacing: .02em; }
+.lwg-terminus circle { fill: var(--lw-ink); }
+.lwg-terminus .lwg-terminus-ring { fill: none; stroke: var(--lw-ink); stroke-width: 1.4; }
+.lwg-terminus text { font-family: var(--lw-ui); font-size: 11.5px; fill: var(--lw-ink-2); font-weight: 600; }
+
+/* ── edges ─────────────────────────────────────────────────────────────── */
+
+.lwg-arrow { fill: var(--lw-edge); }
+.lwg-arrow-hot { fill: var(--lw-agent); }
+.lwg-arrow-peek { fill: var(--lw-ink); }
+.lwg-edge { fill: none; stroke: var(--lw-edge); stroke-linecap: round; stroke-linejoin: round; transition: opacity var(--lw-med) var(--lw-ease), stroke var(--lw-med); }
+.lwg-edge[data-kind="loop"] { stroke-dasharray: 4 5; stroke: var(--lw-edge-faint); }
+.lwg-edge[data-shape="skip"], .lwg-edge[data-shape="back"] { stroke-dasharray: 5 5; }
+.lwg-edge[data-shape="end"] { stroke: var(--lw-edge-faint); }
+.lwg-edge-term { stroke-width: 1.6; }
+.lwg-edge[data-quiet] { opacity: 0; }
+.lwg-edge[data-faint] { opacity: .25; }
+.lwg-edge[data-dim] { opacity: .12; }
+.lwg-edge[data-hot] { stroke: var(--lw-agent); stroke-dasharray: 7 6; opacity: 1; animation: lwg-flow 1.1s linear infinite; }
+@keyframes lwg-flow { to { stroke-dashoffset: -26; } }
+.lwg-edge[data-intro] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: lwg-draw .9s var(--lw-ease) forwards; }
+@keyframes lwg-draw { to { stroke-dashoffset: 0; } }
+
+.lwg-elabel { transition: opacity var(--lw-med) var(--lw-ease); cursor: default; }
+.lwg-elabel rect { fill: var(--lw-paper); stroke: none; }
+.lwg-elabel text { font-family: var(--lw-ui); font-size: 13px; fill: var(--lw-ink-2); font-weight: 500; }
+.lwg-elabel[data-gate] text { fill: var(--lw-person); font-weight: 700; }
+.lwg-elabel[data-shape="back"] text, .lwg-elabel[data-shape="skip"] text { font-style: italic; }
+.lwg-elabel[data-hot] text { fill: var(--lw-agent-deep); font-weight: 700; }
+.lwg-elabel[data-quiet] { opacity: 0; pointer-events: none; }
+.lwg-elabel[data-faint] { opacity: .3; }
+.lwg-elabel[data-dim] { opacity: .15; }
+
+/* A hovered step's own edges, drawn over the rest. */
+.lwg-peek { pointer-events: none; }
+.lwg-peek .lwg-edge { stroke: var(--lw-ink); opacity: .85; stroke-dasharray: none; animation: lwg-fade var(--lw-fast) var(--lw-ease) both; }
+.lwg-peek .lwg-edge[data-peek="in"] { stroke: var(--lw-ink-3); }
+.lwg-peek .lwg-elabel { animation: lwg-fade var(--lw-fast) var(--lw-ease) both; }
+.lwg-peek .lwg-elabel text { fill: var(--lw-ink); font-weight: 650; }
+.lwg-peek .lwg-elabel[data-gate] text { fill: var(--lw-person); }
+@keyframes lwg-fade { from { opacity: 0; } }
+.lwg[data-hovering] .lwg-edges .lwg-edge:not([data-hot]) { opacity: .45; }
+.lwg[data-hovering] .lwg-edges .lwg-edge[data-quiet] { opacity: 0; }
+
+/* ── nodes ─────────────────────────────────────────────────────────────── */
+
+.lwg-node { cursor: pointer; outline: none; transition: opacity var(--lw-med) var(--lw-ease); }
+.lwg-node .lwg-box { transition: transform var(--lw-fast) var(--lw-ease), filter var(--lw-fast); }
+.lwg-node:hover .lwg-box { transform: translateY(-1px); filter: brightness(1.05); }
+.lwg-node:active .lwg-box { transform: scale(.985); }
+.lwg-node[data-kind="agent"] .lwg-shape { fill: var(--lw-agent); }
+.lwg-node[data-kind="person"] .lwg-shape { fill: var(--lw-person); }
+.lwg-node[data-kind="script"] .lwg-shape { fill: var(--lw-card); stroke: var(--lw-ink); stroke-width: 1.3; }
+.lwg-node[data-dot] .lwg-shape { stroke-width: 1.5; }
+.lwg-node[data-dot]:hover .lwg-box { transform: scale(1.25); }
+.lwg-t { font-family: var(--lw-ui); font-weight: 700; font-size: 16px; fill: var(--lw-on-accent); letter-spacing: -.01em; pointer-events: none; }
+.lwg-s { font-family: var(--lw-ui); font-size: 14px; fill: var(--lw-on-accent); fill-opacity: .84; pointer-events: none; }
+.lwg-node[data-kind="script"] .lwg-t { font-family: var(--lw-mono); font-weight: 500; font-size: 14px; fill: var(--lw-ink); letter-spacing: 0; }
+.lwg-dotname { font-family: var(--lw-ui); font-size: 14px; font-weight: 550; fill: var(--lw-ink-2); pointer-events: none; }
+.lwg-glyph circle, .lwg-glyph path { fill: var(--lw-on-accent); }
+.lwg-glyph .lwg-glyph-ring { fill: none; stroke: var(--lw-on-accent); stroke-opacity: .75; stroke-width: 1.5; }
+
+/* Ends: chips in their outcome's color. */
+.lwg-node[data-kind="end"] .lwg-shape { fill: var(--lw-paper-2); }
+.lwg-node[data-kind="end"] .lwg-t { font-size: 14px; font-weight: 650; fill: var(--lw-ink-2); }
+.lwg-node[data-tone="ok"] .lwg-shape { fill: var(--lw-ok-soft); }
+.lwg-node[data-tone="ok"] .lwg-t { fill: var(--lw-ok); }
+.lwg-node[data-tone="warn"] .lwg-shape { fill: var(--lw-warn-soft); }
+.lwg-node[data-tone="warn"] .lwg-t { fill: var(--lw-warn); }
+.lwg-node[data-tone="person"] .lwg-shape { fill: var(--lw-person-soft); }
+.lwg-node[data-tone="person"] .lwg-t { fill: var(--lw-person); }
+.lwg-node[data-tone="agent"] .lwg-shape { fill: var(--lw-agent-soft); }
+.lwg-node[data-tone="agent"] .lwg-t { fill: var(--lw-agent-deep); }
+
+/* The decisions bar along an agent's foot. */
+.lwg-bar rect { shape-rendering: crispEdges; }
+.lwg-bar rect[data-tone="fwd"] { fill: var(--lw-on-accent); }
+.lwg-bar rect[data-tone="stop"] { fill: color-mix(in srgb, var(--lw-ok) 35%, var(--lw-on-accent)); }
+.lwg-bar rect[data-tone="warn"] { fill: color-mix(in srgb, var(--lw-warn) 55%, var(--lw-on-accent)); }
+.lwg-bar rect[data-tone="bad"] { fill: color-mix(in srgb, var(--lw-ink) 65%, transparent); }
+.lwg-bar rect[data-tone="live"] { fill: color-mix(in srgb, var(--lw-live) 50%, var(--lw-on-accent)); }
+
+.lwg-exits { font-family: var(--lw-ui); font-size: 14px; fill: var(--lw-ink-3); pointer-events: none; }
+.lwg-exits tspan[data-tone] { font-weight: 600; }
+.lwg-exits tspan[data-tone="ok"] { fill: var(--lw-ok); }
+.lwg-exits tspan[data-tone="warn"] { fill: var(--lw-warn); }
+.lwg-exits tspan[data-tone="bad"] { fill: var(--lw-bad); }
+.lwg-exits tspan[data-tone="person"] { fill: var(--lw-person); }
+.lwg-exits tspan[data-tone="agent"] { fill: var(--lw-agent-deep); }
+.lwg-exits tspan[data-tone="plain"] { fill: var(--lw-ink-2); }
+
+.lwg-ring { fill: none; stroke: var(--lw-ink); stroke-width: 2; opacity: 0; transition: opacity var(--lw-fast); }
+.lwg-node[data-focus] .lwg-ring { opacity: .55; stroke-dasharray: 3 3; }
+.lwg-node[data-selected] .lwg-ring { opacity: 1; stroke-width: 2.5; }
+.lwg-node[data-on-run][data-dot] .lwg-shape { fill: var(--lw-agent); stroke: var(--lw-agent); }
+/* A step whose closes did not hold (BackBadge): the Timeline's "Came back" red, so the two read as one fact. */
+.lwg-back rect { fill: color-mix(in srgb, var(--lw-bad) 22%, var(--lw-paper)); stroke: color-mix(in srgb, var(--lw-bad) 70%, transparent); stroke-width: 1; }
+.lwg-back text { fill: var(--lw-bad); font: 700 11px var(--lw-ui); }
+.lwg-order rect { fill: var(--lw-agent); }
+.lwg-order text { fill: var(--lw-on-accent); font: 700 10px var(--lw-ui); }
+.lwg-order .lwg-times { fill: var(--lw-ink); }
+.lwg-order .lwg-times-t { fill: var(--lw-paper); font: 700 9.5px var(--lw-ui); }
+.lwg-node[data-dim] { opacity: .18; }
+.lwg-node[data-soft] { opacity: .42; }
+/* A step the stage edge cuts through: faded to a trace, named on the edge arrow instead. After dim and soft, which it overrides. */
+.lwg-node[data-cut] { opacity: .1; }
+.lwg-edge[data-cut] { opacity: .08; }
+
+.lwg-in { animation: lwg-pop .5s var(--lw-ease) both; }
+@keyframes lwg-pop { from { opacity: 0; transform: translateY(6px); } }
+
+/* ── chrome over the stage ─────────────────────────────────────────────── */
+
+.lwg-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+  display: flex; align-items: center; gap: var(--lw-s4); padding: 10px var(--lw-s5) 18px;
+  background: linear-gradient(var(--lw-paper) 55%, color-mix(in srgb, var(--lw-paper) 0%, transparent));
+  pointer-events: none;
+}
+.lwg-top > * { pointer-events: auto; }
+.lwg-legend { display: flex; gap: 14px; color: var(--lw-ink-2); font-size: var(--lw-fs-sm); flex-wrap: wrap; }
+.lwg-lg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lwg-lg b { display: inline-block; flex: none; }
+.lwg-lg i { font-style: normal; color: var(--lw-ink-3); }
+.lwg-lg[data-kind="agent"] b { width: 18px; height: 11px; border-radius: 4px; background: var(--lw-agent); }
+.lwg-lg[data-kind="person"] b { width: 18px; height: 11px; border-radius: 6px; background: var(--lw-person); }
+.lwg-lg[data-kind="script"] b { width: 16px; height: 10px; border-radius: 3px; border: 1.5px solid var(--lw-ink); }
+.lwg-lg[data-kind="dot"] b { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--lw-ink); background: var(--lw-card); }
+.lwg-controls { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.lwg-controls .lw-seg button { white-space: nowrap; }
+.lwg-btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px;
+  border: 1px solid var(--lw-rule); border-radius: 8px; background: var(--lw-card); color: var(--lw-ink);
+  font: inherit; font-size: var(--lw-fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: border-color var(--lw-fast), background var(--lw-fast), transform 100ms;
+}
+.lwg-btn:hover { border-color: var(--lw-ink-3); }
+.lwg-btn:active { transform: translateY(1px); }
+.lwg-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 1px; }
+.lwg-btn[data-ghost] { background: color-mix(in srgb, var(--lw-card) 60%, transparent); }
+.lwg-btn[data-icon] { width: 30px; padding: 0; justify-content: center; }
+.lwg-btn em { font-style: normal; color: var(--lw-ink-3); font-weight: 500; font-variant-numeric: tabular-nums; }
+.lwg-btn[disabled] { opacity: .4; pointer-events: none; }
+.lwg-runs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lw-ink-3); transition: background var(--lw-fast), box-shadow var(--lw-fast); }
+.lwg-btn[aria-pressed="true"] .lwg-runs-dot { background: var(--lw-agent); box-shadow: 0 0 0 3px var(--lw-agent-soft); }
+
+.lwg-hint {
+  display: flex; gap: 6px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden;
+  color: var(--lw-ink-3); font-size: var(--lw-fs-xs); padding-left: var(--lw-s4); border-left: 1px solid var(--lw-rule-2);
+}
+.lwg-hint b { color: var(--lw-ink); font-weight: 650; }
+/* A narrow stage (the drawer open) keeps the controls on one line: the hint goes whole rather than clipped, then the legend. */
+@container lwg (max-width: 1100px) { .lwg-hint { display: none; } }
+@container lwg (max-width: 980px) { .lwg-legend { display: none; } }
+/* The graph runs past an edge: a fade there (GraphView marks the stage), and an arrow that pans to it. */
+.lwg::before, .lwg::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 112px; z-index: 1; pointer-events: none;
+  opacity: 0; transition: opacity var(--lw-fast);
+}
+.lwg::before { left: 0; background: linear-gradient(90deg, var(--lw-paper) 12%, transparent); }
+.lwg::after { right: 0; background: linear-gradient(270deg, var(--lw-paper) 12%, transparent); }
+.lwg[data-more-left]::before, .lwg[data-more-right]::after { opacity: 1; }
+/* The arrows over those edges (EdgeArrows): on the faded edge itself, halfway down the stage, so the cut step and
+   the arrow naming what lies past it read together. */
+.lwg > .line-edge-arrow { z-index: 2; top: var(--lwg-arrow-y, 50%); bottom: auto; transform: translateY(-50%); }
+.lwg > .line-edge-arrow[data-side="left"] { left: 12px; }
+.lwg > .line-edge-arrow[data-side="right"] { right: 12px; }
+.lwg-zoom {
+  position: absolute; right: var(--lw-s5); bottom: 16px; z-index: 2; display: flex; flex-direction: column;
+  border: 1px solid var(--lw-rule); border-radius: 9px; background: var(--lw-card); overflow: hidden; box-shadow: var(--lw-shadow);
+}
+.lwg-zoom button { width: 30px; height: 28px; border: 0; background: none; color: var(--lw-ink-2); cursor: pointer; font: 600 15px var(--lw-ui); display: grid; place-items: center; }
+.lwg-zoom button + button { border-top: 1px solid var(--lw-rule-2); }
+.lwg-zoom button:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
+.lwg[data-run-bar] .lwg-zoom { bottom: 92px; }
+
+/* The run bar: one run lit, the ones before and after a key away. */
+.lwg-runbar {
+  position: absolute; left: var(--lw-s5); right: var(--lw-s5); bottom: 16px; z-index: 3;
+  display: flex; gap: 14px; align-items: center; padding: 11px 12px 11px 14px;
+  background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); box-shadow: var(--lw-shadow-pop);
+  animation: lwg-rise .35s var(--lw-ease) both;
+}
+@keyframes lwg-rise { from { opacity: 0; transform: translateY(10px); } }
+.lwg-runbar-text { min-width: 0; flex: 1; }
+.lwg-runbar-text b { display: block; font-size: var(--lw-fs-base); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lwg-runbar-text span { display: block; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lwg-runbar-n { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lwg-endtag { font-size: var(--lw-fs-xs); font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; background: var(--lw-paper-2); color: var(--lw-ink-2); }
+.lwg-endtag[data-tone="ok"] { background: var(--lw-ok-soft); color: var(--lw-ok); }
+.lwg-endtag[data-tone="warn"] { background: var(--lw-warn-soft); color: var(--lw-warn); }
+.lwg-endtag[data-tone="bad"] { background: var(--lw-bad-soft); color: var(--lw-bad); }
+.lwg-endtag[data-tone="live"] { background: var(--lw-live-soft); color: var(--lw-live); }
+.lwg-endtag[data-tone="person"] { background: var(--lw-person-soft); color: var(--lw-person-deep); }
+.lwg-endtag[data-tone="agent"] { background: var(--lw-agent-soft); color: var(--lw-agent-deep); }
+
+/* The runs list. */
+.lwg-pop {
+  position: absolute; top: 50px; right: var(--lw-s5); z-index: 6; width: 440px; max-height: calc(100% - 70px); overflow: auto;
+  background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); box-shadow: var(--lw-shadow-pop);
+  padding: 8px; animation: lwg-rise .22s var(--lw-ease) both; overscroll-behavior: contain;
+}
+.lwg-pop h4 { margin: 10px 10px 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-weight: 650; display: flex; gap: 6px; }
+.lwg-pop h4 em { font-style: normal; font-weight: 500; font-variant-numeric: tabular-nums; }
+.lwg-runrow {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; width: 100%; padding: 9px 10px; border-radius: 9px; cursor: pointer;
+  border: 0; background: none; text-align: left; color: inherit; font: inherit;
+}
+.lwg-runrow:hover, .lwg-runrow[aria-current="true"] { background: var(--lw-paper); }
+.lwg-runrow:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: -2px; }
+.lwg-runrow b { font-size: var(--lw-fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lwg-runrow small { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lwg-runrow small:first-of-type { font-variant-numeric: tabular-nums; }
+.lwg-runrow .lw-trail { grid-column: 1 / -1; margin-top: 4px; }
+.lwg-more { display: block; width: calc(100% - 20px); margin: 4px 10px 8px; padding: 6px; border: 1px dashed var(--lw-rule); border-radius: 8px; background: none; color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-xs); cursor: pointer; }
+.lwg-more:hover { color: var(--lw-ink); border-color: var(--lw-ink-3); }
+
+/* The tooltip: dark, quick, out of the pointer's way. */
+.lwg-tip {
+  position: fixed; z-index: 60; max-width: 300px; padding: 8px 10px; border-radius: 8px; pointer-events: none;
+  background: var(--lw-ink); color: var(--lw-paper); font-size: var(--lw-fs-xs); line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18); animation: lwg-fade 120ms var(--lw-ease) both;
+}
+.lwg-tip b { display: block; margin-bottom: 2px; font-weight: 650; }
+
+/* The keys sheet. */
+.lwg-sheet { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; background: color-mix(in srgb, var(--lw-ink) 22%, transparent); animation: lwg-fade .2s both; }
+.lwg-sheet-box { width: min(440px, 92%); background: var(--lw-card); border-radius: var(--lw-r-xl); box-shadow: var(--lw-shadow-pop); animation: lwg-rise .3s var(--lw-ease) both; }
+.lwg-sheet-box h3 { margin: 0; padding: 18px 20px 4px; font-size: var(--lw-fs-lg); letter-spacing: -.02em; font-weight: 750; }
+.lwg-keys { display: grid; grid-template-columns: auto 1fr; gap: 9px 18px; padding: 12px 20px 20px; font-size: var(--lw-fs-base); align-items: center; color: var(--lw-ink-2); }
+.lwg-keys > span:nth-child(odd) { display: flex; gap: 3px; }
+
+/* The chat's graph: static, fitted, no lanes' big titles fighting the text. */
+.lwg-mini { display: block; width: 100%; height: auto; }
+.lwg-mini .lwg-node:hover .lwg-box { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lwg *, .lwg-mini * { animation: none !important; transition: none !important; }
+  .lwg-edge[data-intro] { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+
+/* A script: its >_ glyph, and how many times runs ran it. */
+.lwg-glyph-sh { font-family: var(--lw-mono); font-size: 14px; font-weight: 700; fill: var(--lw-ink-3); pointer-events: none; }
+.lwg-node[data-kind="script"] .lwg-ran { fill: var(--lw-ink-3); fill-opacity: 1; }
+.lwg-ran { font-family: var(--lw-ui); font-size: 14px; fill: var(--lw-ink-3); font-variant-numeric: tabular-nums; pointer-events: none; }
