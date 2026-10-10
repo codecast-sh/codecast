@@ -2,68 +2,13 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
-// Genuine `cast pr` output captured on 2026-09-17 against the public repository
-// codecast-sh/codecast. Check URLs are dropped from `show` for width; one
-// bot comment is omitted. Every omission is marked with an editorial "…".
-
-const PR_LS = `  #46  open  Artifact draft store: published pages can autosave vi-  aivery/artifact-drafts -> main        10 green 2 red  1h
-  #47  open  fix(cli): a Mac remote absorbs the pushed Claude logi-  remote-mac-credential-absorb -> main  9 green 3 red   jx7905c  1h
-…  three more rows: two webhook test PRs and a proof PR  …
-`;
-
-const PR_SHOW = `codecast-sh/codecast#47 fix(cli): a Mac remote absorbs the pushed Claude login into its keychain and never rotates it open
-
-  url        https://github.com/codecast-sh/codecast/pull/47
-  page       https://codecast.sh/pr/codecast-sh/codecast/47
-  branch     remote-mac-credential-absorb -> main
-  sha        e7a03055c5cc
-  author     samvit
-  merge      unstable, 33 behind
-  updated    1h ago
-
-shepherd
-  session    jx7905c StagePane label crash fix
-  enabled    no
-
-checks (failure)
-  x GitGuardian Security Checks failure
-  * classify changed paths (pull_request) success
-  - lint (pull_request) skipped
-  …  seven more checks: build, the contract check and an advisory macOS check pass; four jobs skipped  …
-  x test-cli (pull_request) failure
-  x verify (pull_request) failure
-
-unresolved comments (3)
-  samvit  ## 🎙️ Codecast Conversation
-  …  one bot comment  …
-  samvit  Rebased onto origin/main (e7a03055c). Note for reviewers: \`daemon.machine-prompt
-
-linked
-  jx7905c StagePane label crash fix
-  jx7cep7 Verify Codecast E2E
-  jx71rq4 Keyboard shortcuts help coverage
-  jx7fmc6 Verify codecast cross-machine
-  jx724wf Mobile viewport scaling fix
-  jx71196 React error #520 debug
-  jx73db1 Task status picker
-`;
-
-const PR_EVENTS = `    8h pr_behind PR #47 is behind main
-    1d pr_check samvit CI failed: verify (pull_request)
-    1d pr_check samvit CI failed: verify (pull_request)
-    1d pr_check samvit CI failed: test-cli (pull_request)
-    1d pr_ready PR #47 merges cleanly again
-    1d pr_check samvit CI failed: GitGuardian Security Checks
-    1d pr_synchronize samvit PR #47 updated to e7a0305
-    1d pr_check samvit CI failed: test-cli (pull_request)
-    1d pr_behind PR #47 is behind main
-    1d pr_check samvit CI failed: GitGuardian Security Checks
-    1d pr_opened samvit Opened PR #47: fix(cli): a Mac remote absorbs the pushed Claude login into its keychain and never rotates it
-`;
+// Screenshots are the codecast web app against the public repository
+// codecast-sh/codecast: #47 on 2026-09-17, the Pull requests tab and #52 on
+// 2026-10-09. The #47 event history is from `cast pr events` the same day.
 
 export default function PullRequestKnowsItsSessionsPost() {
   const post = getPost("the-pull-request-that-knows-its-sessions");
@@ -112,44 +57,32 @@ export default function PullRequestKnowsItsSessionsPost() {
         </P>
         <P>
           So codecast treats a pull request the way it treats a session or a task: as an
-          object with an address, a state, and links to the conversations around it. Here is
-          the team&apos;s open list on our own repository this morning:
+          object with an address, a state, and links to the conversations around it. Every
+          repository in codecast has a <em>Pull requests</em> tab, filtered by{" "}
+          <em>Open</em>, <em>Merged</em>, <em>Closed</em>, <em>Mine</em> and{" "}
+          <em>Shepherded</em>. Here it is on our own repository today:
         </P>
 
-        <Terminal label="cast pr ls">
-          <Cmd>cast pr ls --repo codecast-sh/codecast</Cmd>
-          {PR_LS}
-        </Terminal>
+        <Screenshot
+          wide
+          src="/blog/the-pull-request-that-knows-its-sessions/pr-list.png"
+          alt="The Pull requests tab of codecast-sh/codecast in the codecast web app, with filters Open, Merged, Closed, Mine and Shepherded, listing one open pull request, #52 Fix stash, kill and restore failing on large session groups, with checks failing and a shepherded tag"
+          caption="The repository's Pull requests tab. The shepherded tag means a session owns this one."
+        />
 
         <P>
-          Two teammates, two branches, check counts, and on the second row a session id: the
-          conversation that pull request belongs to. That column is the whole idea.
+          One open pull request, its checks failing, and a tag that says{" "}
+          <em>shepherded</em>: a session owns it. That tag is the whole idea.
         </P>
 
         <H2>Everything known about one</H2>
         <P>
-          <Code>cast pr show</Code> is the page a reviewer wants before opening the diff. State
-          and merge status, the author, which session shepherds it, every check with its
-          verdict, the open comments, and the sessions linked to the change. This one, from a
-          teammate, is shepherded by a session about a crash and linked to six more:
-        </P>
-
-        <Terminal label="cast pr show" wrap>
-          <Cmd>cast pr show codecast-sh/codecast#47</Cmd>
-          {PR_SHOW}
-        </Terminal>
-
-        <P>
-          Seven linked sessions, judging by their titles: a crash fix, two verification passes
-          across machines, a React error debug, and three unrelated to the change that read or
-          touched it. Each is one <Code>cast read</Code> away, and in the web app they sit beside
-          the PR as cards. The first unresolved comment is titled <em>Codecast Conversation</em>:
-          a link from the pull request back to the session that made it. The paper trail runs
-          both ways.
-        </P>
-        <P>
-          The same object in the web app, on the Checks tab, with the shepherd session in its
-          own panel to the right:
+          Open one and you get the page a reviewer wants before opening the diff. Across the
+          top: <em>Checks</em>, <em>Review</em>, <em>Merge</em>, <em>Open comments</em> and{" "}
+          <em>Diff</em>, each with its verdict. Below that, tabs for <em>Conversation</em>,{" "}
+          <em>Files</em>, <em>Commits</em> and <em>Checks</em>, and beside them the sessions
+          that made the change. Here is a teammate&apos;s pull request from September, #47, on
+          the Checks tab, with its shepherd session on the right:
         </P>
 
         <Screenshot
@@ -158,52 +91,75 @@ export default function PullRequestKnowsItsSessionsPost() {
           caption="codecast.sh/pr/codecast-sh/codecast/47, Checks tab. Three failed, four passed, five skipped, and the session that owns it on the right."
         />
 
+        <P>
+          That pull request was linked to seven sessions. Judging by their titles: a crash
+          fix, two verification passes across machines, a React error debug, and three that
+          read or touched the change without being about it. Each opens with a click. The
+          first comment on the GitHub side is titled <em>Codecast Conversation</em>: a link
+          from the pull request back to the session that made it. The paper trail runs both
+          ways. (A terminal gets the same summary from <Code>cast pr show</Code>.)
+        </P>
+
         <H2>A timeline, not a notification pile</H2>
         <P>
           GitHub tells you a check failed by email, one at a time, out of order. Codecast keeps
-          the pull request&apos;s history as a timeline you can read top down, and{" "}
-          <Code>cast pr watch</Code> streams the same events live, one line per change, silent
-          until something moves:
+          the pull request&apos;s history as a timeline on its <em>Conversation</em> tab, with
+          a marker for what changed since you last looked, and a comment box whose comments
+          are mirrored to GitHub. The shepherd session sees the same events as rows in its own
+          transcript. The day #47 had looked like this, read top down:
         </P>
 
-        <Terminal label="cast pr events" wrap>
-          <Cmd>cast pr events codecast-sh/codecast#47</Cmd>
-          {PR_EVENTS}
-        </Terminal>
+        <ol className="mb-6 ml-6 list-decimal space-y-1 text-[17px] leading-8" style={{ color: SOL.base01 }}>
+          <li>Opened.</li>
+          <li>A security check and a test job fail; the branch falls behind main.</li>
+          <li>The author pushes a fix, and the pull request merges cleanly again.</li>
+          <li>The same two checks fail again, and a third joins them.</li>
+          <li>By morning it is behind main once more.</li>
+        </ol>
 
         <P>
-          Read it bottom up and you can see the day: opened, a security check and a test job
-          fail, the branch falls behind main, the author pushes a fix, the PR merges cleanly
-          again, the same two checks fail again, a third joins them, and by morning it is behind
-          main once more. That is a pull request waiting for its owner. Which brings us to the
-          part that is new.
+          That is a pull request waiting for its owner. Which brings us to the part that is
+          new.
         </P>
 
         <H2>A review that wakes the author</H2>
         <P>
-          When a session owns a pull request, codecast calls it the shepherd. Turn it on with{" "}
-          <Code>cast pr shepherd on</Code>, or let the shipping flow do it when it opens the
-          PR. From then on the session is woken when the pull request moves: a check goes red,
-          the branch falls behind, and above all, someone reviews it.
+          When a session owns a pull request, codecast calls it the shepherd. On a pull
+          request with none, the header offers <em>Assign a shepherd session</em> and lists the
+          sessions that worked on it; the shipping flow assigns one itself when it opens the
+          pull request. Once set, the header names the shepherd and carries a switch,{" "}
+          <em>Wakes on changes</em> or <em>Paused</em>:
         </P>
 
-        <Terminal label="review from the shell">
-          <Cmd>cast pr comment 47 --hold --file src/x.ts --line 42 &quot;what should change here&quot;</Cmd>
-          <Cmd>cast pr review 47 --request-changes -b &quot;one fix, then good to go&quot;</Cmd>
-        </Terminal>
+        <Screenshot
+          wide
+          src="/blog/the-pull-request-that-knows-its-sessions/pr-shepherd.png"
+          alt="The header of pull request #52 in the codecast web app: the title, Open, the author, a Shepherd control naming the session that shipped it with the note branch is behind its base and the switch Wakes on changes, the Review and Merge buttons, and the summary row of checks, review, merge, open comments and diff"
+          caption="#52's header: the shepherd session, what it is waiting on, and Wakes on changes switched on."
+        />
 
         <P>
-          A review from the shell is a batch: hold notes on lines, then send them as one
-          verdict. It lands on GitHub under the reviewer&apos;s own account, so the verdict is
-          theirs. And if the pull request has a shepherd, the whole review, verdict and every
-          note, arrives in that session as a message the moment GitHub accepts it. The agent
-          that wrote the change reads the review, makes each fix, pushes to the same branch,
-          replies on the threads it addressed, and resolves them. The reviewer sees resolutions,
-          not silence.
+          From then on the session is woken when the pull request moves: a check goes red, the
+          branch falls behind, and above all, someone reviews it. Reviewing happens on the same
+          page. On the <em>Files</em> tab, click a line and choose <em>Start a review</em>;
+          later notes go in with <em>Add to review</em>. The <em>Review</em> button opens{" "}
+          <em>Finish your review</em>, where the notes go out as one verdict:{" "}
+          <em>Comment</em>, <em>Approve</em> or <em>Request changes</em>. It lands on GitHub
+          under the reviewer&apos;s own account, so the verdict is theirs. Or choose{" "}
+          <em>Send to session</em>, and the notes go only to the shepherd, as one message,
+          with nothing posted to GitHub.
         </P>
         <P>
-          The shepherd on our example is off, which is why it sat behind main all night with
-          three red checks and nobody woke up. Toggle it on, and the next failed check becomes
+          Either way, if the pull request has a shepherd, the whole review, verdict and every
+          note, arrives in that session the moment it is sent. The agent that wrote the change
+          reads the review, makes each fix, pushes to the same branch, replies on the threads
+          it addressed, and resolves them. The reviewer sees resolutions, not silence. Agents
+          that review each other use the same batch from a terminal, with{" "}
+          <Code>cast pr comment --hold</Code> and <Code>cast pr review</Code>.
+        </P>
+        <P>
+          The shepherd on #47 was off, which is why it sat behind main all night with three
+          red checks and nobody woke up. Toggle it on, and the next failed check becomes
           a turn in the session that knows the code.
         </P>
 
@@ -240,14 +196,13 @@ export default function PullRequestKnowsItsSessionsPost() {
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          The three terminal captures are genuine <Code>cast pr</Code> output from 2026-09-17
-          against the public repository codecast-sh/codecast, whose pull requests and author
-          handles are public on GitHub. The <Code>ls</Code> excerpt keeps two of five rows; the{" "}
-          <Code>show</Code> excerpt drops the per-check URLs, collapses seven checks to one line,
-          and omits one automated bot comment. Each omission is marked <Code>…</Code>. The
-          review commands are illustrative, with placeholder file and text, and were not run
-          against this pull request. The screenshot is the pull request page in the codecast web app, cropped to
-          the content column from the author row down; the author&apos;s avatar is blurred.
+          All three screenshots are the pull request pages in the codecast web app for the
+          public repository codecast-sh/codecast, whose pull requests and author handles are
+          public on GitHub: #47&apos;s Checks tab on 2026-09-17, cropped to the content column
+          with the author&apos;s avatar blurred, and the Pull requests tab and #52&apos;s header
+          on 2026-10-09. The linked sessions and the event history of #47 were read with{" "}
+          <Code>cast pr show</Code> and <Code>cast pr events</Code> on 2026-09-17; the timeline
+          above summarizes those events in order.
         </p>
       </article>
     </main>
