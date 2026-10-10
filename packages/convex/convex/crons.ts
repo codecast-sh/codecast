@@ -1,10 +1,12 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
-import { LINE_SWEEP_ON } from "./lib/lineSweep";
 
 const crons = cronJobs();
 
 crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
+
+// The session lifecycle trail keeps 60 days (conversationEvents.ts).
+crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});
 
 // Summarize hosted conversations' history past the replayed window
 // (assistant/longHistory.ts): bounded by its own deadline and spend caps.
@@ -137,9 +139,9 @@ crons.interval(
 );
 
 crons.interval(
-  "backfill docs and tasks from sessions",
+  "refresh plan timestamps from session insights",
   { hours: 6 },
-  internal.taskMining.backfillAllTeams
+  internal.taskMining.refreshPlanTimestamps
 );
 
 crons.interval(
@@ -200,6 +202,17 @@ crons.interval(
   "close quiet watches",
   { hours: 1 },
   internal.signals.sweepWatches,
+  {}
+);
+
+crons.interval(
+  // A judge's finding marked wrong waits for its project's line to diagnose
+  // it (learning-loop.md LL11): the sweep starts waiting diagnoses while the
+  // line is on and retries one whose run ended without an answer. Two empty
+  // index reads while nothing waits.
+  "diagnose wrong findings",
+  { minutes: 5 },
+  (internal as any).judgeReview.sweep,
   {}
 );
 
@@ -377,10 +390,10 @@ crons.interval(
   {}
 );
 
-// The line sweep (the-line.md L9): starts the top causes of every line whose
-// role's switch is on, within caps. Registered only while orgLine.LINE_SWEEP_ON
-// is true, the one switch the line map reads too.
-if (LINE_SWEEP_ON) crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as any).orgLine.sweep, {});
+// The line sweep (the-line.md L9): starts the top problems of every line whose
+// start switch is on (learning-loop.md LL5, caps.line_on on the role that leads
+// it), within its slots. Always registered; a line that is off starts nothing.
+crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as any).orgLine.sweep, {});
 
 crons.interval(
   // A new cause names its goal, category, risk and readiness before the line
@@ -409,6 +422,15 @@ crons.cron(
   "reset ingest counters and buckets",
   "15 2 * * *",
   internal.ingest.dailyUpkeep,
+  {}
+);
+
+crons.cron(
+  // Moments (learning-loop.md LL7): a kept body past 30 days is gone from R2,
+  // and a moment no extractor took, or one that failed, goes after 30 days.
+  "prune moments",
+  "35 2 * * *",
+  internal.moments.prune,
   {}
 );
 

@@ -49,3 +49,18 @@ test("move clones: an unused clean one goes; in use, dirty, stashed or host-comm
   });
   expect([fs.existsSync(clean), fs.existsSync(used), fs.existsSync(repo)]).toEqual([false, true, true]);
 });
+
+test("worktrees are swept in checkouts kept outside ~/work too", async () => {
+  const { work } = world();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "host-sweep-home-"));
+  const checkout = path.join(home, "src", "repo");
+  fs.mkdirSync(checkout, { recursive: true });
+  git(checkout, "init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(checkout, "a.txt"), "a\n");
+  git(checkout, "add", "-A");
+  git(checkout, "commit", "-qm", "base");
+  const wt = path.join(checkout, ".codecast", "worktrees", "done");
+  git(checkout, "worktree", "add", "-q", "-b", "done", wt);
+  const r = await sweepHostDisk({ workDir: work, checkouts: [checkout], inUsePaths: [], log: () => {} });
+  expect(r.released.concat(r.kept.map((k) => k.path))).toContain(wt);
+});
