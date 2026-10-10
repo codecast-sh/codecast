@@ -20,13 +20,16 @@
 // (LP3, published onto the project row) join Sense, so a silent one shows.
 import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
-import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
+import { LINE_GOAL, NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
-import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
+import { runEnd, shippedUnanswered } from "@codecast/shared/contracts/causeHistory";
+import { isLiveRun, runLiveNode, type LineRun, type LiveNode, type RunNodeStatus } from "./taskLine";
 import { isConvexId } from "./entityLinks";
 import { runHref } from "./decisionLinks";
 import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
+import { projectGraphs, type ProjectGraph } from "./line/lineGraphs";
+import { judgeReviewLine, type JudgeReviewView } from "@codecast/shared/contracts/judgeReview";
 
 export const HOUR = 60 * 60 * 1000;
 export const DAY = 24 * HOUR;
@@ -51,7 +54,28 @@ export type LineSignal = {
   project_id?: string | null;
   attach?: string;
   reopened?: boolean;
+  /** A product's judge that made the finding, its version, and the severity it rated (learning-loop.md LL3). */
+  judge?: string;
+  judge_version?: string;
+  severity?: number;
+  /** The moment a codecast judge read (learning-loop.md LL8). */
+  moment?: string;
+  /**
+   * A judge's finding found wrong, and what diagnosing it found (LL11): the
+   * answer, the fact and the case it became. judgeReviewLine says it in words.
+   */
+  judge_review?: JudgeReviewView;
+  /** On a case against a judge (LL11): the finding it was made from. */
+  case_of?: string;
 };
+
+
+/** Where a finding marked wrong stands (learning-loop.md LL11), as a sentence ("Marked wrong; the judge misread what it saw ..."), or null. */
+export function findingReviewWords(s: Pick<LineSignal, "judge_review">): string | null {
+  if (!s.judge_review) return null;
+  const line = judgeReviewLine(s.judge_review);
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
 
 export type LineCauseTask = {
   _id: string;
@@ -78,6 +102,9 @@ export type LineCauseTask = {
 
 export type LineFlowRun = LineRun & {
   workflow_slug?: string;
+  /** The graph the run ran: its workflows row and the stations it recorded (lineGraphs). */
+  workflow_id?: string;
+  graph_nodes?: Array<{ id: string; h: string }>;
   task_short_id?: string;
   task_title?: string;
   fail_reason?: string;
@@ -119,7 +146,7 @@ export type StageKind = "running" | "ask" | "paused" | "starved" | "failing" | "
 /** `run`: the run the state speaks about (the failed one), so its words can open its report. */
 export type StageState = { kind: StageKind; since?: number | null; why: string; run?: string };
 
-export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "unknown" | "parked" | "ungrounded" };
+export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "line" | "unknown" | "parked" | "ungrounded" };
 
 export type SenseSource = {
   source: string;
@@ -146,10 +173,12 @@ export type LineAdmission = {
   role: { id: string; handle: string; paused: boolean } | null;
   /** Work filed under no project: no role admits it, so no line ever starts it. */
   noProject?: boolean;
+  /** The line's start switch (learning-loop.md LL5; roleAutonomy.lineStartsOn):
+   *  on, the line starts problems on its own up to `slots` at a time. */
   on: boolean;
-  /** Codecast's line sweep is off (convex lib/lineSweep.ts LINE_SWEEP_ON): no
-   *  line starts a cause on its own, whatever the role's switch says. */
-  sweepOff?: boolean;
+  /** What the line would start in order, the sweep's own queue (orgLine.queue);
+   *  null or absent until the server has said. */
+  queued?: number | null;
   /** Open cards the answering person may hold across their lines (caps.cards). */
   slots: number;
   /** Cards they hold open now; null until the server has said. */
@@ -162,27 +191,73 @@ export type LineAdmission = {
 /** Why the line starts nothing while causes wait, in one sentence, and the
  *  two words a node mark has room for; null when it may start the next one.
  *  The order is the sweep's: the switch, the day's hands, then the slots. */
-export type AdmissionHold = { why: string; short: string; long?: string };
+export type AdmissionHold = {
+  why: string;
+  short: string;
+  long?: string;
+  /** Set when nothing starts until a person acts (no project, no one in
+   *  charge, paused, line off), as against a queue that moves on its own
+   *  (today's limit, places taken): the reason as a clause, for "Not started: <stopped>". */
+  stopped?: string;
+};
 export function admissionHold(a: LineAdmission): AdmissionHold | null {
   // `long` is the node's own sentence (its mark and Health), with the way out.
-  if (a.noProject) return { why: "they have no project, so nothing starts them", short: "No project", long: "Nothing starts here on its own: these causes have no project. Move one into a project to run it" };
-  if (!a.role) return { why: "no role looks after this project, so nothing starts on its own", short: "No role starts it" };
+  if (a.noProject) return { why: "they belong to no project, so nothing works on them", short: "No project", stopped: "it belongs to no project", long: "Nothing starts here on its own: these problems belong to no project. Move one into a project to have its line work on it" };
+  if (!a.role) return { why: "no one is in charge of this project's line, so nothing starts on its own", short: "No one in charge", stopped: "no one is in charge of this project's line" };
   const who = `@${a.role.handle}`;
-  if (a.sweepOff) return {
-    why: "codecast's line sweep is off, so no line starts a cause on its own",
-    short: "Sweep off",
-    long: `Nothing starts here on its own: codecast's line sweep is off for every line (LINE_SWEEP_ON in packages/convex/convex/lib/lineSweep.ts), whatever ${who}'s switch says. Start a cause by hand`,
-  };
-  if (a.role.paused) return { why: `${who} is paused, so admission is held`, short: "Admission held" };
-  if (!a.on) return { why: `admission is off for ${who}, so nothing starts on its own`, short: "Admission off" };
-  if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} started its ${a.handsCap} sessions for today`, short: "Day's cap reached" };
-  if (a.busy != null && a.busy >= a.slots) return { why: a.slots === 1 ? "its one slot is busy until its card is answered" : `all ${a.slots} slots are busy until a card is answered`, short: `${a.slots} of ${a.slots} slots busy` };
+  if (a.role.paused) return { why: `${who}, who runs this line, is paused, so nothing new starts`, short: "Paused", stopped: `${who}, who runs this line, is paused` };
+  if (!a.on) return { why: `${who}'s line is off, so nothing starts on its own`, short: "Line off", stopped: `${who}'s line is off` };
+  if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} used all ${a.handsCap} of today's sessions`, short: "Today's limit reached" };
+  if (a.busy != null && a.busy >= a.slots) return { why: a.slots === 1 ? "the line works on one fix at a time, and one waits for your decision" : `the line works on ${a.slots} fixes at a time, and ${a.slots === 2 ? "both" : `all ${a.slots}`} wait for your decision`, short: `${a.slots} of ${a.slots} places taken` };
   return null;
 }
 
 /** LE5, LE6: a cause the sweep may admit, the test orgLine isReadyCause
  *  makes: ground marked it ready and named its goal, and nobody else holds it. */
 export const readyForLine = (t: LineCauseTask) => t.readiness === "ready" && !!t.goal_ref?.trim() && !t.assignee;
+
+/** A cause the sweep would start now: open, held by no run, and readyForLine. */
+export const startableCause = (t: LineCauseTask) => t.status === "open" && !t.workflow_run_id && readyForLine(t);
+
+/** Why causes are not ready to start, as counted phrases ("4 need context
+ *  from a person"), the first reason each one meets, in the order the sweep
+ *  tests them (orgLine rankedCandidates): only an open cause no run holds,
+ *  then readyForLine. Ready ones are skipped, so the counts add up to the
+ *  waiting causes the sweep will not start. */
+export type NotReadyKey = "review" | "not_open" | "earlier_run" | "context" | "ungrounded" | "nothing" | "assigned" | "goal" | "other";
+
+/** The reasons that wait on a person: a review to read, a question to answer. The overview counts these as waiting on you. */
+export const PERSON_REASONS: ReadonlySet<NotReadyKey> = new Set(["review", "context"]);
+
+export function notReadyReasons(tasks: ReadonlyArray<LineCauseTask>): Array<{ key: NotReadyKey; count: number; words: string }> {
+  const reasons: Array<[NotReadyKey, (t: LineCauseTask) => boolean, string, string]> = [
+    ["review", (t) => t.status === "in_review", "is in review", "are in review"],
+    ["not_open", (t) => t.status !== "open", "is not open", "are not open"],
+    ["earlier_run", (t) => !!t.workflow_run_id, "still belongs to an earlier run", "still belong to an earlier run"],
+    ["context", (t) => t.readiness === "needs_context", "needs context from a person", "need context from a person"],
+    ["ungrounded", (t) => !t.readiness, "is not grounded yet", "are not grounded yet"],
+    ["nothing", (t) => t.readiness === "not_actionable", "has nothing to change", "have nothing to change"],
+    ["assigned", (t) => !!t.assignee, "is assigned to someone", "are assigned to someone"],
+    ["goal", (t) => t.readiness === "ready" && !t.goal_ref?.trim(), "needs a goal", "need a goal"],
+    // A readiness the sweep does not know still counts, so the reasons add up to every cause not started.
+    ["other", () => true, "is held for another reason", "are held for other reasons"],
+  ];
+  const counts = reasons.map(() => 0);
+  for (const t of tasks) {
+    if (startableCause(t)) continue;
+    const i = reasons.findIndex(([, test]) => test(t));
+    if (i >= 0) counts[i]++;
+  }
+  return reasons.map(([key, , one, many], i) => ({ key, count: counts[i], words: `${counts[i]} ${counts[i] === 1 ? one : many}` })).filter((r) => r.count > 0);
+}
+
+/** The waiting causes split once into the ones the sweep would start and the
+ *  ones it would not, with the reasons: every surface that counts them reads
+ *  this, so ready plus not ready is always the waiting count. */
+export function waitingReadiness(tasks: ReadonlyArray<LineCauseTask>): { ready: number; notReadyIds: string[]; notReady: Array<{ key: NotReadyKey; count: number; words: string }> } {
+  const notReadyIds = tasks.filter((t) => !startableCause(t)).map((t) => t._id);
+  return { ready: tasks.length - notReadyIds.length, notReadyIds, notReady: notReadyReasons(tasks) };
+}
 
 /** The sweep looks every two minutes (orgLine.sweep): a ready cause still
  *  waiting this long with a slot free was not passed over by chance. */
@@ -198,16 +273,10 @@ export function admissionStall(a: LineAdmission, ranked: CauseRow[], lastStart: 
   const ready = ranked.filter((r) => readyForLine(r.task));
   if (!ready.length) {
     if (!ranked.some((r) => waited(r.task) > ADMISSION_STALL_MS)) return null;
-    const count = (pred: (t: LineCauseTask) => boolean) => ranked.filter((r) => pred(r.task)).length;
-    const parts = [
-      [count((t) => t.readiness === "needs_context"), "needs context from a person", "need context from a person"],
-      [count((t) => !t.readiness), "is not grounded yet", "are not grounded yet"],
-      [count((t) => t.readiness === "not_actionable"), "has nothing to change", "have nothing to change"],
-      [count((t) => !!t.assignee), "is assigned to someone", "are assigned to someone"],
-    ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+    const parts = notReadyReasons(ranked.map((r) => r.task)).map((r) => r.words);
     const n = ranked.length;
-    const why = `none is ready for the line${parts.length ? `: ${parts.join(", ")}` : ""}`;
-    return { why, short: "None ready", long: `${n === 1 ? "The cause here is" : `None of the ${n} causes here is`} ready for the line${parts.length ? `: ${parts.join(", ")}` : ""}. Admission takes only causes ground marked ready`, top: null };
+    const why = `none is ready to start${parts.length ? `: ${parts.join(", ")}` : ""}`;
+    return { why, short: "None ready", long: `${n === 1 ? "The problem here is" : `None of the ${n} problems here is`} ready to start${parts.length ? `: ${parts.join(", ")}` : ""}. The line starts only problems its first step marked ready`, top: null };
   }
   // Ready since ground last touched it: a cause first seen days ago and
   // grounded a minute ago has not waited on the sweep yet.
@@ -216,12 +285,12 @@ export function admissionStall(a: LineAdmission, ranked: CauseRow[], lastStart: 
   if (now - since <= ADMISSION_STALL_MS) return null;
   const age = ageShort(now - since);
   const free = a.busy != null ? a.slots - a.busy : null;
-  const slots = free == null ? "a free slot" : `${free} free slot${free === 1 ? "" : "s"}`;
-  const readyWords = `${ready.length} ${ready.length === 1 ? "cause" : "causes"} ready`;
+  const room = free == null ? "room for more" : `room for ${free} more`;
+  const readyWords = `${ready.length} ${ready.length === 1 ? "problem" : "problems"} ready`;
   return {
-    why: `nothing has started in ${age}, though ${free == null ? "a slot is" : `${free} ${free === 1 ? "slot is" : "slots are"}`} free`,
+    why: `nothing has started in ${age}, though there is ${room}`,
     short: `No start in ${age}`,
-    long: `Admission is on with ${slots} and ${readyWords}, but nothing has started in ${age}. The sweep that starts the top one every two minutes is not running; start it by hand`,
+    long: `Starting is on, with ${room} and ${readyWords}, but nothing has started in ${age}. The check that starts the top one every two minutes is not running; start it by hand`,
     top: ready[0],
   };
 }
@@ -356,11 +425,13 @@ export function quietWatchEnd(t: LineCauseTask, now: number): number | null {
 }
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
- *  "in-3:metric"), a project ref, "none" (parked), or nothing yet. */
+ *  "in-3:metric"), a project ref, "line" (a change to the line itself, which
+ *  serves the line's own health), "none" (parked), or nothing yet. */
 export function goalChip(ref: string | null | undefined, initiatives: GoalRow[], projects: GoalRow[]): GoalChip & { priority: "p0" | "p1" | "p2" | "p3" | "unranked" | null } {
   const raw = ref?.trim();
   if (!raw) return { ref: "", label: "not grounded", kind: "ungrounded", priority: null };
   if (raw === NO_GOAL) return { ref: raw, label: "no goal", kind: "parked", priority: null };
+  if (raw === LINE_GOAL) return { ref: raw, label: "the line itself", kind: "line", priority: "unranked" };
   const [head, metric] = raw.split(":");
   const initiative = initiatives.find((i) => i.short_id === head);
   if (initiative) return { ref: raw, label: metric ? `${initiative.title} · ${metric}` : initiative.title, kind: "initiative", priority: initiative.priority ?? "unranked" };
@@ -383,7 +454,7 @@ function median(values: number[]): number | null {
 }
 
 /** Counts per day over the seven days ending now, oldest first. */
-function perDay(times: Array<number | null | undefined>, now: number): number[] {
+export function perDay(times: Array<number | null | undefined>, now: number): number[] {
   const days = new Array(7).fill(0);
   for (const t of times) {
     if (typeof t !== "number" || t > now || t < now - WEEK) continue;
@@ -471,10 +542,10 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const started = input.signals.length > 0 || causes.length > 0;
   const silent = sources.filter((s) => s.silent).length;
   const senseState: StageState = daySignals.length > 0
-    ? { kind: "running", since: lastSignal, why: silent ? `signals arriving, ${silent} of ${finders.length} finders silent` : "signals arriving" }
+    ? { kind: "running", since: lastSignal, why: silent ? `reports arriving, ${silent} of ${finders.length} finders silent` : "reports arriving" }
     : started
-      ? { kind: "starved", since: lastSignal, why: "no signal in 24h" }
-      : { kind: "idle", why: "waiting for the first signal" };
+      ? { kind: "starved", since: lastSignal, why: "no report in 24h" }
+      : { kind: "idle", why: "waiting for the first report" };
 
   // ── awaiting you: the viewer's line cards ──
   const awaitingItems = input.decisions
@@ -556,9 +627,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const capped = gateCards.length >= cardsCap;
   const lastStart = lineRuns.reduce<number | null>((m, r) => (m === null || r.created_at > m ? r.created_at : m), null);
   const held = input.admission && ranked.length > 0 ? admissionHold(input.admission) : null;
-  // With the sweep off, starting by hand is the only way in: the top ready cause is offered.
+  // With the line's start switch off, starting by hand is the other way in: the top ready cause is offered.
   const hold = input.admission && ranked.length > 0
-    ? (held && input.admission.sweepOff ? { ...held, top: ranked.find((r) => readyForLine(r.task)) ?? null } : held) ?? admissionStall(input.admission, ranked, lastStart, now)
+    ? (held && !input.admission.on ? { ...held, top: ranked.find((r) => readyForLine(r.task)) ?? null } : held) ?? admissionStall(input.admission, ranked, lastStart, now)
     : null;
   const causesState: StageState = hold
     ? { kind: "paused", since: null, why: hold.why }
@@ -566,7 +637,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
       ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
       : openRows.length > 0
         ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
-        : { kind: "idle", why: started ? "no open cause" : "opens on the first signal" };
+        : { kind: "idle", why: started ? "no open problem" : "opens on the first report" };
 
   const buildState: StageState = lastEnded?.status === "failed"
     ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed", run: lastEnded._id }
@@ -575,13 +646,13 @@ export function buildLineFlow<D extends LineDecision>(input: {
       : fresh.length > 0
         ? { kind: "running", why: `${fresh.length} building${stalledNote}` }
         : ranked.length
-          ? { kind: "starved", since: lastEnded?.updated_at ?? null, why: `causes wait, nothing building${stalledNote}` }
+          ? { kind: "starved", since: lastEnded?.updated_at ?? null, why: `problems wait, nothing building${stalledNote}` }
           : { kind: "idle", since: lastEnded?.updated_at ?? null, why: `nothing to build${stalledNote}` };
 
   const awaitingState: StageState = awaitingItems.length > 0
     ? { kind: "ask", since: awaitingItems[0].created_at ?? null, why: "waiting on you" }
     : { kind: "clear", why: "nothing to answer" };
-  const watchState: StageState = watchItems.length > 0 ? { kind: "running", why: "counting signals" } : { kind: "clear", why: "nothing in watch" };
+  const watchState: StageState = watchItems.length > 0 ? { kind: "running", why: "counting reports" } : { kind: "clear", why: "nothing in watch" };
   const closedState: StageState = closedItems.length > 0 ? { kind: "running", why: "this week" } : { kind: "clear", why: "nothing closed this week" };
 
   // ── throughput, this week ──
@@ -651,7 +722,8 @@ export function ageShort(ms: number): string {
 
 /** station names the column a part points at, so the page can link it. */
 /** href: a page the part opens instead (a failed run's report). */
-export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" | "clear"; station?: "causes" | "build" | "awaiting" | "watching"; href?: string };
+/** `why`: the reason behind a part, said after it as its own quieter sentence ("149 causes wait to start." then why). */
+export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" | "clear"; station?: "causes" | "build" | "awaiting" | "watching"; href?: string; why?: string };
 
 /** One sentence from the flow's state, what needs the founder first: cards
  *  waiting on them, then what is building and what stalled or failed, then
@@ -664,23 +736,24 @@ export function lineHeadline(flow: LineFlow, now: number, scope?: string | null)
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const { awaiting, build, causes, watching } = flow;
   if (awaiting.count > 0) {
-    parts.push({ text: `${plural(awaiting.count, "card waits", "cards wait")} on you${awaiting.oldestAt ? `, oldest ${ageShort(now - awaiting.oldestAt)}` : ""}`, tone: "ask", station: "awaiting" });
+    parts.push({ text: `${plural(awaiting.count, "finished fix waits", "finished fixes wait")} for your decision${awaiting.oldestAt ? `, oldest ${ageShort(now - awaiting.oldestAt)}` : ""}`, tone: "ask", station: "awaiting" });
   }
   const fresh = build.items.filter((b) => !b.stalled).length;
-  if (fresh > 0) parts.push({ text: `${fresh} building`, tone: "live", station: "build" });
+  if (fresh > 0) parts.push({ text: `${plural(fresh, "problem", "problems")} being worked on`, tone: "live", station: "build" });
   const stalled = build.items.filter((b) => b.stalled);
   if (stalled.length > 0) {
     const silent = Math.max(...stalled.map((b) => now - (b.run.updated_at ?? b.run.created_at)));
-    parts.push({ text: `${stalled.length} stalled ${ageShort(silent)}`, tone: "warn" });
+    parts.push({ text: `${plural(stalled.length, "run", "runs")} silent for ${ageShort(silent)}`, tone: "warn" });
   }
   if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail", ...(build.state.run ? { href: runHref(build.state.run) } : {}) });
   // The count every surface shows for the queue: parked causes wait here too.
-  if (causes.state.kind === "paused") parts.push({ text: `${plural(causes.count, "cause waits", "causes wait")}: ${causes.state.why}`, tone: "warn", station: "causes" });
-  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} queued`, tone: "live", station: "causes" });
-  if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm", station: "watching" });
+  if (causes.state.kind === "paused") parts.push({ text: `${plural(causes.count, "problem waits", "problems wait")} to start`, why: causes.state.why, tone: "warn", station: "causes" });
+  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "problem waits", "problems wait")} to start`, tone: "live", station: "causes" });
+  if (watching.count > 0) parts.push({ text: `${plural(watching.count, "shipped fix is", "shipped fixes are")} being watched`, tone: "calm", station: "watching" });
   if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
   const here = scope ? ` in ${scope}` : "";
-  if (awaiting.count === 0) parts.push({ text: parts.length ? `nothing waiting on you${here}` : scope ? "Quiet: nothing building, nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });
+  // An all-clear beside a warning reads as a contradiction: it is said only when nothing is wrong.
+  if (awaiting.count === 0 && !parts.some((p) => p.tone === "warn" || p.tone === "fail")) parts.push({ text: parts.length ? `nothing needs you${here}` : scope ? "Quiet: nothing being worked on, nothing needs you" : "The line is quiet: nothing being worked on, nothing needs you", tone: "clear" });
   return parts;
 }
 
@@ -712,6 +785,35 @@ export function scopeLine<D extends LineDecision, R extends LineRows<D>>(rows: R
   };
 }
 
+/** Waiting causes no run has touched on any line: the part of the queue the
+ *  per-line counts (lineGraphs `work`, which count causes their runs worked)
+ *  leave out, said beside them so the numbers add up. */
+export function causesNeverRun(flow: Pick<LineFlow, "causes">, runs: ReadonlyArray<{ task_id?: string | null }>): number {
+  const ran = new Set(runs.map((r) => r.task_id).filter(Boolean));
+  return [...waitingCauseIds(flow)].filter((id) => !ran.has(id)).length;
+}
+
+/** Problems whose newest finished run went live past a card nobody answered:
+ *  the Timeline's "Shipped without approval" (timeline problemState), counted
+ *  without building a history. Each waits on a person to review what shipped.
+ *  A dropped problem, or one closed with its watch over, waits on nobody. */
+export function unapprovedShips(tasks: ReadonlyArray<{ _id: string; status?: string; watch_until?: number | null }>, runs: ReadonlyArray<{ task_id?: string | null; started_at?: number; node_statuses?: RunNodeStatus[] }>, now: number): string[] {
+  const newest = new Map<string, (typeof runs)[number]>();
+  for (const r of runs) {
+    if (!r.task_id || !(runEnd(r) || shippedUnanswered(r))) continue;
+    const was = newest.get(r.task_id);
+    if (!was || (r.started_at ?? 0) > (was.started_at ?? 0)) newest.set(r.task_id, r);
+  }
+  return tasks.filter((t) => {
+    const r = newest.get(t._id);
+    if (!r || !shippedUnanswered(r) || t.status === "dropped") return false;
+    return t.status !== "done" || (t.watch_until ?? 0) > now;
+  }).map((t) => t._id);
+}
+
+/** The queue's causes by task id: the set the headline's "N waiting" counts. */
+export const waitingCauseIds = (flow: Pick<LineFlow, "causes">): Set<string> => new Set([...flow.causes.items, ...flow.causes.parked].map((r) => r.task._id));
+
 /** One row of the "all projects" roll-up: counts only. */
 export type RollupRow = {
   key: string;
@@ -727,6 +829,26 @@ export type RollupRow = {
   silent: number;
   /** Finder sources (not people or lessons) that filed here this week with no declared finder, busiest first. */
   undeclared: string[];
+  /** Why nothing new starts, in words, when the queue is held (admission known), else null. */
+  hold: string | null;
+  /** Live runs that have said nothing for a day. */
+  stalled: number;
+  /** The latest run failed. */
+  failing: boolean;
+  /** The graphs its runs went through, busiest first (lineGraphs). */
+  graphs: ProjectGraph[];
+  /** Waiting causes no line has run yet (causesNeverRun). */
+  neverRun: number;
+  /** Problems that went live past a card nobody answered (unapprovedShips): each waits on a person. */
+  unapproved: number;
+  /** Why the waiting causes that are not ready to start are held (notReadyReasons). */
+  notReady: Array<{ key?: NotReadyKey; count: number; words: string }>;
+  /** The waiting causes the sweep would start (startableCause): with notReadyIds they split `causes` exactly, so the header's count, the start switch and the Timeline's "Not ready" filter all read one result (learning-loop.md LL5). */
+  ready: number;
+  /** The waiting causes that are not ready to start, by task id. */
+  notReadyIds: string[];
+  /** The hold is automatic starting switched off (the role's switch or codecast's own), which the Causes switch answers. */
+  startingOff: boolean;
 };
 
 /**
@@ -734,7 +856,7 @@ export type RollupRow = {
  * projects holding a cause or a signal in the window, projects whose profile
  * declares finders, and the work filed under no project. Most open causes first.
  */
-export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number): RollupRow[] {
+export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number, admissions?: ReadonlyMap<string, LineAdmission>): RollupRow[] {
   const keys = new Set<string>();
   for (const t of rows.tasks) if (isCause(t)) keys.add(projectKey(t.project_id));
   const causeKey = new Map(rows.tasks.map((t) => [t._id, projectKey(t.project_id)]));
@@ -746,7 +868,9 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
     const project = byId.get(key);
     // A project the viewer cannot see (another workspace's) is not a line here.
     if (key !== NO_PROJECT && !project) continue;
-    const f = buildLineFlow({ ...scopeLine(rows, key), initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at });
+    const scoped = scopeLine(rows, key);
+    const admission = key === NO_PROJECT ? NO_PROJECT_ADMISSION : admissions?.get(key);
+    const f = buildLineFlow({ ...scoped, initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at, admission });
     out.push({
       key,
       title: project?.title ?? "No project",
@@ -760,6 +884,14 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
       finders: project?.line_profile?.finders.length ?? 0,
       silent: f.sense.items.filter((s) => s.silent).length,
       undeclared: f.sense.items.filter((s) => !s.finder && s.week > 0 && !isBuiltInSource(s.source)).sort((a, b) => b.week - a.week).map((s) => s.source),
+      hold: f.causes.count > 0 && f.causes.state.kind === "paused" ? f.causes.state.why : null,
+      stalled: f.build.items.filter((b) => b.stalled).length,
+      failing: f.build.state.kind === "failing",
+      graphs: projectGraphs(scoped.runs, scoped.signals, undefined, waitingCauseIds(f)),
+      neverRun: causesNeverRun(f, scoped.runs),
+      unapproved: unapprovedShips(scoped.tasks.filter(isCause), scoped.runs, now).length,
+      ...waitingReadiness([...f.causes.items, ...f.causes.parked].map((r) => r.task)),
+      startingOff: f.causes.count > 0 && f.causes.state.kind === "paused" && !!admission?.role && !admission.role.paused && !admission.on,
     });
   }
   return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));

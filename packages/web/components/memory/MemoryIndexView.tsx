@@ -9,6 +9,7 @@ import { parseNote } from "@codecast/shared/vault";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatBytes } from "./memoryView";
 import { MemoryLinkChip } from "./parts";
+import { Button } from "../ui/button";
 
 /** One index line with its links as chips and the rest as text. */
 function IndexLine({ line, atlas, onOpen }: { line: string; atlas: MemoryAtlas; onOpen: (file: string) => void }) {
@@ -83,9 +84,9 @@ export function MemoryIndexView({ atlas, onOpen, onEditIndex, focusLine }: { atl
             {budget.cutAt ? <> · cut at line <b className="text-sol-red font-medium">{budget.cutAt}</b></> : " · loads in full"}
             {longCount > 0 && <> · <span className="text-sol-yellow">{longCount}</span> lines over {MEMORY_INDEX_LINE_SOFT_MAX} characters</>}
           </span>
-          <button type="button" onClick={onEditIndex} className="sol-btn text-xs px-2.5 py-1">
+          <Button type="button" variant="ghost" size="xs" onClick={onEditIndex}>
             Edit MEMORY.md
-          </button>
+          </Button>
         </div>
       </div>
 

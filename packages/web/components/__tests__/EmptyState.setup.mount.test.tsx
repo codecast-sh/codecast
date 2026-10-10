@@ -62,10 +62,17 @@ beforeEach(() => {
   setupResult = { ok: true };
   setupTokens = [];
   tracked.length = 0;
-  useInboxStore.setState({ composes: [] });
+  useInboxStore.setState({ composes: [], currentUser: { _id: "u_me", staff: true } } as any);
   withLane(undefined);
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+test("anyone but staff is offered only their own coding tools", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u_other" } } as any);
+  await render();
+  expect(text()).toContain("Connect your coding tools");
+  expect(text()).not.toContain("Ask the Codecast assistant");
+});
 const click = (label: string) => act(async () => { button(label)!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
 test("a person with no machine is offered the assistant here or their own coding tools", async () => {
@@ -99,7 +106,9 @@ test("asking for the install command counts as choosing the machine", async () =
 test("hosted mode offers only the assistant", async () => {
   withLane("simple");
   await render();
-  expect(text()).toContain("Ask the Codecast assistant");
+  // The hosted inbox starts the way /welcome does (LANE_COPY.home).
+  expect(text()).toContain("What can I take off your plate?");
+  expect(text()).not.toContain("How would you like to start?");
   expect(text()).not.toContain("Connect your coding tools");
   expect(button("Generate install command")).toBeUndefined();
 });

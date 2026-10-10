@@ -62,6 +62,7 @@ import {
   stable,
   tableRows,
   teamOf,
+  undeliveredEntities,
   userOf,
   writeOf,
   type CheckMode,
@@ -186,6 +187,9 @@ export const INVARIANTS: readonly Invariant[] = [
       const held = await heldKeysFor(ctx, user as any);
       const state = w!.store.getState() as any;
       const key = activeWorkspaceKeyOf(state);
+      // Mid drain, a revocation still in its outbox slot has not reached any
+      // log the window reads; the row stays as production would hold it.
+      const inFlight = mode === "always" ? undeliveredEntities(world, held) : new Set<string>();
       const out: Violation[] = [];
       for (const table of WORKSPACE_TABLES) {
         const replica = (state[table] ?? {}) as Record<string, Row>;
@@ -196,7 +200,7 @@ export const INVARIANTS: readonly Invariant[] = [
         // Every row the window holds must be one the principal may read,
         // whichever workspace it is filed under (the cache spans workspaces).
         for (const [id, row] of Object.entries(replica)) {
-          if (!isConvexId(id) || readable.has(id)) continue;
+          if (!isConvexId(id) || readable.has(id) || inFlight.has(id)) continue;
           out.push({ message: `the window holds a ${table} row its principal cannot read`, row: { table, id, server: (await serverRow(world, id)) ?? null, replica: row } });
         }
         if (mode === "always" || !w!.feeds?.has(table)) continue;
