@@ -4,6 +4,7 @@ import { Eye, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { Button } from "./ui/button";
 import { pickTeamSharingNudge, teamVisibilityOption } from "../lib/teamVisibility";
 
 // Snoozed for a month per dismiss, synced per user like the other strips.
@@ -46,12 +47,13 @@ export function TeamSharingNudgeBanner() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
+          <Button
+            variant="cyan"
+            size="xs"
             onClick={shareNew}
-            className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-cyan text-sol-base03"
           >
             Share new sessions in full
-          </button>
+          </Button>
           <Link
             href="/settings/sync"
             className="px-2.5 py-1 text-xs font-medium rounded-md text-sol-text-muted hover:text-sol-text transition-colors"

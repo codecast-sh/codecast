@@ -11,7 +11,7 @@ import {
   walkieKeyName,
   walkieKeyState,
 } from "../../hooks/useWalkie";
-import { startHuddle } from "../../lib/calls/callManager";
+import { requestHuddleStart } from "../../lib/calls/huddleStart";
 import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
 import "./walkie.css";
 
@@ -163,7 +163,7 @@ export function WalkiePttButton({
             icon={Headphones}
             disabled={!!ringReason || ring.toUserIds.length === 0}
             title={ringReason ?? undefined}
-            onSelect={() => void startHuddle({ roomKey: roomKey!, toUserIds: ring.toUserIds, anchorTitle: ring.anchorTitle })}
+            onSelect={() => requestHuddleStart({ roomKey: roomKey!, toUserIds: ring.toUserIds, anchorTitle: ring.anchorTitle })}
           >
             {ringReason ? `${ringWord} — ${ringReason.toLowerCase()}` : `${ringWord} and start a huddle`}
           </CtxItem>

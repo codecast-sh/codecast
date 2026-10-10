@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { Button } from "../ui/button";
 import { Mic, MicOff, Phone } from "lucide-react";
 import { getMicLevel, leaveCall, setMuted, subscribeMicLevel } from "../../lib/calls/callManager";
 
@@ -44,12 +45,14 @@ export function MicButton({ muted, size = "regular" }: { muted: boolean; size?: 
 export function HangUpButton({ size = "regular" }: { size?: keyof typeof SIZES }) {
   const sz = SIZES[size];
   return (
-    <button
+    <Button
+      variant="red"
+      size={size === "regular" ? "default" : "icon-sm"}
       onClick={() => void leaveCall()}
-      className={`sol-btn-solid ${sz.radius} ${sz.pad} ${size === "regular" ? "px-3.5" : ""} bg-sol-red text-white`}
+      className={sz.radius}
       title="End call"
     >
-      <Phone className={`${sz.icon} rotate-[135deg]`} />
-    </button>
+      <Phone className="rotate-[135deg]" />
+    </Button>
   );
 }
