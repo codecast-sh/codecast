@@ -181,6 +181,28 @@ export const DAEMON_COMMANDS = [
   // as an unknown edit op. Result: LineProfileEditReply. Old daemons:
   // "Unknown command".
   "line_profile_edit",
+  // The app's edit of one step of a published graph (line-workspace.md LW4):
+  // the prompt or script file a .cast names, in the checkout its origin
+  // names (workflows.origin), targeted at the device that pushed it. args:
+  // LineGraphEditArgs (packages/cli/src/lineGraphEdit.ts) — { root, file,
+  // node, field?, text, base_hash? }. Written atomically after the parser
+  // accepts the result, then pushed again. Result: LineGraphEditReply. Old
+  // daemons: "Unknown command".
+  "line_graph_edit",
+  // Try (LW4): a step's edited prompt run on past cases through the dry-run
+  // harness with writes refused, on the device that pushed the graph. args:
+  // LineTryArgs (packages/cli/src/lineTry.ts). Answers { accepted } at once;
+  // each case reports to its line_tries row (/cli/line-tries/report). Old
+  // daemons: "Unknown command".
+  "line_try",
+  // The setup card under a `cast browser`/`cast computer` command that failed
+  // for want of the Chrome extension or the macOS grants (agentToolSetup.ts).
+  // Targeted at the session's device. args: AgentToolSetupArgs — check answers
+  // AgentToolSetupStatus; start runs `cast browser extension setup` or `cast
+  // computer setup --yes` there in a detached child and answers at once, and
+  // the card checks until it lands. Old daemons: "Unknown command" (the card
+  // says to update codecast there).
+  "agent_tool_setup",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

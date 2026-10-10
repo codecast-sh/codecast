@@ -23,6 +23,7 @@ import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning"
 import { applyActivate, getArmableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
+import { seatPlace } from "./lib/seatPlace";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
 import { truncateStr } from "@codecast/shared/render";
 
@@ -451,9 +452,9 @@ export async function bindHostOf(ctx: Ctx, userId: Id<"users">, row: any): Promi
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
   const standing = role ? await standingConversationOf(ctx, role) : null;
   const project = await ctx.db.get(row.project_id);
-  // The daemon that polls the command belongs to the human who runs the role
-  // (org_roles.host_user_id); a standing session renders as its bot identity.
-  const hostUser: Id<"users"> = role?.host_user_id ?? standing?.owner_user_id ?? userId;
+  // The daemon that polls the command belongs to the human who runs the
+  // role's standing session (seatPlace); it renders as its bot identity.
+  const hostUser: Id<"users"> = role ? seatPlace(role, standing).runner_user_id : userId;
   const dir: string | null = standing?.project_path ?? project?.project_path ?? null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", hostUser)).collect();
   const now = Date.now();
