@@ -137,7 +137,9 @@ export interface LoadNewerInput {
  * bottom, which re-enters the trigger band with no user input and rips through
  * every remaining page. The caller therefore also gates on a wheel-down "arm"
  * (consumed per load) exactly as load-older does — that intent state lives
- * outside this pure function, same as loadOlderArmedRef.
+ * outside this pure function, same as loadOlderArmedRef — except while the
+ * window cannot scroll: then nothing can snap and loading stops once it
+ * overflows, so it fills without intent.
  */
 export function shouldLoadNewer(i: LoadNewerInput): boolean {
   if (!i.hasMoreBelow || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;
@@ -181,6 +183,18 @@ export interface ResizeAdjustInput {
 export function shouldAdjustScrollForResize(i: ResizeAdjustInput): boolean {
   if (i.held) return false;
   return i.itemStart < i.scrollOffset;
+}
+
+/**
+ * Hand the view back to the reader. Every virtualizer scrollToIndex/scrollToEnd
+ * leaves a reconcile loop running for up to 5s that re-scrolls to its target
+ * whenever the target moves, and nothing the reader does stops it. At the tail
+ * of a streaming session each append issues a fresh scrollToEnd, so a reader
+ * who wheeled away was pulled back the moment a row grew or a row below
+ * mounted and measured. The loop's state is private, so clear it by name.
+ */
+export function releaseScrollTarget(virtualizer: object): void {
+  (virtualizer as { scrollState: unknown }).scrollState = null;
 }
 
 export type FeedJumpDensity = "full" | "condensed" | "compact";

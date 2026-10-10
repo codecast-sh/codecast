@@ -17,10 +17,10 @@ import { requireApp } from "../model";
 import { cleanAppName } from "../lib/slugs";
 import { appendVersion } from "../versions";
 import { publicVisitors, requireVisitor } from "../visitors";
-import { narrationLine, touchedFile, visitorArgs, type NarrationLine } from "../validators";
+import { RETRYABLE_FAILURES, failureKind, narrationLine, touchedFile, visitorArgs, type NarrationLine } from "../validators";
 import type { PromptMessage } from "../prompts";
-import { TALLY, addTally, tally } from "../tallies";
-import { cleanIdeas, nextInLine, startRefusal, type Refusal } from "./rules";
+import { TALLY, addTally, isOver, setOver, tally } from "../tallies";
+import { SPEND_BUDGET_USD, cleanIdeas, nextInLine, overBudget, startRefusal, type Budget, type Refusal } from "./rules";
 
 /** Time past the run's own deadline before the watchdog fails a build whose
  *  action died without reporting. */
@@ -50,16 +50,33 @@ export async function enqueueBuild(
   return buildId;
 }
 
+/** Each daily spend budget a build in `appId` counts toward, with its tally
+ *  key: the asker's own only when there is one. */
+function spendKeys(appId: Id<"apps">, asker: Id<"visitors"> | undefined): [Budget, string][] {
+  return [["global", TALLY.spend], ["app", TALLY.appSpend(appId)], ...(asker ? [["visitor", TALLY.visitorSpend(asker)] as [Budget, string]] : [])];
+}
+
+/** Read every budget of a build in `appId` asked by `asker`, one way or another. */
+async function perBudget<T>(appId: Id<"apps">, asker: Id<"visitors">, read: (key: string) => Promise<T>): Promise<Record<Budget, T>> {
+  const entries = await Promise.all(spendKeys(appId, asker).map(async ([b, key]) => [b, await read(key)] as const));
+  return Object.fromEntries(entries) as Record<Budget, T>;
+}
+
+const buildsOff = () => process.env.PLAYGROUND_BUILDS_OFF === "1";
+
 /** Why a build of `app` asked by `asker` may not start now (paused, a
  *  budget spent), or null. `heldUsd` is spend not charged yet that already
  *  counts against the global budget (builds running elsewhere). */
 export async function buildRefusal(ctx: QueryCtx, app: Doc<"apps">, asker: Id<"visitors">, heldUsd = 0): Promise<Refusal | null> {
-  const [globalSpent, appSpent, visitorSpent] = await Promise.all([
-    tally(ctx, TALLY.spend),
-    tally(ctx, TALLY.appSpend(app._id)),
-    tally(ctx, TALLY.visitorSpend(asker)),
-  ]);
-  return startRefusal({ paused: process.env.PLAYGROUND_BUILDS_OFF === "1", appSpent, globalSpent: globalSpent + heldUsd, visitorSpent });
+  const spent = await perBudget(app._id, asker, (key) => tally(ctx, key));
+  return startRefusal({ paused: buildsOff(), over: overBudget({ ...spent, global: spent.global + heldUsd }) });
+}
+
+/** The same answer for a page to show, read from the over-budget marks,
+ *  which change only when a total crosses its budget. Not the last word: a
+ *  build that starts is checked again against the totals (advance). */
+export async function shownRefusal(ctx: QueryCtx, appId: Id<"apps">, asker: Id<"visitors">): Promise<Refusal | null> {
+  return startRefusal({ paused: buildsOff(), over: await perBudget(appId, asker, (key) => isOver(ctx, key)) });
 }
 
 /** What builds running anywhere may still cost: each holds its ceiling until
@@ -90,7 +107,7 @@ export const advance = internalMutation({
     const now = Date.now();
     const refusal = await buildRefusal(ctx, app, next.requested_by, await heldByRunningBuilds(ctx));
     if (refusal) {
-      await ctx.db.patch(next._id, { status: "failed", error: refusal.error, error_detail: refusal.detail, finished_at: now });
+      await failBuild(ctx, next, refusal, now);
       await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id });
       return;
     }
@@ -110,8 +127,15 @@ export async function roomBefore(ctx: QueryCtx, message: Doc<"messages">, limit:
     .order("desc")
     .filter((q) => q.or(q.eq(q.field("kind"), "chat"), q.eq(q.field("kind"), "request")))
     .take(limit);
-  const people = await publicVisitors(ctx, rows.flatMap((m) => (m.visitor_id ? [m.visitor_id] : [])));
-  return rows.reverse().map((m) => ({ who: (m.visitor_id && people.get(m.visitor_id)?.name) || "Someone", body: m.body }));
+  // A request that didn't make it never happened to the app, and quoting it
+  // would carry a refused ask (a phishing page, say) into every later build,
+  // where the model refuses the whole turn for it.
+  const failed = new Set(
+    (await Promise.all(rows.map((m) => (m.build_id ? ctx.db.get(m.build_id) : null)))).flatMap((b) => (b?.status === "failed" ? [b.request_message_id] : [])),
+  );
+  const said = rows.filter((m) => !failed.has(m._id));
+  const people = await publicVisitors(ctx, said.flatMap((m) => (m.visitor_id ? [m.visitor_id] : [])));
+  return said.reverse().map((m) => ({ who: (m.visitor_id && people.get(m.visitor_id)?.name) || "Someone", body: m.body }));
 }
 
 /** Everything a build reads before it starts, or null once it is not building. */
@@ -173,14 +197,17 @@ export const narrate = internalMutation({
 });
 
 /** Count what a model call cost toward the global, the app's and the asker's
- *  daily budgets. A negative amount gives back part of a hold. */
+ *  daily budgets, marking each budget it uses up (or frees). A negative
+ *  amount gives back part of a hold. */
 export async function chargeSpend(ctx: MutationCtx, appId: Id<"apps">, asker: Id<"visitors"> | undefined, usd: number): Promise<void> {
-  if (!Number.isFinite(usd)) return;
-  await addTally(ctx, [TALLY.spend, TALLY.appSpend(appId), ...(asker ? [TALLY.visitorSpend(asker)] : [])], usd);
+  if (!Number.isFinite(usd) || usd === 0) return;
+  const budgets = spendKeys(appId, asker);
+  const totals = await addTally(ctx, budgets.map(([, key]) => key), usd);
+  for (const [b, key] of budgets) await setOver(ctx, key, totals.get(key)! >= SPEND_BUDGET_USD[b]);
 }
 
-async function failBuild(ctx: MutationCtx, build: Doc<"builds">, error: string, detail: string, now: number) {
-  await ctx.db.patch(build._id, { status: "failed", error, error_detail: detail.slice(0, 4_000), finished_at: now });
+async function failBuild(ctx: MutationCtx, build: Doc<"builds">, { kind, error, detail }: Refusal, now: number) {
+  await ctx.db.patch(build._id, { status: "failed", failure: kind, error, error_detail: detail.slice(0, 4_000), finished_at: now });
 }
 
 /** The run's end: commit the draft as the new live version, or fail with a
@@ -204,7 +231,7 @@ export const finish = internalMutation({
         try: v.optional(v.string()),
         files: v.array(v.object({ path: v.string(), text: v.string() })),
       }),
-      v.object({ ok: v.literal(false), error: v.string(), detail: v.string() }),
+      v.object({ ok: v.literal(false), kind: failureKind, error: v.string(), detail: v.string() }),
     ),
   },
   handler: async (ctx, args) => {
@@ -226,10 +253,10 @@ export const finish = internalMutation({
       });
     } else if (moved) {
       await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
-      await failBuild(ctx, build, "The app kept changing while Clay worked. Try again.", `live moved from v${build.base_version} to v${app.live_version} twice`, now);
+      await failBuild(ctx, build, { kind: "moved", error: "The app kept changing while Clay worked. Try again.", detail: `live moved from v${build.base_version} to v${app.live_version} twice` }, now);
     } else if (!args.result.ok) {
       await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
-      await failBuild(ctx, build, args.result.error, args.result.detail, now);
+      await failBuild(ctx, build, args.result, now);
     } else {
       await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
       try {
@@ -253,7 +280,7 @@ export const finish = internalMutation({
         if (ideas.length || name) await ctx.db.patch(app._id, { ...(ideas.length ? { ideas } : {}), ...(name ? { name } : {}) });
       } catch (e) {
         if (!(e instanceof ConvexError)) throw e;
-        await failBuild(ctx, build, "The code Clay wrote didn't run.", (e.data as PlaygroundErrorData).message, now);
+        await failBuild(ctx, build, { kind: "invalid", error: "The code Clay wrote didn't run.", detail: (e.data as PlaygroundErrorData).message }, now);
       }
     }
     await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id: build.app_id });
@@ -268,7 +295,7 @@ export const expire = internalMutation({
     const build = await ctx.db.get(build_id);
     // A restarted build has a later start and its own watchdog.
     if (build?.status !== "building" || build.started_at !== started_at) return;
-    await failBuild(ctx, build, "It ran out of time on a big change. Try a smaller step.", "the build's run stopped reporting", Date.now());
+    await failBuild(ctx, build, { kind: "time", error: "It ran out of time on a big change. Try a smaller step.", detail: "the build's run stopped reporting" }, Date.now());
     await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id: build.app_id });
   },
 });
@@ -281,6 +308,7 @@ export const retry = mutation({
     const build = (await ctx.db.get(args.build_id)) ?? fail("not_found", "That build does not exist.");
     const message = await ctx.db.get(build.request_message_id);
     if (build.status !== "failed" || message?.build_id !== build._id) fail("invalid", "Only the latest failed build of a request can be tried again.");
+    if (build.failure && !RETRYABLE_FAILURES.includes(build.failure)) fail("invalid", "Trying the same words again won't help here. Edit the request instead.");
     const app = await requireApp(ctx, build.app_id);
     return { build_id: await enqueueBuild(ctx, app, message, visitor._id) };
   },
