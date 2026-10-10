@@ -52,7 +52,9 @@
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/task-pulse.sh": "689c09bc0e8a5330"
+      ".claude/hooks/task-context.sh": "4761306aa8abbaea",
+      ".claude/hooks/task-pulse.sh": "689c09bc0e8a5330",
+      ".claude/settings.json": "94ffa3aac59be407"
     }
   },
   "triggers": {
@@ -184,10 +186,10 @@
     "wroteClaudeMd": false,
     "otherFiles": {
       ".claude/agents/critic.md": "bd99e7786ce5b525",
-      ".claude/agents/implementer.md": "a8f235ac4fcefa4c",
+      ".claude/agents/implementer.md": "952adc7a9e5ec50d",
       ".claude/agents/reviewer.md": "bdd5a03c6aac7951",
       ".claude/settings.json": "d3b7568f317c3f0f",
-      ".claude/skills/codecast-orchestrate/SKILL.md": "2ed98decaba83c2e",
+      ".claude/skills/codecast-orchestrate/SKILL.md": "3fabcbdf91a432dc",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"
     }
