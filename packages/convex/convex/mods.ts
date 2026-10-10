@@ -6,6 +6,7 @@ import { isTeamMember } from "./privacy";
 import { validateManifest } from "@codecast/shared/contracts/mods";
 import type { Id } from "./_generated/dataModel";
 import { LOG_CAP } from "./modLogs";
+import { withDevice } from "./modLocal";
 
 /**
  * Codecast mods (plan pl-839, shared/contracts/mods.ts). The CLI pushes a
@@ -55,8 +56,10 @@ export const webList = query({
       if (!owners.has(key)) owners.set(key, await ctx.db.get(row.user_id));
     }
     // The local half runs in a daemon, never in the page: the web learns only that one exists.
-    return rows.map(({ local_code, ...row }: any) => ({
+    // Where it runs names the author's machines, so only the author sees that.
+    return rows.map(({ local_code, local_off, local_devices, ...row }: any) => ({
       ...row,
+      ...(String(row.user_id) === String(userId) ? { local_off, local_devices } : {}),
       has_local: !!local_code,
       owner_name: owners.get(String(row.user_id))?.name ?? undefined,
       is_mine: String(row.user_id) === String(userId),
@@ -72,6 +75,18 @@ export const webSetEnabled = mutation({
     const row = await ctx.db.get(args.id);
     if (!row || String(row.user_id) !== String(userId)) throw new Error("Only the mod's author can turn it on or off");
     await ctx.db.patch(args.id, { enabled: args.enabled, updated_at: Date.now() });
+  },
+});
+
+/** Turn a mod's local half on or off for one of the author's machines (the Mods page). */
+export const webSetLocalDevice = mutation({
+  args: { id: v.id("mods"), device: v.string(), on: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not signed in");
+    const row = await ctx.db.get(args.id);
+    if (!row || String(row.user_id) !== String(userId)) throw new Error("Only the mod's author can choose where its local half runs");
+    await ctx.db.patch(args.id, { local_off: withDevice(row.local_off, args.device, !args.on) });
   },
 });
 

@@ -340,7 +340,50 @@ Four things read the stream (`packages/shared/replay/`); the fourth, `replayMome
 
 - `renderTimeline(events)`: the text timeline `cast replay show` prints and the summary stores.
 - `toRepro(events, baseUrl)`: a Playwright test that replays navigation, clicks, typed placeholders and submits up to the error, then asserts the error does not happen.
-- `fromRrweb(rrwebEvents)`: converts PostHog and Sentry rrweb recordings (meta, incremental mouse interactions, inputs, the console and network plugins) into the same events, so mirrored replays read the same way.
+- `fromRrweb(rrwebEvents)`: converts PostHog and Sentry rrweb recordings (meta, incremental mouse interactions, inputs, the console and network plugins) into the same events, so mirrored replays read the same way. A request with no status is a failure only when the browser could have seen one: a performance entry from a browser without `responseStatus` (Safari leaves the field off every entry) counts as failed only when its timings are visible and show no response arrived, and a cross-origin resource or an entry whose timings the browser zeroed is not judged (VENDOR_CONVERTER_VERSION 4).
+- `readVendorCapture(raw)` (`capture.ts`): what an import stores, read once. It runs `fromRrweb` for the stream and `prepareDomCapture` for the page capture, and first converts a PostHog mobile recording (below) into an ordinary rrweb capture.
+
+**Mobile recordings.** PostHog's iOS, Android, React Native (Expo) and
+Flutter SDKs record no DOM. A full snapshot carries `data.wireframes`, a tree
+of boxes with absolute x/y/width/height, a type (text, image, screenshot,
+rectangle, div, input, radio_group, web_view, placeholder, status_bar,
+navigation_bar), a small style object and base64 images, and later screens
+arrive as mutations whose `adds` and `updates` hold wireframes. Read as rrweb,
+that is a page with no document, and the player drew it white.
+`shared/replay/mobile.ts` (`fromMobileWireframes`; ported from PostHog's MIT
+transformer in `common/replay-shared/src/mobile`, outside its `ee/`) turns it
+at import into a capture of a plain page: html, head and body, each box a
+`position:fixed` element, text as text, images as data URIs, inputs as
+`input`, `textarea`, `select`, `button` or a labelled checkbox, a web view
+or placeholder as a labelled box, the status and navigation bars lifted
+above the app, and the keyboard as a box at the bottom. Every wireframe id is
+remapped into one sequence the converter owns, so a synthetic node never takes
+a real view's id. A wireframe's id always names the outermost node drawn for
+it (a labelled checkbox's `label`, not the `input` inside), so a removal takes
+the whole drawing with it. Every mutation goes through the converter, a
+removals-only one included: a removal names the node's drawn parent, and a
+removal of a node the converter never drew is dropped, because a raw
+wireframe id could name a fixed node such as the body. An update is a removal
+and a parent-first flattened add, because rrweb adds one node per mutation. A
+status or navigation bar that arrives in a mutation replaces the one in its
+slot above the app, as in a full snapshot. Style values are checked before
+they reach a style attribute (a value that could close its declaration, or a
+background image that is not a data URI, is dropped), so a recording cannot
+make the replayed page fetch anything. rrweb seeks from the last Meta event at
+or before a moment and drops everything earlier, assuming a full snapshot
+follows each Meta as a web checkout does. A mobile SDK sends a Meta alone at
+each screen change, so the converter draws the current screen as a full
+snapshot right after it. A tap (a touch start and end within 12 px and 1 s)
+also becomes an rrweb click on the topmost, deepest box under the finger, so
+the stream names what was tapped; the touches stay for the player. Each
+screen's visible text is read off the wireframes into `view` outlines (at a
+full snapshot, the first change after a screen change, before a tap and
+before an error, and otherwise at most every 5 s while the screen changes);
+a field contributes `[field]` and its label, never its value. Masking is
+then the same `prepareDomCapture`: an input's value is a value attribute on
+a field, starred like any other. The SDK applies its own masking first
+(masked text inputs and images), and a screenshot-mode recording, whose
+screens are images, is drawn as those images (VENDOR_CONVERTER_VERSION 5).
 
 A PostHog or Sentry recording is imported the first time it is read (X7), or
 all at once by a source's bulk import (`sources/replayBackfill.ts`), shaped
@@ -432,15 +475,22 @@ its page capture, the raw rrweb events, so people can watch it and agents can
 see frames of it. The contract every piece below shares is
 `packages/shared/contracts/replayPlayer.ts`.
 
-**Storage.** A vendor import keeps the capture (VENDOR_CONVERTER_VERSION 3,
-so older copies re-import on their next read or backfill pass). It is masked
+**Storage.** A vendor import keeps the capture (VENDOR_CONVERTER_VERSION 3 and later,
+so older copies re-import on their next read or backfill pass). An older
+copy whose refresh fails keeps serving, and the row's `vendor_refresh_after`
+holds the vendor off (`VENDOR_REFRESH_RETRY`: an hour, or the vendor's
+Retry-After, after a failure; a month once the vendor says the recording is
+gone), so reads in between do not each spend PostHog's ~60 snapshot reads an
+hour. It is masked
 first by the semantic stream's own rule (`shared/replay/dom.ts`
 `prepareDomCapture`): an input event's text, a field's value attribute, a
 textarea's text and every text node under `[data-private]`, an editable
 region or rrweb's and the vendors' block classes become stars of the same
 length, in snapshots, added nodes and later mutations, and a Meta href goes
-through `cleanUrl`. A capture with no full snapshot is not kept (nothing could
-draw it). The masked events are packed into gzipped chunks of about 6 MB of
+through `cleanUrl`. A capture rrweb could not draw is not kept: one with no
+full snapshot, or whose full snapshots hold no serialized document
+(`replayCaptureProblem` in the contract, the one rule the import and the
+player share). The masked events are packed into gzipped chunks of about 6 MB of
 JSON (`REPLAY_DOM_LIMITS`: 8 MB gzipped per chunk, 60 chunks; a single event
 past the cap is dropped) and uploaded by the adapter's own action
 (`vendorReplay.storeDomCapture`, `replays.storeReplayDom`), because a capture
@@ -455,7 +505,13 @@ A re-import that kept no capture clears the old keys.
 ms since the stream's first event, the clock `renderTimeline` prints. For an
 import `dom_t0` is the capture's first rrweb timestamp plus the stream's first
 `t`; for our recorder the assembly sets it to `started_at` plus the first `t`.
-The player maps an rrweb timestamp to the clock as `timestamp - dom_t0`.
+The player maps an rrweb timestamp to the clock as `timestamp - dom_t0`
+(`infra/replay-player/src/clock.ts`), and the clock ends at the row's
+`duration_ms` (the capture's end only when the row has none): its bar, its
+`time`, `ready` and `frame` posts and its frames all count on it. A capture
+can run past the stream's last event (a page that kept mutating after the
+person stopped; rp-39's runs 6:01 against a 5:00 stream), so playback stops
+at the replay's end and a frame asked for past it draws the end.
 rrweb draws only events strictly before the offset it is given, so a moment
 is drawn one millisecond past, and an event at exactly `t` shows.
 
@@ -475,27 +531,85 @@ replays bucket already allows GET from any origin.
 
 **The player** is `infra/replay-player`, a Worker on `replay.codecast.sh`, its
 own origin: customer DOM never renders on codecast.sh, nor on a.codecast.sh
-where anyone's published HTML runs. `GET /p/<cap>?t=<ms>&mode=frame&controls=0&autoplay=1`
+where anyone's published HTML runs. `GET /p/<cap>?t=<ms>&mode=frame&controls=0&autoplay=1&assets=remote`
 (`replayPlayerUrl`) serves a page with `script-src 'self'`,
 `Referrer-Policy: no-referrer` and no caching; its script (`src/player.ts`,
 bundled with `@rrweb/replay` into `public/player.js`) reads the manifest and
-the chunks and hands them to rrweb's Replayer, whose iframe is sandboxed with
+the chunks and, unless `replayCaptureProblem` names a reason the capture
+cannot be drawn (then that reason is the page's error, which a frame request
+answers as a 422 and `cast replay snap` prints, instead of a white frame),
+hands them to rrweb's Replayer, whose iframe is sandboxed with
 `allow-same-origin` only (no scripts; rrweb also turns `<script>` into
-`<noscript>`). Interactive mode has a control bar (hidden by `controls=0`)
+`<noscript>`). The replayed page always scrolls at once (an inserted
+`scroll-behavior: auto !important` rule): a recording whose page sets
+`scroll-behavior: smooth` would otherwise animate every scroll rrweb applies,
+so a seek glides instead of landing and a frame is right only if the
+animation ends before it is shot. A second inserted rule hides the cast
+browser extension's agent-tab frame (`html > div[id^=cast-][data-cast-color]`,
+a fixed red border the extension mounts while an agent drives a tab): a
+recording made in such a tab captured it, and it is codecast's chrome, not
+the customer's page. Interactive mode has a control bar (hidden by `controls=0`)
 and speaks postMessage with whatever embeds it: the player posts `ready`,
 `time` (on every seek and four times a second while playing), `state`,
-`frame` and `error`, tagged `source: "codecast-replay-player"`, to its parent
-with targetOrigin `*` (it says nothing private); the host posts `seek`
-(`t_ms`, optional `play`), `play`, `pause` and `speed`, tagged
-`codecast-replay-host`, and should check `event.origin` against
-`REPLAY_PLAYER_ORIGIN`. Frame mode draws the page at `t`, waits for its images
-and fonts (at most 4 s), exposes `window.__codecastReplay` (state, url,
-visible text, size) and `window.__codecastReplaySeek(t)`, and posts `frame`.
+`frame` and `error`, tagged `source: "codecast-replay-player"`, to its
+parent's origin and nowhere else. It knows that origin from
+`location.ancestorOrigins` where the browser has it; elsewhere (Firefox) it
+holds every message and posts only a bare `hello` to `*`, carrying nothing,
+until its parent sends any command, whose origin it then posts the held
+messages to. The host posts `seek` (`t_ms`, optional `play`), `play`,
+`pause`, `speed` and `hello` (the answer to the player's `hello`, which the
+web channel hook `useReplayPlayerChannel` sends for every host), tagged
+`codecast-replay-host`, and checks `event.origin` against
+`REPLAY_PLAYER_ORIGIN`. The player obeys a command only from its parent
+window (`event.source === window.parent`), never from another window that
+found it. Frame mode draws the page at `t`, waits for its images and fonts
+(at most 4 s), exposes `window.__codecastReplay` (state, url, visible text,
+size) and `window.__codecastReplaySeek(t)`, and posts `frame`.
+
+The page reads the chunks four at a time and counts the bytes as they
+inflate: a chunk past `REPLAY_DOM_LIMITS.chunk_max_inflated_bytes` (48 MB)
+or a capture past four of those stops with an error, in the viewer's tab and
+in the renderer alike, because an SDK chunk is a few MB of gzip anyone with a
+source's public ingest key may upload. Every open still reads the whole
+capture before it draws (chunks carry no time index), so a moment late in a
+long recording costs the full download.
+
+**What the replayed page may fetch.** A recording names its own images,
+stylesheets and fonts, and a recording uploaded with a source's public
+ingest key can name any URL, so a replay being readable only inside its
+workspace says nothing about the hosts it names. By default nothing remote
+loads, in either mode: the page's CSP allows no remote host in `img-src`,
+`style-src`, `font-src` or `media-src`, so remote images show as empty boxes
+(stylesheets are inlined by the recorder and still apply). In interactive
+mode the viewer may opt in on one view: when the capture names remote assets
+(`remoteAssetHosts`: src, srcset and poster, href on `<link>`, url() and
+@import in styles; never an `<a>` target), the player shows a button naming
+the hosts ("Load images from shop.example and 2 other sites"), never over the
+recorded page: at the end of its control bar, or, with `controls=0`, in a
+28 px strip under the page (`ready` reports what it draws below the page as
+`below_px`, and a host sizing the iframe to the page adds it). A click
+reloads the page with `assets=remote` at the time it stood at, under a CSP
+that adds `https:` (never `http:`) to those four directives. Only then does
+the viewer's browser fetch them, and those hosts learn the viewer's IP and
+user agent, never a referrer. Frame mode ignores `assets=remote`, and its
+browser is Cloudflare's: the renderer also intercepts every request
+(`frameRequestAllowed`) and lets through only the player's origin, Convex,
+the replays bucket and `data:`/`blob:`. The bucket is pinned: the worker's
+`REPLAYS_BUCKET_URL` (`https://<account>.r2.cloudflarestorage.com/codecast-replays/`,
+path style, as Convex signs chunk URLs) is the one R2 prefix the renderer
+and the page's `connect-src` allow; unset, they allow no bucket.
 
 **Frames** are rendered server side, so a cloud host sees what a laptop sees.
 `POST https://replay.codecast.sh/frame { cap, times_ms }` (at most 12 per
-request) first asks the manifest route whether the capability opens, so a
-forged one costs one GET and no browser time, then loads the frame-mode page
+request) is first admitted by Convex (`POST /cli/replays/frame-admit { cap }`,
+`replaysHttp.replayFrameAdmit`): the capability opens and its person can
+still read the replay, and both still have frame budget. Each request is a
+billable browser session from a pool every replay shares, so one capability
+buys `REPLAY_FRAME_LIMITS.requests_per_cap` (8) requests and one person 30
+per ten minutes across every capability they mint (`ipRateLimit` counters,
+failing closed); past either the worker answers 429 with the counter's
+Retry-After. Admission signs nothing, so a forged capability costs one POST
+and no browser time. The worker then loads the frame-mode page
 in Cloudflare Browser Rendering (the Worker's `browser` binding; the account
 is on Workers Paid, checked 2026-10-07 with `cf accounts subscriptions get`,
 and a REST screenshot probe answered), screenshots the stage per time and
@@ -503,12 +617,77 @@ answers `{ frames: [{ t_ms, png_base64, url, outline, width, height, error? }] }
 A full browser pool answers 429 with Retry-After. A recording is drawn at its
 own size, scaled down past 1600 px.
 
+**In codecast** one host embeds the player (`packages/web/hooks/useReplayPlayer.ts`
+and `components/ops/ReplayPlayerFrame.tsx`): `useReplayPlayerLink`
+mints a capability through `replays.playerLink` each time a player opens,
+`ReplayPlayerIframe` loads it sandboxed `allow-scripts allow-same-origin` (the
+player's own script, on its own origin) with no referrer, and
+`useReplayPlayerChannel` trusts a message only from the minted URL's origin
+(Convex builds it from `REPLAY_PLAYER_ORIGIN`) and from that iframe's window,
+and posts commands to that origin alone. The capability lives in component
+state and nowhere else: it is a short bearer, not a store row.
+
+- A detail page (`ReplayPage`, and the issue page alike) reads its row by
+  short id or id from the whole collection (`useOpsReplay`, `useOpsGroup`),
+  not through the workspace-scoped list readers: the detail feeder's read is
+  the access check, so a link to another workspace's replay opens it the way
+  a task page does, and a refusal drops the row.
+- The `/ops/replays/:id` page (`ReplayPage`, `useReplayStage`) puts the page
+  above its scrubber when the row lists DOM chunks (`dom_chunks` on the list
+  and detail views), with the player's bar hidden (`controls=0`). Its box keeps
+  the page's shape with the player's `below_px` as padding under it, so the
+  page fills the width and the remote-assets strip sits beneath it. Until the
+  player posts `ready` the page keeps its own clock; on `ready` it is told
+  where the page stands (seek, play, speed), and from then on its `time` and
+  `state` posts move the scrubber, the event list and the play button (for
+  300 ms after a seek from here, only the player's echo of that seek is
+  followed, so a time post it queued before the seek cannot pull the
+  scrubber back), while
+  every seek here (scrubber, an event, a console or network row, the arrows,
+  Home, End, Page Up and Down), play, pause and speed is posted to it. A
+  player that posts `error` (a lapsed link, a capture with nothing to draw)
+  says why in one line and the page goes on with its own clock. A replay
+  with no capture never asks for a player.
+- References: `rp` is a registered short-id prefix (shared/entities, type
+  `replay`, digits only), so `rp-N` is a pill everywhere markdown renders
+  (transcripts, chat, task and doc bodies, mobile), named by the page it
+  recorded (`replayTitle`) and opening `/ops/replays/rp-N`. Mobile has no
+  replay screen: its pill opens that web page, at the moment, in the in-app
+  browser. A moment
+  (`rp-N@1:23`) or a stretch (`rp-N@1:00-2:30`, `REPLAY_REF_SOURCE`) is the
+  same pill with the time, opening the page at that second (`?t=<ms>`, and a
+  pasted `/ops/replays/rp-N?t=<ms>` link reads back as the moment). The pill
+  reads `replays.webGetReplay` (the list row, null for no access, never the
+  timeline), seeded from the Ops replays in the store. Alone on its line a
+  moment is the player itself (`ReplayMomentEmbed`, through
+  `remarkEntityCards`, the call moment's rule: in running text it stays the
+  pill), with the player's own bar, opened at that second. The embed is only
+  where `remarkEntityCards` runs, agent transcripts and team chat, the same
+  reach as a call moment; task and doc bodies and mobile show the pill. Where Ops is hidden (hosted mode, `surfaceShown("nav.ops")`)
+  a reference reads as the text it was written as, like any pill to a hidden
+  page. It
+  mints when it first comes near the screen and then keeps the player (letting
+  it go would mint and download the whole capture again on every scroll
+  back); at most three embeds on a page open by themselves
+  (`LIVE_PLAYERS_MAX`), and the rest wait behind a play button. Its height
+  follows the recording's shape at the smaller of the embed's width and the
+  recording's own, because the player never scales a page up. An agent transcript promotes a lone
+  `rp-N` to its card and a lone moment to the player; a tool result reading
+  `Frame of the replay: rp-N@m:ss` (`cast replay snap`) renders as the same
+  embed where the picture would have been.
+
 **SDK captures** (DOM mode, above) upload through the same sign
 route: `POST /cli/ingest/replay-sign/<key> { replay_id, seq, sha256, size, kind: "dom" }`
 signs a DOM chunk (a gzipped JSON array of rrweb events with epoch
 timestamps) under the recording's `dom/` prefix, held to `REPLAY_DOM_LIMITS`,
 and lists it in `dom_chunk_keys`, never in `chunk_keys`, so the assembly never
-reads it. The chunk read redirect takes `&kind=dom` too.
+reads it. The chunk read redirect takes `&kind=dom` too. An SDK DOM chunk is
+untrusted: it goes straight from the browser to R2 and never passes
+`prepareDomCapture`, so its masking is only the client recorder's, and anyone
+holding a source's public ingest key can store unmasked or crafted DOM for
+that source. What bounds it is the player: scripts never run (the sandbox and
+`script-src 'self'`), inflation is capped, frames fetch nothing remote, and
+the replay is readable only in the source's own workspace.
 
 ## X6. Promotion to the line
 
@@ -810,15 +989,20 @@ form saves through `eventFilterForSave`, so a `--source` or `--repo` armed from
 the CLI survives an edit.
 
 `cast replay snap rp-N@1:23` (a stretch: `rp-N@1:00-2:30 --every 10s`, or
-`--every` alone across the whole replay, at most 50 frames) mints a
-capability, has the replay player render the frames server side, and writes
+`--every` alone across the whole replay; a lone moment with `--every` is
+refused, since it means a stretch) mints a capability, has the replay player
+render the frames server side, and writes
 each PNG to the owner-only scratch directory, remembered by `callFrameRefs`
 so a Read of it syncs as `Frame of the replay: rp-N@1:23`, never as the
 customer's page. Beside each frame it prints, fenced as product text, the
 moment (`replayMoment`): the page's URL, its visible text (the rendered
 frame's, else the stream's last outline), the last few actions before it, and
-the console and failed or slow requests within 5 s. A replay with no capture
-says so and prints the text alone. `cast replay show rp-N --at 1:23` (or
+the console and failed or slow requests within 5 s. A snap draws at most 50
+frames; a stretch that wants more says where it stopped (the last moment
+drawn, and `truncated` in `--json`). A capability that lapses partway through
+a long snap is minted again for the next batch, and a batch that still fails
+keeps the frames already drawn and marks the rest with the error. A replay
+with no capture says so and prints the text alone. `cast replay show rp-N --at 1:23` (or
 `show rp-N@1:23`) prints the moment without a frame. A moment reference is
 `rp-N@m:ss` (`parseReplayRef`, the call moment's clock grammar); an event
 index form is left out because the timeline prints times, not indices.
@@ -830,8 +1014,10 @@ writes, with the grant toggles a person uses, and the call audit). Detail pages
 `/ops/issues/:id` (stack, samples, release, commit, the session that wrote it,
 cause, triggers fired, replays) and `/ops/replays/:id` (a player with a
 scrubber, event list, view outline, console and network panes, and buttons to
-copy the repro or start a fix session; the replay player embeds there when the
-replay keeps a page capture, X5 "Playing a replay"). Source setup sits on Settings →
+copy the repro or start a fix session; when the replay keeps a page capture
+the page itself plays above the scrubber, synced both ways with it, X5
+"Playing a replay"). `rp-N` and `rp-N@1:23` render as pills in any markdown,
+and a moment alone on its line embeds the player at that second. Source setup sits on Settings →
 Integrations next to the other connections. Ingestion transitions render
 inline in transcripts and timelines through `registerExternalEventStyles`.
 
