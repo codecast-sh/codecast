@@ -2,52 +2,13 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
+import { KeyCap } from "@/components/KeyCap";
 
-// Genuine `cast blame` output captured from this repository on 2026-07-20.
-// BLAME_LINES is verbatim (all 9 rows). BLAME_LOG and BLAME_PORCELAIN are
-// excerpts: every omission is marked with an editorial "…". In BLAME_PORCELAIN
-// the git author/committer block (name, email, timestamps) and git's trailing
-// fields are trimmed; all six codecast-* keys are shown in full. Nothing here
-// is reconstructed.
-
-const BLAME_LINES = `1cc1592e3 (jx75w7g Ashot Cross-device session sync          2026-06-14 19:59:09 -0400 1) import { mutation, query, internalAction, internalMutation } from "./functions";
-a15290d7d (Ashot Petrosian                                  2025-12-24 13:16:30 -0800 2) import { v } from "convex/values";
-a15290d7d (Ashot Petrosian                                  2025-12-24 13:16:30 -0800 3) import { internal } from "./_generated/api";
-e5657b8e6 (Ashot Petrosian                                  2025-12-24 16:08:21 -0800 4) import { getAuthUserId } from "@convex-dev/auth/server";
-726e57342 (jx708f9 Ashot Topical Commits and Conflict Res.. 2026-02-07 23:32:38 -0800 5) import { verifyApiToken } from "./apiTokens";
-69add29d7 (jx72v1e Ashot Deploy forced CLI release          2026-04-07 13:47:42 -0500 6) import { isConversationTeamVisible } from "./privacy";
-beda6c5e2 (jx710sn Ashot Worktree consolidation             2026-07-08 20:01:09 +0300 7) import { isAgentSpawnedConversation } from "./ccAccountsShared";
-c1707b627 (jx76xy4 Ashot Codecast ownership model refactor  2026-07-14 14:42:08 +0400 8) import { listSessionOwnerIds } from "./sessionOwners";
-9ed63bb00 (Ashot Petrosian                                  2026-07-13 15:36:26 +0400 9) import {
-`;
-
-const BLAME_LOG = `Sessions that shaped ~/src/codecast/packages/convex/convex/notifications.ts  (382/843 lines attributed)
-
-  jx7bn26  Ashot   773469c14  Daemon flush cadence fix                     3 lines  2026-07-20
-  jx74vrz  Ashot   a28115d2b  Notification aggregation per conversat..    29 lines  2025-12-24→2026-07-20
-  jx76xy4  Ashot   c1707b627  Codecast ownership model refactor           70 lines  2026-07-14
-  jx70at5  Ashot   9ed63bb00  Idle session notifications                  46 lines  2025-12-25→2026-07-13
-  jx73xhc  Ashot   9ed63bb00  Team session notifications gate fix          7 lines  2025-12-25→2026-07-13
-  jx707cd  Ashot   9ed63bb00  Notification settings granular control       3 lines  2025-12-25→2026-07-13
-  jx78db2  Ashot   9ed63bb00  Notification system audit & implementa..     3 lines  2025-12-25→2026-07-13
-  jx779qm  Ashot   9ed63bb00  Fork: Agent Queue UI Implementation          3 lines  2026-02-17→2026-07-13
-  …  17 more sessions
-`;
-
-const BLAME_PORCELAIN = `c1707b627059816451a7c1967ffce25b9e55d871 8 8 1
-…  author + committer block (name, email, timestamps) trimmed  …
-summary feat(sessions): owners as an independent set — multi-owner handoff with notification
-codecast-session jx76xy4
-codecast-conversation jx76xy4kp0dngmd2vzbn3sjvqd8ahvsr
-codecast-title Codecast ownership model refactor
-codecast-author Ashot Petrosian
-codecast-url https://codecast.sh/conversation/jx76xy4kp0dngmd2vzbn3sjvqd8ahvsr
-codecast-message k171az4qwtbck5fnc3rmbvpy1s8agha1
-…  git trailers (previous, filename, content) trimmed  …
-`;
+// The screenshot is the codecast web app's file page with Blame set to
+// Sessions, captured from this repository on 2026-10-09.
 
 export default function GitBlameForAiAgentsPost() {
   const post = getPost("git-blame-for-ai-agents");
@@ -70,7 +31,7 @@ export default function GitBlameForAiAgentsPost() {
             git blame for AI agents
           </h1>
           <p className="mt-5 text-xl leading-relaxed" style={{ color: SOL.base00 }}>
-            When an agent writes the line, the author column goes blank. <Code>cast blame</Code> fills it back in — with the conversation that wrote it.
+            When an agent writes the line, the author column goes blank. Codecast&apos;s blame fills it back in, with the conversation that wrote it.
           </p>
           <div className="mt-6 flex items-center gap-3 font-mono text-sm" style={{ color: SOL.base1 }}>
             <span>{post?.author ?? "the codecast team"}</span>
@@ -118,87 +79,69 @@ export default function GitBlameForAiAgentsPost() {
           yourself.
         </P>
 
-        <H2>What cast blame does</H2>
+        <H2>Blame by session</H2>
         <P>
           <Code>git blame</Code> answers who wrote this. For agent-written code the useful answer
-          is not a person; it is the conversation. <Code>cast blame</Code> is <Code>git blame</Code> with
-          that column swapped: the author of each line is the codecast session that produced it.
-          Nothing about your workflow changes — you still run agents in a terminal, still commit
-          under your own name. The daemon watches the sessions as they happen and keeps the
-          mapping from line to conversation, so the attribution is there when you go looking for
-          it.
-        </P>
-
-        <Terminal label="cast blame">
-          <Cmd>cast blame -L 1,9 packages/convex/convex/notifications.ts</Cmd>
-          {BLAME_LINES}
-        </Terminal>
-
-        <P>
-          Read the author column. The leading token — <Code>jx76xy4</Code>, <Code>jx710sn</Code>,{" "}
-          <Code>jx75w7g</Code> — is a codecast session, and the text beside it is that
-          session&apos;s title: <em>Codecast ownership model refactor</em>, <em>Worktree
-          consolidation</em>, <em>Cross-device session sync</em>. Lines marked only{" "}
-          <em>Ashot Petrosian</em> predate the record or came from an ordinary hand edit;{" "}
-          <Code>cast blame</Code> does not invent an author it does not have. In this file, 382 of
-          843 lines trace back to a specific session.
+          is not a person; it is the conversation. So codecast&apos;s blame swaps that column:
+          the author of each line is the codecast session that produced it. Nothing about your
+          workflow changes. You still run agents in a terminal and still commit under your own
+          name. The daemon watches the sessions as they happen and keeps the mapping from line
+          to conversation, so the attribution is there when you go looking for it.
         </P>
         <P>
-          Step back from lines to sessions and you get the shape of the file&apos;s history:
+          You find it where you read code. Open a repository in codecast, open any file from
+          the <em>Code</em> tab (or from a pull request&apos;s <em>Files</em> tab, or a
+          commit), and the file&apos;s toolbar has a <em>Blame</em> switch with three
+          positions: <em>Off</em>, <em>Git</em> and <em>Sessions</em>. The <KeyCap size="xs">b</KeyCap>{" "}
+          key cycles them. Here is a file from this repository, set to <em>Sessions</em>:
         </P>
 
-        <Terminal label="cast blame --log">
-          <Cmd>cast blame --log packages/convex/convex/notifications.ts</Cmd>
-          {BLAME_LOG}
-        </Terminal>
+        <Screenshot
+          wide
+          src="/blog/git-blame-for-ai-agents/blame-sessions.png"
+          alt="The codecast file page for packages/convex/convex/notifications.ts with Blame set to Sessions: a strip reading 70% by 41 sessions with a chip per session and its line count, and a gutter naming the session behind each block of lines, such as Cross-device session sync, Production deployment and Codecast ownership model refactor, with plain author names where no session wrote the line"
+          caption="notifications.ts with Blame on Sessions. The gutter names the conversation behind each block of lines."
+        />
 
         <P>
-          Each row is a conversation that shaped this file, newest first, with how many of its
-          lines survive and the span of dates it touched. It is the map of where the file came
-          from, rebuilt from agent work that would otherwise have evaporated at the end of each
-          session.
+          Read the gutter. Each block of lines carries a session&apos;s title and age:{" "}
+          <em>Cross-device session sync</em>, <em>Production deployment</em>,{" "}
+          <em>Codecast ownership model refactor</em>. Rows that show only{" "}
+          <em>Ashot Petrosian</em> predate the record or came from an ordinary hand edit;
+          blame does not invent an author it does not have. The strip above the code steps
+          back from lines to sessions: <em>70% by 41 sessions</em>, then one chip per
+          conversation with how many of its lines survive. Hover a chip and its lines light
+          up; click it and the view jumps to the first of them and keeps them lit. That strip
+          is the map of where the file came from, rebuilt from agent work that would
+          otherwise have evaporated at the end of each session.
         </P>
 
         <H2>From a line to the conversation</H2>
         <P>
-          The point is not the label. The point is that the label is a link.{" "}
-          <Code>cast blame</Code> is a drop-in replacement for <Code>git blame</Code> — the default
-          and porcelain formats match byte for byte, so anything that already shells out to{" "}
-          <Code>git blame</Code> can call <Code>cast blame</Code> instead. Alongside git&apos;s own
-          fields, porcelain adds six <Code>codecast-*</Code> keys — session, conversation, title,
-          author, url, and message:
-        </P>
-
-        <Terminal label="cast blame --porcelain">
-          <Cmd>cast blame packages/convex/convex/notifications.ts:8 --porcelain</Cmd>
-          {BLAME_PORCELAIN}
-        </Terminal>
-
-        <P>
-          Take line 8. Blame says it came from <Code>jx76xy4</Code>, <em>Codecast ownership model
-          refactor</em>. Open that session and you see why <Code>listSessionOwnerIds</Code> is
-          imported here at all: the refactor made ownership an independent set, so notifications
-          had to resolve a list of owners instead of a single author. That reason is one click
-          from the line — not guessed from a commit summary, but the actual conversation, prompt
-          and dead ends included.
+          The point is not the label. The point is that the label is a link. Take line 18,
+          which imports <Code>listSessionOwnerIds</Code>. Blame says it came from{" "}
+          <em>Codecast ownership model refactor</em>. Open that session and you see why the
+          import is here at all: the refactor made ownership an independent set, so
+          notifications had to resolve a list of owners instead of a single author. That
+          reason is one click from the line. Not guessed from a commit summary, but the actual
+          conversation, prompt and dead ends included.
         </P>
         <P>
-          That <Code>codecast-url</Code> is the conversation link, and{" "}
-          <Code>codecast-message</Code> pins the exact turn; <Code>cast blame src/file.ts:8 --open</Code>{" "}
-          just opens it for you. In
-          your editor it is closer still: the VS Code and Cursor extension shows the session that
-          wrote the current line at the end of the line, the way GitLens shows the commit, and
-          lets you open the conversation behind it. For vim,{" "}
-          <Code>cast blame --install-fugitive</Code> points fugitive at a shim so <Code>:Gblame</Code>{" "}
-          renders sessions in the author column.
+          The same attribution reaches the places code is read outside the app. In VS Code and
+          Cursor, the codecast extension shows the session that wrote the current line at the
+          end of the line, the way GitLens shows the commit, and opens the conversation behind
+          it. In a terminal, <Code>cast blame</Code> is a drop-in for <Code>git blame</Code>{" "}
+          with the session in the author column; its porcelain output matches git&apos;s and
+          adds <Code>codecast-*</Code> keys (session, title, url, and the exact message), so
+          anything that already shells out to <Code>git blame</Code> can call it instead.
         </P>
 
         <H2>Blame is one query over the record</H2>
         <P>
           Line attribution is one view of a larger thing: every agent conversation your team has
-          run, kept and searchable instead of discarded when the terminal closes.{" "}
-          <Code>cast search &quot;auth&quot;</Code> greps it like ripgrep;{" "}
-          <Code>cast ask &quot;how did we implement auth?&quot;</Code> answers from it. It spans
+          run, kept and searchable instead of discarded when the terminal closes. The{" "}
+          <em>Search</em> page finds a phrase in any of them, and the repository&apos;s own{" "}
+          <em>Search</em> and <em>Sessions</em> tabs scope it to one codebase. It spans
           agents and machines — Claude Code, Codex, Cursor, Gemini — not one vendor&apos;s cloud
           runs, because the daemon watches the local sessions you already run, wherever you run
           them.
@@ -239,11 +182,9 @@ export default function GitBlameForAiAgentsPost() {
           Sources:{" "}
           <a href="https://survey.stackoverflow.co/2025/ai/" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: SOL.yellow }}>Stack Overflow 2025 Developer Survey</a>;{" "}
           <a href="https://dora.dev/dora-report-2025/" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: SOL.yellow }}>DORA 2025 State of AI-assisted Software Development</a>;{" "}
-          <a href="https://arxiv.org/abs/2607.01418" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: SOL.yellow }}>a controlled study of a large enterprise command-line agent rollout (Microsoft, 2026)</a>; Simon Willison on parallel agents. Terminal output is genuine{" "}
-          <Code>cast blame</Code> from this repository, captured 2026-07-20 — the line blame is
-          verbatim; the <Code>--log</Code> and <Code>--porcelain</Code> views are excerpts with
-          every omission marked <Code>…</Code> (the porcelain author/committer block and git
-          trailers are trimmed).
+          <a href="https://arxiv.org/abs/2607.01418" target="_blank" rel="noopener noreferrer" className="underline" style={{ color: SOL.yellow }}>a controlled study of a large enterprise command-line agent rollout (Microsoft, 2026)</a>; Simon Willison on parallel agents. The screenshot is the codecast web app&apos;s
+          file page for <Code>packages/convex/convex/notifications.ts</Code> in this repository,
+          captured 2026-10-09 with Blame set to Sessions and cropped to the content column.
         </p>
       </article>
     </main>
