@@ -12,6 +12,12 @@
 
 export const SOURCE_SETTLE_MS = 4 * 60_000;
 export const SOURCE_RESTART_SPACING_MS = 30 * 60_000;
+// A restart re-adopts every live session, and on a saturated machine that
+// took up to 20 minutes, during which parking and status tracking are blind
+// (2026-10-09: 40 restarts in a day, most at load 6 to 14 per cpu). So a
+// restart waits out the load, but never longer than this: a machine that is
+// always busy still gets the daemon's fixes.
+export const SOURCE_LOADED_MAX_DEFER_MS = 3 * 3600_000;
 
 export type SourceRestartState = {
   /** The source the running daemon booted on. */
@@ -24,10 +30,11 @@ export type SourceRestartState = {
 };
 
 /** What to do with the id the source hashes to now. `restart` means: check the new code builds, then restart. */
-export function decideSourceRestart(state: SourceRestartState, observedId: string, now: number): { state: SourceRestartState; restart: boolean } {
+export function decideSourceRestart(state: SourceRestartState, observedId: string, now: number, overloaded = false): { state: SourceRestartState; restart: boolean } {
   if (observedId === state.bootId) return { state: { bootId: state.bootId, lastRestartAt: state.lastRestartAt }, restart: false };
   if (observedId !== state.pendingId) return { state: { ...state, pendingId: observedId, pendingSince: now }, restart: false };
   const settled = now - (state.pendingSince ?? now) >= SOURCE_SETTLE_MS;
   const spaced = state.lastRestartAt === undefined || now - state.lastRestartAt >= SOURCE_RESTART_SPACING_MS;
-  return { state, restart: settled && spaced };
+  const deferred = overloaded && now - (state.pendingSince ?? now) < SOURCE_LOADED_MAX_DEFER_MS;
+  return { state, restart: settled && spaced && !deferred };
 }
