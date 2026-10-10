@@ -13,6 +13,7 @@ import { Doc, Id } from "../_generated/dataModel";
 import { inferEntityTypeFromShortId, shortIdSource } from "@codecast/shared/entities";
 import { extractSessionTrailer } from "@codecast/shared/blame";
 import { isConversationOwner, isConversationTeamVisible } from "../privacy";
+import { normalizeRepository } from "@codecast/shared/contracts";
 
 type Db = { db: any };
 
@@ -233,4 +234,12 @@ export function commitUrl(repository: string, sha: string): string {
 
 export function shortSha(sha: string | undefined | null): string {
   return (sha ?? "").slice(0, 7);
+}
+
+/** The pull request row for `repository#number`, in any spelling of the repository. */
+export async function prByNumber(ctx: Db, repository: string, number: number): Promise<Doc<"pull_requests"> | null> {
+  return await ctx.db
+    .query("pull_requests")
+    .withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", number))
+    .first();
 }

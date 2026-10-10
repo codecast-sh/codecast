@@ -119,7 +119,7 @@ export interface RunnerIo {
 
   /** Wake and resolve the cloud host behind a device id (throws when this machine cannot reach it). */
   prepareHost(deviceId: string): Promise<void>;
-  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string; migrationId: string; batchId: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
+  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
   /** The reorientation notice for the moved agent, from what the transfer proved. */
   notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult, stoppedOnSource?: Array<{ name: string; via?: string }>): string | null;
@@ -308,7 +308,7 @@ export async function migrateRow(
       }
       await io.report(id, { status: "transferring", stage: owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)" });
       try {
-        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead, migrationId: id, batchId: batch.batch_id });
+        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead });
         transfer = t;
         if (owner) ledger.settle(key, t.pushedHead);
       } catch (err) {

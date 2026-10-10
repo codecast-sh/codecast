@@ -21,7 +21,7 @@ import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
 import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, alwaysCovers, approvalContext, approveWords, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
-import { strandedCalls } from "./history";
+import { STOPPED_TURN_LINE, strandedCalls } from "./history";
 import { hostedInputWaits } from "./input";
 import { incidentDeps, noteProviderFault } from "./incidents";
 
@@ -65,7 +65,7 @@ const testTools = (): Tool[] => [
 beforeAll(() => {
   faux = pi.registerFauxProvider({
     models: [
-      { id: "claude-haiku-4-5-20251001" },
+      { id: "claude-haiku-5-5" },
       { id: "claude-sonnet-5-5" },
       // A model no turn's ceiling can pay for.
       { id: "pricey", cost: { input: 1_000_000, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
@@ -91,7 +91,7 @@ afterEach(() => Object.assign(turnDeps, saved));
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const user = await t.run((ctx) => ctx.db.insert("users", { name: "Dana", timezone: "America/Los_Angeles" } as any));
+  const user = await t.run((ctx) => ctx.db.insert("users", { name: "Dana", timezone: "America/Los_Angeles", emailVerificationTime: 1 } as any));
   const authed = t.withIdentity({ subject: user });
   const start = async () => (await authed.mutation(api.assistant.entry.startConversation, {})).conversation_id as Id<"conversations">;
   const conversationId = await start();
@@ -175,7 +175,7 @@ describe("a turn", () => {
 
     const s = await expectBalanced(t, conversationId, user);
     expect(s.turns).toHaveLength(1);
-    expect(s.turns[0]).toMatchObject({ status: "done", reason: "done", model: "claude-haiku-4-5-20251001" });
+    expect(s.turns[0]).toMatchObject({ status: "done", reason: "done", model: "claude-haiku-5-5" });
     expect(s.turns[0].cost_usd).toBeGreaterThan(0);
     expect(s.messages.map((m) => [m.role, m.content])).toEqual([
       ["user", "Hi there"],
@@ -190,7 +190,7 @@ describe("a turn", () => {
 
   test("the first message of a new conversation wakes its turn on its own", async () => {
     const t = convexTest(schema, modules);
-    const user = await t.run((ctx) => ctx.db.insert("users", {}));
+    const user = await t.run((ctx) => ctx.db.insert("users", { emailVerificationTime: 1 }));
     faux.setResponses([reply("On it.")]);
     const started = await t.withIdentity({ subject: user }).mutation(api.assistant.entry.startConversation, { firstMessage: "Book a dentist" });
     await settle(t);
@@ -907,6 +907,44 @@ describe("more limits", () => {
     expect((await t.run((ctx) => ctx.db.query("assistant_incidents").collect()))[0].closed_at).toBeNumber();
   });
 
+  test("after a turn that stopped, a new ask reads the stop, and a retry reads the ask alone", async () => {
+    const { t, user, conversationId } = await setup();
+    turnDeps.fallbackModel = () => undefined;
+    turnDeps.retryDelaysMs = [50, 50];
+    const broke = () => {
+      throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}');
+    };
+    faux.setResponses([broke, broke, broke]);
+    await say(t, conversationId, user, "Add a to-do: renew my library card");
+    await settle(t);
+    // What the model reads, as plain text per message.
+    const read: string[][] = [];
+    const capture = (text: string) => (context: { messages: Array<{ role: string; content: unknown }> }) => {
+      read.push(context.messages.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`));
+      return reply(text);
+    };
+    // An unrelated ask: the stopped one sits behind one stop line, so the
+    // model is not left with two asks in a row and no reply between them.
+    faux.setResponses([capture("Nothing from your dentist this week.")]);
+    await say(t, conversationId, user, "Any emails from my dentist this week?");
+    await settle(t);
+    const asked = read[0];
+    const first = asked.findIndex((m) => m.includes("renew my library card"));
+    expect(asked.slice(first + 1).map((m) => m.split(":")[0])).toEqual(["assistant", "user"]);
+    expect(asked[first + 1]).toContain(STOPPED_TURN_LINE.slice(1, 40));
+    expect(asked.filter((m) => m.includes(STOPPED_TURN_LINE.slice(1, 40)))).toHaveLength(1);
+
+    // A retry resends the same words: its notices drop and the ask reads alone.
+    const { t: t2, user: user2, conversationId: c2 } = await setup();
+    faux.setResponses([broke, broke, broke]);
+    await say(t2, c2, user2, "Help me write a kind note");
+    await settle(t2);
+    faux.setResponses([capture("Here is a kind note.")]);
+    await say(t2, c2, user2, "Help me write a kind note");
+    await settle(t2);
+    expect(read[1].some((m) => m.includes(STOPPED_TURN_LINE.slice(1, 40)))).toBe(false);
+  });
+
   test("while an incident is open a probe tries the provider, backing off, and a served ping closes it", async () => {
     const { t } = await setup();
     const pings: string[] = [];
@@ -917,20 +955,20 @@ describe("more limits", () => {
       return serves;
     };
     try {
-      await t.run((ctx) => noteProviderFault(ctx, { model: "claude-haiku-4-5-20251001", fault: "billing", error: "credit balance is too low" }));
+      await t.run((ctx) => noteProviderFault(ctx, { model: "claude-haiku-5-5", fault: "billing", error: "credit balance is too low" }));
       const probes = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((job) => job.name.includes("incidents") && job.name.endsWith("probe") && job.state.kind === "pending"));
       expect((await probes()).map((job) => job.args[0].attempt)).toEqual([0]);
-      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-4-5-20251001", attempt: 0 });
+      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-5-5", attempt: 0 });
       // Still down: tried once, the incident stays open, and the next probe is booked.
       expect((await probes()).map((job) => job.args[0].attempt)).toEqual([0, 1]);
       const open = () => t.query(internal.assistant.incidents.openIncident, { provider: "anthropic" });
       expect(await open()).not.toBeNull();
       serves = true;
-      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-4-5-20251001", attempt: 1 });
-      expect(pings).toEqual(["anthropic:claude-haiku-4-5-20251001", "anthropic:claude-haiku-4-5-20251001"]);
+      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-5-5", attempt: 1 });
+      expect(pings).toEqual(["anthropic:claude-haiku-5-5", "anthropic:claude-haiku-5-5"]);
       expect(await open()).toBeNull();
       // Closed: a probe still booked does nothing.
-      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-4-5-20251001", attempt: 2 });
+      await t.action(internal.assistant.incidents.probe, { provider: "anthropic", model: "claude-haiku-5-5", attempt: 2 });
       expect(pings).toHaveLength(2);
     } finally {
       Object.assign(incidentDeps, before);
@@ -952,7 +990,7 @@ describe("more limits", () => {
     expect(s.turns[0]).toMatchObject({ status: "done", reason: "done", model: "claude-sonnet-5-5" });
     expect(s.messages[s.messages.length - 1].content).toBe("Done, from the fallback.");
     const incidents = await t.run((ctx) => ctx.db.query("assistant_incidents").collect());
-    expect(incidents.map((row) => [row.fault, row.model])).toEqual([["auth", "claude-haiku-4-5-20251001"]]);
+    expect(incidents.map((row) => [row.fault, row.model])).toEqual([["auth", "claude-haiku-5-5"]]);
   });
 
   test("a run that died is ended by its lease, charged what it recorded, and the next message runs", async () => {
@@ -966,7 +1004,7 @@ describe("more limits", () => {
           started_at: Date.now() - 60 * 60_000,
           cost_reserved_usd: 0,
           cost_usd: spent,
-          model: "claude-haiku-4-5-20251001",
+          model: "claude-haiku-5-5",
         });
         expect(await reserve(ctx, user, id, 0.25)).toBe(true);
         return id;
@@ -1126,7 +1164,7 @@ describe("more limits", () => {
         started_at: Date.now() - 60 * 60_000,
         cost_reserved_usd: 0,
         cost_usd: 0.003,
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-5-5",
       });
       expect(await reserve(ctx, user, turnId, 0.25)).toBe(true);
       await ctx.db.delete(conversationId);
@@ -1245,14 +1283,10 @@ describe("pieces", () => {
     expect(covers("create_event", { attendees: ["dana@example.com"] })).toBe("Add events with dana@example.com as the guests, without emailing them");
   });
 
-  test("the yes says what it does: a routine starts and keeps going, a one-off write is just this time", () => {
-    const now = Date.parse("2026-10-07T12:20:00Z");
-    const ny = { timezone: "America/New_York", now };
-    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"], time: "18:00" } }, false, ny)).toBe(`I'll start today at 6:00 PM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
-    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"], time: "08:00" } }, false, ny)).toBe(`I'll start tomorrow, Thursday, at 8:00 AM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
-    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-09T17:00:00-04:00", repeat_every_hours: 168 } }, false, ny)).toBe(`I'll start Friday, October 9, at 5:00 PM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
-    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-07T14:00:00-04:00" } }, false, ny)).toBe(`I'll do it today at 2:00 PM. ${ROUTINE_SHOWS_UP}`);
-    expect(approveWords({ name: "schedule_routine", input: {} }, false, ny)).toBe(`I'll do it that one time. ${ROUTINE_SHOWS_UP}`);
+  test("the yes says what the card does not: a routine runs until paused, a one-off write is just this time", () => {
+    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"], time: "18:00" } }, false)).toBe(`Runs until you pause it. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-09T17:00:00-04:00", repeat_every_hours: 168 } }, false)).toBe(`Runs until you pause it. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-07T14:00:00-04:00" } }, false)).toBe("Runs once. What it finds arrives in your inbox.");
     expect(approveWords({ name: "send_mail", input: {} }, true)).toBe("Just this time.");
     expect(approveWords({ name: "replace_doc", input: {} }, false)).toBe("Go ahead.");
   });

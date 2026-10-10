@@ -7,7 +7,7 @@ import { C as SharedC } from "../kit";
 export const BLUE = SOL.blue;
 /** The two machines every diagram on the page names. */
 export const LAPTOP = "MacBook-Pro";
-export const HOST = "ip-172-31-40-243";
+export const HOST = "shop-host";
 export const SESSION = "jx7k2pd";
 
 /** Inline style that sets an animation delay (seconds) on a `.cl-anim` element. */

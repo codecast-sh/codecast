@@ -61,6 +61,8 @@ async function setup() {
     const project = (short_id: string, title: string, goal: string) =>
       ctx.db.insert("projects", { user_id: person, team_id: team, workspace, short_id, title, goal, status: "active", created_at: T0, updated_at: T0 } as any);
     const checkout = await project("pr-1", "Checkout", "Every cart that reaches checkout becomes an order");
+    // sentry's signals open causes: the explicit conversion step (LE4).
+    await ctx.db.patch(checkout, { line_profile: { finders: [{ id: "errors", source: "sentry", kind: ["bug"], fingerprint: "<group>", opens_causes: true }], changed_at: T0 } } as any);
     const avatars = await project("pr-2", "Avatars", "Profiles look like their owners");
     return { person, team, workspace, checkout, avatars };
   });
@@ -94,7 +96,7 @@ describe("lineGround.sweep (LE5)", () => {
 
     expect(await task(filed.task_id)).toMatchObject({ goal_ref: "pr-1", category: "code", risk: "low", readiness: "ready", readiness_note: "Checkout errors cost orders" });
     const comments = await t.run(async (ctx) => await ctx.db.query("task_comments").collect());
-    expect(comments.some((c: any) => c.author === "ground" && c.text.startsWith("Grounded: goal pr-1"))).toBe(true);
+    expect(comments.some((c: any) => c.author === "ground" && c.text.startsWith("Grounded: serves pr-1."))).toBe(true);
 
     // Grounded causes are not asked about again.
     const before = stub.state.calls.length;
@@ -165,7 +167,7 @@ async function orgSetup() {
       const id = await ctx.db.insert("org_roles", {
         short_id: `or-${handle}`, scope_type: "team", team_id: team, host_user_id: person, name: handle, handle,
         scope: { project_ids: scope, plan_ids: [] }, reports_to, status: "active", trust: "direct", anchor_id: anchor,
-        caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, ...(cards ? { cards } : {}) },
+        caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true, ...(cards ? { cards } : {}) },
         created_by: person, created_at: T0, updated_at: T0,
       } as any);
       return { id, conv };
