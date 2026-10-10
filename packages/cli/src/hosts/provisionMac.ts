@@ -31,6 +31,16 @@ export const MAC_REACH_SCRIPT = `if ! pkgutil --pkgs='org\\.fuse-t\\.core.*' >/d
 fi
 ${SSHD_KEEPALIVE_SCRIPT}`;
 
+/** The browser `cast browser` drives. A stock AWS macOS image has none. */
+const MAC_CHROME_SCRIPT = `if [ ! -d "/Applications/Google Chrome.app" ]; then
+  chromedir=$(mktemp -d)
+  curl -fsSL -o "$chromedir/chrome.dmg" https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg
+  hdiutil attach -nobrowse -readonly -mountpoint "$chromedir/mnt" "$chromedir/chrome.dmg" >/dev/null
+  sudo -n ditto "$chromedir/mnt/Google Chrome.app" "/Applications/Google Chrome.app"
+  hdiutil detach "$chromedir/mnt" -quiet
+  rm -rf "$chromedir"
+fi`;
+
 export const MAC_HOST_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
 
 export function macServiceLabel(user: string): string {
@@ -56,6 +66,7 @@ for agent in .codex .claude .gemini .grok; do
     exit 1
   fi
 done
+${MAC_CHROME_SCRIPT}
 ${MAC_REACH_SCRIPT}
 echo MAC-BASE-OK`;
 }
@@ -115,6 +126,32 @@ function run(host: RemoteHost, script: string, timeout: number): string {
   return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
     input: `${MAC_HOST_PATH}\n${script}`, encoding: "utf8", timeout, maxBuffer: 8 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+/**
+ * codecast's base image, built on a fresh AWS Mac from its bootstrap login:
+ * runtimes and Chrome, the managed codecast login signed into the desktop, the
+ * signed release of cast (its helper matches the grants a person then gives
+ * once), and the agent CLIs. Nothing personal: no configuration push, no agent
+ * logins, no daemon and so no device identity.
+ */
+export async function buildMacBase(bootstrap: RemoteHost, log: (message: string) => void): Promise<{ login: RemoteHost; desktop: ReturnType<typeof parseMacDesktop> }> {
+  const { provisionMacLogin } = await import("./macLogin.js");
+  const { installHostRelease } = await import("./installRelease.js");
+  const { BASE_IMAGE_LOGIN } = await import("./image.js");
+  const base = (h: RemoteHost) => {
+    const out = run(h, macBaseScript(), 30 * 60_000);
+    if (!out.includes("MAC-BASE-OK")) throw new Error(`Mac setup did not complete: ${out.slice(-600)}`);
+  };
+  log(`runtimes and Chrome as ${bootstrap.user}, which owns Homebrew…`);
+  base(bootstrap);
+  const login = provisionMacLogin(bootstrap, BASE_IMAGE_LOGIN);
+  log(`runtimes as ${login.user}…`);
+  base(login);
+  installHostRelease(login, "darwin", log);
+  log("agent CLIs…");
+  log(parseAgentCliReport(run(login, agentCliInstallScript(readInstalledClientVersions(), { upgradeCodex: true }), 15 * 60_000)));
+  return { login, desktop: macDesktop(login) };
 }
 
 export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: boolean; gitIdentity?: string }, log: (message: string) => void) {

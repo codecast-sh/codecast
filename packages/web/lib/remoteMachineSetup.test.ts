@@ -28,3 +28,9 @@ describe("a saved image", () => {
     expect(remoteMachineSetupCommand({ ...base, savedImage: "ami-0abc", image: "ami-0def" })).toContain("--image 'ami-0def'");
   });
 });
+
+test("a new Mac needs no image: it starts from codecast's base image", () => {
+  const command = remoteMachineSetupCommand({ platform: "mac", mode: "new", instance: "", region: "us-east-2", profile: "", key: "~/.ssh/k.pem", name: "mac1", image: "", keyName: "k", subnet: "subnet-1", securityGroup: "sg-1", dedicatedHost: "h-1" });
+  expect(command).toContain("cast hosts create mac");
+  expect(command).not.toContain("--image");
+});
