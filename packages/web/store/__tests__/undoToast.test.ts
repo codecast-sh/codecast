@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import { toast } from "sonner";
 import { _resetUndoStacks, getUndoHistory, setUndoNotifier } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
-import { CODECAST_UNDO_NOTIFIER, gestureToast, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
+import { CODECAST_UNDO_NOTIFIER, gestureToast, UNDO_QUIET_ACTION_CLASS, UNDO_RECEIPT_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
 import * as undoTimeline from "../../lib/undoTimelineOpen";
 import { undoAsOne } from "../undoActions";
 
@@ -141,12 +141,12 @@ describe("undo announcements", () => {
     performUndo();
     expect(status()?.action?.label).toBe("History");
     // A side door, worn quietly, not a second primary button.
-    expect((status() as any)?.className).toBe(UNDO_QUIET_ACTION_CLASS);
+    expect((status() as any)?.className).toBe(`${UNDO_RECEIPT_CLASS} ${UNDO_QUIET_ACTION_CLASS}`);
 
     // A redo never offers it, and its update clears the earlier one.
     performRedo();
     expect(status()).toHaveProperty("action", undefined);
-    expect(status()).toHaveProperty("className", undefined);
+    expect(status()).toHaveProperty("className", UNDO_RECEIPT_CLASS);
   });
 
   test("the notifier is silent while the timeline is open", () => {
