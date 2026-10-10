@@ -5,7 +5,8 @@
 // tabRouting → TabBar) that made vite full-reload every window instead of hot
 // updating whenever anything in that loop changed.
 import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
-import { isConvexId } from "@codecast/shared/entities";
+import { isConvexId, orgObjectOfRef } from "@codecast/shared/entities";
+import { orgRefOfPath } from "../components/org/company/sheetStack";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 import { changesDayLabel } from "./changesDay";
 import { modTabLabel, objectTabLabel } from "./mods/label";
@@ -45,7 +46,8 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   // (/inbox?s=<id>) must label as "Inbox" — before this, the raw
   // "inbox?s=jx7…" leaked into tab titles. The /files branch below still reads
   // the original path because its label lives IN the query (?f=<file>).
-  const clean = currentPagePath(path.split("?")[0].split("#")[0]);
+  // An old address reads as the page it moved to (/goals is the Org screen).
+  const clean = currentPagePath(path.split("?")[0].split("#")[0]).split("?")[0];
   if (clean.startsWith("/conversation/")) return "Conversation";
   if (clean.startsWith("/calls/")) return "Call";
   // /chat/threads is the pre-move alias of /threads — old saved tabs keep it.
@@ -60,11 +62,23 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   if (clean.startsWith("/workflows/runs/")) return "Run";
   // A trace (line-map.md LX4) titles by the ref it follows.
   if (clean.startsWith("/line/trace/")) { const r = clean.split("/")[3]; return r ? `Trace ${decodeURIComponent(r)}` : "Trace"; }
-  if (clean.startsWith("/projects/") && clean.split("/")[2] && !/^pj-\d+$/i.test(clean.split("/")[2])) return "Project";
+  // A project's line workspace: the store names the project (tabTitle).
+  if (/^\/line\/[^/]+$/.test(clean) && clean !== "/line/settings") return "Line";
+  if (clean.startsWith("/projects/") && clean.split("/")[2]) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
-  // A goal titles by its `in-N`, the handle people quote (initiatives-projects-role-page.md I1).
-  if (clean.startsWith("/goals/")) return /^in-\d+$/i.test(clean.split("/")[2] ?? "") ? `Goal ${clean.split("/")[2].toLowerCase()}` : "Goal";
+  // A company object on the Org screen titles by its kind and the handle
+  // people quote (`Goal in-2`, `Role or-7`, `@samvit`); tabTitle upgrades it
+  // to the object's name from the store. A project's is not readable, so it
+  // is "Project" until then.
+  const org = orgRefOfPath(clean);
+  if (org?.ref) {
+    const object = orgObjectOfRef(org.ref);
+    if (object?.kind === "initiative") return `Goal ${object.ref}`;
+    if (object?.kind === "role") return `Role ${object.ref}`;
+    if (object?.kind === "project") return "Project";
+    if (object?.kind === "person") return `@${object.ref}`;
+  }
   // A decision's document page and a stack (docs/architecture/decisions-as-
   // documents.md D4, D5) title by their short id, the handle people quote.
   if (clean.startsWith("/decisions/stacks/")) return clean.split("/")[3] ? `Stack ${clean.split("/")[3]}` : "Stack";
@@ -148,7 +162,6 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
     "/plans": "Plans",
     "/calls": "Calls",
-    "/projects": "Projects",
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
@@ -156,6 +169,7 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     "/line/settings": "Line settings",
     "/org": "Org",
     "/goals": "Goals",
+    "/projects": "Projects",
     "/chat": "Chat",
     "/community": "Community",
     "/threads": "Threads",

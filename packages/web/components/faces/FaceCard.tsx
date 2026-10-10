@@ -28,6 +28,8 @@ import type { FaceKey } from "../presence/useFaceKey";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { GuestTag } from "../calls/GuestTag";
 import { GuestRemoveButton } from "../calls/GuestDoor";
+import { FaceMessages } from "./FaceMessages";
+import { useFaceChatFocus } from "../../lib/chat/faceChat";
 
 /** The card's edge gutter: it never touches the viewport. */
 const EDGE = 8;
@@ -110,6 +112,7 @@ function FaceCardBody({
   const cap = (n: number) => (n > 20 ? "20+" : String(n));
 
   const huddle = useMemberHuddle(member, viewerId, liveRoom, displayName);
+  const readFocus = useFaceChatFocus(memberId);
   const openDm = useOpenDm();
   const messageThem = () => {
     onClose();
@@ -145,6 +148,29 @@ function FaceCardBody({
   const setStatus = (status: "available" | "busy" | "away") => {
     useInboxStore.getState().setMyStatus(status);
   };
+
+  // The unread DM said in words: the messages section's stand-in.
+  const dmLine = dm && (
+    <button
+      type="button"
+      className="face-card-dm"
+      title={`Open your conversation with ${displayName}`}
+      onClick={messageThem}
+    >
+      <span className="face-card-dm-head">
+        <MessageSquare className="face-card-dm-icon" />
+        <span className="face-card-dm-count">
+          {dm.unread > 99 ? "99+" : dm.unread} new message{dm.unread === 1 ? "" : "s"}
+        </span>
+        {dm.at && <span className="face-card-dm-at">{formatRelative(dm.at, now)}</span>}
+        <span className="face-card-dm-go">
+          Reply
+          <ArrowRight className="face-card-dm-arrow" />
+        </span>
+      </span>
+      {dm.preview && <span className="face-card-dm-preview">{dm.preview}</span>}
+    </button>
+  );
 
   return (
     <div
@@ -191,26 +217,11 @@ function FaceCardBody({
         )}
       </Who>
 
-      {dm && (
-        <button
-          type="button"
-          className="face-card-dm"
-          title={`Open your conversation with ${displayName}`}
-          onClick={messageThem}
-        >
-          <span className="face-card-dm-head">
-            <MessageSquare className="face-card-dm-icon" />
-            <span className="face-card-dm-count">
-              {dm.unread > 99 ? "99+" : dm.unread} new message{dm.unread === 1 ? "" : "s"}
-            </span>
-            {dm.at && <span className="face-card-dm-at">{formatRelative(dm.at, now)}</span>}
-            <span className="face-card-dm-go">
-              Reply
-              <ArrowRight className="face-card-dm-arrow" />
-            </span>
-          </span>
-          {dm.preview && <span className="face-card-dm-preview">{dm.preview}</span>}
-        </button>
+      {/* What they have been saying, with a reply box, above the ways to
+          reach them. With nothing from them in this window, the unread DM
+          line stands in. Your own card and an agent's have neither. */}
+      {!isSelf && !member.is_bot && (
+        <FaceMessages memberId={memberId} name={displayName} focus={readFocus} onLeave={onClose} fallback={dmLine} />
       )}
 
       {/* Where they are, and the one gesture that goes there with them. */}
