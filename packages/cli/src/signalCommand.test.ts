@@ -17,6 +17,14 @@ describe("signalAddBody", () => {
     expect(signalAddBody({ source: "person", kind: "bug", title: "Checkout  Throws!" }).fingerprint).toBe("person:checkout-throws");
   });
 
+  test("a product's finding files under its issue key, with its judge, version and severity (learning-loop.md LL3)", () => {
+    expect(signalAddBody({ source: "agentwatch", kind: "bug", title: "Narrates effort", issue: " union:cluster:a ", judge: "comms", judgeVersion: "v7", severity: "8" })).toEqual({
+      source: "agentwatch", kind: "bug", title: "Narrates effort", fingerprint: "union:cluster:a", issue: true, judge: "comms", judge_version: "v7", severity: 8,
+    });
+    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", issue: "union:cluster:a", fingerprint: "x" })).toThrow("not both");
+    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", severity: "high" })).toThrow("--severity takes a number");
+  });
+
   test("an unknown kind is refused with the list", () => {
     expect(() => signalAddBody({ source: "s", kind: "feeling", fingerprint: "f", title: "t" })).toThrow("Kinds: bug, regression, prompt_miss, ux, cohesion, request");
   });
@@ -104,6 +112,12 @@ describe("cast signal on the wire", () => {
     await expect(run("add", "--source", "person")).rejects.toThrow(/exit 1/);
     expect(calls).toHaveLength(0);
     expect(logs.join("\n")).toContain("--kind, --title");
+  });
+
+  test("move sends the key, the cause it leaves, and where it goes", async () => {
+    answer = () => ({ from: "ct-7", to: "ct-9", moved: 2, created: true });
+    await run("move", "--fingerprint", "union:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "union:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
   });
 
   test("ls --fingerprint asks the server for that one key in the workspace", async () => {

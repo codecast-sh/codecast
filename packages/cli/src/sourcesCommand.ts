@@ -58,6 +58,24 @@ export interface SourceAddOptions {
   [configFlag: string]: string | boolean | undefined;
 }
 
+/**
+ * The config settings the flags name, one per SOURCE_CONFIG_FIELDS entry
+ * given. With a provider, a flag for another provider is a visible mistake,
+ * not a setting dropped in silence; without one (`set`), the server checks.
+ */
+export function sourceConfigFromFlags(o: Record<string, unknown>, provider?: SourceProvider): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const field of SOURCE_CONFIG_FIELDS) {
+    const given = o[optionKey(field.flag)];
+    const raw = typeof given === "string" ? given : undefined;
+    const value = field.list ? csv(raw) : raw?.trim() || undefined;
+    if (value === undefined) continue;
+    if (provider && !field.providers.includes(provider)) throw new Error(`--${field.flag} does not apply to a ${provider} source`);
+    config[field.key] = value;
+  }
+  return config;
+}
+
 /** The wire body for `cast sources add`, or the one line that says what is wrong. */
 export function sourceAddBody(providerRaw: string, name: string | undefined, o: SourceAddOptions): Record<string, unknown> {
   const provider = providerRaw.trim().toLowerCase();
@@ -67,16 +85,7 @@ export function sourceAddBody(providerRaw: string, name: string | undefined, o: 
   if (!(ADDABLE_SOURCE_PROVIDERS as readonly string[]).includes(provider)) {
     throw new Error(`Unknown provider "${providerRaw}". Providers: ${ADDABLE_SOURCE_PROVIDERS.join(", ")}`);
   }
-  const config: Record<string, unknown> = {};
-  for (const field of SOURCE_CONFIG_FIELDS) {
-    const given = o[optionKey(field.flag)];
-    const raw = typeof given === "string" ? given : undefined;
-    const value = field.list ? csv(raw) : raw?.trim() || undefined;
-    if (value === undefined) continue;
-    // A flag for another provider is a visible mistake, not a setting dropped in silence.
-    if (!field.providers.includes(provider as SourceProvider)) throw new Error(`--${field.flag} does not apply to a ${provider} source`);
-    config[field.key] = value;
-  }
+  const config = sourceConfigFromFlags(o, provider as SourceProvider);
   return {
     provider,
     name: name?.trim() || provider,
@@ -265,6 +274,24 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
         emit(o.json, result, () => formatSourceLine(result.source));
       });
   }
+
+  const set = sources
+    .command("set")
+    .description("Change a source's settings; the ones not named stay as they are")
+    .argument("<source>", "Name or src-N");
+  for (const field of SOURCE_CONFIG_FIELDS) {
+    const only = field.providers.length < SOURCE_PROVIDERS.length ? ` (${field.providers.join(", ")})` : "";
+    set.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
+  }
+  set
+    .option(...TEAM_OPTION)
+    .option(...JSON_OPTION)
+    .action(async (ref: string, o: Record<string, unknown> & { team?: string; json?: boolean }) => {
+      const config = sourceConfigFromFlags(o);
+      if (!Object.keys(config).length) fail(`Name a setting to change: ${SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`).join(", ")}`);
+      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, config }, o.team);
+      emit(o.json, result, () => formatSourceLine(result.source));
+    });
 
   sources
     .command("rm")

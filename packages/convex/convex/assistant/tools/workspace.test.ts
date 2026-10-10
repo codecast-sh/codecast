@@ -24,7 +24,7 @@ setDefaultTimeout(120_000);
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const user = await t.run((ctx) => ctx.db.insert("users", {}));
+  const user = await t.run((ctx) => ctx.db.insert("users", { emailVerificationTime: 1 }));
   const other = await t.run((ctx) => ctx.db.insert("users", {}));
   const started = await t.withIdentity({ subject: user }).mutation(api.assistant.entry.startConversation, { title: "Help" });
   const deps = {

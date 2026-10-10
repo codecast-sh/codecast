@@ -1,0 +1,27 @@
+// Diagnosing a wrong finding (docs/architecture/learning-loop.md LL4, LL11).
+//
+// A judge's finding was marked wrong, by a person or by a line run's proof.
+// The line that leads the finding's project starts this graph for it
+// (convex/judgeReview.ts), with the finding (sg-N) as the goal. One short
+// session answers one question, whether the fact a correct judgment needed
+// was missing from what the judge saw or there and misread, and the record
+// step files the finding as a case against the part of the judge at fault:
+// its prompt, the input the product builds for it, or the extractor that
+// froze the moment. Cases against one part gather into one problem, which
+// runs on the project's line like any change.
+digraph judge_review {
+  graph [goal="A wrong finding", stack="Judge review · $run_date"]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  exit  [shape=Msquare,  label="Exit"]
+
+  diagnose [label="Diagnose", backend=session, agent=claude, timeout=1800, prompt="@line/diagnose.md"]
+
+  record [label="File the case", shape=parallelogram, timeout=300,
+    script="cast signal diagnosis $goal --answer $diagnose.json.answer --fact $diagnose.json.fact --why $diagnose.json.why"]
+
+  start -> diagnose
+  diagnose -> record
+  record -> exit
+}

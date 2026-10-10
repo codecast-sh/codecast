@@ -18,7 +18,7 @@ import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contract
 import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -47,8 +47,13 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   plan: "/plans",
   session: "/conversation",
   doc: "/docs",
-  project: "/projects",
-  initiative: "/goals",
+  // The company's objects (goals, projects, roles, people) each open as a
+  // sheet on the Org screen, `/org/<ref>` (objectHref). A project's work
+  // board stays at `/projects/<pj-…>`, reached from the sheet.
+  project: "/org",
+  initiative: "/org",
+  role: "/org",
+  person: "/org",
   // A staffing proposal lives on the org page, beside the chart that draws
   // its ghosts: addressed by query (`/org?proposal=op-N`, see QUERY_PARAM),
   // because `/org/<or-N>` is a role's page.
@@ -86,16 +91,19 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   cl: "call",
   src: "source",
   rp: "replay",
+  or: "role",
+  pj: "project",
 };
 
 /**
  * A prefix that is also an English word or a common path segment takes digits
- * only: `in-7` is an initiative, `op-3` a proposal, `sd-289` a decision and
- * `src-13` a source, while "in-app", "in-house", "op-ed", "sd-card" and
- * "src-tauri" are prose. Every matcher below derives
+ * only: `in-7` is an initiative, `op-3` a proposal, `sd-289` a decision,
+ * `or-4` a role and `src-13` a source, while "in-app", "in-house", "op-ed",
+ * "sd-card", "or-else" and "src-tauri" are prose. A project's `pj-` is
+ * followed by base 36 (`pj-mf3k2a`), and "pj" is no word. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -163,6 +171,7 @@ export function normalizeEntityType(type: string): EntityType | null {
 export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
+  if (isOrgObjectKind(norm)) return objectHref(norm, id);
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
   if (norm === "replay") {
     // A moment, or the start of a stretch, opens the replay at that time.
@@ -183,6 +192,60 @@ export function entityRoute(type: string, id: string): string | null {
   if (change) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${change.proposal}&focus=${change.seq}`;
   if (QUERY_ONLY.has(norm)) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
+}
+
+// ---------------------------------------------------------------------------
+// The company's objects
+//
+// A goal, a project, a role and a person each have one address: the Org
+// screen with that object's sheet open, `/org/in-2`, `/org/pj-mf3k2a`,
+// `/org/or-7`, `/org/@samvit`. Every link, pill, palette row and map node
+// that means "this object" is built here. A project's work board keeps its
+// own page (`/projects/<pj-…>`), and a person's activity profile its own
+// (`/team/<handle>`); those are views of the object, not its address.
+// ---------------------------------------------------------------------------
+
+export type OrgObjectKind = "initiative" | "project" | "role" | "person";
+
+const ORG_OBJECT_KINDS: ReadonlySet<string> = new Set<OrgObjectKind>(["initiative", "project", "role", "person"]);
+
+export function isOrgObjectKind(type: string | null | undefined): type is OrgObjectKind {
+  return !!type && ORG_OBJECT_KINDS.has(type);
+}
+
+/** The address of a company object. A person is named by handle
+ *  (personRefOf), the rest by short id. A Convex id works too: the page
+ *  replaces it with the short form. */
+export function objectHref(kind: OrgObjectKind, ref: string): string {
+  const r = ref.trim();
+  if (kind === "person") return `/org/@${encodeURIComponent(r.replace(/^@/, ""))}`;
+  // Goals and projects are pages of their own; roles and people live on the Org screen.
+  if (kind === "initiative") return `/goals/${encodeURIComponent(r)}`;
+  if (kind === "project") return `/projects/${encodeURIComponent(r)}`;
+  return `/org/${encodeURIComponent(r)}`;
+}
+
+/** The handle a person is addressed by: their GitHub name, else their user
+ *  id, the two forms the activity profile also resolves. */
+export function personRefOf(person: { _id: string; github_username?: string | null }): string {
+  return person.github_username || String(person._id);
+}
+
+/** The object an `/org/<ref>` segment names, or null for any other page
+ *  under /org (`workspace`, a Convex id, which names no kind by itself). */
+export function orgObjectOfRef(segment: string): { kind: OrgObjectKind; ref: string } | null {
+  let r: string;
+  try {
+    r = decodeURIComponent(segment).trim();
+  } catch {
+    r = segment.trim();
+  }
+  if (r.startsWith("@")) {
+    const handle = r.slice(1).trim();
+    return handle ? { kind: "person", ref: handle } : null;
+  }
+  const kind = inferEntityTypeFromShortId(r);
+  return isOrgObjectKind(kind) ? { kind, ref: r.toLowerCase() } : null;
 }
 
 /**
@@ -336,7 +399,8 @@ export function splitContextualPrRefs(lead: string, digits: string, tail: string
   const numberToken = (prefix: string, n: string): ContextualPrToken =>
     ({ number: Number(n), label: prefix.endsWith("#") ? `#${n}` : n, bare });
   const tokens: ContextualPrToken[] = [];
-  if (lead !== "#") tokens.push({ text: lead });
+  // "PR #6": the label carries the "#", so the prose in front keeps "PR " alone.
+  if (lead !== "#") tokens.push({ text: lead.endsWith("#") ? lead.slice(0, -1) : lead });
   tokens.push(numberToken(lead, digits));
   const step = new RegExp(`^(${PR_LIST_SEP_SOURCE})(\\d{1,6})\\b`);
   let rest = tail;
@@ -683,11 +747,17 @@ export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURN
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
 export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
-/** Scans prose for bare object ids. Bounded by anything but a letter, digit
- *  or hyphen on either side, so it can't split a longer token: a hyphen is a
- *  word boundary to `\b`, which read "2-in-1" as "2-" and an initiative. */
+/** The bounds of a bare id in prose: anything but a letter, digit or hyphen
+ *  on either side, so a scan can't split a longer token. A hyphen is a word
+ *  boundary to `\b`, which read "2-in-1" as "2-" and an initiative. A
+ *  scanner that embeds BARE_ID_SOURCE in its own alternation (mobile's
+ *  markdown tokenizer) wraps it in these rather than `\b`. */
+export const BARE_ID_BEFORE = "(?<![\\w-])";
+export const BARE_ID_AFTER = "(?![\\w-])";
+
+/** Scans prose for bare object ids, inside BARE_ID_BEFORE and BARE_ID_AFTER. */
 export function bareEntityIdRegex(): RegExp {
-  return new RegExp(`(?<![\\w-])(?:${BARE_ID_SOURCE})(?![\\w-])`, "gi");
+  return new RegExp(`${BARE_ID_BEFORE}(?:${BARE_ID_SOURCE})${BARE_ID_AFTER}`, "gi");
 }
 
 /**
@@ -884,6 +954,9 @@ export function parseEntityUrl(
   if (repoObject) return { type: repoObject.type, id: repoObjectId(repoObject) };
   const replay = parseReplayPath(segs, search);
   if (replay) return { type: "replay", id: replay };
+  // `/org/<ref>` is a goal, project, role or person's sheet (objectHref).
+  const orgObject = segs.length === 2 && segs[0].toLowerCase() === "org" ? orgObjectOfRef(segs[1]) : null;
+  if (orgObject) return { type: orgObject.kind, id: orgObject.ref };
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
 

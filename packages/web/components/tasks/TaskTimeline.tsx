@@ -12,6 +12,8 @@
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { WAIT_STATE_STYLE } from "./TaskBlockedMark";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { SessionTag } from "../identity/SessionTag";
@@ -22,6 +24,8 @@ import { groupByDay } from "../../lib/timelineRail";
 import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
+import { EntityIdPill } from "../EntityIdPill";
+import { findStoredWaitTime, formatWaitTime, graphChange, type GraphChange, type GraphTone } from "@codecast/shared/tasks";
 
 type Person = { name: string; image?: string; github_username?: string };
 
@@ -65,13 +69,36 @@ function Line({ children }: { children: ReactNode }) {
 /** The issue sync writes three actions of its own (issue-sync.md S6, S5). */
 const SYNC_ACTIONS = new Set(["synced_from_provider", "synced_to_provider", "sync_refused"]);
 
-function changeStyle(row: HistoryRow) {
+/** `graph`: the row's `graphChange`, read once where the row renders. */
+function changeStyle(row: HistoryRow, graph: GraphChange | null) {
   if (row.action === "created") return { icon: ListPlus, color: "text-sol-green" };
   if (row.action === "sync_refused") return { icon: Link2, color: "text-sol-red" };
   if (SYNC_ACTIONS.has(row.action)) return { icon: Link2, color: "text-sol-cyan" };
   if (row.field === "status") return { icon: ArrowRight, color: "text-sol-yellow" };
   if (row.field === "assignee") return { icon: UserRound, color: "text-sol-cyan" };
+  if (graph) return GRAPH_STYLE[graph.tone];
   return { icon: Pencil, color: "text-sol-text-dim" };
+}
+
+const waitStyle = ({ icon, text }: { icon: typeof Pencil; text: string }) => ({ icon, color: text });
+const GRAPH_STYLE: Record<GraphTone, { icon: typeof Pencil; color: string }> = {
+  blocked: waitStyle(WAIT_STATE_STYLE.waiting),
+  met: waitStyle(WAIT_STATE_STYLE.met),
+  failed: waitStyle(WAIT_STATE_STYLE.failed),
+  link: { icon: Link2, color: "text-sol-cyan" },
+};
+
+/** A graph change's text, its stored UTC time (TG11) shown in the viewer's
+ *  zone, as the Blocked by row shows it, the stored words on hover. */
+function GraphText({ text }: { text: string }) {
+  const now = useCoarseNow(60_000);
+  const t = findStoredWaitTime(text);
+  if (!t) return <span className="text-sol-text min-w-0">{text}</span>;
+  return (
+    <span className="text-sol-text min-w-0" title={text}>
+      {text.slice(0, t.start)}{formatWaitTime(t.at, { now })}{text.slice(t.end)}
+    </span>
+  );
 }
 
 /** A linked session named inline, opening it on click. */
@@ -79,7 +106,7 @@ export function TaskSessionLink({ session, onOpen }: { session: TaskLinkedSessio
   return <SessionTag session={session} size="sm" onClick={() => onOpen(session)} className="font-medium" />;
 }
 
-function ChangeBody({ row, provider, origin, openLinkedSession }: { row: HistoryRow; provider?: "linear" | "github"; origin?: TaskLinkedSession; openLinkedSession: (info: any) => void }) {
+function ChangeBody({ row, graph, provider, origin, openLinkedSession }: { row: HistoryRow; graph: GraphChange | null; provider?: "linear" | "github"; origin?: TaskLinkedSession; openLinkedSession: (info: any) => void }) {
   const dim = "text-sol-text-muted";
   if (row.action === "created") {
     // A task a session filed says so: the session is the author, and its
@@ -122,6 +149,20 @@ function ChangeBody({ row, provider, origin, openLinkedSession }: { row: History
         {row.new_value && (row.new_value_resolved
           ? <Who person={row.new_value_resolved} />
           : <span className="text-sol-text-muted italic">someone who has since left</span>)}
+      </>
+    );
+  }
+  if (graph) {
+    return (
+      <>
+        <Who person={row.actor} />
+        {graph.clauses.map((c, i) => (
+          <span key={i} className="inline-flex items-center flex-wrap gap-x-1.5 gap-y-0.5 min-w-0">
+            <span className={dim}>{c.verb}</span>
+            {c.refs?.map((ref) => <EntityIdPill key={ref} type="task" shortId={ref} />)}
+            {c.text && <GraphText text={c.text} />}
+          </span>
+        ))}
       </>
     );
   }
@@ -226,10 +267,11 @@ export function TaskTimeline({
                 </RailRow>
               );
             }
-            const style = changeStyle(item.row);
+            const graph = graphChange(item.row);
+            const style = changeStyle(item.row, graph);
             return (
               <RailRow key={item.key} icon={style.icon} color={style.color} ts={item.ts} clock>
-                <Line><ChangeBody row={item.row} provider={task.external?.provider} origin={origin} openLinkedSession={openLinkedSession} /></Line>
+                <Line><ChangeBody row={item.row} graph={graph} provider={task.external?.provider} origin={origin} openLinkedSession={openLinkedSession} /></Line>
               </RailRow>
             );
           })}

@@ -1,15 +1,21 @@
-import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
+import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
+import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
+import { discussCore } from "./decisionDiscussion";
+import { sendLineChatCore } from "./lineChat";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { enqueueStartSession, performRemoveDevices, performSetDeviceShares } from "./devices";
+import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performSetProviderKey } from "./devices";
+import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
@@ -17,7 +23,7 @@ import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
-import { resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
+import { addDepCore, removeDepCore, resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { sentryStatusFor } from "./sources/sentry";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
@@ -167,6 +173,7 @@ export const dispatch = mutation({
     ack_positions: v.optional(v.boolean()),
   },
   handler: async (ctx, { action, args: actionArgs, patches, result, ack_positions }) => {
+    noteWriteCause(ctx, `web:${action}`);
     const userId = await getAuthUserId(ctx);
     // Signed out is a state, not a verdict on the write: retryable keeps it in
     // the client outbox to land once auth returns, instead of dropping it and
@@ -183,7 +190,7 @@ export const dispatch = mutation({
       typeof patches === "object" &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
-      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action) });
+      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action), cause: `web:${action}` });
     }
 
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
@@ -274,7 +281,10 @@ function receiptOrLegacyCommandId(
 
 type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }
-  | { version: 1; kind: "assignBucket"; conversationIds: string[] };
+  | { version: 1; kind: "assignBucket"; conversationIds: string[] }
+  // A project created from a goal's sheet lands under that goal in the same
+  // transaction as the create, so the goal never lists a project that failed.
+  | { version: 1; kind: "attachToInitiative"; initiativeId: string };
 
 function validatedCreateContinuation(
   action: string,
@@ -314,6 +324,15 @@ function validatedCreateContinuation(
       kind: "assignBucket",
       conversationIds: [...new Set(continuation.conversationIds as string[])],
     };
+  }
+  if (
+    continuation.version === 1 &&
+    continuation.kind === "attachToInitiative" &&
+    action === "createProject" &&
+    typeof continuation.initiativeId === "string" &&
+    continuation.initiativeId.length > 0
+  ) {
+    return { version: 1, kind: "attachToInitiative", initiativeId: continuation.initiativeId };
   }
   throw new Error(`Invalid ${action} continuation`);
 }
@@ -385,19 +404,49 @@ async function hideForViewerByClientId(ctx: any, userId: Id<"users">, convId: st
 // inbox_dismissed_at stays transition-gated.
 const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
 
+// Rows one applyPatches transaction applies before it schedules the rest.
+const PATCH_ROWS_INLINE = 25;
+
+// The rows applyPatches deferred, with the caller's user and intent.
+export const applyDeferredPatches = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    patches: v.any(),
+    force_kill: v.optional(v.boolean()),
+    cause: v.optional(v.string()),
+  },
+  handler: async (ctx, { user_id, patches, force_kill, cause }) => {
+    if (cause) noteWriteCause(ctx, cause);
+    await applyPatches(ctx, user_id, patches, { forceKill: force_kill, cause });
+  },
+});
+
 // Exported for tests (the dispatch mutation is the only runtime caller).
 export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
   patches: Record<string, Record<string, Record<string, any>>>,
-  opts?: { forceKill?: boolean }
+  opts?: { forceKill?: boolean; cause?: string }
 ) {
   let bucketViewChanged = false;
+  // A gesture on a lead patches every row of its group, and each conversation
+  // row runs its hide or un-kill teardown here. A lead with 175 subagents did
+  // all of that in one transaction and passed Convex's 4096-read cap, so it
+  // could be neither stashed, killed nor restored (2026-10-08). The first rows
+  // land in the caller's transaction; the rest continue through this same
+  // function in scheduled batches.
+  const scheduler = (ctx as any).scheduler;
+  let inline = PATCH_ROWS_INLINE;
+  let deferred: Record<string, Record<string, Record<string, any>>> | null = null;
   for (const [table, docs] of Object.entries(patches)) {
     const config = Object.prototype.hasOwnProperty.call(TABLE_CONFIG, table) ? TABLE_CONFIG[table] : undefined;
     if (!config) continue;
 
     for (const [docKey, fields] of Object.entries(docs)) {
+      if (inline-- <= 0 && scheduler) {
+        ((deferred ??= {})[table] ??= {})[docKey] = fields;
+        continue;
+      }
       const safe: Record<string, any> = {};
       for (const [k, val] of Object.entries(fields)) {
         if (config.editable.has(k)) safe[k] = val === null ? undefined : val;
@@ -416,9 +465,9 @@ export async function applyPatches(
           (doc as any)[config.ownerField] === userId ||
           (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString()) ||
           // A decision is answerable by every person it was asked of
-          // (docs/architecture/decisions-as-documents.md D6), not only the
-          // asking session's owner.
-          (table === "session_decisions" && personMayResolve(doc as any, userId))
+          // (docs/architecture/decisions-as-documents.md D6), and by anyone
+          // else who may read it (the people then hear who answered).
+          (table === "session_decisions" && (personMayResolve(doc as any, userId) || await userMayRead(ctx as any, userId, doc as any)))
         );
         // owner_user_id caches only the PRIMARY (first-added) owner; a SECONDARY
         // owner's triage patch must resolve through the canonical owner set or
@@ -504,7 +553,7 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill });
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, cause: opts?.cause });
         }
         // The un-kill mirror: a patch CLEARING either hide stamp on a row that
         // had it is the restore/undo gesture (web restoreSession, the /sessions
@@ -576,6 +625,11 @@ export async function applyPatches(
       }
     }
   }
+  if (deferred) {
+    await scheduler.runAfter(0, internal.dispatch.applyDeferredPatches, {
+      user_id: userId, patches: deferred, force_kill: opts?.forceKill, cause: opts?.cause,
+    });
+  }
   if (bucketViewChanged) {
     await advanceLocalViewRevision(
       ctx as any,
@@ -642,6 +696,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // patches sessionDecisions and decisionStacks on the draft first; these are
   // the server writes the optimistic rows reconcile against.
   reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
+  // A person's words to the session that owns a decision (decisionDiscussion.ts).
+  // A refusal is returned, not thrown: the outbox would redrive a throw forever.
+  discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
+    discussCore(ctx, userId, { decision: decisionId, text, client_id: clientId }),
+  // A person's words to the session that answers a project's line (lineChat.ts),
+  // refused the same way: returned, never thrown.
+  sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>
+    sendLineChatCore(ctx, userId, { project_id: projectId, text, client_id: clientId, graph, focus }),
   reorderStack: async (ctx, userId, [stackId, decisionIds]: [string, string[]]) =>
     reorderStackCore(ctx, userId, stackId, decisionIds as Id<"session_decisions">[]),
   removeFromStack: async (ctx, userId, [stackId, decisionId]: [string, string]) => removeFromStackCore(ctx, userId, stackId, decisionId),
@@ -709,7 +771,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.starts_on_its_own !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, on: !!fields.starts_on_its_own });
     else if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
     if (fields.caps !== undefined) {
-      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day, cards: fields.caps.cards });
+      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day, cards: fields.caps.cards, line_on: fields.caps.line_on });
     }
     // Who reports to the role (org-roles-run-work.md R6): the tab wrote the
     // whole list, and the mutation takes the difference against its own row.
@@ -745,6 +807,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Stop customizing: the fork goes, roles on it having moved back first.
   removeLineWorkflow: async (ctx, _userId, [slug]: [string]) => {
     return await ctx.runMutation!((api as any).workflows.webRemove, { slug });
+  },
+  // A person's verdict on one decision a line step made (line-workspace.md
+  // LW4); null takes it back. The label lands where the run lives.
+  labelDecision: async (ctx, _userId, [runId, nodeId, verdict, note]: [string, string, "right" | "wrong" | null, string | null | undefined]) => {
+    if (!(ctx.db as any).normalizeId("workflow_runs", runId)) return null;
+    return await ctx.runMutation!((api as any).lineWorkspace.label, { run_id: runId, node_id: nodeId, verdict, ...(note ? { note } : {}) });
   },
   // A role following a chat channel (agent-channels.md C1). orgChannels
   // resolves the role by short id or handle and checks the admin grant.
@@ -882,7 +950,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // stub→real flush durable in the legacy outbox.
     await applyPatches(ctx, userId, {
       conversations: { [conversationId]: fields || {} },
-    });
+    }, { cause: "web:flushResolvedSessionFields" });
   },
 
   applyUndoPatches: async (
@@ -892,7 +960,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   ) => {
     // Undo values use the same allowlists, ownership checks, immutable-field
     // filtering, and null-tombstone semantics as ordinary optimistic patches.
-    await applyPatches(ctx, userId, patches || {});
+    await applyPatches(ctx, userId, patches || {}, { cause: "web:applyUndoPatches" });
   },
 
   updateClientUI: async (ctx, userId, _args, result) => {
@@ -970,7 +1038,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "kill_session" as const,
-      args: JSON.stringify({ conversation_id: convId }),
+      args: JSON.stringify({ conversation_id: convId, cause: "web:switchProject" }),
       created_at: now,
     });
     const daemonType = fromConvexAgentType(conv.agent_type);
@@ -1326,6 +1394,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // on the roster draft; device_shares is the server home of that fact.
   setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
     performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
+  // A snippet or machine setting switched on one device: the web paints the
+  // roster row's settings; the device's apply_snippet command does the rest.
+  setDeviceSnippet: async (ctx, userId, [deviceId, change]: [string, DeviceSnippetChange]) =>
+    performSetDeviceSnippet(ctx as any, userId, deviceId, change),
+  // A provider key set or removed on one device: the web paints the roster
+  // row's managed ids; the key itself travels sealed to the device.
+  setProviderKey: async (ctx, userId, [deviceId, change]: [string, ProviderKeyCommand]) =>
+    performSetProviderKey(ctx as any, userId, deviceId, change),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(
@@ -1456,12 +1532,30 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       sort_order: fields.sort_order,
       duplicate_of: fields.duplicate_of,
       from_call: fields.from_call,
+      model: fields.model,
+      effort: fields.effort,
+      ephemeral: fields.ephemeral,
       subtask_resolution:
         fields.subtask_resolution === "cascade" || fields.subtask_resolution === "only_parent"
           ? fields.subtask_resolution
           : undefined,
     });
   },
+
+  // Task blockers (task-graph.md TG4, TG12): the task page's add-blocker
+  // palette and the Blocked by row's remove, through the same core as
+  // `cast task dep`. The store patches both rows' mirrors on the draft.
+  addBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
+    addDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
+  removeBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
+    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
+  removeBlocks: async (ctx, userId, [shortId, dependent]: [string, string]) =>
+    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocks: String(dependent) }),
+
+  // Task links that do not block (task-graph.md TG5). The store's relateTasks
+  // and unrelateTasks patch both rows' related on the draft.
+  relateTasks: async (ctx, userId, [shortId, other]: [string, string]) => relateCore(ctx as any, userId, shortId, other, "add"),
+  unrelateTasks: async (ctx, userId, [shortId, other]: [string, string]) => relateCore(ctx as any, userId, shortId, other, "remove"),
 
   // Delegate to tasks.webCreate so every workspace rule lives in one place:
   // team_id membership enforcement (createDataContext.resolveWorkspace),
@@ -1489,8 +1583,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // Idempotency key: a retried/replayed create returns the same row.
       client_key: opts.client_key,
       from_call: opts.from_call,
+      model: opts.model,
+      effort: opts.effort,
+      ephemeral: opts.ephemeral,
     });
   },
+
+  // Waits (task-graph.md TG2). The client paints the wait under its own id and
+  // passes it here, so the synced row reconciles the optimistic one; input is
+  // client JSON, which addWaitCore rebuilds field by field.
+  addWait: async (ctx, userId, [shortId, input]: [string, AddWaitInput]) =>
+    addWaitCore(ctx as any, userId, shortId, {
+      ref: input?.ref, target: input?.target, repository: input?.repository, time_zone: input?.time_zone, id: input?.id,
+    }),
+  removeWait: async (ctx, userId, [shortId, waitId]: [string, string]) =>
+    removeWaitCore(ctx as any, userId, shortId, { wait_id: String(waitId) }),
 
   // Delegate to tasks.webAddComment so the local-first path keeps image
   // attachments, the canAccessTask check, and subscriber notifications — none of
@@ -1583,13 +1690,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // the project's checkout, and that machine's republish makes it the
       // line's. The daemon admits only a checkout it tracks.
       const checkout = project.project_path;
-      if (lp || !checkout) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+      if (lp || !checkout) throw new ConvexError("No machine has uploaded this line's settings yet, and the project does not name its folder: run one session in the project's folder, then change it here");
       const last = await ctx.db.query("conversations")
         .withIndex("by_user_git_root", (q: any) => q.eq("user_id", userId).eq("git_root", checkout))
         .order("desc")
         .filter((q: any) => q.neq(q.field("owner_device_id"), undefined))
         .first();
-      if (!last?.owner_device_id) throw new ConvexError("None of your machines has run a session in this project's checkout yet: open one there, or run cast line profile --publish in it");
+      if (!last?.owner_device_id) throw new ConvexError("None of your machines has run a session in this project's folder yet: open one there, then change it here");
       const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: checkout, edits }), last.owner_device_id, requestId);
       return { command_id: commandId };
     }
@@ -1883,6 +1990,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   setModEnabled: async (ctx, _userId, [id, enabled]: [string, boolean]) => {
     await (ctx as any).runMutation((api as any).mods.webSetEnabled, { id, enabled });
+  },
+  setModLocalDevice: async (ctx, _userId, [id, device, on]: [string, string, boolean]) => {
+    await (ctx as any).runMutation((api as any).mods.webSetLocalDevice, { id, device, on });
   },
   createModObject: async (ctx, _userId, [opts]: [any]) => {
     return await (ctx as any).runMutation((api as any).modObjects.webCreate, opts);
@@ -2392,13 +2502,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!hasReceiptCommandId(result)) {
       return await ctx.runMutation!(api.projects.webCreate, opts);
     }
-    validatedCreateContinuation("createProject", result);
+    const continuation = validatedCreateContinuation("createProject", result);
     return await runReceiptBackedCreate(ctx, userId, {
       action: "createProject",
       commandName: "projects.create/v2",
       arguments: opts,
       result,
-      create: () => ctx.runMutation!(api.projects.webCreate, opts),
+      create: async () => {
+        const created = await ctx.runMutation!(api.projects.webCreate, opts);
+        if (continuation?.kind === "attachToInitiative") {
+          await ctx.runMutation!(api.initiatives.addProject, { id: continuation.initiativeId, project_id: String(created.id) });
+        }
+        return created;
+      },
     });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {
