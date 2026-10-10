@@ -86,7 +86,7 @@
 
 /* The one animated thing in this file. A colour drain is not motion in the
    vestibular sense, but the app's own convention is that a reduced-motion
-   setting turns transitions off (`.sol-btn` carries motion-reduce), and a
+   setting turns transitions off (motion-reduce), and a
    teammate going grey is exactly the kind of ambient change somebody asks to
    stop. It lands instantly instead. */
 @media (prefers-reduced-motion: reduce) {
