@@ -53,13 +53,19 @@ test("each filter is one lens on the same tree, read only, with no session stack
   await render("everything", false);
   expect(last().changes).toBeUndefined();
   expect(q("[data-org-map-proposed='off']", el)).not.toBeNull();
-  // The chips and the toggle report to the page; the map holds no filter of its own.
-  await act(async () => { q("[data-map-filter-pick='people']", el)!.click(); });
-  expect(picked).toEqual(["people"]);
+  // The filter is the company pane's: the map draws no chips of its own. Its
+  // corner keeps the overlay toggle, which reports to the page.
+  expect(q("[data-map-filter-pick]", el)).toBeNull();
+  expect(picked).toEqual([]);
   await act(async () => { q("[data-map-proposed]", el)!.click(); });
   expect(overlay).toEqual([true]);
   await render("goals", true);
   expect(last().lens).toBe("goals");
+  expect(last().dimGoals).toBe(false);
+  // Projects: the goals outline, its goals stepped back so the projects lead.
+  await render("projects" as any, true);
+  expect(last().lens).toBe("goals");
+  expect(last().dimGoals).toBe(true);
   await render("people", true);
   expect(last().lens).toBe("people");
   // Only the People filter asks for org.health, and only when the page gave none.
@@ -109,6 +115,96 @@ test("no tree yet draws the placeholder and no toolbar chip decides anything", a
   // No proposal: no overlay toggle to press.
   expect(q("[data-map-proposed]", el)).toBeNull();
   expect(q("[data-ghost-actions]", el)).toBeNull();
+  await act(async () => { root.unmount(); });
+  el.remove();
+});
+
+test("the open sheet's object is ringed and kept clear of the sheet; a click on a card opens its object", async () => {
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  const opened: unknown[] = [], changes: string[] = [], talks: unknown[] = [];
+  const ring = { kind: "project", id: "p-1" };
+  await act(async () => {
+    root.render(h(OrgMap, { tree: UNION_GOALS_TREE, goals: UNION_GOALS_DATA, filter: "everything", asProposed: false, onAsProposed() {}, ring, panelWidth: 560, onOpenObject: (o: unknown) => opened.push(o), onOpenChange: (id: string) => changes.push(id), onTalk: (o: unknown) => talks.push(o) }));
+  });
+  expect(last().ring).toBe(ring);
+  expect(last().panelWidth).toBe(560);
+  // The canvas reports its gestures; the map hands them through untouched.
+  last().onOpenObject({ kind: "initiative", id: "g-1" });
+  last().onOpenChange("c-1");
+  last().onTalk({ kind: "role", id: "r-1" });
+  expect(opened).toEqual([{ kind: "initiative", id: "g-1" }]);
+  expect(changes).toEqual(["c-1"]);
+  expect(talks).toEqual([{ kind: "role", id: "r-1" }]);
+  // A person card double clicked in the goals lens opens their sheet too.
+  last().onOpenInPeople("person:u-1");
+  expect(opened.at(-1)).toEqual({ kind: "person", id: "u-1" });
+  await act(async () => { root.unmount(); });
+  el.remove();
+});
+
+test("This week (D12): on People each role card carries its week and the lines the work flowing down them; the open role's lines stay lit; any other filter draws no week", async () => {
+  const { ORG_STAFFING_FIXTURE_HEALTH } = await import("./orgStaffingFixture");
+  const { ORG_FIXTURE_WITH_HEAD } = await import("./orgFixture");
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  const role = ORG_FIXTURE_WITH_HEAD.roles[0];
+  const render = (filter: "people" | "goals", week: boolean, ring: any = null) => act(async () => {
+    root.render(h(OrgMap, { tree: ORG_FIXTURE_WITH_HEAD, health: ORG_STAFFING_FIXTURE_HEALTH, filter, asProposed: false, onAsProposed: () => {}, week, ring }));
+  });
+  await render("people", false);
+  expect(last().flow).toBeUndefined();
+  expect(last().view.structureOnly).toBeFalsy();
+  expect(q("[data-org-map-week]", el)).toBeNull();
+  await render("people", true);
+  const flow = last().flow;
+  expect(flow).toBeDefined();
+  // The week is the reporting structure alone: every role card is its week.
+  expect(last().view.structureOnly).toBe(true);
+  expect(Object.keys(flow.roles).length).toBe(ORG_FIXTURE_WITH_HEAD.roles.filter((r) => r.status !== "retired").length);
+  for (const f of Object.values(flow.roles) as any[]) expect(typeof f.wakesTotal === "number" && typeof f.doneTotal === "number").toBe(true);
+  expect(flow.days.length).toBe(7);
+  expect(flow.focusNodeId).toBeNull();
+  expect(q("[data-org-map-week='on']", el)).not.toBeNull();
+  // A role's sheet open over the map keeps its lines lit.
+  await render("people", true, { kind: "role", id: role._id });
+  expect(last().flow.focusNodeId).toBe(`role:${role._id}`);
+  // The week is People's: another filter with the flag set draws none.
+  await render("goals", true);
+  expect(last().flow).toBeUndefined();
+  expect(q("[data-org-map-week]", el)).toBeNull();
+  await act(async () => { root.unmount(); });
+  el.remove();
+});
+
+test("the page's People controls drive the People filter only, and step aside for This week", async () => {
+  const { ORG_FIXTURE } = await import("./orgFixture");
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  const view = { collapsed: new Set<string>(), expanded: {}, sessionCards: true };
+  const toggled: string[] = [];
+  const people = { view, loadingClusters: new Set(["person:x"]), onToggleCollapse: (id: string) => toggled.push(id), onExpandCluster() {}, onCollapseCluster() {}, onReparentRequest() {}, onNodeContextMenu() {}, canDrag: () => true, resetKey: 3 };
+  const render = (filter: "people" | "everything", week = false) => act(async () => {
+    root.render(h(OrgMap, { tree: ORG_FIXTURE, health: null, filter, asProposed: false, onAsProposed() {}, people, week }));
+  });
+  await render("people");
+  expect(last().view).toBe(view);
+  expect(last().loadingClusters.has("person:x")).toBe(true);
+  expect(last().canDrag({ kind: "role" })).toBe(true);
+  expect(last().resetKey).toBe(3);
+  last().onToggleCollapse("person:y");
+  expect(toggled).toEqual(["person:y"]);
+  // Another filter keeps the still picture: no stacks, nothing picked up.
+  await render("everything");
+  expect(last().view.sessionCards).toBe(false);
+  expect(last().canDrag({ kind: "role" })).toBe(false);
+  // This week draws the structure alone.
+  await render("people", true);
+  expect(last().view.structureOnly).toBe(true);
+  expect(last().canDrag({ kind: "role" })).toBe(false);
   await act(async () => { root.unmount(); });
   el.remove();
 });

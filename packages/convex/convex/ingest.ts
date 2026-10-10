@@ -30,10 +30,11 @@ import { recordExternalEventOnce } from "./externalEvents";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
 import { linkReplayToGroup, upsertReplayManifest } from "./replays";
+import { recordMomentEvents } from "./moments";
 import { takeFromWindow, windowSpent } from "./ipRateLimit";
 import { readableRowByRef, rowByRef } from "./lib/rowByRef";
 import { scopeArgs } from "./lib/ingestScopeArgs";
-import { scopeOf, sourceByRef } from "./lib/ingestScope";
+import { scopeOf, sourceByRef, sourceFilingScope } from "./lib/ingestScope";
 import { commitBySha } from "./commits";
 import { addableSourceProviderValidator, groupStatusValidator, groupKindValidator, sourceConfigValidator, transitionValidator } from "./ingestSchema";
 import {
@@ -283,7 +284,8 @@ export const updateSource = mutation({
     if (args.config) {
       const configProblem = sourceConfigProblem(row.provider, args.config);
       if (configProblem) invalidScope(configProblem);
-      patch.config = args.config;
+      // A setting not named stays as it was (`cast sources set` names one at a time).
+      patch.config = { ...row.config, ...args.config };
     }
     await ctx.db.patch(row._id, patch);
     return { source: await sourceViewOf(ctx, (await ctx.db.get(row._id))!) };
@@ -1004,6 +1006,10 @@ export const applyBatch = internalMutation({
 
     for (const deploy of deploys) if (await announceDeploy(ctx, source, deploy)) transitions++;
 
+    // Moment events are kept: each joins its (kind, subject) moment (moments.ts, learning-loop.md LL7).
+    const momentEvents = items.filter((i): i is Extract<IngestItem, { type: "moment" }> => i.type === "moment");
+    if (momentEvents.length) await recordMomentEvents(ctx, source, momentEvents, now);
+
     const named = items.flatMap((i) => (i.type === "event" ? [{ name: i.name, at: i.at }] : []));
     await patchSourceStats(ctx, source, (s) => ({
       events_today: (s.events_today ?? 0) + items.length,
@@ -1257,7 +1263,6 @@ export function promotionSignal(
     `Seen ${group.count} times${group.last_release ? `, last in ${group.last_release}` : ""}.`,
     `Read it with \`cast events show ${group.short_id}\`.`,
   ].filter(Boolean).join("\n");
-  const teamKey = source.workspace.startsWith("team:");
   return {
     source: `${source.provider}:${source.name}`,
     kind,
@@ -1268,8 +1273,7 @@ export function promotionSignal(
     observed_at: group.last_seen,
     // Explicit, so the signal lands in the source's workspace whatever the
     // filer's active team is.
-    workspace: teamKey ? ("team" as const) : ("personal" as const),
-    ...(teamKey && source.team_id ? { team_id: source.team_id } : {}),
+    ...sourceFilingScope(source),
     ...(source.project_id ? { project: String(source.project_id) } : {}),
   };
 }
@@ -1291,13 +1295,15 @@ export const promote = internalAction({
       // the source to someone still in the workspace.
       await ctx.runMutation(internal.ingest.pauseSource, {
         source_id: source._id,
-        reason: "The source's owner is no longer in this workspace, so its signals have nobody to file as. Resume it after giving it a new owner.",
+        reason: "The source's owner is no longer in this workspace, so its reports have nobody to file as. Resume it after giving it a new owner.",
       });
       return { skipped: "filer left" };
     }
     const signal = promotionSignal(source, group, args.transition, args.fingerprint);
     if (!signal) return { skipped: "transition does not promote" };
     const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal });
+    // A held signal (no finder converts this source, LE4) reached no cause yet.
+    if (!result.task_id) return { skipped: "held as a finding" };
     await ctx.runMutation(internal.ingest.linkSignal, { group_id: group._id, task_id: result.task_id, external_event_id: args.external_event_id });
     return { task_id: result.task_id };
   },

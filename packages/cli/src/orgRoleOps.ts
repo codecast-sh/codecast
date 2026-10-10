@@ -6,6 +6,8 @@ import type { Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
 import { registerLineProfileCommands } from "./lineProfileCommand.js";
+import { registerMomentsCommands } from "./momentsCommand.js";
+import { registerJudgingCommands } from "./judgingCommand.js";
 import type { PublishDeps } from "./castApi.js";
 
 export interface RoleOpsDeps extends OrgInitDeps {
@@ -124,4 +126,8 @@ export function registerOrgRoleOpsCommands(program: Command, deps: RoleOpsDeps):
 
   // The repo's line profile and the eval station's builder (line-profile.md LP2, LP4).
   registerLineProfileCommands(line, deps.publishDeps);
+  // Bringing moments and the team's model budget (learning-loop.md LL7, LL10).
+  registerMomentsCommands(line, deps.publishDeps);
+  // Setting up and improving a project's judges (learning-loop.md LL4).
+  registerJudgingCommands(line, deps.publishDeps);
 }

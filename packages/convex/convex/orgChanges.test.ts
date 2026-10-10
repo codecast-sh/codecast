@@ -61,6 +61,17 @@ describe("org history round trips", () => {
     await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, on: false }), ["trust"]);
     await roundTrip(f, role._id, () => performUpdateRole(f.ctx(), ME as any, { role_id: role._id, name: "Market" }), ["name"]);
   });
+  // learning-loop.md LL5: the line's start switch rides the caps a person sets.
+  test("the line's start switch and slots are stored with the caps, kept by other cap edits, and undone to off", async () => {
+    const f = fixture(); const role = await f.role();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, line_on: true, cards: 2 });
+    expect((await f.db.get(role._id)).caps).toMatchObject({ line_on: true, cards: 2 });
+    await f.undo();
+    expect((await f.db.get(role._id)).caps.line_on).toBeFalsy();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, line_on: true });
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 });
+    expect((await f.db.get(role._id)).caps).toMatchObject({ hands_per_day: 8, line_on: true });
+  });
   for (const [kind, target, fields, change] of [
     ["task_status", "tasks_t", ["status", "closed_at", "review_verdict"], { task: "ct-1", status: "done", reason: "finished" }],
     ["plan_status", "plans_p", ["status"], { plan: "pl-1", status: "done", reason: "finished" }],

@@ -233,12 +233,15 @@ export function fallbackProfiles<
     email?: string;
     usage?: CcUsage | null;
     login_expired_at?: number | null;
+    access_refused_at?: number | null;
     setup_token?: { expires_at: number } | null;
   },
 >(profiles: readonly P[], activeEmail: string | undefined, now: number, models?: readonly string[]): P[] {
   // A dead saved login is still a target when a minted setup-token is live:
-  // the switch lands sessions on the token and never touches the login.
-  const reachable = (p: P) => !p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now);
+  // the switch lands sessions on the token and never touches the login. An
+  // account whose organization refuses subscription access takes neither.
+  const reachable = (p: P) =>
+    !p.access_refused_at && (!p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now));
   return rankByHeadroom(
     profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now, models)),
     now,

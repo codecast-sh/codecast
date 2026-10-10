@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { dmRoomKey } from "@codecast/shared/contracts";
-import { joinCall, knockRoom, ringInto, startHuddle } from "../../lib/calls/actions";
+import { joinCall, knockRoom, ringInto } from "../../lib/calls/actions";
+import { requestHuddleStart } from "../../lib/calls/huddleStart";
 import { callRoomOf } from "../../lib/faces/faceRow";
 import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import type { LiveRoomRow } from "../../hooks/useLiveRooms";
@@ -80,7 +81,7 @@ export function useMemberHuddle(
       else if (lockedRoomKey) {
         if (!knocked) void knockRoom(lockedRoomKey);
       } else
-        void startHuddle({
+        requestHuddleStart({
           roomKey: dmRoomKey(viewerId, memberId),
           toUserIds: [memberId],
         });

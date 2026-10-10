@@ -7,8 +7,9 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
 import { bridge, type DaemonSetupState } from "../lib/desktop";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useSurface } from "../lib/surfaces";
+import { useSimpleModeAllowed, useSurface } from "../lib/surfaces";
 import { useInboxStore } from "../store/inboxStore";
+import { isSessionRailOpen, type WorkspaceState } from "../store/workspace";
 import { AssistantIntro } from "./AssistantIntro";
 import { startHostedConversation } from "../lib/startHostedConversation";
 import { AgentTypeIcon } from "./AgentTypeIcon";
@@ -19,9 +20,14 @@ import { carriedAsk, forgetCarriedAsk } from "./simple/carriedAsk";
 import "./simple/simple.css";
 import { TerminalSquare } from "lucide-react";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
-import { useWaitingOnPerson } from "../hooks/useNeedsInputCount";
-import { sessionCardTitle } from "../lib/sessionCard";
+import { useNewResults, useWaitingOnPerson } from "../hooks/useNeedsInputCount";
+import { formatRowTime, sessionCardTitle } from "../lib/sessionCard";
 import { LANE_COPY } from "./simple/lane";
+import Link from "next/link";
+import { useTriggers } from "../hooks/useSyncTriggers";
+import { isAssistantRoutine } from "../lib/assistantScope";
+import { firstRunWords } from "./triggers/hostedSchedule";
+import { taskDisplayTitle } from "./triggerTasks";
 
 interface EmptyStateProps {
   title: string;
@@ -325,6 +331,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
   const onConnected = () => setConnected(true);
   const askAssistant = useAskAssistant();
   const mail = useConnectAvailable().available === true;
+  const assistant = useSimpleModeAllowed();
   if (hasOtherSessions && !connected) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center px-4">
@@ -336,9 +343,9 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
           <p className="text-xs text-sol-text-dim mt-3">
             Works with Claude Code, Codex, Cursor, and Gemini. {SETUP_GUIDE}
           </p>
-          <button type="button" onClick={askAssistant} className="mt-5 text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 transition-colors hover:text-sol-text">
+          {assistant && <button type="button" onClick={askAssistant} className="mt-5 text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 transition-colors hover:text-sol-text">
             Or ask the Codecast assistant, nothing to install
-          </button>
+          </button>}
         </div>
       </div>
     );
@@ -370,15 +377,15 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
               <>
                 <div className="text-center mb-6">
                   <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
-                    How would you like to start?
+                    {assistant ? "How would you like to start?" : "Get started"}
                   </h2>
                   <p className="text-sm text-sol-text-muted">
-                    Ask the assistant right here, or connect the coding tools on your computer.
+                    {assistant ? "Ask the assistant right here, or connect the coding tools on your computer." : "Connect the coding tools on your computer."}
                   </p>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <section className="flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
+                <div className={assistant ? "grid gap-3 sm:grid-cols-2" : "mx-auto max-w-sm"}>
+                  {assistant && <section className="flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
                     <div className="mb-2 flex items-center gap-2">
                       <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="h-5 w-5" />
                       <h3 className="text-sm font-semibold text-sol-text">Ask the Codecast assistant</h3>
@@ -393,7 +400,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
                     >
                       Start a conversation
                     </button>
-                  </section>
+                  </section>}
 
                   <section className="flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
                     <div className="mb-2 flex items-center gap-2">
@@ -420,7 +427,9 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
 // they do there, landing in the new conversation; under them sits the same
 // composer /welcome uses, so the first ask in one's own words is a keystroke
 // away. An errand carried in from the marketing page that /welcome could not
-// ask yet (thinking was down) waits in it.
+// ask yet (thinking was down) waits in it. Someone back finds their move and
+// the next routine first, with fewer asks under them (AssistantIntro
+// `returning`).
 function HostedEmptyState() {
   const ask = (text: string) => {
     forgetCarriedAsk();
@@ -433,15 +442,50 @@ function HostedEmptyState() {
   });
   return (
     <div className="flex h-full min-h-[360px] flex-col py-16">
-      <AssistantIntro onAsk={ask} title={LANE_COPY.home.title}>
+      <AssistantIntro onAsk={ask} title={LANE_COPY.home.title} returning={<RailAwareReturning />}>
         {held ? null : (
           <div data-simple-lane="inline" className="mt-2 w-full max-w-md text-left">
             <Composer placeholder="Or ask in your own words" onSend={ask} seed={seed} />
           </div>
         )}
-        <HostedWaitingList />
       </AssistantIntro>
     </div>
+  );
+}
+
+/** What waits on the person and the next routine. The rail beside the home
+ *  already leads with its Your move rows and ends on the same Coming up
+ *  line, so while it shows (from lg up) the home leaves both to it; on a
+ *  phone, or with the rail folded, the home says them. */
+function RailAwareReturning() {
+  const railOpen = useInboxStore((s) => isSessionRailOpen(s.workspace as WorkspaceState));
+  return (
+    <div className={`flex w-full flex-col items-center ${railOpen ? "lg:hidden" : ""}`}>
+      <HostedWaitingList />
+      <HostedNewList />
+      <HostedComingUp />
+    </div>
+  );
+}
+
+/** The person's next routine run, in the rail foot's words ("Coming up:
+ *  Morning review, tomorrow at 8:00 AM"), linking to Routines. Nothing
+ *  scheduled, no line. */
+function HostedComingUp() {
+  const { tasks } = useTriggers();
+  const now = Date.now();
+  let next: any = null;
+  for (const task of tasks) {
+    if (!isAssistantRoutine(task) || task.status !== "scheduled" || !(task.run_at > now)) continue;
+    if (!next || task.run_at < next.run_at) next = task;
+  }
+  if (!next) return null;
+  return (
+    <Link href="/triggers" data-cc-home-coming-up className="mt-3 block w-full max-w-md px-1 text-left text-xs text-sol-text-dim no-underline [text-wrap:pretty] transition-colors hover:text-sol-text-muted">
+      {/* The when is one unit, so "8:00 AM" never sits alone on a line. */}
+      {`${LANE_COPY.home.comingUp}: ${taskDisplayTitle(next)}, `}
+      <span className="whitespace-nowrap">{firstRunWords(next.run_at, now)}</span>
+    </Link>
   );
 }
 
@@ -471,6 +515,41 @@ function HostedWaitingList() {
         ))}
       </ul>
       {rows.length > WAITING_SHOWN && <p className="px-1 pt-1 text-xs text-sol-text-dim">{LANE_COPY.home.showMore(rows.length - WAITING_SHOWN)} in the inbox</p>}
+    </section>
+  );
+}
+
+/** Under Your move, where no rail shows them (a phone, a folded rail): the
+ *  newest results the person has not read, the rail's own New rows, and a
+ *  line that opens the rest in the conversations panel. */
+const NEW_SHOWN = 3;
+function HostedNewList() {
+  const rows = useNewResults();
+  if (rows.length === 0) return null;
+  const store = useInboxStore.getState;
+  return (
+    <section data-cc-home-new className="mt-6 w-full max-w-md text-left">
+      <h2 className="mb-1.5 px-1 text-xs font-medium text-sol-text-muted">New</h2>
+      <ul className="flex flex-col">
+        {rows.slice(0, NEW_SHOWN).map((row) => (
+          <li key={row._id}>
+            <button
+              type="button"
+              onClick={() => store().navigateToSession(row._id)}
+              className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-sm transition-colors hover:bg-sol-bg-alt"
+            >
+              <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--pd-accent,var(--sol-orange))]" />
+              <span className="min-w-0 flex-1 truncate font-medium text-sol-text">{sessionCardTitle(row)}</span>
+              <span className="shrink-0 text-xs tabular-nums text-sol-text-dim">{formatRowTime(row.updated_at, true)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rows.length > NEW_SHOWN && (
+        <button type="button" onClick={() => store().toggleSidePanel()} className="px-1 pt-1 text-xs text-sol-text-dim underline-offset-2 hover:text-sol-text hover:underline">
+          {LANE_COPY.home.showMore(rows.length - NEW_SHOWN)} in the inbox
+        </button>
+      )}
     </section>
   );
 }
