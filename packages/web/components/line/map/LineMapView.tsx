@@ -6,7 +6,7 @@
 // one), keeps its window, panel and trace in the URL so each is a link, and
 // walks the nodes with the arrow keys. A trace ref (`?trace=`) lights one
 // item's path (lineTrace pathNodeIds) and dims the rest.
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { MessageSquarePlus, SlidersHorizontal, X } from "lucide-react";
@@ -25,8 +25,7 @@ import { buildLineTrace, resolveTraceRef, type TraceRows } from "../../../lib/li
 import { KeyCap } from "../../KeyboardShortcutsHelp";
 import { KeyHint } from "../../changes/useChangesKeys";
 import { LineSettingsPage } from "../settings/LineSettingsPage";
-import { useProjectStations } from "../settings/LineStations";
-import { ageShort } from "../../../lib/lineFlow";
+import { ageShort, causesNeverRun, waitingCauseIds } from "../../../lib/lineFlow";
 import { WHOLE_LINE } from "../../../lib/line/lineCause";
 import { LineMap, MORE_SOURCES, foldSources, nodeTone, throughWords } from "./LineMap";
 import { ChangeComposer } from "./ChangeComposer";
@@ -34,6 +33,10 @@ import { LineMapPanel, AskProjectPick, useProjectTitle } from "./LineMapPanel";
 import type { useLineAdmission } from "./useLineAdmission";
 import { cn } from "../../../lib/utils";
 import { projectLineVersions } from "../../../lib/line/runReport";
+import { lineMetrics } from "../../../lib/line/lineMetrics";
+import { lineMetricsPhrases, windowWords } from "../../../lib/line/lineMetricsWords";
+import { graphKeyOf, type ProjectGraph } from "../../../lib/line/lineGraphs";
+import { useLineGraph } from "./useLineGraph";
 import "./lineMap.css";
 
 export type LineMapRows = { signals: LineSignal[]; tasks: LineCauseTask[]; runs: LineFlowRun[]; decisions: LineDecision[] };
@@ -73,11 +76,11 @@ function LineMapNow({ map, asks, now, selected, onSelectNode }: { map: ReturnTyp
     .sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone] || b.here - a.here), [map.nodes, asks]);
   const fit = useWholeRows(rows.length);
   if (!rows.length) return null;
-  const total = rows.reduce((s, r) => s + r.here, 0);
-  const across = rows.length === 1 ? "one step" : `${rows.length} steps`;
+  // Each row says its own count; a sum here would add waiting causes to work under way and disagree with the headline.
+  const across = rows.length === 1 ? "One step holds work" : `${rows.length} steps hold work, the trouble first`;
   return (
     <section ref={fit.section} className="lmap-now" aria-label="Where work waits now" data-map-now data-all={fit.all ? "true" : undefined}>
-      <h3 className="lmap-now-title">Now<small>{total} waiting across {across}, the trouble first</small>
+      <h3 className="lmap-now-title">Now<small>{across}</small>
         {(fit.shown < rows.length || rows.some((r) => Math.min(r.n.now.length, NOW_ITEMS) > fit.items)) && <button type="button" className="lmap-now-all" onClick={fit.showAll} data-map-now-all>Show all</button>}
       </h3>
       <div ref={fit.list} className="lmap-now-list">
@@ -194,7 +197,7 @@ function LineAsk({ projectId: own, node }: { projectId: string | null; node: Map
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
-        title={own ? "An agent works the change through the line and brings you a card" : "Pick the project whose line to change; work under no project runs the shipped line"}
+        title={own ? "An agent works the change through the line and brings it to you to decide" : "Pick the project whose line to change; work under no project runs the shipped line"}
         data-map-line-ask-open
       >
         <MessageSquarePlus className="w-3 h-3" />
@@ -226,13 +229,56 @@ function LineAsk({ projectId: own, node }: { projectId: string | null; node: Map
 }
 
 const WINDOWS = Object.keys(LINE_MAP_WINDOWS) as LineMapWindow[];
+
+/** How the line's quality is going over the map's window (lineMetrics, LM8):
+ *  expectation breaks a day, the share of signals that joined a known cause,
+ *  and the fixes that held, as one sentence under the bar. */
+function LineMapQuality({ rows, now, windowMs, window: w }: { rows: LineMapRows; now: number; windowMs: number; window: LineMapWindow }) {
+  const phrases = useMemo(() => lineMetricsPhrases(lineMetrics({
+    signals: rows.signals, tasks: rows.tasks, runs: rows.runs, window: { from: now - windowMs, to: now }, now,
+  })), [rows.signals, rows.tasks, rows.runs, now, windowMs]);
+  const lead = windowWords(w);
+  return (
+    <p className="lmap-note lmap-quality" data-map-quality data-window={w}>
+      <span className="lmap-quality-lead">In {lead}:</span>{" "}
+      {phrases.map((p, i) => (
+        <span key={p.key} data-map-quality-metric={p.key} data-empty={p.num === null ? "true" : undefined} title={p.tip}>
+          {i > 0 && <span className="lmap-quality-sep" aria-hidden> · </span>}
+          {p.num !== null && <b>{p.num}</b>}{p.text}
+        </span>
+      ))}
+    </p>
+  );
+}
+/** The map's side gutter (LineMap GUTTER). */
+const MAP_GUTTER = 24;
+
+/** An element's size, kept in step with resizes. */
+function useElementSize(ref: RefObject<HTMLElement | null>): { w: number; h: number } {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => setSize((s) => (s.w === el.clientWidth && s.h === el.clientHeight ? s : { w: el.clientWidth, h: el.clientHeight }));
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}
+
+/** The share of the page's column the map may take (lineMap.css .lmap-fit max-height); Now takes the rest. */
+const MAP_SHARE = 0.72;
+
 const KEY_DIR: Record<string, MapDirection> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", h: "left", l: "right", k: "up", j: "down" };
 
 // Every gate answer a run took, for the rounds of a loop the run row overwrote (lineMap runVisits).
 const isGateDecision = (d: { workflow_run_id?: string; gate_node_id?: string }) => !!d.workflow_run_id && !!d.gate_node_id;
 const gateSig = (d: SessionDecisionItem & { gate_node_id?: string }) => `${d.status}|${d.answer_index ?? ""}|${d.updated_at ?? 0}`;
 
-export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEnd, footEnd, admit }: {
+export function LineMapView({ projectId, rows: allRows, flow, now, note, lineParam, barEnd, footEnd, admit }: {
   /** The project whose line this is; null draws the shipped line for work under no project. */
   projectId: string | null;
   /** The project's rows, already scoped (lineFlow scopeLine). */
@@ -254,9 +300,15 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   const { state, set } = useLineMapUrl(lineParam);
   const windowMs = LINE_MAP_WINDOWS[state.window];
 
-  // The line's actual graph and its declared finders.
-  const stations = useProjectStations(projectId ?? "");
-  const graph: LineGraph | null = useMemo(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
+  // The graphs this project's work actually runs (lineGraphs), each read off
+  // its runs: codecast's line from the project's own copy, the repo's or the
+  // shipped one; any other graph from the row its newest run ran, or, when
+  // that row cannot be read, from the stations its runs recorded.
+  const waiting = useMemo(() => waitingCauseIds(flow), [flow]);
+  const { graphs, graphKey, picked, ownLine, source, graph, unread } = useLineGraph(projectId, allRows.runs as MapRun[], allRows.signals, state.graph, waiting);
+  // The runs drawn are the ones that ran the graph on show; the queue, the
+  // signals and the cards stay the whole project's.
+  const rows = useMemo(() => (graphs.length > 1 ? { ...allRows, runs: allRows.runs.filter((r) => graphKeyOf(r as MapRun) === graphKey) } : allRows), [allRows, graphs.length, graphKey]);
   const lp = useInboxStore((s) => (projectId ? ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[projectId]?.line_profile ?? null) : null));
   const answered = useCollectionRows<SessionDecisionItem & MapDecision>("sessionDecisions", { where: isGateDecision as (d: SessionDecisionItem) => boolean, sig: gateSig });
   const decisions = useMemo(() => {
@@ -275,7 +327,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   // What each version of this project's line delivered, for a station's history (LX3).
   const versions = useMemo(() => (projectId ? projectLineVersions(rows) : undefined), [projectId, rows]);
   // A trace: any ref the line knows, drawn as a path.
-  const traceRows: TraceRows = useMemo(() => ({ signals: rows.signals as MapSignal[], tasks: rows.tasks, runs: rows.runs as MapRun[], decisions }), [rows, decisions]);
+  const traceRows: TraceRows = useMemo(() => ({ signals: allRows.signals as MapSignal[], tasks: allRows.tasks, runs: allRows.runs as MapRun[], decisions }), [allRows, decisions]);
   const trace = useMemo(() => {
     if (!state.trace) return null;
     const resolved = resolveTraceRef(state.trace, traceRows);
@@ -289,17 +341,28 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   const openAt = useMemo(() => openTarget(map.nodes, asks), [map.nodes, asks]);
   // Sources past the fifth fold into one pill until it is opened, never the
   // open node, the opening one or one on a trace's path (LX2).
-  const lineKey = projectId ?? "none";
+  const lineKey = `${projectId ?? "none"}:${graphKey}`;
   const shown = useMemo(() => {
     if (sourcesOpen === lineKey) return map;
     return foldSources(map, new Set([state.node ?? "", openAt ?? "", ...(trace?.pathNodeIds ?? [])]));
   }, [map, sourcesOpen, lineKey, state.node, openAt, trace]);
-  const layout = useMemo(() => layoutLineMap(shown), [shown]);
 
   const node = state.node && state.node !== LINE_SETTINGS_NODE ? map.nodes.find((n) => n.id === state.node) ?? null : null;
   const edge = state.edge ? map.edges.find((e) => e.id === state.edge) ?? null : null;
   const settingsOpen = state.node === LINE_SETTINGS_NODE && !!projectId;
   const open = !!node || !!edge || settingsOpen;
+  // The map folds to the column it has, so every station shows without
+  // scrolling sideways; widths are rounded so a resize of a few pixels does
+  // not lay the map out again.
+  // Rows that would stack taller than the map's share of the column would
+  // hide whole rows under the frame, so then the line takes one row and
+  // scrolls sideways (lineMapLayout fitHeight).
+  const mainRef = useRef<HTMLDivElement>(null);
+  const main = useElementSize(mainRef);
+  const zoomed = open ? PANEL_ZOOM : 1;
+  const fitWidth = main.w ? Math.floor((main.w - 2 * MAP_GUTTER) / zoomed / 40) * 40 : null;
+  const fitHeight = main.h ? Math.floor((main.h * MAP_SHARE) / zoomed / 20) * 20 : null;
+  const layout = useMemo(() => layoutLineMap(shown, { fitWidth, fitHeight, asks }), [shown, fitWidth, fitHeight, asks]);
 
   // The keyboard cursor: the open node, else where the viewer moved it, else
   // the first node holding work.
@@ -354,10 +417,15 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   }, [layout, focused, node, edge, open, state.trace, state.window, set, close, selectNode]);
 
   const empty = map.nodes.every((n) => n.through === 0 && n.now.length === 0);
+  // Every graph's runs, not just the one on show: a cause another graph ran has run.
+  const neverRun = useMemo(() => causesNeverRun(flow, allRows.runs), [flow, allRows.runs]);
 
   return (
-    <div className="lmap-view" data-line-map-view data-window={state.window}>
-      <div className="lmap-main">
+    <div className="lmap-view" data-line-map-view data-window={state.window} data-map-graph={graphKey}>
+      <div ref={mainRef} className="lmap-main">
+        {projectId && graphs.length > 0 && (
+          <GraphTabs graphs={graphs} selected={graphKey} onSelect={(key) => set({ graph: key === graphs[0]?.key ? null : key, node: null, edge: null, trace: null })} unread={unread} neverRun={neverRun} />
+        )}
         <div className="lmap-bar">
           <div className="lmap-windows" role="group" aria-label="Window">
             {WINDOWS.map((w) => (
@@ -367,23 +435,24 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
           <span className="lmap-legend" aria-hidden>
             {/* The reading key, in the busiest node's real numbers: big is what sits there now, small what passed in the window. */}
             {legendNode && <span data-map-legend-nums data-map-legend-node={legendNode.id} title="A node's big number is what sits there now; the small words count what passed in the window">{legendNode.label}: <b className="lmap-legend-num">{legendNode.now.length}</b> here now, {throughWords(legendNode)} in {state.window}</span>}
-            <span title="Wider for more"><i />work that crossed</span>
+            <span title="Wider for more work"><i />path work took</span>
             <span><i data-kind="loop" />sent back</span>
-            <span><i data-kind="empty" />nothing yet</span>
+            <span><i data-kind="empty" />path not used yet</span>
           </span>
           {!open && <LineAsk projectId={projectId} node={cursor ? map.nodes.find((n) => n.id === cursor) ?? null : null} />}
           {projectId && (
-            <button type="button" onClick={() => set({ node: settingsOpen ? null : LINE_SETTINGS_NODE })} aria-pressed={settingsOpen} className={cn("inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text", open && "ml-auto")} data-map-settings title="Every value of this line: its file, finders, checks and limits">
+            <button type="button" onClick={() => set({ node: settingsOpen ? null : LINE_SETTINGS_NODE })} aria-pressed={settingsOpen} className={cn("inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text", open && "ml-auto")} data-map-settings title="Every setting of this line: its sources, checks and limits">
               <SlidersHorizontal className="w-3 h-3" />settings<KeyHint action="line.settings" />
             </button>
           )}
           {barEnd && <span>{barEnd}</span>}
         </div>
+        {!empty && <LineMapQuality rows={rows} now={now} windowMs={windowMs} window={state.window} />}
         {empty && (note ?? <p className="lmap-note" data-map-empty>Nothing passed through this line in the last {state.window}. The map shows its stations; counts fill in as work arrives.</p>)}
         {state.trace && (
           <div className="lmap-trace-bar" data-map-trace={state.trace}>
             <span className="min-w-0 truncate text-sol-text">
-              {trace ? <><b className="font-semibold">{trace.cause.title}</b><span className="text-sol-text-muted">: {trace.where.text}</span></> : <>No cause on this line matches {state.trace}.</>}
+              {trace ? <><b className="font-semibold">{trace.cause.title}</b><span className="text-sol-text-muted">: {trace.where.text}</span></> : <>No problem on this line matches {state.trace}.</>}
             </span>
             <span className="ml-auto shrink-0 flex items-center gap-3 text-[11px]">
               {trace && <Link href={lineTraceHref(state.trace)} className="text-sol-blue hover:underline">full trace</Link>}
@@ -395,7 +464,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
         )}
         {/* Keyed by the line, so each line opens on its own work (openTarget), never at the last line's scroll. */}
         <LineMap
-          key={projectId ?? "none"}
+          key={lineKey}
           className="lmap-fit"
           map={shown}
           layout={layout}
@@ -443,10 +512,35 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
           onTrace={(ref) => set({ trace: state.trace === ref ? null : ref })}
           onSelectNode={selectNode}
           onClose={close}
+          section={state.section}
           admit={admit}
           versions={versions}
+          stations={source ? { ...source, foreign: !ownLine } : null}
+          graphTitle={picked?.title ?? null}
         />
       ) : null}
+    </div>
+  );
+}
+
+/** The graphs this project's work runs, one tab each, labeled by the work
+ *  that goes through it (lineGraphs projectGraphs). `unread`: the graph's own
+ *  row could not be read, so its stations come from what its runs recorded. */
+function GraphTabs({ graphs, selected, onSelect, unread, neverRun }: { graphs: ProjectGraph[]; selected: string; onSelect: (key: string) => void; unread: boolean; neverRun: number }) {
+  return (
+    <div className="lmap-graphs" data-map-graphs>
+      <span className="lmap-graphs-lead">{graphs.length > 1 ? `Work here runs through ${graphs.length} lines` : "Work here runs through"}</span>
+      <div className="lmap-graphs-tabs" role="tablist" aria-label="Lines this project runs">
+        {graphs.map((g) => (
+          <button key={g.key} type="button" role="tab" aria-selected={g.key === selected} onClick={() => onSelect(g.key)} className="lmap-graph-tab" data-map-graph-tab={g.key}>
+            <b>{g.title}</b>
+            <span>{g.work}{g.live ? `, ${g.live} running now` : ""}</span>
+          </button>
+        ))}
+      </div>
+      {/* Each tab counts the waiting causes whose newest run ran it; the rest of the queue has not started on any line, said so the numbers add up to the headline. */}
+      {neverRun > 0 && <span className="lmap-graphs-note" data-map-never-run>{neverRun} waiting {neverRun === 1 ? "problem has" : "problems have"} not run on any line yet</span>}
+      {unread && <span className="lmap-graphs-note" data-map-graph-partial>Drawn from the steps its runs recorded; its full instructions are not shared with you.</span>}
     </div>
   );
 }

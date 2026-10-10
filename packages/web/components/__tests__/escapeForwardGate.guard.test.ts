@@ -17,15 +17,18 @@ import { join } from "node:path";
 // message starts once the daemon pastes it (2026-08-28) — now rides on the
 // press time: the daemon skips a press that predates its newest injection.
 //
-// The dispatch lives once, in useSessionEscape (hooks/useSessionComposerControls.ts),
-// and every composer that shows a session (the conversation view, a Threads card)
-// sends its Escape through it.
+// The press lives once, in useSessionEscape (hooks/useSessionComposerControls.ts),
+// which calls the store's sendEscape, the one dispatch; every composer that
+// shows a session (the conversation view, a Threads card) sends its Escape
+// through the hook.
 describe("Escape is forwarded on every press, stamped with the press time", () => {
   const read = (rel: string) => readFileSync(join(import.meta.dir, "..", rel), "utf-8");
   const src = read("../hooks/useSessionComposerControls.ts");
   const start = src.indexOf("export function useSessionEscape(");
-  const dispatch = src.indexOf('"sendEscapeToSession"', start);
+  const dispatch = src.indexOf("sendEscape(conversationId)", start);
   const body = src.slice(start, dispatch);
+  const store = read("../store/inboxStore.ts");
+  const storeDispatch = store.slice(store.indexOf("  sendEscape: (convId: string) => get()"));
 
   test("every composer sends Escape through the one hook", () => {
     for (const rel of ["ConversationView.tsx", "conversation/SessionInlineThread.tsx"]) {
@@ -42,7 +45,8 @@ describe("Escape is forwarded on every press, stamped with the press time", () =
   });
 
   test("the dispatch carries pressed_at", () => {
-    const call = src.slice(dispatch, src.indexOf(")", dispatch) + 1);
+    const call = storeDispatch.slice(0, storeDispatch.indexOf("\n"));
+    expect(call).toContain('"sendEscapeToSession"');
     expect(call).toMatch(/pressed_at:\s*Date\.now\(\)/);
   });
 });

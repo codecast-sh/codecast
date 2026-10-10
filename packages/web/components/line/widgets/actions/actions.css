@@ -1,0 +1,55 @@
+/* The line workspace's actions (line-workspace.md LW4): Save and versions,
+   Try, Ask an agent, and the right/wrong label. Built on the workspace's own
+   tokens (workspace.css), so they read as part of the drawer. */
+
+.lw-save-note { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lw-save-note[data-tone="bad"] { color: var(--lw-bad); }
+.lw-save-note[data-tone="warn"] { color: var(--lw-warn); }
+.lw-save-note[data-tone="ok"] { color: var(--lw-ok); }
+.lw-try .lw-save-note, .lw-ask .lw-save-note { white-space: normal; max-width: none; margin-top: var(--lw-s3); }
+
+/* Versions: under the prompt, newest first. */
+.lw-versions { margin-top: var(--lw-s5); border-top: 1px solid var(--lw-rule-2); padding-top: var(--lw-s3); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lw-versions-head { font-weight: 650; color: var(--lw-ink); margin-bottom: 6px; }
+.lw-version { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+.lw-version-hash { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); padding: 1px 6px; border-radius: 5px; background: var(--lw-paper-2); color: var(--lw-ink-2); flex: none; }
+.lw-version[data-current] .lw-version-hash { background: var(--lw-ink); color: var(--lw-paper); }
+.lw-version[data-state="refused"] { color: var(--lw-bad); }
+.lw-version[data-state="saving"], .lw-version[data-state="pushing"] { color: var(--lw-ink); }
+
+/* Try. */
+.lw-try-what { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); margin-bottom: var(--lw-s3); }
+.lw-try-cases { display: flex; flex-direction: column; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-card); }
+.lw-try-case { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; transition: background var(--lw-fast); }
+.lw-try-case + .lw-try-case { border-top: 1px solid var(--lw-rule-2); }
+.lw-try-case:hover { background: var(--lw-card-2); }
+.lw-try-case[data-on] { background: color-mix(in srgb, var(--lw-agent) 6%, var(--lw-card)); }
+.lw-try-case input { accent-color: var(--lw-agent); flex: none; }
+.lw-try-case-t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.lw-try-case-t b { font-weight: 600; font-size: var(--lw-fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lw-try-case-t small { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+.lw-try-go { display: flex; align-items: center; gap: var(--lw-s3); margin: var(--lw-s3) 0 var(--lw-s4); flex-wrap: wrap; }
+.lw-try-fine { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); max-width: 46ch; line-height: 1.4; }
+.lw-try-result { margin-top: var(--lw-s3); animation: lw-try-in var(--lw-med) var(--lw-ease-out); }
+.lw-try-past { display: flex; justify-content: space-between; gap: 10px; width: 100%; margin-top: 6px; padding: 8px 12px; border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); background: var(--lw-card-2); color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-sm); cursor: pointer; text-align: left; transition: border-color var(--lw-fast), color var(--lw-fast); }
+.lw-try-past:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+@keyframes lw-try-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .lw-try-result { animation: none; } }
+
+/* Ask an agent. */
+.lw-ask-field { display: flex; flex-direction: column; gap: 6px; font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink); }
+.lw-ask-field textarea { font: inherit; font-weight: 400; font-size: var(--lw-fs-base); line-height: 1.5; color: var(--lw-ink); background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: var(--lw-r); padding: 10px 12px; resize: vertical; min-height: 92px; transition: border-color var(--lw-fast), box-shadow var(--lw-fast); }
+.lw-ask-field textarea:focus { outline: none; border-color: var(--lw-person); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lw-person) 18%, transparent); }
+.lw-ask-goes { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lw-ask-cases { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.lw-ask-case { display: inline-flex; align-items: center; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); padding: 2px 8px 2px 2px; border: 1px solid var(--lw-rule-2); border-radius: 8px; background: var(--lw-card); max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Right or wrong, in a decision's foot. */
+.lw-labeler { display: inline-flex; align-items: center; gap: 4px; }
+.lw-labeler-q { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); margin-right: 4px; }
+.lw-labeler-b { border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; padding: 1px 9px; border-radius: 6px; cursor: pointer; transition: background var(--lw-fast), color var(--lw-fast), border-color var(--lw-fast); }
+.lw-labeler-b:hover { color: var(--lw-ink); border-color: var(--lw-ink-3); }
+.lw-labeler-b[data-verdict="right"][aria-pressed="true"] { background: var(--lw-ok-soft); color: var(--lw-ok); border-color: color-mix(in srgb, var(--lw-ok) 40%, transparent); }
+.lw-labeler-b[data-verdict="wrong"][aria-pressed="true"] { background: var(--lw-bad-soft); color: var(--lw-bad); border-color: color-mix(in srgb, var(--lw-bad) 40%, transparent); }
+.lw-labeler-note { font: inherit; font-size: var(--lw-fs-xs); width: 26ch; padding: 2px 8px; border: 1px solid var(--lw-rule); border-radius: 6px; background: var(--lw-card); color: var(--lw-ink); }
+.lw-labeler-note:focus { outline: none; border-color: var(--lw-bad); }
