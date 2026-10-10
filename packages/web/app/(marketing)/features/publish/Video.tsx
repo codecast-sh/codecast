@@ -81,6 +81,7 @@ export function Video() {
     <Section
       id="video"
       n="07"
+      tone="sand"
       title="Put a screen recording in the bundle. It plays like a film."
       lede={<>Video and audio inside a published folder upload to media hosting and keep their relative paths, so <C>&lt;video src=&quot;demo.mp4&quot;&gt;</C> just works. A video with controls becomes the cast player, and several clips can play back to back as chapters of one film.</>}
     >

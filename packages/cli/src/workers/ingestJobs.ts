@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readCompleteLines, cursorPassBoundary, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
 import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
-import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseMirrorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
+import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseMirrorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractSidechain, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
 import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyCursorTranscriptTail } from './ingestMetadata.js';
 import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, hasClockFreeReceipts, isWindowedIngest, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
@@ -242,6 +242,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       if (headWindow.incomplete) meta.warnings.push('head: incomplete final record');
       checkpoint();
       meta.slug = extractSlug(head); meta.parentUuid = extractParentUuid(head); meta.cwd = extractCwd(head);
+      meta.sidechain = extractSidechain(head);
       meta.headMessages = parseSessionFile(head).filter(m => m.role === 'user').slice(0,3);
       checkpoint();
       meta.cliFlags = detectCliFlags(head+'\n'+content);

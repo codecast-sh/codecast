@@ -210,7 +210,7 @@ describe("grouping", () => {
     expect(cards.map((c) => [c.title, c.seqs])).toEqual([["Win the private network", [6]], ["Proud relationships", [9]]]);
     expect(cards[1].change_ids).toEqual(["g9"]);
     // The purpose is not in this ask, and is still what the sentence calls the parent.
-    expect(cards[0].sentence).toBe("Move Win the private network under the purpose.");
+    expect(cards[0].sentence).toBe("Move Win the private network under the mission.");
   });
 
   test("a plan carries the tasks it closes; they get no card and are decided with it", () => {
@@ -296,9 +296,9 @@ describe("sentences", () => {
 
   test("several changes to a goal that exists join into one sentence, its name the only one written", () => {
     const proud = cardsOf(TREE)[4];
-    expect(proud.sentence).toBe("Move Proud relationships under the purpose, give it two measures and have Agent Quality carry it.");
+    expect(proud.sentence).toBe("Move Proud relationships under the mission, give it two measures and have Agent Quality carry it.");
     expect(proud.sentence.slice(...proud.subjectSpan!)).toBe("Proud relationships");
-    expect(proud.sentenceThis).toBe("Move this goal under the purpose, give it two measures and have Agent Quality carry it.");
+    expect(proud.sentenceThis).toBe("Move this goal under the mission, give it two measures and have Agent Quality carry it.");
     expect(proud.reasons).toEqual(["why g9", "why g10"]);
   });
 
@@ -354,16 +354,16 @@ describe("rows with nothing to compare", () => {
   });
 });
 
-describe("the purpose", () => {
+describe("the mission", () => {
   test("the one top level goal others sit under is set as the purpose, and named so wherever it is a parent", () => {
     const [purpose, revenue, , network] = cardsOf(TREE);
     expect(purpose.sentence).toBe(`Set ${PURPOSE} as the purpose.`);
     expect(purpose.sentence.slice(...purpose.subjectSpan!)).toBe(PURPOSE);
     expect(purpose.sits).toBeNull();
-    expect(revenue.sentence).toBe("Add the goal Make revenue under the purpose.");
-    expect(revenue.sits).toBe("Under the purpose");
-    expect(network.sentence).toBe("Move Win the private network under the purpose.");
-    expect(diff(network, "parent")).toEqual(["change", "at the top level", "the purpose"]);
+    expect(revenue.sentence).toBe("Add the goal Make revenue under the mission.");
+    expect(revenue.sits).toBe("Under the mission");
+    expect(network.sentence).toBe("Move Win the private network under the mission.");
+    expect(diff(network, "parent")).toEqual(["change", "at the top level", "the mission"]);
   });
 
   test("a goal's projects are one list; the purpose is read through its goals, with no number of its own", () => {
@@ -472,7 +472,7 @@ describe("which before a row shows", () => {
     expect(shaped.evidence).toEqual([{ label: "#team, Sep 23" }]);
     const proud = cardsOf(TREE)[4];
     expect(proud.rows.map((r) => [r.key, r.op, read(r.before), read(r.after), r.seq])).toEqual([
-      ["parent", "change", "at the top level", "the purpose", 9],
+      ["parent", "change", "at the top level", "the mission", 9],
       ["metrics", "change", "nothing", "Trust breaks per day, target 0; Comms score, target 0.9 or higher", 9],
       ["projects", "add", "no project", "Agent Quality", 10],
     ]);

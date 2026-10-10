@@ -6,7 +6,8 @@ export type NodeShape =
   | "diamond"        // conditional
   | "component"      // parallel fan-out
   | "tripleoctagon"  // parallel fan-in
-  | "tab"            // prompt (single LLM call, no tools)
+  | "tab"            // prompt: a Claude Code session given one prompt
+  | "note"           // call: one model call, one answer, no tools (learning-loop.md LL1)
   | "box";           // agent (default)
 
 export type NodeType =
@@ -14,6 +15,7 @@ export type NodeType =
   | "exit"
   | "agent"
   | "prompt"
+  | "call"
   | "command"
   | "human"
   | "conditional"
@@ -45,6 +47,11 @@ export interface WorkflowNode {
   // and prompt. Node-level agent/model/reasoning_effort override its parts.
   definition?: string;
   temperature?: number;
+  // Call nodes (learning-loop.md LL1): the answer's cap and shape, and an
+  // optional system prompt. `prompt` and `model` are shared with agent nodes.
+  max_tokens?: number;
+  system?: string;
+  output?: "json" | "text";
   // Command nodes
   script?: string;
   // Command nodes: seconds the script may run (default 120).

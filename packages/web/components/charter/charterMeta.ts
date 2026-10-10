@@ -114,10 +114,6 @@ export function ownerCandidates(roles: OrgRoles): OrgRole[] {
   return (roles ?? []).filter((r) => r.status !== "retired" && !isHeadOfPeopleRole(r));
 }
 
-export function roleHref(role: Pick<OrgRole, "short_id">): string {
-  return `/org/${role.short_id}`;
-}
-
 /** "400k", "1.2M": the budget line reads at a glance. */
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${trimZero(n / 1_000_000)}M`;
