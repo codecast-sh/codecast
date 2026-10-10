@@ -40,6 +40,7 @@ import {
   type CallWindowSize,
   type VoiceWindowShape, DOCK_FACES_TITLE, navigateMainWindow, useFacesFloating } from "../../lib/desktop";
 import "./voiceHost.css";
+import { objectHref, personRefOf } from "../../lib/entityLinks";
 
 /**
  * The voice host: the one window that holds the microphone, in every shape.
@@ -363,7 +364,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
           callsEnabled={callsEnabled}
           bridge={CALL_WINDOW_BRIDGE}
           // The profile opens where the work is: the main window, raised.
-          onOpenProfile={(m) => navigateMainWindow(`/team/${m.github_username || m._id}`)}
+          onOpenProfile={(m) => navigateMainWindow(objectHref("person", personRefOf(m)))}
           chrome={{
             onExpand: openCall,
             onClose: closeFloat,

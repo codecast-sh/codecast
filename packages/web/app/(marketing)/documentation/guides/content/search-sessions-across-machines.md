@@ -1,52 +1,49 @@
-Claude Code keeps every conversation as a JSONL file under `~/.claude/projects/` on the machine where it ran. That makes search easy on one machine and awkward across several: a session from your laptop is not on your desktop, and a session from a cloud box or a teammate's machine is not on either. This guide covers the options for searching that history, starting with the ones that need nothing installed.
+Claude Code keeps each conversation on the computer that ran it. Yesterday's session on your laptop isn't on your desktop, and a session on a cloud machine or a teammate's computer isn't on either. Codecast puts them in one place: every computer you connect sends its sessions to your account as they happen, so you can search all of them from any computer, from the web at codecast.sh, from the Mac app or from your iPhone.
 
-## On one machine
+![The search page with the query "Codecast-Session trailer", its Scope, Match in, Time and Sort filters, and sessions with the matching messages highlighted](/documentation/search-sessions-across-machines/search.webp "One search over every machine. Each result is a session, with the messages that matched and when they were said.")
 
-**`claude --resume`** opens a picker of recent sessions for the current project, and the picker can filter the list. It is built in and fine for "the session I had yesterday", but it lists sessions from this machine only.
+## Set it up
 
-**[search-sessions](https://github.com/sinzin91/search-sessions)** is a small open source CLI (MIT) that searches the full text of every Claude Code and OpenClaw session in `~/.claude/projects/`, with no index to build and no database. It also installs as a slash command inside Claude Code. It reads local disk only, by design.
+Install codecast and sign in on each computer your agents run on ([Getting started](/documentation#getting-started) walks through it). There is nothing else to turn on. From then on, every session on that computer is recorded and searchable, whether it ran in Claude Code, Codex, Cursor, Gemini, pi or Grok.
+## Search
 
-**[LLMnesia](https://www.llmnesia.com/blog/search-claude-code-conversation-history)** is a free Chrome and Edge extension that indexes Claude Code sessions from the terminal, the VS Code extension and the desktop app, together with browser chats in ChatGPT, Claude, Gemini and others, into one local search. It also keeps everything on the device, with no account and no cloud.
+Press **⌘K** anywhere in the app and start typing. Sessions with matching messages appear as you type, along with tasks and other things that match. Press **⌘↵** to open the full search page, where you can narrow the results:
 
-If all your agent work happens on one computer, one of these is the least setup. Copying `~/.claude/projects/` between machines also works, since Claude Code reads session files wherever they are, but it is a manual step you have to remember each time.
+| Filter | Choices |
+|--------|---------|
+| **Scope** | **Everyone** you share sessions with, or **Only mine** |
+| **Match in** | **Everything** said in a session, or only **My prompts**, the lines you typed |
+| **Time** | **All time**, the last **7d**, **30d** or **90d** |
+| **Sort** | **Recent** first, or most **Relevant** first |
 
-## Across every machine, with codecast
+Put a phrase in quotes to match it exactly; words without quotes match anywhere in the session. To narrow further, type one of these into the search box (the empty search page lists them, and clicking one adds it):
 
-Codecast takes the other approach: instead of searching the files where they sit, a small daemon on each machine watches the history files your agents already write and syncs each conversation to your account as it happens. Every machine that runs the daemon under the same login feeds one history, so a search from any of them, or from the web, covers all of them:
+| Type | To find |
+|------|---------|
+| `file:src/auth.ts` | Sessions that edited a file or folder |
+| `commit:3f2a91c` | The session that made a commit |
+| `pr:482` | Sessions linked to a pull request |
+| `author:me` | Sessions a particular person ran |
+| `repo:codecast` | Sessions in one repository |
+| `label:api` | Sessions you filed under a label |
+| `after:7d`, `before:2026-09-01` | Sessions active after or before a time |
 
-```bash
-curl -fsSL https://codecast.sh/install | sh
-cast login
-```
+Each result is a session. Under its title you see the matching messages, who said them (you or the agent) and when. Click a message to open the conversation at that point. When a session handed work to helper sessions, the result says how many of them matched too. Right click a result for more, such as copying a link to it.
 
-```figure
-OneHistoryFigure
-Local tools read the disk in front of you; the daemon on each machine syncs into one history that every machine searches.
-```
+The search page address keeps your whole query, so a narrowed search is a link you can bookmark or send to a teammate.
 
-Search then runs from the terminal:
+On your iPhone, the search at the top of the inbox searches the same history.
 
-```bash
-cast search "flaky deploy"               # every session you can see, keyword and semantic
-cast search auth --mine -s 7d            # only your own sessions, last seven days
-cast search "rate limit" -m samvit       # one teammate's sessions
-cast search migration -u                 # only what a person typed, not the agent's replies
-cast ask "how did we fix the flaky deploy?"   # a question answered across that history
-```
+## Let your agents search it
 
-Quoted phrases match exactly and unquoted words match anywhere. Each result names its session, which `cast read <id>` opens. The same history is searchable in the web app at `codecast.sh/search` and from its command palette.
+With [Memory](/documentation/memory) on, your agents search this same history themselves, from whichever computer they run on. Ask "what did we decide about the schema in yesterday's session on my laptop?" and the agent finds it and answers with a link to the session.
 
-![The command palette searching "webhook retry": three sessions with a matching line each, and a task](/documentation/shots/command-palette.webp "The same search in the web app's command palette, over sessions from every machine.")
+## What it covers
 
-Two things differ from the local tools. The search is not only yours: by default it covers every session your team can see for the current directory, and `--mine` narrows it to you. And it covers Codex, Cursor and Gemini sessions alongside Claude Code, because the daemon records those too (and pi and Grok). Your agents can run the same commands, which is what [Agent memory](/documentation/memory) describes in depth.
+- **Your sessions, and your team's shared ones.** A teammate's session appears only if it is shared with the team. Which folders are shared, and which stay private to you, is set per folder; see [Team sessions](/documentation/team-sessions).
+- **Every message for the last 30 days, titles and summaries before that.** A search matches the full text of recent sessions. Older sessions match by their title and summary, and the search page says so above the results.
+- **Only computers running codecast.** A computer that has never had codecast installed and signed in adds nothing to the history.
 
-```figure
-SearchScopeFigure
-The rings choose whose sessions a search covers; the flags narrow any of them.
-```
+## If you only use one computer
 
-The limits are the other side of the design. It only covers machines where the daemon runs, it needs an account, and the history lives in codecast rather than only on your disk. Which directories are shared with a team, and which stay private to you, is set per directory; see [See your whole team's Claude Code sessions in one place](/documentation/team-sessions).
-
-## Choosing
-
-Use `claude --resume` for a recent session on the machine in front of you. Use search-sessions or LLMnesia when you want full text search of your own history and want it to stay on one device. Use codecast when the history you need is spread across several machines or several people, or includes agents other than Claude Code, and you want one place to search it from.
+Claude Code's own `claude --resume` lists recent sessions for the folder you are in, on that computer. Open source tools such as [search-sessions](https://github.com/sinzin91/search-sessions) and [LLMnesia](https://www.llmnesia.com/blog/search-claude-code-conversation-history) search the full text of the session files on one computer and keep everything on it. If your work lives on one machine and only you need it, those are less to set up. Codecast is for history spread across several computers, several agents or several people.

@@ -7,12 +7,11 @@
 // wide instead of eight). Roles nest the same way. A stack ends in a cluster
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
-import { roleWords, type OrgChange, type OrgChangeKind, type OrgChangeStatus, type OrgProposalChange } from "./orgStaffingTypes";
-import { editedOrgChange, isOrgQuietChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
-import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
+import { type OrgChange, type OrgChangeKind, type OrgChangeStatus, type OrgProposalChange } from "./orgStaffingTypes";
+import { editedOrgChange, isOrgQuietChange, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
+import { changeLine, chipLine, roleTenureChip } from "./orgMeta";
 import type { ZoomLevel } from "./orgZoom";
-
-export type OrgNodeKind = "person" | "role" | "session" | "cluster";
+import { CARD, roleCardRows, roleMetaLine, runningSessions, seatHeight, sessionCardRows, wrapLines, type OrgSessionDetail, type RoleOpenDetail } from "./orgCardModel";
 
 // ---------------------------------------------------------------- ghosts
 // Open proposal changes drawn INTO the tree (docs/architecture/org-staffing.md
@@ -44,21 +43,24 @@ export type OrgGhostPlan = {
   chips: Record<string, OrgGhostChip[]>;
 };
 
-export const EMPTY_GHOSTS: Readonly<Omit<OrgGhostPlan, "merged">> = { stubs: {}, retires: {}, moves: [], chips: {} };
-
 type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhostMove; chips?: OrgGhostChip[] };
 
 export type OrgLayoutNode =
   // `h` is the card's height at the zoom level the layout was asked for (orgZoom).
   | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
-  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
-  | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
-  | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
+  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string };
+      /** Opened in place: the card lists its charter, leads, open tasks and sessions (`open` is what the store had). */ opened?: boolean; open?: RoleOpenDetail } & GhostDecor)
+  | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef; /** What the card adds under its title (orgSessionDetail); absent at far. */ detail?: OrgSessionDetail; opened?: boolean } & GhostDecor)
+  | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean }
+  // The product layer on the Everything chart (orgProductLayer): a goal under whoever owns it, a project under its lead with its sessions under it, the mission at the top, and one quiet group for what nobody owns yet.
+  | { id: string; kind: "goal" | "project" | "mission"; x: number; y: number; w: number; h: number; data: Record<string, unknown> }
+  | { id: string; kind: "group"; x: number; y: number; w: number; h: number; label: string; count: number };
 
 /** `ghost`: a proposed edge into a stub, or a proposed move's edge to the new
  *  parent (then `change_id` names the move). `faded`: the old edge of a
- *  proposed move, drawn at 30%. */
-export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost"; faded?: boolean; change_id?: string;
+ *  proposed move, drawn at 30%. `cross`: a project to a goal it serves in
+ *  another branch, drawn only while either end is pointed at or selected. */
+export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost" | "cross"; faded?: boolean; change_id?: string;
   /** Drawn as a spine down the parent's left edge into the card's side (the health map's columns). */
   spine?: boolean };
 
@@ -75,50 +77,56 @@ export type OrgLayoutView = {
   /** False keeps the tree layout but draws no session stack under a card: its
    *  sessions are its counts and state dots (the map, org-staffing.md S40). */
   sessionCards?: boolean;
+  /** What each session card says under its title, by conversation id
+   *  (orgSessionDetail.sessionDetailsOf, from the store's inbox rows). */
+  sessionDetails?: Readonly<Record<string, OrgSessionDetail>>;
+  /** Role and session node ids opened in place: the card lists more, and the layout books it. */
+  opened?: ReadonlySet<string>;
+  /** What an opened role card lists from the store, by role id. */
+  roleDetails?: Readonly<Record<string, RoleOpenDetail>>;
+  /** The Everything chart: goals and projects joined into the people tree (orgProductLayer). */
+  product?: OrgProductInput;
+};
+
+export type { OrgSessionDetail, RoleOpenDetail };
+
+/** The product layer as the people tree places it: every card's height and
+ *  data already resolved for the zoom level (orgProductLayer), so this module
+ *  stays a pure tree layout. */
+export type OrgProductInput = {
+  /** The mission (or the company) card at the top, beside the first root. */
+  mission: { h: number; w: number; data: Record<string, unknown> } | null;
+  goals: { id: string; owner: OrgParentRef | null; h: number; w: number; data: Record<string, unknown> }[];
+  projects: { id: string; lead: OrgParentRef | null; goalIds: string[]; h: number; w: number; data: Record<string, unknown> }[];
+  /** Which project a session works on (its bound task's or plan's project, from the store). */
+  sessionProject: Readonly<Record<string, string>>;
 };
 
 export const ORG_SIZES = {
-  person: { w: 232, h: 84 },
-  role: { w: 232, h: 108 },
+  person: { w: CARD.person.w, h: 84 },
+  /** A role's far card (its name, large); every nearer card is sized by orgCardModel.roleCardRows. */
+  role: { w: CARD.role.w, h: CARD.role.far },
   /** A role on the health map (OrgNodeCards.HealthRoleCard): name, the week's two numbers, its signals. */
   healthRole: { w: 232, h: 122 },
-  session: { w: 220, h: 50 },
-  cluster: { w: 220, h: 58 },
+  /** A session's far card; nearer cards are sized by orgCardModel.sessionCardRows. */
+  session: { w: CARD.session.w, h: CARD.session.far },
+  cluster: { w: CARD.cluster.w, h: 58 },
+  /** The quiet "No owner yet" group header on the Everything chart. */
+  group: { w: 300, h: 40 },
   /** Extra card height when a node carries ghost chips. */
   chipRow: 24,
   /** A quiet chip's line (OrgNodeCards.GhostChips `quiet`): what a goal card books per change on it. */
   quietChipRow: 20,
   /** A card lists this many changes as lines, then one line counting the rest. */
   quietChipMax: 3,
-  /** Extra role card height when its standing agent has a line to show
-   *  (StandingLine: 6px margin plus one 10.5px line at 1.5). The card draws
-   *  the line on the same predicate (standingLineOf), so the layout and the
-   *  card cannot disagree about the card's height. */
-  standingRow: 22,
-  /** Extra height of a program seat's tenure row (org-staffing.md S10): its own
-   *  line, because "program · ends with pl-N" does not fit the meta line. A
-   *  standing seat says nothing, so it takes no row. */
-  tenureRow: 18,
   /** Extra height of an adopt stub: a second line naming the role it joins. */
   adoptRow: 18,
-  /** A ghost role that names a session says what naming changes (R2): the
-   *  sentence wraps, so its row is sized from its length (seatRowHeight). */
-  seatLine: 14,
-  seatChars: 36,
-  /** Close zoom level rows (orgZoom), which the close layout adds to a card:
-   *  a role's charter (two lines) and up to three running sessions, one line each. */
-  charterRows: 32,
+  /** Close zoom level rows on a person card: up to three running sessions, one line each. */
   runningRow: 15,
   runningMax: 3,
-  /** At close the line under the name (who they are, how many sessions) moves
-   *  to a row of its own, the card's full width, so nothing on it is clipped:
-   *  its first line with the gap above it, each further line, and how many
-   *  characters fit a line (10.5px in 208px). */
+  /** A person's line under the name (who they are, how many sessions) on a row of its own. */
   closeMetaRow: 22,
   closeMetaLine: 16,
-  closeMetaChars: 32,
-  /** A role's open work at close: the tasks and plans its area holds (org.health's ledger). */
-  workRow: 17,
   siblingGap: 40,
   levelGap: 56,
   stackGap: 8,
@@ -151,51 +159,39 @@ export function parentRefOfNodeId(id: string): OrgParentRef | null {
 
 // ---------------------------------------------------------------- hierarchy
 
-/** The sessions a close card lists: the ones working now, newest first, three at most. */
-export const runningSessions = (holder: { sessions: OrgSession[] }): OrgSession[] => holder.sessions.filter((x) => x.state === "working").slice(0, ORG_SIZES.runningMax);
+export { runningSessions, roleMetaLine };
 /** The list's rows plus the 6px it stands off what is above it (OrgNodeCards.RunningList). */
 const runningRows = (holder: { sessions: OrgSession[] }) => { const n = runningSessions(holder).length; return n ? n * ORG_SIZES.runningRow + 6 : 0; };
-/** How many lines a text takes wrapped by word at `chars` a line, one to three (the cards clamp at three). */
-export function wrappedLines(text: string, chars: number): number {
-  let lines = 1, used = 0;
-  for (const word of text.trim().split(/\s+/)) {
-    const need = used ? used + 1 + word.length : word.length;
-    if (used && need > chars) { lines += 1; used = word.length; } else used = need;
-    // A word longer than a line breaks inside itself.
-    while (used > chars) { lines += 1; used -= chars; }
-  }
-  return Math.min(3, lines);
-}
-
-/** A role's line under its name, as the close card prints it whole: its title, whether its seat is started, its sessions. */
-export const roleMetaLine = (r: OrgRole, ghost?: boolean): string =>
-  [roleWords(r).subtitle, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
+/** How many lines a text takes wrapped by word at `chars` a line, one to three (the goal cards clamp at three). */
+export const wrappedLines = (text: string, chars: number): number => wrapLines(text, chars, 3);
 /** How many lines a card's changes take as quiet lines: one each up to the cap, then one more for the rest. */
 export const quietChipLines = (n: number) => (n <= ORG_SIZES.quietChipMax ? n : ORG_SIZES.quietChipMax + 1);
-/** At close a card's changes are lines instead of a row of chips: what that adds to the chips row. */
-const closeChipsExtra = (n: number) => (n ? Math.max(0, quietChipLines(n) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow) : 0);
-/** What the close card adds under a role's middle card: the line under its
- *  name on its own row, its changes as lines, its charter, its open work and
- *  its running sessions. */
-const roleCloseExtra = (r: OrgRole, chips: number, ghost: boolean) =>
-  ORG_SIZES.closeMetaRow + (wrappedLines(roleMetaLine(r, ghost), ORG_SIZES.closeMetaChars) - 1) * ORG_SIZES.closeMetaLine + closeChipsExtra(chips) + (r.charter?.trim() ? ORG_SIZES.charterRows : 0) + (ghost ? 0 : ORG_SIZES.workRow) + runningRows(r);
-const personCloseExtra = (p: OrgPerson, chips: number) => ORG_SIZES.closeMetaRow + closeChipsExtra(chips) + runningRows(p);
+/** A person's nearer card adds its meta line on a row of its own, its changes as lines, and its running sessions. */
+const personFullExtra = (p: OrgPerson, chips: number) => ORG_SIZES.closeMetaRow + (chips ? Math.max(0, quietChipLines(chips) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow) : 0) + runningRows(p);
+
+type Stack = { parent: OrgParentRef; /** The node the stack hangs under (a person, a role or a project). */ under: string; sessions: OrgSession[]; total: number; counts: StateCounts; hasMoreNode: boolean; fullyLoaded: boolean };
 
 type Branch = {
   id: string;
-  kind: "person" | "role";
+  kind: "person" | "role" | "goal" | "project" | "group" | "mission";
   w: number;
   h: number;
   person?: OrgPerson;
   role?: OrgRole;
+  /** A goal, project or mission card's data (orgProductLayer). */
+  data?: Record<string, unknown>;
+  label?: string;
+  count?: number;
   /** A program seat's tenure chip (S10), resolved HERE because this is where
    *  the whole tree is in hand: the plan or project name lives in some other
    *  role's scope_names, so a card resolving it alone would show a raw id and
    *  would not repaint when the naming role's row changed. Absent = standing. */
   tenure?: { short: string; full: string };
+  opened?: boolean;
+  open?: RoleOpenDetail;
   children: Branch[];
   /** The parent's own sessions, drawn as a vertical stack under it. */
-  stack: { parent: OrgParentRef; sessions: OrgSession[]; total: number; counts: StateCounts; hasMoreNode: boolean; fullyLoaded: boolean } | null;
+  stack: Stack | null;
   collapsed: boolean;
   /** Everything folded away under a collapsed node, for the card's count. */
   hidden: number;
@@ -218,40 +214,45 @@ function bucketedIds(tree: OrgTree): Set<string> {
   return out;
 }
 
-function stackFor(parent: OrgParentRef, bucket: { sessions: OrgSession[]; total: number; counts: StateCounts }, view: OrgLayoutView, elsewhere: ReadonlySet<string>): Branch["stack"] {
-  const id = parentNodeId(parent);
-  const opened = id in view.expanded;
-  const extra = view.expanded[id] ?? [];
+function stackFor(parent: OrgParentRef, under: string, bucket: { sessions: OrgSession[]; total: number; counts: StateCounts }, view: OrgLayoutView, elsewhere: ReadonlySet<string>, skip?: (s: OrgSession) => boolean): Stack | null {
+  const opened = under in view.expanded;
+  const extra = view.expanded[under] ?? [];
   const seen = new Set(bucket.sessions.map((s) => s._id));
-  const loaded = [...bucket.sessions, ...extra.filter((s) => !seen.has(s._id) && !elsewhere.has(s._id))];
-  const total = Math.max(bucket.total, loaded.length);
+  const all = [...bucket.sessions, ...extra.filter((s) => !seen.has(s._id) && !elsewhere.has(s._id))];
+  // Sessions that sit under one of this card's projects leave its own stack, and its counts.
+  const loaded = skip ? all.filter((s) => !skip(s)) : all;
+  const moved = all.length - loaded.length;
+  const counts = moved ? { ...bucket.counts } : bucket.counts;
+  if (moved) for (const s of all) if (skip!(s)) counts[s.state] = Math.max(0, (counts[s.state] ?? 0) - 1);
+  const total = Math.max(bucket.total - moved, loaded.length);
   if (loaded.length === 0 && total === 0) return null;
   const sessions = opened ? loaded : loaded.slice(0, ORG_STACK_VISIBLE);
   const fullyLoaded = sessions.length >= total;
   // The cluster card appears when there is more to show, and stays (as "show
   // fewer") once the stack has been opened past the default five.
   const hasMoreNode = !fullyLoaded || opened;
-  return { parent, sessions, total, counts: bucket.counts, hasMoreNode, fullyLoaded };
+  return { parent, under, sessions, total, counts, hasMoreNode, fullyLoaded };
 }
 
 type Stubs = Readonly<Record<string, OrgGhostStub>> | undefined;
 
-/** The height of a ghost role's seat sentence: a 6px margin and one line per
- *  `seatChars` characters. The layout books it and the card draws the sentence
- *  in a box of this height, so the two cannot disagree. */
-export function seatRowHeight(seat: OrgRoleSeat | undefined): number {
-  return seat ? 6 + Math.ceil(seatSentence(seat).length / ORG_SIZES.seatChars) * ORG_SIZES.seatLine : 0;
+/** The height of a ghost role's seat sentence (orgCardModel.seatHeight). */
+export const seatRowHeight = (seat: OrgRoleSeat | undefined): number => seatHeight(seat);
+
+/** How a session card is sized at this level: far is the title alone; nearer, what it says (orgCardModel). */
+type SessionSizing = { stubs: Stubs; far: boolean; details?: Readonly<Record<string, OrgSessionDetail>>; opened?: ReadonlySet<string> };
+
+/** A session row's height: an adopt stub carries a second line; nearer than far a session says where it stands and its task. */
+function sessionHeight(s: OrgSession, sz: SessionSizing): number {
+  if (sz.stubs?.[sessionNodeId(s._id)]?.kind === "adopt") return ORG_SIZES.session.h + ORG_SIZES.adoptRow;
+  if (sz.far) return ORG_SIZES.session.h;
+  return sessionCardRows(s, sz.details?.[s._id], !!sz.opened?.has(sessionNodeId(s._id))).h;
 }
 
-/** A session row's height: an adopt stub carries a second line. */
-function sessionHeight(conversationId: string, stubs: Stubs): number {
-  return stubs?.[sessionNodeId(conversationId)]?.kind === "adopt" ? ORG_SIZES.session.h + ORG_SIZES.adoptRow : ORG_SIZES.session.h;
-}
-
-function stackHeight(stack: NonNullable<Branch["stack"]>, stubs: Stubs): number {
+function stackHeight(stack: Stack, sz: SessionSizing): number {
   const n = stack.sessions.length + (stack.hasMoreNode ? 1 : 0);
   if (n === 0) return 0;
-  const rows = stack.sessions.reduce((h, s) => h + sessionHeight(s._id, stubs) + ORG_SIZES.stackGap, 0);
+  const rows = stack.sessions.reduce((h, s) => h + sessionHeight(s, sz) + ORG_SIZES.stackGap, 0);
   return rows + (stack.hasMoreNode ? ORG_SIZES.cluster.h + ORG_SIZES.stackGap : 0) - ORG_SIZES.stackGap;
 }
 
@@ -261,9 +262,15 @@ function subtreeCount(b: Branch): number {
   return n;
 }
 
+export const goalNodeIdOf = (id: string) => `goal:${id}`;
+export const projectNodeIdOf = (id: string) => `project:${id}`;
+export const MISSION_NODE_ID = "mission";
+export const UNOWNED_NODE_ID = "group:unowned";
+
 export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<OrgGhostPlan, "chips" | "stubs">, level: ZoomLevel = "close"): Branch[] {
-  // The close card says more, so it is taller; the far and middle cards share the middle height.
-  const close = level === "close" && !view.structureOnly;
+  // Far, a card is its name; nearer, the full card (orgCardModel), sized from what it says.
+  const far = level === "far";
+  const full = !far && !view.structureOnly;
   const filed = bucketedIds(tree);
   const chipRow = (id: string) => (ghosts?.chips[id]?.length ? ORG_SIZES.chipRow : 0);
   // A seat's bot is a team member too, but the seat is drawn inside its
@@ -293,8 +300,54 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
   // on the role card and its hands stack under it. The anchors table is the
   // seat's storage and nothing here draws a node from it.
 
+  // The product layer (Everything): goals under their owner, projects under
+  // their lead, each project's sessions under it. What nobody owns or leads,
+  // or whose owner is not on the chart, goes to the "No owner yet" group.
+  const product = view.product;
+  const nodeOf = (ref: OrgParentRef | null) => (ref && (ref.kind === "user" ? personIds.has(ref.user_id) : roleIds.has(ref.role_id)) ? parentNodeId(ref) : null);
+  const goalsUnder = new Map<string, NonNullable<typeof product>["goals"]>();
+  const projectsUnder = new Map<string, NonNullable<typeof product>["projects"]>();
+  const unowned: Branch[] = [];
+  const drawnProjects = new Set<string>();
+  const projectSessions = new Map<string, OrgSession[]>();
+  if (product) {
+    for (const g of product.goals) { const at = nodeOf(g.owner); if (at) goalsUnder.set(at, [...(goalsUnder.get(at) ?? []), g]); }
+    for (const p of product.projects) { drawnProjects.add(p.id); const at = nodeOf(p.lead); if (at) projectsUnder.set(at, [...(projectsUnder.get(at) ?? []), p]); }
+    // A project's sessions: every session the tree or a loaded page holds that works on it.
+    const pageRows = Object.values(view.expanded).flat();
+    const seen = new Set<string>();
+    for (const s of [...tree.people.flatMap((p) => p.sessions), ...tree.roles.flatMap((r) => r.sessions), ...pageRows]) {
+      const pid = product.sessionProject[s._id];
+      if (!pid || !drawnProjects.has(pid) || seen.has(s._id)) continue;
+      seen.add(s._id);
+      projectSessions.set(pid, [...(projectSessions.get(pid) ?? []), s]);
+    }
+  }
+  const underProject = (s: OrgSession) => !!product && drawnProjects.has(product.sessionProject[s._id] ?? "");
+  const leaf = (kind: "goal" | "mission", id: string, x: { h: number; w: number; data: Record<string, unknown> }): Branch =>
+    ({ id, kind, w: x.w, h: x.h, data: x.data, children: [], stack: null, collapsed: false, hidden: 0, overflow: 0, width: 0, height: 0 });
+  const projectBranch = (p: NonNullable<typeof product>["projects"][number]): Branch => {
+    const id = projectNodeIdOf(p.id);
+    const list = projectSessions.get(p.id) ?? [];
+    const sorted = sortedByState(list);
+    // The sessions are filed under their person or role; a move from here still names that parent.
+    const parent = list[0] ? parentOfSession(tree, list[0]) : null;
+    const stack = view.sessionCards === false || view.structureOnly || !parent || !list.length ? null
+      : stackFor(parent, id, { sessions: sorted, total: sorted.length, counts: countsOf(sorted) }, view, new Set());
+    return { id, kind: "project", w: p.w, h: p.h, data: p.data, children: [], stack, collapsed: false, hidden: 0, overflow: 0, width: 0, height: 0 };
+  };
+  const productKids = (nodeId: string): Branch[] => [
+    ...(goalsUnder.get(nodeId) ?? []).map((g) => leaf("goal", goalNodeIdOf(g.id), g)),
+    ...(projectsUnder.get(nodeId) ?? []).map(projectBranch),
+  ];
+  if (product) {
+    for (const g of product.goals) if (!nodeOf(g.owner)) unowned.push(leaf("goal", goalNodeIdOf(g.id), g));
+    for (const p of product.projects) if (!nodeOf(p.lead)) unowned.push(projectBranch(p));
+  }
+
   const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
   const visiting = new Set<string>();
+  const isOpen = (id: string) => !!view.opened?.has(id);
 
   const roleBranch = (r: OrgRole): Branch => {
     const id = roleNodeId(r._id);
@@ -304,20 +357,25 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const kids = visiting.has(r._id) ? [] : (rolesUnderRole.get(r._id) ?? []).sort(byName);
     visiting.add(r._id);
     // Resolved once, with the whole tree in hand; the row's height already
-    // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
+    // books the tenure row for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
-    const mid = view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id);
+    const opened = full && isOpen(id);
+    const open = opened ? view.roleDetails?.[r._id] ?? { leads: [], tasks: [] } : undefined;
+    const h = view.structureOnly ? ORG_SIZES.healthRole.h
+      : far ? ORG_SIZES.role.h
+      : roleCardRows(r, { ghost: !!ghosts?.stubs[id], changes: ghosts?.chips[id]?.length ?? 0, tenure: r.tenure?.kind === "program", seat: ghosts?.stubs[id]?.seat, open }).h;
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: mid + (close ? roleCloseExtra(r, ghosts?.chips[id]?.length ?? 0, !!ghosts?.stubs[id]) : 0), role: r,
+      id, kind: "role", w: view.structureOnly ? ORG_SIZES.healthRole.w : ORG_SIZES.role.w, h, role: r,
       ...(tenure ? { tenure } : {}),
-      children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
+      ...(opened ? { opened, open } : {}),
+      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch)],
+      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "role", role_id: r._id }, id, r, view, filed, product ? underProject : undefined),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     // No stack drawn (collapsed, or the map): every session is "not drawn", and the card's tally carries them all.
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? r.total : 0;
     visiting.delete(r._id);
-    if (collapsed) b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
+    if (collapsed) b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length;
     return b;
   };
   const personBranch = (p: OrgPerson): Branch => {
@@ -325,41 +383,60 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     const b: Branch = {
-      id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id) + (close ? personCloseExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
-      children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
+      id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id) + (full ? personFullExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
+      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch)],
+      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "user", user_id: p.user_id }, id, p, view, filed, product ? underProject : undefined),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? p.total : 0;
-    if (collapsed) b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
+    if (collapsed) b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length;
     return b;
   };
 
-  return [
+  const roots = [
+    ...(product?.mission ? [leaf("mission", MISSION_NODE_ID, product.mission)] : []),
     ...people.map(personBranch),
     ...orphanRoles.sort(byName).map(roleBranch),
   ];
+  if (unowned.length) {
+    roots.push({ id: UNOWNED_NODE_ID, kind: "group", w: ORG_SIZES.group.w, h: ORG_SIZES.group.h, label: "No owner yet", count: unowned.length, children: unowned, stack: null, collapsed: false, hidden: 0, overflow: 0, width: 0, height: 0 });
+  }
+  return roots;
+}
+
+const STATE_RANK: Record<string, number> = { needs_input: 0, working: 1, dormant: 2, done: 3, idle: 4 };
+const sortedByState = (list: OrgSession[]) => [...list].sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9) || b.updated_at - a.updated_at);
+const countsOf = (list: OrgSession[]): StateCounts => { const c: StateCounts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0 }; for (const s of list) c[s.state] = (c[s.state] ?? 0) + 1; return c; };
+/** The person or role a session is filed under in the tree, for a move that starts from a project's stack. */
+function parentOfSession(tree: OrgTree, s: OrgSession): OrgParentRef | null {
+  for (const r of tree.roles) if (r.sessions.some((x) => x._id === s._id)) return { kind: "role", role_id: r._id };
+  for (const p of tree.people) if (p.sessions.some((x) => x._id === s._id)) return { kind: "user", user_id: p.user_id };
+  if (s.org_role_id) return { kind: "role", role_id: s.org_role_id };
+  return s.owner_user_id ? { kind: "user", user_id: s.owner_user_id } : null;
 }
 
 // ---------------------------------------------------------------- measure + place
 
-function measure(b: Branch, stubs: Stubs): void {
-  for (const c of b.children) measure(c, stubs);
+function measure(b: Branch, sz: SessionSizing): void {
+  for (const c of b.children) measure(c, sz);
   const parts: number[] = b.children.map((c) => c.width);
   if (b.stack) parts.push(ORG_SIZES.session.w);
   const childrenWidth = parts.length ? parts.reduce((a, w) => a + w, 0) + ORG_SIZES.siblingGap * (parts.length - 1) : 0;
   b.width = Math.max(b.w, childrenWidth);
   const childHeights = b.children.map((c) => c.height);
-  if (b.stack) childHeights.push(stackHeight(b.stack, stubs));
+  if (b.stack) childHeights.push(stackHeight(b.stack, sz));
   const below = childHeights.length ? Math.max(...childHeights) : 0;
   b.height = b.h + (below > 0 ? ORG_SIZES.levelGap + below : 0);
 }
 
-function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], stubs: Stubs): void {
+function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): void {
   const x = left + (b.width - b.w) / 2;
   const y = top;
-  if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
-  else out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
+  const box = { id: b.id, x, y, w: b.w, h: b.h };
+  if (b.kind === "person") out.push({ ...box, kind: "person", person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+  else if (b.kind === "role") out.push({ ...box, kind: "role", role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}), ...(b.opened ? { opened: true, open: b.open } : {}) });
+  else if (b.kind === "group") out.push({ ...box, kind: "group", label: b.label ?? "", count: b.count ?? 0 });
+  else out.push({ ...box, kind: b.kind, data: b.data ?? {} });
 
   const parts: number[] = b.children.map((c) => c.width);
   if (b.stack) parts.push(ORG_SIZES.session.w);
@@ -368,7 +445,7 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
   let cx = left + (b.width - childrenWidth) / 2;
   const cy = y + b.h + ORG_SIZES.levelGap;
   for (const c of b.children) {
-    place(c, cx, cy, out, edges, stubs);
+    place(c, cx, cy, out, edges, sz);
     edges.push({ id: `e:${b.id}->${c.id}`, source: b.id, target: c.id, kind: "tree" });
     cx += c.width + ORG_SIZES.siblingGap;
   }
@@ -378,8 +455,10 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
     let prev = b.id;
     st.sessions.forEach((s, i) => {
       const id = sessionNodeId(s._id);
-      const h = sessionHeight(s._id, stubs);
-      out.push({ id, kind: "session", x: cx, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent });
+      const h = sessionHeight(s, sz);
+      const detail = sz.far ? undefined : sz.details?.[s._id];
+      const opened = !sz.far && !!sz.opened?.has(id);
+      out.push({ id, kind: "session", x: cx, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent, ...(detail ? { detail } : {}), ...(opened ? { opened } : {}) });
       edges.push({ id: `e:${prev}->${id}`, source: prev, target: id, kind: i === 0 ? "tree" : "stack" });
       prev = id;
       sy += h + ORG_SIZES.stackGap;
@@ -401,22 +480,37 @@ export type OrgLayout = { nodes: OrgLayoutNode[]; edges: OrgLayoutEdge[]; width:
  * Lay the tree out. With `ghosts` (from `ghostsFor`, built from the SAME
  * tree) the merged tree is laid out instead and every node and edge carries
  * its ghost decoration: stubs, retire overlays, chips, the proposed edge of a
- * proposed move and the faded old one.
+ * proposed move and the faded old one. With `view.product` the goals and
+ * projects join the tree, and a project's cross edge to each goal it serves
+ * that sits in another branch is added (drawn only on hover or selection).
  */
-export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan, /** The zoom level the cards are sized for (orgZoom); the close card is the tallest. */ level: ZoomLevel = "close"): OrgLayout {
+export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan, /** The zoom level the cards are sized for (orgZoom). */ level: ZoomLevel = "close"): OrgLayout {
   if (view.structureOnly && !ghosts) return layoutOrgColumns(buildBranches(tree, view));
   const roots = buildBranches(ghosts?.merged ?? tree, view, ghosts, level);
-  for (const r of roots) measure(r, ghosts?.stubs);
+  const sz: SessionSizing = { stubs: ghosts?.stubs, far: level === "far", details: view.sessionDetails, opened: view.opened };
+  for (const r of roots) measure(r, sz);
   const nodes: OrgLayoutNode[] = [];
   const edges: OrgLayoutEdge[] = [];
   let x = 0;
   let height = 0;
   for (const r of roots) {
-    place(r, x, 0, nodes, edges, ghosts?.stubs);
+    place(r, x, 0, nodes, edges, sz);
     x += r.width + ORG_SIZES.rootGap;
     height = Math.max(height, r.height);
   }
   if (ghosts) decorate(nodes, edges, ghosts);
+  if (view.product) {
+    const parentOf = new Map(edges.filter((e) => e.kind === "tree").map((e) => [e.target, e.source]));
+    const drawn = new Set(nodes.map((n) => n.id));
+    for (const p of view.product.projects) {
+      const pid = projectNodeIdOf(p.id);
+      if (!drawn.has(pid)) continue;
+      for (const g of p.goalIds) {
+        const gid = goalNodeIdOf(g);
+        if (drawn.has(gid) && parentOf.get(gid) !== parentOf.get(pid)) edges.push({ id: `x:${pid}->${gid}`, source: pid, target: gid, kind: "cross" });
+      }
+    }
+  }
   return { nodes, edges, width: Math.max(0, x - ORG_SIZES.rootGap), height };
 }
 
@@ -457,17 +551,26 @@ function decorate(nodes: OrgLayoutNode[], edges: OrgLayoutEdge[], ghosts: OrgGho
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const moveOf = new Map(ghosts.moves.map((m) => [m.nodeId, m]));
   for (const n of nodes) {
-    if (n.kind === "cluster") continue;
-    const stub = ghosts.stubs[n.id];
-    if (stub) n.ghost = stub;
-    const chips = ghosts.chips[n.id];
-    if (chips?.length) n.chips = chips;
-    if (n.kind !== "role") continue;
-    const retire = ghosts.retires[n.id];
-    if (retire) n.retire = retire;
-    const move = moveOf.get(n.id);
-    if (move) n.move = move;
+    if (n.kind !== "person" && n.kind !== "role" && n.kind !== "session") continue;
+    decorateNode(n, ghosts, moveOf);
   }
+  edgesOf(edges, ghosts, byId);
+}
+
+type Decorated = Extract<OrgLayoutNode, { kind: "person" | "role" | "session" }>;
+function decorateNode(n: Decorated, ghosts: OrgGhostPlan, moveOf: Map<string, OrgGhostMove>): void {
+  const stub = ghosts.stubs[n.id];
+  if (stub) n.ghost = stub;
+  const chips = ghosts.chips[n.id];
+  if (chips?.length) n.chips = chips;
+  if (n.kind !== "role") return;
+  const retire = ghosts.retires[n.id];
+  if (retire) n.retire = retire;
+  const move = moveOf.get(n.id);
+  if (move) n.move = move;
+}
+
+function edgesOf(edges: OrgLayoutEdge[], ghosts: OrgGhostPlan, byId: Map<string, OrgLayoutNode>): void {
   // The edge into a proposed (not yet accepted) stub is drawn as a ghost too.
   for (const e of edges) {
     const stub = ghosts.stubs[e.target];

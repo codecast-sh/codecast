@@ -43,6 +43,8 @@ import BlogAgentsTalk from "@/app/(marketing)/blog/agents-that-talk-to-each-othe
 import BlogPullRequests from "@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page";
 import BlogTeamSees from "@/app/(marketing)/blog/what-your-team-sees/page";
 import BlogWorktrees from "@/app/(marketing)/blog/one-repository-twenty-checkouts/page";
+import BlogTurns from "@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page";
+import BlogTaskPage from "@/app/(marketing)/blog/the-task-your-agent-reports-to/page";
 import BlogCloud from "@/app/(marketing)/blog/codecast-in-the-cloud/page";
 import BlogJumps from "@/app/(marketing)/blog/fewer-bigger-jumps/page";
 import BlogFieldManual from "@/app/(marketing)/blog/field-manual/page";
@@ -105,6 +107,8 @@ export function render(path: string): string {
             <Route path="blog/the-pull-request-that-knows-its-sessions" element={<BlogPullRequests />} />
             <Route path="blog/what-your-team-sees" element={<BlogTeamSees />} />
             <Route path="blog/one-repository-twenty-checkouts" element={<BlogWorktrees />} />
+            <Route path="blog/the-tree-at-the-end-of-every-turn" element={<BlogTurns />} />
+            <Route path="blog/the-task-your-agent-reports-to" element={<BlogTaskPage />} />
             <Route path="blog/codecast-in-the-cloud" element={<BlogCloud />} />
             <Route path="blog/fewer-bigger-jumps" element={<BlogJumps />} />
             <Route path="blog/field-manual" element={<BlogFieldManual />} />
