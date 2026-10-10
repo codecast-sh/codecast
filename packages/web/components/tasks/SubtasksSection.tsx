@@ -2,8 +2,9 @@
 
 import { useMemo, useRef, useState } from "react";
 import { Bot, Plus } from "lucide-react";
-import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
-import { useInboxStore, type TaskDetail, type TaskItem } from "../../store/inboxStore";
+import { MAX_TASK_DEPTH, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
+import { useInboxStore, type TaskDetail } from "../../store/inboxStore";
+import { taskChildren } from "../../lib/subtaskTally";
 import { closeTaskWithGuard, createTaskAndAdopt } from "../../lib/taskActions";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
 
@@ -24,7 +25,7 @@ export function SubtasksSection({ task, onNavigate }: {
 
   const children = useMemo(
     () =>
-      directChildren(Object.values(allTasks) as TaskItem[], task._id)
+      taskChildren(task._id, allTasks)
         .filter((t: any) => isActiveTask(t))
         .sort((a: any, b: any) => (a.created_at || 0) - (b.created_at || 0)),
     [allTasks, task._id],
@@ -35,8 +36,7 @@ export function SubtasksSection({ task, onNavigate }: {
   // A subtask can't be added below the depth cap — the server would refuse and
   // strand a ghost. Compute this task's depth from the store and hide the input.
   const atMaxDepth = useMemo(() => {
-    const byId = new Map((Object.values(allTasks) as TaskItem[]).map((t) => [String(t._id), t]));
-    const parentOf = (id: string) => { const p = byId.get(String(id))?.parent_id; return p ? String(p) : undefined; };
+    const parentOf = (id: string) => { const p = allTasks[id]?.parent_id; return p ? String(p) : undefined; };
     return taskDepth(String(task._id), parentOf) >= MAX_TASK_DEPTH;
   }, [allTasks, task._id]);
 
