@@ -109,8 +109,8 @@ const recordSig = (r: InitiativeRow): string =>
  *  carries back: never a Convex id, so nothing mistakes the stub for a row. */
 export const newInitiativeKey = (): string => `in_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-/** The address of an initiative's page: its `in-N`, or its key while it is a stub. */
-export const initiativeHref = (r: Pick<InitiativeRow, "_id" | "short_id">): string => `/goals/${r.short_id || r._id}`;
+/** True for a key newInitiativeKey minted: a goal's address while it is a stub. */
+export const isInitiativeKey = (ref: string): boolean => /^in_[a-z0-9]+_[a-z0-9]+$/.test(ref);
 
 /** The conversation an initiative opens beside (I1 "The page"): a role
  *  owner's standing session, or a person owner's own anchor in this workspace.
