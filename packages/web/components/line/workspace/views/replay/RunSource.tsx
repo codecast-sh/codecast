@@ -1,0 +1,51 @@
+"use client";
+// Where a run's problem came from (line-workspace.md LW1): the finding the
+// problem leads with, its source, judge and severity, the words it quotes,
+// and the link to the evidence. More findings and other sources are counts
+// that open the problem's timeline.
+import { memo, useState } from "react";
+import { ExternalLink } from "lucide-react";
+import type { RunSource as RunSourceModel } from "../../../../../lib/line/runTrace";
+import { dayWords } from "../../../widgets";
+
+export const RunSource = memo(function RunSource({ source, onFindings, onSource }: { source: RunSourceModel; onFindings: (() => void) | null; onSource: (name: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const lead = source.lead;
+  if (!lead) {
+    return (
+      <section className="rd-src" data-run-source="none">
+        <span className="rd-tag">Source</span>
+        <span className="rd-src-none">No finding on record: started by hand</span>
+      </section>
+    );
+  }
+  const others = source.sources.filter((s) => s.source !== lead.source);
+  return (
+    <section className="rd-src" data-run-source={lead.source}>
+      <span className="rd-tag">Source</span>
+      <div className="rd-src-body">
+        <div className="rd-src-facts">
+          <button type="button" className="rd-chip" data-k="source" onClick={() => onSource(lead.source)} title="Open this source">{lead.source}</button>
+          {lead.judge && <span className="rd-fact"><i>judge</i>{lead.judge}</span>}
+          {lead.severity != null && <span className="rd-fact" data-sev={lead.severity >= 7 ? "hi" : lead.severity >= 4 ? "mid" : "lo"}><i>sev</i>{lead.severity}</span>}
+          {lead.ref && <span className="rd-fact rd-mono">{lead.ref}</span>}
+          <span className="rd-fact">{dayWords(lead.at)}</span>
+          {source.count > 1 && (
+            onFindings
+              ? <button type="button" className="rd-fact rd-link" onClick={onFindings}>{source.count} findings</button>
+              : <span className="rd-fact">{source.count} findings</span>
+          )}
+          {others.map((o) => <button key={o.source} type="button" className="rd-chip" data-k="source" onClick={() => onSource(o.source)}>+{o.count} {o.source}</button>)}
+          <span className="rd-spacer" />
+          {lead.evidenceUrl && <a className="rd-fact rd-link" href={lead.evidenceUrl} target="_blank" rel="noreferrer">Evidence <ExternalLink className="w-3 h-3" aria-hidden /></a>}
+        </div>
+        <div className="rd-src-title">{lead.title}</div>
+        {(lead.quote || lead.headline) && (
+          <blockquote className="rd-src-quote" data-open={open ? "" : undefined} onClick={() => setOpen((o) => !o)} title={open ? undefined : "Show all"}>
+            {lead.quote ?? lead.headline}
+          </blockquote>
+        )}
+      </div>
+    </section>
+  );
+});

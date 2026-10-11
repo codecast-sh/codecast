@@ -22,8 +22,29 @@ import type { WorkflowEdge, WorkflowGraph, WorkflowNode } from "./types.js";
 /** `updateProgress` stores the head of each step's output on the node. */
 export const RESULT_PREVIEW_CHARS = 800;
 
+/** A step's output as its node shows it: a station script that ends on one
+ *  JSON result saying `why` (the line's checks) is that result, which the run
+ *  report reads as its sentence; any other output is its head. */
 export function resultPreview(output: string): string | undefined {
   const text = output.trim();
+  const last = text.slice(text.lastIndexOf("\n") + 1).trim();
+  if (last.startsWith("{") && last.length <= RESULT_PREVIEW_CHARS) {
+    try {
+      if (typeof JSON.parse(last)?.why === "string") return last;
+    } catch {}
+  }
+  return text ? text.slice(0, RESULT_PREVIEW_CHARS) : undefined;
+}
+
+/** An agent step's output as its node shows it: what it concluded, in its
+ *  own words. The session runner's `work_state:` line and any fenced json
+ *  report are dropped (the edges route on the json; the run reads the prose),
+ *  and the rest is capped like a script's head. */
+export function agentResultPreview(output: string): string | undefined {
+  const text = output
+    .replace(/^work_state:[^\n]*\n?/, "")
+    .replace(/```json[ \t]*\n[\s\S]*?\n[ \t]*```/g, "")
+    .trim();
   return text ? text.slice(0, RESULT_PREVIEW_CHARS) : undefined;
 }
 
