@@ -609,6 +609,10 @@ export type ResolvedScope = {
   projects: any[];
   plans: any[];
   tasks: any[];
+  /** Ephemeral bookkeeping in scope (task-graph.md TG9). It is no work of the
+   *  scope's, so `tasks` leaves it out (the feed, the counts, the brief); a
+   *  session bound to one still works here, so sessionsInScope reads these. */
+  ephemeral_task_ids?: string[];
   initiatives?: any[];
   initiative_ids?: Id<"initiatives">[];
 };
@@ -655,8 +659,14 @@ export async function resolveScope(
   // Tasks: by project, by plan (a plan's project may be outside the listed
   // projects, so both reads run), deduped.
   const taskById = new Map<string, any>();
+  const ephemeralIds = new Set<string>();
   const admit = async (rows: any[]) => {
-    for (const t of rows) if (!taskById.has(t._id.toString()) && (await mayRead("tasks", t))) taskById.set(t._id.toString(), t);
+    for (const t of rows) {
+      const id = t._id.toString();
+      if (taskById.has(id) || ephemeralIds.has(id) || !(await mayRead("tasks", t))) continue;
+      if (t.ephemeral) ephemeralIds.add(id);
+      else taskById.set(id, t);
+    }
   };
   for (const project of projects) {
     await admit(await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect());
@@ -672,7 +682,7 @@ export async function resolveScope(
     if (goal) goalById.set(goal._id.toString(), goal);
   }
   const initiatives = Array.from(goalById.values());
-  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()), initiatives, initiative_ids: initiatives.map((g) => g._id) };
+  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()), ephemeral_task_ids: [...ephemeralIds], initiatives, initiative_ids: initiatives.map((g) => g._id) };
 }
 
 // F1's session rule over the org scan (org-staffing.md S35): bound to a task
@@ -682,7 +692,7 @@ export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
 export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
   if (isScopeless(resolved.scope) && !resolved.role) return [];
   const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
-  const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
+  const taskIds = new Set([...resolved.tasks.map((t) => t._id.toString()), ...(resolved.ephemeral_task_ids ?? [])]);
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
   const roleId = resolved.role?._id?.toString();
   const out: Array<{ session: OrgSession; raw: any }> = [];
@@ -1353,12 +1363,18 @@ const WHOLE_WORKSPACE_TASK_CAP = 2000;
 // its boundary (org-staffing.md S26); resolveScope answers nothing for that
 // case, so read them here. Projects ride along so the Head of People reads
 // every charter in its frame.
-async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; plans: any[] }> {
+async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; ephemeral_task_ids: string[]; plans: any[] }> {
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
   const projects: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(200);
   const tasks: any[] = await ctx.db.query("tasks").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(WHOLE_WORKSPACE_TASK_CAP);
   const plans: any[] = await ctx.db.query("plans").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(500);
-  return { projects: projects.filter((p) => p.status !== "done"), tasks: tasks.filter((t) => t.status !== "dropped"), plans };
+  const live = tasks.filter((t) => t.status !== "dropped");
+  return {
+    projects: projects.filter((p) => p.status !== "done"),
+    tasks: live.filter((t) => !t.ephemeral),
+    ephemeral_task_ids: live.filter((t) => t.ephemeral).map((t) => String(t._id)),
+    plans,
+  };
 }
 
 // `viewerId` is whose grants the facts are read with: the caller of
@@ -1372,7 +1388,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   }
   if (whole) {
     const items = await wholeWorkspaceItems(ctx, role);
-    resolved = { ...resolved, projects: items.projects, tasks: items.tasks, plans: items.plans };
+    resolved = { ...resolved, ...items };
   }
   // One org scan serves the summary's sessions and the hands: the same
   // membership (recent, visible, top level) and the same classifier inputs
