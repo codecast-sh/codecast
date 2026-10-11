@@ -7,7 +7,7 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 // and what its category means. The old header said "See the conversation",
 // a bare red "unknown" and a plain name — none of which identified anyone.
 mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) => <a href={typeof href === "string" ? href : "#"} {...rest}>{children}</a> }));
-mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true }));
+mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true, locateDecisionAsk: async () => null }));
 import { useInboxStore } from "../../../store/inboxStore";
 import { AskingSession, PersonChip, CategoryNote } from "../DecisionParties";
 import { categoryMeaning } from "../../../lib/decisionCategory";
@@ -70,7 +70,7 @@ test("a session the store has never seen falls back to its own stamp, then to pl
 test("a person renders with their face and links to their profile", async () => {
   const { container, unmount } = await mount(<PersonChip userId="u1" fallbackName="Jason" />);
   const a = container.querySelector("a")!;
-  expect(a.getAttribute("href")).toBe("/team/jasonbenn");
+  expect(a.getAttribute("href")).toBe("/org/@jasonbenn");
   expect(container.querySelector("img")!.getAttribute("src")).toBe("https://example.test/j.png");
   expect(container.textContent).toContain("Jason Benn");
   unmount();

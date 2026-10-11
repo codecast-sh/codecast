@@ -1,9 +1,14 @@
 import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActions";
+import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
+import { settingsDataKey } from "../lib/settingsData";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
+import type { GraphRefStatus, TaskWait } from "@codecast/shared/tasks";
+import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, rollbackWaitDraft, setBlockerEdge, setRelatedEdge, type TaskWaitInput } from "./taskGraphDraft";
 import { carryRingStubs } from "../lib/calls/ringStubs";
+import { carryNodeSessions } from "../lib/workflowRun";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
@@ -70,7 +75,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -234,7 +239,7 @@ function stubTitle(agentType: string, firstMessage?: string): string {
 }
 import { defaultAgentType } from "../lib/defaultAgent";
 import { retryHostedStart } from "../lib/startHostedConversation";
-import { isHostedUi, laneOf } from "../components/simple/lanePaths";
+import { isHostedUi, laneOf, simpleModeAllowed } from "../components/simple/lanePaths";
 import { readLaneHint, writeLaneHint, type LaneHint } from "../components/simple/laneBoot";
 import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
@@ -286,7 +291,7 @@ import {
 import { bindOptimisticMessageWriter, createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
-import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { attachProjectStubDraft, createInitiativeSlice, detachProjectStubDraft, moveProjectInGoals, moveProjectInLocks, rekeyInitiativeProjectDraft, type InitiativeSliceActions } from "./initiativeSlice";
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
@@ -515,6 +520,8 @@ export type FeedCollection =
 export type ProjectItem = {
   _id: string;
   short_id?: string;
+  /** A web create's stub key, stored on the server row so it supersedes the stub. */
+  client_key?: string;
   title: string;
   description?: string;
   status: string;
@@ -664,6 +671,7 @@ export type InboxSession = {
   // A child of this row is asking (overlay fact, ct-56051): lifts the parent
   // into QUESTIONS when the asking child is not held here.
   child_asking?: boolean | null;
+  child_asking_until?: number | null;
   tmux_session?: string | null;
   permission_mode?: string | null;
   // When the agent process behind this session started. Background watches and
@@ -1231,6 +1239,20 @@ export type TaskItem = {
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
+  // The task graph (docs/architecture/task-graph.md): blockers outside the
+  // graph (TG2), and links that do not block (TG5), all task short ids.
+  waits?: TaskWait[];
+  found_during?: string;
+  superseded_by?: string;
+  related?: string[];
+  /** Graph refs the detail looked up that name no task (taskMining
+   *  webGetTaskDetail): `statusLookup`'s `searched`, so they read as not
+   *  found rather than unknown. Detail-only, preserved across list deltas. */
+  graph_missing?: string[];
+  /** The list's snapshot of its blocker and parent refs (convex
+   *  lib/taskGraph stampGraphStatus), read beneath the store's live rows
+   *  (lib/taskBlockers). Preserved across rows that lack it (the detail). */
+  graph_status?: GraphRefStatus[];
   user_id?: string;
   assignee?: string;
   assignee_info?: { name: string; image?: string } | null;
@@ -1338,8 +1360,9 @@ export type DecisionKind = "single" | "multi" | "rank" | "form";
 // list of indexes (multi / rank) or a key→value map (form), or a dismissal.
 export type DecisionAnswerInput = { index?: number; text?: string; json?: any } | { dismiss: true };
 export type DecisionFormField = { key: string; label: string; type: "text" | "number" | "select" | "bool"; options?: string[] };
-export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number };
-export type DecisionParty = { kind: "user" | "role" | "policy"; id: string };
+export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number; passed_at?: number };
+// `via`: the session that carried a person's answer at their word (cast decide answer --for-human).
+export type DecisionParty = { kind: "user" | "role" | "policy"; id: string; via?: string };
 
 export type SessionDecisionItem = {
   _id: string;
@@ -1444,6 +1467,30 @@ export type HandledDecisionItem = SessionDecisionItem & {
 // The document page's context (sessionDecisions.getWithDoc), keyed by the
 // decision id: the doc body, the task, the stack, the ladder with role names,
 // the people, the holder role, and the grant offer.
+// The discussion of one decision (convex decisionDiscussion.discussion): who
+// owns it, resolved now, and each ask with the owner's reply read from its
+// transcript. One row per decision viewed, keyed by the decision's Convex id.
+export type DecisionDiscussionOwnerVia = "asker" | "run" | "lead" | "workspace";
+export type DecisionDiscussionTurn = {
+  client_id: string;
+  text: string;
+  at: number;
+  user_id: string;
+  by: string;
+  conversation_id: string;
+  delivered: boolean;
+  reply: { text: string; at: number } | null;
+};
+export type DecisionDiscussionItem = {
+  _id: string;
+  decision_short_id?: string;
+  owner: { conversation_id: string; short_id?: string; name: string; via: DecisionDiscussionOwnerVia } | null;
+  turns: DecisionDiscussionTurn[];
+};
+/** A person's words to a decision's owner on their way: painted at once,
+ *  retired when the server's row carries the same client id. */
+export type DecisionDiscussionSend = { client_id: string; text: string; at: number };
+
 export type DecisionDetailItem = {
   _id: string;
   decision: SessionDecisionItem;
@@ -1459,7 +1506,10 @@ export type DecisionDetailItem = {
 
 // conversation_id → bucket_id lookup, derived at read time from the assignment
 // rows (never stored — see the liveEntities rule on derived snapshots).
+const convBucketMaps = new WeakMap<object, Record<string, string | undefined>>();
 export function convBucketMap(assignments: Record<string, BucketAssignmentItem>): Record<string, string | undefined> {
+  const cached = convBucketMaps.get(assignments);
+  if (cached) return cached;
   // A conversation can transiently carry two rows: the optimistic
   // `bucketassign-` stub (immortal on disk — the cache never deletes without an
   // exclude — so hydration unions it back each boot until live sync rekeys it)
@@ -1476,6 +1526,7 @@ export function convBucketMap(assignments: Record<string, BucketAssignmentItem>)
   }
   const map: Record<string, string | undefined> = {};
   for (const a of Object.values(winner)) map[a.conversation_id] = a.bucket_id ?? undefined;
+  convBucketMaps.set(assignments, map);
   return map;
 }
 
@@ -1800,6 +1851,10 @@ export type ClientUI = {
   // Show each session's agent client icon (Claude Code, opencode, …) next to
   // its title in the inbox list. On by default; read as `!== false`.
   show_agent_icon?: boolean;
+  // Mark where a session runs in the inbox list: a cloud icon for a cloud
+  // machine, a small device icon for one of your other machines. On by
+  // default; read as `!== false`.
+  show_device_icon?: boolean;
   // Give EVERY session a character — an animal face and a name — instead of
   // only the ones somebody personified by hand (session-characters.md S2).
   // Off by default: a face is a choice, not something that happens to you.
@@ -1842,6 +1897,25 @@ export type ClientUI = {
   // second one. Stamped LWW: the phone sees the laptop's review too. The
   // page derives reviewing, ended or nothing from it (staffingModel.reviewRunState).
   org_review_run?: { since: number; session_id: string | null; workspace: string } | null;
+  // A pass of the expectations proposer started from a project's
+  // Expectations page, per project id (components/expectations/draftExpectations):
+  // when, how (its routine's trigger, or a fresh session) and the session.
+  // The page reads it as "reading" until a proposal newer than it lands.
+  expectations_drafts?: Record<string, { since: number; session_id?: string | null; via: "routine" | "session" }>;
+  // The goals, projects and people opened in place on the Org screen's
+  // document (components/company/CompanyDocument). Absent until the person
+  // opens or folds one, and the document opens on its most pressing goal
+  // until then. Stamped LWW: a goal opened on the laptop is open on the phone.
+  org_expanded?: string[];
+  // What the /org chart shows (components/org/OrgChart): the people with their
+  // roles and live sessions ("people", the default), the goals and projects
+  // beside them ("everything"), or the goals alone ("goals"). A value from an
+  // older screen ("read", "map") reads as the default. Stamped LWW, like
+  // org_expanded: the reading follows the person to every device.
+  org_view?: "people" | "everything" | "goals" | "read" | "map";
+  // The /org chart's "Expand all": every role and session card opened in
+  // place. Stamped LWW like org_view.
+  org_expand_all?: boolean;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -1926,6 +2000,8 @@ export type ClientUI = {
   // The color of your own messages in the Minimal style: a preset id or a
   // #rrggbb hex (lib/bubbleColor.ts). Follows the person, so it is stamped.
   user_bubble_color?: string;
+  // The color theme a mod offers, as "<mod name>/<theme id>" (lib/theme/colorTheme.ts); empty or absent is codecast's own palette.
+  color_theme?: string;
   // Minimal hides the schedule, plan and workflow strips under a conversation's
   // header; true brings them back. Classic always shows them.
   show_session_context?: boolean;
@@ -2331,6 +2407,13 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
 //     work immediately instead of flashing empty.
 // The focused row is always kept so the session you're viewing never vanishes.
 const EMPTY_TEAM_INBOX_IDS: ReadonlySet<string> = new Set<string>();
+const inboxScopeCache = new WeakMap<object, {
+  scope: "mine" | "team";
+  meId: string | null | undefined;
+  teamInboxIds: ReadonlySet<string>;
+  focusedId: string | null | undefined;
+  value: Record<string, InboxSession>;
+}>();
 
 export function filterInboxScope(
   sessions: Record<string, InboxSession>,
@@ -2339,21 +2422,41 @@ export function filterInboxScope(
   teamInboxIds: ReadonlySet<string> = EMPTY_TEAM_INBOX_IDS,
   focusedId?: string | null,
 ): Record<string, InboxSession> {
+  const hit = inboxScopeCache.get(sessions);
+  if (hit && hit.scope === scope && hit.meId === meId && hit.teamInboxIds === teamInboxIds && hit.focusedId === focusedId) return hit.value;
+  const value = computeInboxScope(sessions, scope, meId, teamInboxIds, focusedId);
+  inboxScopeCache.set(sessions, { scope, meId, teamInboxIds, focusedId, value });
+  return value;
+}
+
+function computeInboxScope(
+  sessions: Record<string, InboxSession>,
+  scope: "mine" | "team",
+  meId: string | null | undefined,
+  teamInboxIds: ReadonlySet<string> = EMPTY_TEAM_INBOX_IDS,
+  focusedId?: string | null,
+): Record<string, InboxSession> {
   if (scope === "team" && teamInboxIds.size > 0) {
     const out: Record<string, InboxSession> = {};
-    for (const [id, s] of Object.entries(sessions)) {
+    for (const id in sessions) {
+      if (!Object.hasOwn(sessions, id)) continue;
+      const s = sessions[id];
       if (teamInboxIds.has(id) || id === focusedId || !isConvexId(id)) out[id] = s;
     }
     return out;
   }
   // "mine" (and team before its first payload): hide definitively-foreign rows.
   let anyForeign = false;
-  for (const s of Object.values(sessions)) {
+  for (const id in sessions) {
+    if (!Object.hasOwn(sessions, id)) continue;
+    const s = sessions[id];
     if (s._id !== focusedId && isForeignRow(s, meId)) { anyForeign = true; break; }
   }
   if (!anyForeign) return sessions; // referentially stable when nothing to drop
   const out: Record<string, InboxSession> = {};
-  for (const [id, s] of Object.entries(sessions)) {
+  for (const id in sessions) {
+    if (!Object.hasOwn(sessions, id)) continue;
+    const s = sessions[id];
     if (id === focusedId || !isForeignRow(s, meId)) out[id] = s;
   }
   return out;
@@ -3424,6 +3527,7 @@ export type InboxAsking = {
 function deriveInboxAsking(
   state: Pick<PlaceInboxState, "sessions" | "sessionDecisions" | "questionResolutions">,
   meId: string | null,
+  now: number,
   mineAll: Record<string, InboxSession> = filterInboxScope(state.sessions, "mine", meId),
 ): InboxAsking {
   const decisions = state.sessionDecisions ?? (EMPTY_PLACEMENT_OBJ as Record<string, SessionDecisionItem>);
@@ -3442,8 +3546,9 @@ function deriveInboxAsking(
   const liftable = (p: InboxSession | undefined) => !!p && !p.inbox_stashed_at && !p.inbox_dismissed_at && !p.inbox_killed_at;
   for (const s of Object.values(mineAll)) {
     // The overlay's child_asking fact: an asking child this replica never
-    // holds (a live pool row outside its window) still lifts the parent.
-    if (s.child_asking && liftable(s)) askingChildParents.add(s._id);
+    // holds (a live pool row outside its window) still lifts the parent,
+    // until that child's ask stops counting (child_asking_until).
+    if (childAskingAt(s, now) && liftable(s)) askingChildParents.add(s._id);
     if (s.inbox_killed_at) continue;
     // The shared rollup rule (rollupParentIdOf): the same grouping the server
     // pool applies, so a parent is lifted on both sides or neither.
@@ -3488,7 +3593,7 @@ export function projectReplicaInbox(
 } {
   const meId = state.currentUser?._id?.toString?.() ?? null;
   const scoped = ctx.scoped ?? filterInboxScope(state.sessions, ctx.scope, meId, state.teamInboxIds ?? EMPTY_TEAM_INBOX_IDS, ctx.focusedId);
-  const askingOf = ctx.askingOf ?? deriveInboxAsking(state, meId).askingOf;
+  const askingOf = ctx.askingOf ?? deriveInboxAsking(state, meId, ctx.now).askingOf;
   const adapted = new Map<string, ProjectableInboxRow>();
   const rowById = new Map<string, InboxSession>();
   for (const s of Object.values(scoped)) {
@@ -3632,7 +3737,7 @@ export function placeInboxRows(
 
   // 3. The asking derivation (never stored — sync-convergence C3). In the
   // personal scope `scoped` IS the viewer's own map, so it is reused.
-  const { mineAll, askingOf, ownPromptOnly } = deriveInboxAsking(state, meId, scope === "mine" ? scoped : undefined);
+  const { mineAll, askingOf, ownPromptOnly } = deriveInboxAsking(state, meId, now, scope === "mine" ? scoped : undefined);
 
   // The one row → placement path: the shared module, then the bounded local
   // overlays. A queued/pending send or a fresh revive stamp is the user having
@@ -4023,6 +4128,11 @@ export function isUnsentConversation(s: { message_count?: number; last_user_mess
   return !sending && !(s.message_count ?? 0) && !s.last_user_message;
 }
 
+/** Hosted sections that never fold: New holds the results the Inbox count
+ *  counts, so a fold an old click stored is ignored by the render and the
+ *  keyboard walk alike. */
+export const HOSTED_UNFOLDABLE_SECTIONS: ReadonlySet<string> = new Set(["new_results"]);
+
 export function hostedStatusSections<T extends { _id: string; updated_at?: number; message_count?: number; last_user_message?: string | null }>(placed: {
   pinned: T[]; questions: T[]; needsInput: T[]; newSessions: T[]; working: T[]; done: T[]; dormant: T[];
 }, awaitsOk: (id: string) => boolean = () => false, sending: (id: string) => boolean = () => false, unread: (id: string) => boolean = () => false): Array<[T[], "pinned" | "needs_input" | "working" | "new_results" | "done" | "drafts"]> {
@@ -4084,7 +4194,7 @@ export function visualOrderSessions(
   ];
   const result: InboxSession[] = [];
   for (const [section, key] of sections) {
-    if (collapsed?.[key]) continue;
+    if (collapsed?.[key] && !(opts.hostedOnly && HOSTED_UNFOLDABLE_SECTIONS.has(key))) continue;
     for (const s of section) {
       // The shared predicate (chipMatchesSession) so the walk and the render
       // can never disagree — including the mid-create stub carve-out.
@@ -5677,7 +5787,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // row through the pending-aware per-field merge, then drop `unset` keys. For
   // `sessions` the same fields land on the `conversations` meta twin when it
   // exists. Returns false when no base row exists (caller falls back to byIds).
-  applyCargoFields: (coll: "sessions" | "tasks" | "docs" | "plans" | "projects", id: string, fields: Record<string, any>, unset: string[]) => boolean;
+  applyCargoFields: (coll: CargoCollection, id: string, fields: Record<string, any>, unset: string[]) => boolean;
+  applyCargoBatch: (items: CargoItem[]) => boolean[];
   // Ephemeral per-run counters for the sync pill's detail panel and the
   // synclog_apply metric: how many actions applied directly vs went to byIds.
   syncLogApplyStats: { direct: number; refetch: number };
@@ -5888,6 +5999,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   deleteSavedView: (id: string) => void;
   /** Turn a mod on or off (lib/mods). The running set follows the row at once. */
   setModEnabled: (id: string, enabled: boolean) => void;
+  setModLocalDevice: (id: string, device: string, on: boolean) => void;
   /** Create an object of a mod-declared kind; a stub row renders at once and the server row supersedes it. */
   createModObject: (opts: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string; team_id?: string; client_key?: string }) => any;
   updateModObject: (id: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string; archived?: boolean }) => void;
@@ -5941,6 +6053,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // reads the roster only when this is true, so a stale cache can never veto
   // a freshly cloned path.
   machineRosterLive: boolean;
+  // The machine this window runs on, as its daemon answered the local probe
+  // (hooks/useLocalDeviceId), keyed by the viewer it was found for. Per
+  // window and never persisted: another window may sit on another machine.
+  localDevice: { viewer: string; deviceId: string } | null;
   setMachineRoster: (devices: MachineCandidate[]) => void;
   /** Drop machines from the roster (Settings > Machines). The server refuses
    *  an online machine, whose next heartbeat would list it again. */
@@ -5948,6 +6064,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
+  setProviderKey: (deviceId: string, change: ProviderKeyCommand) => Promise<{ command_id?: string } | undefined>;
   /** Start, stop or adjust keeping a cloud session's folder in step with a laptop copy (dispatch setLocalMirror → cloud_live_sync on that laptop): a mode, a conflict pick, or watch-only's overwrite. */
   setLocalMirror: (conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) => void;
   /** Wake, sleep, apply setup, save or delete an image on a cloud host (dispatch cloudHostAction → cloud_host_action on the laptop that manages it). */
@@ -6026,6 +6144,15 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionStacks: Record<string, DecisionStackItem>;
   handledDecisions: Record<string, HandledDecisionItem>;
   decisionDetails: Record<string, DecisionDetailItem>;
+  decisionDiscussions: Record<string, DecisionDiscussionItem>;
+  // Local echoes of discussDecision, by decision id. Ephemeral like
+  // questionResolutions: a reload reads server truth.
+  discussionSends: Record<string, DecisionDiscussionSend[]>;
+  // A person's words to the session that owns a decision (decisionDiscussion.ts).
+  // Resolves with the server's answer; a refusal comes back as { error } (sendDiscussion).
+  discussDecision: (decisionId: string, text: string, clientId: string) => Promise<unknown>;
+  // Takes back a local echo the server refused.
+  dropDiscussionSend: (decisionId: string, clientId: string) => void;
   // Resolve a decision locally (status flips instantly; patch rides the
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch. The promise is
@@ -6315,12 +6442,24 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; from_call?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
+  // The task graph (docs/architecture/task-graph.md TG12): the task page's
+  // Blocked by row and the add-blocker palette. Each paints every row the
+  // edge lives on; a refusal (a loop, a PR codecast cannot see) rolls back.
+  addBlocker: (shortId: string, blocker: string) => Promise<any>;
+  removeBlocker: (shortId: string, blocker: string, forms?: string[]) => Promise<any>;
+  removeBlocks: (shortId: string, dependent: string) => Promise<any>;
+  addWait: (shortId: string, input: TaskWaitInput) => Promise<any>;
+  /** A refused addWait: its painted wait off, what it displaced back (lib/dispatchBinding). */
+  rollbackWait: (shortId: string, waitId: string) => void;
+  removeWait: (shortId: string, waitId: string) => Promise<any>;
+  relateTasks: (shortId: string, other: string) => Promise<any>;
+  unrelateTasks: (shortId: string, other: string) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; status_id?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string; from_call?: string }) => Promise<any>;
   clearSavedViewTombstones: () => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
-  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string; client_key?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
@@ -6381,6 +6520,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   clearKnock: (roomKey: string) => void;
   setRoomLocked: (roomKey: string, locked: boolean) => void;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
+  setTeamBudget: (teamId: string, capUsd: number) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
   updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
@@ -7062,7 +7202,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // creator, assignee_info and plan. They stay preserved so a row without
     // them (an older server's list, the create stub's rekey) keeps the cached
     // thread.
-    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight"],
+    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
@@ -7191,6 +7331,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list) },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
+  // Run feeds overlay with different session budgets: a bare node keeps the
+  // session another feed attached (lib/workflowRun carryNodeSessions).
+  workflowRuns: { ...REGISTRY_SYNC_OPTS.workflowRuns, normalize: (rows: any, state: any) => carryNodeSessions(rows, state?.workflowRuns) },
 };
 
 // Rename pending protection entries from oldId → newId so field
@@ -7208,6 +7351,8 @@ function rekeyPending(pending: Record<string, any>, oldId: string, newId: string
       delete pending[key];
     }
   }
+  // A goal's list that holds the stub follows it to the real id.
+  if (oldId !== newId) moveProjectInLocks(pending, oldId, newId);
 }
 
 type SessionLaunchSnapshot = {
@@ -7642,6 +7787,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     if (row.conversation_id === oldId) row.conversation_id = newId;
     if (row.bucket_id === oldId) row.bucket_id = newId;
   }
+  // A project stub listed under a goal: the list follows the project when its
+  // server row supersedes the stub. The lock on the list moves in rekeyPending,
+  // which owns the pending map syncTable commits.
+  if (draft.initiatives) moveProjectInGoals(draft.initiatives, oldId, newId);
   if (draft.buckets[oldId]) {
     for (const row of [...Object.values(draft.sessions), ...Object.values(draft.conversations)] as any[]) {
       if (row._postCreateBucketId === oldId) row._postCreateBucketId = newId;
@@ -7850,6 +7999,48 @@ function setSessionSnoozeInDraft(draft: Draft, id: string, until: number) {
 function teamFeedKeys(draft: { feedConversations: Record<string, any[]> }, teamId: string): string[] {
   const prefix = `${teamId}|`;
   return Object.keys(draft.feedConversations ?? {}).filter((k) => k.startsWith(prefix));
+}
+
+export type CargoCollection = "sessions" | "tasks" | "docs" | "plans" | "projects";
+export type CargoItem = { coll: CargoCollection; id: string; fields: Record<string, any>; unset: string[] };
+
+// Merge one sync-log cargo patch into a held row. False when the row is not
+// held (the caller refetches through byIds); true when it merged or an exclude
+// blocks it.
+function applyCargoIn(draft: Draft, { coll, id, fields, unset }: CargoItem): boolean {
+  // Only the collection itself: the `conversations` meta twin is fed by the
+  // per-view code with its own field shape (review) and never by the inbox
+  // row shape a cargo patch carries.
+  const collection = (draft as any)[coll] as Record<string, any> | undefined;
+  const existing = collection?.[id];
+  if (!existing) return false;
+  // An exclude (kill/prune) blocks the whole row; the log's own lifecycle
+  // lifts it (clearFeedExcludes) before an authorized upsert, never here.
+  if (draft.pending[`${coll}:${id}`]?.type === "exclude") return true;
+  // The collection's single-writer strip list (the sessions projection
+  // stamps) applies to every channel, this one included (review).
+  const strip = SYNC_REGISTRY[coll]?.stripFields;
+  const stripSet = strip?.length ? new Set(strip) : null;
+  // Partial-patch pending protection: locks for fields the patch omits are
+  // untouched (a local clear is a lock with value undefined — applySyncRecord
+  // would retire it against the omitted key); a named field's lock wins
+  // until its value echoes (review blocker).
+  const { fields: protectedFields, unset: keptUnset, pending } = applySyncPatch(coll, id, fields, unset, draft.pending);
+  draft.pending = pending as any;
+  let changed = false;
+  for (const [k, v] of Object.entries(protectedFields)) {
+    if (stripSet?.has(k)) continue;
+    if (!Object.is(existing[k], v)) { existing[k] = v; changed = true; }
+  }
+  for (const k of keptUnset) {
+    if (stripSet?.has(k)) continue;
+    if (coll === "sessions") { if (existing[k] !== null) { existing[k] = null; changed = true; } }
+    else if (k in existing) { delete existing[k]; changed = true; }
+  }
+  // The convergence compare's quiescence clock must see this apply like any
+  // other row channel's (sync-convergence C6 gate 4).
+  if (changed && SYNC_ACTIVITY_FIELDS.has(coll)) noteSyncApply();
+  return true;
 }
 
 // Forget one team's feed cache: the rows, the paging state, and the covered
@@ -9004,6 +9195,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   machineRoster: [],
   machineRosterLive: false,
+  localDevice: null,
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
     this.machineRoster = devices;
     this.machineRosterLive = true;
@@ -9037,6 +9229,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
+  }),
+  // A snippet or machine setting on one device paints on its roster row; the
+  // setDeviceSnippet side effect sends the device its apply_snippet command.
+  setDeviceSnippet: asyncAction(function (this: Draft, deviceId: string, change: DeviceSnippetChange) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.settings = settingsAfterSnippet(row.settings, change);
+  }),
+  // A provider key set or removed on one device paints the roster row's
+  // managed ids (never the key); the setProviderKey side effect sends the
+  // sealed key to the device and answers with the command to watch.
+  setProviderKey: asyncAction(function (this: Draft, deviceId: string, change: ProviderKeyCommand) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.managed_provider_ids = managedIdsAfter(row.managed_provider_ids, change);
   }),
   sessionThreads: null,
   wallet: null,
@@ -9198,6 +9403,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   decisionStacks: {},
   handledDecisions: {},
   decisionDetails: {},
+  decisionDiscussions: {},
+  discussionSends: {},
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.
@@ -9211,10 +9418,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
     answerDecisionDraft(this, decisionId, answer);
   }),
-  // A decision the viewer holds but whose queue row they lack: a role on its
-  // ladder heard it first (org-staffing.md S28), so no inbox row put it in
-  // sessionDecisions, yet the viewer is one of its people and the server
-  // takes their answer. The document page's copy becomes the row, here and
+  // The words paint at once as a local echo; the discussDecision side effect
+  // delivers them to the owner and records the ask, and the discussion feed's
+  // row carrying the same client id retires the echo (lib/decisionDiscussion).
+  // A refusal (discussCore's { error }) is returned, not thrown, so the caller
+  // awaits it and takes the echo back (lib/decisionDiscussion sendDiscussion).
+  discussDecision: asyncAction(function (this: Draft, decisionId: string, text: string, clientId: string) {
+    const sends = (this.discussionSends[decisionId] ??= []);
+    if (!sends.some((x) => x.client_id === clientId)) sends.push({ client_id: clientId, text: text.trim(), at: Date.now() });
+  }),
+  dropDiscussionSend: sync(function (this: Draft, decisionId: string, clientId: string) {
+    const sends = this.discussionSends[decisionId];
+    if (!sends) return;
+    const kept = sends.filter((x) => x.client_id !== clientId);
+    if (kept.length) this.discussionSends[decisionId] = kept;
+    else delete this.discussionSends[decisionId];
+  }),
+  // A decision the viewer may answer but whose queue row they lack: a role on
+  // its ladder heard it first (org-staffing.md S28), or it was asked of
+  // somebody else, so no inbox row put it in sessionDecisions, yet the server
+  // takes the viewer's answer. The document page's copy becomes the row, here and
   // not inside answerDecision, because the answer reaches the server only as
   // field patches on a row that already exists.
   adoptDecision: sync(function (this: Draft, decisionId: string) {
@@ -9840,44 +10063,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   applyCargoFields: sync(function (
     this: Draft,
-    coll: "sessions" | "tasks" | "docs" | "plans" | "projects",
+    coll: CargoCollection,
     id: string,
     fields: Record<string, any>,
     unset: string[],
   ): boolean {
-    // Only the collection itself: the `conversations` meta twin is fed by the
-    // per-view code with its own field shape (review) and never by the inbox
-    // row shape a cargo patch carries.
-    const collection = (this as any)[coll] as Record<string, any> | undefined;
-    const existing = collection?.[id];
-    if (!existing) return false;
-    // An exclude (kill/prune) blocks the whole row; the log's own lifecycle
-    // lifts it (clearFeedExcludes) before an authorized upsert, never here.
-    if (this.pending[`${coll}:${id}`]?.type === "exclude") return true;
-    // The collection's single-writer strip list (the sessions projection
-    // stamps) applies to every channel, this one included (review).
-    const strip = SYNC_REGISTRY[coll]?.stripFields;
-    const stripSet = strip?.length ? new Set(strip) : null;
-    // Partial-patch pending protection: locks for fields the patch omits are
-    // untouched (a local clear is a lock with value undefined — applySyncRecord
-    // would retire it against the omitted key); a named field's lock wins
-    // until its value echoes (review blocker).
-    const { fields: protectedFields, unset: keptUnset, pending } = applySyncPatch(coll, id, fields, unset, this.pending);
-    this.pending = pending as any;
-    let changed = false;
-    for (const [k, v] of Object.entries(protectedFields)) {
-      if (stripSet?.has(k)) continue;
-      if (!Object.is(existing[k], v)) { existing[k] = v; changed = true; }
-    }
-    for (const k of keptUnset) {
-      if (stripSet?.has(k)) continue;
-      if (coll === "sessions") { if (existing[k] !== null) { existing[k] = null; changed = true; } }
-      else if (k in existing) { delete existing[k]; changed = true; }
-    }
-    // The convergence compare's quiescence clock must see this apply like any
-    // other row channel's (sync-convergence C6 gate 4).
-    if (changed && SYNC_ACTIVITY_FIELDS.has(coll)) noteSyncApply();
-    return true;
+    return applyCargoIn(this, { coll, id, fields, unset });
+  }),
+
+  // A whole sync-log page in one draft. Every action pays for an IDB diff of
+  // each collection it touched and a pass over every store subscriber, both
+  // O(collection), so applying a 500-row page row by row froze the tab for
+  // seconds per page while a backfill restamp drained (2026-10-08: 21 ms a
+  // row against 22k tasks and 18k docs). Returns applyCargoFields' answer per
+  // item, in order.
+  applyCargoBatch: sync(function (this: Draft, items: CargoItem[]): boolean[] {
+    return items.map((item) => applyCargoIn(this, item));
   }),
 
   noteSyncLogApply: (direct: number, refetch: number) => {
@@ -10638,6 +10839,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // opening it again sticks.
   setLane: (lane: "simple" | "full") => {
     const s = get();
+    if (lane === "simple" && !simpleModeAllowed(s.currentUser)) return;
     const entering = lane === "simple" && !isHostedUi(s.clientState.ui);
     // The assistant files what it makes in the person's Personal workspace,
     // so hosted mode starts there: its notes and to-dos are on the pages and
@@ -10926,6 +11128,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row) Object.assign(row, { enabled, updated_at: Date.now() });
   }),
 
+  setModLocalDevice: action(function (this: Draft, id: string, device: string, on: boolean) {
+    const row = ((this as any).mods ?? {})[id];
+    if (!row) return;
+    const rest = (row.local_off ?? []).filter((d: string) => d !== device);
+    row.local_off = on ? rest : [...rest, device];
+  }),
+
   createModObject: action(function (this: Draft, opts: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string; team_id?: string; client_key?: string }) {
     // Mutate opts: the dispatch forwards these args, so the client_key and the
     // team must ride to the server, not just the stub (see createSavedView).
@@ -11162,6 +11371,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // decision is made on plain objects; only the final assignment touches the
     // draft.
     const prevCollection = base[field] || {};
+    if (config.normalize) incoming = config.normalize(incoming, base);
     // Single-writer enforcement (sync-convergence C1): stamp fields never land
     // on a row, whichever channel delivered it. Copy-on-write per row so an
     // untouched payload keeps its identities.
@@ -12305,7 +12515,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     let realId: string;
     try {
       realId = await get().ensureSessionCreated(stubId);
-    } catch {
+    } catch (err) {
+      // A stranded new session whose re-create failed: its first message is
+      // still only local, so this is the moment that message gets lost.
+      console.error(`[stub-heal] re-create failed for ${stubId}`, err);
+      captureError(err instanceof Error ? err : new Error(String(err)), { source: "stub-heal", stubId });
       return null;
     }
     if (!isConvexId(realId)) return null;
@@ -12546,6 +12760,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  // The task graph: draft writes in ./taskGraphDraft, the real write in the
+  // same-named side effect (convex/dispatch.ts). The adds are asyncActions so
+  // the palette can tell a landed pick from a refused one.
+  addBlocker: asyncAction(function (this: Draft, shortId: string, blocker: string) {
+    setBlockerEdge(this.tasks, shortId, blocker, true);
+  }),
+  // Every form the edge is stored under goes in one draft; the side effect
+  // reads only [shortId, blocker], since the server drops every form too.
+  removeBlocker: action(function (this: Draft, shortId: string, blocker: string, forms: string[] = []) {
+    removeBlockerEdge(this.tasks, shortId, blocker, forms);
+  }),
+  // The same edge removed from the blocker's side, so a Blocks entry whose
+  // mirror drifted (or whose dependent is unreadable) still goes.
+  removeBlocks: action(function (this: Draft, shortId: string, dependent: string) {
+    removeBlocksEdge(this.tasks, shortId, dependent);
+  }),
+  addWait: asyncAction(function (this: Draft, shortId: string, input: TaskWaitInput) {
+    addWaitDraft(this.tasks, shortId, input, this.currentUser?._id ? String(this.currentUser._id) : undefined);
+  }),
+  // `waits` holds no lock to roll back, so a refusal from any caller (the
+  // palette, an undo, an outbox replay) lands here.
+  rollbackWait: sync(function (this: Draft, shortId: string, waitId: string) {
+    rollbackWaitDraft(this.tasks, shortId, waitId);
+  }),
+  removeWait: action(function (this: Draft, shortId: string, waitId: string) {
+    removeWaitDraft(this.tasks, shortId, waitId);
+  }),
+  relateTasks: asyncAction(function (this: Draft, shortId: string, other: string) {
+    setRelatedEdge(this.tasks, shortId, other, true);
+  }),
+  unrelateTasks: action(function (this: Draft, shortId: string, other: string) {
+    setRelatedEdge(this.tasks, shortId, other, false);
+  }),
+
   // Plans are a protected store collection with no serverTable, so the local
   // mutation here is field-protected but only the updatePlan side-effect writes
   // to Convex (it delegates to plans.webUpdate for progress recalc + doc sync).
@@ -12701,10 +12949,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   // Creates route through the single dispatch path (no direct useMutation) and
-  // delegate to the existing webCreate mutation, which returns the real id. We
-  // intentionally do NOT add an optimistic stub: every caller awaits the result
-  // and navigates to the new record's own page, and delta-synced lists don't
-  // prune, so a temp stub would linger as a duplicate. receiptAsyncAction keeps
+  // delegate to the existing webCreate mutation, which returns the real id.
+  // Docs and plans paint no stub: their callers navigate to the new record's
+  // own page, and their delta-synced lists have no altKey to retire a stub.
+  // A project carries one (see createProject below). receiptAsyncAction keeps
   // its Promise pending across an unwired window and resolves it from the exact
   // durable command receipt, preserving the caller's navigation continuation.
   createDoc: receiptAsyncAction(function (
@@ -12721,12 +12969,41 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ) {
     return continuation ? { continuation } : undefined;
   }),
+  // A project create that names a `client_key` paints a stub row under it at
+  // once; the server stores the key and the synced row supersedes the stub
+  // (the projects altKey). Created from a goal's sheet it also sits under the
+  // goal in the same draft, and the server attaches it in the create's own
+  // transaction (attachToInitiative); the acknowledgement moves the goal's
+  // list to the real id.
   createProject: receiptAsyncAction(function (
     this: Draft,
-    _opts: Record<string, any>,
+    opts: { title: string; client_key?: string; workspace?: "personal" | "team"; team_id?: string; [k: string]: any },
     continuation?: DurableCreateContinuation,
   ) {
-    return continuation ? { continuation } : undefined;
+    const stubId = opts?.client_key;
+    const title = (opts?.title || "").trim();
+    const me = String(this.currentUser?._id ?? "");
+    const team = opts?.workspace === "team" && opts.team_id ? opts.team_id : undefined;
+    // The stub needs the workspace it will land in, or no list would show it.
+    if (stubId && title && (team || me)) {
+      const now = Date.now();
+      this.projects[stubId] = {
+        _id: stubId,
+        client_key: stubId,
+        title,
+        status: opts.status || "active",
+        ...(team ? { team_id: team } : {}),
+        workspace: team ? `team:${team}` : `user:${me}`,
+        task_counts: { total: 0, done: 0, in_progress: 0 },
+        plan_count: 0,
+        doc_count: 0,
+        active_plan_count: 0,
+        created_at: now,
+        updated_at: now,
+      } as ProjectItem;
+      if (continuation?.kind === "attachToInitiative") attachProjectStubDraft(this, continuation.initiativeId, stubId);
+    }
+    return continuation ? { continuation, ...(stubId ? { stubId } : {}) } : stubId ? { stubId } : undefined;
   }),
   // Low-frequency doc/plan/conversation ops: route through dispatch and delegate
   // to the existing mutations. asyncAction surfaces the server result for the
@@ -13115,6 +13392,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     _commandId: string,
   ) {
     const seedTarget = { createDoc: "docs", createPlan: "plans", createProject: "projects" } as const;
+    if (actionName === "createProject" && continuation.kind === "attachToInitiative") {
+      // The server attached the project in the create's transaction. The row
+      // carries the stub's key: the stub becomes the real row here (or already
+      // has, if the feed's push came first) and the goal's list follows it.
+      const row = serverResult?.row;
+      const stubId = typeof row?.client_key === "string" ? row.client_key : null;
+      if (!row || typeof row._id !== "string" || !stubId) return;
+      if (this.projects[stubId]) {
+        if (!this.projects[row._id]) this.projects[row._id] = { ...this.projects[stubId], ...row };
+        delete this.projects[stubId];
+      }
+      delete this.pending[`projects:${stubId}`];
+      rekeyInitiativeProjectDraft(this as any, stubId, row._id);
+      return;
+    }
     if (actionName in seedTarget) {
       // The receipt carries the inserted row. Seed the collection so the detail
       // page (which paints from the store) has its row before the view moves;
@@ -13189,6 +13481,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
         }
       }
       return ["buckets", "bucketAssignments", "sessions", "conversations", "pending"];
+    }
+
+    if (actionName === "createProject") {
+      const stubId = localResult.stubId;
+      if (typeof stubId !== "string") return false;
+      delete this.projects[stubId];
+      delete this.pending[`projects:${stubId}`];
+      detachProjectStubDraft(this as any, stubId);
+      return ["projects", "initiatives", "pending"];
     }
 
     if (actionName === "deleteCallRecording") {
@@ -13927,6 +14228,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     team.features = { ...(team.features ?? {}), [feature]: enabled };
   }),
 
+  // A team's monthly model budget (learning-loop.md LL10; admin only on the
+  // server). Paints the cached settings row; the server's answer replaces it,
+  // and a refusal toasts like any dispatch.
+  setTeamBudget: action(function (this: Draft, teamId: string, capUsd: number) {
+    const key = settingsDataKey("teamBudget", (this.currentUser as any)?._id, teamId);
+    const row = key ? (this.settingsData as any)[key] : undefined;
+    if (row?.value) row.value = { ...row.value, cap_usd: Math.round(capUsd * 100) / 100 };
+  }),
+
   // The viewer's codecast-wide default model for one agent client
   // (users.default_models, applied server-side at launch). currentUser is a
   // localFirst singleton, so the pin holds until the echo and rolls back if
@@ -14195,9 +14505,18 @@ function patchMyProfileInDraft(draft: any, patch: MyProfilePatch) {
   if (me) Object.assign(me, patch);
 }
 
-/** A person the decision was asked of, while a person (not a role) holds it. */
+/**
+ * Anyone the server let read the decision may answer it (sessionDecisions
+ * userMayRead); when it is held by somebody else, the page warns and the
+ * server tells its people who answered for them.
+ */
 export function mayAnswerFromDocument(detail: DecisionDetailItem, meId: string): boolean {
-  return !!meId && detail.decision.holder?.kind !== "role" && detail.asked_users.some((u) => u._id === meId);
+  return !!meId && !!detail;
+}
+
+/** Answering would act for somebody else: a role holds it, or the viewer is not one of its people. */
+export function answersForOthers(detail: DecisionDetailItem, meId: string): boolean {
+  return detail.decision.holder?.kind === "role" || !detail.asked_users.some((u) => u._id === meId);
 }
 
 /**
@@ -14926,7 +15245,7 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo,
+  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {

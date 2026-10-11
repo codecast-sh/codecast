@@ -63,14 +63,14 @@ export function shouldUseTabRouting(
  * entries. The history `state` is tagged so the global popstate handler can tell a
  * tab navigation apart from an inbox session selection (`{ inboxId }`).
  */
-export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromTabId?: string) {
+export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromTabId?: string, userState?: unknown) {
   // The tab, its title, the recents rail and the history entry all take the storable spelling (lib/tabSafePath).
   const path = tabSafePath(to);
   // No tab here is this document's to move (borrowsTabShell). Callers that
   // reach this directly — a pane gesture whose stage could not take the page —
   // still mean "go there", so it goes there for real.
   if (borrowsTabShell()) {
-    routerNavigate(path, mode);
+    routerNavigate(path, mode, userState === undefined ? null : { usr: userState });
     return;
   }
   const store = useInboxStore.getState();
@@ -81,7 +81,9 @@ export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromT
   // browser URL and history belong to the tab the user is looking at.
   if (fromTabId && fromTabId !== store.activeTabId) return;
   const current = window.location.pathname + window.location.search;
-  const state = { tabNav: true, tabId };
+  // A caller's own state rides where react-router keeps it (`usr`), so
+  // `location.state` reads it the same with tabs or without.
+  const state = { tabNav: true, tabId, ...(userState === undefined ? {} : { usr: userState }) };
   if (mode === "push" && path !== current) {
     window.history.pushState(state, "", path);
     // Real (pushed) page navigations feed the recently-visited rail. A path

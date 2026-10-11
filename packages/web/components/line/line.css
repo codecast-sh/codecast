@@ -42,27 +42,7 @@
 .line-col-count { font-size: 15px; font-weight: 700; }
 .line-meter-num { font-size: 24px; }
 
-/* The one sentence that says how the line is doing. Its counts are bold;
-   color marks only what needs action. */
-/* One line at body-plus size and regular weight, so the map under it keeps
-   the height (LX1): the counts take a half step of weight, color marks only
-   what needs action, and a narrow floor truncates it. One size whether a
-   panel is open or not, so selecting a node never reflows the header. */
-.line-headline {
-  font-size: 17px;
-  line-height: 1.35;
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  /* The hero wraps, never cuts: its last words are often the reason. */
-  white-space: normal;
-  text-wrap: pretty;
-  min-width: 0;
-  max-width: 100%;
-  flex: 0 1 auto;
-}
-.line-headline b { font-weight: 600; }
-.line-headline-sep { color: var(--sol-text-dim); }
-@container line-floor (max-width: 640px) { .line-headline { font-size: 15px; } }
+/* The page's subtitle shows once the floor has room for it. */
 .line-subtitle { display: none; }
 @container line-floor (min-width: 700px) { .line-subtitle { display: inline; } }
 
@@ -104,6 +84,9 @@
 .line-edge-arrow:hover { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-blue) 50%, var(--sol-border)); }
 /* An arrow with cards waiting past its edge carries their count, in the ask color. */
 .line-edge-arrow[data-waiting="true"] { width: auto; min-width: 22px; padding: 0 5px; gap: 2px; border-color: color-mix(in srgb, var(--sol-yellow) 55%, var(--sol-border)); }
+/* An arrow that names what lies past its edge ("Build, Check +3"): a pill, so the row reads as going on. */
+.line-edge-arrow[data-named="true"] { width: auto; height: 24px; padding: 0 8px; gap: 4px; font-size: 11px; color: var(--sol-text-muted); }
+.line-edge-names { white-space: nowrap; font-family: var(--font-mono), monospace; }
 .line-edge-count { font-size: 10.5px; font-weight: 600; line-height: 1; color: var(--sol-yellow); font-variant-numeric: tabular-nums; }
 .line-edge-arrow[data-side="left"] { left: 2px; }
 .line-edge-arrow[data-side="right"] { right: 2px; }
@@ -206,18 +189,6 @@
 /* The week's outcome rides the headline's row, muted, at its right end. */
 .line-head-row > [data-line-throughput], .line-head-row > .line-meter-summary { margin-left: auto; flex-shrink: 0; }
 .line-meter-summary .line-num { font-weight: 600; }
-
-/* The headline's links: a station named in the sentence. The underline
-   shows on hover and focus only, so the sentence reads as a sentence. */
-.line-headline-link {
-  font: inherit;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
-  text-decoration-color: transparent;
-  transition: text-decoration-color 120ms ease;
-}
-.line-headline-link:hover, .line-headline-link:focus-visible { text-decoration-color: currentColor; outline: none; }
 
 /* Footer hints: under 760px only the keys stay; each says itself in a tooltip. */
 @container line-floor (max-width: 760px) {
@@ -692,3 +663,43 @@ html:not(.dark) .line-rail[data-live="true"] { box-shadow: none; }
 @media (prefers-reduced-motion: reduce) {
   .line-col, .line-ghost::before, .line-ghost-col, .line-start, .line-rail[data-live="true"], .line-lamp::after, .line-lamp[data-kind="failing"], .line-live-dot { animation: none !important; }
 }
+
+/* The overview of every project's line (LineOverview): one card per project,
+   what needs you and what is stuck leading, revealed in a short stagger. */
+.line-overview-summary { font-size: 14px; line-height: 1.5; margin: 6px 0 14px; }
+.line-overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; max-width: 1280px; }
+.line-overview-grid > li { animation: line-overview-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(min(var(--i, 0), 12) * 35ms); }
+@keyframes line-overview-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .line-overview-grid > li { animation: none; } }
+.line-overview-card {
+  width: 100%; height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-text) 2.5%, transparent);
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.line-overview-card:hover { border-color: var(--sol-border); background: color-mix(in srgb, var(--sol-text) 4.5%, transparent); }
+.line-overview-card[data-tone="ask"] { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); }
+.line-overview-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.line-overview-head b { font-size: 13.5px; font-weight: 600; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-overview-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.line-overview-card:hover .line-overview-open { color: var(--sol-blue); }
+.line-overview-ask { font-size: 12.5px; font-weight: 600; color: var(--sol-yellow); }
+.line-overview-action {
+  display: inline-flex; align-items: center; margin-left: 10px; padding: 2px 9px; border-radius: 7px; font-size: 12px; vertical-align: baseline;
+  color: var(--sol-text); border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, var(--sol-border));
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.line-overview-action:hover { border-color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 8%, transparent); }
+.line-overview-stuck { font-size: 12.5px; line-height: 1.45; color: color-mix(in srgb, var(--sol-orange) 88%, var(--sol-text)); }
+.line-overview-doing { font-size: 12.5px; line-height: 1.45; color: var(--sol-text-muted); }
+.line-overview-graphs, .line-overview-sources { font-size: 11.5px; line-height: 1.5; color: var(--sol-text-dim); }
+
+/* Ask again (AskAgain): the one thing to do about a cause whose card went unanswered. */
+.line-ask-again {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 7px; font-size: 12px; font-weight: 600; max-width: 100%;
+  color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-yellow) 40%, transparent);
+  transition: background-color 120ms ease;
+}
+.line-ask-again:hover { background: color-mix(in srgb, var(--sol-yellow) 20%, transparent); }
+.line-ask-again:disabled { opacity: 0.6; cursor: default; }
