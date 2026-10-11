@@ -41,6 +41,25 @@ export type SystemNote = Infer<typeof systemNote>;
 export const buildStatus = v.union(v.literal("queued"), v.literal("building"), v.literal("live"), v.literal("failed"));
 export type BuildStatus = Infer<typeof buildStatus>;
 
+/** How a build failed, which decides what its card offers: a retry where
+ *  one can succeed, an edit where the request itself has to change. A
+ *  decline is Clay's answer, not a failure, and reads as Clay's reply. */
+export const failureKind = v.union(
+  v.literal("declined"),
+  v.literal("unchanged"),
+  v.literal("invalid"),
+  v.literal("time"),
+  v.literal("budget"),
+  v.literal("stopped"),
+  v.literal("unreachable"),
+  v.literal("moved"),
+  v.literal("refused"),
+);
+export type FailureKind = Infer<typeof failureKind>;
+
+/** Failures a second try of the same words can get past. */
+export const RETRYABLE_FAILURES: readonly FailureKind[] = ["invalid", "time", "stopped", "unreachable", "moved"];
+
 /** A file a build looked at or changed, as its card shows it. */
 export const touchedFile = v.object({
   path: v.string(),
