@@ -116,6 +116,7 @@ function getNodeColors(type: string, p: SolPalette): { bg: string; border: strin
     case "exit":          return { bg: p.bgAlt,  border: p.blue,    text: p.blue };
     case "agent":         return { bg: p.bgAlt,  border: p.border,  text: p.text };
     case "prompt":        return { bg: p.bgAlt,  border: p.violet,  text: p.violet };
+    case "call":          return { bg: p.bgAlt,  border: p.orange,  text: p.orange };
     case "command":       return { bg: p.bgAlt,  border: p.green,   text: p.green };
     case "human":         return { bg: p.bgAlt,  border: p.magenta, text: p.magenta };
     case "conditional":   return { bg: p.bgAlt,  border: p.yellow,  text: p.yellow };

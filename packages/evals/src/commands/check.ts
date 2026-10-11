@@ -18,6 +18,8 @@ import { homePaths } from '../paths';
 import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
 import type { SurfaceMeta } from '../surface';
+import { sendsThinkingOff } from '../models';
+import { evalsApiKey } from '../adapters/apiCall';
 import { publishSite } from './publish';
 import { pickSurfaces } from './stale';
 import { batchSet, BISECT_CADENCE, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdict } from './verdict';
@@ -160,6 +162,16 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
       console.log('nothing changed');
       return 0;
     }
+  }
+
+  // A call rep goes out as prod posts it only with the evals' API key. Without
+  // one it runs through Claude Code, which cannot turn a model's thinking off,
+  // so a model prod posts with thinking off would be measured on a request prod
+  // never sends.
+  if (!flags.dry && !evalsApiKey()) {
+    const unmatched = metas.filter((m) => m.route === 'call' && m.model && sendsThinkingOff(m.model));
+    for (const m of unmatched) console.log(`skipped ${m.id}: prod posts ${m.model} with thinking off, which a replay through Claude Code cannot send; put the evals' API key in the keychain (codecast-evals-anthropic-key) or CODECAST_EVALS_ANTHROPIC_KEY`);
+    metas = metas.filter((m) => !unmatched.includes(m));
   }
 
   const all = await store.list();
