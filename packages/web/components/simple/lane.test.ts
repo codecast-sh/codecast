@@ -17,6 +17,7 @@ import {
   ledgerLines,
   meterOut,
   meterShort,
+  meterWords,
   monthPercent,
   monthShare,
   LANE_PATHS,
@@ -101,15 +102,15 @@ describe("approvals", () => {
     expect(APPROVAL_LABEL[approvalAsk({ kind: "multi", options: opts("Milk", "No thanks") } as any)]).toBe("Needs your answer");
   });
 
-  it("drops the answer note for a decline, which the declined step already says", () => {
-    expect(answerNote("Approve")).toBe("You said: Approve");
-    expect(answerNote("Always allow")).toBe("You said: Always allow");
+  it("drops the answer note for a plain yes or no, which the step already says", () => {
+    expect(answerNote("Approve")).toBeNull();
+    expect(answerNote("Always allow")).toBe("You said yes, and not to ask again");
     // A plain decline, and a decline the assistant follows with a new ask:
     // the rule reads the answer alone, so neither waits on the step's result.
     expect(answerNote("Decline")).toBeNull();
     expect(answerNote(" Decline ")).toBeNull();
     // The person's own words are more than a no, and always show.
-    expect(answerNote("No, make it 9am")).toBe("You said: No, make it 9am");
+    expect(answerNote("No, make it 9am")).toBe("You said: “No, make it 9am”");
     expect(answerNote("")).toBeNull();
     expect(answerNote(undefined)).toBeNull();
   });
@@ -228,6 +229,12 @@ describe("usage", () => {
     expect(usageHeadline({ used_usd: 0, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("Nothing used yet this month");
     expect(usageHeadline({ used_usd: 0.5, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("25% of this month's allowance used");
     expect(usageHeadline({ used_usd: 2, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("You've used all of this month's allowance");
+  });
+
+  it("counts what is left in requests while the allowance has room, else says the share", () => {
+    expect(meterWords({ used_usd: 0.1, reserved_usd: 0, cap_usd: 2, topup_usd: 0, remaining_usd: 1.9 })).toBe("About 300 requests left this month");
+    expect(meterWords({ used_usd: 0, reserved_usd: 0, cap_usd: 2, topup_usd: 0, remaining_usd: 2 })).toBe("Nothing used this month");
+    expect(meterWords({ used_usd: 2, reserved_usd: 0, cap_usd: 2, topup_usd: 5, remaining_usd: 5 })).toBe("Allowance used, on extra credit");
   });
 
   it("holds only when the allowance and the extra credit are both spent", () => {
