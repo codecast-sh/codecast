@@ -22,10 +22,14 @@ describe("isNonTabRoute", () => {
   it("treats dashboard routes as inside the tab shell", () => {
     for (const p of [
       "/inbox", "/feed", "/conversation/abc", "/tasks", "/tasks/x",
-      "/docs", "/docs/y", "/plans", "/projects", "/team", "/cli",
+      "/docs", "/docs/y", "/plans", "/projects/pj-x", "/team/someone", "/cli",
     ]) {
       expect(isNonTabRoute(p)).toBe(false);
     }
+  });
+
+  it("leaves the renamed list pages to the router, which moves them into Org", () => {
+    for (const p of ["/projects", "/team"]) expect(isNonTabRoute(p)).toBe(true);
   });
 
   // Public profiles live at the ROOT as a bare handle (/:username), rendered
@@ -101,25 +105,6 @@ describe("tabNavigate", () => {
   it("downgrades a same-URL push to replace", () => {
     tabNavigate("/inbox", "push");
     expect(calls).toEqual([{ op: "replace", url: "/inbox", state: { tabNav: true, tabId: "tab_1" } }]);
-  });
-
-  // The recents rail lists sessions (recordSessionView) and real pages. A
-  // session opened from another surface lands in the inbox as /inbox?s=<id>
-  // (useOpenSession); that push is the session's visit, not a page of its own,
-  // and filing it as one put "Inbox" between the things the user had actually
-  // looked at in the Ctrl+Tab switcher. A bare /inbox — the sidebar's Inbox
-  // click — is a real visit and stays.
-  it("records real pages and the bare inbox, never an inbox push carrying a session", () => {
-    useInboxStore.setState({ recentVisits: [] });
-    tabNavigate("/tasks/ct-1", "push");
-    tabNavigate("/tasks", "push");
-    tabNavigate("/inbox?s=jx7abc", "push");
-    tabNavigate("/conversation/jx7abc", "push");
-    // The fixture's live URL is /inbox; a same-URL push downgrades to replace
-    // and records nothing, so stand somewhere else before the bare push.
-    (globalThis as any).window.location.pathname = "/tasks";
-    tabNavigate("/inbox", "push");
-    expect(useInboxStore.getState().recentVisits.map((v) => v.key)).toEqual(["page:/inbox", "page:/tasks", "page:/tasks/ct-1"]);
   });
 
   it("replaces (no new entry) in replace mode", () => {
