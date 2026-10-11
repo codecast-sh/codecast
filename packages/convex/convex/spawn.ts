@@ -425,7 +425,11 @@ export const createSessionFromCli = mutation({
       spawnerConversationId: spawner?._id,
       handoffFrom,
       prompt,
-      fleet: subagentFields ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
+      // A worker joins the fleet when its spawner declares the fleet's limits
+      // (`cast spawn --subagent` always does). A workflow station's hand is
+      // nested under its run but paced by it, one station at a time, so it
+      // never waits for a slot behind the machine's other workers.
+      fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);

@@ -85,7 +85,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "land",
-    description: `Find the work every worktree and cloud host holds that main does not, and release finished trees`,
+    description: `Find the work every worktree and cloud host holds that main does not, release finished trees, and level a checkout onto its upstream`,
     load: () => import("./land/cli.js").then((m) => m.registerLandCommand),
   },
   {
@@ -164,8 +164,10 @@ Subcommands:
   cast decide edit [id] [flags]       Change the open decision in place; every ask flag applies (question, -o, --context, --report, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory/--blocking)
   cast decide cancel [id]             Withdraw the open decision
   cast decide show <sd>               One decision with its document, ladder and holder
-  cast decide recommend <sd> <n>      A role on the ladder recommends option n (within 5 minutes; --note -)
+  cast decide recommend <sd> <n>      A role on the ladder recommends option n and hands the card to its people (--note -)
+  cast decide pass <sd>               A role on the ladder hands the card to its people with no recommendation (--note -)
   cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
+                                      --for-human: from a session, as your human, only at their explicit word
 
 Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
   --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
@@ -206,7 +208,7 @@ Examples:
   },
   {
     token: "signal",
-    description: `Signals: file what a finder saw; each attaches to one cause task
+    description: `Findings: file what a finder saw; each joins one problem
 
   cast signal add --source <finder> --kind <kind> --fingerprint <key> --title "<one line>" [--detail -] [--url <url>] [--subject <ref>] [--goal-hint <metric>]
   cast signal ls [--task ct-N] [--source <finder>]
@@ -253,7 +255,7 @@ Short ids render as live pills wherever codecast shows prose.`,
   cast goals [--brief] [--json] [--project <ref> | --task <ct>] [--team <name|id|personal>]
 
 --brief is the compact shape a prompt reads. Each metric prints with its goal_ref
-(in-N:key); a project's goal_ref is its short id. --task reads the brief a cause
+(in-N:key); a project's goal_ref is its short id. --task reads the brief a problem
 is grounded against: its own project's, else its workspace's.`,
     load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
   },
@@ -264,6 +266,7 @@ is grounded against: its own project's, else its workspace's.`,
   cast expectations show [--project <ref>] [--at <version>] [--brief] [--json]
   cast expectations propose <file|-> [--project <ref>] [--hold]
   cast expectations apply|drop <xp-N>
+  cast expectations routine [--project <ref>]
 
 --brief is what a judge reads: the active lines with ids under the version a
 finding cites. A proposal that only adds lines, each in a person's quoted,
@@ -277,7 +280,7 @@ dated words, applies on its own; any other change waits for the project's person
   cast card build --task ct-N [--eval-result eval-result.json] [--proof proof.json]
     [--wrong -] [--change -] [--recommend ship|revise|drop --why -] [--out card.json] [--publish] [--json]
 
-Assembles the card from the task (cause, goal, verify, review, PR), the eval result, the
+Assembles the card from the task (problem, goal, verify, review, PR), the eval result, the
 branch diff and the run cost; validates it and names every field that is missing or wrong;
 writes card.json and card.html. --publish attaches the page to the task as evidence.`,
     load: () => import("./cardCommand.js").then((m) => m.registerCardCommand),
@@ -367,6 +370,8 @@ Subcommands:
   cast ship run --session <id>          Ship a session's diff
   cast ship run --pr 123                Ship a pull request; this one merges once green
   cast ship run --task ct-42 --dry-run  Print what Ship would do, start nothing
+  cast ship checkout --dry-run          Plan shipping everything uncommitted in this shared checkout, by session
+  cast ship checkout --plan             Ship that plan: commit, replay onto upstream, level, check, deploy, push
   cast ship mark --surface backend      Mark HEAD of this checkout as deployed
   cast ship mark --surface web --sha <sha> --version 1.2.3`,
     load: () => import("./shipCommand.js").then((m) => m.registerShipCommand),
@@ -381,6 +386,7 @@ Subcommands:
   cast sources add posthog <name> [--project-id <id>]
   cast sources add app <name> --base-url <url>   The product's connector (cast connector), no secret
   cast sources show|pause|resume|rm|test <source>
+  cast sources set <source> --moment-storage host|codecast   Change one setting, keep the rest
   cast sources key rotate <source>
 
 add and key rotate record the source in the checkout's codecast.json (--write

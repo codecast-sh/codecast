@@ -1,0 +1,26 @@
+{
+  "name": "card-write unscored-line-change",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:unscored-line-change"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "card-write:unscored-line-change",
+    "title": "card-write unscored-line-change"
+  },
+  "asOf": "2026-10-07T12:00:00.000Z",
+  "trigger": {
+    "type": "card-write"
+  },
+  "meta": {
+    "surface": "card-write",
+    "visibility": "public",
+    "snapshot": "fixtures/card-write/unscored-line-change.json"
+  },
+  "judge": "a person who never saw the work can judge Ship, Revise or Drop from the six fields alone, and every claim in them matches what the card records (its checks, proof, examples and diff), with no result stated stronger than the card shows",
+  "notes": null,
+  "tags": [],
+  "id": "ddee68b5-c410-4cb0-bf7d-812fb6ff2e8e",
+  "createdAt": "2026-10-07T17:30:45.829Z"
+}

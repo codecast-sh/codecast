@@ -582,14 +582,17 @@ export const updatePresence = mutation({
     // same rule a send checks. Decided here so a reader never has to.
     const conversation = await composeConversation(ctx, args.doc_id);
     const canSend = conversation ? await canSendProductMessage(ctx, userId, conversation) : undefined;
+    const now = Date.now();
+    const moved = anchor && (existing?.anchor?.message_id !== anchor.message_id || existing?.anchor?.offset !== anchor.offset);
     const fields = {
       cursor_pos: args.cursor_pos,
       anchor_pos: args.anchor_pos,
       draft_text: draft,
       anchor,
+      anchor_at: anchor ? (moved ? now : existing?.anchor_at ?? now) : undefined,
       can_send: canSend,
       ...presenceIdentity(user),
-      updated_at: Date.now(),
+      updated_at: now,
     };
     if (existing) await ctx.db.patch(existing._id, fields);
     else await ctx.db.insert("doc_presence", { doc_id: args.doc_id, user_id: userId, ...fields });
@@ -643,6 +646,7 @@ export const getPresence = query({
     draft_text: v.optional(v.string()),
     can_send: v.optional(v.boolean()),
     anchor: v.optional(vAnchor),
+    anchor_at: v.optional(v.number()),
     claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number(), how: v.optional(v.string()) }))),
     updated_at: v.number(),
   })),
@@ -669,6 +673,7 @@ export const getPresence = query({
           draft_text: p.draft_text,
           can_send: p.can_send,
           anchor: p.anchor,
+          anchor_at: p.anchor_at,
           claims: claims.length ? claims : undefined,
           updated_at: p.updated_at,
         };
