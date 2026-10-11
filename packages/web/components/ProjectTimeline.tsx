@@ -1,13 +1,18 @@
 "use client";
 /**
- * The Timeline tab: everything that happened in a project, one feed.
+ * The Timeline tab: everything that happened in a project, one feed, with
+ * the composer for the next update on top.
  *
- * The backend (api.projectUpdates.webTimeline) merges update posts and their
- * comments, task lifecycle from task_history, plan entries and doc creation
- * into one time-ordered list. This view's job is legibility: group by day,
- * hang every event off one vertical rail, and give each kind a small icon and
- * color so the eye can skim a week in a glance. Update posts render as cards —
- * they are the narrated moments; everything else is a one-line fact.
+ * The backend (api.projectUpdates.webTimeline) merges update comments, task
+ * lifecycle from task_history, plan entries and doc creation into one
+ * time-ordered list. Update posts come from the store (the projectUpdates
+ * collection), so a post written here paints in the same tick and keeps its
+ * own thread, edits and comments; the server's copy of a post is dropped
+ * once the store holds the project's posts. This view's job is legibility:
+ * group by day, hang every event off one vertical rail, and give each kind a
+ * small icon and color so the eye can skim a week in a glance. Update posts
+ * render as cards: they are the narrated moments; everything else is a
+ * one-line fact.
  */
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -25,6 +30,10 @@ import {
   Target,
 } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useProjectUpdates } from "../hooks/useProjectUpdates";
+import { useInboxStore } from "../store/inboxStore";
+import type { ProjectUpdateRow } from "../store/projectUpdatesSlice";
+import { UpdateCard, UpdateComposer } from "./ProjectUpdates";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { groupByDay } from "../lib/timelineRail";
@@ -60,6 +69,8 @@ type TimelineEvent = {
   doc?: { id: string; title: string; doc_type?: string };
   /** Set only on "git" rows: the store row this event was built from. */
   git?: ExternalEventRecord;
+  /** Set on a post read from the store: drawn as its full card. */
+  post?: ProjectUpdateRow;
 };
 
 /** Icon + accent per event kind. The rail dot wears the accent; rows stay calm. */
@@ -133,14 +144,12 @@ function EventBody({ event }: { event: TimelineEvent }) {
         </div>
       );
     case "update_comment":
-      // The one row type whose payload is guaranteed clipped links to the
-      // full thread on the Updates tab.
+      // Only for a post the store does not hold yet: a held post's card
+      // carries its own thread, so its comments are not repeated here.
       return (
         <span className="text-sol-text-muted min-w-0 truncate">
           <Actor event={event} /> <span className="text-sol-text-dim">commented on</span>{" "}
-          <Link href="?tab=updates" className="text-sol-text hover:text-sol-cyan transition-colors">
-            {event.update?.title || "an update"}
-          </Link>
+          <span className="text-sol-text">{event.update?.title || "an update"}</span>
           {event.text && <span className="text-sol-text-muted">: {event.text}</span>}
         </span>
       );
@@ -220,12 +229,16 @@ function EventBody({ event }: { event: TimelineEvent }) {
   }
 }
 
-export function ProjectTimeline({ projectId }: { projectId: string }) {
+export function ProjectTimeline({ projectId, composer = true }: { projectId: string; /** The composer for the next update, on top. */ composer?: boolean }) {
   const { data: events, error, retry } = useQueryNoThrow(
     api.projectUpdates.webTimeline,
     projectId ? { project_id: projectId } : "skip",
   );
   const [filter, setFilter] = useState<string>("all");
+  // The posts, from the store: fed here, read here, written by the composer above.
+  const posts = useProjectUpdates(projectId);
+  const currentUserId = useInboxStore((s: any) => s.currentUser?._id && String(s.currentUser._id));
+  const postsHeld = posts.ready || posts.updates.length > 0;
 
   // External events do not come from webTimeline: they are their own synced
   // collection, so mount the project feeder and read the store.
@@ -243,7 +256,17 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
       type: "git",
       git: row,
     }));
-    const list = [...((events ?? []) as TimelineEvent[]), ...externalEvents]
+    const postEvents: TimelineEvent[] = postsHeld ? posts.updates.map((u) => ({ ts: u.created_at, type: "update_posted", actor: u.author, actor_kind: u.author_kind, post: u })) : [];
+    // Once the store holds the posts, each is drawn as its card, thread and
+    // all: the server's copy of a post goes, and so do the comment rows of
+    // every post the store holds.
+    const held = new Set(postsHeld ? posts.updates.map((u) => String(u._id)) : []);
+    const serverEvents = ((events ?? []) as TimelineEvent[]).filter((e) => {
+      if (!postsHeld) return true;
+      if (e.type === "update_posted") return false;
+      return !(e.type === "update_comment" && e.update && held.has(String(e.update.id)));
+    });
+    const list = [...serverEvents, ...postEvents, ...externalEvents]
       .filter((e) => {
         if (filter === "all") return true;
         // "People" cuts across kinds: only what a human actually did — posts,
@@ -255,7 +278,7 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
       // same order before the day grouping walks it.
       .sort((a, b) => b.ts - a.ts);
     return groupByDay(list, now);
-  }, [events, filter, externalRows]);
+  }, [events, filter, externalRows, postsHeld, posts.updates]);
 
   if (error) {
     return (
@@ -267,14 +290,19 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
       </div>
     );
   }
-  if (events === undefined) {
+  const top = composer && !posts.refused ? <div className="mb-4"><UpdateComposer projectId={projectId} /></div> : null;
+  if (events === undefined && !postsHeld) {
     return (
-      <div className="max-w-3xl mx-auto py-12 text-center text-xs text-sol-text-dim">Loading timeline…</div>
+      <div className="max-w-3xl mx-auto py-4 px-2">
+        {top}
+        <div className="py-12 text-center text-xs text-sol-text-dim">Loading timeline…</div>
+      </div>
     );
   }
 
   return (
-    <div className="max-w-3xl mx-auto py-4 px-2">
+    <div className="max-w-3xl mx-auto py-4 px-2" data-project-timeline={projectId}>
+      {top}
       {/* Kind filter — the feed mixes narration with mechanics; let the reader
           pick which layer they are reading. */}
       <div className="mb-4 w-fit">
@@ -313,6 +341,13 @@ export function ProjectTimeline({ projectId }: { projectId: string }) {
               );
             }
             const style = EVENT_STYLE[e.type];
+            if (e.post) {
+              return (
+                <RailRow key={e.post._id} icon={style.icon} color={style.color} ts={e.ts} card>
+                  <UpdateCard update={e.post} currentUserId={currentUserId} />
+                </RailRow>
+              );
+            }
             return (
               <RailRow key={`${e.ts}-${i}`} icon={style.icon} color={style.color} ts={e.ts} card={e.type === "update_posted"}>
                 <EventBody event={e} />

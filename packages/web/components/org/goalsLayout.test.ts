@@ -187,8 +187,8 @@ describe("a proposal's goal changes as ghosts", () => {
 describe("the map over the Union fixture", () => {
   const union = (changes: readonly OrgProposalChange[] = [], people?: "owners" | "everyone" | "none") => layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, changes, people });
 
-  test("Everything puts every person and active role in the column, with their sessions by state and who a role reports to", () => {
-    const { nodes } = union([], "everyone");
+  test("Everything draws the people chart: every person, the roles under whoever they report to, indented and joined", () => {
+    const { nodes, edges } = union([], "everyone");
     const owners = nodes.filter((n): n is Extract<GoalsNode, { kind: "owner" }> => n.kind === "owner");
     const ids = owners.map((o) => o.id);
     for (const p of UNION_GOALS_TREE.people) expect(ids).toContain(`person:${p.user_id}`);
@@ -196,9 +196,14 @@ describe("the map over the Union fixture", () => {
     const quality = owners.find((o) => o.id === "role:fixture-role-agent-quality")!;
     expect(quality.counts).toBeDefined();
     expect(Object.values(quality.counts!).reduce((a, b) => a + b, 0)).toBe(UNION_GOALS_TREE.roles[1].sessions.length);
-    expect(quality.reportsTo).toBe("Ashot Petrosian");
-    // A fixed order, people first (me at the top) then roles by name, so the column reads the same with the proposal on and off.
-    expect(ids).toEqual(["person:fixture-user-me", "person:fixture-user-samvit", "role:fixture-role-agent-quality", "role:fixture-role-head-of-people"]);
+    // The tree says whom a role reports to: it sits under them, one step in, on a spine.
+    const me = owners.find((o) => o.id === "person:fixture-user-me")!;
+    expect(quality.reportsTo).toBeUndefined();
+    expect(ids.indexOf(quality.id)).toBeGreaterThan(ids.indexOf(me.id));
+    expect(quality.x).toBeGreaterThan(me.x);
+    expect(edges).toContainEqual(expect.objectContaining({ source: me.id, target: quality.id, kind: "spine" }));
+    // Me first, then everyone else in a fixed order, so the chart reads the same with the proposal on and off.
+    expect(ids[0]).toBe(me.id);
     expect(owners.find((o) => o.id === "person:fixture-user-samvit")!.owns).toBe(0);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
   });
@@ -216,6 +221,10 @@ describe("the map over the Union fixture", () => {
     const carried = new Set(UNION_GOALS_DATA.initiatives.flatMap((g) => g.project_ids));
     const expected = UNION_GOALS_DATA.projects.filter((p) => !carried.has(p._id));
     expect(loose.projects).toBe(expected.length);
+    // The company's tally counts them too, as the document's state line does: the loose card says the split.
+    const top = nodes[0];
+    const tally = top.kind === "company" ? top.projects : top.kind === "goal" ? top.root?.projects : undefined;
+    expect(tally).toBe(new Set([...carried, ...expected.map((p) => p._id)].filter((id) => UNION_GOALS_DATA.projects.some((p) => p._id === id && p.status !== "done"))).size);
     const rows = nodes.filter((n) => n.kind === "project" && n.id.startsWith(`project:${LOOSE_NODE_ID}:`));
     expect(rows.length).toBe(expected.length);
     for (const r of rows) expect(edges.some((e) => e.kind === "spine" && e.source === LOOSE_NODE_ID && e.target === r.id)).toBe(true);

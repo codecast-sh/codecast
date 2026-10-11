@@ -5,10 +5,13 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 import "./button.css"
 
-// Filled variants share the .sol-btn-solid finish (globals.css): lit edge,
-// grounded shadow, one hover and press. The transition list replaces the
-// base's transition-colors so the brighten and the press animate too.
-const solid = "sol-btn-solid transition-[filter,box-shadow,transform,background-color,color]"
+// THE button. Every action on the site is one of these: a filled face for
+// the one thing a surface is for (default, cyan, or an accent tone when the
+// action has a colour of its own: violet for calls, red for stop and delete,
+// green for approve, amber for triggers, yellow for guests), outline or secondary beside it,
+// ghost for the quiet rest. The faces are drawn in button.css; a call site
+// picks a variant and a size and never a fill, a text colour or a shadow.
+const tone = (name: string) => `cc-btn-fill cc-btn-tone cc-btn-${name}`
 
 const buttonVariants = cva(
   "cc-btn inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium select-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring/60 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
@@ -28,12 +31,21 @@ const buttonVariants = cva(
         // (button.css), not the theme's, so the fixed dark base03 text keeps
         // its contrast in every theme.
         cyan: "cc-btn-fill cc-btn-cyan text-sol-base03",
+        violet: tone("violet"),
+        red: tone("red"),
+        green: tone("green"),
+        blue: tone("blue"),
+        amber: tone("amber"),
+        yellow: tone("yellow"),
       },
       size: {
         default: "h-9 px-4 py-2",
         sm: "h-8 rounded-md px-3 text-xs",
+        // Inline in a row of text, a banner or a card footer.
+        xs: "h-7 gap-1.5 rounded-md px-2.5 text-xs [&_svg]:size-3.5",
         lg: "h-10 rounded-md px-8",
         icon: "h-9 w-9",
+        "icon-sm": "h-7 w-7 [&_svg]:size-3.5",
       },
     },
     defaultVariants: {
