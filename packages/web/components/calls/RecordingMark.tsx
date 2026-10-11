@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Button } from "../ui/button";
 import { Loader2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { BELOW_SM, useMediaQuery } from "../../hooks/useIsPhone";
@@ -155,17 +156,10 @@ export function StopRecordingQuestion({
   escKeeps?: boolean;
 }) {
   const stop = (
-    <button
-      type="button"
-      onClick={onStop}
-      disabled={busy}
-      className={`sol-btn-solid flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red font-mono font-medium text-white disabled:opacity-60 ${
-        dense ? "px-1.5 py-0.5 text-[10px]" : "px-3 py-1.5 text-[11.5px]"
-      }`}
-    >
-      {busy && <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />}
+    <Button type="button" variant="red" size="xs" onClick={onStop} disabled={busy} className="shrink-0 font-mono">
+      {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
       {dense ? "Stop" : STOP_RECORDING_ASK.stop}
-    </button>
+    </Button>
   );
   const keep = (
     <button
