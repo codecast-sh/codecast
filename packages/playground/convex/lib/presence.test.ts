@@ -12,14 +12,24 @@ describe("presence cutoff", () => {
     expect(isHere({ last_seen: NOW - PRESENCE.staleMs }, NOW)).toBe(false);
   });
 
-  test("the window survives one missed heartbeat", () => {
-    expect(isHere({ last_seen: NOW - 2 * PRESENCE.heartbeatMs }, NOW)).toBe(true);
+  test("an idle beat writes only every other time, and a row renewed then survives a missed beat", () => {
+    expect(PRESENCE.heartbeatMs).toBeLessThan(PRESENCE.seenWriteMs);
+    expect(PRESENCE.seenWriteMs + PRESENCE.heartbeatMs).toBeLessThan(PRESENCE.staleMs);
+    const beats = Array.from({ length: 8 }, (_, i) => i * PRESENCE.heartbeatMs);
+    let row = { last_seen: 0, viewing_version: null as number | null };
+    let writes = 0;
+    for (const at of beats.slice(1)) {
+      const patch = heartbeatPatch(row, null, at);
+      if (patch) (row = patch), writes++;
+      expect(isHere(row, at + PRESENCE.heartbeatMs * 2 - 1)).toBe(true);
+    }
+    expect(writes).toBe(Math.floor((beats.length - 1) / 2));
   });
 
   test("typing holds until its deadline", () => {
-    expect(isTyping({ typing_until: NOW + 1 }, NOW)).toBe(true);
-    expect(isTyping({ typing_until: NOW }, NOW)).toBe(false);
-    expect(isTyping({ typing_until: 0 }, NOW)).toBe(false);
+    expect(isTyping({ until: NOW + 1 }, NOW)).toBe(true);
+    expect(isTyping({ until: NOW }, NOW)).toBe(false);
+    expect(isTyping({ until: 0 }, NOW)).toBe(false);
   });
 });
 

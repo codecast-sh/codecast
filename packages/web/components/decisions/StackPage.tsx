@@ -178,7 +178,7 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
         <section className="mt-8 mb-16">
           <h2 className="decision-kicker mb-3">Members · in order</h2>
           {stack.decision_ids.length === 0
-            ? <div className="text-sm text-sol-text-dim">Empty. Add with <code className="text-sol-text">cast decide --stack {stack.short_id}</code> or group cards from the queue.</div>
+            ? <div className="text-sm text-sol-text-dim">Empty. Group cards from the queue, or ask an agent to add its decisions to this stack.</div>
             : <StackChecklist stack={stack} editable />}
         </section>
       </div>
@@ -215,7 +215,7 @@ export function StacksIndex() {
 
         {!ready && rows.length === 0 && <div className="mt-8"><AppLoader /></div>}
         {ready && rows.length === 0 && (
-          <div className="mt-10 text-sm text-sol-text-dim">No stacks yet. Group cards from the queue, or <code className="text-sol-text">cast decide --stack "Launch checklist"</code>.</div>
+          <div className="mt-10 text-sm text-sol-text-dim">No stacks yet. Group cards from the queue, or ask an agent to put related decisions in one stack.</div>
         )}
 
         {open.length > 0 && (

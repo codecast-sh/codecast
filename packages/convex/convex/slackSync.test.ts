@@ -643,6 +643,30 @@ describe("direct messages", () => {
     }
     expect(auths).toEqual(["Bearer xoxb-test"]);
   });
+  test("a reaction in a mirrored DM stays here and never pauses the link", async () => {
+    const ctx = context(ALICE, {
+      slack_user_tokens: [{ _id: "slack_user_tokens_9" as any, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-alice", scopes: "chat:write,im:read,im:history,mpim:read,mpim:history", created_at: 1, updated_at: 1 }],
+    });
+    await ctx.db.patch(LINK, { kind: "dm", owner_user_id: ALICE });
+    const msg = await ctx.db.insert("chat_messages", {
+      channel_id: CHANNEL, user_id: ALICE, content: "said in Slack", created_at: 7_000, updated_at: 7_000,
+      external: { provider: "slack", direction: "inbound", workspace: WS, channel: SLACK_CH, ts: "7000.000001", synced_at: 7_000 },
+    } as any);
+    ctx.runQuery = (_ref: unknown, args: any) => call(pushContext, ctx, args);
+    let calls = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ ok: false, error: "channel_not_found" }));
+    }) as any;
+    try {
+      await call(pushReaction, ctx, { message_id: msg, emoji: "👍", add: true });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(calls).toBe(0);
+    expect((await ctx.db.get(LINK)).paused).toBeFalsy();
+  });
   test("a shared image comes over as an attachment; a sign-in page in its place stays a link", async () => {
     const stored: Blob[] = [];
     const ctx: any = { storage: { store: async (b: Blob) => { stored.push(b); return `storage_${stored.length}`; } } };

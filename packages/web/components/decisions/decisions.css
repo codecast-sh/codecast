@@ -173,3 +173,13 @@
 .decision-card[data-cta="true"]:hover {
   border-color: color-mix(in srgb, var(--sol-yellow) 65%, transparent);
 }
+
+/* A decision settled without an answer says so first, in one calm line. */
+.decision-status-banner {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-text-dim) 35%, var(--sol-border));
+  background: color-mix(in srgb, var(--sol-text-dim) 8%, transparent);
+}

@@ -1,121 +1,71 @@
-An agent that reaches a real fork has two bad choices. It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick a direction alone, and you learn about the choice after code depends on it.
+An agent that reaches a real fork has two bad options. It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick a direction alone, and you find out after code depends on it.
 
-`cast decide` is a third path. The agent writes one question, 2 to 9 options, and the reasoning into a row that lands in a queue. You clear the queue in one sitting, when you choose to. The answer goes back into the asking session as a message, and the agent continues from it.
+With the Decision queue on, there is a third way. The agent writes one clear question, the options with what each one costs, and its reasoning, and the question waits in **Questions** until you get to it. You clear the queue in one sitting, a key per answer, and each answer goes back to the session that asked as an ordinary message. The agent carries on from there.
 
-```figure
-DecisionRoundTripFigure
-The agent asks and parks, the row waits until you sit down with the queue, and your keypress returns as an ordinary message.
-```
+![A session waiting on a decision: the question in large type, the agent's reasoning, two numbered options each with its consequence, and links to answer in your own words or dismiss](/documentation/decisions/waiting.webp "A session waiting on your decision. The question, the reasoning and the options are all on the card, so you can answer without reading the thread.")
 
-The cost model is the point. An interruption is expensive, so the usual rule for agents is to decide alone. A queued question costs you almost nothing to receive, so the bar for asking drops. The decide snippet ([how snippets work](/documentation/agent-snippets)) tells the agent this directly: a choice it would have made silently and mentioned in passing goes to the queue instead. Install it with `cast install decide`.
+Because a queued question costs you almost nothing to receive, agents are told to ask more often than they would interrupt you: a choice they would otherwise have made silently and mentioned in passing goes to the queue instead.
 
-```bash
-cast decide "Which schema wins?" \
-  -o "Frontmatter wins :: renames keep the id, the daemon changes" \
-  -o "Path wins :: the web index changes, old links break" \
-  --context - <<'EOF'
-The daemon writes note ids from the file path. The web index derives them
-from frontmatter. A rename keeps one id and changes the other, so the same
-note indexes twice. Either side can be authoritative.
-EOF
-cast decide "Approve dropping agent_runs_v1?" -o "Approve" -o "Hold" \
-  --context "Nothing wrote to it in 40 days." --report drop-analysis.html
-cast decide "Which layout?" -o "Dense" -o "Roomy" --context "Both pass review." \
-  --option-page 1=dense.html --option-page 2=roomy.html
-cast decide "Back off or switch keys?" -o "Back off" -o "Switch keys" \
-  --advisory --default 1 --context "429s for 4m. Backing off costs about 20m."
-cast decide ls                 # this session's decisions, with ids and answers
-cast decide edit --context -   # rewrite the open decision in place
-cast decide cancel             # withdraw it
-```
+## Turn it on
 
-## What the agent writes
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Decision queue**, under *Working together*. Click **How it works** on the card for an example.
 
-| Flag | What it carries |
-|------|-----------------|
-| `-o "Label :: consequence"` | One option. Text after `::` becomes the description shown under the label. Repeat 2 to 9 times; the options map to keys 1 to 9 in the queue |
-| `--context <text>` or `--context -` | Markdown reasoning: what the agent found, what each option costs, why it cannot pick. `-` reads a heredoc from stdin |
-| `--report <file>` | An HTML or markdown file published through the same path as [`cast publish`](/documentation/publish). The row stores only the page slug, and the page renders embedded with the question |
-| `--option-page n=<file, slug or url>` | A page for option n. A file publishes like `--report`. A slug or a codecast page URL attaches a page that already exists. The server refuses a slug that is not published |
-| `--doc <file>` | A markdown document as the long body of the decision |
-| `--advisory --default <n>` | Do not block. The agent proceeds with option n. Each flag requires the other |
+Agents ask on their own once it is on. You can also tell them when to:
 
-The CLI refuses a question with no `--context`, `--report` or `--doc`. After a post it prints the card back to the agent. It adds a note when the context is under 200 characters with no report, because you would have to open the session to answer. It adds a second note when no option has a consequence.
+- "If you need my call on the caching strategy, queue a decision and keep going on the rest."
+- "Before you pick a database for this, ask me with the options laid out."
+- "Put the three layout options in front of me as a decision, with a page for each."
 
-The command writes one row to the `session_decisions` table. The server returns a short id such as `sd-41` and the agent uses that id for every later command. If the agent posts the same question again from the same session, the server updates the open row. A retry after a crash does not create a duplicate. The server rejects a post into a session that belongs to another user.
+## Answer in Questions
 
-## Blocking and advisory
-
-Blocking is the default. The agent posts the decision and ends its turn. The session stays parked until the answer arrives.
-
-An advisory decision keeps the agent working on the default it declared. Your answer can still override that default later. The help text and the snippet both restrict this to a default that is cheap to undo. The reason is timing: the snippet tells the agent that answers tend to land about an hour later and often disagree. Everything built on the default in that hour is then work to remove. If the reversal would cost more than the wait, the agent must block.
+**Questions** in the sidebar shows a count of the decisions waiting on you. It opens the queue as a list of compact cards. Click **one at a time** to work through it as full cards, one after another.
 
 ```figure
-BlockingAdvisoryFigure
-Blocking spends time waiting. Advisory spends the same hour building on a guess, and a disagreeing answer turns that hour into work to undo.
+QueueClearingFigure
+Three asks in the queue. Each answer clears the card, the next one rises, and the session that asked goes back to work with your answer.
 ```
 
-`cast decide edit --blocking` turns an advisory decision into a blocking one and clears its default.
+On a card:
 
-## What you see
-
-The decision renders as a card in the conversation, at the place where the agent ran the command. The same row appears in the queue at `/questions`. The snippet tells the agent to write nothing about the decision in prose after the command, because the card already holds the full payload.
-
-![A decision card answered inline in a conversation](/documentation/shots/hero.webp "Exponential or fixed backoff?, asked as sd-1290 in Retry failed webhooks: the card carries the agent's evidence and shows the chosen answer, Exponential, 5 attempts.")
-
-The queue has two modes. The list mode groups pending decisions by stack and then by scope, as compact cards that link to each decision's page. The step mode (`/questions?mode=step`) shows one decision at full width and advances when you answer.
-
-| Key in step mode | Action |
-|------------------|--------|
+| Key | What it does |
+|-----|--------------|
 | `1` to `9` | Answer with that option |
-| `t` | Type your own answer |
-| `s` | Skip for now |
-| `x` | Dismiss. The row resolves as dismissed, leaves the queue, and the agent is not told |
+| `t` | **Or answer in your own words**: your text goes to the agent as a message |
+| `s` | Skip it for now |
+| `x` | Dismiss it. It leaves the queue and the agent is not told |
 | `o` | Open the session |
+| `esc` | Leave the queue |
 
-The order is fixed by a rule and not by a score. Blocked decisions whose session can still receive an answer come first. Blocked decisions on a stopped or unresponsive session come second. Advisory decisions come last. Inside each group the oldest decision comes first, because a parked agent costs more the longer it waits.
+The order follows a rule, not a score. Questions that are holding an agent up come first, then questions from sessions that have stopped, then questions the agent is already working around. Inside each group the oldest comes first, because a waiting agent costs more the longer it waits. Each card also shows its age twice, in time and in messages since it was asked, so a question the thread has already moved past is easy to spot.
+
+A permission prompt or a question an agent asked in its own terminal waits in the same queue, under *Waiting in a terminal*. Those are answered in the session itself, with its real Approve and Deny controls; number keys never approve anything.
+
+## In the conversation
+
+When a session is waiting on you, opening it shows the decision as a full card, headed *Waiting on your decision*, with **Copy link** to send it to someone and **Read the thread** to see what led up to it. Answer it right there with a click or a number key.
+
+After you answer, the transcript keeps the record: the question marked *answered* with a check on your choice, and your answer as a message linked back to the ask.
+
+![The answered decision in the transcript: the question with an Answered chip, the chosen option checked, the person's answer as a message, and the agent's reply](/documentation/decisions/answered.webp "The same decision after answering. The agent wrote the README with the format that was picked.")
+
+Some questions don't need to hold the agent up. When the agent has a sensible default that is cheap to undo, it keeps working on that default and the ask folds into a small *Asked for your steer* pill above the composer. Your answer can still override it. Agents are told to wait instead whenever undoing the default would cost more than waiting for you.
+
+Every decision also has its own page, which you reach from the card or by the link. It holds the question, the full reasoning or a report the agent attached, a page per option when the agent made one, a discussion, and the answer controls.
+
+## On your phone
 
 ```figure
-QueueOrderFigure
-Three groups, oldest first inside each. Nothing in the order depends on the session, the project or the wording.
+PhoneQueueFigure
+The iPhone app walks the same queue one decision at a time, and moves to the next when you answer, skip or dismiss.
 ```
 
-Each decision also has a document page at `/decisions/<sd-N>`. The page shows the question, the asking session, the body or the embedded report, each option with its own page, and the answer controls. The card links to this page when a decision has a document, an option page, or an answer kind other than a single choice.
+## Stacks
 
-## How the answer returns
+When several decisions belong together, such as a launch checklist, click **group into a stack** in the list, tick the cards, name the stack and create it. A stack is cleared in one sitting like a checklist. On its page you can set a **Due** date, and an **Auto default**: after that many hours, any question the agent was already working around is answered with its default. Questions that are holding an agent up are never answered for you.
 
-An answer from the web does two things in one store action. It marks the row answered in the local store, so the card leaves the queue at once. It then sends a normal user message into the asking session through the same path as the composer. The message text is `Decision: <chosen label>` plus a `cast-decision` tag that names the decision id and the question. The conversation uses that tag to render the message as an answer linked back to the ask.
+## What agents are told
 
-Answers that do not come from the web, such as `cast decide answer <sd-N> <n>` from a shell, go through one server function that writes the same message. The first writer wins. A second answer to a row that is no longer pending changes nothing, and the CLI reports that the first answer stands.
-
-## Keeping an ask correct
-
-A posted decision belongs to the agent until someone answers it.
-
-`cast decide edit` rewrites the question, options, context, report or mode on the open row. The row keeps its id, its age and its place in the queue. With no id, `edit` and `cancel` act on the session's single open decision. With several open, the CLI lists them and asks for an id. `cast decide cancel` marks the row withdrawn, and the conversation shows it as withdrawn. An edit or cancel on an answered row fails and prints the answer.
-
-Staleness is measured, not assumed. Each ask stores the conversation's message count at that moment. `cast decide ls` prints each open decision as `asked 3h ago, 42 messages since`. The card shows the same two numbers. The CLI treats an open ask as stale after 2 hours or 30 messages, and tells the agent to cancel or edit it. A new post also lists the session's earlier open asks with the same numbers, so the agent reviews them at the moment it posts.
-
-## Permission prompts in the same queue
-
-The queue has two more sources: an agent's terminal question and a permission prompt. Neither has an authored payload, so the card shows the last assistant message and the session's [pinned state](/documentation/thread-state).
-
-A permission card renders the real Approve and Deny controls. Number keys are disabled on it. A queue that advances on each key press could otherwise send the digit you meant for the previous card to an approval. From the keyboard, only `y` and `n` answer a permission card. Inside the queue, these cards are answered in step mode, on the session's own pane.
-
-## Decision stacks
-
-On 2026-09-13 a decision became a document, and decisions gained stacks. A stack is an ordered set of decisions that one person clears in one sitting, with an id such as `ds-7`.
-
-```bash
-cast stack create "Launch checklist" --policy auto-default:24h
-cast decide "Ship the banner?" -o "Ship" -o "Hold" --context "Copy is final." --stack ds-7
-cast stack remove ds-7 sd-41
-cast stack reorder ds-7 sd-43,sd-41,sd-42     # every member, in the new order
-cast stack policy ds-7 --due tomorrow         # or --auto-default 24h, --no-due
-```
-
-`--stack ds-N` on `cast decide` appends the new decision to that stack. The queue renders a stack as a checklist, and you can also group selected cards into a new stack from the list. The stack page lives at `/decisions/stacks/<id>`.
-
-A stack has two policies that change runtime behavior. `--due` records when you mean to have cleared the stack, and the queue lists an overdue stack first. `--auto-default <duration>` lets a server job, which runs every 5 minutes, answer advisory members with their declared default after the deadline passes. The deadline counts from when the decision joined the stack. Blocking members never receive an automatic answer. The checklist also has one control that answers every advisory member with its default.
-
-A stack closes when every member is resolved, by any path: answered, dismissed or withdrawn.
+- One question per decision, with the reasoning written so you can answer without opening the session.
+- Ask before choices that are hard to reverse, that spend money, that touch production or user data, or that come down to taste.
+- Never ask what reading more code would answer, and never use the queue for status updates.
+- Keep the ask correct: if the facts change, edit the open question in place, and withdraw it if it no longer matters. A withdrawn question shows as withdrawn in the conversation.

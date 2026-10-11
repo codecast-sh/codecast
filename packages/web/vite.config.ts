@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import { updatePromptVite } from "../../platform/packages/update-prompt/src/build";
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
+import { contentOnlyHmrPlugin } from "./plugins/contentOnlyHmr";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
 import { laneBootPlugin } from "./plugins/laneBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
@@ -50,6 +51,9 @@ export default defineConfig(({ mode, command }) => ({
     react(),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),
+    // An edit to a file no window has loaded updates the stylesheet that scans
+    // it instead of reloading every window.
+    contentOnlyHmrPlugin(),
     // Restarts the server when node_modules/.vite is deleted underneath it
     // (vendor-platform.sh, manual cache purges); without this every dep not
     // yet served answers 504 until someone restarts by hand.
@@ -247,13 +251,17 @@ export default defineConfig(({ mode, command }) => ({
             return "highlight";
           }
 
-          // Diff viewer is conversation-only.
-          if (
-            id.includes("/node_modules/diff/") ||
-            id.includes("/node_modules/diff-match-patch/") ||
-            id.includes("/node_modules/react-diff-view/")
-          ) {
+          // Text diffing (jsdiff), which the boot path uses.
+          if (id.includes("/node_modules/diff/") || id.includes("/node_modules/diff-match-patch/")) {
             return "diff";
+          }
+
+          // The diff viewer (DiffView on @pierre/diffs), apart from jsdiff so it
+          // does not ride along wherever jsdiff loads. Shiki stays out: its
+          // grammars, themes and WASM engine are dynamic imports that a named
+          // chunk would pull into the static graph (see the NOTE above).
+          if (id.includes("/node_modules/@pierre/diffs/") || id.includes("/node_modules/@pierre/theming/")) {
+            return "pierre";
           }
 
           // Drag-drop only used in queue/board UIs.

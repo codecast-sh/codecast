@@ -73,7 +73,7 @@ describe("every route shell in the main window reaches its undo history or recor
   for (const m of app.matchAll(/<Route(?:\s+path="[^"]*")?\s+element=\{<(\w+)\s*\/>\}>/g)) shells.add(m[1]!);
 
   function sourceOf(name: string): string {
-    const lazy = app.match(new RegExp(`const ${name} = lazy\\(\\(\\) => import\\("\\./([^"]+)"\\)\\)`));
+    const lazy = app.match(new RegExp(`const ${name} = lazy\\(\\(\\) => import\\("\\./([^"]+)"\\)`));
     const named = app.match(new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from "\\./([^"]+)"`));
     const dflt = app.match(new RegExp(`import ${name} from "\\./([^"]+)"`));
     const rel = lazy?.[1] ?? named?.[1] ?? dflt?.[1];
