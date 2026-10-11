@@ -11,6 +11,7 @@ import {
   fetchUsageSnapshot,
   isLivePollOverdue,
   isLiveUsageFresh,
+  isOrgAccessRefusal,
   markLoginExpired,
   noteActiveAccount,
   parseProfile,
@@ -22,6 +23,7 @@ import {
   refreshActiveCredential,
   refreshProfileCredential,
   resnapshotActiveProfile,
+  setAccessRefused,
   usageCachePath,
   type CcProfile,
   type CcUsageSnapshot,
@@ -228,9 +230,12 @@ export async function refreshUsageSnapshots(
         delete retries[key]; // recovered — the next failure starts at 30s again
         retriesChanged = true;
       }
+      setAccessRefused(key, null); // the organization lets it in again
     } catch (err) {
       retries[key] = nextUsageRetry(retries[key], err, now);
       retriesChanged = true;
+      // Keeps being probed on the backoff, so the stamp clears on its own.
+      if (isOrgAccessRefusal(err)) setAccessRefused(key, now);
       summary.failed.push({ name: job.label, reason: err instanceof Error ? err.message : String(err) });
     }
   }
