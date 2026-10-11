@@ -16,6 +16,7 @@ import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession } from "./types";
 import { SPREAD_CEILING, assignDestinations, loadShift } from "../../lib/resourceOffload";
+import { Button } from "../ui/button";
 
 const movable = (r: OffloadCandidate["perDestination"][string] | undefined) => r?.readiness === "ready" || r?.readiness === "preflight_required";
 
@@ -363,15 +364,17 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
               <ul className="mt-1 list-disc space-y-0.5 pl-5">{toConfirm.map((p) => <li key={p}>{p}</li>)}</ul>
             </details>
           )}
-          <button
+          <Button
             type="button"
+            variant="cyan"
+            size="lg"
             disabled={!!moveBlocked}
             title={moveBlocked}
             onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
-            className="sol-btn-solid w-full rounded-xl bg-sol-cyan px-4 py-2.5 text-[14px] font-semibold text-sol-bg disabled:cursor-not-allowed disabled:opacity-40"
+            className="w-full rounded-lg disabled:pointer-events-auto disabled:cursor-not-allowed"
           >
             {toConfirm.length > 0 && going.length > 0 ? "Confirm and move" : "Move"} {going.length > 0 ? plural(going.length, "session") : "sessions"}
-          </button>
+          </Button>
           {moveBlocked && off && <div className="text-center text-[10px] text-sol-text-dim">{off}</div>}
         </footer>
       )}
