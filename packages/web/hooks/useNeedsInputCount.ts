@@ -53,9 +53,9 @@ export function useWaitingOnPerson(enabled = true): readonly PlacedInbox["needsI
 }
 
 // Hosted mode's finished results the person has not read yet: the rail's New
-// section (hostedStatusSections), counted over the same placement and scope,
-// for the Inbox row and the tab title. Zero outside hosted mode's scope.
-export function useNewResultsCount(enabled = true): number {
+// section (hostedStatusSections), over the same placement and scope, newest
+// first, for the phone home's New list. Empty outside hosted mode's scope.
+export function useNewResults(enabled = true): readonly PlacedInbox["done"][number][] {
   const placed = useMinePlacement(enabled);
   const s = useTrackedStore([
     (st) => assistantScopeOnly(st.clientState.ui),
@@ -64,11 +64,18 @@ export function useNewResultsCount(enabled = true): number {
   const only = assistantScopeOnly(s.clientState.ui);
   const unreadSig = sessionUnreadWakeSig(s);
   return useMemo(() => {
-    if (!placed || !only) return 0;
+    if (!placed || !only) return [];
     const unread = sessionUnreadMap(s);
-    return withinScope([...placed.done, ...placed.dormant], only, bySessionAgent).filter((row) => unread[row._id]).length;
+    return withinScope([...placed.done, ...placed.dormant], only, bySessionAgent)
+      .filter((row) => unread[row._id])
+      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placed, only, unreadSig]);
+}
+
+// Their count, for the Inbox row and the tab title.
+export function useNewResultsCount(enabled = true): number {
+  return useNewResults(enabled).length;
 }
 
 // The mine-scoped placement itself, for a surface that renders more than the

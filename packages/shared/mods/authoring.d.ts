@@ -187,6 +187,13 @@ declare module "codecast-mod" {
     readonly key?: string;
   }
 
+  export type ThemePalette = Partial<Record<
+    | "bg" | "bg-alt" | "card" | "border" | "text" | "text-muted" | "text-dim" | "link"
+    | "red" | "orange" | "amber" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta"
+    | "font-ui" | "font-mono",
+    string
+  >>;
+
   export type Manifest = {
     name: string; title?: string; description?: string; version?: string; icon?: string; main?: string;
     permissions?: { read?: Collection[] | "*"; write?: ("tasks" | "sessions" | "docs" | "clipboard" | "objects")[] | "*"; fetch?: string[] | "*" };
@@ -196,7 +203,13 @@ declare module "codecast-mod" {
     sidebar?: { id: string; title: string }[];
     /** What agents should know to use this mod well: its objects, its fences, when to reach for them. `cast mod guide` prints it to every agent that asks. */
     agents?: string;
-    /** The local half: a module the daemon runs on machines where you approved it (cast mod approve). */
+    /**
+     * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
+     * value per token for light and/or dark; a token left out keeps codecast's own.
+     * Accents also recolor every Tailwind scale of their hue, and bg/text the grays.
+     */
+    themes?: { id: string; title: string; light?: ThemePalette; dark?: ThemePalette }[];
+    /** The local half: a module the daemon runs on each of your machines (cast mod revoke stops it on one). */
     local?: { main: string; description?: string };
     /**
      * New kinds of first-class objects. Each gets `<prefix>-<n>` short ids that render as live pills
@@ -225,21 +238,34 @@ declare module "codecast-mod" {
   /** Theme tokens: an accent name maps to codecast's palette. */
   export type Tone = "default" | "muted" | "dim" | "blue" | "green" | "yellow" | "red" | "magenta" | "cyan" | "orange" | "violet";
   type Space = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 | 12;
+  /**
+   * Your own styling, for what the props do not cover: one edge's border, a radius, letter spacing, uppercase,
+   * opacity, min and max sizes, and the rest of the box and type properties. Colours come from the theme: a
+   * --sol-* variable ("var(--sol-blue)"), a color-mix of them, transparent or currentColor. A declaration that
+   * uses anything else (a hex, rgb(), a named colour, url()) is dropped, so the mod follows every theme.
+   */
+  type Style = Record<string, string | number>;
   type Layout = Children & {
     gap?: Space; pad?: Space; padX?: Space; padY?: Space; align?: "start" | "center" | "end" | "stretch" | "baseline";
     justify?: "start" | "center" | "end" | "between" | "around"; wrap?: boolean; grow?: boolean; width?: number | string;
     height?: number | string; maxWidth?: number | string; scroll?: boolean; border?: boolean; rounded?: boolean;
-    bg?: "card" | "alt" | "none" | Tone; tone?: Tone; onPress?: () => unknown; tip?: string;
+    bg?: "card" | "alt" | "none" | Tone; tone?: Tone; onPress?: () => unknown; tip?: string; style?: Style;
   };
 
   export const Box: (p: Layout & { direction?: "row" | "column" }) => Element;
   export const Row: (p: Layout) => Element;
   export const Column: (p: Layout) => Element;
+  /** Without `columns`, as many columns of at least `min` px (180) as fit, stretched to fill the row. */
   export const Grid: (p: Layout & { columns?: number | string; min?: number }) => Element;
+  /**
+   * A quiet panel (the alternate surface and a hairline, like a cast-canvas block); `bg` and `tone` change it.
+   * Returned as the whole of a fence, it is the block itself: its title and actions sit in the block's header.
+   */
   export const Card: (p: Layout & { title?: string; subtitle?: string; actions?: Node }) => Element;
   /** `grow` takes the free space in a Row (as on layouts). */
-  export const Text: (p: Children & { tone?: Tone; size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl"; weight?: "normal" | "medium" | "semibold" | "bold"; mono?: boolean; italic?: boolean; truncate?: boolean; lines?: number; align?: "left" | "center" | "right"; grow?: boolean; tip?: string }) => Element;
-  export const Heading: (p: Children & { level?: 1 | 2 | 3; tone?: Tone }) => Element;
+  export const Text: (p: Children & { tone?: Tone; size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl"; weight?: "normal" | "medium" | "semibold" | "bold"; mono?: boolean; italic?: boolean; truncate?: boolean; lines?: number; align?: "left" | "center" | "right"; grow?: boolean; tip?: string; style?: Style }) => Element;
+  export const Heading: (p: Children & { level?: 1 | 2 | 3; tone?: Tone; style?: Style }) => Element;
+  /** Quiet (a hairline) by default; "ghost" drops the hairline; only "primary" and "danger" fill. */
   export const Button: (p: Children & { label?: string; onPress?: () => unknown; variant?: "primary" | "secondary" | "ghost" | "danger"; size?: "sm" | "md"; icon?: string; disabled?: boolean; tip?: string }) => Element;
   export const Input: (p: { value?: string; placeholder?: string; onChange?: (value: string) => unknown; onSubmit?: (value: string) => unknown; autoFocus?: boolean; mono?: boolean; width?: number | string }) => Element;
   export const TextArea: (p: { value?: string; placeholder?: string; rows?: number; onChange?: (value: string) => unknown; onSubmit?: (value: string) => unknown }) => Element;
@@ -260,8 +286,12 @@ declare module "codecast-mod" {
   export const Chart: (p: { spec: Record<string, unknown>; height?: number }) => Element;
   /** Markdown drawn the way messages are: short ids become live pills. */
   export const Markdown: (p: { text: string; size?: "sm" | "md" }) => Element;
-  /** Raw HTML and SVG, sanitized and themed like a cast-canvas block (no scripts). */
-  export const Canvas: (p: { html: string; height?: number }) => Element;
+  /**
+   * Your own HTML and SVG, sanitized and themed like a cast-canvas block (no scripts; style it with --sol-*
+   * variables). Interactive through names: an element with data-press="save" calls on.save with its other
+   * data-* values; an input or select with data-change="pick" calls on.pick with { value, ...data }.
+   */
+  export const Canvas: (p: { html: string; height?: number; on?: Record<string, (data: Record<string, string>) => unknown> }) => Element;
   export const Code: (p: { code: string; lang?: string; wrap?: boolean; maxHeight?: number }) => Element;
   export const Progress: (p: { value: number; max?: number; tone?: Tone; label?: string }) => Element;
   export const Divider: (p: { label?: string }) => Element;
@@ -280,13 +310,14 @@ declare module "codecast-mod" {
   export const Avatar: (p: { name?: string; src?: string; size?: number }) => Element;
   export const Sparkline: (p: { values: number[]; tone?: Tone; height?: number; width?: number }) => Element;
 
-  export const Fragment: string;
+  /** What `<>...</>` compiles to: its children, with no element of its own. */
+  export const Fragment: (p: Children) => Element;
   export function h(type: any, props: any, ...children: any[]): any;
 }
 
 // The local half: `import { type LocalRegister } from "codecast-mod/local"`.
 // It runs in the codecast daemon on your machine with that machine's access
-// (node:fs, processes, network), at a version you approved there.
+// (node:fs, processes, network), on each of your machines where it is on.
 declare module "codecast-mod/local" {
   export type RunResult = { code: number; stdout: string; stderr: string };
   export interface LocalApi {
