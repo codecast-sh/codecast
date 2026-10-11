@@ -2,10 +2,10 @@
   display: flex; align-items: center; gap: 8px; padding: 0 12px 0 18px;
   font: 400 13.5px/1.3 var(--ui); white-space: nowrap; overflow: hidden;
 }
-.title { flex: none; font: 650 14.5px/1.2 var(--voice); font-variation-settings: var(--voice-axes); }
+.title { flex: none; font: 650 14.5px/1.2 var(--ui); }
 .live { color: var(--live); }
 .name { flex: none; font-weight: 650; }
-.clock { flex: none; font: var(--t-mono); font-variation-settings: var(--mono-axes); font-feature-settings: "tnum" 1; color: var(--ink-3); }
+.clock { flex: none; font: var(--t-mono); font-feature-settings: "tnum" 1; color: var(--ink-3); }
 .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); animation: global(fade-in) var(--t-quick) var(--ease-out); }
 .action { flex: none; height: 32px; }
 .action svg { width: 14px; height: 14px; }
