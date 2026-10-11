@@ -44,6 +44,12 @@ the world to a held fix, and lays the data over it.
   through"; outcomes live in the mark, never in the count). An empty node says
   "empty", an end with none yet says "none yet". Each edge's width is the
   number of items that crossed it in the window.
+- **How quality is going, first.** Under the map's controls one sentence
+  says the line's three numbers over the same window, in words (the-line-model.md
+  LM8; `lineMetricsWords.ts` over `lineMetrics.ts`): expectation breaks a
+  day, the share of new signals that joined a cause the line already knows,
+  and how many of the fixes whose watch ended held. A number with nothing to
+  count says so ("no watches ended yet") rather than showing zero.
 - **Marks say what is wrong in words.** A node with stuck items (past its
   usual time), failures, a silent finder, or a queue that does not move is
   marked, tinted, and its mark says why in a few words with the full sentence
@@ -76,7 +82,10 @@ back to keep the selected node and its neighbours in view. One shape for all:
   nothing starts (LX2), followed by the role's admission switch and its slots,
   edited in place on the role (admission belongs to the role whose area holds
   the project, not to the profile), and "Start the top cause" when the queue
-  is stalled.
+  is stalled. The switch is the line's own start switch (learning-loop.md LL5:
+  `caps.line_on` beside `caps.cards`, off until a person turns it on, and only
+  on while the role's own switch is); it says how many problems turning it on
+  would start. The project's Line tab shows the same control above its map.
 - **Definition**: what this node is and every value that shapes it (a
   finder's declaration, a station's prompt, script and timeout, a command, a
   cap, the watch length, the expectations), each editable in place (LX5). A
@@ -149,13 +158,33 @@ with category `line`, its subject the node it names (`line:station:prove`,
 `line:finder:agentwatch`, `line:profile:watch_days`, or `line:whole`), the
 person's words as its first signal, and any draft they wrote attached for the
 agent to weigh. The composer lists the causes already filed on that node. The
-line runs it like any change: ground may choose the `line` category, implement
-edits the line's files, prove shows the problem on recorded runs where it can,
-verify routes it to eval, and eval replays the changed station on recorded
-inputs when the profile has an eval command for stations; otherwise the card
-says the change is unscored. The card shows the diff, Ship lands it in the
-repo, and the line republishes. The line changes itself under the same rules
-as everything else.
+line runs it like any change, with its own prove and build stations:
+
+- **Ground** sets category `line` and goal `line`, the line's own health (its
+  three numbers, the-line-model.md LM8, and every station doing its job),
+  which every goals brief offers beside the product's goals
+  (the-line-end-to-end.md LE5). A change to the line never serves a product
+  goal, and never parks as serving none.
+- **Prove line** (`line/prove_line.md`) names the recorded runs where the
+  named part did what the cause describes, in `$run_dir/line-proof.json`:
+  per run its task, id, station, and the station's status, outcome or the
+  run's fail reason as the records hold them. When the line's files can be
+  checked directly (a graph's routing, a profile value, a script), it also
+  leaves a failing test as `repro.sh`.
+- **Red** checks every claim against the run records (`cast line
+  proof-check`, `cli/src/lineProof.ts`) and fails a proof that names a run the
+  line never recorded, or a status, outcome or reason the record does not
+  hold; a `repro.sh` must also fail on the base. A comment is never proof.
+- **Implement line** (`line/implement_line.md`) edits the line's own files;
+  every way back to the builder (checks failed, still red, eval failed,
+  review changes, Revise, a rebase conflict) returns a line cause there.
+- **Green** turns the checked runs and the test into the card's proof, red
+  before and green after; a station prompt change with no test has no proof
+  to rerun, and eval scores it on that station's eval surface (`ground` and
+  `card-write` have one), else the card says it is unscored.
+
+The card shows the diff, Ship lands it in the repo, and the line republishes.
+The line changes itself under the same rules as everything else.
 
 ## LX7. Sources back to their origin
 
