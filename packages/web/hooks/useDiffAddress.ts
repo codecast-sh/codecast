@@ -13,6 +13,7 @@ import type { DiffFlow } from "../components/FileDiffLayout";
 import { useRepoLocation } from "../components/repo/useRepoFamily";
 import { formatDiffHash, parseDiffHash } from "../lib/prView";
 import { type DiffLineAnchor } from "../lib/patchParser";
+import { diffLineElements, findDiffLine } from "../components/diff/pierre";
 import { toStandaloneHref } from "../lib/repoView";
 import { sharePageUrl } from "../lib/utils";
 import { copyText } from "../lib/copyText";
@@ -91,24 +92,27 @@ export function useDiffAddress({
       quietHash.current = null;
       return;
     }
-    const lineId = target.anchor
-      ? formatDiffHash({ file: target.file, anchor: { side: target.anchor.side, lineNumber: target.anchor.lineNumber } }).slice(1)
-      : null;
+    const anchor = target.anchor;
     const fileId = formatDiffHash({ file: target.file }).slice(1);
+    // The line lives inside the file card's diff; until that is drawn, the
+    // card itself is the target.
+    const isLine = (el: HTMLElement) => el.matches("[data-line]");
     return landOn(
       () => {
         const inner = rootRef.current;
         return inner?.closest<HTMLElement>("[data-main-scroll]") ?? inner;
       },
-      (root) => (lineId && root.querySelector<HTMLElement>(`[id="${CSS.escape(lineId)}"]`))
-        || root.querySelector<HTMLElement>(`[id="${CSS.escape(fileId)}"]`),
+      (root) => {
+        const card = root.querySelector<HTMLElement>(`[id="${CSS.escape(fileId)}"]`);
+        return (anchor && card && findDiffLine(card, anchor)) || card;
+      },
       // A line sits a third of the way down, with the lines before it in view
       // for context; a file starts right under the sticky chrome. A line not
       // on screen yet (its card still arriving) has not landed.
-      (el, root) => (lineId && el.id === lineId ? Math.max(stickyTop + 80, root.clientHeight / 3) : stickyTop + 12),
+      (el, root) => (anchor && isLine(el) ? Math.max(stickyTop + 80, root.clientHeight / 3) : stickyTop + 12),
       // Once the file's rows are drawn and the line is not among them (it
       // sits in an unchanged stretch the diff leaves out), it is not coming.
-      (el) => !lineId || el.id === lineId || !!el.querySelector(".cc-diff-target"),
+      (el) => !anchor || isLine(el) || diffLineElements(el).length > 0,
     );
   }, [ready, here, loc.hash]);
 
@@ -134,7 +138,6 @@ export function useDiffAddress({
   const flow: DiffFlow = {
     stickyTop,
     fileId: (path) => formatDiffHash({ file: path }).slice(1),
-    rowId: (path, anchor) => formatDiffHash({ file: path, anchor: { side: anchor.side, lineNumber: anchor.lineNumber } }).slice(1),
     fileAnchorHref: (path) => diffHref(formatDiffHash({ file: path })),
     lineHref: (path, anchor) => diffHref(formatDiffHash({ file: path, anchor })),
     shareUrl,
