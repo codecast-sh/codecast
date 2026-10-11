@@ -22,7 +22,9 @@ export function useSyncSignals(workspace?: string | null) {
   return useSyncCollection("signals", api.signals.webList, queryArgs as any);
 }
 
-const signalSig = (s: LineSignal) => `${s.created_at}|${s.task_id}|${s.reopened ? 1 : 0}`;
+// The fields readers branch on: a finding's judge and where its review stands
+// (learning-loop.md LL11) change after it lands, and the problem page shows both.
+const signalSig = (s: LineSignal) => `${s.created_at}|${s.task_id}|${s.reopened ? 1 : 0}|${s.judge ?? ""}|${s.judge_review?.state ?? ""}|${s.judge_review?.waiting_on ?? ""}`;
 
 /** Reader: a workspace's signals out of the store; the active one unless
  *  `workspace` names another. */
