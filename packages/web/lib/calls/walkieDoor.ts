@@ -92,6 +92,12 @@ const WINDOW_KEY = "cc.walkie.window.";
 /** A record older than this belongs to a window that closed without saying so
  *  (a crash, a killed tab). Three ticks of the poll below. */
 const STALE_MS = 60_000;
+/** A record this old is deleted when read. pagehide removes a window's own key,
+ *  but a crash, a killed tab or a tab closed over the debugger never gets
+ *  there, and their keys piled up (75 on one machine, 2026-10-09). A live
+ *  window restamps at least once a minute even throttled in the background, and
+ *  one deleted by mistake writes itself back on its next tick. */
+const PRUNE_MS = 10 * 60_000;
 /** How often a window restamps itself, and how often the idle answer is
  *  re-read. Coarse on purpose: the question is a three minute one. */
 const TICK_MS = 20_000;
@@ -167,14 +173,18 @@ let osIdleMs: number | null = null;
 let lastWrite = 0;
 const watchers = new Set<() => void>();
 
-function readWindows(): DoorWindow[] {
+export function readWindows(now = Date.now()): DoorWindow[] {
   const out: DoorWindow[] = [];
+  const dead: string[] = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key || !key.startsWith(WINDOW_KEY)) continue;
-      const row = JSON.parse(localStorage.getItem(key) || "null");
-      if (row && typeof row.aliveAt === "number") {
+      let row: { aliveAt?: unknown; inputAt?: unknown; focusedAt?: unknown } | null = null;
+      try { row = JSON.parse(localStorage.getItem(key) || "null"); } catch { /* unreadable: pruned below */ }
+      if (!row || typeof row.aliveAt !== "number" || now - row.aliveAt > PRUNE_MS) {
+        dead.push(key);
+      } else {
         out.push({
           id: key.slice(WINDOW_KEY.length),
           inputAt: Number(row.inputAt) || 0,
@@ -183,6 +193,8 @@ function readWindows(): DoorWindow[] {
         });
       }
     }
+    // Removed after the scan: deleting while walking by index skips keys.
+    for (const key of dead) localStorage.removeItem(key);
   } catch {
     // No storage (private mode, a test environment). One window is then all
     // this app can see, which is the answer it had before any of this existed.
@@ -214,7 +226,7 @@ function writeSelf(now: number): void {
  */
 function compute(now: number): MachineDoor {
   const local = Math.max(getLastDesktopActivityAt(), focusedAt);
-  const shared = Math.max(local, machineInputAt(readWindows(), now));
+  const shared = Math.max(local, machineInputAt(readWindows(now), now));
   const inPageIdle = shared > 0 ? now - shared : Number.MAX_SAFE_INTEGER;
   const idleMs = Math.min(inPageIdle, osIdleMs ?? Number.MAX_SAFE_INTEGER);
   const leader = isElectron() ? ownsTheDesktop() : ownsTheBrowser(now);
@@ -237,7 +249,7 @@ function ownsTheDesktop(): boolean {
 }
 
 function ownsTheBrowser(now: number): boolean {
-  const windows = readWindows();
+  const windows = readWindows(now);
   // A window that cannot write its own record cannot be outvoted by one that
   // can: with no storage every window believes it is alone, which is what the
   // walkie did before the election existed.

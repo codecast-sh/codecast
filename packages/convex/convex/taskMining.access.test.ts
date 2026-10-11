@@ -32,6 +32,17 @@ test("an explicit task assignee can read an owner-only task", async () => {
   expect(result.linked_conversations).toEqual([]);
 });
 
+test("an assignee of an owner-only task receives none of the owner's graph tasks", async () => {
+  const theirs = { user_id: "other", workspace: "user:other" };
+  const ctx = context("other", { assignee: "viewer", blocked_by: ["ct-2"], related: ["ct-3"] });
+  await ctx.db.insert("tasks", { _id: "task2", short_id: "ct-2", status: "open", title: "Private blocker", description: "secret plan", ...theirs });
+  await ctx.db.insert("tasks", { _id: "task3", short_id: "ct-3", status: "open", title: "Private related", ...theirs });
+  const result = await (webGetTaskDetail as any)._handler(ctx, { id: "ct-1" });
+  expect(result._id).toBe("task1");
+  expect(result.graph_tasks).toEqual([]);
+  expect(result.graph_missing).toEqual([]);
+});
+
 test("team routing does not grant access to a private workspace task", async () => {
   expect(await (webGetTaskDetail as any)._handler(context("other", { team_id: "team1" }, {}, true), { id: "ct-1" })).toBeNull();
 });
@@ -70,4 +81,26 @@ test("the owner retains readable linked-session summaries and insights", async (
   const result = await (webGetTaskDetail as any)._handler(ctx, { id: "ct-1" });
   expect(result.linked_conversations[0].title).toBe("Synthetic private title");
   expect(result.source_insight._id).toBe("insight1");
+});
+
+test("the detail ships the tasks its graph names in its own workspace, and none from another", async () => {
+  const mine = { user_id: "viewer", workspace: "user:viewer" };
+  const ctx = {
+    auth: { getUserIdentity: async () => ({ subject: "viewer|session" }) },
+    db: makeFakeDb({
+      users: [{ _id: "viewer" }, { _id: "other" }],
+      tasks: [
+        { _id: "task1", short_id: "ct-1", ...mine, blocked_by: ["ct-2", "ct-3", "ct-404"], found_during: "ct-4", superseded_by: "ct-1" },
+        { _id: "task2", short_id: "ct-2", status: "done", ...mine },
+        { _id: "task3", short_id: "ct-3", status: "open", user_id: "other", workspace: "user:other" },
+        { _id: "task4", short_id: "ct-4", status: "in_progress", ...mine },
+      ],
+    }),
+  } as any;
+  const result = await (webGetTaskDetail as any)._handler(ctx, { id: "ct-1" });
+  // ct-3 is another person's private task: it stays unknown (and blocks) rather
+  // than reporting whether it finished. ct-404 names nothing, so it ships as
+  // missing (not found, never blocking); a self-link is skipped.
+  expect(result.graph_tasks.map((t: any) => t.short_id).sort()).toEqual(["ct-2", "ct-4"]);
+  expect(result.graph_missing).toEqual(["ct-404"]);
 });
