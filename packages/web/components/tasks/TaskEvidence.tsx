@@ -101,7 +101,10 @@ function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
   // pages, docs, images and the PR. Either paints alone.
   const files = row?.files_changed ?? task.files_changed ?? [];
   const verification = row?.verification_evidence ?? task.verification_evidence ?? null;
-  const execution = row?.execution_status ?? task.execution_status ?? null;
+  // A problem's execution status is its last run session's handoff, not the task's state:
+  // "Blocked" beside an open problem contradicts its status, so a problem shows it only while it is blocked.
+  const rawExecution = row?.execution_status ?? task.execution_status ?? null;
+  const execution = (task as { cause?: unknown }).cause && task.status !== "blocked" ? null : rawExecution;
   const verdict = row?.review_verdict ?? task.review_verdict ?? null;
   const stations = row?.stations ?? [];
   const docs = row?.docs ?? [];

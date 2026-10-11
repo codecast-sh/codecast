@@ -29,6 +29,8 @@ export const PRICE_OVERRIDES: Readonly<Record<string, Price>> = {
   "claude-opus-4-8": listPrice(5, 25),
   "claude-sonnet-5-5": listPrice(2, 10),
   "claude-sonnet-5": listPrice(2, 10),
+  // Prompts over 100K tokens bill at $0.50 / $2.50; the server's calls stay under that.
+  "claude-haiku-5-5": listPrice(0.1, 0.5),
   "claude-haiku-4-5": listPrice(1, 5),
 };
 
