@@ -135,9 +135,14 @@ export function buildBreadcrumbs(pathname: string, lookups: BreadcrumbLookups = 
 
   switch (head) {
     case "projects":
-      if (rest[0]) push(rest[0], "project", lookups.project, `/projects/${rest[0]}`);
-      // A task opened inside a project extends that project's trail — the whole
-      // point of the nested route: you are in a task, inside this project.
+      // A project's board names itself in its own header, and the project
+      // list lives on the Org screen now, so the trail starts at the project:
+      // the board alone is one crumb (no bar), and a task opened inside it
+      // reads Project > task.
+      if (rest[0]) {
+        crumbs.length = 0;
+        push(rest[0], "project", lookups.project, `/projects/${rest[0]}`);
+      }
       if (rest[1]) push(rest[1], "task", lookups.task);
       break;
     case "tasks":

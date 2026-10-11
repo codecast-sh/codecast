@@ -58,6 +58,24 @@ export interface SourceAddOptions {
   [configFlag: string]: string | boolean | undefined;
 }
 
+/**
+ * The config settings the flags name, one per SOURCE_CONFIG_FIELDS entry
+ * given. With a provider, a flag for another provider is a visible mistake,
+ * not a setting dropped in silence; without one (`set`), the server checks.
+ */
+export function sourceConfigFromFlags(o: Record<string, unknown>, provider?: SourceProvider): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const field of SOURCE_CONFIG_FIELDS) {
+    const given = o[optionKey(field.flag)];
+    const raw = typeof given === "string" ? given : undefined;
+    const value = field.list ? csv(raw) : raw?.trim() || undefined;
+    if (value === undefined) continue;
+    if (provider && !field.providers.includes(provider)) throw new Error(`--${field.flag} does not apply to a ${provider} source`);
+    config[field.key] = value;
+  }
+  return config;
+}
+
 /** The wire body for `cast sources add`, or the one line that says what is wrong. */
 export function sourceAddBody(providerRaw: string, name: string | undefined, o: SourceAddOptions): Record<string, unknown> {
   const provider = providerRaw.trim().toLowerCase();
@@ -67,16 +85,7 @@ export function sourceAddBody(providerRaw: string, name: string | undefined, o: 
   if (!(ADDABLE_SOURCE_PROVIDERS as readonly string[]).includes(provider)) {
     throw new Error(`Unknown provider "${providerRaw}". Providers: ${ADDABLE_SOURCE_PROVIDERS.join(", ")}`);
   }
-  const config: Record<string, unknown> = {};
-  for (const field of SOURCE_CONFIG_FIELDS) {
-    const given = o[optionKey(field.flag)];
-    const raw = typeof given === "string" ? given : undefined;
-    const value = field.list ? csv(raw) : raw?.trim() || undefined;
-    if (value === undefined) continue;
-    // A flag for another provider is a visible mistake, not a setting dropped in silence.
-    if (!field.providers.includes(provider as SourceProvider)) throw new Error(`--${field.flag} does not apply to a ${provider} source`);
-    config[field.key] = value;
-  }
+  const config = sourceConfigFromFlags(o, provider as SourceProvider);
   return {
     provider,
     name: name?.trim() || provider,
@@ -135,8 +144,8 @@ export function formatSourceDetail(s: SourceRow, now: number = Date.now()): stri
   const lines = sourceHead(s, now);
   if (s.keyed) lines.push(fmt.muted(`  ingest key ${s.key_prefix ?? "?"}… (cast sources key rotate ${s.name} for a new one)`));
   if (s.last_poll_at) lines.push(fmt.muted(`  last poll ${ago(s.last_poll_at, now)}`));
-  if (s.promote?.length) lines.push(fmt.muted(`  promotes ${s.promote.join(", ")} to signals`));
-  if (s.fingerprint_prefix) lines.push(fmt.muted(`  fingerprints as ${s.fingerprint_prefix}:<kind>:<fp>`));
+  if (s.promote?.length) lines.push(fmt.muted(`  promotes ${s.promote.join(", ")} to findings`));
+  if (s.fingerprint_prefix) lines.push(fmt.muted(`  groups by ${s.fingerprint_prefix}:<kind>:<key>`));
   if (s.replay_backfill) lines.push(fmt.muted(`  recordings: ${replayBackfillLine(s.replay_backfill, now)}`));
   for (const [k, v] of Object.entries(s.config ?? {})) lines.push(fmt.muted(`  ${k}: ${Array.isArray(v) ? v.join(", ") : String(v)}`));
   const events = eventNameRows(s.event_names, now);
@@ -195,14 +204,14 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
     .description(`Add a source (${ADDABLE_SOURCE_PROVIDERS.join(", ")}). sdk and http print their ingest key once; sentry, posthog and app read through the workspace's connection, which holds the host, base url and secret (cast integrations connect <provider>)`)
     .argument("<provider>", ADDABLE_SOURCE_PROVIDERS.join(" | "))
     .argument("[name]", "Unique in the workspace; --source filters use it (default: the provider)")
-    .option("--project <ref>", "Project its signals file under (default: the repo profile's [line] project, when --team is the profile's workspace)");
+    .option("--project <ref>", "Project its findings file under (default: the repo profile's [line] project, when --team is the profile's workspace)");
   for (const field of SOURCE_CONFIG_FIELDS) {
     const only = field.providers.length < SOURCE_PROVIDERS.length ? ` (${field.providers.join(", ")})` : "";
     add.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
   }
   add
-    .option("--fingerprint-prefix <prefix>", "Fingerprints become <prefix>:<kind>:<fp>, joining causes a finder files the same way")
-    .option("--promote <transitions>", "Transitions that become signals on the line (default: new, regressed)")
+    .option("--fingerprint-prefix <prefix>", "Group keys become <prefix>:<kind>:<key>, joining problems a finder files the same way")
+    .option("--promote <transitions>", "Transitions that become findings on the line (default: new, regressed)")
     .option("--base-url <url>", "app: where the app answers; connects it with no secret, since codecast signs every request")
     .option("--write <path>", "The codecast.json to record the source in (default: the nearest one up to the checkout root, else the root's)")
     .option("--no-write", "Record nothing in codecast.json")
@@ -265,6 +274,24 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
         emit(o.json, result, () => formatSourceLine(result.source));
       });
   }
+
+  const set = sources
+    .command("set")
+    .description("Change a source's settings; the ones not named stay as they are")
+    .argument("<source>", "Name or src-N");
+  for (const field of SOURCE_CONFIG_FIELDS) {
+    const only = field.providers.length < SOURCE_PROVIDERS.length ? ` (${field.providers.join(", ")})` : "";
+    set.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
+  }
+  set
+    .option(...TEAM_OPTION)
+    .option(...JSON_OPTION)
+    .action(async (ref: string, o: Record<string, unknown> & { team?: string; json?: boolean }) => {
+      const config = sourceConfigFromFlags(o);
+      if (!Object.keys(config).length) fail(`Name a setting to change: ${SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`).join(", ")}`);
+      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, config }, o.team);
+      emit(o.json, result, () => formatSourceLine(result.source));
+    });
 
   sources
     .command("rm")

@@ -52,6 +52,8 @@ interface RunningTask extends TrackedRun {
 interface SavedRuns {
   daemonId: string;
   runs: TrackedRun[];
+  /** Run session uuid -> trigger id, for runs whose conversation may not have synced yet. */
+  sessions?: Record<string, { taskId: string; at: number }>;
 }
 
 function readSavedRuns(file: string): SavedRuns | null {
@@ -68,9 +70,20 @@ function readSavedRuns(file: string): SavedRuns | null {
 // transcript sync creates a run's conversation already stamped as that
 // trigger's run (conversations.createConversation agent_task_id), nested from
 // its first instant rather than a loose card until linkRunConversation lands.
-const liveRunTasks = new Map<string, string>();
+//
+// A run's transcript can sync long after the run ends (tr-1423, 2026-10-09: the
+// daemon was frozen for minutes, the lease lapsed, and the row was created 18
+// minutes later with no stamp, a loose inbox card nobody owned). So an entry
+// outlives its run and the daemon: it is kept on disk until the conversation
+// exists (forgetTriggerRun) or RUN_SESSION_TTL_MS passes.
+const RUN_SESSION_TTL_MS = 48 * 3600_000;
+const liveRunTasks = new Map<string, { taskId: string; at: number }>();
 export function triggerRunTaskId(sessionId: string): string | undefined {
-  return liveRunTasks.get(sessionId);
+  return liveRunTasks.get(sessionId)?.taskId;
+}
+/** The run's conversation exists and carries its stamp; nothing left to remember. */
+export function forgetTriggerRun(sessionId: string): void {
+  liveRunTasks.delete(sessionId);
 }
 
 interface TaskSchedulerConfig {
@@ -245,6 +258,9 @@ export class TaskScheduler {
     const saved = readSavedRuns(this.runsFile);
     this.daemonId = saved?.daemonId ?? crypto.randomUUID();
     this.adoptable = saved?.runs ?? [];
+    for (const [uuid, entry] of Object.entries(saved?.sessions ?? {})) {
+      if (Date.now() - entry.at < RUN_SESSION_TTL_MS) liveRunTasks.set(uuid, entry);
+    }
     this.syncService = syncService;
     this.config = config;
     this.log = (msg, level) => log(`[TaskSched] ${msg}`, level);
@@ -516,7 +532,7 @@ export class TaskScheduler {
     // completed run of a repeating schedule out of the inbox. completeTaskRun
     // backfills the link at run end if every attempt here loses the race.
     if (run.runSessionUuid) {
-      liveRunTasks.set(run.runSessionUuid, run.taskId);
+      liveRunTasks.set(run.runSessionUuid, { taskId: run.taskId, at: Date.now() });
       this.scheduleRunLink(run.taskId, run.runSessionUuid);
     }
   }
@@ -527,6 +543,9 @@ export class TaskScheduler {
     const saved: SavedRuns = {
       daemonId: this.daemonId,
       runs: [...this.running.values()].map(({ heartbeatTimer: _timer, ...run }) => run),
+      sessions: Object.fromEntries(
+        [...liveRunTasks].filter(([, entry]) => Date.now() - entry.at < RUN_SESSION_TTL_MS),
+      ),
     };
     try {
       fs.writeFileSync(this.runsFile, JSON.stringify(saved));
@@ -630,7 +649,6 @@ export class TaskScheduler {
     const entry = this.running.get(taskId);
     if (entry) {
       clearInterval(entry.heartbeatTimer);
-      if (entry.runSessionUuid) liveRunTasks.delete(entry.runSessionUuid);
       this.running.delete(taskId);
       this.saveRuns();
     }

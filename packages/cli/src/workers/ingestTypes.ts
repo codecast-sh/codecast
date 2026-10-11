@@ -44,6 +44,8 @@ export type IngestResult = {
     teamInfo?: { teamName: string; agentName: string };
     planTools?: { name: string; input: Record<string, any>; occurrence: string }[];
     subagent?: { description?: string; agentType?: string };
+    /** A Claude sidechain (subagent) transcript, and the session it runs inside. */
+    sidechain?: { parentSessionId?: string };
     appServerHead?: string; codex?: CodexSessionMetadata; forkRoot?: string;
     completedReview?: boolean; backupAttempted?: boolean;
     title?: string; parentSessionId?: string; agentName?: string;

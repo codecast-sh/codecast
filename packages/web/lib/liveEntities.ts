@@ -238,7 +238,15 @@ export function computePlanProgress(
 // The raw, user-editable fields the store owns authoritatively. When overlaying a
 // live store task onto a server snapshot we copy exactly these (so the snapshot's
 // server-only enrichment — origin_session, session_count, etc. — is preserved).
-const LIVE_TASK_FIELDS = ["status", "priority", "title", "assignee", "labels", "execution_status", "description", "updated_at"] as const;
+// blocked_by and waits carry the task graph, so a plan graph shows a blocker or
+// wait the moment it is edited (task-graph.md TG12).
+const LIVE_TASK_FIELDS = ["status", "priority", "title", "assignee", "labels", "execution_status", "description", "updated_at", "blocked_by", "waits"] as const;
+
+// A list field from the store and the same list from a server snapshot are two
+// arrays even when equal, so lists compare by content: a reference check would
+// rebuild every row on every pass.
+const sameField = (a: unknown, b: unknown) =>
+  a === b || (Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b));
 
 /**
  * Overlay live store tasks onto a server-query snapshot (e.g. plan.tasks), so a
@@ -259,15 +267,16 @@ export function mergeLiveTasks(
     const live = storeTasks[t._id];
     const assignee = live ? live.assignee : t.assignee;
     const assignee_info = resolveAssigneeInfo(assignee, t.assignee_info, teamMembers, currentUser, roles);
-    let changed = !sameAssigneeInfo(assignee_info, t.assignee_info);
-    const merged: any = { ...t };
+    let merged = sameAssigneeInfo(assignee_info, t.assignee_info) ? t : { ...t, assignee_info };
     if (live) {
       for (const f of LIVE_TASK_FIELDS) {
-        if (live[f] !== undefined && live[f] !== t[f]) { merged[f] = live[f]; changed = true; }
+        if (live[f] !== undefined && !sameField(live[f], t[f])) {
+          if (merged === t) merged = { ...t, assignee_info };
+          merged[f] = live[f];
+        }
       }
     }
-    merged.assignee_info = assignee_info;
-    return changed ? merged : t;
+    return merged;
   });
 }
 
@@ -467,7 +476,9 @@ function byShortId(collection: Record<string, any> | undefined | null): Map<stri
   const cached = shortIdIndexes.get(collection);
   if (cached) return cached;
   const index = new Map<string, any>();
-  for (const row of Object.values(collection)) {
+  for (const id in collection) {
+    if (!Object.hasOwn(collection, id)) continue;
+    const row = collection[id];
     const sid = (row as any)?.short_id;
     if (typeof sid === "string") index.set(sid.toLowerCase(), row);
   }
@@ -476,7 +487,7 @@ function byShortId(collection: Record<string, any> | undefined | null): Map<stri
 }
 
 /** Look an id up in a collection by Convex id first, then by short id. */
-function lookup(collection: Record<string, any> | undefined | null, rawId: string): any {
+export function lookup(collection: Record<string, any> | undefined | null, rawId: string): any {
   if (!collection) return undefined;
   return collection[rawId] ?? byShortId(collection)?.get(rawId.toLowerCase());
 }
@@ -509,6 +520,30 @@ export function entityTypeInStore(state: any, convexId: string): EntityType | un
   return undefined;
 }
 
+// The org tree's roles keyed like a collection, memoized on the array's
+// identity (a new tree is a new array) so every role pill shares one index.
+const roleCollections = new WeakMap<object, Record<string, any>>();
+
+function orgRoleInStore(state: any, rawId: string): any {
+  const roles = state.orgTree?.roles;
+  if (!Array.isArray(roles)) return undefined;
+  let byId = roleCollections.get(roles);
+  if (!byId) {
+    byId = Object.fromEntries(roles.map((r: any) => [String(r._id), r]));
+    roleCollections.set(roles, byId);
+  }
+  return lookup(byId, rawId);
+}
+
+/** A teammate as the store holds them, by GitHub handle, username or user
+ *  id: the forms personRefOf writes and the activity profile reads. */
+export function personInStore(state: any, ref: string): any {
+  const members = state?.teamMembers;
+  if (!Array.isArray(members) || !ref) return undefined;
+  const key = ref.replace(/^@/, "").toLowerCase();
+  return members.find((m: any) => String(m?._id) === ref || m?.github_username?.toLowerCase() === key || m?.username?.toLowerCase() === key);
+}
+
 /**
  * The object a reference names, as the local store already knows it — or
  * undefined when the client has never seen it. Sessions resolve by their 7-char
@@ -529,7 +564,14 @@ export function findEntityInStore(
     case "doc":
       return lookup(state.docs, rawId) ?? lookup(mention?.docs, rawId);
     case "project":
+      // By Convex id or `pj-…` short id.
       return lookup(state.projects, rawId);
+    case "role":
+      // The workspace's roles ride the org tree snapshot, by `or-N` or Convex id.
+      return orgRoleInStore(state, rawId);
+    case "person":
+      // A teammate by handle (objectHref's `@name`) or user id.
+      return personInStore(state, rawId);
     case "initiative":
       // The workspace's initiatives are one snapshot, so `in-N` names a row
       // the client already holds.
