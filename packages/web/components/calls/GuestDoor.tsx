@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState, type ReactNode } from "react";
-import { Check, Copy, Link2, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
+import { Check, Copy, DoorOpen, Globe, Link2, MessageSquareOff, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -15,6 +15,7 @@ import { useGuestDoor } from "../../hooks/useGuestDoor";
 import { GUEST_LINK_TTL_CHOICES, guestLinkExpiry, meetingTitle } from "../../lib/calls/roomGuests";
 import { firstName } from "./speakers";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
+import { Button } from "../ui/button";
 
 // THE ROOM'S SIDE OF A GUEST (callGuests.ts has the rules).
 //
@@ -208,6 +209,12 @@ export function GuestInvite({
   );
 }
 
+const GUEST_FACTS = [
+  { icon: Globe, text: "Joins in a browser, no account" },
+  { icon: DoorOpen, text: "Someone in the call lets them in" },
+  { icon: MessageSquareOff, text: "Sees and hears the call, not its chat" },
+];
+
 function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () => void }) {
   const door = useGuestDoor();
   const now = useCoarseNow(30_000);
@@ -267,25 +274,24 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
 
   return (
     <>
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sol-yellow/15 text-sol-yellow">
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sol-yellow/15 text-sol-yellow">
           <Link2 className="h-3.5 w-3.5" />
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium leading-snug">Invite someone outside the team</div>
-          <p className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">
-            They join from the link in a browser, no account. Someone in the call lets them in, and they are told first if the call is transcribed or recorded. Guests see and hear the call, not its chat.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="-mr-1 -mt-1 shrink-0 rounded-md p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-          aria-label="Close"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="min-w-0 flex-1 text-[13px] font-medium">Guest link</div>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close" className="-mr-1 text-sol-text-dim">
+          <X />
+        </Button>
       </div>
+      {/* What a guest gets, as facts to scan rather than a paragraph. */}
+      <ul className="mt-2.5 space-y-1 text-[11.5px] text-sol-text-muted">
+        {GUEST_FACTS.map(({ icon: Icon, text }) => (
+          <li key={text} className="flex items-center gap-2">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
+            {text}
+          </li>
+        ))}
+      </ul>
 
       {!ready && links.length === 0 ? (
         <div className="mt-3 h-[74px] animate-pulse rounded-lg bg-sol-bg-highlight/60" />
@@ -303,16 +309,10 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
                   className="min-w-0 flex-1 bg-transparent font-mono text-[11.5px] text-sol-text-secondary outline-none"
                   style={{ fontVariantLigatures: "none" }}
                 />
-                <button
-                  type="button"
-                  onClick={() => void copy(mine.path)}
-                  className={`flex shrink-0 items-center gap-1 rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors ${
-                    copied ? "bg-sol-green/15 text-sol-green" : "bg-sol-yellow/15 text-sol-yellow hover:bg-sol-yellow/25"
-                  }`}
-                >
-                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  {copied ? "copied" : "copy"}
-                </button>
+                <Button size="xs" variant={copied ? "green" : "yellow"} onClick={() => void copy(mine.path)} className="shrink-0">
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
               </div>
               <div className="mt-1.5 flex items-center gap-2 px-0.5 font-mono text-[10.5px] text-sol-text-muted">
                 <span className="min-w-0 truncate">
@@ -326,69 +326,65 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
                     </>
                   )}
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="xs"
                   disabled={!!busy}
                   onClick={() => void revoke(mine.link_id)}
-                  className="ml-auto shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50"
-                  title="Turn this link off. Nobody new can use it; guests already in stay"
+                  className="ml-auto shrink-0 text-sol-text-muted hover:bg-sol-red/10 hover:text-sol-red"
+                  title="Nobody new can use it; guests already in stay"
                 >
-                  {busy === mine.link_id ? "turning off…" : "turn off"}
-                </button>
+                  <Unlink />
+                  {busy === mine.link_id ? "Turning off…" : "Turn off"}
+                </Button>
               </div>
             </>
           )}
           {/* How long the next link stays open: always in sight, because a
-              replacement is a new choice, not the old link's. The row reads
-              as one sentence with its verb at the end ("new link lasts 1 day,
-              replace link"): a duration alone changes nothing until the
-              action on its right is pressed, and the label says so by naming
-              the link it is for, not the one already out. */}
-          <div className={`flex items-center gap-1 px-0.5 ${mine ? "mt-3 border-t border-sol-border/50 pt-2.5" : "mb-2"}`}>
-            <span className="mr-1 font-mono text-[10.5px] text-sol-text-muted">{mine ? "new link lasts" : "link lasts"}</span>
-            {GUEST_LINK_TTL_CHOICES.map((c) => (
-              <button
-                key={c.ms}
-                type="button"
-                onClick={() => setTtl(c.ms)}
-                aria-pressed={ttl === c.ms}
-                className={`rounded-md px-1.5 py-0.5 font-mono text-[10.5px] transition-colors ${
-                  ttl === c.ms ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text"
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-            {mine && (
-              <button
-                type="button"
-                disabled={!!busy}
-                onClick={() => create(true)}
-                className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text disabled:opacity-50"
-                title={`Replace your link with a new one, open for ${ttlLabel}. The old one stops working`}
-              >
-                <RefreshCw className={`h-3 w-3 ${busy === "fresh" ? "animate-spin" : ""}`} />
-                {busy === "fresh" ? "replacing…" : "replace link"}
-              </button>
-            )}
+              replacement is a new choice, not the old link's. */}
+          <div className={`flex items-center gap-2 ${mine ? "mt-3 border-t border-sol-border/50 pt-3" : "mt-3"}`}>
+            <span className="w-14 shrink-0 text-[11px] text-sol-text-dim">{mine ? "New link" : "Expires"}</span>
+            <div role="radiogroup" aria-label="Link lasts" className="flex flex-1 rounded-md bg-sol-bg p-0.5 ring-1 ring-sol-border/60">
+              {GUEST_LINK_TTL_CHOICES.map((c) => (
+                <button
+                  key={c.ms}
+                  type="button"
+                  role="radio"
+                  aria-checked={ttl === c.ms}
+                  onClick={() => setTtl(c.ms)}
+                  className={`flex-1 rounded px-1.5 py-1 text-[11px] transition-colors ${
+                    ttl === c.ms ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
           </div>
-          {!mine && (
-            <button
-              type="button"
+          {mine ? (
+            <Button
+              variant="outline"
+              size="sm"
               disabled={!!busy}
-              onClick={() => create(false)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sol-yellow/90 px-3 py-2 text-[12.5px] font-medium text-sol-base03 transition-colors hover:bg-sol-yellow disabled:opacity-60"
+              onClick={() => create(true)}
+              className="mt-2 w-full"
+              title={`The old link stops working; the new one is open for ${ttlLabel}`}
             >
-              <Link2 className="h-3.5 w-3.5" />
-              {busy === "create" ? "Making a link…" : "Make a link and copy it"}
-            </button>
+              <RefreshCw className={busy === "fresh" ? "animate-spin" : ""} />
+              {busy === "fresh" ? "Replacing…" : "Replace link"}
+            </Button>
+          ) : (
+            <Button variant="yellow" size="sm" disabled={!!busy} onClick={() => create(false)} className="mt-2 w-full">
+              <Link2 />
+              {busy === "create" ? "Making a link…" : "Create and copy link"}
+            </Button>
           )}
           {!mine && copyFailed && (
             <p className="mt-1.5 px-0.5 font-mono text-[10.5px] text-sol-orange">The link was made but not copied. Press copy above.</p>
           )}
           {seenAs && (
-            <p className="mt-2 px-0.5 text-[11px] leading-snug text-sol-text-dim">
-              Guests see this call as <span className="text-sol-text-muted">{seenAs}</span>.
+            <p className="mt-2 truncate text-[11px] text-sol-text-dim">
+              Shown to guests as <span className="text-sol-text-muted">{seenAs}</span>
             </p>
           )}
         </div>
@@ -396,21 +392,22 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
 
       {others.length > 0 && (
         <div className="mt-3 border-t border-sol-border/50 pt-2">
-          <div className="mb-1 px-0.5 font-mono text-[10.5px] text-sol-text-dim">other open links into this call</div>
+          <div className="mb-1 text-[11px] text-sol-text-dim">Other open links</div>
           {others.map((l) => (
             <div key={l.link_id} className="flex items-center gap-2 rounded-md px-0.5 py-1 font-mono text-[11px] text-sol-text-muted">
               <span className="min-w-0 flex-1 truncate">
                 {l.mine ? "your older link" : `${firstName(l.created_by_name)}'s link`} · {guestLinkExpiry(l.expires_at, now)}
                 {l.waiting > 0 && <span className="text-sol-yellow"> · {l.waiting} waiting</span>}
               </span>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 disabled={!!busy}
                 onClick={() => void revoke(l.link_id)}
-                className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50"
+                className="shrink-0 text-sol-text-muted hover:bg-sol-red/10 hover:text-sol-red"
               >
-                {busy === l.link_id ? "turning off…" : "turn off"}
-              </button>
+                {busy === l.link_id ? "Turning off…" : "Turn off"}
+              </Button>
             </div>
           ))}
         </div>
