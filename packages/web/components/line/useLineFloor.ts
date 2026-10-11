@@ -1,8 +1,7 @@
 "use client";
-// The rows every line surface reads, and the line the viewer has chosen: the
-// /line flow and /line/settings mount the same feeders, count the same
-// roll-up and share the switcher's choice (LineProjects useLineProject), so
-// switching pages keeps the project.
+// The rows every line surface reads: the line app and /line/settings mount
+// the same feeders and count the same roll-up. Which project is in view is the
+// caller's (useLineProjectId reads the address).
 import { useMemo } from "react";
 import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
 import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -13,7 +12,7 @@ import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals"
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useSyncProjectTasks } from "../../hooks/useSyncTasks";
 import { isLineCard, lineRollup, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
-import { useLineProject } from "./LineProjects";
+import { useLineAdmissions } from "./map/useLineAdmission";
 
 const RUNS_FEED = { limit: 200 };
 
@@ -51,10 +50,8 @@ export function useLineFloor(project?: string | null, workspace?: string | null)
   const cards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: isLineCard as (d: SessionDecisionItem) => boolean, sig: cardSig });
   const projects = useWorkspaceCollection<LineProject>("projects", projectSig, workspace);
 
-  // One project's line (LP1): the roll-up counts every line, the switcher
-  // picks one.
   const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
-  const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
-  const line = useLineProject(rollup, projects, project);
-  return { now, tasks, projects, lineRows, rollup, line };
+  const admissions = useLineAdmissions(projects);
+  const rollup = useMemo(() => lineRollup(lineRows, projects, now, undefined, admissions), [lineRows, projects, now, admissions]);
+  return { now, tasks, projects, lineRows, rollup, admissions };
 }
