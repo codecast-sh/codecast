@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {execFile} from 'node:child_process';
+import {execFile} from '../../proc.js';
 import {promisify} from 'node:util';
 import {loadScaledMs} from '../../test-helpers/machineLoad.js';
 import {pollUntil} from '../../test-helpers/pollUntil.js';

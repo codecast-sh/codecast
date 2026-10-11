@@ -224,6 +224,19 @@ describe("F2 org.scopeFeed", () => {
     expect(rows.map((r) => r.short_id)).toEqual(["jx3"]);
   });
 
+  test("ephemeral bookkeeping is no task of the scope's, but the session working it stays in scope (TG9)", async () => {
+    const db = fixtures({
+      conversations: [
+        { _id: "conversations_s4", user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Checklist", short_id: "jx4", project_path: "/elsewhere", active_task_id: "tasks_t4", updated_at: NOW - H / 2, created_at: 1, message_count: 1 },
+      ],
+    });
+    await db.insert("tasks", { _id: "tasks_t4", user_id: ME, team_id: TEAM, workspace: WS, plan_id: PLAN, parent_id: T2, short_id: "ct-4", title: "probe", task_type: "task", status: "open", priority: "medium", ephemeral: true, created_at: 1, updated_at: NOW - H });
+    const resolved = (await resolveScope(ctxOf(db), ME as any, { scope: { project_ids: [], plan_ids: [PLAN as any] }, team_id: TEAM }))!;
+    expect(resolved.tasks.map((t) => t.short_id)).toEqual(["ct-2"]);
+    const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["task", "session"] });
+    expect(rows.map((r) => r.short_id).sort()).toEqual(["ct-2", "jx4"]);
+  });
+
   // Goals in a scope (initiatives-projects-role-page.md I5): what the owner
   // said, the moments on the record, and the calls that name the goal.
   const G = "initiatives_g1";
