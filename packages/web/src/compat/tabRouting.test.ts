@@ -22,10 +22,14 @@ describe("isNonTabRoute", () => {
   it("treats dashboard routes as inside the tab shell", () => {
     for (const p of [
       "/inbox", "/feed", "/conversation/abc", "/tasks", "/tasks/x",
-      "/docs", "/docs/y", "/plans", "/projects", "/team", "/cli",
+      "/docs", "/docs/y", "/plans", "/projects/pj-x", "/team/someone", "/cli",
     ]) {
       expect(isNonTabRoute(p)).toBe(false);
     }
+  });
+
+  it("leaves the renamed list pages to the router, which moves them into Org", () => {
+    for (const p of ["/projects", "/team"]) expect(isNonTabRoute(p)).toBe(true);
   });
 
   // Public profiles live at the ROOT as a bare handle (/:username), rendered
