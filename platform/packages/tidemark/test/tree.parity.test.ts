@@ -1,12 +1,12 @@
 /**
  * Parity: the cases of the original activity-tree unit suite, ported
- * unchanged against tree.ts, plus the original cover implementation kept here
- * as a reference oracle so cover(T, budget) is checked to be identical, not
- * merely valid.
+ * unchanged against tree.ts, plus Taelin's rollback push kept here as the
+ * oracle of the merge order, so cover(T, budget) is checked to be identical,
+ * not merely valid.
  */
 import { describe, expect, test, setDefaultTimeout } from 'bun:test';
 
-import { blockChildren, blockKey, blockSpan, cover, pendingMerges, resolveBlocks, type TreeBlock } from '../src/tree';
+import { blockChildren, blockKey, blockSpan, cover, coverSpan, pendingMerges, resolveBlocks, type TreeBlock } from '../src/tree';
 
 // Seeding long histories is slow on a loaded machine; the 5s default is too tight.
 setDefaultTimeout(120_000);
@@ -148,70 +148,90 @@ describe('pendingMerges', () => {
   }, 120_000);
 });
 
-// The original cover, verbatim, as the oracle.
-function refCoverAt(T: number, alpha: number): Array<[number, number]> {
-  let root = 1;
-  while (root < T) root *= 2;
-  const out: Array<[number, number]> = [];
-  const stack: Array<[number, number]> = [[0, root]];
-  while (stack.length > 0) {
-    const [lo, hi] = stack.pop()!;
-    if (lo >= T) continue;
-    const size = hi - lo;
-    if (size > 1 && (hi > T || size > alpha * (T - lo))) {
-      const mid = (lo + hi) / 2;
-      stack.push([mid, hi], [lo, mid]);
-    } else {
-      out.push([lo, hi]);
-    }
-  }
-  return out.sort((a, b) => a[0] - b[0]);
+/**
+ * Taelin's rollback push (rollback_state_list.js, 2022), verbatim but for
+ * `life`, which stays 0 under push alone. Its list, oldest first, holds the
+ * first leaf of each line of a view over the leaves pushed so far.
+ */
+type PushList = { keep: number; state: number; older: PushList } | null;
+function push(state: number, list: PushList): PushList {
+  if (list === null) return { keep: 0, state, older: null };
+  if (list.keep === 0) return { keep: 1, state: list.state, older: list.older };
+  return { keep: 0, state, older: push(list.state, list.older) };
 }
-function refCover(T: number, budget: number): TreeBlock[] {
-  if (T <= 0 || budget <= 0) return [];
-  if (T <= budget) return Array.from({ length: T }, (_, i) => ({ level: 0, index: i }));
-  let lo = 0;
-  let hi = 1;
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    if (refCoverAt(T, mid).length > budget) lo = mid;
-    else hi = mid;
-  }
-  const out = refCoverAt(T, hi);
-  while (out.length < budget) {
-    let at = -1;
-    for (let i = out.length - 1; i >= 0; i--) {
-      if (out[i][1] - out[i][0] > 1) {
-        at = i;
-        break;
-      }
-    }
-    if (at < 0) break;
-    const [a, b] = out[at];
-    const mid = (a + b) / 2;
-    out.splice(at, 1, [a, mid], [mid, b]);
-  }
-  return out.map(([a, b]) => ({ level: Math.log2(b - a), index: a / (b - a) }));
+function starts(list: PushList): number[] {
+  const out: number[] = [];
+  for (let at = list; at; at = at.older) out.push(at.state);
+  return out.reverse();
 }
 
-describe('identical to the original cover', () => {
-  test('cover(T, budget) equals the reference wherever the reference fits its budget', () => {
-    let compared = 0;
-    for (const budget of [8, 16, 32, 96]) {
-      for (const T of [...Array.from({ length: 400 }, (_, i) => i), 1023, 1024, 1025, 4095, 4096, 4097, 65537]) {
-        const ref = refCover(T, budget);
-        if (ref.length > budget) continue; // the reference overflowed; see the next test
-        expect(cover(T, budget)).toEqual(ref);
-        compared++;
-      }
+describe('the merge order is Taelin\'s rollback push', () => {
+  test('with the budget at push\'s length, cover(T) is push\'s list at every step', () => {
+    let list: PushList = null;
+    for (let T = 1; T <= 4096; T++) {
+      list = push(T - 1, list);
+      const want = starts(list);
+      expect(cover(T, want.length).map((b) => blockSpan(b)[0])).toEqual(want);
     }
-    expect(compared).toBeGreaterThan(1500);
   }, 300_000);
 
-  test('at the default budget of 32 the reference fits its budget at every sampled size', () => {
-    for (const T of [1000, 10000, 100003, 262143]) {
-      expect(refCover(T, 32).length).toBeLessThanOrEqual(32);
-      expect(cover(T, 32)).toEqual(refCover(T, 32));
+  test('on any sub-range it is the greedy rule itself: merge the most due sibling pair, oldest on ties', () => {
+    // The rule simulated literally, pair by pair, as the oracle of coverSpan's per-level computation.
+    const greedy = (lo: number, hi: number, budget: number): Array<[number, number]> => {
+      const out: Array<[number, number]> = [];
+      for (let i = lo; i < hi; i++) out.push([i, i + 1]);
+      while (out.length > budget) {
+        let best = -1;
+        let bestDue = -1;
+        for (let k = 0; k + 1 < out.length; k++) {
+          const [a, b] = out[k];
+          const [c, d] = out[k + 1];
+          if (d - c !== b - a || a % (2 * (b - a)) !== 0) continue;
+          const due = (hi - (d - 1)) / (b - a);
+          if (due > bestDue) {
+            bestDue = due;
+            best = k;
+          }
+        }
+        if (best < 0) break;
+        out.splice(best, 2, [out[best][0], out[best + 1][1]]);
+      }
+      return out;
+    };
+    for (let lo = 0; lo < 40; lo += 3) {
+      for (let hi = lo + 1; hi < lo + 130; hi += 7) {
+        for (const budget of [1, 2, 3, 5, 8, 13, 32]) expect(coverSpan(lo, hi, budget).map(blockSpan)).toEqual(greedy(lo, hi, budget));
+      }
+    }
+  }, 300_000);
+
+  test('old lines stay put as T grows: a line ending before the newest quarter almost never changes', () => {
+    for (const budget of [8, 32, 96]) {
+      let churned = 0;
+      let steps = 0;
+      for (let T = 4 * budget; T < 3000; T++) {
+        const next = new Set(cover(T + 1, budget).map(blockKey));
+        churned += cover(T, budget).filter((b) => blockSpan(b)[1] <= T * 0.75 && !next.has(blockKey(b))).length;
+        steps++;
+      }
+      // Measured: 0.07, 0.20 and 0.33 old lines per step at 8, 32 and 96 lines.
+      expect(churned / steps).toBeLessThan(budget / 64 + 0.1);
+    }
+  }, 300_000);
+
+  test('a growing scope rewrites only its recent end: the first changed line sits past the cover\'s middle on average', () => {
+    for (const budget of [8, 32, 96]) {
+      let at = 0;
+      let steps = 0;
+      for (let T = 4 * budget; T < 3000; T++) {
+        const a = cover(T, budget).map(blockKey);
+        const b = cover(T + 1, budget).map(blockKey);
+        let p = 0;
+        while (p < a.length && a[p] === b[p]) p++;
+        at += p / a.length;
+        steps++;
+      }
+      expect(at / steps).toBeGreaterThan(0.5);
     }
   }, 300_000);
 });
