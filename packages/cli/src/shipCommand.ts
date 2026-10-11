@@ -103,6 +103,43 @@ export function registerShipCommand(program: Command, deps: PublishDeps & { chec
         : `${c.green}✓${c.reset} Ship session ${result.short_id} started (cast read ${result.short_id})`);
     });
 
+  ship.command("checkout")
+    .description("Ship everything uncommitted in this shared checkout: commit by session, replay onto upstream in memory, level, check, deploy, push")
+    .option("--dry-run", "Freeze, attribute and write the plan; ship nothing")
+    .option("--plan [file]", "Run a plan written by --dry-run (default: the checkout's .git/codecast/ship-plan.json), as edited")
+    .option("--no-check", "Skip the check and tests (CI still runs)")
+    .option("--no-push", "Commit, replay and level, but push and deploy nothing")
+    .option("--no-deploy", "Push without running [ship.deploy] steps")
+    .option("--no-fetch", "Plan against the upstream ref already on disk")
+    .option("--json", "Machine-readable output")
+    .addHelpText("after", `
+Configure it in .codecast/workspace.toml:
+
+  [ship]
+  mode = "direct"          # push to the default branch; "pr" (default) opens a pull request
+  check = "cast check"     # run in the checkout before anything leaves; "" skips
+  tests = true             # also run the test files the ship changes
+  level = true             # the daemon keeps this checkout level with upstream
+
+  [[ship.deploy]]
+  name = "convex"
+  when = ["packages/convex/**"]
+  run = "packages/convex/deploy.sh"
+  stage = "before_push"    # or "after_push"
+
+The flow for an agent: --dry-run --json, read each group (who wrote it, is it
+mid-turn, what it last said), hold what is half done, fix the messages, then
+--plan. What ships is the tree frozen at --dry-run, whatever changed since.`)
+    .action(async (options: import("./land/shipCheckoutCli.js").CheckoutOptions) => {
+      const { runCheckoutCommand } = await import("./land/shipCheckoutCli.js");
+      try {
+        await runCheckoutCommand(options);
+      } catch (err) {
+        console.error(String((err as Error)?.message ?? err));
+        process.exit(1);
+      }
+    });
+
   ship.command("mark")
     .description("Record that a surface just shipped this commit (a deploy marker on the repository's team)")
     .requiredOption("--surface <name>", "What shipped: backend, web, cli, desktop, or any name your team uses")

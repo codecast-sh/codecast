@@ -43,6 +43,9 @@ const restoreGlobals = replaceGlobals({
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,
   MutationObserver: dom.window.MutationObserver,
+  // useFrameTheme posts the theme to a framed page on the next frame.
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   // Answered: the pane is showing a page, which is the state a gesture
   // inside it comes from.
   fetch: () => Promise.resolve({}),

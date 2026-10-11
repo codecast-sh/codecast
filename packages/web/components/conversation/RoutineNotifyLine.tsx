@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useOsPermission } from "../../hooks/useOsPermissions";
 import { isPermissionActionable, requestOsPermission } from "../../lib/osPermissions";
+import { ROUTINE_NOTIFY_OFF } from "../../lib/hostedApproval";
 
 export function RoutineNotifyLine({ className = "" }: { className?: string }) {
   const { readiness, refresh } = useOsPermission("notifications");
@@ -23,9 +24,7 @@ export function RoutineNotifyLine({ className = "" }: { className?: string }) {
   };
   return (
     <p data-routine-notify={readiness} className={`text-[12.5px] leading-snug text-sol-text-muted ${className}`}>
-      {readiness === "off"
-        ? "Notifications are blocked for Codecast on this device, so each run will only wait in your inbox."
-        : "Notifications are off on this device, so each run will only wait in your inbox."}
+      {ROUTINE_NOTIFY_OFF[readiness]}
       {actionable ? (
         <>
           {" "}
