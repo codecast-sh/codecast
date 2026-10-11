@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
-
 import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { parseRouterReply, routerDecision, routerRequest, rosterText, type RouterRoster } from '../../../../convex/convex/lib/orgRouter';
 import { ownerOf, type LeadRole } from '../../../../shared/contracts/orgLead';
+import { castJson } from '../../adapters/cast';
 import { apiConfig, toConvoMessages } from '../../adapters/convo';
 import { gate, type Captured, type SurfaceImpl } from '../../surface';
 
@@ -31,12 +30,6 @@ export interface RouteLabel {
 }
 
 const REF_FORMS = `route@ takes a fixture or a team and a task, like route@fixture:<case> or route@Union:ct-55017 (the task's title and description are the request; the rule's owner for its project or plan is the expected answer)`;
-
-const castJson = (args: string[]): any => {
-  const r = spawnSync('cast', [...args, '--json'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (r.status !== 0) throw new UsageError(`cast ${args.join(' ')} --json failed: ${(r.stderr || r.stdout || '').trim().split('\n').pop()}`);
-  return JSON.parse(r.stdout);
-};
 
 /** The roster as the CLI's org tree carries it (charter, areas, the standing line, what it holds), plus the areas no role names. */
 export function rosterFromTree(tree: any, projects: any[] = [], plans: any[] = []): { roster: RouterRoster; roles: Array<LeadRole & { handle: string }> } {

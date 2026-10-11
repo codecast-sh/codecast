@@ -2554,6 +2554,12 @@ div.ch-reaction-tip {
   object-fit: cover;
 }
 
+.ch-att-video {
+  max-height: 340px;
+  cursor: default;
+  background: #000;
+}
+
 .ch-att-loading {
   display: block;
   width: 168px;
