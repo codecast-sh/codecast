@@ -3156,7 +3156,9 @@ export const pushReaction = internalAction({
   args: { message_id: v.id("chat_messages"), emoji: v.string(), add: v.boolean() },
   handler: async (ctx, args) => {
     const c = await pushableContext(ctx, args.message_id, { option: "reactions", ours: false });
-    if (!c) return;
+    // The app is not in a person's DM, so Slack answers channel_not_found, and
+    // that answer pauses the whole link. The reaction stays here.
+    if (!c || c.link.kind === "dm") return;
     const name = emojiToShortcode(args.emoji);
     if (!name) return;
     // Always the app's token. The context swaps in the message AUTHOR's own
