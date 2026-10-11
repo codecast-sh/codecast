@@ -3,6 +3,7 @@ import { REFERENCES_SECTION, SNIPPET_CATALOG, type SectionSpec } from "@codecast
 import { findOwnedSections } from "@platform/snippets";
 import { AGENT_SCRUBBED_ENV_VARS } from "../../agentEnv.js";
 import { isCodecastHookCommand } from "../../codecastOwned.js";
+import { PRIVATE_KEY_RE, VENDOR_TOKEN_RE } from "../../secretPatterns.js";
 
 export type MirrorKind =
   | "verbatim"
@@ -183,8 +184,8 @@ export function isExampleSecretValue(value: string, password = false): boolean {
 export function credentialContentReason(bytes: Buffer): string | null {
   const text = portableText(bytes);
   if (text === null) return null;
-  if (/^\s*-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/m.test(text)) return "private key material excluded";
-  if (/\b(?:sk-ant-[A-Za-z0-9_-]{24,}|sk-(?:proj-|or-v1-)?[A-Za-z0-9_-]{24,}|(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{35})\b/.test(text)) return "credential material excluded";
+  if (PRIVATE_KEY_RE.test(text)) return "private key material excluded";
+  if (VENDOR_TOKEN_RE.test(text)) return "credential material excluded";
   const isCredential = (value: unknown, key: string): boolean => typeof value === "string" && value.trim().length > 0
     && !(/(?:file|path|dir|directory|command|cmd|helper|program|script|bin)$/i.test(key) && /^[~/.]/.test(value.trim()))
     && !CREDENTIAL_LABEL_KEY_RE.test(key)
