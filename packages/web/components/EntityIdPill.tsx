@@ -3,7 +3,8 @@ import { repoObjectDeepHref } from "../lib/repoView";
 import { ShortId } from "./ShortId";
 import Link from "next/link";
 import { RoleFace } from "./org/RoleFace";
-import { RoleHoverCard, SessionFace } from "./identity";
+import { RoleHoverCard, RoleHoverContent, SessionFace } from "./identity";
+import { PersonHoverContent } from "./identity/PersonHoverCard";
 import { sessionIdentity } from "../lib/sessionIdentity";
 import { usePersonifyAll } from "../hooks/usePersonifyAll";
 import {
@@ -27,11 +28,14 @@ import {
   ChevronDown,
   Radio,
   Film,
+  Hexagon,
+  UserRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
-import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
+import { GoalHoverContent } from "./initiatives/GoalHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { useHoverCard } from "../hooks/useHoverCard";
+import { HoverCardClose } from "../lib/hoverCardsOff";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
@@ -41,6 +45,7 @@ import {
   parseMessageRefUrl,
   isEntityId,
   entityMentionRegex,
+  bareEntityIdRegex,
   MESSAGE_REF_PREFIX,
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
@@ -96,8 +101,8 @@ import { TimeAgo } from "./tasks/TaskCommentStream";
 import { useRevealRef } from "../lib/revealHost";
 import { RevealOpenLink } from "./ObjectReveal";
 import { ModObjectPill } from "./mods/ModObjectPill";
-import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, replayFacts, sourceFacts } from "./ops/parts";
-import { replayTitle } from "./ops/opsModel";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
+import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 
@@ -660,23 +665,33 @@ function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   return namePill;
 }
 
-export function TextWithMentions({ text }: { text: string }) {
+/** `@[Title id]` mentions drawn as pills. With `bareIds`, a bare `ct-123`
+ *  in the plain text between them is drawn as a pill too. */
+export function TextWithMentions({ text, bareIds = false }: { text: string; bareIds?: boolean }) {
   const parts: React.ReactNode[] = [];
+  const plain = (chunk: string, base: number) => {
+    if (!bareIds) { parts.push(chunk); return; }
+    const bare = bareEntityIdRegex();
+    let at = 0;
+    let b: RegExpExecArray | null;
+    while ((b = bare.exec(chunk))) {
+      if (b.index > at) parts.push(chunk.slice(at, b.index));
+      parts.push(<EntityIdPill key={`b${base + b.index}`} shortId={b[0]} />);
+      at = b.index + b[0].length;
+    }
+    if (at < chunk.length) parts.push(chunk.slice(at));
+  };
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   MENTION_RE.lastIndex = 0;
   while ((match = MENTION_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
+    if (match.index > lastIndex) plain(text.slice(lastIndex, match.index), lastIndex);
     const name = match[1].trim();
     const entityId = match[2];
     parts.push(<MentionPill key={match.index} name={name} entityId={entityId} />);
     lastIndex = MENTION_RE.lastIndex;
   }
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
+  if (lastIndex < text.length) plain(text.slice(lastIndex), lastIndex);
   return <>{parts.length > 0 ? parts : [text]}</>;
 }
 
@@ -922,7 +937,10 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   }
   // A pasted/linked codecast object URL (e.g. https://codecast.sh/tasks/<id>)
   // becomes a rich, in-app pill instead of an external link.
-  const entityRef = parseEntityUrl(href);
+  // A chat role mention (`@handle`, mention-role below) is a link to the
+  // role's sheet too, but it keeps the chip chat draws for it.
+  const roleMention = typeof (props as any).className === "string" && (props as any).className.includes("mention-role");
+  const entityRef = roleMention ? null : parseEntityUrl(href);
   if (entityRef) {
     // A GitHub pull request or commit URL is the same object as its codecast
     // page, so it renders as that pill and opens there. A URL leaves no doubt
@@ -1128,6 +1146,7 @@ export function EntityIdPill({
   certain = false,
   label: labelProp,
   to,
+  wide = false,
 }: {
   shortId?: string;
   type?: EntityType;
@@ -1136,6 +1155,9 @@ export function EntityIdPill({
   mention?: MentionInfo;
   /** Force the short-name form (a surface too narrow for a title). */
   compact?: boolean;
+  /** A reference on a line of its own (a task page's blocker list): the whole
+   *  name, cut by the line's width rather than a character count. */
+  wide?: boolean;
   /** The reference certainly names a pull request or commit — it came from a
    *  URL, or from a number in a conversation bound to the repository — so it
    *  wears the pill even before codecast holds the row. A bare
@@ -1205,7 +1227,7 @@ export function EntityIdPill({
   const personifyAll = usePersonifyAll();
   const identity = isSession && entity ? sessionIdentity(entity, personifyAll) : null;
   const persona = identity && identity.kind !== "plain" ? identity : null;
-  const pillLabel = persona ? persona.name : refLabel;
+  const pillLabel = persona ? persona.name : wide ? fullLabel : refLabel;
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -1218,6 +1240,10 @@ export function EntityIdPill({
             ? Folder
             : type === "initiative"
               ? Flag
+            : type === "role"
+              ? Hexagon
+            : type === "person"
+              ? UserRound
             : type === "proposal"
               ? Network
             : type === "decision"
@@ -1247,6 +1273,12 @@ export function EntityIdPill({
             // Health owns green, yellow and red, so an initiative is magenta.
             : type === "initiative"
               ? "bg-sol-magenta/[0.08] text-sol-magenta hover:bg-sol-magenta/[0.16]"
+            // A role is the org's violet, as its chat mention is; a person
+            // the green of a person mention in the editor.
+            : type === "role"
+              ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]"
+            : type === "person"
+              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
             // A proposal is the org page's violet, the colour of the ghosts it draws.
             : type === "proposal"
               ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]"
@@ -1347,12 +1379,16 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={fullLabel !== pillLabel ? fullLabel : undefined}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          title={wide || fullLabel !== pillLabel ? fullLabel : undefined}
         >
           <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
               <SessionFace row={entity} size="1em" />
+            ) : type === "role" && entity?.handle ? (
+              <RoleFace role={entity} size={13} className="block" />
+            ) : type === "person" && entity ? (
+              <AuthorAvatar name={entity.name} avatar={entity.image ?? entity.github_avatar_url} size="1em" />
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
@@ -1364,7 +1400,7 @@ export function EntityIdPill({
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
-          <span className="self-baseline">{pillLabel}</span>
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band
@@ -1396,7 +1432,10 @@ export function EntityIdPill({
             "inside" the card while crossing it, so moving up to click never
             dismisses the popover. */}
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
-        <Link
+        <HoverCardClose.Provider value={closeNow}>
+        {/* A role's card is the one every place that names a role shows, a
+            link of its own, so it is not wrapped in a second one. */}
+        {type === "role" && entity ? <RoleHoverContent role={entity} onOpen={handleOpen} /> : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
           href={href}
           onClick={handleOpen}
           className="block p-3 no-underline cursor-pointer"
@@ -1407,7 +1446,6 @@ export function EntityIdPill({
             : isSession ? <SessionHoverContent session={entity} />
             : isTrigger ? <TriggerHoverContent trigger={entity} />
             : type === "doc" ? <DocHoverContent doc={entity} />
-            : type === "initiative" ? <InitiativeHoverContent initiative={entity} />
             : type === "decision" ? <DecisionHoverContent decision={entity} />
             : type === "call" ? <CallHoverContent call={entity} rawId={rawId} />
             : type === "source" ? <SourceHoverContent source={entity} />
@@ -1420,7 +1458,7 @@ export function EntityIdPill({
           ) : (
             <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
-        </Link>
+        </Link>}
         {/* A repository object codecast holds no row for lives on GitHub; the
             band offers that instead of an inline page with nothing to show. */}
         {!entity && (isPr || isCommit) && githubHref && (
@@ -1447,6 +1485,7 @@ export function EntityIdPill({
             <RevealOpenLink href={href} label={openLabel} onOpen={handleOpen} variant="compact" />
           </div>
         )}
+        </HoverCardClose.Provider>
       </PopoverContent>
     </Popover>
     {/* The possessive sits against the label, not a padding-width away. */}

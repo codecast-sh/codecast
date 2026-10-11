@@ -11,6 +11,7 @@ import {
   cancel,
   createFromCli,
   listRunsCore,
+  graphOfRun,
   pollGateResponse,
 } from "./workflow_runs";
 import { resolve, withdraw, answerCore, askCore, settleClientResolution } from "./sessionDecisions";
@@ -146,6 +147,22 @@ describe("pauseAtGate asks through the decision rail (the-line.md L4)", () => {
     expect(tables.decision_stacks[0].decision_ids).toEqual(tables.session_decisions.map((d) => d._id));
     // Answering the first gate closed the stack; the second gate reopened it.
     expect(tables.decision_stacks[0].status).toBe("open");
+  });
+
+  test("a spawner session another account owns (the project lead's) still asks, as its owner", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations[0].user_id = MATE;
+    const r: any = await pause(ctx);
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_spawner");
+    expect(tables.workflow_runs[0].gate_decision_id).toBe(tables.session_decisions[0]._id);
+  });
+
+  test("a gate that could not ask anyone says so instead of waiting in silence", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].spawner_conversation_id = "conversations_missing";
+    const r: any = await pause(ctx);
+    expect(r.error).toMatch(/could not ask anyone/);
   });
 
   test("the primary conversation asks when the run has no spawner", async () => {
@@ -320,6 +337,16 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     void tables;
   });
 
+  test("a teammate reads a run's graph without where it lives; its owner sees the origin", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflows[0].origin = { device_id: "dev_1", root: "/Users/owner/src/app", file: "line.cast" };
+    const asMate: any = await (graphOfRun as any)._handler(asUser(ctx, MATE), { run_id: RUN });
+    expect(asMate?.name).toBe("line");
+    expect(asMate?.origin).toBeUndefined();
+    const asOwner: any = await (graphOfRun as any)._handler(asUser(ctx, HOST), { run_id: RUN });
+    expect(asOwner?.origin?.root).toBe("/Users/owner/src/app");
+  });
+
   test("createFromCli stamps workspace and team_id from the bound task", async () => {
     const { ctx, tables } = await seed();
     tables.workflow_runs[0].status = "completed";
@@ -341,6 +368,19 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     const free = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line" });
     const own = tables.conversations.find((c) => c._id === free.primary_conversation_id);
     expect(own.inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a run started from outside any session runs as the lead of its cause's project, so its gates reach a person", async () => {
+    const { ctx, tables } = await seed({
+      projects: [{ _id: "projects_aq", team_id: TEAM, title: "Agent Quality", owner_role_id: "org_roles_aq" }],
+      anchors: [{ _id: "anchors_aq", conversation_id: "conversations_spawner" }],
+      org_roles: [{ _id: "org_roles_aq", team_id: TEAM, handle: "agent-quality", status: "active", anchor_id: "anchors_aq", reports_to: { kind: "user", user_id: HOST } }],
+    });
+    tables.workflow_runs[0].status = "completed";
+    tables.tasks[0].project_id = "projects_aq";
+    const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
+    expect(tables.workflow_runs.find((x) => x._id === r.run_id).spawner_conversation_id).toBe("conversations_spawner");
+    expect(r.spawner_conversation_id).toBe("conversations_spawner");
   });
 
   test("createFromCli refuses a second run while the cause's run is live (LE1.4), and --force overrides", async () => {
