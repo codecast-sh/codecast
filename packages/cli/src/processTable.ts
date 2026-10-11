@@ -189,6 +189,93 @@ export function descendantRows(procs: ProcRow[], root: number): ProcRow[] {
   return out;
 }
 
+export interface ReapTargetOptions {
+  /** Walked from like any root, never signalled: a tmux server the caller
+   *  stops itself after its tree is gone. */
+  spare?: number[];
+  /** Ownership the table cannot show any more: was this process, now outside
+   *  the tree, once under one of its members (processLineage.ts)? */
+  descendsFrom?: (row: ProcRow, tree: ReadonlyMap<number, ProcRow>) => boolean;
+  selfPid?: number;
+  /** Only this user's processes are added by group or lineage. */
+  uid?: number;
+}
+
+/**
+ * Everything a teardown of `roots` must stop, from one table read, deepest
+ * first so roots go last.
+ *
+ * The ppid walk alone misses what left the tree before the kill. Two more
+ * rules bring it back, applied until nothing changes:
+ *
+ * - A process in a group whose leader is in the tree belongs to it. A group's
+ *   id cannot be handed out again while any member lives, so the leader's
+ *   presence in this same read proves it is the same group. This is the dev
+ *   server `next dev` forks: its parent exits, it reparents to pid 1, and it
+ *   keeps the group of the shell job that started it.
+ * - A process the lineage saw under a member of the tree belongs to it (an
+ *   agent's tool shell, orphaned when the agent restarted).
+ *
+ * This process and its ancestors are never targets, whatever the rules say.
+ */
+export function reapTargets(procs: ProcRow[], roots: number[], opts: ReapTargetOptions = {}): { targets: ProcRow[]; tree: Map<number, ProcRow> } {
+  const selfPid = opts.selfPid ?? process.pid;
+  const byPid = new Map<number, ProcRow | null>();
+  for (const p of procs) byPid.set(p.pid, byPid.has(p.pid) ? null : p);
+  const children = new Map<number, ProcRow[]>();
+  for (const p of procs) {
+    if (byPid.get(p.pid) !== p) continue;
+    const list = children.get(p.ppid);
+    if (list) list.push(p);
+    else children.set(p.ppid, [p]);
+  }
+  // This process and its ancestors stay out of the tree, so neither they nor
+  // their groups are ever claimed; the walk passes through the ancestors to
+  // reach their other children, and stops at this process.
+  const self = new Set<number>();
+  for (let pid: number | undefined = selfPid, hops = 0; pid && pid > 1 && hops < 64; hops++) {
+    self.add(pid);
+    pid = byPid.get(pid)?.ppid;
+  }
+  const tree = new Map<number, ProcRow>();
+  const visited = new Set<number>();
+  const add = (row: ProcRow) => {
+    if (visited.has(row.pid) || row.pid === selfPid) return;
+    visited.add(row.pid);
+    if (!self.has(row.pid)) tree.set(row.pid, row);
+    for (const child of children.get(row.pid) ?? []) add(child);
+  };
+  for (const root of roots) {
+    const row = byPid.get(root);
+    if (row && root > 1) add(row);
+  }
+  if (tree.size === 0) return { targets: [], tree };
+
+  const mine = (p: ProcRow) => opts.uid === undefined || p.uid === opts.uid;
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const p of byPid.values()) {
+      if (!p || visited.has(p.pid) || self.has(p.pid) || p.pid <= 1 || !mine(p)) continue;
+      const groupInTree = p.pgid !== undefined && tree.get(p.pgid)?.pgid === p.pgid;
+      if (groupInTree || opts.descendsFrom?.(p, tree)) {
+        add(p);
+        grew = true;
+      }
+    }
+  }
+
+  const keep = new Set(opts.spare ?? []);
+  const depth = (row: ProcRow) => {
+    let d = 0;
+    for (let c = tree.get(row.ppid); c && d < 64; c = tree.get(c.ppid)) d++;
+    return d;
+  };
+  const targets = [...tree.values()].filter((p) => !keep.has(p.pid) && p.pid > 1);
+  const depths = new Map(targets.map((p) => [p.pid, depth(p)]));
+  targets.sort((a, b) => depths.get(b.pid)! - depths.get(a.pid)!);
+  return { targets, tree };
+}
+
 /** Does a command line's program look like one of our agent clients? Matches the
  *  registry binary names and the claude launcher's versioned binaries
  *  (`~/.local/share/claude/versions/2.1.237`), whose basename is a version. */

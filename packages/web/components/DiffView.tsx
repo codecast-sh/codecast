@@ -1,39 +1,27 @@
-import { useState, useMemo, useCallback, useRef, memo, lazy, Suspense } from "react";
+import { useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { FileDiff, useStableCallback, type DiffLineAnnotation, type FileDiffOptions, type SelectedLineRange } from "@pierre/diffs/react";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { genCommentId } from "../lib/reviewActions";
 import { useFileComments } from "../hooks/useConversationComments";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import Prism from "prismjs";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-jsx";
-import "prismjs/components/prism-tsx";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-markdown";
-import "prismjs/components/prism-yaml";
+import { useTheme } from "./ThemeProvider";
+import { DIFF_THEME } from "./diff/pierre";
 import {
   anchorEndLine,
-  commentRangeEnd,
   diffLineKey,
-  extendLineRange,
-  isLineSelected,
   parseDiffLineKey,
   type DiffLineAnchor,
   type DiffSide,
   type LineRange,
   type PatchHunk,
 } from "../lib/patchParser";
+import { buildDiffMetadata, diffRows, type DiffRow } from "../lib/diffMetadata";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import { captureDiffAnchor, placeInDiff, type DiffPlacement } from "../lib/diffAnchorPlacement";
-import { AnchorGutterMark } from "./comments/AnchorPlacementNote";
 
-import { useWatchEffect } from "../hooks/useWatchEffect";
 // Lazy on purpose, not just for bundle size: FileLineThread pulls the comment
 // rail machinery (CommentComposer → ConversationView's MessageInput), and this
 // module sits under MarkdownRenderer, which ConversationView itself imports. A
@@ -50,162 +38,12 @@ const FileLineThread = lazy(() =>
 const EMPTY_LINE_COMMENTS: Record<number, PendingComment[]> = {};
 const EMPTY_COMMENT_LIST: PendingComment[] = [];
 
-// The LCS matrix below is O(m*n) in time and memory; past this many cells we
-// give up on a minimal diff and render the changed region as remove-all/add-all.
-const MAX_LCS_CELLS = 500_000;
+// Row height, matching the line height set on diffs-container in globals.css.
+// A long diff shows its first `maxLines` rows and a "show more".
+const ROW_PX = 22;
 
-export function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
-  const totalOld = oldLines.length;
-  const totalNew = newLines.length;
-
-  // Trim common prefix/suffix so the quadratic LCS only sees the changed
-  // middle. Identical inputs (e.g. a Read result rendered through DiffView)
-  // resolve here in linear time with no matrix at all.
-  const minLen = Math.min(totalOld, totalNew);
-  let prefix = 0;
-  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
-  let suffix = 0;
-  while (
-    suffix < minLen - prefix &&
-    oldLines[totalOld - 1 - suffix] === newLines[totalNew - 1 - suffix]
-  ) suffix++;
-
-  const result: Array<{ type: 'added' | 'removed' | 'context'; content: string }> = [];
-  for (let k = 0; k < prefix; k++) result.push({ type: 'context', content: oldLines[k] });
-
-  const m = totalOld - prefix - suffix;
-  const n = totalNew - prefix - suffix;
-
-  if (m > 0 && n > 0 && m * n > MAX_LCS_CELLS) {
-    for (let k = 0; k < m; k++) result.push({ type: 'removed', content: oldLines[prefix + k] });
-    for (let k = 0; k < n; k++) result.push({ type: 'added', content: newLines[prefix + k] });
-  } else if (m > 0 || n > 0) {
-    const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
-          dp[i][j] = dp[i - 1][j - 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-        }
-      }
-    }
-
-    let i = m, j = n;
-    const temp: typeof result = [];
-    while (i > 0 || j > 0) {
-      if (i > 0 && j > 0 && oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
-        temp.push({ type: 'context', content: oldLines[prefix + i - 1] });
-        i--; j--;
-      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        temp.push({ type: 'added', content: newLines[prefix + j - 1] });
-        j--;
-      } else {
-        temp.push({ type: 'removed', content: oldLines[prefix + i - 1] });
-        i--;
-      }
-    }
-    for (let k = temp.length - 1; k >= 0; k--) result.push(temp[k]);
-  }
-
-  for (let k = suffix; k > 0; k--) result.push({ type: 'context', content: oldLines[totalOld - k] });
-  return result;
-}
-
-function highlightCode(code: string, language?: string): string {
-  if (!language) return escapeHtml(code);
-
-  try {
-    const grammar = Prism.languages[language];
-    if (!grammar) return escapeHtml(code);
-    return Prism.highlight(code, grammar, language);
-  } catch {
-    return escapeHtml(code);
-  }
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-interface WordDiffToken {
-  text: string;
-  highlighted: boolean;
-}
-
-function computeWordDiff(oldLine: string, newLine: string): { oldTokens: WordDiffToken[]; newTokens: WordDiffToken[] } {
-  let prefixLen = 0;
-  const minLen = Math.min(oldLine.length, newLine.length);
-  while (prefixLen < minLen && oldLine[prefixLen] === newLine[prefixLen]) {
-    prefixLen++;
-  }
-
-  let suffixLen = 0;
-  while (
-    suffixLen < minLen - prefixLen &&
-    oldLine[oldLine.length - 1 - suffixLen] === newLine[newLine.length - 1 - suffixLen]
-  ) {
-    suffixLen++;
-  }
-
-  const oldPrefix = oldLine.slice(0, prefixLen);
-  const oldMiddle = oldLine.slice(prefixLen, oldLine.length - suffixLen);
-  const oldSuffix = oldLine.slice(oldLine.length - suffixLen);
-
-  const newPrefix = newLine.slice(0, prefixLen);
-  const newMiddle = newLine.slice(prefixLen, newLine.length - suffixLen);
-  const newSuffix = newLine.slice(newLine.length - suffixLen);
-
-  const oldTokens: WordDiffToken[] = [];
-  if (oldPrefix) oldTokens.push({ text: oldPrefix, highlighted: false });
-  if (oldMiddle) oldTokens.push({ text: oldMiddle, highlighted: true });
-  if (oldSuffix) oldTokens.push({ text: oldSuffix, highlighted: false });
-
-  const newTokens: WordDiffToken[] = [];
-  if (newPrefix) newTokens.push({ text: newPrefix, highlighted: false });
-  if (newMiddle) newTokens.push({ text: newMiddle, highlighted: true });
-  if (newSuffix) newTokens.push({ text: newSuffix, highlighted: false });
-
-  return { oldTokens, newTokens };
-}
-
-function renderTokensWithHighlight(
-  tokens: WordDiffToken[],
-  highlightClass: string,
-  language?: string
-): string {
-  return tokens.map(t => {
-    const html = language ? highlightCode(t.text, language) : escapeHtml(t.text);
-    if (t.highlighted) {
-      return `<span class="${highlightClass}">${html}</span>`;
-    }
-    return html;
-  }).join("");
-}
-
-type DiffLineType = 'added' | 'removed' | 'context';
-
-interface FlatDiffLine {
-  type: DiffLineType;
-  content: string;
-  oldNum?: number;
-  newNum?: number;
-  wordDiffHtml?: string;
-  html?: string;
-  // Stable index across the full (un-truncated) line list, used to anchor line
-  // comments so they stay attached when the diff expands/collapses.
-  lineKey?: number;
-}
-
-interface HunkSeparator {
-  type: 'separator';
-}
-
-type DisplayItem = FlatDiffLine | HunkSeparator;
+// Rows plus the hidden-context separators a test may hand the placement code.
+type DisplayItem = DiffRow | { type: "separator" };
 
 // Assign each owner-held thread to the row that shows ITS side of the line: a
 // LEFT thread (a comment on deleted code) goes under the row carrying that old
@@ -251,7 +89,7 @@ export function placeSidedThreads(
 // Threads placed where their passage is NOW. Each thread is relocated by its
 // stored text against the whole diff (lib/diffAnchorPlacement), then hung on
 // the display row showing the new spot, on the side the passage was found.
-// A thread whose row is truncated away or outside every hunk has no row.
+// A thread whose passage is outside every hunk has no row.
 // Exported for tests.
 export function placeRelocatedThreads<K>(
   allItems: DisplayItem[],
@@ -260,7 +98,7 @@ export function placeRelocatedThreads<K>(
 ): Map<number, Array<{ key: K; placement: DiffPlacement }>> {
   const byPlacedKey = new Map<string, Array<{ key: K; placement: DiffPlacement }>>();
   for (const { key, comment } of threads) {
-    const placement = placeInDiff(allItems as FlatDiffLine[], comment);
+    const placement = placeInDiff(allItems, comment);
     if (!placement) continue;
     const placedKey = diffLineKey({ side: placement.side, lineNumber: placement.line, lineEnd: placement.lineEnd });
     byPlacedKey.set(placedKey, [...(byPlacedKey.get(placedKey) ?? []), { key, placement }]);
@@ -274,7 +112,7 @@ export function placeRelocatedThreads<K>(
 
 // The anchors one row can carry. A context row exists on both sides, so it can
 // hold either; an added row is only on the right, a removed row only on the left.
-function lineAnchors(line: FlatDiffLine): DiffLineAnchor[] {
+function lineAnchors(line: DiffRow): DiffLineAnchor[] {
   const anchors: DiffLineAnchor[] = [];
   if (line.newNum !== undefined && line.type !== "removed") {
     anchors.push({ side: "RIGHT", lineNumber: line.newNum });
@@ -285,158 +123,13 @@ function lineAnchors(line: FlatDiffLine): DiffLineAnchor[] {
   return anchors;
 }
 
-function hunksToDisplayItems(
-  hunks: PatchHunk[],
-  language?: string
-): { items: DisplayItem[]; maxLineNum: number } {
-  const items: DisplayItem[] = [];
-  let maxLineNum = 0;
+// Pierre names the two sides by what they hold; a comment names them as GitHub
+// does. A context line is drawn as an addition-side line.
+const toPierreSide = (side: DiffSide) => (side === "LEFT" ? "deletions" : "additions");
+const fromPierreSide = (side: string | undefined): DiffSide => (side === "deletions" ? "LEFT" : "RIGHT");
 
-  for (let h = 0; h < hunks.length; h++) {
-    if (h > 0) {
-      items.push({ type: 'separator' });
-    }
-
-    const hunk = hunks[h];
-    const lines = hunk.lines;
-
-    const processed = lines.map(l => ({
-      type: (l.type === 'addition' ? 'added' : l.type === 'deletion' ? 'removed' : 'context') as DiffLineType,
-      content: l.content,
-      oldNum: l.oldLineNumber,
-      newNum: l.newLineNumber,
-    }));
-
-    const withWordDiff = applyWordDiffToBlock(processed, language);
-
-    for (const line of withWordDiff) {
-      if (line.oldNum && line.oldNum > maxLineNum) maxLineNum = line.oldNum;
-      if (line.newNum && line.newNum > maxLineNum) maxLineNum = line.newNum;
-      items.push(line);
-    }
-  }
-
-  return { items, maxLineNum };
-}
-
-function diffToDisplayItems(
-  changes: Array<{ type: 'added' | 'removed' | 'context'; content: string }>,
-  startLine: number,
-  contextLines: number,
-  language?: string,
-  // Also emit a separator for hidden context at the very top/bottom of the file
-  // (not just between visible regions), so an expandable diff offers a handle
-  // even when the only change sits at one end. Off for inert diffs, whose
-  // appearance shouldn't change.
-  edgeSeparators = false
-): { items: DisplayItem[]; maxLineNum: number; totalCodeLines: number } {
-  const allLines: FlatDiffLine[] = [];
-  let oldLineNum = startLine;
-  let newLineNum = startLine;
-
-  for (const change of changes) {
-    if (change.type === 'added') {
-      allLines.push({ type: 'added', content: change.content, newNum: newLineNum++ });
-    } else if (change.type === 'removed') {
-      allLines.push({ type: 'removed', content: change.content, oldNum: oldLineNum++ });
-    } else {
-      allLines.push({ type: 'context', content: change.content, oldNum: oldLineNum++, newNum: newLineNum++ });
-    }
-  }
-
-  const hasChanges = allLines.some(l => l.type !== 'context');
-  const showLine = new Set<number>();
-  if (!hasChanges) {
-    for (let i = 0; i < allLines.length; i++) showLine.add(i);
-  } else {
-    for (let i = 0; i < allLines.length; i++) {
-      if (allLines[i].type !== 'context') {
-        for (let j = Math.max(0, i - contextLines); j <= Math.min(allLines.length - 1, i + contextLines); j++) {
-          showLine.add(j);
-        }
-      }
-    }
-  }
-
-  // lineKey = index into the FULL line list, assigned before context collapsing,
-  // so a comment's anchor survives a contextLines change (expanding hidden
-  // context must not shift the keys of lines already on screen).
-  for (let i = 0; i < allLines.length; i++) allLines[i].lineKey = i;
-
-  const items: DisplayItem[] = [];
-  let lastShown = -1;
-
-  const visibleLines: FlatDiffLine[] = [];
-  const visibleIndices: number[] = [];
-  for (let i = 0; i < allLines.length; i++) {
-    if (showLine.has(i)) {
-      if (lastShown >= 0 && i > lastShown + 1) {
-        items.push({ type: 'separator' });
-      } else if (lastShown < 0 && edgeSeparators && i > 0) {
-        items.push({ type: 'separator' });
-      }
-      visibleLines.push(allLines[i]);
-      visibleIndices.push(items.length);
-      items.push(allLines[i]);
-      lastShown = i;
-    }
-  }
-  if (edgeSeparators && lastShown >= 0 && lastShown < allLines.length - 1) {
-    items.push({ type: 'separator' });
-  }
-
-  const withWordDiff = applyWordDiffToBlock(visibleLines, language);
-  for (let k = 0; k < withWordDiff.length; k++) {
-    items[visibleIndices[k]] = withWordDiff[k];
-  }
-
-  const maxLineNum = Math.max(oldLineNum, newLineNum) - 1;
-  const totalCodeLines = items.filter(i => i.type !== 'separator').length;
-
-  return { items, maxLineNum, totalCodeLines };
-}
-
-function applyWordDiffToBlock(lines: FlatDiffLine[], language?: string): FlatDiffLine[] {
-  const result = [...lines];
-
-  let i = 0;
-  while (i < result.length) {
-    if (result[i].type === 'removed') {
-      const removeStart = i;
-      while (i < result.length && result[i].type === 'removed') i++;
-      const removeEnd = i;
-
-      const addStart = i;
-      while (i < result.length && result[i].type === 'added') i++;
-      const addEnd = i;
-
-      const removeCount = removeEnd - removeStart;
-      const addCount = addEnd - addStart;
-      const pairCount = Math.min(removeCount, addCount);
-
-      for (let p = 0; p < pairCount; p++) {
-        const ri = removeStart + p;
-        const ai = addStart + p;
-        const { oldTokens, newTokens } = computeWordDiff(result[ri].content, result[ai].content);
-
-        if (oldTokens.some(t => t.highlighted) || newTokens.some(t => t.highlighted)) {
-          result[ri] = {
-            ...result[ri],
-            wordDiffHtml: renderTokensWithHighlight(oldTokens, "diff-word-removed", language),
-          };
-          result[ai] = {
-            ...result[ai],
-            wordDiffHtml: renderTokensWithHighlight(newTokens, "diff-word-added", language),
-          };
-        }
-      }
-      continue;
-    }
-    i++;
-  }
-
-  return result;
-}
+// Fence labels and Prism grammar names that Shiki spells differently.
+const SHIKI_LANGUAGE: Record<string, string> = { markup: "html" };
 
 interface DiffViewProps {
   oldStr?: string;
@@ -447,7 +140,7 @@ interface DiffViewProps {
   maxLines?: number;
   language?: string;
   showLineNumbers?: boolean;
-  // When provided, each line gets a hover affordance to attach an inline comment.
+  // When provided, each line gets a gutter affordance to attach an inline comment.
   // Comments accumulate in the shared review batch keyed by `conversationId`
   // (under this `anchorKey`), so they auto-attach to the user's next reply just
   // like message/plan annotations. Omit it (the default) and the diff is inert.
@@ -462,15 +155,13 @@ interface DiffViewProps {
   // `placement` says where the thread's passage is now when it moved or is
   // gone (lib/diffAnchorPlacement), for the thread's header.
   renderLineThread?: (anchor: DiffLineAnchor, items: unknown[], placement?: DiffPlacement) => React.ReactNode;
-  // When set, the hover handle calls this instead of starting a review-batch
-  // comment, and the handle appears even with no commentContext. The anchor is
-  // the side and line of the row the handle was on; `anchorLines` the text to
-  // store with the comment so it can be found again after the code moves.
+  // When set, the comment affordance calls this instead of starting a
+  // review-batch comment, and appears even with no commentContext. The anchor
+  // is the side and line (or run of lines) it was used on; `anchorLines` the
+  // text to store with the comment so it can be found again after the code moves.
   onLineComment?: (anchor: DiffLineAnchor | undefined, code: string, anchorLines?: CodeAnchorText) => void;
-  // When provided, the ⋯ hidden-context separators become clickable and invoke
-  // this (the owner responds by raising contextLines). Only meaningful in
-  // oldStr/newStr mode, where the full text is present to expand into.
-  onExpandContext?: () => void;
+  // Open every unchanged stretch of a whole file, as if each were expanded.
+  expandUnchanged?: boolean;
   // Wrap long lines instead of scrolling the block sideways. A page that is
   // one scroller (the pull request page) wants this: a second, horizontal
   // scroller per file is exactly the nesting it exists to avoid.
@@ -479,13 +170,11 @@ interface DiffViewProps {
   // URL. Omit both to keep the selection inside the diff.
   selection?: DiffSelection | null;
   onSelectionChange?: (selection: DiffSelection | null) => void;
-  // Line addresses. With `lineHref` the gutter numbers are real links (open in
-  // a new tab, copy the address) and `rowId` gives each row a scroll target.
-  lineHref?: (anchor: DiffLineAnchor) => string;
-  rowId?: (anchor: DiffLineAnchor) => string;
 }
 
 export type DiffSelection = { side: DiffSide; range: LineRange };
+
+type AnnotationMeta = { row: number };
 
 export const DiffView = memo(function DiffView({
   oldStr,
@@ -500,72 +189,31 @@ export const DiffView = memo(function DiffView({
   lineThreads,
   renderLineThread,
   onLineComment,
-  onExpandContext,
+  expandUnchanged = false,
   wrap = false,
   selection: selectionProp,
   onSelectionChange,
-  lineHref,
-  rowId,
 }: DiffViewProps) {
+  const { theme } = useTheme();
   const [fullyExpanded, setFullyExpanded] = useState(false);
-  // Hover affordance and per-row wiring turn on for either comment model.
+  // The comment affordance turns on for either comment model.
   const interactive = !!commentContext || !!onLineComment;
-  // Where the affordance lives. Inside a message the diff has a gutter beside
-  // it and one handle glides down that margin. A surface that owns the
-  // comments (the pull request page) has no margin: its diff sits flush in a
-  // clipped card, where a handle hung outside the block is invisible. Those
-  // rows carry their own "+" in the line-number gutter instead, the way a
-  // reader expects a diff to work.
-  const rowPlus = !!onLineComment;
+  const filePath = commentContext?.filePath;
 
-  const { items, totalCodeLines, gutterCh } = useMemo(() => {
-    let items: DisplayItem[];
-    let maxLineNum: number;
-    if (hunks && hunks.length > 0) {
-      ({ items, maxLineNum } = hunksToDisplayItems(hunks, language));
-    } else {
-      const oldLines = (oldStr || "").split('\n');
-      const newLines = (newStr || "").split('\n');
-      const changes = computeDiff(oldLines, newLines);
-      ({ items, maxLineNum } = diffToDisplayItems(changes, startLine, contextLines, language, !!onExpandContext));
-    }
-    // Highlight once here, not in render — this component sits inside the
-    // frequently re-rendering conversation tree, and Prism per line per render
-    // froze the page whenever a large block was open. Assign a stable lineKey to
-    // each code line in the same pass so comment anchors survive truncation.
-    // Lines from the oldStr/newStr path already carry a collapse-stable key
-    // (see diffToDisplayItems); the positional fallback covers the hunks path.
-    let lineKey = 0;
-    items = items.map(item =>
-      item.type === 'separator'
-        ? item
-        : { ...item, lineKey: item.lineKey ?? lineKey++, html: item.wordDiffHtml ?? highlightCode(item.content, language) },
-    );
-    const totalCodeLines = items.filter(i => i.type !== 'separator').length;
-    return { items, totalCodeLines, gutterCh: String(Math.max(maxLineNum, 1)).length };
-  }, [hunks, oldStr, newStr, startLine, contextLines, language, onExpandContext]);
+  // Pierre's model of the diff, and the rows it shows with their line numbers
+  // on each side. Comment placement and anchor capture read the rows, so they
+  // agree with what is drawn by construction.
+  const { fileDiff, rows } = useMemo(() => {
+    const lang = language ? SHIKI_LANGUAGE[language] ?? language : undefined;
+    const fileDiff = buildDiffMetadata({ oldStr, newStr, hunks, startLine, contextLines, name: filePath ?? "snippet", lang });
+    return { fileDiff, rows: diffRows(fileDiff) };
+  }, [hunks, oldStr, newStr, startLine, contextLines, language, filePath]);
 
-  const needsTruncation = totalCodeLines > maxLines && !fullyExpanded;
+  const shownRows = useMemo(() => rows.reduce((n, r) => (r.hidden ? n : n + 1), 0), [rows]);
+  const needsTruncation = shownRows > maxLines && !fullyExpanded;
 
-  const displayItems = useMemo(() => {
-    if (!needsTruncation) return items;
-    let lineCount = 0;
-    const truncated: DisplayItem[] = [];
-    for (const item of items) {
-      if (item.type === 'separator') {
-        truncated.push(item);
-      } else {
-        if (lineCount < maxLines) {
-          truncated.push(item);
-          lineCount++;
-        }
-      }
-    }
-    return truncated;
-  }, [items, needsTruncation, maxLines]);
-
-  // Line comments (opt-in): grouped by their anchor line so each row can render
-  // its own thread. Only subscribes when commentContext is set, so inert diffs
+  // Line comments (opt-in): grouped by their row so each row can render its
+  // own thread. Only subscribes when commentContext is set, so inert diffs
   // (Read results, etc.) pay nothing.
   //
   // The store subscription MUST return a flat array, not the grouped map: the map
@@ -583,53 +231,56 @@ export const DiffView = memo(function DiffView({
         : EMPTY_COMMENT_LIST,
     ),
   );
-  const commentsByLine = useMemo(() => {
+  const commentsByRow = useMemo(() => {
     if (myComments.length === 0) return EMPTY_LINE_COMMENTS;
     const map: Record<number, PendingComment[]> = {};
     for (const c of myComments) (map[c.blockIndex] ??= []).push(c);
     return map;
   }, [myComments]);
-  const [editingLine, setEditingLine] = useState<number | null>(null);
+  const [editingRow, setEditingRow] = useState<number | null>(null);
 
-  // The rows the reader has selected to comment on. A selection lives on ONE
+  // The lines the reader has selected to comment on. A selection lives on ONE
   // side, because the two sides are different files and a run across them
-  // names no code. Shift clicking the other side starts over there.
+  // names no code.
   const [ownSelection, setOwnSelection] = useState<DiffSelection | null>(null);
   const controlled = selectionProp !== undefined;
   const selection = controlled ? selectionProp : ownSelection;
-
-  const selectLine = useCallback((anchor: DiffLineAnchor, extend: boolean) => {
-    const sameSide = extend && selection?.side === anchor.side;
-    const next = {
-      side: anchor.side,
-      range: extendLineRange(sameSide ? selection!.range : null, anchor.lineNumber),
-    };
+  const selectable = interactive || !!onSelectionChange;
+  const selectedLines = useMemo<SelectedLineRange | null>(
+    () => selection ? { start: selection.range.start, end: selection.range.end, side: toPierreSide(selection.side) } : null,
+    [selection],
+  );
+  const onLineSelected = useStableCallback((range: SelectedLineRange | null) => {
+    if (!range) return;
+    const side = fromPierreSide(range.side);
+    // A drag that crosses to the other side keeps only where it started.
+    const end = range.endSide && range.endSide !== range.side ? range.start : range.end;
+    const next = { side, range: { start: Math.min(range.start, end), end: Math.max(range.start, end) } };
     if (!controlled) setOwnSelection(next);
     onSelectionChange?.(next);
-  }, [selection, controlled, onSelectionChange]);
-  const selectable = interactive || !!onSelectionChange;
+  });
 
   // Durable code-anchored comments (real `comments` rows keyed file:line, shared
   // with the team) rendered under their diff line. Anchored to FILE line numbers,
   // not diff row indices, so they survive re-rendering the file in a different
   // diff.
-  const durableByLine = useFileComments(commentContext?.conversationId, commentContext?.filePath);
-  const durableRowByIndex = useMemo(
+  const durableByLine = useFileComments(commentContext?.conversationId, filePath);
+  const durableByRow = useMemo(
     () => durableByLine.size === 0
       ? null
-      : placeRelocatedThreads(items, displayItems, [...durableByLine].map(([line, comments]) => ({
+      : placeRelocatedThreads(rows, rows, [...durableByLine].map(([line, comments]) => ({
           key: line,
           comment: { line_number: line, anchor_lines: comments.find((c) => c.anchor_lines)?.anchor_lines },
         }))),
-    [items, displayItems, durableByLine],
+    [rows, durableByLine],
   );
 
   // Owner-held threads get the same placement: a file line number resolved to
-  // the display row that shows it.
-  const explicitRowByIndex = useMemo(
+  // the row that shows it.
+  const explicitByRow = useMemo(
     () => !lineThreads || lineThreads.size === 0
       ? null
-      : placeRelocatedThreads(items, displayItems, [...lineThreads].map(([key, thread]) => {
+      : placeRelocatedThreads(rows, rows, [...lineThreads].map(([key, thread]) => {
           const anchor = parseDiffLineKey(key);
           return {
             key,
@@ -641,301 +292,141 @@ export const DiffView = memo(function DiffView({
             },
           };
         })),
-    [items, displayItems, lineThreads],
+    [rows, lineThreads],
   );
 
+  // One annotation per row that carries anything: a thread of any kind, or the
+  // composer for a comment being written. Pierre draws each under its line.
+  const lineAnnotations = useMemo(() => {
+    const hosts = new Set<number>();
+    if (commentContext) {
+      for (const row of Object.keys(commentsByRow)) hosts.add(Number(row));
+      if (editingRow !== null) hosts.add(editingRow);
+      for (const row of durableByRow?.keys() ?? []) hosts.add(row);
+    }
+    for (const row of explicitByRow?.keys() ?? []) hosts.add(row);
+    const out: DiffLineAnnotation<AnnotationMeta>[] = [];
+    for (const row of [...hosts].sort((a, b) => a - b)) {
+      const anchor = rows[row] && lineAnchors(rows[row])[0];
+      if (anchor) out.push({ side: toPierreSide(anchor.side), lineNumber: anchor.lineNumber, metadata: { row } });
+    }
+    return out;
+  }, [commentContext, commentsByRow, editingRow, durableByRow, explicitByRow, rows]);
+
   const closeEditor = useCallback(() => {
-    setEditingLine(null);
+    setEditingRow(null);
     useInboxStore.getState().setReviewEditingId(null);
   }, []);
 
-  const addLineComment = useCallback(
-    (lineKey: number, lineNum: number | undefined, code: string, anchor?: DiffLineAnchor) => {
-      const anchorLines = anchor ? captureDiffAnchor(items, anchor.side, anchor.lineNumber, anchor.lineEnd) : undefined;
-      if (onLineComment) {
-        onLineComment(anchor, code, anchorLines);
-        return;
-      }
-      if (!commentContext) return;
-      const s = useInboxStore.getState();
-      const id = genCommentId();
-      const quote = `${commentContext.filePath}:${lineNum ?? "?"}\n${code}`;
-      s.addReviewComment(commentContext.conversationId, {
-        id, messageId: commentContext.anchorKey, blockIndex: lineKey, quote, body: "", createdAt: Date.now(),
-        filePath: commentContext.filePath, fileLine: lineNum, anchorLines,
-      });
-      s.setReviewEditingId(id);
-      setEditingLine(lineKey);
-    },
-    [commentContext, onLineComment, items],
-  );
-
-  // One comment handle for the whole block instead of one per row, sitting in the
-  // left margin OUTSIDE the code — the same `.cc-block-quote` handle a message
-  // block gets (MessageReview), at the same gutter offset. It glides to whatever
-  // row the cursor is on, so only a single mark is ever on screen and sweeping
-  // the diff no longer flashes a chip down every line.
-  //
-  // Moving it is imperative (a delegated mouseover writes `top` and a data
-  // attribute) rather than React state: hover state would re-render every row of
-  // the diff on each row the cursor crosses, and this sits inside the
-  // frequently-rendering conversation tree.
-  const handleRef = useRef<HTMLButtonElement | null>(null);
-  const hoveredLine = useRef<FlatDiffLine | null>(null);
-  const hoverClear = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // The handle sits in the margin with a gap between it and the code, so the
-  // cursor leaves the block on its way over — hide on a delay and cancel that
-  // when it arrives, or the handle would vanish before it could be clicked.
-  // Same grace as the message-block handle in MessageReview.
-  const cancelClear = useCallback(() => {
-    if (hoverClear.current) {
-      clearTimeout(hoverClear.current);
-      hoverClear.current = null;
+  // The comment affordance in the gutter: on one line, or on the run the reader
+  // selected or dragged down the gutter. The comment hangs under the run's last line.
+  const onGutterUtilityClick = useStableCallback((range: SelectedLineRange) => {
+    const side = fromPierreSide(range.side);
+    const start = Math.min(range.start, range.end);
+    const end = Math.max(range.start, range.end);
+    const row = rows.findIndex((r) => lineAnchors(r).some((a) => a.side === side && a.lineNumber === end));
+    if (row < 0) return;
+    const anchor: DiffLineAnchor = { side, lineNumber: start, ...(end !== start ? { lineEnd: end } : {}) };
+    const anchorLines = captureDiffAnchor(rows, side, start, end === start ? undefined : end);
+    const code = rows[row].content;
+    if (onLineComment) {
+      onLineComment(anchor, code, anchorLines);
+      return;
     }
-  }, []);
-
-  const trackRow = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    cancelClear();
-    const btn = handleRef.current;
-    if (!btn) return;
-    const rowEl = (e.target as HTMLElement | null)?.closest?.("[data-diff-row]") as HTMLElement | null;
-    // Separators, comment threads and the handle itself report no row: keep the
-    // handle where it is rather than snapping it away mid-gesture.
-    if (!rowEl) return;
-    const line = displayItems[Number(rowEl.dataset.diffRow)];
-    if (!line || line.type === "separator") return;
-    hoveredLine.current = line;
-    // The handle lives outside the horizontal scroller, so it can't use the
-    // row's offsetTop (that's measured inside it). Measure against the block.
-    const host = btn.offsetParent as HTMLElement | null;
-    const top = host ? rowEl.getBoundingClientRect().top - host.getBoundingClientRect().top : 0;
-    // Appearing and moving are different gestures. Sliding into place from the
-    // row you last left looks like a glitch, so only animate `top` while the
-    // handle is already visible.
-    btn.dataset.moving = btn.dataset.on === "yes" ? "yes" : "no";
-    btn.style.top = `${top}px`;
-    btn.dataset.on = "yes";
-  }, [displayItems, cancelClear]);
-
-  const untrackRow = useCallback(() => {
-    cancelClear();
-    hoverClear.current = setTimeout(() => {
-      hoveredLine.current = null;
-      if (handleRef.current) handleRef.current.dataset.on = "no";
-    }, 140);
-  }, [cancelClear]);
-
-  useWatchEffect(() => cancelClear, [cancelClear]);
-
-  const commentOnLine = useCallback((line: FlatDiffLine) => {
-    // A row the reader can comment on is on one side or the other; a context
-    // row counts as the new side, which is what a reader is reading.
-    const anchor = lineAnchors(line)[0];
-    if (!anchor) return;
-    // Commenting from inside a selection comments on the whole run; commenting
-    // anywhere else is about that row alone.
-    const range = selection?.side === anchor.side ? selection.range : null;
-    const end = commentRangeEnd(range, anchor.lineNumber);
-    addLineComment(line.lineKey ?? 0, line.newNum ?? line.oldNum, line.content, {
-      ...anchor,
-      ...(end === undefined ? {} : { lineNumber: range!.start, lineEnd: end }),
+    if (!commentContext) return;
+    const s = useInboxStore.getState();
+    const id = genCommentId();
+    const quote = `${commentContext.filePath}:${end}\n${code}`;
+    s.addReviewComment(commentContext.conversationId, {
+      id, messageId: commentContext.anchorKey, blockIndex: row, quote, body: "", createdAt: Date.now(),
+      filePath: commentContext.filePath, fileLine: end, anchorLines,
     });
-  }, [addLineComment, selection]);
+    s.setReviewEditingId(id);
+    setEditingRow(row);
+  });
 
-  const commentOnHoveredRow = useCallback(() => {
-    if (hoveredLine.current) commentOnLine(hoveredLine.current);
-  }, [commentOnLine]);
+  const renderAnnotation = useCallback((annotation: DiffLineAnnotation<AnnotationMeta>) => {
+    const row = annotation.metadata.row;
+    const explicit = explicitByRow?.get(row)
+      ?.map(({ key, placement }) => ({ key, placement, items: lineThreads?.get(key) }))
+      .filter((t) => t.items !== undefined);
+    const pending = commentContext ? commentsByRow[row] : undefined;
+    const durable = commentContext
+      ? durableByRow?.get(row)
+          ?.map(({ key, placement }) => ({ line: key, placement, comments: durableByLine.get(key) }))
+          .filter((t) => t.comments?.length)
+      : undefined;
+    return (
+      <div className="font-sans text-sol-text">
+        {renderLineThread
+          ? explicit?.map(({ key, placement, items }) => (
+              <div key={key}>{renderLineThread(parseDiffLineKey(key), items!, placement)}</div>
+            ))
+          : null}
+        {commentContext && (pending?.length || editingRow === row) ? (
+          <DiffLineThread
+            conversationId={commentContext.conversationId}
+            comments={pending ?? EMPTY_COMMENT_LIST}
+            onCloseEditor={closeEditor}
+          />
+        ) : null}
+        {commentContext && durable?.length ? (
+          <Suspense fallback={null}>
+            {durable.map(({ line, placement, comments }) => (
+              <FileLineThread
+                key={line}
+                conversationId={commentContext.conversationId}
+                filePath={commentContext.filePath}
+                lineNumber={line}
+                comments={comments!}
+                placement={placement}
+              />
+            ))}
+          </Suspense>
+        ) : null}
+      </div>
+    );
+  }, [explicitByRow, lineThreads, commentContext, commentsByRow, durableByRow, durableByLine, renderLineThread, editingRow, closeEditor]);
+
+  const options = useMemo<FileDiffOptions<AnnotationMeta, undefined>>(() => ({
+    theme: DIFF_THEME,
+    themeType: theme,
+    diffStyle: "unified",
+    diffIndicators: "classic",
+    lineDiffType: "word-alt",
+    // A whole file can open what it hides; a snippet or a patch has nothing
+    // beyond its hunks, so its gaps are only marked.
+    hunkSeparators: fileDiff.isPartial ? "simple" : "line-info",
+    expandUnchanged,
+    overflow: wrap ? "wrap" : "scroll",
+    disableLineNumbers: !showLineNumbers,
+    disableFileHeader: true,
+    enableLineSelection: selectable,
+    onLineSelected: selectable ? onLineSelected : undefined,
+    enableGutterUtility: interactive,
+    onGutterUtilityClick: interactive ? onGutterUtilityClick : undefined,
+  }), [theme, fileDiff.isPartial, expandUnchanged, wrap, showLineNumbers, selectable, interactive, onLineSelected, onGutterUtilityClick]);
 
   return (
-    <div
-      className={`code-block-resizable group font-mono text-[13px] leading-[22px] ${interactive ? "relative" : ""}`}
-      onMouseOver={interactive && !rowPlus ? trackRow : undefined}
-      onMouseLeave={interactive && !rowPlus ? untrackRow : undefined}
-    >
-      {interactive && !rowPlus && (
-        <button
-          ref={handleRef}
-          type="button"
-          data-cc-gutter
-          data-on="no"
-          tabIndex={-1}
-          className="cc-block-quote cc-diff-quote"
-          title="Comment on this line"
-          aria-label="Comment on this line"
-          onMouseEnter={cancelClear}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={commentOnHoveredRow}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M9.6 6C7 7.5 5.2 9.9 5.2 13.1c0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L9.6 6zm8 0c-2.6 1.5-4.4 3.9-4.4 7.1 0 2.4 1.5 4 3.5 4 1.8 0 3.1-1.3 3.1-3 0-1.6-1.1-2.8-2.7-2.8-.3 0-.6 0-.7.1.3-1.6 1.6-3.2 3-4.1L17.6 6z" />
-          </svg>
-        </button>
-      )}
-      <div className={wrap ? undefined : "cb-hscroll"}>
-        <div className={wrap ? undefined : "min-w-fit"}>
-        {displayItems.map((item, i) => {
-          if (item.type === 'separator') {
-            if (onExpandContext) {
-              return (
-                <button
-                  key={`sep-${i}`}
-                  type="button"
-                  onClick={onExpandContext}
-                  className="block w-full text-center text-[11px] text-sol-blue/60 hover:text-sol-cyan hover:bg-sol-bg-highlight/40 select-none transition-colors"
-                  title="Show hidden context"
-                >
-                  &#8943;
-                </button>
-              );
-            }
-            return (
-              <div
-                key={`sep-${i}`}
-                className={wrap
-                  ? "my-0.5 border-y border-sol-border/40 bg-sol-bg-alt/60 py-0.5 text-center text-[11px] text-sol-text-dim select-none"
-                  : "text-center text-[11px] text-sol-text-dim/40 select-none"}
-                title={wrap ? "Unchanged lines not shown" : undefined}
-              >
-                &#8943;
-              </div>
-            );
-          }
-
-          const line = item as FlatDiffLine;
-          const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
-          const rowBg = line.type === 'added'
-            ? 'diff-line-added'
-            : line.type === 'removed'
-            ? 'diff-line-removed'
-            : '';
-          const prefixColor = line.type === 'added'
-            ? 'text-sol-green/60'
-            : line.type === 'removed'
-            ? 'text-sol-red/60'
-            : 'text-transparent';
-
-          const lk = line.lineKey ?? i;
-          const lineComments = commentContext ? commentsByLine[lk] : undefined;
-          const durablePlaced = durableRowByIndex?.get(i);
-          const durableThreads = durablePlaced
-            ?.map(({ key, placement }) => ({ line: key, placement, comments: durableByLine.get(key) }))
-            .filter((t) => t.comments?.length);
-          const explicitThreads = explicitRowByIndex?.get(i)
-            ?.map(({ key, placement }) => ({ key, placement, items: lineThreads?.get(key) }))
-            .filter((t) => t.items !== undefined);
-
-          // The row's own anchor, and whether the reader has it selected.
-          const rowAnchor = lineAnchors(line)[0];
-          const selected =
-            !!rowAnchor &&
-            selection?.side === rowAnchor.side &&
-            isLineSelected(selection.range, rowAnchor.lineNumber);
-
-          const row = (
-            <div
-              data-diff-row={interactive ? i : undefined}
-              data-ln={rowAnchor ? `${rowAnchor.side === "LEFT" ? "L" : "R"}${rowAnchor.lineNumber}` : undefined}
-              id={rowId && rowAnchor ? rowId(rowAnchor) : undefined}
-              className={`${rowBg} ${wrap ? "flex items-start" : "whitespace-pre"} ${rowId ? "cc-diff-target" : ""} ${selected ? "cc-diff-selected" : ""} ${selected && selection && rowAnchor!.lineNumber === selection.range.end ? "cc-diff-selected-end" : ""} ${rowPlus ? "cc-diff-row" : ""}`}
-            >
-              {rowPlus && (
-                <button
-                  type="button"
-                  className="cc-row-plus"
-                  tabIndex={-1}
-                  disabled={!rowAnchor}
-                  title={selected ? "Comment on the selected lines" : "Comment on this line"}
-                  aria-label={selected ? "Comment on the selected lines" : "Comment on this line"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => commentOnLine(line)}
-                >
-                  +
-                </button>
-              )}
-              {showLineNumbers && (() => {
-                const canSelect = selectable && !!rowAnchor;
-                const gutterClass = `select-none inline-block shrink-0 text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30 ${
-                  canSelect ? "cursor-pointer hover:text-sol-cyan hover:opacity-100" : ""
-                } ${selected ? "text-sol-cyan opacity-100" : ""}`;
-                const gutterProps = {
-                  className: gutterClass,
-                  style: { minWidth: `calc(${gutterCh}ch + 1rem)` },
-                  title: canSelect ? "Click to select this line, shift click to select a range" : undefined,
-                  onMouseDown: canSelect ? (e: React.MouseEvent) => { if (!e.metaKey && !e.ctrlKey && e.button === 0) e.preventDefault(); } : undefined,
-                  onClick: canSelect
-                    ? (e: React.MouseEvent) => {
-                        // A modified click on a link is the reader's own gesture
-                        // (a new tab, a new window): leave it to the browser.
-                        if (e.metaKey || e.ctrlKey || e.altKey) return;
-                        e.preventDefault();
-                        selectLine(rowAnchor!, e.shiftKey);
-                      }
-                    : undefined,
-                };
-                const number = line.newNum ?? line.oldNum ?? '';
-                // A thread hung here after its code moved, or whose code is gone.
-                const shifted = [...(durableThreads ?? []), ...(explicitThreads ?? [])]
-                  .find((t) => t.placement.state !== "current")?.placement;
-                const content = shifted
-                  ? <><AnchorGutterMark placement={shifted} absolute />{number}</>
-                  : number;
-                if (shifted) gutterProps.className += " relative";
-                return lineHref && rowAnchor
-                  ? <a href={lineHref(rowAnchor)} {...gutterProps}>{content}</a>
-                  : <span {...gutterProps}>{content}</span>;
-              })()}
-              <span className={`select-none shrink-0 whitespace-pre ${prefixColor}`}>{prefix} </span>
-              <span className={wrap ? "min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]" : undefined} dangerouslySetInnerHTML={{ __html: line.html || ' ' }} />
-            </div>
-          );
-
-          if (!explicitThreads?.length && (!commentContext || (!lineComments?.length && editingLine !== lk && !durableThreads?.length))) {
-            return <div key={i}>{row}</div>;
-          }
-          return (
-            <div key={i}>
-              {row}
-              {renderLineThread
-                ? explicitThreads?.map(({ key, placement, items }) => (
-                    <div key={key}>{renderLineThread(parseDiffLineKey(key), items!, placement)}</div>
-                  ))
-                : null}
-              {commentContext && (lineComments?.length || editingLine === lk) ? (
-                <DiffLineThread
-                  conversationId={commentContext.conversationId}
-                  comments={lineComments ?? EMPTY_COMMENT_LIST}
-                  onCloseEditor={closeEditor}
-                />
-              ) : null}
-              {commentContext && durableThreads?.length ? (
-                <Suspense fallback={null}>
-                  {durableThreads.map(({ line, placement, comments }) => (
-                    <FileLineThread
-                      key={line}
-                      conversationId={commentContext.conversationId}
-                      filePath={commentContext.filePath}
-                      lineNumber={line}
-                      comments={comments!}
-                      placement={placement}
-                    />
-                  ))}
-                </Suspense>
-              ) : null}
-            </div>
-          );
-        })}
-        </div>
+    <div className="code-block-resizable">
+      <div style={needsTruncation ? { maxHeight: maxLines * ROW_PX, overflow: "hidden" } : undefined}>
+        <FileDiff<AnnotationMeta, undefined>
+          fileDiff={fileDiff}
+          options={options}
+          selectedLines={selectable ? selectedLines : undefined}
+          lineAnnotations={lineAnnotations}
+          renderAnnotation={renderAnnotation}
+        />
       </div>
       {needsTruncation && (
         <button
           onClick={() => setFullyExpanded(true)}
           className="block w-full text-center py-2 sm:py-1 text-xs sm:text-[11px] text-sol-blue hover:text-sol-cyan transition-colors"
         >
-          show {totalCodeLines - maxLines} more lines
+          show {shownRows - maxLines} more lines
         </button>
       )}
-      {fullyExpanded && totalCodeLines > maxLines && (
+      {fullyExpanded && shownRows > maxLines && (
         <button
           onClick={() => setFullyExpanded(false)}
           className="block w-full text-center py-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
