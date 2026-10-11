@@ -16,6 +16,8 @@ import {
   Radio,
   Target,
   Zap,
+  Hexagon,
+  UserRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
@@ -58,8 +60,9 @@ import { TranscriptTurnList } from "./calls/TranscriptTurns";
 import { groupTurns } from "./calls/transcriptTurnModel";
 import { firstName, fmtCallLength } from "./calls/speakers";
 import { CallMomentFrame } from "./calls/CallMomentFrame";
-import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, replayFacts, sourceFacts } from "./ops/parts";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
+import { replayFacts } from "./ops/opsModel";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -88,6 +91,8 @@ const TYPE_ICON: Record<EntityType, any> = {
   call: Phone,
   replay: Film,
   source: Radio,
+  role: Hexagon,
+  person: UserRound,
 };
 
 /** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
