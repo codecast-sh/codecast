@@ -23,7 +23,8 @@ import {
   Link2,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { DiffView } from "./DiffView";
+import { FilePatchDiff } from "./DiffView";
+import { diffLineElements } from "./diff/pierre";
 import { parsePatch, getFileStatus, type DiffLineAnchor } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
 import { copyText } from "../lib/copyText";
@@ -117,9 +118,8 @@ export interface FileDiffLayoutProps {
 export type DiffFlow = {
   /** Pixels of sticky chrome above the diff; file headers pin under it. */
   stickyTop: number;
-  /** The DOM id of a file's card, and of a line's row: the fragment targets. */
+  /** The DOM id of a file's card: the fragment target. */
   fileId: (path: string) => string;
-  rowId: (path: string, anchor: DiffLineAnchor) => string;
   /** The in-page address of a file and of a line or run of lines. */
   fileAnchorHref: (path: string) => string;
   lineHref: (path: string, anchor: DiffLineAnchor) => string;
@@ -247,10 +247,6 @@ function FileHeaderName({
   );
 }
 
-export function FilePatchDiff({ patch, ...props }: { patch: string } & Omit<React.ComponentProps<typeof DiffView>, "hunks">) {
-  const { hunks } = useMemo(() => parsePatch(patch), [patch]);
-  return <DiffView {...props} hunks={hunks} />;
-}
 
 function FileDiffContent({
   file,
@@ -921,8 +917,6 @@ function FlowDiffView({
                         ...(next.range.end !== next.range.start ? { lineEnd: next.range.end } : {}),
                       });
                     }}
-                    lineHref={(anchor) => flow.lineHref(path, anchor)}
-                    rowId={(anchor) => flow.rowId(path, anchor)}
                     commentContext={commentContextFor?.(path)}
                     {...lineThreadProps(lineThreads, file)}
                   />
@@ -1105,9 +1099,10 @@ export function FileDiffLayout({
     }
   });
 
+  const groupElRef = useRef<HTMLDivElement | null>(null);
   const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     s.updateClientLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
-  });
+  }, groupElRef);
 
   const handleSelectFile = (filename: string) => {
     setSelectedFile(filename);
@@ -1419,6 +1414,7 @@ export function FileDiffLayout({
         <Group
           orientation="horizontal"
           onLayoutChange={handleLayoutChange}
+          elementRef={groupElRef}
           defaultLayout={layout}
           className="h-full"
         >
@@ -1454,11 +1450,13 @@ function topDiffRow(root: HTMLElement): { line?: number; fileIndex?: number } | 
   const scroller = root.querySelector<HTMLElement>("[data-follow-diff-scroll]");
   if (!scroller) return null;
   const edge = scroller.getBoundingClientRect().top + PANE_HEADER_PX;
-  for (const row of scroller.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
-    if (row.getBoundingClientRect().bottom <= edge) continue;
-    const card = row.closest<HTMLElement>("[id^='file-']");
+  for (const { el, anchor } of diffLineElements(scroller)) {
+    if (anchor.side !== "RIGHT" || el.getBoundingClientRect().bottom <= edge) continue;
+    // The line sits in its diff's shadow root; the card is around the diff.
+    const host = (el.getRootNode() as ShadowRoot).host as HTMLElement | undefined;
+    const card = host?.closest<HTMLElement>("[id^='file-']");
     const fileIndex = card ? Number(card.id.slice(5)) : undefined;
-    return { line: Number(row.dataset.ln!.slice(1)), fileIndex: Number.isFinite(fileIndex) ? fileIndex : undefined };
+    return { line: anchor.lineNumber, fileIndex: Number.isFinite(fileIndex) ? fileIndex : undefined };
   }
   return { line: undefined };
 }
@@ -1472,12 +1470,13 @@ function landOnDiffRow(paneRef: React.RefObject<HTMLElement | null>, fileIndex: 
       const scope = fileIndex === null ? scroller : scroller.querySelector<HTMLElement>(`[id="file-${fileIndex}"]`);
       if (!scope || line === undefined) return scope === scroller ? (scroller.firstElementChild as HTMLElement | null) : scope;
       let best: HTMLElement | null = null;
-      for (const row of scope.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
-        if (Number(row.dataset.ln!.slice(1)) > line) break;
-        best = row;
+      for (const { el, anchor } of diffLineElements(scope)) {
+        if (anchor.side !== "RIGHT") continue;
+        if (anchor.lineNumber > line) break;
+        best = el;
       }
       return best ?? scope;
     },
-    (el) => (el.matches("[data-ln]") ? PANE_HEADER_PX : 0),
+    (el) => (el.matches("[data-line]") ? PANE_HEADER_PX : 0),
   );
 }
