@@ -14,6 +14,21 @@ they find. Read `git status` for changes that belong to other sessions and
 leave those out. Group the rest into topical commits with short messages that
 say what changed and why; never one commit for unrelated work.
 
+## Shipping everything in a shared checkout
+
+When the work to ship is everything the sessions in a shared checkout left
+uncommitted, not just this session's, use `cast ship checkout` rather than
+committing by hand. `cast ship checkout --dry-run --json` freezes the tree and
+groups the changed files by the session that wrote them, with each session's
+state and last words. Judge every group before it goes: hold one whose session
+is mid-change or says it is not finished, split a group that holds two
+changes, rewrite messages to say what changed. `cast ship checkout --plan`
+then ships exactly the frozen tree. When it stops (a check failing in a
+shipped file, a shipped file importing a held one, a conflict), fix the cause
+and plan again. The repo's `[ship]` table in `.codecast/workspace.toml` says
+whether it pushes the default branch or opens a pull request, and what
+deploys.
+
 ## Open the pull request
 
 Description, in order: the goal in one sentence, what changed and why, how it

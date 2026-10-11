@@ -131,7 +131,7 @@ test("a change to a project: the sentence with one bold name, the field from wha
   // A short reason has no clamp word.
   expect(q("[data-subject-reasons] [data-field-more]")).toBeNull();
 
-  // In a list the entry's Approve is an outline: the frame keeps its one filled button.
+  // The entry's Approve is an outline: the composer's send is the one filled button.
   const approve = q("[data-subject-approve]");
   expect(approve.textContent).toBe("Approve");
   expect(approve.style.background).toBe("");
@@ -343,8 +343,8 @@ test("a charter edit draws each edit as a passage diff under one Charter label; 
   expect(blocks.length).toBe(3);
   expect(blocks.map((b) => Array.from(b.querySelectorAll("[data-diff]")).map((p) => p.getAttribute("data-diff")))).toEqual([["removed", "added"], ["added"], ["removed"]]);
   expect(blocks.map((b) => b.getAttribute("data-passage-diff"))).toEqual(["2", "1", "1"]);
-  // One label for the run of edits.
-  expect(Array.from(q("[data-subject-group]").querySelectorAll("dt")).map((d) => d.textContent)).toEqual(["Charter", "", ""]);
+  // One label for the run of edits; the reason and the evidence follow as rows of the same grid.
+  expect(Array.from(q("[data-subject-group]").querySelectorAll("dt")).map((d) => d.textContent)).toEqual(["Charter", "", "", "Why", "Evidence"]);
   expect(blocks[0].querySelector("del")!.textContent).toBe(ESCALATIONS_CHARTER_SENTENCES[1]);
   expect(blocks[0].querySelector("ins")).not.toBeNull();
   expect(document.body.textContent).not.toContain(ESCALATIONS_CHARTER_SENTENCES[3]);
@@ -397,9 +397,9 @@ test("a field that held nothing reads its placeholder, quiet and never struck; a
   meta.done();
 });
 
-test("a new role with what rides along is one entry whose members are the card's; a limit never shows; alone, Approve is filled until pressed", () => {
+test("a new role with what rides along is one entry whose members are the card's; a limit never shows; alone, Approve is still an outline", () => {
   const card = cardOf(ROLE, "Head of Platform");
-  const m = mount({ card, lead: true, onAnswer });
+  const m = mount({ card, onAnswer });
   expect(q("[data-subject]").getAttribute("data-change-ids")).toBe("role limit trust routine");
   expect(q("[data-subject-sentence]").textContent).toBe("Add the role Head of Platform, reporting to you.");
   // "you" carries the reader's own face (the initials are its text).
@@ -417,9 +417,9 @@ test("a new role with what rides along is one entry whose members are the card's
   expect(qa("[data-subject-group]").length).toBe(1);
   expect(q("[data-subject-reasons]").textContent).toBe("Because role.Because routine.Because trust.");
   expect(document.body.textContent).not.toMatch(/800|tokens|wakes|caps|limit/i);
-  // No number column on a card that stands alone, and its Approve is the frame's filled button.
+  // No number column on a card that stands alone, and its Approve stays an outline: only the composer's send acts.
   expect(q("[data-subject-ordinal]")).toBeNull();
-  expect(q("[data-subject-approve]").style.background).toBe("var(--sol-violet)");
+  expect(q("[data-subject-approve]").style.background).toBe("");
   click(q("[data-subject-approve]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
   m.done();
@@ -428,20 +428,20 @@ test("a new role with what rides along is one entry whose members are the card's
 test("a failed entry: the note under the sentence, a red number, Retry in Approve's place; staged, the band says it runs again", () => {
   const failed = { ...RAISE, status: "failed" as const, applied_note: "The project was renamed while this waited." };
   const card = cardOf([FIRST, failed], "Private Network");
-  const m = mount({ card, ordinal: 4, lead: true, onAnswer });
+  const m = mount({ card, ordinal: 4, onAnswer });
   expect(q("[data-subject]").getAttribute("data-subject-status")).toBe("failed");
   expect(q("[data-failed-note]").textContent).toBe("Failed: The project was renamed while this waited.");
   expect(q("[data-subject-ordinal]").className).toContain("--ink-red");
   // A failed apply wrote nothing, so the field still reads the live record.
   expect(field("priority").getAttribute("data-field-before")).toBe("P2");
-  // Retry is never the filled button, even on a card that stands alone; it is an approve answer like any other.
+  // Retry is an approve answer like any other: an outline.
   expect(q("[data-subject-approve]").textContent).toBe("Retry");
   expect(q("[data-subject-approve]").style.background).toBe("");
   click(q("[data-subject-approve]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
   expect(q("[data-subject-reject]")).not.toBeNull();
   expect(q("[data-subject-reply]")).not.toBeNull();
-  m.update({ card, ordinal: 4, lead: true, onAnswer, answer: APPROVE });
+  m.update({ card, ordinal: 4, onAnswer, answer: APPROVE });
   expect(band()!.textContent).toBe("Retry. Runs again when you send.Undo");
   m.done();
 });
@@ -558,10 +558,10 @@ test("changes that ended differently: each group carries its own word or its own
 
 test("several changes to a goal that exists read change by change under one sentence and one answer", () => {
   const m = mount({ card: cardOf([G1, G9, G10], "Proud relationships"), ordinal: 9, onAnswer });
-  expect(q("[data-subject-sentence]").textContent).toBe("Move Proud relationships under the purpose, measure it by Trust breaks per day and have Agent Quality carry it.");
+  expect(q("[data-subject-sentence]").textContent).toBe("Move Proud relationships under the mission, measure it by Trust breaks per day and have Agent Quality carry it.");
   expect(qa("[data-subject-group]").length).toBe(2);
   expect(field("parent").getAttribute("data-field-before")).toBe("at the top level");
-  expect(field("parent").getAttribute("data-field-after")).toBe("the purpose");
+  expect(field("parent").getAttribute("data-field-after")).toBe("the mission");
   expect(field("projects").getAttribute("data-field-before")).toBe("no project");
   // A list that gains an entry: the kept names, then the new one behind a quiet plus.
   expect(field("projects").textContent).toBe("+ Agent Quality");
@@ -572,7 +572,7 @@ test("several changes to a goal that exists read change by change under one sent
   m.done();
 });
 
-test("a goal's projects read as one run of names, measures as written, the owner as a face; sources sit behind one control", () => {
+test("a goal's projects read as one run of names, measures as written, the owner as a face; its sources read in place", () => {
   const purpose = mount({ card: cardOf([G1, G2], PURPOSE), ordinal: 1, onAnswer });
   expect(q("[data-subject-sentence]").textContent).toBe(`Set ${PURPOSE} as the purpose.`);
   expect(field("projects").textContent).toBe("Infrastructure, Matching & Funnel, People & Deals, Private Network, Agent Quality");
@@ -581,14 +581,12 @@ test("a goal's projects read as one run of names, measures as written, the owner
   purpose.done();
 
   const child = mount({ card: cardOf([G1, G2], "Improve conversion"), ordinal: 2, onAnswer });
-  expect(q("[data-subject-sentence]").textContent).toBe("Add the goal Improve conversion under the purpose.");
+  expect(q("[data-subject-sentence]").textContent).toBe("Add the goal Improve conversion under the mission.");
   expect(field("metrics").textContent).toBe("Email to intro rate, target 0.20%Cold email reply rate, target 1% higher (Cameron)");
   expect(field("metrics").children[0].children.length).toBe(2);
   expect(field("projects").textContent).toBe("Matching & Funnel");
   const sources = q("[data-subject-sources]");
-  expect(sources.textContent).toBe("1 source");
-  click(sources.querySelector("button")!);
-  expect(sources.textContent).toBe("Source:North star goals, admin home page");
+  expect(sources.textContent).toBe("North star goals, admin home page");
   expect(reached).toEqual([]);
   child.done();
 });
@@ -596,7 +594,6 @@ test("a goal's projects read as one run of names, measures as written, the owner
 test("a linked source opens as a link; there is no Edit", () => {
   const linked = { ...RAISE, evidence: [{ label: "3 decisions waiting", href: "/decisions" }, { label: "The ranking doc", href: "https://example.com/doc" }] };
   const m = mount({ card: cardOf([FIRST, linked], "Private Network"), ordinal: 4, onAnswer });
-  click(q("[data-subject-sources] button"));
   expect(qa("[data-subject-sources] a").map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("target")])).toEqual([["3 decisions waiting", "/decisions", null], ["The ranking doc", "https://example.com/doc", "_blank"]]);
   expect(q("[data-subject-edit]")).toBeNull();
   expect(document.body.textContent).not.toMatch(/\bEdit\b/);
@@ -607,7 +604,7 @@ test("a linked source opens as a link; there is no Edit", () => {
 test("what approving would take over: the card shows the phrase and the leave box while it waits, and the band carries it once staged", () => {
   const card = cardOf(ROLE, "Head of Platform");
   const takeover = { phrase: "12 sessions now report to @platform" };
-  const m = mount({ card, lead: true, onAnswer, takeover });
+  const m = mount({ card, onAnswer, takeover });
   expect(q("[data-takeover-phrase]").textContent).toContain("12 sessions now report to @platform");
   click(q("[data-takeover-leave-input]"));
   expect(reached).toEqual([]);
@@ -615,19 +612,19 @@ test("what approving would take over: the card shows the phrase and the leave bo
   click(q("[data-subject-approve]"));
   expect(sent.splice(0)).toEqual([{ verdict: "approve", leave_sessions: true }]);
   const ticked = { verdict: "approve" as const, leave_sessions: true };
-  m.update({ card, lead: true, onAnswer, answer: ticked, takeover });
+  m.update({ card, onAnswer, answer: ticked, takeover });
   expect(band()!.textContent).toContain("Approved, and the sessions stay where they are.");
   expect((q("[data-staged] [data-takeover-leave-input]") as HTMLInputElement).checked).toBe(true);
   // Unticking rewrites the pending approval without it; ticking again puts it back.
   click(q("[data-takeover-leave-input]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
-  m.update({ card, lead: true, onAnswer, answer: APPROVE, takeover });
+  m.update({ card, onAnswer, answer: APPROVE, takeover });
   expect(band()!.textContent).toContain("Approved. Applies when you send.Undo");
   expect((q("[data-staged] [data-takeover-leave-input]") as HTMLInputElement).checked).toBe(false);
   click(q("[data-takeover-leave-input]"));
   expect(sent.splice(0)).toEqual([ticked]);
   // Read only, or decided, the box is gone.
-  m.update({ card, lead: true, takeover });
+  m.update({ card, takeover });
   expect(q("[data-takeover-phrase]")).toBeNull();
   m.done();
 });
@@ -668,7 +665,7 @@ test("the narrow form puts the controls under the entry at the right and the ban
 
 test("a limit alone is one plain sentence with its answers and nothing else", () => {
   const card = cardsOf([change("limit", 1, { kind: "budget", handle: "growth", caps: { wakes_per_day: 12, tokens_per_day: 800_000 } }, "proposed", { rationale: "Growth wakes 30 times a day." })])[0];
-  const m = mount({ card, lead: true, onAnswer });
+  const m = mount({ card, onAnswer });
   expect(q("[data-subject-sentence]").textContent).toBe("Head of Growth keeps a safety net on its daily work.");
   expect(qa("[data-field]")).toEqual([]);
   expect(document.body.textContent).not.toMatch(/wakes|tokens|caps|limit|\d/i);
