@@ -363,6 +363,28 @@ describe("authors", () => {
     expect(api.conversation_ids.map(String)).not.toContain(String(sessions.webAuthor));
   });
 
+  test("a subagent that wrote the files is an author with no insight of its own, and brings its parent", async () => {
+    const { t, ids, build, byShas } = await setup();
+    const { parent, worker } = await t.run(async (ctx) => {
+      const session = (short: string, extra: Record<string, unknown> = {}) => ctx.db.insert("conversations", {
+        user_id: ids.ana, team_id: ids.team, agent_type: "claude_code", session_id: `s-${short}`, short_id: short, title: short,
+        started_at: at("07:00"), updated_at: at("08:40"), message_count: 9, is_private: false, status: "active", git_root: "/repo", ...extra,
+      } as any);
+      const parent = await session("jx7pare");
+      await ctx.db.insert("session_insights", {
+        conversation_id: parent, team_id: ids.team, actor_user_id: ids.ana, source: "idle", generated_at: at("08:45"),
+        summary: "Launched the line pages", headline: "Launched the line pages", outcome_type: "shipped", themes: [],
+      } as any);
+      const worker = await session("jx7work", { is_subagent: true, parent_conversation_id: parent });
+      const message = await ctx.db.insert("messages", { conversation_id: worker, message_uuid: "e-worker", role: "assistant", content: "edit", timestamp: at("08:30") } as any);
+      await ctx.db.insert("file_changes", { conversation_id: worker, change_key: "e-worker", message_id: message, seq: 0, file_path: "/repo/packages/web/line.tsx", change_type: "write", timestamp: at("08:30") } as any);
+      return { parent, worker };
+    });
+    await build();
+    const story = await byShas("a1");
+    expect(story.conversation_ids.map(String)).toEqual(expect.arrayContaining([String(worker), String(parent)]));
+  });
+
   test("a past day finds its author under a later week's sessions", async () => {
     const { t, ids, build, byShas } = await setup();
     const author = await t.run(async (ctx) => {
