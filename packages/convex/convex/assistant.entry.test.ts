@@ -50,7 +50,8 @@ afterEach(() => {
 async function setup() {
   const t = convexTest(schema, modules);
   const user = await t.run(async (ctx) => {
-    const user = await ctx.db.insert("users", {});
+    // A proven address: the Free plan serves only one (assistant/freeGate.ts).
+    const user = await ctx.db.insert("users", { emailVerificationTime: 1 });
     await ctx.db.insert("api_tokens", { user_id: user, token_hash: await hashToken(TOKEN), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any);
     return user;
   });
