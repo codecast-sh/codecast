@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from "react";
 import { isCommandMessage, isHiddenSystemNotice, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
-import { isModelSwitchStdout } from "@codecast/shared/contracts";
+import { hasAgentSetupMarker, isModelSwitchStdout } from "@codecast/shared/contracts";
 import { isToolResultCarrier, stripInjectionNoise, foldNudgeRuns, nudgeLabel, type NudgeRow } from "../components/sessionMessage";
 import { sameMessageAuthor } from "../lib/messageAuthors";
 import { FOLD_KEPT_USER_KINDS, classifyUserMessage, isAlwaysVisibleToolCall, isHiddenStubMessage, parseCastCommand, stripSystemTags } from "../components/conversation/classify";
@@ -96,6 +96,14 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     let curKey: string | null = null;
     let ownerId: string | null = null;                 // current segment's receipt owner
     let previousAssistant: Message | null = null;
+    // Results arrive on later user rows; a setup marker in one keeps its tool out of the receipt.
+    const setupResults = new Map<string, { content?: string }>();
+    // Scanned over messages, not the timeline: a row that only carries results is not a timeline item.
+    for (const m of messages) {
+      for (const r of m.tool_results ?? []) {
+        if (hasAgentSetupMarker(r.content)) setupResults.set(r.tool_use_id, r);
+      }
+    }
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
@@ -143,7 +151,7 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
       if (!stats.preview && hasText) {
         stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
       }
-      const hideable = tools.filter(tc => !isAlwaysVisibleToolCall(tc));
+      const hideable = tools.filter(tc => !isAlwaysVisibleToolCall(tc, setupResults.get(tc.id)));
       const entry: ReceiptEntry = { messageId: msg._id, messageUuid: msg.message_uuid, timestamp: msg.timestamp, tools: hideable };
       // Segment ownership: a text message opens a new segment and owns its own
       // tools; a tool-only message folds into the current owner (or becomes one).
@@ -155,15 +163,15 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
         // A message carrying an always-visible block (poll, plan write) must
         // still render that block — fold its hideable tools into the receipt but
         // don't absorb the message itself.
-        if (!tools.some(isAlwaysVisibleToolCall)) absorbed.add(msg._id);
+        if (hideable.length === tools.length) absorbed.add(msg._id);
       } else {
         ownerId = msg._id;
         receiptOf.set(msg._id, hideable.length ? [entry] : []);
       }
     }
     if (curBoundary && hasMoreBelow) routingOf.get(curBoundary)!.until = lastLoadedAt;
-    return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed, routingOf };
-  }, [timeline, userMsgKindMap, messageAuthors, hasMoreBelow]);
+    return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed, routingOf, setupResults };
+  }, [timeline, messages, userMsgKindMap, messageAuthors, hasMoreBelow]);
 
   // The turn the agent is in or just finished (the last assistant message's)
   // and where its last answer sits. Fold mode keeps an ask card only while
@@ -186,8 +194,8 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
   }, [foldWorkingTurns, timeline, turnAggregates]);
   const liveTurnKey = liveTurn.key;
   const openAsk = useCallback((msg: Message, index: number, turnKey: string | undefined) =>
-    turnKey === liveTurn.key && index > liveTurn.lastUserIndex && !!msg.tool_calls?.some(isAlwaysVisibleToolCall),
-  [liveTurn]);
+    turnKey === liveTurn.key && index > liveTurn.lastUserIndex && !!msg.tool_calls?.some((tc) => isAlwaysVisibleToolCall(tc, turnAggregates.setupResults.get(tc.id))),
+  [liveTurn, turnAggregates]);
 
   // Pair each slash-command invocation with its expansion (the body of the command's
   // .md file, emitted by Claude Code as the next user message). They render as one
