@@ -17,7 +17,7 @@
 // the profile's edit path to that machine (useLineStationEdits), and the
 // first one writes the shipped line out into the repo. The workflow copy
 // above is only for a project no machine has published.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -31,10 +31,11 @@ import { lineOptions } from "../../org/scope/lineBoard";
 import { LineChip } from "../CustomizedLineChip";
 import { EditStatus } from "./LineValueRow";
 import { useLineStationEdits } from "./useLineStationEdits";
-import { useSendThroughLine } from "../map/ChangeComposer";
+import { useSendThroughLine } from "../map/useSendThroughLine";
 import { REPO_LINE_REL_DIR } from "@codecast/shared/contracts/lineProfile";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
+import { readableTemplate } from "../../../lib/line/lineGraphs";
 import { SHIPPED_LINE } from "../../../lib/line/shippedLine.generated";
-import { shortDay, type StationVersion } from "../../../lib/line/runReport";
 import {
   editStation, forkShippedLine, isEditableStation, lineForkSlug, resetAllStations, resetStation,
   rolesOnProject, stationDiffs, stationText, type LineNode, type LineWorkflow, type ShippedLine, type StationPatch,
@@ -131,33 +132,6 @@ export function StationDefinition({ projectId, stationId }: { projectId: string;
   );
 }
 
-const CHANGE_WORDS: Record<StationVersion["change"], string> = { first: "First recorded", edited: "Edited", added: "Added", removed: "Removed" };
-
-/** A station's own version history (line-map.md LX3): each version in which
- *  this station changed, when it ran and what it delivered, newest first. */
-export function StationHistory({ history }: { history: StationVersion[] }) {
-  return (
-    <div className="space-y-1" data-station-history>
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--sol-text-dim)" }}>Versions of this station</div>
-      {history.length === 0 ? (
-        <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>No run has recorded this station yet. Each run records the version it ran, so a change here can be compared by what it delivered.</p>
-      ) : (
-        <ul className="space-y-0.5 text-[12px] tabular-nums">
-          {history.map((v, i) => (
-            <li key={v.hash} className="flex items-baseline gap-2" data-station-version={v.hash}>
-              <span style={{ color: "var(--sol-text)" }}>{CHANGE_WORDS[v.change]}</span>
-              <span style={{ color: "var(--sol-text-muted)" }}>{shortDay(v.first)}{i === 0 ? " to now" : v.last - v.first > 86_400_000 ? ` to ${shortDay(v.last)}` : ""}</span>
-              <span className="ml-auto" style={{ color: "var(--sol-text-muted)" }} title={`Line version ${v.hash.slice(0, 8)}`}>
-                {v.change === "removed" ? `${v.runs} ${v.runs === 1 ? "run" : "runs"} without it` : `${v.runs} ${v.runs === 1 ? "run" : "runs"}, ${v.shipped} shipped${v.stopped ? `, ${v.stopped} stopped` : ""}`}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 /** focusStation (a link in, ?station=) opens that station's panel, opens the
  *  graph around it, and scrolls the panel into view. */
 export function LineStations({ projectId, focusStation }: { projectId: string; focusStation?: string | null }) {
@@ -170,7 +144,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
   const panel = useRef<HTMLDivElement>(null);
   const arrived = !!focusStation && selected?.id === focusStation;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (arrived) panel.current?.scrollIntoView({ block: "center" });
   }, [arrived, focusStation]);
 
@@ -387,7 +361,12 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
 
       {!field && <p className="lset-empty">This station routes the run and carries no prompt or script.</p>}
 
-      {field && !canEdit && (
+      {field === "prompt" && !canEdit && (
+        <div className="lset-instructions" data-station-prompt>
+          {body.text ? <MarkdownRenderer content={readableTemplate(body.text)} /> : <span style={{ color: "var(--sol-text-dim)" }}>No instructions written yet.</span>}
+        </div>
+      )}
+      {field === "script" && !canEdit && (
         <pre className="text-[11.5px] leading-[1.5] whitespace-pre-wrap max-h-[420px] overflow-auto m-0 p-2 rounded" style={{ fontFamily: "var(--font-mono)", color: "var(--sol-text)", background: "var(--sol-card)" }}>
           {body.text || "(empty)"}
         </pre>

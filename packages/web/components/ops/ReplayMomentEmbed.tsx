@@ -8,23 +8,61 @@
 // the capability it plays through is minted for this viewer, checked against
 // the replay's workspace, when the embed comes near the screen.
 //
-// A thread of moments is not a wall of players: one is opened as the reader
-// nears it and let go once they are far past (the capture is megabytes of
-// page), the way a call moment holds its video. A replay that kept no page
+// A thread of moments is not a wall of players. Each player loads the whole
+// capture (megabytes of page) on a fresh replayer in its own process, so an
+// embed opens once, as the reader first nears it, and then stays open:
+// letting it go would mint a new capability and download the capture again
+// on every scroll back. At most LIVE_PLAYERS_MAX open by themselves on one
+// page; past that an embed waits behind a play button until it is clicked.
+// A replay that kept no page
 // capture still reads as the replay at a time, saying so, with the link to
 // its events at that moment.
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import Link from "next/link";
-import { ArrowUpRight, Film } from "lucide-react";
+import { ArrowUpRight, Film, Play } from "lucide-react";
 import { formatCallTime, parseReplayRef, replayRefStart } from "@codecast/shared/entities";
 import { useNearViewport } from "../../hooks/useNearViewport";
-import { ReplayPlayerIframe, useReplayPlayerChannel, useReplayPlayerLink } from "./ReplayPlayerFrame";
+import { ReplayPlayerIframe } from "./ReplayPlayerFrame";
+import { useReplayPlayerChannel, useReplayPlayerLink } from "../../hooks/useReplayPlayer";
 import { replayTitle } from "./opsModel";
 
 /** The player's own bar under the page (infra/replay-player CONTROLS_H). */
 const PLAYER_BAR_PX = 44;
 /** Until the player says how big the recording is. */
-const DEFAULT_SIZE = { width: 16, height: 10 };
+const DEFAULT_SIZE = { width: 1600, height: 1000 };
+
+/** Players a page opens by itself; the rest wait for a click. */
+export const LIVE_PLAYERS_MAX = 3;
+
+// The embeds holding a self-opened player, in the order they asked.
+const live = new Set<symbol>();
+const liveListeners = new Set<() => void>();
+const liveChanged = () => liveListeners.forEach((l) => l());
+const subscribeLive = (l: () => void) => (liveListeners.add(l), () => void liveListeners.delete(l));
+
+/**
+ * Whether this embed may open its player without a click: it asked (`want`)
+ * while fewer than LIVE_PLAYERS_MAX held one. A slot, once held, is kept
+ * until the embed unmounts.
+ */
+function useLivePlayerSlot(want: boolean): boolean {
+  const [id] = useState(() => Symbol("replay-embed"));
+  const [held, setHeld] = useState(false);
+  const size = useSyncExternalStore(subscribeLive, () => live.size, () => live.size);
+  useMountEffect(() => () => {
+    if (live.delete(id)) liveChanged();
+  });
+  useWatchEffect(() => {
+    // The set itself, not this render's snapshot: embeds mounted in one commit all run here before any re-renders.
+    if (!want || held || live.size >= LIVE_PLAYERS_MAX) return;
+    live.add(id);
+    setHeld(true);
+    liveChanged();
+  }, [want, held, size, id]);
+  return held;
+}
 
 export function ReplayMomentEmbed({
   rawId,
@@ -45,15 +83,19 @@ export function ReplayMomentEmbed({
   const time = formatCallTime(atMs);
   const title = replayTitle(entity) ?? ref?.replay ?? rawId;
   const boxRef = useRef<HTMLDivElement>(null);
-  const close = useNearViewport(boxRef, "1200px", { latch: false });
+  const near = useNearViewport(boxRef, "1200px");
   // A row that says it kept no capture is not asked for a player at all.
   const knownNoCapture = !!entity && entity.dom_chunks === 0;
-  const link = useReplayPlayerLink(entity?._id ?? null, close && !!entity && !knownNoCapture, { t_ms: atMs });
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const playable = !!entity && !knownNoCapture;
+  const slot = useLivePlayerSlot(near && playable);
+  const [clicked, setClicked] = useState(false);
+  const open = playable && (slot || clicked);
+  const link = useReplayPlayerLink(entity?._id ?? null, open, { t_ms: atMs });
+  const [size, setSize] = useState<{ width: number; height: number; below: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const channel = useReplayPlayerChannel(link.state === "ready" ? link.origin : null, (msg) => {
     if (msg.type === "ready") {
-      setSize({ width: msg.width, height: msg.height });
+      setSize({ width: msg.width, height: msg.height, below: msg.below_px ?? PLAYER_BAR_PX });
       setError(null);
     } else if (msg.type === "error") setError(msg.message);
   });
@@ -66,7 +108,7 @@ export function ReplayMomentEmbed({
     );
   }
 
-  const box = size ?? DEFAULT_SIZE;
+  const box = size ?? { ...DEFAULT_SIZE, below: PLAYER_BAR_PX };
   const noCapture = knownNoCapture || link.state === "no-capture";
   const problem = link.state === "failed" ? link.error : error;
   return (
@@ -75,7 +117,7 @@ export function ReplayMomentEmbed({
       className="my-1 w-[min(100%,640px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40"
       data-replay-moment={rawId}
       // The player's height follows the recording's shape at the embed's own
-      // width (container units), plus its bar.
+      // width (container units), plus what it draws below the page.
       style={{ containerType: "inline-size" }}
     >
       {noCapture || problem ? (
@@ -88,7 +130,9 @@ export function ReplayMomentEmbed({
       ) : (
         <div
           className="relative bg-sol-bg"
-          style={{ height: `calc(100cqw * ${box.height / box.width} + ${PLAYER_BAR_PX}px)`, maxHeight: "70vh" }}
+          // The player scales a recording down to fit, never up: a page
+          // narrower than the embed is drawn at its own width.
+          style={{ height: `calc(min(100cqw, ${box.width}px) * ${box.height / box.width} + ${box.below}px)`, maxHeight: "70vh" }}
         >
           {link.state === "ready" && (
             <ReplayPlayerIframe
@@ -99,11 +143,20 @@ export function ReplayMomentEmbed({
               style={{ height: "100%", opacity: size ? 1 : 0 }}
             />
           )}
-          {!size && (
+          {!size && near && playable && !open ? (
+            <button
+              type="button"
+              onClick={() => setClicked(true)}
+              className="absolute inset-0 flex items-center justify-center gap-2 text-[11.5px] text-sol-text-muted hover:text-sol-text"
+            >
+              <Play className="h-4 w-4" />
+              Play the page at {time}
+            </button>
+          ) : !size ? (
             <div className="absolute inset-0 flex items-center justify-center text-[11.5px] text-sol-text-dim">
               {served || entity ? "Loading the page capture…" : "Opening the replay…"}
             </div>
-          )}
+          ) : null}
         </div>
       )}
       <Link href={href} className="group flex items-center gap-2 px-2.5 py-1.5 hover:bg-sol-bg-highlight/40" title={`Open ${title} at ${time}`}>
