@@ -17,6 +17,10 @@ import { freshResourceMachine } from "../../lib/resourceOffload";
 import { fmtAgo } from "./resourceModel";
 
 const DISMISS_MS = 3600_000;
+// The Resources page shows every incident; this app-wide notice speaks only when
+// the machine is genuinely struggling: critical memory pressure, or an incident
+// that has outlasted a build or a test run.
+const NOTICE_AFTER_MS = 10 * 60_000;
 
 export function ResourcePressureNotice() {
   const now = useCoarseNow(30_000);
@@ -30,7 +34,7 @@ export function ResourcePressureNotice() {
     for (const m of joinMachines(devices, rows)) {
       if (m.role !== "local" || !freshResourceMachine(m, now) || (dismissed?.[m.deviceId] ?? 0) > now) continue;
       const incident = sustainedResourcePressure(m.history, now);
-      if (incident) return { machine: m, incident };
+      if (incident && (incident.level === "critical" || now - incident.since >= NOTICE_AFTER_MS)) return { machine: m, incident };
     }
     return null;
   }, [devices, rows, dismissed, now]);
