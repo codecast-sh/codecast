@@ -13,7 +13,7 @@ import { Face } from "../ui/Face";
 import { CheckIcon } from "../ui/icons";
 import { Spinner } from "../ui/Spinner";
 import { useAppState, useStream } from "./appState";
-import { ReverseButton, useReverse, useSummary } from "./BuildCard";
+import { ReverseButton, useReverse, useSummary } from "./versionActions";
 import { useBuildTicker } from "./buildTicker";
 import { SystemNote } from "./ChatMessage";
 import { useAlsoViewing, viewingText } from "./ViewingPill";
@@ -40,6 +40,15 @@ export function SheetPeek() {
   }
   const b = last?.build;
   if (last && b?.status === "live" && b.result_version === landed) return <LiveRow m={last} b={b} n={landed} />;
+  if (last && b?.status === "failed" && b.failure === "declined") {
+    return (
+      <p className={s.row}>
+        <Blob size={20} />
+        <b className={s.name}>Clay</b>
+        <span className={s.text}>{b.error}</span>
+      </p>
+    );
+  }
   if (last && b?.status === "failed") {
     return (
       <p className={s.row}>

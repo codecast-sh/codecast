@@ -39,31 +39,6 @@ function Dot({ className }: { className: string }) {
   return <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${className}`} />;
 }
 
-function Term({ lines, t }: { lines: [string, string?][]; t: Tone }) {
-  return (
-    <Panel className="w-full max-w-[260px] overflow-hidden">
-      <div className="flex gap-1 border-b border-sol-border/60 px-2 py-1.5">
-        <Dot className="bg-sol-red/50" />
-        <Dot className="bg-sol-yellow/50" />
-        <Dot className="bg-sol-green/50" />
-      </div>
-      <div className="space-y-1 px-2.5 py-2">
-        {lines.map(([cmd, out], i) => (
-          <div key={i}>
-            {cmd && (
-              <div className="truncate text-sol-text">
-                <span className={t.text}>$ </span>
-                {cmd}
-              </div>
-            )}
-            {out && <div className="truncate text-sol-text-muted">{out}</div>}
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
 /** One session as it sits in the inbox: a status dot, a title, a meta line. */
 function SessionRow({ title, dot, meta, children }: { title: string; dot: string; meta?: string; children?: ReactNode }) {
   return (
@@ -96,7 +71,7 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
   memory: (t) => (
     <div className="w-full max-w-[260px] space-y-1.5">
       <Panel className="flex items-center gap-1.5 px-2 py-1.5 text-sol-text">
-        <span className={t.text}>$</span> cast search &quot;retry backoff&quot;
+        <span className={t.text}>&rsaquo;</span> how did we handle retry backoff?
       </Panel>
       {[
         ["3 days ago", "chose exponential, capped at 30s"],
@@ -434,20 +409,23 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
         </div>
       </div>
       <div className="space-y-1">
-        <div><span className={t.text}>$</span> cast sim tap --label &quot;Sign up&quot;</div>
+        <div><span className={t.text}>tap</span> &quot;Sign up&quot;</div>
         <div className="text-sol-text-dim">✓ screenshot in the thread</div>
       </div>
     </div>
   ),
 
   check: (t) => (
-    <Term
-      t={t}
-      lines={[
-        ["cast check web", "✓ web: 0 errors (pass 2s old)"],
-        ["cast check-status", "1 watcher · 9 sessions sharing it"],
-      ]}
-    />
+    <Panel className="w-full max-w-[240px] p-2.5">
+      <div className="flex items-center justify-between text-sol-text">
+        <span>web typecheck</span>
+        <span className={t.text}>✓ 0 errors</span>
+      </div>
+      <div className="mt-1 text-sol-text-dim">answered in 2s</div>
+      <div className="mt-2 flex items-center gap-1.5 text-sol-text-dim">
+        <Dot className={t.dot} /> 1 shared check · 9 sessions using it
+      </div>
+    </Panel>
   ),
 
   limits: (t) => (
