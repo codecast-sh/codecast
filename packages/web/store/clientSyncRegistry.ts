@@ -171,7 +171,10 @@ export const CLIENT_SYNC_REGISTRY = {
     // the server's full set (which includes the real comment) replaces it. A
     // field lock here could never retire — the temp-id stub never matches the
     // server echo — and would freeze the stream at its optimistic snapshot.
-    unprotectedFields: ["comments"],
+    // `waits` likewise: addWait paints a stub the echo never equals (the
+    // server stamps created_at, resolves a bare #42, may meet it at once),
+    // and a lock would hide every later settle of the wait.
+    unprotectedFields: ["comments", "waits"],
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
     // carry a session short id (jx…) or none. A non-array `comments` is a row
@@ -309,6 +312,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["sessionDecisions.getWithDoc"],
   },
+  // A decision's discussion (decisionDiscussion.discussion): its owner and
+  // each ask with the owner's reply, one row per decision viewed. Delta: each
+  // surface feeds its own row and must not evict the others.
+  decisionDiscussions: {
+    persistence: { kind: "collection", key: "decisionDiscussions" },
+    hydration: { phase: "deferred" },
+    // Only the owner and the turns move on a row (no scalar does), so both
+    // compare by content.
+    sync: { isDelta: true, deepFields: ["turns", "owner"] },
+    feeds: ["decisionDiscussion.discussion"],
+  },
   // Task evidence (the-line.md L6): the one object taskEvidence.get computes
   // for a task (pages by station, docs, images, files, PR, verdict), one row
   // per task viewed, keyed by the task's Convex id. Delta: each task page
@@ -332,12 +346,25 @@ export const CLIENT_SYNC_REGISTRY = {
   // forProject view (the current document, its history, the open proposals
   // with their changes, whether the viewer is the project's person), one row
   // per project viewed, keyed by the project's Convex id. Delta: each panel
-  // feeds its own row and must not evict the others.
+  // feeds its own row and must not evict the others. Everything that changes
+  // on the row is nested (the document, its history, the proposals, the
+  // usage), so those compare by content: by scalars alone an echo that keeps
+  // current_version (a paint already reached it) was dropped whole.
   projectExpectations: {
     persistence: { kind: "collection", key: "projectExpectations" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true },
+    sync: { isDelta: true, deepFields: ["doc", "versions", "proposals", "usage", "sources", "routine", "project"] },
     feeds: ["expectations.forProject"],
+  },
+  // Every project's expectations in a workspace, one summary row each
+  // (expectations.overview): the /expectations page. Snapshot: the query is
+  // the workspace's complete set. Rows carry the workspace key.
+  expectationsOverview: {
+    persistence: { kind: "collection", key: "expectationsOverview" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    sync: { deepFields: ["project", "most_broken"] },
+    feeds: ["expectations.overview"],
   },
   // Saved views: the sidebar rail and its pinned rows. A pin lives in client
   // UI state and renders offline, but its click resolves the view row from
@@ -390,8 +417,10 @@ export const CLIENT_SYNC_REGISTRY = {
     // from tasks/plans/docs and move without any scalar on the row changing,
     // so they must be content-compared or a refetch lands as a no-op. The line
     // profile (signals.publishProfile) is replaced whole without touching any
-    // scalar, so it is content-compared for the same reason.
-    sync: { isDelta: true, deepFields: ["task_counts", "line_profile"] },
+    // scalar, so it is content-compared for the same reason. A create paints
+    // a stub keyed by its `client_key`; the server row carrying the same key
+    // supersedes it.
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["task_counts", "line_profile"] },
   },
   // Initiatives (initiatives-projects-role-page.md I1). SNAPSHOT, not delta:
   // initiatives.webList returns the complete visible set of the workspace, so
@@ -689,7 +718,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, altKey: "slug" },
     // The server's clock; a client cannot predict it.
     unprotectedFields: ["created_at", "updated_at"],
-    feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug"],
+    feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug", "workflow_runs.graphOfRun"],
   },
   // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
   // get, listRuns) that overlay into one collection, last push wins. Every
@@ -703,7 +732,9 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     localFirst: true,
     indexes: "_id, workflow_id",
-    sync: { isDelta: true },
+    // A node's session is a join that moves no scalar on the row (a feed with
+    // budget attaches it where another had none), so the nodes compare by content.
+    sync: { isDelta: true, deepFields: ["node_statuses"] },
     feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
@@ -716,6 +747,96 @@ export const CLIENT_SYNC_REGISTRY = {
     workspaceScoped: true,
     sync: {},
     feeds: ["signals.webList"],
+  },
+  // The line workspace (line-workspace.md LW2, LW4). Labels: a person's
+  // verdict on one decision a step made, one per person per decision. The
+  // workspace's labels are one complete answer, so a snapshot; a label is
+  // painted at once by labelDecision as a stub keyed by its natural key
+  // (run:node:user), which the server row supersedes.
+  lineLabels: {
+    persistence: { kind: "collection", key: "lineLabels" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, run_id",
+    sync: { altKey: "key" },
+    unprotectedFields: ["at"],
+    feeds: ["lineWorkspace.labels"],
+  },
+  // What a station was handed (its session's first message), read when a
+  // decision is opened, one row per station session. Delta: each opened
+  // station overlays its own row.
+  stationInputs: {
+    persistence: { kind: "collection", key: "stationInputs" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["lineWorkspace.stationInput"],
+  },
+  // A project's causes' occurrences over the history window, one row per
+  // cause (the Timeline's series; `signals` keeps two weeks with their
+  // words), and the deploys codecast knows of for the project. Both are fed
+  // per project, so delta: one project's feed never prunes another's rows.
+  lineOccurrences: {
+    persistence: { kind: "collection", key: "lineOccurrences" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, project_id",
+    sync: { isDelta: true, deepFields: ["observed", "reopened", "sources"] },
+    feeds: ["lineWorkspace.occurrences"],
+  },
+  // Every line card on a project's causes, answered by anyone (the card's
+  // words and answer, never its body): what each attempt proposed. The
+  // viewer's own queue (sessionDecisions) is a card's live home; these fill
+  // in the cards it does not hold. Per project, so delta.
+  lineCards: {
+    persistence: { kind: "collection", key: "lineCards" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, project_id",
+    sync: { isDelta: true, deepFields: ["card", "options"] },
+    feeds: ["lineWorkspace.cards"],
+  },
+  lineDeploys: {
+    persistence: { kind: "collection", key: "lineDeploys" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, project_id",
+    sync: { isDelta: true },
+    feeds: ["lineWorkspace.deploys"],
+  },
+  // The viewer's chat with a project's line (convex lineChat.thread): who
+  // answers it and each ask with its reply, one row per project, keyed by
+  // the project id. Delta: each workspace feeds its own project's row.
+  lineChats: {
+    persistence: { kind: "collection", key: "lineChats" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["turns", "owner"] },
+    feeds: ["lineChat.thread"],
+  },
+  // Try (line-workspace.md LW4): one row per case of a try, a step's edited
+  // prompt run on a past case on the graph's machine. tryStep paints the
+  // cases queued under their natural key (try:run), which the server rows
+  // supersede; the daemon's reports move them. Per project, so delta.
+  lineTries: {
+    persistence: { kind: "collection", key: "lineTries" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    indexes: "_id, project_id",
+    sync: { isDelta: true, altKey: "key", deepFields: ["old", "new", "refused", "pickup"] },
+    feeds: ["lineActions.tries"],
+  },
+  // Every version of a pushed graph (each save is one), per drawn graph, and
+  // whether the viewer can edit and try it (and on which machine, or why
+  // not), keyed by the drawn graph's id. Delta: each graph feeds its own.
+  lineGraphVersions: {
+    persistence: { kind: "collection", key: "lineGraphVersions" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workflow_id",
+    sync: { isDelta: true, deepFields: ["nodes", "changed"] },
+    feeds: ["lineActions.versions"],
+  },
+  lineGraphEditability: {
+    persistence: { kind: "collection", key: "lineGraphEditability" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["files", "nodes"] },
+    feeds: ["lineActions.editability"],
   },
   // External data on the Ops page (external-data.md X10). Every row carries
   // the workspace key its query read by. Sources, the transition timeline and
@@ -1643,8 +1764,10 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionStacks: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",
+  decisionDiscussions: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
+  expectationsOverview: "shared",
   shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
@@ -1680,6 +1803,15 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflows: "shared",
   workflowRuns: "shared",
   signals: "shared",
+  lineLabels: "shared",
+  stationInputs: "shared",
+  lineOccurrences: "shared",
+  lineDeploys: "shared",
+  lineCards: "shared",
+  lineChats: "shared",
+  lineTries: "shared",
+  lineGraphVersions: "shared",
+  lineGraphEditability: "shared",
   opsSources: "shared",
   opsGroups: "shared",
   opsSamples: "shared",
@@ -1784,11 +1916,32 @@ export const REPLICATED_STORE_KEYS: readonly string[] = [
   ...REPLICATED_EPHEMERAL_KEYS,
 ];
 
-const REPLICATED_COLLECTION_SET = new Set<string>(
-  REGISTERED_COLLECTION_KEYS.filter((key) => REPLICATION_CLASSIFICATION[key] === "shared"),
-);
+const isShared = (key: string) => REPLICATION_CLASSIFICATION[key as ClientSyncStoreKey] === "shared";
+const REPLICATED_TABLE_SET = new Set<string>(REGISTERED_COLLECTION_KEYS.filter(isShared));
+
+// A row map ships per row: only the rows a write touched cross the channel.
+// That covers the registered collections and the keys whose rows dispatch per
+// row but persist as one meta blob (conversations). Classed as a whole value,
+// conversations sent every row (8 MB at 2k sessions) to every follower on
+// each write, and each follower re-applied it all: minutes of pegged
+// renderers after every launch.
+const REPLICATED_COLLECTION_SET = new Set<string>([
+  ...REPLICATED_TABLE_SET,
+  ...registryEntries.filter(([key, entry]) => entry.dispatchTable?.kind === "collection" && isShared(key)).map(([key]) => key),
+]);
 
 /** Whether a replicated key holds an id-keyed row map (vs a whole value). */
 export function isReplicatedCollectionKey(key: string): boolean {
   return REPLICATED_COLLECTION_SET.has(key);
+}
+
+/**
+ * Whether a follower's own write to `key` reaches the host as row fields,
+ * which the host holds under locks until the server echoes them. Only
+ * registered collections: a meta-blob row map's echo arrives only in windows
+ * mounting that row's feed, so a lock the host mirrored there could outlive
+ * its settle window. Those writes ship as the whole value.
+ */
+export function isMutRowKey(key: string): boolean {
+  return REPLICATED_TABLE_SET.has(key);
 }
