@@ -3,7 +3,10 @@
 // this channel is the only thing the two share. Both sides import this module.
 //
 //   app -> shell  ready           the SDK loaded and waits for init (resent
-//                                 until it arrives, so a slow shell is fine)
+//                                 until it arrives, so a slow shell is fine),
+//                                 with the version its page is
+//   shell -> app  hold            the shell is here, and init follows once it
+//                                 knows who you are: wait for it
 //   shell -> app  init            who is here and how to reach the backend
 //   app -> shell  painted         the app has drawn itself with its data: the
 //                                 shell reveals a new version on this, not on
@@ -35,7 +38,8 @@ import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { runtimeTokenForSecret, type TokenScope } from "../convex/lib/identity";
 import type { ElementFields } from "../convex/lib/room";
 
-export const PROTOCOL = "clayground/1";
+export { PROTOCOL } from "../convex/lib/bootCatcher";
+import { PROTOCOL } from "../convex/lib/bootCatcher";
 
 export type PublicVisitorWire = { id: string; avatar: AvatarKey; name: string };
 
@@ -63,13 +67,16 @@ export type InitMessage = {
 
 export type ShellMessage =
   | InitMessage
+  | { protocol: typeof PROTOCOL; type: "hold" }
   | { protocol: typeof PROTOCOL; type: "token"; token: string }
   | { protocol: typeof PROTOCOL; type: "pick"; on: boolean; theme?: PickTheme }
   | { protocol: typeof PROTOCOL; type: "spotlight"; selector: string; color: string }
   | { protocol: typeof PROTOCOL; type: "capture"; width: number; height: number };
 
 export type AppMessage =
-  | { protocol: typeof PROTOCOL; type: "ready" }
+  /** `version`: the one its page is, which a page opened at an app's live
+   *  link only learns once it arrives. */
+  | { protocol: typeof PROTOCOL; type: "ready"; version: number | null }
   | { protocol: typeof PROTOCOL; type: "painted" }
   | { protocol: typeof PROTOCOL; type: "spotlit"; found: boolean }
   | { protocol: typeof PROTOCOL; type: "picked"; element: ElementFields }
@@ -85,7 +92,7 @@ function isOurs(data: unknown): data is { protocol: string; type: string } {
 }
 
 export function isShellMessage(data: unknown): data is ShellMessage {
-  return isOurs(data) && ["init", "token", "pick", "spotlight", "capture"].includes(data.type);
+  return isOurs(data) && ["init", "hold", "token", "pick", "spotlight", "capture"].includes(data.type);
 }
 
 export function isAppMessage(data: unknown): data is AppMessage {

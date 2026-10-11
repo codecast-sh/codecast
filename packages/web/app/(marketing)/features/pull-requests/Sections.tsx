@@ -55,8 +55,8 @@ export function Doors() {
 
       <div className="space-y-3">
         {door("The page", `/pr/${REPO}/${PR_NUMBER}`, "Conversation, Files, Commits and Checks, with the shepherd in the header.")}
-        {door("The terminal", "cast pr …", "Every verb the page has, for you and for any agent.")}
-        {door("The shepherd", "cast pr shepherd on", "A session woken by the row's changes.")}
+        {door("The shepherd", "the Shepherd line in the header", "A session woken by the row's changes.")}
+        {door("Scripts and agents", "cast pr …", "Every act the page has, as a command.")}
       </div>
     </div>
   );
@@ -121,12 +121,9 @@ export function Linked() {
           The <C>Codecast-Session</C> trailer in each commit message reads as the session&apos;s pill, not a URL.
         </div>
       </Frame>
-      <Term title="and from the other side">
-        <Prompt>cast search &quot;pr:{REPO}#{PR_NUMBER}&quot;</Prompt>
-        {T.dim("every session behind the pull request")}{"\n"}
-        <Prompt>cast blame src/retry.ts</Prompt>
-        {T.dim("each line, by the session that wrote it")}
-      </Term>
+      <p className="text-[14px] leading-relaxed" style={{ color: SOL.base00 }}>
+        It works from the other side too: search finds every session behind a pull request, and blame names the session that wrote each line.
+      </p>
       </div>
 
       <div className="space-y-4">
