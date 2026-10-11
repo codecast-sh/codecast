@@ -6,7 +6,6 @@ import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
 import { Body, C, Section } from "./ui";
-import { Whole } from "../kit";
 
 type Ref = { cmd: string; does: ReactNode };
 const REFERENCE: { group: string; rows: Ref[] }[] = [
@@ -48,7 +47,7 @@ const REFERENCE: { group: string; rows: Ref[] }[] = [
 
 export function Reference() {
   return (
-    <Section id="reference" title="Command reference" lede={<>Everything here is in <C>cast trigger --help</C>. IDs take the short form (<C>tr-42</C>), the full id, or its last 8 characters.</>}>
+    <Section id="reference" title="For scripts and agents" lede={<>Agents set most triggers from inside a session with these commands, and they work from any shell. Everything here is in <C>cast trigger --help</C>. IDs take the short form (<C>tr-42</C>), the full id, or its last 8 characters.</>}>
       <div className="grid gap-6 lg:grid-cols-3">
         {REFERENCE.map((g) => (
           <div key={g.group} className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${SOL.base2}` }}>
@@ -71,11 +70,11 @@ export function Reference() {
 const LIMITS: { q: string; a: ReactNode }[] = [
   {
     q: "Does my laptop need to be on?",
-    a: <>Yes, for triggers armed from the CLI. A run executes on the machine where it was armed, in that checkout, through the codecast daemon. If the machine is asleep when a trigger comes due, the trigger waits and runs when the machine wakes. To keep things running around the clock, arm them from a session on a <Link href={featureHref("cloud")} className="underline" style={{ color: SOL.blue }}>cloud host</Link>.</>,
+    a: <>Yes. A run executes through the codecast daemon on the machine where the trigger was set, in that checkout; the New trigger form says so under its fields. If the machine is asleep when a trigger comes due, the trigger waits and runs when the machine wakes. To keep things running around the clock, set them from a session on a <Link href={featureHref("cloud")} className="underline" style={{ color: SOL.blue }}>cloud host</Link>.</>,
   },
   {
     q: "What do event triggers need?",
-    a: <>Pull request and push events need the GitHub integration; issue events need GitHub or Linear. Product events (<C>error_new</C>, <C>metric_alert</C>, <C>deploy</C> and the rest) need a source set up with <C>cast sources add</C>.</>,
+    a: <>Pull request and push events need the GitHub integration; issue events need GitHub or Linear. Product events (a new error, a metric alert, a deploy and the rest) need a connected source such as Sentry or PostHog.</>,
   },
   {
     q: "How exact is the schedule?",
@@ -83,11 +82,11 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "What does a run cost?",
-    a: <>A run is a normal agent session on your own Claude or Codex account, so it uses your plan like any other session. A run inline in a long thread reloads that whole thread. That is why repeating work belongs in <C>--spawn</C> runs, and why <C>--precheck</C> exists.</>,
+    a: <>A run is a normal agent session on your own Claude or Codex account, so it uses your plan like any other session. A run inside a long thread reloads that whole thread. That is why repeating work belongs in fresh sessions, and why prechecks exist.</>,
   },
   {
-    q: "Is --safe a sandbox?",
-    a: <>It removes write tools and blocks state-changing commands for a spawned run. It is a guard on what the agent may do, not an isolated machine. A run injected into an existing session follows that session&apos;s rules, not <C>--safe</C>.</>,
+    q: "Is read-only a sandbox?",
+    a: <>It removes write tools and blocks state-changing commands for a fresh run. It is a guard on what the agent may do, not an isolated machine. A run that lands in an existing conversation follows that conversation&apos;s rules instead.</>,
   },
   {
     q: "Who can see my triggers?",
@@ -126,7 +125,7 @@ export function Related() {
           >
             <span className="font-mono text-[15px] font-bold" style={{ color: SOL.base03 }}>{f.name}</span>
             <span className="mt-2 flex-1 text-[13.5px] leading-6" style={{ color: SOL.base01 }}>{f.dek}</span>
-            <span className="mt-3 font-mono text-[12px] transition-colors" style={{ color: f.color }}>{f.command} <span className="inline-block transition-transform group-hover:translate-x-1">→</span></span>
+            <span className="mt-3 font-mono text-[12px] transition-colors" style={{ color: f.color }}>Read the page <span className="inline-block transition-transform group-hover:translate-x-1">→</span></span>
           </Link>
         ))}
       </div>
@@ -147,14 +146,11 @@ export function Cta() {
           Arm one before you log off tonight
         </h2>
         <p className="mt-5 text-[17px] leading-8" style={{ color: SOL.base1 }}>
-          Install codecast, then give the session you are in a follow-up for tomorrow morning.
+          Install codecast, open Triggers and set one for tomorrow morning, or ask the session you are in to check back on its own work.
         </p>
         <div className="mt-8 text-left">
           <InstallTabs location="feature-triggers" />
         </div>
-        <pre className="mt-5 whitespace-pre-wrap break-words rounded-xl px-4 py-3 text-left font-mono text-[12.5px]" style={{ backgroundColor: SOL.base02, color: SOL.base1 }}>
-          <span style={{ color: SOL.green }}>$</span> <Whole text={'cast trigger add "Summarize what changed overnight and what needs me" --in 10h'} />
-        </pre>
         <div className="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2 text-[14px]">
           <Link href="/documentation/triggers" className="underline" style={{ color: SOL.base2 }}>Triggers guide</Link>
           <Link href="/documentation/workflows" className="underline" style={{ color: SOL.base2 }}>Workflows guide</Link>
