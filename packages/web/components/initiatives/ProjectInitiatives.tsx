@@ -20,7 +20,7 @@ export function ProjectInitiatives({ projectId, size = "sm", label, except, metr
   size?: "xs" | "sm";
   /** An initiative to leave out: its own page lists what a project shares with the others. */
   except?: string;
-  /** Words before the pills, where the line stands alone ("Part of"). */
+  /** Words before the pills, where the line stands alone ("Serves"). */
   label?: string;
   /** Show each goal's first number against its target beside its pill. */
   metrics?: "chip" | "line";

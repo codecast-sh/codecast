@@ -1,5 +1,5 @@
 // The asks view model (org-staffing.md S19): each ask joined to its rows with
-// its state in words, the header count, the cost line, and the letter split
+// its state in words, the header count, and the letter split
 // for the author's first bubble. Run: bun test components/org/staffingAsks.test.ts
 import { describe, expect, test } from "bun:test";
 import { ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
@@ -8,10 +8,11 @@ import { askOfChange, asksProgress, letterIntro, letterParts, proposalAsks } fro
 describe("proposalAsks", () => {
   test("a proposal with no stored asks derives them, every live change in exactly one", () => {
     const asks = proposalAsks(ORG_STAFFING_FIXTURE_PROPOSAL);
-    expect(asks.map((a) => a.title)).toEqual(["Bring 2 records up to date", "Add an agent: Head of Platform", "Add an agent: Content Lead", "3 smaller changes: filing, goals and settings" /* four rows, three drawn: the limit is never a row (S23.2) */]);
+    // The plan and the task sit in different record groups, so each is its own ask, read as that one change.
+    expect(asks.map((a) => a.title)).toEqual(["Mark the plan Onboarding emails as done", "Mark the task Fix the auth race on sign-in as done", "Add an agent: Head of Platform", "Add an agent: Content Lead", "3 smaller changes: filing, goals and settings" /* four rows, three drawn: the limit is never a row (S23.2) */]);
     const seen = asks.flatMap((a) => a.changes.map((c) => c.seq)).sort((a, b) => a - b);
     expect(seen).toEqual(ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.seq));
-    expect(asks.map((a) => a.index)).toEqual([0, 1, 2, 3]);
+    expect(asks.map((a) => a.index)).toEqual([0, 1, 2, 3, 4]);
   });
 
   test("stored asks win, joined to the rows by seq, in apply order inside each", () => {
@@ -29,13 +30,13 @@ describe("proposalAsks", () => {
     expect(asks[0].state).toBe("open");
     expect(asks[0].verdictLine).toBeNull();
     // The rest ask holds an accepted, a skipped and two proposed rows.
-    expect(asks[3].state).toBe("open");
-    expect(asks[3].verdictLine).toBe("2 of 4 changes answered");
+    expect(asks[4].state).toBe("open");
+    expect(asks[4].verdictLine).toBe("2 of 4 changes answered");
     const flip = (status: string, seqs: number[]) => ({ ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => seqs.includes(c.seq) ? { ...c, status: status as any } : c) });
-    expect(proposalAsks(flip("applied", [7, 8]))[0]).toMatchObject({ state: "accepted", verdictLine: "Approved", remaining: 0 });
-    expect(proposalAsks(flip("skipped", [7, 8]))[0]).toMatchObject({ state: "skipped", verdictLine: "Rejected" });
-    const mixed = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.seq === 7 ? { ...c, status: "applied" as const } : c.seq === 8 ? { ...c, status: "skipped" as const } : c) };
-    expect(proposalAsks(mixed)[0]).toMatchObject({ state: "accepted", verdictLine: "Approved, 1 rejected" });
+    expect(proposalAsks(flip("applied", [7]))[0]).toMatchObject({ state: "accepted", verdictLine: "Approved", remaining: 0 });
+    expect(proposalAsks(flip("skipped", [7]))[0]).toMatchObject({ state: "skipped", verdictLine: "Rejected" });
+    // The rest ask already holds one skipped row: approving the others reads as approved with that one rejected.
+    expect(proposalAsks(flip("applied", [3, 4, 6]))[4]).toMatchObject({ state: "accepted", verdictLine: "Approved, 1 rejected" });
     expect(proposalAsks(flip("failed", [7]))[0]).toMatchObject({ state: "open", verdictLine: "1 change failed. Approve tries it again", failed: 1 });
   });
 
@@ -47,7 +48,7 @@ describe("proposalAsks", () => {
   });
 
   test("the header counts asks, not rows", () => {
-    expect(asksProgress(proposalAsks(ORG_STAFFING_FIXTURE_PROPOSAL))).toEqual({ decided: 0, total: 4, remaining: 4 });
+    expect(asksProgress(proposalAsks(ORG_STAFFING_FIXTURE_PROPOSAL))).toEqual({ decided: 0, total: 5, remaining: 5 });
     expect(asksProgress([])).toEqual({ decided: 0, total: 0, remaining: 0 });
   });
 });

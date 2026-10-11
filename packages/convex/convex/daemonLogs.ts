@@ -545,6 +545,9 @@ export const checkDeviceLoopFreeze = internalMutation({
           direct_recipient_id: user._id,
           actor_name: machine,
           message,
+          // Bell only. A slow daemon is a diagnostic with nothing for the
+          // person to do in the moment, so it never raises a banner or a push.
+          quiet: true,
           // No `link`: that field is for pages OUTSIDE the app and the bell
           // opens it in a new tab. The device entity routes in-app to
           // /settings/devices through notificationRoute.
