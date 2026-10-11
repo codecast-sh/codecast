@@ -11,10 +11,12 @@
 // words and what it is doing, then its notes and what happened lately. Lists
 // live one tab away, under Work, and the tab strip carries no numbers. The
 // workspace root has no role to describe, so it opens on its activity.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, Pencil, X } from "lucide-react";
 import { cn } from "../../../lib/utils";
+import { objectHref } from "@codecast/shared/entities";
+import { useLineOpen } from "../lines/lineOpen";
 import { TaskListContent } from "../../../app/tasks/page";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
 import type { ScopeIds } from "../../../hooks/useScopeIds";
@@ -24,9 +26,9 @@ import { ScopeFeed } from "./ScopeFeed";
 import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { TemplateSections } from "../TemplateSections";
 import { useRoleScope } from "../../../hooks/useRoleScope";
-import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { EntityIdPill } from "../../EntityIdPill";
-import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
+import { RoleNowLine } from "../company/sheets/sheetParts";
+import { roleNow } from "../company/sheets/sheetModel";
+import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale, type StandingLine } from "@codecast/shared/contracts/briefStanding";
 import { parsePlaybook, playbookIsEmpty, roleWakeOf, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import { RolePlaybook, RoleWakeLine } from "./RolePlaybook";
 import { ScopeSettings } from "./ScopeSettings";
@@ -51,8 +53,15 @@ export type ScopePanelProps = {
   onTab: (next: ScopeTabKey) => void;
   /** The Work view a link written for an older tab opens on. */
   initialWorkView?: ScopeWorkView;
-  onClose: () => void;
+  /** The tabs to show, when not all of the scope's (the role sheet shows only the working ones). */
+  tabs?: readonly ScopeTabKey[];
+  /** Close the panel; without it the panel draws no close button (it sits inside a frame that has one). */
+  onClose?: () => void;
   layout: ScopePanelLayout;
+  /** The panel flows in its host's one scroll (a sheet): the tab body takes
+   *  its content's height, and only the task board, which scrolls its own
+   *  rows, keeps a height of its own. */
+  inline?: boolean;
   scopeRef: ScopeRef | null;
   scopeIds: ScopeIds;
   summary: ScopeSummary | null | undefined;
@@ -74,7 +83,7 @@ export type ScopePanelProps = {
 
 export function ScopePanel(p: ScopePanelProps) {
   const { tree, role, tab, layout } = p;
-  const visibleTabs = scopeTabsFor(!!role);
+  const visibleTabs = scopeTabsFor(!!role).filter((t) => !p.tabs || p.tabs.includes(t.key));
   const [workView, setWorkView] = useState<ScopeWorkView>(p.initialWorkView ?? "tasks");
   const teamId = tree.workspace.kind === "team" ? tree.workspace.id : undefined;
   const stripRef = useRef<HTMLElement | null>(null);
@@ -87,8 +96,8 @@ export function ScopePanel(p: ScopePanelProps) {
   }, [tab]);
 
   return (
-    <div className="scope-panel-cq h-full flex flex-col min-h-0" data-scope-panel={layout} data-scope-tab-active={tab}>
-      <style>{`.scope-panel-cq { container-type: inline-size; } @container (max-width: 560px) { .scope-tab-label { display: none; } }`}</style>
+    <div className={cn("scope-panel-cq flex flex-col", !p.inline && "h-full min-h-0")} data-scope-panel={layout} data-scope-tab-active={tab} data-scope-inline={p.inline ? "" : undefined}>
+      <style>{`.scope-panel-cq { container-type: inline-size; } @container (max-width: 560px) { .scope-panel-cq:not([data-scope-inline]) .scope-tab-label { display: none; } } @container (max-width: 380px) { .scope-tab-label { display: none; } }`}</style>
       <div className="shrink-0 flex items-center gap-1 border-b pl-1 pr-1.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
         <nav ref={stripRef as any} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto cq-no-scrollbar -mb-px" aria-label="Sections">
           {visibleTabs.map((t) => {
@@ -106,15 +115,15 @@ export function ScopePanel(p: ScopePanelProps) {
                 title={t.label}
                 aria-label={t.label}
               >
-                <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-violet)" : undefined }} />
+                <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-text)" : undefined }} />
                 {/* Every label shows where the panel is wide enough; a narrow one keeps the active tab's. */}
                 <span className={cn(!active && "scope-tab-label")}>{t.label}</span>
-                {active && <span className="absolute left-1.5 right-1.5 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
+                {active && <span className="absolute left-1.5 right-1.5 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-text)" }} />}
               </button>
             );
           })}
         </nav>
-        <button
+        {p.onClose && <button
           type="button"
           onClick={p.onClose}
           className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-sol-bg-highlight/70"
@@ -124,26 +133,26 @@ export function ScopePanel(p: ScopePanelProps) {
           data-scope-panel-close
         >
           {layout === "sheet" ? <ChevronDown className="w-4 h-4" /> : <X className="w-4 h-4" />}
-        </button>
+        </button>}
       </div>
 
       {tab === "feed" && p.scopeRef && <ScopeFeed key={JSON.stringify(p.scopeRef)} scope={p.scopeRef} fill />}
       {tab === "work" && (
         <div className="shrink-0 flex items-center gap-1 px-3 pt-2.5 pb-1.5" role="tablist" aria-label="Work" data-work-views>
           {SCOPE_WORK_VIEWS.map((v) => (
-            <button key={v.key} type="button" role="tab" aria-selected={workView === v.key} onClick={() => setWorkView(v.key)} data-work-view={v.key} className={cn("h-6 px-2.5 rounded-full text-[11.5px] transition-colors", workView === v.key ? "font-semibold" : "hover:bg-sol-bg-highlight/60")} style={workView === v.key ? { background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-text)" } : { color: "var(--sol-text-muted)" }}>
+            <button key={v.key} type="button" role="tab" aria-selected={workView === v.key} onClick={() => setWorkView(v.key)} data-work-view={v.key} className={cn("h-6 px-2.5 rounded-full text-[11.5px] transition-colors", workView === v.key ? "font-semibold" : "hover:bg-sol-bg-highlight/60")} style={workView === v.key ? { background: "var(--sol-bg-highlight)", color: "var(--sol-text)" } : { color: "var(--sol-text-muted)" }}>
               {v.label}
             </button>
           ))}
         </div>
       )}
       {tab === "work" && workView === "tasks" && (
-        <div className="flex-1 min-h-0">
+        <div className={p.inline ? "h-[480px]" : "flex-1 min-h-0"}>
           <TaskListContent scope={p.scopeIds.whole ? undefined : { projectIds: p.scopeIds.projectIds, planIds: p.scopeIds.planIds }} />
         </div>
       )}
       {tab !== "feed" && !(tab === "work" && workView === "tasks") && (
-        <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
+        <div data-scope-scroll={p.inline ? undefined : ""} className={cn(!p.inline && "flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
           {tab === "scope" && role && <RoleOverview {...p} role={role} />}
           {tab === "work" && workView === "status" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
           {tab === "work" && workView === "plans" && <ScopePlansTab ids={p.scopeIds} />}
@@ -211,12 +220,12 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
         )}
       </section>
 
-      <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />
+      <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} />
       <RolePlaybookSections narrative={p.brief?.narrative} routine={p.brief?.role.routine ?? null} now={p.now} />
 
       {me && (
         <section data-scope-section="goals">
-          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Your goals</h3>
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Your focus</h3>
           <PersonGoals person={me} roleHandle={role.handle} now={p.now} own />
         </section>
       )}
@@ -269,33 +278,10 @@ export function RolePlaybookSections({ narrative, routine, now }: { narrative: s
 /** The briefing (F5.1): where each project stands and what the role is
  *  doing, in words. The only number on it is inside the activity line; the
  *  mount test holds it to that. */
-export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean }) {
-  const { model } = useRoleScope(role.short_id);
-  const standing = useMemo(() => parseStandingSection(narrative), [narrative]);
-  const projects = model?.projects ?? role.scope_names.projects.map((p) => ({ id: p.id, ref: p.short_id ?? p.id, title: p.title }));
-  const written = projectsWithLines(standing, projects.map((p) => ({ ...p, short_id: p.ref })));
+export function ScopeOverviewTab({ role, now, narrative }: { role: OrgRole; now: number; narrative: string | null | undefined }) {
   return (
     <div className="space-y-6" data-scope-briefing>
-      {written.length > 0 && (
-        <section data-scope-section="stands">
-          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Where it stands</h3>
-          <ul className="space-y-2">
-            {written.map(({ project: p, line }) => {
-              const stale = standingLineStale(line, now);
-              const days = standingLineAgeDays(line, now);
-              return (
-                <li key={p.id} className="px-2.5" data-scope-stands={p.ref}>
-                  <Link href={`/projects/${p.ref}`} className="text-[12.5px] font-semibold text-sol-text no-underline hover:underline underline-offset-2">{p.title}</Link>
-                  <p className="text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-scope-stands-line>
-                    {line.text}
-                    {stale && days !== null && <span className="ml-1.5 text-[11px]" style={{ color: "var(--sol-yellow)" }} data-scope-stands-age={days}>written {days} days ago</span>}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+      <RoleStands role={role} now={now} narrative={narrative} label={<h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Where it stands</h3>} className="px-2.5" />
 
       <section data-scope-section="doing">
         <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>What it is doing</h3>
@@ -305,26 +291,75 @@ export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: 
   );
 }
 
-/** What a role is doing (F5.1): the sessions at work under it, and the one it
- *  moved most recently, from the tree's own rows. The Overview says it in
- *  full, with the session it is on; `short` is the collapsed glance's count. */
-export function RoleDoing({ role, short, className }: { role: OrgRole; short?: boolean; className?: string }) {
-  const openLinked = useOpenLinkedSession();
-  const active = role.counts.working ?? 0;
-  const current = [...role.sessions].filter((s) => s.state === "working").sort((a, b) => b.updated_at - a.updated_at)[0]
-    ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
-  const line = short
-    ? (role.total === 0 ? "no sessions yet" : active === 0 ? "nothing at work" : `${active} at work`)
-    : (role.total === 0 ? "No sessions under it yet." : active === 0 ? "No session at work right now." : `${active} ${active === 1 ? "session" : "sessions"} at work`);
+/** Where each project stands in the role's own words (its brief's standing
+ *  section), one line a project, dated when it has gone stale. `only` keeps
+ *  the projects named (a sheet shows the ones the role leads). Nothing when
+ *  the role has written no line. A project's name opens it: its sheet inside
+ *  the Org screen, its page elsewhere. */
+function RoleStands({ role, now, narrative, only, label, section, className }: { role: OrgRole; now: number; narrative: string | null | undefined; only?: readonly string[]; label?: ReactNode; /** Frames the lines in the host's own section (a sheet's SheetSection) instead of the label. */ section?: (body: ReactNode) => ReactNode; className?: string }) {
+  const { model } = useRoleScope(role.short_id);
+  const { onLinkClick } = useLineOpen();
+  const standing = useMemo(() => parseStandingSection(narrative), [narrative]);
+  const all = model?.projects ?? role.scope_names.projects.map((p) => ({ id: p.id, ref: p.short_id ?? p.id, title: p.title }));
+  const projects = only ? all.filter((p) => only.includes(p.id)) : all;
+  const written = projectsWithLines(standing, projects.map((p) => ({ ...p, short_id: p.ref })));
+  if (written.length === 0) return null;
+  const list = (
+      <ul className="space-y-2">
+        {written.map(({ project: p, line }) => (
+          <li key={p.id} className={className} data-scope-stands={p.ref}>
+            <Link href={objectHref("project", p.ref)} onClick={onLinkClick({ kind: "project", ref: p.ref })} className="text-[12.5px] font-semibold text-sol-text no-underline hover:underline underline-offset-2">{p.title}</Link>
+            <StandsLine line={line} now={now} />
+          </li>
+        ))}
+      </ul>
+  );
+  if (section) return <>{section(list)}</>;
   return (
-    <p className={cn("flex items-center gap-2 flex-wrap", className)} style={{ color: "var(--sol-text-secondary)" }} data-scope-doing={active}>
-      {line}
-      {current && !short && (
-        <span className="inline-flex items-center gap-1.5 min-w-0" onClick={() => { openLinked({ _id: current._id, short_id: current.short_id, title: current.title, agent_type: current.agent_type }); }}>
-          <span style={{ color: "var(--sol-text-dim)" }}>{active > 0 ? "· on" : "· last"}</span>
-          <EntityIdPill id={current._id} shortId={current.short_id} type="session" compact />
-        </span>
+    <section data-scope-section="stands">
+      {label}
+      {list}
+    </section>
+  );
+}
+
+/** One project's line in the role's words: three lines at most with a toggle
+ *  for the rest, and always its age, quietly, yellow once it has gone stale. */
+function StandsLine({ line, now }: { line: StandingLine; now: number }) {
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const days = standingLineAgeDays(line, now);
+  const stale = standingLineStale(line, now);
+  const measure = (el: HTMLParagraphElement | null) => { if (el && !open) setClipped(el.scrollHeight > el.clientHeight + 1); };
+  return (
+    <div data-scope-stands-line>
+      <p ref={measure} className={cn("text-[13px] leading-relaxed [overflow-wrap:anywhere]", !open && "line-clamp-3")} style={{ color: "var(--sol-text-secondary)" }} data-scope-stands-text>
+        {line.text}
+      </p>
+      {(days !== null || clipped || open) && (
+        <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
+          {days !== null && <span style={stale ? { color: "var(--sol-yellow)" } : undefined} title={line.written_on ? `Written ${line.written_on}` : undefined} data-scope-stands-age={days}>{days === 0 ? "today" : stale ? `written ${days} days ago` : `${days}d ago`}</span>}
+          {(clipped || open) && (
+            <>
+              {days !== null && <span aria-hidden>·</span>}
+              <button type="button" onClick={() => setOpen((v) => !v)} className="hover:underline underline-offset-2" style={{ color: "var(--sol-text-muted)" }} aria-expanded={open} data-scope-stands-more>{open ? "less" : "more"}</button>
+            </>
+          )}
+        </div>
       )}
+    </div>
+  );
+}
+
+/** What a role is doing (F5.1), in the words every sheet uses for it
+ *  (`RoleNowLine`): its own state line or its live sessions, and the session
+ *  it is on. One plain sentence when nothing under it is live. */
+export function RoleDoing({ role, className }: { role: OrgRole; className?: string }) {
+  // The line carries its own inset, which lines up with the briefing's.
+  if (roleNow(role)) return <div data-scope-doing><RoleNowLine role={role} /></div>;
+  return (
+    <p className={className} style={{ color: "var(--sol-text-secondary)" }} data-scope-doing>
+      {role.total === 0 ? "No sessions under it yet." : "Nothing live right now."}
     </p>
   );
 }
