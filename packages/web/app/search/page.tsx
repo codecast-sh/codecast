@@ -53,6 +53,13 @@ function projectName(p?: string | null): string | null {
 const PAGE_SIZE = 20;
 
 type RangeKey = "all" | "7d" | "30d" | "90d";
+/** The time filter's words in hosted mode. */
+const HOSTED_RANGES: { value: RangeKey; label: string }[] = [
+  { value: "all", label: "Any time" },
+  { value: "7d", label: "Past week" },
+  { value: "30d", label: "Past month" },
+  { value: "90d", label: "Past 3 months" },
+];
 const RANGE_MS: Record<Exclude<RangeKey, "all">, number> = {
   "7d": 7 * 24 * 60 * 60 * 1000,
   "30d": 30 * 24 * 60 * 60 * 1000,
@@ -337,7 +344,9 @@ export default function SearchPage() {
                 onKeyDown={handleInputKeyDown}
                 placeholder={words.searchPagePlaceholder}
                 data-cc-search-field
-                className={`w-full pl-12 pr-12 py-3.5 bg-sol-bg-alt border border-sol-border rounded-xl text-[15px] text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 transition-all shadow-sm ${internals ? "focus:ring-amber-500/40 focus:border-amber-500/40" : "focus:ring-sol-text/15 focus:border-sol-text/30"}`}
+                // Hosted mode's focus is a hairline of ink and a soft glow of the
+                // accent, the family's field, rather than a thick ring.
+                className={`w-full pl-12 pr-12 py-3.5 bg-sol-bg-alt border border-sol-border rounded-xl text-[15px] text-sol-text placeholder-sol-text-dim focus:outline-none transition-all shadow-sm ${internals ? "focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500/40" : "focus:ring-[3px] focus:ring-sol-orange/[0.08] focus:border-sol-text/60"}`}
                 autoFocus
               />
               <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
@@ -347,9 +356,10 @@ export default function SearchPage() {
                   query && (
                     <button
                       onClick={() => { setQuery(""); inputRef.current?.focus(); }}
-                      className="text-sol-text-dim hover:text-sol-text text-xs px-1.5 py-0.5 rounded border border-sol-border/60 bg-sol-bg"
+                      aria-label="Clear the search"
+                      className="text-sol-text-dim hover:text-sol-text"
                     >
-                      esc
+                      <KeyCap size="xs">Esc</KeyCap>
                     </button>
                   )
                 )}
@@ -383,8 +393,7 @@ export default function SearchPage() {
                 ]}
                 onChange={(v) => setUserOnly(v === "prompts")}
               />}
-              <SegmentedControl
-                plain={!internals}
+              {internals ? <SegmentedControl
                 label="Time"
                 value={range}
                 options={[
@@ -394,9 +403,18 @@ export default function SearchPage() {
                   { value: "90d", label: "90d" },
                 ]}
                 onChange={setRange}
-              />
-              <SegmentedControl
-                plain={!internals}
+              /> : (
+                // Hosted mode: one quiet menu in words, and newest first.
+                <select
+                  aria-label="Time"
+                  value={range}
+                  onChange={(e) => setRange(e.target.value as RangeKey)}
+                  className="rounded-md border-0 bg-transparent py-1 pl-1 pr-6 text-[13px] text-sol-text-muted hover:text-sol-text focus:outline-none focus:ring-1 focus:ring-sol-text/30"
+                >
+                  {HOSTED_RANGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              )}
+              {internals && <SegmentedControl
                 label="Sort"
                 value={sort}
                 options={[
@@ -404,7 +422,7 @@ export default function SearchPage() {
                   { value: "relevance", label: "Relevant" },
                 ]}
                 onChange={setSort}
-              />
+              />}
             </div>
           </div>
 
@@ -418,12 +436,14 @@ export default function SearchPage() {
               <span className="text-sol-text-secondary">
                 {/* Title matches count conversations but no message matches,
                     so the match count leads only when it covers them all. */}
-                {parsedQuery.text && totalMatches >= totalSessions && (
+                {internals && parsedQuery.text && totalMatches >= totalSessions && (
                   <>
                     <span className="text-sol-text font-medium tabular-nums">{totalMatches}</span> match{totalMatches !== 1 ? "es" : ""} in{" "}
                   </>
                 )}
-                <span className="text-sol-text font-medium tabular-nums">{totalSessions}</span> {(totalSessions !== 1 ? words.conversations : words.conversation).toLowerCase()}
+                {/* Hosted mode counts each group under its own heading, so a
+                    page-level count never reads as the to-dos' count too. */}
+                {internals && <><span className="text-sol-text font-medium tabular-nums">{totalSessions}</span> {(totalSessions !== 1 ? words.conversations : words.conversation).toLowerCase()}</>}
                 {filterSummary.length > 0 && (
                   <span className="text-sol-text-dim"> · {filterSummary.join(" · ")}</span>
                 )}
@@ -488,7 +508,10 @@ export default function SearchPage() {
           {!internals && searchActive && <ObjectMatches query={debouncedQuery} scopeOnly={scopeOnly} />}
 
           {results.length > 0 && (
-            <div className="space-y-4">
+            <div className={internals ? "space-y-4" : "space-y-1.5"} data-search-conversations>
+              {!internals && (
+                <h2 className="mb-1 px-1 text-[12px] text-sol-text-muted">{words.conversations} <span className="ml-0.5 tabular-nums text-sol-text-dim">{totalSessions}</span></h2>
+              )}
               {results.map((result: any, idx: number) => {
                 const proj = projectName(result.projectPath);
                 const isSelected = idx === selectedIdx;
@@ -564,7 +587,9 @@ export default function SearchPage() {
                     )}
                     {result.matches.length > 0 && (
                       <div className="divide-y divide-sol-border/50">
-                        {result.matches.map((match: any, mIdx: number) => (
+                        {/* Hosted mode shows a hit as one row and its best
+                            snippet; the selected hit opens the rest. */}
+                        {(internals || isSelected ? result.matches : result.matches.slice(0, 1)).map((match: any, mIdx: number) => (
                           <Link
                             key={`${result.conversationId}-${mIdx}`}
                             href={hrefFor(result, match.messageId)}
@@ -592,12 +617,12 @@ export default function SearchPage() {
                                 {formatSearchTimestamp(match.timestamp)}
                               </span>
                             </div>
-                            <p className="text-[13px] text-sol-text-secondary leading-relaxed line-clamp-3">
+                            <p className={`text-[13px] text-sol-text-secondary leading-relaxed ${internals || isSelected ? "line-clamp-3" : "line-clamp-1"}`}>
                               {highlightMatch(stripSnippetMarkup(match.content ?? ""), hlQuery)}
                             </p>
                           </Link>
                         ))}
-                        {result.matchCount > result.matches.length && (
+                        {(internals || isSelected) && result.matchCount > result.matches.length && (
                           <Link
                             href={hrefFor(result, result.matches[0]?.messageId)}
                             className="block px-4 py-2 text-[11px] text-sol-text-dim hover:text-sol-text-secondary transition-colors"

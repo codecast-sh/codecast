@@ -5,11 +5,9 @@ import { HtmlSnippet } from "@/components/HtmlSnippet";
 import { useNearViewport } from "@/hooks/useNearViewport";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { SOL } from "../../../blog/blogChrome";
-import { PanelHead, Stage, t } from "../../../blog/figureKit";
-import { Sheet, Term } from "../figureParts";
 
 /**
- * Figures for the visual canvas guide. The gallery renders real canvases
+ * The figure for the visual canvas guide. The gallery renders real canvases
  * through the app's own HtmlSnippet, inside the same theme classes the app
  * puts on <html>, so what a reader sees is exactly what a conversation shows.
  */
@@ -171,143 +169,5 @@ export function CanvasThemesFigure() {
         {auto && <span className="font-mono text-[11px] ml-auto bj-pulse" data-play="1" style={{ color: SOL.base1 }}>cycling</span>}
       </div>
     </div>
-  );
-}
-
-// ─── Anatomy: tokens in the source, colors in the render ───────────────────
-
-const ANATOMY: { line: string; token?: string }[] = [
-  { line: `<div data-canvas-title="Fixed vs exponential">` },
-  { line: `  <div style="background:var(--sol-card)">`, token: "card" },
-  { line: `    <b style="color:var(--sol-red)">3 lost</b>`, token: "red" },
-  { line: `    <i style="background:var(--sol-orange)"></i>`, token: "orange" },
-  { line: `  </div>` },
-  { line: `  <div style="background:var(--sol-card)">`, token: "card" },
-  { line: `    <b style="color:var(--sol-green)">0 lost</b>`, token: "green" },
-  { line: `    <i style="background:var(--sol-blue)"></i>`, token: "blue" },
-  { line: `  </div>` },
-  { line: `</div>` },
-];
-
-/** Underline each token in the source with the color it paints here. */
-const ANATOMY_INK: Record<string, string> = { card: SOL.base1, red: SOL.red, orange: SOL.orange, green: SOL.green, blue: SOL.blue };
-
-/** The agent names a role, never a color; each theme decides what the role looks like. */
-export function TokenAnatomyFigure() {
-  return (
-    <Stage>
-      <div className="grid grid-cols-1 *:min-w-0 md:grid-cols-[1.25fr_1fr]">
-        <div className="border-b md:border-b-0 md:border-r" style={{ borderColor: SOL.base2 }}>
-          <PanelHead title="What the agent writes" sub="Roles, not hex values. The snippet forbids hardcoded colors." color={SOL.violet} />
-          <Term>
-            {ANATOMY.map((a, i) => (
-              <div key={i} className="bj-rise" style={t(0.15 + i * 0.12)}>
-                {a.token ? (
-                  <>
-                    {a.line.split(`var(--sol-${a.token})`)[0]}
-                    <span className="rounded px-0.5" style={{ color: SOL.base3, backgroundColor: SOL.base02, boxShadow: `inset 0 -2px 0 ${ANATOMY_INK[a.token]}` }}>
-                      var(--sol-{a.token})
-                    </span>
-                    {a.line.split(`var(--sol-${a.token})`)[1]}
-                  </>
-                ) : a.line}
-              </div>
-            ))}
-          </Term>
-        </div>
-        <div>
-          <PanelHead title="What each theme paints" sub="One source, four results, no edits." color={SOL.cyan} />
-          <div className="m-4 grid grid-cols-2 gap-2">
-            {THEMES.map((th, ti) => (
-              <div key={th.id} className={`${th.cls} rounded-lg overflow-hidden bj-pop`} style={t(1.5 + ti * 0.18)}>
-                <div className="p-2.5 h-full" style={{ backgroundColor: "var(--sol-bg)", color: "var(--sol-text)" }}>
-                  <div className="font-mono text-[10px] mb-1.5" style={{ color: "var(--sol-text-muted)" }}>{th.label}</div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {(["red", "green"] as const).map((c, i) => (
-                      <div key={c} className="rounded p-1.5" style={{ backgroundColor: "var(--sol-card)", border: "1px solid color-mix(in srgb, var(--sol-border) 45%, transparent)" }}>
-                        <div className="font-mono text-[11px] font-bold" style={{ color: `var(--sol-${c})` }}>{i === 0 ? "3 lost" : "0 lost"}</div>
-                        <div className="mt-1 h-1.5 rounded-full" style={{ backgroundColor: `var(--sol-${i === 0 ? "orange" : "blue"})`, width: i === 0 ? "70%" : "45%" }} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </Stage>
-  );
-}
-
-// ─── The sandbox: what happens between the fence and the screen ────────────
-
-const STAGES = [
-  { x: 20, label: "cast-canvas", sub: "the agent's HTML" },
-  { x: 205, label: "sanitize", sub: "DOMPurify" },
-  { x: 390, label: "shadow root", sub: "styles scoped" },
-  { x: 575, label: "hydrate", sub: "tabs, tables, charts" },
-];
-
-const STRIPPED = ["<script>", "onclick=", "<iframe>", "remote <img>", "url(https://…)"];
-
-/** The four steps a canvas takes, and what the sanitizer drops on the way. */
-export function SandboxPipelineFigure() {
-  const W = 150;
-  return (
-    <Stage minWidth={660}>
-      <Sheet w={760} h={250} label="A canvas is sanitized, mounted in a shadow root that inherits the theme tokens, then hydrated">
-        {(arrow) => (
-          <>
-
-            {STAGES.map((s, i) => (
-              <g key={s.label} className="bj-pop" style={t(0.2 + i * 0.45)}>
-                <rect x={s.x} y={44} width={W} height={56} rx={8} fill={SOL.base3} stroke={i === 2 ? SOL.cyan : SOL.base1} strokeWidth={i === 2 ? 1.6 : 1.1} />
-                <text x={s.x + W / 2} y={68} textAnchor="middle" fontSize="12.5" fontWeight={700} fill={SOL.base02}>{s.label}</text>
-                <text x={s.x + W / 2} y={86} textAnchor="middle" fontSize="10.5" fill={SOL.base01}>{s.sub}</text>
-              </g>
-            ))}
-            {STAGES.slice(1).map((s, i) => (
-              <path key={s.label} d={`M${STAGES[i].x + W + 4} 72H${s.x - 6}`} pathLength={1} stroke={SOL.base1} strokeWidth={1.4} fill="none" markerEnd={arrow()} className="bj-draw" style={t(0.45 + i * 0.45, 0.3)} />
-            ))}
-
-            {/* dropped by the sanitizer */}
-            {STRIPPED.map((s, i) => (
-              <g key={s} className="bj-rise" style={t(1.0 + i * 0.16)}>
-                <path d={`M${280} ${100}Q${282 + i * 4} ${130 + i * 6} ${150 + i * 2} ${142 + i * 20}`} pathLength={1} fill="none" stroke={SOL.red} strokeOpacity={0.5} strokeDasharray="3 3" />
-                <text x={140 + i * 2} y={146 + i * 20} textAnchor="end" fontSize="11" fill={SOL.red}>
-                  <tspan textDecoration="line-through">{s}</tspan>
-                </text>
-              </g>
-            ))}
-            <text x={20} y={240} fontSize="10.5" fill={SOL.red} className="bj-fade" style={t(1.9)}>dropped: no agent code runs, nothing loads from the network</text>
-
-            {/* tokens flow in from the app */}
-            <g className="bj-fade" style={t(1.6)}>
-              <rect x={352} y={150} width={240} height={64} rx={8} fill={`${SOL.cyan}14`} stroke={SOL.cyan} strokeDasharray="4 3" />
-              <text x={472} y={172} textAnchor="middle" fontSize="11" fontWeight={700} fill={SOL.cyan}>the app's theme</text>
-              {["--sol-text", "--sol-card", "--sol-blue …"].map((tok, i) => (
-                <text key={tok} x={366 + i * 72} y={196} fontSize="10" fill={SOL.base01}>{tok}</text>
-              ))}
-            </g>
-            <path d="M465 148V104" pathLength={1} stroke={SOL.cyan} strokeWidth={1.6} fill="none" markerEnd={arrow()} className="bj-draw" style={t(1.9, 0.4)} />
-            <text x={474} y={122} fontSize="10" fill={SOL.cyan} className="bj-fade" style={t(2.1)}>
-              <tspan x={474}>inherited through</tspan>
-              <tspan x={474} dy={13}>the shadow boundary</tspan>
-            </text>
-
-            <g className="bj-pop" style={t(2.4)}>
-              <circle cx={735} cy={72} r={10} fill={SOL.green} />
-              <path d="M730 72l3.5 3.5 6.5-7" stroke={SOL.base3} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </g>
-            <text x={680} y={166} textAnchor="middle" fontSize="10.5" fill={SOL.base01} className="bj-fade" style={t(2.5)}>
-              <tspan x={680}>the behavior is</tspan>
-              <tspan x={680} dy={13}>codecast's code,</tspan>
-              <tspan x={680} dy={13}>never the agent's</tspan>
-            </text>
-          </>
-        )}
-      </Sheet>
-    </Stage>
   );
 }
