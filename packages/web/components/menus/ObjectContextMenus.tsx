@@ -31,6 +31,8 @@ import {
   CircleDot,
   ArrowUp,
   RefreshCw,
+  Hourglass,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
@@ -215,6 +217,8 @@ export function TaskMenuItems({
       </CtxSub>
       <CtxItem icon={Tag} onSelect={() => openPaletteMode(tasks, "task", "labels")}>Labels…</CtxItem>
       <CtxItem icon={CornerDownRight} onSelect={() => openPaletteMode(tasks, "task", "parent")}>Set parent…</CtxItem>
+      <CtxItem icon={Hourglass} onSelect={() => openPaletteMode(tasks, "task", "blocker")}>Add blocker…</CtxItem>
+      <CtxItem icon={Link2} onSelect={() => openPaletteMode(tasks, "task", "related")}>Link related task…</CtxItem>
       {hasParent && (
         <CtxItem
           icon={CornerDownRight}

@@ -1412,6 +1412,24 @@ export const deleteBySource = internalMutation({
 });
 
 
+// Once, after extraction from session transcripts was retired: archives the
+// docs it made (Markdown files a session wrote, long assistant replies), so they
+// leave the list and search. Archiving is reversible; clear archived_at to undo.
+export const archiveExtractedDocs = internalMutation({
+  args: { dry_run: v.boolean(), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("docs").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    const now = Date.now();
+    let archived = 0;
+    for (const d of page.page) {
+      if (d.archived_at || (d.source !== "file_sync" && d.source !== "inline_extract")) continue;
+      archived++;
+      if (!args.dry_run) await ctx.db.patch(d._id, { archived_at: now });
+    }
+    return { scanned: page.page.length, archived, cursor: page.continueCursor, done: page.isDone };
+  },
+});
+
 export const debugList = internalQuery({
   args: {},
   handler: async (ctx) => {
