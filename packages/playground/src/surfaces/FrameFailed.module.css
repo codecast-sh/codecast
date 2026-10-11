@@ -1,0 +1,8 @@
+.failed { display: grid; justify-items: center; gap: var(--s2); max-width: 360px; padding: var(--s6); text-align: center; }
+.title { margin-top: var(--s1); font: var(--t-card); }
+.why {
+  font: var(--t-mono); color: var(--ink-3); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); margin-top: var(--s2); }
+.hint { font: 400 13px/1.4 var(--ui); color: var(--ink-2); }
