@@ -55,41 +55,16 @@ export function blockSibling(b: TreeBlock): TreeBlock {
   return { level: b.level, index: b.index ^ 1 };
 }
 
-/**
- * Tile [lo,hi) with aligned power-of-two blocks, keeping a block whole iff it
- * lies inside the range and its size is at most `alpha` times its age (the
- * distance from its start to hi). Bigger alpha: coarser, fewer lines. With
- * lo = 0 the root is the smallest power of two holding [0,hi), which is the
- * original cover.
- */
-function coverAt(lo: number, hi: number, alpha: number): Array<[number, number]> {
-  let root = 1;
-  while (Math.floor(lo / root) !== Math.floor((hi - 1) / root)) root *= 2;
-  const start = Math.floor(lo / root) * root;
+/** The fewest aligned power-of-two blocks that tile [lo, hi), oldest first. */
+function minimalTiling(lo: number, hi: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
-  const stack: Array<[number, number]> = [[start, start + root]];
-  while (stack.length > 0) {
-    const [a, b] = stack.pop()!;
-    if (a >= hi || b <= lo) continue;
-    const size = b - a;
-    if (size > 1 && (b > hi || a < lo || size > alpha * (hi - a))) {
-      const mid = (a + b) / 2;
-      stack.push([mid, b], [a, mid]);
-    } else {
-      out.push([a, b]);
-    }
+  for (let at = lo; at < hi; ) {
+    let size = 1;
+    while (at % (size * 2) === 0 && at + size * 2 <= hi) size *= 2;
+    out.push([at, at + size]);
+    at += size;
   }
-  return out.sort((x, y) => x[0] - y[0]);
-}
-
-/** The smallest alpha in (lo, hi] whose cover fits the budget, by bisection. */
-function fitAlpha(lo: number, hi: number, from: number, to: number, budget: number): number {
-  for (let i = 0; i < 60; i++) {
-    const mid = (from + to) / 2;
-    if (coverAt(lo, hi, mid).length > budget) from = mid;
-    else to = mid;
-  }
-  return to;
+  return out;
 }
 
 /**
@@ -98,33 +73,59 @@ function fitAlpha(lo: number, hi: number, from: number, to: number, budget: numb
  * verbatim. A span that cannot be tiled in `budget` aligned blocks (budget
  * below its minimal aligned tiling, at most about 2·log2 of its length)
  * returns that minimal tiling; callers compare the length with the budget.
+ *
+ * Which blocks merge: starting from the leaves, the most due pair of sibling
+ * blocks merges into its parent, again and again, until the budget is met. A
+ * pair at level l whose last leaf is `last` is due by (hi - last) / 2^l: how
+ * long ago it ended, in its own size. Ties go to the oldest pair. Measured
+ * from a pair's end, old blocks stay put as the span grows and the churn sits
+ * at the recent end; with the budget at its length, this is exactly the list
+ * Taelin's rollback `push` keeps (UniiChat, "Taelin's rollback push").
+ *
+ * A parent pair is always less due than its children (at most half as due),
+ * so the merges come out in one global order, by level from finest: each
+ * level merges a prefix of its blocks, oldest first. That is what is computed
+ * here, one merge at a time, in O((hi - lo) · log) without simulating pairs.
  */
 export function coverSpan(lo: number, hi: number, budget: number): TreeBlock[] {
   const n = hi - lo;
   if (n <= 0 || budget <= 0 || lo < 0) return [];
-  if (n <= budget) {
-    return Array.from({ length: n }, (_, i) => ({ level: 0, index: lo + i }));
+  // Per level from 1: the merged blocks there are indices [first, next).
+  const levels: Array<{ size: number; first: number; next: number; end: number }> = [];
+  for (let size = 2; size <= n; size *= 2) {
+    const first = Math.ceil(lo / size);
+    const end = Math.floor(hi / size);
+    if (first < end) levels.push({ size, first, next: first, end });
   }
-  let out = coverAt(lo, hi, fitAlpha(lo, hi, 0, 1, budget));
-  // Size at most age (alpha 1) can still be too fine for a small budget; only
-  // then are blocks allowed to outgrow their age, up to the minimal tiling.
-  if (out.length > budget) out = coverAt(lo, hi, fitAlpha(lo, hi, 1, n, budget));
-  // Block sizes jump in powers of two, so alpha alone can undershoot the
-  // budget. Spend what is left on the present, where detail is worth most.
-  while (out.length < budget) {
-    let at = -1;
-    for (let i = out.length - 1; i >= 0; i--) {
-      if (out[i][1] - out[i][0] > 1) {
-        at = i;
-        break;
+  for (let left = n - Math.floor(budget); left > 0; left--) {
+    let pick: (typeof levels)[number] | undefined;
+    let pickDue = -1;
+    for (const l of levels) {
+      if (l.next >= l.end) continue;
+      // The pair under block l.next: its last leaf, in units of its own size.
+      const due = (hi - ((l.next + 1) * l.size - 1)) / (l.size / 2);
+      if (due > pickDue || (due === pickDue && l.next * l.size < pick!.next * pick!.size)) {
+        pick = l;
+        pickDue = due;
       }
     }
-    if (at < 0) break;
-    const [a, b] = out[at];
-    const mid = (a + b) / 2;
-    out.splice(at, 1, [a, mid], [mid, b]);
+    if (!pick) break;
+    pick.next++;
   }
-  return out.map(([a, b]) => blockOf(a, b));
+  const merged = (a: number, size: number) => {
+    const l = levels[Math.log2(size) - 1];
+    return a / size < l.next;
+  };
+  const out: TreeBlock[] = [];
+  const emit = (a: number, b: number) => {
+    if (b - a === 1 || merged(a, b - a)) out.push(blockOf(a, b));
+    else {
+      emit(a, (a + b) / 2);
+      emit((a + b) / 2, b);
+    }
+  };
+  for (const [a, b] of minimalTiling(lo, hi)) emit(a, b);
+  return out;
 }
 
 /** The cover over T leaves: coverSpan(0, T, budget). */

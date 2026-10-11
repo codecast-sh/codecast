@@ -1105,9 +1105,10 @@ export function FileDiffLayout({
     }
   });
 
+  const groupElRef = useRef<HTMLDivElement | null>(null);
   const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     s.updateClientLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
-  });
+  }, groupElRef);
 
   const handleSelectFile = (filename: string) => {
     setSelectedFile(filename);
@@ -1419,6 +1420,7 @@ export function FileDiffLayout({
         <Group
           orientation="horizontal"
           onLayoutChange={handleLayoutChange}
+          elementRef={groupElRef}
           defaultLayout={layout}
           className="h-full"
         >

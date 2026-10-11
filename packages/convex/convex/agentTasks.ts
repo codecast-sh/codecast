@@ -2868,7 +2868,7 @@ export const reclaimStaleTasks = internalMutation({
 // surface was showing a truncated wall of prompt text. These functions turn
 // the prompt into a short display_title (2-5 words) and a display_summary (one
 // plain sentence: what the agent does each run). Same idiom as
-// titleGeneration.ts: an internalAction calls Haiku at temperature 0 and an
+// titleGeneration.ts: an internalAction calls the cheap model and an
 // internalMutation patches the result; extractTitleJson is reused for the
 // {"title","subtitle"} parse. Triggered from insertTask and from webUpdate on
 // prompt change; backfillDisplaySummaries sweeps pre-existing schedules.
@@ -2979,8 +2979,6 @@ export const generateDisplaySummary = internalAction({
           : "once";
 
     try {
-      // The cheap model, at temperature 0: the same prompt must yield the
-      // same summary.
       // A hosted routine's summary is said to its person (Routines shows it
       // as the description); any other schedule's is a developer's gist.
       const reply = await callModel({
