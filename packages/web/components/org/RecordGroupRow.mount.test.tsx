@@ -198,11 +198,10 @@ test("open, a group lists its records as numbered sentences, closed ones dim and
   expect(a().querySelector("[data-group-rows]")!.getAttribute("data-group-rows")).toBe("20");
   expect(rows().map((r) => r.getAttribute("data-record-row"))).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)));
   expect(rows()[0].querySelector("[data-record-seq]")!.textContent).toBe("#1");
-  expect(rows()[0].querySelector("p")!.textContent).toBe(changeWords(ORG_RECORDS_FIXTURE_PROPOSAL.changes[0].change, { names }).sentence);
-  expect(rows()[0].querySelector("p b")!.textContent).toBe("Funnel stages v2");
-  // A closed row is dim, never struck through: the sentence says the status, and a strike reads as rejected.
-  expect(rows()[0].querySelector("p")!.className).toContain("--sol-text-dim");
-  expect(rows()[17].querySelector("p")!.className).not.toContain("--sol-text-dim");
+  // A record reads as its pill, then what its status becomes; never struck through, which reads as rejected.
+  expect(changeWords(ORG_RECORDS_FIXTURE_PROPOSAL.changes[0].change, { names }).sentence).toBe("Mark the plan Funnel stages v2 as done.");
+  expect(rows()[0].querySelector("p [data-subject-pill]")!.textContent).toBe("Funnel stages v2");
+  expect(rows()[0].querySelector("p [data-diff=added]")!.textContent).toBe("Done");
   expect(rows().filter((r) => /line-through/.test(r.innerHTML))).toEqual([]);
   // The 220-character reason folds with "show all"; a short one has no word.
   const long = rows().find((r) => (r.textContent ?? "").includes("the health sweep flagged it once"))!;

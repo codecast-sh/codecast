@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { matchMentionGroups } from "../universalSearch";
+import { kindOfQuery, matchMentionGroups, matchRoutines } from "../universalSearch";
 
 const index = {
   tasks: {
@@ -27,4 +27,39 @@ test("groups leave out dropped tasks, plan-type docs and abandoned plans, and ke
 test("an empty query lists nothing unless asked to browse", () => {
   expect(matchMentionGroups(index, "", undefined, 5).tasks).toEqual([]);
   expect(matchMentionGroups(index, "", undefined, 5, { task: true }).tasks.length).toBe(1);
+});
+
+test("a kind's own word names the kind, singular or plural", () => {
+  expect(kindOfQuery("routines")).toBe("routine");
+  expect(kindOfQuery(" To-dos ")).toBe("task");
+  expect(kindOfQuery("todo")).toBe("task");
+  expect(kindOfQuery("notes")).toBe("doc");
+  expect(kindOfQuery("routine for mornings")).toBeNull();
+  expect(kindOfQuery("passport")).toBeNull();
+  // A start of three letters or more names the kind while it is typed.
+  expect(kindOfQuery("rou")).toBe("routine");
+  expect(kindOfQuery("rout")).toBe("routine");
+  expect(kindOfQuery("to-d")).toBe("task");
+  expect(kindOfQuery("not")).toBe("doc");
+  expect(kindOfQuery("ro")).toBeNull();
+  expect(kindOfQuery("trip")).toBeNull();
+});
+
+test("a kind word lists that kind, newest first, and leaves the other kinds to their hits", () => {
+  const groups = matchMentionGroups(index, "to-dos", undefined, 5);
+  expect(groups.tasks.map((t) => t._id)).toEqual(["t1"]);
+  expect(groups.docs).toEqual([]);
+  expect(matchMentionGroups(index, "notes", undefined, 5).docs.map((d) => d._id)).toEqual(["d1"]);
+});
+
+test("routines: the kind word lists every live routine after a title hit", () => {
+  const rows = [
+    { _id: "r1", title: "Morning to-do review", status: "scheduled", updated_at: 1 },
+    { _id: "r2", title: "Water the plants", status: "scheduled", updated_at: 3 },
+    { _id: "r3", title: "Routine check-in", status: "scheduled", updated_at: 2 },
+    { _id: "r4", title: "Old one", status: "cancelled", updated_at: 4 },
+  ];
+  expect(matchRoutines(rows, "routine", 5).map((r) => r._id)).toEqual(["r3", "r2", "r1"]);
+  expect(matchRoutines(rows, "routines", 5).map((r) => r._id)).toEqual(["r2", "r3", "r1"]);
+  expect(matchRoutines(rows, "plants", 5).map((r) => r._id)).toEqual(["r2"]);
 });
