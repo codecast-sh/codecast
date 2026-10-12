@@ -8,7 +8,7 @@ import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { fail } from "./lib/errors";
-import { MESSAGE_PAGE_MAX, RUNTIME_ERROR_MAX, TRIAGE_CEILING_USD } from "./lib/limits";
+import { LATEST_MESSAGES, MESSAGE_BODY_MAX, MESSAGE_PAGE_MAX, RUNTIME_ERROR_MAX, TRIAGE_CEILING_USD } from "./lib/limits";
 import { cleanElement, cleanLine, cleanMessageBody } from "./lib/room";
 import { takeRate } from "./limits";
 import { postSystemNote, requireApp, touchApp } from "./model";
@@ -17,7 +17,7 @@ import { buildRefusal, chargeSpend, enqueueBuild } from "./builder/queue";
 import { internal } from "./_generated/api";
 import { versionByNumber } from "./versions";
 import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
-import { composerMode, elementRef, visitorArgs, type BuildStatus, type ElementRef, type MessageKind, type SystemNote } from "./validators";
+import { composerMode, elementRef, visitorArgs, type BuildStatus, type ElementRef, type FailureKind, type MessageKind, type SystemNote } from "./validators";
 
 /** Send a message. `change` makes it a change request and queues its build
  *  (the message then carries the build card), `chat` plain chat, and `auto`
@@ -29,6 +29,7 @@ export const send = mutation({
   handler: async (ctx, args) => {
     const visitor = await requireVisitor(ctx, args);
     const app = await requireApp(ctx, args.app_id);
+    if (args.body.trim().length > MESSAGE_BODY_MAX) fail("invalid", `That's longer than a message can be. Keep it under ${MESSAGE_BODY_MAX} characters.`);
     const body = cleanMessageBody(args.body) ?? fail("invalid", "Say something first.");
     await takeRate(ctx, "message", visitor._id);
     await takeRate(ctx, "appMessage", app._id);
@@ -91,6 +92,8 @@ export type BuildView = {
   /** Why it failed, for people; `error_detail` is the raw cause behind "Details". */
   error: string | null;
   error_detail: string | null;
+  /** How it failed, which decides what its card offers; null when not failed. */
+  failure: FailureKind | null;
   started_at: number | null;
   finished_at: number | null;
 };
@@ -132,9 +135,17 @@ function buildView(b: Doc<"builds">, positions: Map<Id<"builds">, number>, summa
     summary,
     error: b.error ?? null,
     error_detail: b.error_detail ?? null,
+    failure: b.status === "failed" ? (b.failure ?? failureFromDetail(b.error_detail)) : null,
     started_at: b.started_at ?? null,
     finished_at: b.finished_at ?? null,
   };
+}
+
+/** Builds that failed before failures had kinds: read it from the cause. */
+function failureFromDetail(detail: string | undefined): FailureKind {
+  if (detail?.startsWith("declined: ")) return "declined";
+  if (detail === "the draft matched the base version") return "unchanged";
+  return "stopped";
 }
 
 async function noteView(ctx: QueryCtx, note: SystemNote, people: Map<Id<"visitors">, PublicVisitor>): Promise<NoteView> {
@@ -147,6 +158,35 @@ async function noteView(ctx: QueryCtx, note: SystemNote, people: Map<Id<"visitor
 
 const noteAuthor = (note: SystemNote | undefined) => (note && (note.type === "fork" || note.type === "restore") ? note.visitor_id : undefined);
 
+/** Messages as the room shows them, in the order given: each with its
+ *  author, its build card's state and its note joined in. */
+async function messageViews(ctx: QueryCtx, appId: Id<"apps">, rows: Doc<"messages">[]): Promise<MessageView[]> {
+  const people = await publicVisitors(
+    ctx,
+    rows.flatMap((m) => [m.visitor_id, noteAuthor(m.note)].filter((id): id is Id<"visitors"> => !!id)),
+  );
+  const builds = await Promise.all(rows.map((m) => (m.build_id ? ctx.db.get(m.build_id) : null)));
+  const positions = builds.some((b) => b?.status === "queued") ? await queuePositions(ctx, appId) : new Map();
+  const summaries = await Promise.all(
+    builds.map(async (b) => (b?.result_version ? ((await versionByNumber(ctx, b.app_id, b.result_version))?.summary ?? null) : null)),
+  );
+  return Promise.all(
+    rows.map(
+      async (m, i): Promise<MessageView> => ({
+        id: m._id,
+        created_at: m._creationTime,
+        kind: m.kind,
+        author: m.visitor_id ? (people.get(m.visitor_id) ?? null) : null,
+        body: m.body,
+        element: m.element ?? null,
+        triage_pending: m.triage === "pending",
+        build: builds[i] ? buildView(builds[i], positions, summaries[i]) : null,
+        note: m.note ? await noteView(ctx, m.note, people) : null,
+      }),
+    ),
+  );
+}
+
 /** The stream, newest first; feed straight to usePaginatedQuery. */
 export const list = query({
   args: { ...visitorArgs, app_id: v.id("apps"), paginationOpts: paginationOptsValidator },
@@ -157,32 +197,34 @@ export const list = query({
       .withIndex("by_app", (q) => q.eq("app_id", args.app_id))
       .order("desc")
       .paginate({ ...args.paginationOpts, numItems: Math.min(args.paginationOpts.numItems, MESSAGE_PAGE_MAX) });
+    return { ...page, page: await messageViews(ctx, args.app_id, page.page) };
+  },
+});
 
-    const people = await publicVisitors(
-      ctx,
-      page.page.flatMap((m) => [m.visitor_id, noteAuthor(m.note)].filter((id): id is Id<"visitors"> => !!id)),
-    );
-    const builds = await Promise.all(page.page.map((m) => (m.build_id ? ctx.db.get(m.build_id) : null)));
-    const positions = builds.some((b) => b?.status === "queued") ? await queuePositions(ctx, args.app_id) : new Map();
-    const summaries = await Promise.all(
-      builds.map(async (b) => (b?.result_version ? ((await versionByNumber(ctx, b.app_id, b.result_version))?.summary ?? null) : null)),
-    );
-
-    const views = await Promise.all(
-      page.page.map(
-        async (m, i): Promise<MessageView> => ({
-          id: m._id,
-          created_at: m._creationTime,
-          kind: m.kind,
-          author: m.visitor_id ? (people.get(m.visitor_id) ?? null) : null,
-          body: m.body,
-          element: m.element ?? null,
-          triage_pending: m.triage === "pending",
-          build: builds[i] ? buildView(builds[i], positions, summaries[i]) : null,
-          note: m.note ? await noteView(ctx, m.note, people) : null,
-        }),
+/** What the app's link follows while its room is closed, newest first: the
+ *  last few messages, every request in line or building, the request behind
+ *  the live version, and the live version's error note, if it has one. A
+ *  small slice of the stream, for the capsule; the room reads list. */
+export const latest = query({
+  args: { ...visitorArgs, app_id: v.id("apps") },
+  handler: async (ctx, args): Promise<MessageView[]> => {
+    await requireVisitor(ctx, args);
+    const app = await requireApp(ctx, args.app_id);
+    const [recent, inFlight, live, error] = await Promise.all([
+      ctx.db.query("messages").withIndex("by_app", (q) => q.eq("app_id", app._id)).order("desc").take(LATEST_MESSAGES),
+      Promise.all(
+        (["building", "queued"] as const).map((status) =>
+          ctx.db.query("builds").withIndex("by_app_status", (q) => q.eq("app_id", app._id).eq("status", status)).take(LATEST_MESSAGES),
+        ),
       ),
-    );
-    return { ...page, page: views };
+      versionByNumber(ctx, app._id, app.live_version),
+      ctx.db.query("app_errors").withIndex("by_app_version", (q) => q.eq("app_id", app._id).eq("version", app.live_version)).first(),
+    ]);
+    const seen = new Set<string>(recent.map((m) => m._id));
+    const wanted = [...inFlight.flat().map((b) => b.card_message_id ?? b.request_message_id), live?.request_message_id, error?.message_id];
+    const more = [...new Set(wanted.filter((id): id is Id<"messages"> => !!id && !seen.has(id)))];
+    const older = (await Promise.all(more.map((id) => ctx.db.get(id)))).filter((m): m is Doc<"messages"> => m !== null);
+    const rows = [...recent, ...older].sort((a, b) => b._creationTime - a._creationTime);
+    return messageViews(ctx, app._id, rows);
   },
 });

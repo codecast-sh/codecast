@@ -9,8 +9,8 @@
 //
 //   face      Each reply the session posts to the call's chat arrives on the
 //             codecast.face data topic, and the face says it.
-//   realtime  A live model hears the people in the room, sees the active
-//             speaker's camera or a shared screen when it answers, and talks
+//   realtime  A live model hears the people in the room, sees every shared
+//             screen and camera that is on when it answers (vision.mjs), and talks
 //             through the face, or as a plain voice when no face can be
 //             seated (Tavus out of minutes or down). It answers when named, when it is the only
 //             one the person can be talking to, or when someone follows up
@@ -27,8 +27,9 @@
 import { fileURLToPath } from "node:url";
 import { AutoSubscribe, cli, defineAgent, llm, voice, WorkerOptions } from "@livekit/agents";
 import * as openai from "@livekit/agents-plugin-openai";
-import { AudioMixer, AudioStream, RoomEvent, TrackKind, TrackSource, VideoStream } from "@livekit/rtc-node";
+import { AudioMixer, AudioStream, RoomEvent, TrackKind } from "@livekit/rtc-node";
 import { AccessToken } from "livekit-server-sdk";
+import { eachTrack, isPerson, people, watchVideo } from "./vision.mjs";
 
 const AGENT_NAME = process.env.FACE_AGENT_NAME || "codecast-face";
 const FACE_TOPIC = "codecast.face";
@@ -44,20 +45,6 @@ const SPOKEN_MAX = 600;
 // A person's next words this soon after the voice spoke are likely for it.
 const FOLLOW_UP_MS = 15_000;
 const SAMPLE_RATE = 24_000;
-
-// Faces are `agent:<id>` and LiveKit names agent jobs `agent-<id>`; everyone
-// else in a huddle is a person.
-const isPerson = (p) => !p.identity.startsWith("agent");
-const people = (room) => [...room.remoteParticipants.values()].filter(isPerson);
-
-/** Call `fn` for every track this job subscribes to, the ones it already
- *  holds included: the room's people are usually there before the job is. */
-function eachTrack(room, fn) {
-  for (const p of room.remoteParticipants.values()) {
-    for (const pub of p.trackPublications.values()) if (pub.track) fn(pub.track, pub, p);
-  }
-  room.on(RoomEvent.TrackSubscribed, fn);
-}
 
 async function tavus(method, path, body) {
   const res = await fetch(`https://tavusapi.com/v2/${path}`, {
@@ -160,25 +147,6 @@ class RoomMix extends voice.AudioInput {
   }
 }
 
-/** The newest frame of every person's camera and screen share. */
-function watchVideo(room) {
-  const latest = new Map();
-  const key = (p, source) => `${p.identity}:${source}`;
-  eachTrack(room, async (track, pub, p) => {
-    if (track.kind !== TrackKind.KIND_VIDEO || !isPerson(p)) return;
-    for await (const ev of new VideoStream(track)) latest.set(key(p, pub.source), ev.frame);
-    latest.delete(key(p, pub.source));
-  });
-  return (speaker) => {
-    for (const p of people(room)) {
-      const screen = latest.get(key(p, TrackSource.SOURCE_SCREENSHARE));
-      if (screen) return { frame: screen, what: `${p.name || "someone"}'s shared screen` };
-    }
-    const cam = speaker && latest.get(key(speaker, TrackSource.SOURCE_CAMERA));
-    return cam ? { frame: cam, what: `${speaker.name || "the speaker"}'s camera` } : null;
-  };
-}
-
 /** Real-time mode: a live model that hears and sees the room, speaking
  *  through the face, or as this job's own audio track when `face` is null. */
 async function runRealtime(ctx, meta, face) {
@@ -194,7 +162,7 @@ async function runRealtime(ctx, meta, face) {
     if (track.kind === TrackKind.KIND_AUDIO && isPerson(p)) mix.add(pub.sid, track);
   });
   room.on(RoomEvent.TrackUnsubscribed, (_t, pub) => mix.remove(pub.sid));
-  const frameFor = watchVideo(room);
+  const look = watchVideo(room);
   let speaker = null;
   room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
     speaker = speakers.find(isPerson) ?? speaker;
@@ -237,15 +205,18 @@ async function runRealtime(ctx, meta, face) {
   let lastSpokeAt = 0;
   let shownImage = null;
   const answer = async (opts = {}) => {
-    const seen = frameFor(speaker);
+    const views = look(speaker);
     const ctxCopy = agent.chatCtx.copy();
     if (shownImage) ctxCopy.items = ctxCopy.items.filter((i) => i.id !== shownImage);
-    if (seen) {
-      shownImage = ctxCopy.addMessage({
-        role: "user",
-        content: [`(What you can see right now: ${seen.what}.)`, llm.createImageContent({ image: seen.frame, inferenceWidth: 1024, inferenceHeight: 1024 })],
-      }).id;
-    } else shownImage = null;
+    shownImage = ctxCopy.addMessage({
+      role: "user",
+      content: views.length
+        ? [
+            "(What you can see right now. Earlier frames are gone; only these are current.)",
+            ...views.flatMap((v) => [`${v.what}:`, llm.createImageContent({ image: v.frame, inferenceWidth: v.size, inferenceHeight: v.size })]),
+          ]
+        : ["(You see nothing right now: nobody is sharing a screen and no camera is on.)"],
+    }).id;
     await agent.updateChatCtx(ctxCopy).catch((e) => console.error("vision update failed", e));
     session.generateReply(opts);
   };
