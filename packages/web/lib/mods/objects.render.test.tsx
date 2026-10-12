@@ -71,7 +71,7 @@ describe("mod object references in prose", () => {
     expect(unknown).toContain('href="/o/bug-99"');
     expect(unknown).toContain(">bug-99<");
     const done = await render("bug-3 is done");
-    expect(done).toContain("line-through");
+    expect(done).toContain("opacity-60");
   });
 
   test("ids inside inline code are left alone", async () => {

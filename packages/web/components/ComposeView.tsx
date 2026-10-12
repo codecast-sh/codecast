@@ -27,6 +27,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ReviewComposerContext, type ReviewComposer } from "./reviewContext";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { MODE_WORDS, useSurface } from "../lib/surfaces";
+import { Button } from "./ui/button";
 // Every keep/confirm/prune decision reads through here, so it flushes the
 // composer's debounced write first: the last keystrokes count.
 const draftContentFor = (id: string | null) => {
@@ -809,14 +810,10 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
             <KeyCap size="xs">d</KeyCap>
             Discard
           </button>
-          <button
-            autoFocus
-            onClick={onKeep}
-            className="sol-btn-solid inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium"
-          >
+          <Button autoFocus variant="cyan" size="sm" onClick={onKeep}>
             <FooterKeys combo="enter" />
             Keep draft
-          </button>
+          </Button>
         </div>
         <div className="mt-2.5 flex items-center justify-end gap-3 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> back to draft</span>
