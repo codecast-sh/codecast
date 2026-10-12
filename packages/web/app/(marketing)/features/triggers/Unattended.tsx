@@ -58,12 +58,12 @@ const GUARDS: { flag: ReactNode; title: string; body: ReactNode; aside?: ReactNo
     aside: <ParkStrip />,
   },
   {
-    flag: "--safe", title: "Read-only runs",
-    body: <>A spawned run gets its write tools removed and state-changing commands blocked. Right for watchers that should look and report, never touch. A run that injects into an existing session inherits that session&apos;s rules instead.</>,
+    flag: "read-only", title: "Runs that only look",
+    body: <>With <b>read-only</b> ticked in the form, a fresh run gets its write tools removed and state-changing commands blocked. Right for watchers that should look and report, never touch. A run that injects into an existing session inherits that session&apos;s rules instead.</>,
   },
   {
-    flag: "--max-runtime", title: "A hard stop",
-    body: <>Every run has a kill cap, 10 minutes by default. Set it past any wait or retry window the prompt asks for.</>,
+    flag: "time limit", title: "A hard stop",
+    body: <>Every run has a kill cap, 10 minutes by default. An agent setting a trigger that waits or retries raises it past that window.</>,
   },
   {
     flag: "retries", title: "Failure is visible",
