@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createdRefs, hostedReceipt } from "./hostedReceipt";
+import { createdRefs, hostedReceipt, searchedSources, siteOf } from "./hostedReceipt";
 
 const results: Record<string, { content: string; is_error?: boolean }> = {
   a: { content: JSON.stringify({ results: [1, 2, 3] }) },
@@ -15,12 +15,12 @@ describe("a hosted conversation's receipt", () => {
       { id: "a", name: "search_mail", input: '{"query":"is:unread newer_than:7d"}' },
       { id: "b", name: "draft_reply", input: '{"to":"Dana Ruiz <dana@x.org>"}' },
     ], resultFor);
-    expect(r).toEqual({ summary: "Read 3 unread emails from the past week · Drafted a reply to Dana Ruiz", counted: "2 steps", created: [], steps: 2 });
+    expect(r).toEqual({ summary: "Read 3 unread emails from the past week · Drafted a reply to Dana Ruiz", counted: "2 steps", created: [], steps: 2, sources: [] });
   });
 
   it("names the first steps of a busy segment and counts the rest", () => {
     const calls = ["web_search", "fetch_page", "fetch_page", "create_task", "remember"].map((name, i) => ({ id: `c${i}`, name, input: "{}" }));
-    expect(hostedReceipt(calls, resultFor)).toEqual({ summary: "Searched the web · Read a web page · 3 more steps", counted: "5 steps", created: [], steps: 5 });
+    expect(hostedReceipt(calls, resultFor)).toEqual({ summary: "Searched the web · Read a web page · 3 more steps", counted: "5 steps", created: [], steps: 5, sources: [] });
   });
 
   it("never folds away a single step, and never says a tool's name", () => {
@@ -33,8 +33,8 @@ describe("a hosted conversation's receipt", () => {
       { id: "declined", name: "replace_doc", input: "{}" },
       { id: "open", name: "send_email", input: '{"to":"dana@x.org"}' },
     ];
-    expect(hostedReceipt(calls, resultFor).summary).toBe("Didn't update a note (you said no) · Sending an email to Dana");
-    expect(hostedReceipt(calls, resultFor, { asking: true }).summary).toBe("Didn't update a note (you said no) · Waiting for your go-ahead to send an email to Dana");
+    expect(hostedReceipt(calls, resultFor).summary).toBe("Didn't update a note (you said not now) · Sending an email to Dana");
+    expect(hostedReceipt(calls, resultFor, { asking: true }).summary).toBe("Didn't update a note (you said not now) · Waiting for your go-ahead to send an email to Dana");
   });
 
   it("a to-do the turn added is named by its id, for the receipt's live pill", () => {
@@ -52,14 +52,31 @@ describe("a hosted conversation's receipt", () => {
 });
 
 describe("one step that made one thing", () => {
-  it("counts its steps, and the line's words drop the quoted name the link carries", async () => {
-    const { wordsBeforeName } = await import("../components/conversation/HostedMadeLine");
+  it("counts its steps, and splits the line's words from the quoted name the link carries", async () => {
+    const { madeLineParts } = await import("../components/conversation/HostedMadeLine");
     const call = { id: "c1", name: "schedule_routine", input: { title: "Morning stretch" } };
     const receipt = hostedReceipt([call], () => ({ content: "Scheduled tr-12", is_error: false }));
     expect(receipt.steps).toBe(1);
     expect(receipt.created).toEqual(["tr-12"]);
-    expect(wordsBeforeName(receipt.summary)).toBe("Set up the routine");
-    expect(wordsBeforeName('Added a to-do: "Renew passport"')).toBe("Added a to-do:");
-    expect(wordsBeforeName("Checked your to-dos")).toBeNull();
+    expect(madeLineParts(receipt.summary)).toEqual({ words: "Set up the routine", name: "Morning stretch" });
+    expect(madeLineParts('Added a to-do: "Renew passport"')).toEqual({ words: "Added a to-do:", name: "Renew passport" });
+    expect(madeLineParts("Checked your to-dos")).toBeNull();
+  });
+});
+
+describe("a search's sources", () => {
+  const search = { id: "s1", name: "search_web", input: { query: "best robot vacuums" } };
+  const list = "\n\nSources:\n- Best robot vacuums: https://www.tomsguide.com/a\n- More from Tom's: https://www.tomsguide.com/b\n- https://shopping.yahoo.com/c\n- eufy: https://eufy.com/d\n- Wirecutter: https://www.nytimes.com/e\n- Verge: https://theverge.com/f";
+
+  it("one per site, cited order, up to four, from the search's own result", () => {
+    const sources = searchedSources([search], () => ({ content: `Roborock leads.${list}` }));
+    expect(sources.map((s) => siteOf(s.url))).toEqual(["tomsguide.com", "shopping.yahoo.com", "eufy.com", "nytimes.com"]);
+    expect(sources[0].title).toBe("Best robot vacuums");
+  });
+
+  it("content blocks keep the list's lines; a failed or other step lists none", () => {
+    expect(searchedSources([search], () => ({ content: [{ type: "text", text: `Roborock leads.${list}` }] })).length).toBe(4);
+    expect(searchedSources([search], () => ({ content: `Failed.${list}`, is_error: true }))).toEqual([]);
+    expect(searchedSources([{ id: "f", name: "fetch_page", input: {} }], () => ({ content: list }))).toEqual([]);
   });
 });

@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { SOL, Terminal } from "../../blog/blogChrome";
-import { C, CYAN, Caption, Note, Section } from "./kit";
+import { SOL } from "../../blog/blogChrome";
+import { C, CYAN, Note, Section } from "./kit";
 
 function Icon({ d }: { d: string }) {
   return (
@@ -55,7 +55,7 @@ function Pill({ children }: { children: ReactNode }) {
 }
 
 /** An assistant turn in a codecast conversation, showing all three ways a page link renders. */
-function ConversationMock() {
+export function ConversationMock() {
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: SOL.base3, boxShadow: "0 30px 60px -34px rgba(0,43,54,.45)" }}>
       <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-[11.5px]" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
@@ -93,17 +93,17 @@ function ConversationMock() {
 }
 
 const WAYS: { syntax: string; result: string }[] = [
-  { syntax: "a page URL on its own line", result: "the live page, framed, with its title, copy, expand and open controls; drag the bottom edge to resize" },
-  { syntax: "[caption](url) on its own line", result: "the same frame, with your caption under it" },
-  { syntax: "a page URL inside a sentence", result: "a small pill with the page's title" },
-  { syntax: "![alt](url) from cast image", result: "the picture inline; the alt text is its caption" },
+  { syntax: "A page the agent puts on its own line", result: "The live page, framed in the thread. Its bar has Pin a note, Copy link, Expand, Open beside your work and Open in a new tab; drag the bottom edge to resize." },
+  { syntax: "The same, with a caption", result: "The same frame, with the agent's caption under it." },
+  { syntax: "A page named inside a sentence", result: "A small pill with the page's title." },
+  { syntax: "A single picture", result: "The image inline, captioned. Screenshots come this way, not as pages." },
 ];
 
 export function Places() {
   return (
     <Section
       id="conversation"
-      n="06"
+      n="01"
       tone="sand"
       title="The page shows up where the work is discussed."
       lede={<>In a codecast conversation, a published link is not a bare URL. The agent puts it on its own line and the live page renders in the thread, so you review the deliverable without leaving the session that made it.</>}
@@ -119,37 +119,27 @@ export function Places() {
               </li>
             ))}
           </ul>
-          <div className="mt-8 [&>div]:my-0">
-            <Terminal label="one picture, not a page">
-              <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast image after.png --alt &quot;after&quot;</span>{"\n"}
-              <span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>after.png</span> <span style={{ color: SOL.base01 }}>(image/png, 412KB)</span>{"\n"}
-              {"  "}https://…/after.png{"\n"}
-              {"  "}<span style={{ color: SOL.base01 }}>markdown:</span> ![after](https://…/after.png)
-            </Terminal>
-          </div>
+          <p className="mt-6 text-[15px] leading-7" style={{ color: SOL.base01 }}>
+            A note you pin on a framed page rides on your next message to the agent, quoted with the spot it points at, so &quot;make this wider&quot; arrives with the &quot;this&quot;.
+          </p>
           <Note className="mt-5">
-            <C>cast image</C> uploads a screenshot or an image URL and prints a stable link plus the markdown to paste. It takes PNG, JPEG, GIF, WebP, AVIF and BMP.
-            Images over 5 MB are re-encoded on macOS to fit. Use it instead of linking a local path like <C>/tmp/shot.png</C>, which nobody else&apos;s browser can open.
+            For agents and scripts: <C>cast image</C> uploads one picture (PNG, JPEG, GIF, WebP, AVIF or BMP) and prints a stable link plus the markdown to paste, so nobody is handed a local path their browser cannot open.
           </Note>
         </div>
       </div>
 
       <div className="mt-16 grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8 items-center rounded-2xl border p-6 sm:p-8 bg-white/60" style={{ borderColor: "rgba(88,110,117,.2)" }}>
         <div>
-          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Attach it to the task it proves.</h3>
+          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Attached to the task it proves.</h3>
           <p className="mt-3 text-[15px] leading-7" style={{ color: SOL.base01 }}>
-            When the publishing session is working on a task, the page attaches to that task as evidence, stamped with the stage the task was at. Name a different one with{" "}
-            <C>--task ct-N</C>, or attach to a plan with <C>--plan pl-N</C>. Whoever opens the task finds the report, the screenshot page or the dashboard that backs the claim.
+            When the publishing session is working on a task, the page attaches to that task as evidence, stamped with the stage the task was at. Whoever opens the task finds the report, the screenshot page or the dashboard that backs the claim. An agent can name a different task or a plan instead.
           </p>
         </div>
-        <div className="min-w-0 [&>div]:my-0">
-          <Terminal label="evidence">
-            <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish verify.html --task ct-4102</span>{"\n"}
-            <span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>Checkout flow, verified</span>  <span style={{ color: SOL.yellow }}>v1</span> → published{"\n"}
-            {"  "}<span style={{ color: CYAN }}>https://codecast.sh/a/Wc8sN1qTzR5e</span>{"\n"}
-            {"  "}<span style={{ color: SOL.base01 }}>evidence:</span> attached to ct-4102 at in_progress
-          </Terminal>
-          <Caption>Captures on this page trim the owner link line. The CLI prints it on every publish; keep it private.</Caption>
+        <div>
+          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Every page in one place.</h3>
+          <p className="mt-3 text-[15px] leading-7" style={{ color: SOL.base01 }}>
+            <b style={{ color: SOL.base02 }}>Pages</b> in the sidebar lists what you published, then your team&apos;s, each card showing its gates, views and open comments. A card&apos;s menu has Open, Copy link, Manage, Edit and Delete.
+          </p>
         </div>
       </div>
     </Section>

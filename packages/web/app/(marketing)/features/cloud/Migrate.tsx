@@ -2,6 +2,7 @@
 
 import { SOL } from "../../blog/blogChrome";
 import { BLUE, C, Caption, HOST, LAPTOP, Note, Out, P$, Term, delay } from "./kit";
+import { Shot } from "../kit";
 
 const STAGES: { name: string; what: string }[] = [
   { name: "Fence", what: "No daemon delivers into it. Messages sent now wait, and ride the resume." },
@@ -116,44 +117,53 @@ function Divider() {
 export function MigrateSection() {
   return (
     <>
-      <StageTrack />
-      <StageList />
-      <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {STAGES.map((s, i) => (
-          <div key={s.name}>
-            <div className="font-mono text-[12.5px] font-semibold" style={{ color: SOL.base02 }}><span style={{ color: BLUE }}>{i + 1}</span> {s.name}</div>
-            <p className="mt-1 text-[13.5px] leading-6" style={{ color: SOL.base01 }}>{s.what}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-8 items-start">
+        <div className="min-w-0">
+          <Shot dark src="/features/cloud/migration-destination.webp" alt="Settings, Migration, Destination: two cloud hosts online with their session counts, and three laptops" width={1604} height={744} />
+          <Caption>Settings, Migration: the destination first. Asleep hosts are still offered, and wake on the move.</Caption>
+        </div>
+        <div className="space-y-5">
+          <Note>
+            Pick a destination, then tick sessions in the list below it, filtered by title, project or the machine they are on now. <b style={{ color: SOL.base02 }}>Sessions mid-turn</b> sets how long a busy session may finish its turn, and <b style={{ color: SOL.base02 }}>Move</b> starts the batch.
+          </Note>
+          <Note>
+            Every batch then shows under <b style={{ color: SOL.base02 }}>Migrations</b> with live progress, one row per session, each narrating its own step. A failed row keeps its session where it was.
+          </Note>
+          <Note>
+            For one session, use the machine menu in its header and pick <b style={{ color: SOL.base02 }}>Move to</b> the host, or right-click sessions in the inbox and choose <b style={{ color: SOL.base02 }}>Move to machine</b>.
+          </Note>
+        </div>
       </div>
 
       <div className="mt-16">
-        <div>
-          <Term machine="laptop" label="plan first, then move">
-            <P$>cast migrate start --to {HOST.slice(0, 6)} --label rollout --dry-run</P$>
-            <Out>{"  would move  "}<span style={{ color: SOL.base02 }}>jx7k2pd   port the v1 routes</span>{"  (" + LAPTOP + " → " + HOST + ")"}</Out>
-            <Out>{"  would move  "}<span style={{ color: SOL.base02 }}>jx7m4qe   write the migration</span>{"  (" + LAPTOP + " → " + HOST + ")"}</Out>
-            <Out>{"  would move  "}<span style={{ color: SOL.base02 }}>jx7p9ra   nightly backfill</span>{"  (" + LAPTOP + " → " + HOST + ")"}</Out>
-            <Out tone={SOL.base1}>{"  skip       jx7q0aa   review the diff: only Claude Code sessions can be transferred"}</Out>
-            <Out tone={SOL.base1}>{"  skip       jx7r5bb   lint pass: a subagent moves with its parent"}</Out>
-            <Out tone={SOL.base01}>{"dry run: 3 would move to " + HOST + ", 2 skipped"}</Out>
-            <Out>{" "}</Out>
-            <P$>cast migrate start --to {HOST.slice(0, 6)} --label rollout --wait 20</P$>
-            <P$>cast migrate show mg-4k7q2z9a</P$>
-          </Term>
-          <Caption>Every skip names its reason. <C>--from</C>, <C>--project</C>, <C>--all</C> and short ids select too, and they combine.</Caption>
+        <StageTrack />
+        <StageList />
+        <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          {STAGES.map((s, i) => (
+            <div key={s.name}>
+              <div className="font-mono text-[12.5px] font-semibold" style={{ color: SOL.base02 }}><span style={{ color: BLUE }}>{i + 1}</span> {s.name}</div>
+              <p className="mt-1 text-[13.5px] leading-6" style={{ color: SOL.base01 }}>{s.what}</p>
+            </div>
+          ))}
         </div>
-        <div className="mt-10 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8 items-start">
-          <Divider />
-          <div className="space-y-5">
-          <Note>
-            Every ownership flip writes that divider into the thread, and the agent is told which machine it is on now. Messages you sent during the move were held by the fence and arrive on the destination.
-          </Note>
-          <Note>
-            One session at a time: <C>cast remote move &lt;session&gt;</C> to the host, <C>cast remote back &lt;session&gt;</C> to return it, as a fast forward that never overwrites local work. <C>cast pull &lt;session&gt;</C> runs any session you can access on this machine.
-          </Note>
-          </div>
-        </div>
+      </div>
+
+      <div className="mt-16 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8 items-start">
+        <Divider />
+        <Note>
+          Every ownership flip writes that divider into the thread, and the agent is told which machine it is on now. Messages you sent during the move were held by the fence and arrive on the destination.
+        </Note>
+      </div>
+
+      <div className="mt-16">
+        <Term machine="laptop" label="for scripts and agents">
+          <P$>cast migrate start --to {HOST} --label rollout --dry-run</P$>
+          <Out>{"  would move  "}<span style={{ color: SOL.base02 }}>jx7k2pd   port the v1 routes</span>{"  (" + LAPTOP + " → " + HOST + ")"}</Out>
+          <Out tone={SOL.base1}>{"  skip       jx7q0aa   review the diff: only Claude Code sessions can be transferred"}</Out>
+          <Out tone={SOL.base01}>{"dry run: 1 would move to " + HOST + ", 1 skipped"}</Out>
+          <P$>cast migrate start --to {HOST} --label rollout --wait 20</P$>
+        </Term>
+        <Caption>The same batches from a terminal: every skip names its reason, and <C>--from</C>, <C>--project</C>, <C>--all</C> and short ids select too. <C>cast remote move</C> and <C>cast remote back</C> move one session; going back is a fast forward that never overwrites local work.</Caption>
       </div>
     </>
   );
