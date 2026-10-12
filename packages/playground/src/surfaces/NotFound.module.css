@@ -6,6 +6,6 @@
     radial-gradient(700px 380px at -5% 30%, rgba(222, 190, 120, .16), transparent 70%),
     var(--paper);
 }
-.title { margin-top: var(--s4); font: 700 32px/1.1 var(--voice); font-variation-settings: var(--voice-axes); }
+.title { margin-top: var(--s4); font: 700 32px/1.1 var(--ui); }
 .sub { font: 400 15px var(--ui); color: var(--ink-2); }
 .maker { width: min(760px, 100%); margin-top: var(--s6); text-align: left; }

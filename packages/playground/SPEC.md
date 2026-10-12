@@ -141,7 +141,9 @@ read as "simple, fast, fun, and real software", in that order.
 - Rate limit / budget rows as needed.
 
 All public functions take the visitor id + secret and verify the hash (the
-`callGuests.ts` pattern in packages/convex). Never trust a client-sent
+`callGuests.ts` pattern in packages/convex), except registering and the reads behind
+an app link and the home page (the app, the gallery, the feed), which say only
+what anyone can already see, so those pages draw before their visitor is known. Never trust a client-sent
 visitor id alone.
 
 ### Build queue and the builder agent
