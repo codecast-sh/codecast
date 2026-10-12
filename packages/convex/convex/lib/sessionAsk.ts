@@ -502,7 +502,7 @@ export const ASK_BUDGET_CHARS = 180_000;
 
 /** The first call: the model's extra search terms for the question. */
 export function askTermsRequest(question: string): SurfaceRequest {
-  return { model: CHEAP_MODEL, max_tokens: 200, temperature: 0, prompt: buildTermsPrompt(question) };
+  return { model: CHEAP_MODEL, max_tokens: 200, prompt: buildTermsPrompt(question) };
 }
 
 /** What the scan searches for: the question's own words plus the terms call's reply. */
@@ -536,7 +536,7 @@ export function askAnswerRequest(input: AskAnswerInput): { context: AskContext; 
     excerpts: context.text,
     unread,
   });
-  return { context, request: { model: CHEAP_MODEL, max_tokens: 1500, temperature: 0, system: ASK_SYSTEM_PROMPT, prompt } };
+  return { context, request: { model: CHEAP_MODEL, max_tokens: 1500, system: ASK_SYSTEM_PROMPT, prompt } };
 }
 
 /** Message numbers the answer cites (msg 12, msg 12–15, msg 12-msg 15, msg -3), in order, deduplicated. */

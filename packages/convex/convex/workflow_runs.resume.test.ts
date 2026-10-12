@@ -3,7 +3,7 @@
 // the live runs it drove. Driven against the fake db like the gate tests.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { liveRunsForDevice, resumeRunCore } from "./workflow_runs";
+import { failStrandedPendingRuns, liveRunsForDevice, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any;
@@ -71,5 +71,41 @@ describe("liveRunsForDevice", () => {
     const mine = await handler(ctx, { api_token: TOKEN, device: "dev-mini" });
     expect(mine.runs.map((r: any) => [r.run_id, r.status, r.current_node_id])).toEqual([[RUN, "paused", "decide"]]);
     expect((await handler(ctx, { api_token: TOKEN, device: "dev-other" })).runs).toEqual([]);
+  });
+});
+
+describe("failStrandedPendingRuns", () => {
+  const pending = { status: "pending", current_node_id: undefined, gate_node_id: undefined, gate_response: undefined, node_statuses: [] };
+  const took = (tables: Record<string, any[]>, at: number) =>
+    tables.daemon_commands.push({ _id: "cmd1", user_id: HOST, command: "run_workflow", args: JSON.stringify({ workflow_run_id: RUN }), created_at: NOW, executed_at: at });
+
+  test("a run a daemon took that no runner claimed fails after ten minutes, naming why", async () => {
+    const { ctx, tables } = await seed(pending);
+    took(tables, NOW + 3_000);
+    expect(await failStrandedPendingRuns(ctx, HOST, NOW + STRANDED_PENDING_MS - 1)).toEqual([]);
+    expect(await failStrandedPendingRuns(ctx, HOST, NOW + STRANDED_PENDING_MS + 1)).toEqual([RUN]);
+    expect(tables.workflow_runs[0].status).toBe("failed");
+    expect(tables.workflow_runs[0].fail_reason).toContain("No runner started it");
+  });
+
+  test("a run no machine has taken yet stays pending, and so does another person's", async () => {
+    const offline = await seed(pending);
+    expect(await failStrandedPendingRuns(offline.ctx, HOST, NOW + 60 * 60_000)).toEqual([]);
+    expect(offline.tables.workflow_runs[0].status).toBe("pending");
+    const theirs = await seed(pending);
+    took(theirs.tables, NOW + 3_000);
+    expect(await failStrandedPendingRuns(theirs.ctx, MATE, NOW + 60 * 60_000)).toEqual([]);
+  });
+});
+
+describe("cancelRunByPerson", () => {
+  test("a person stops a line run: the run ends and its task reads blocked, saying why", async () => {
+    const { ctx, tables } = await seed({ task_id: "tasks_cause" });
+    tables.tasks = [{ _id: "tasks_cause", short_id: "ct-9", title: "A problem", status: "in_progress", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: NOW, updated_at: NOW }];
+    tables.task_history = [];
+    const { cancelRunByPerson } = await import("./workflow_runs");
+    await cancelRunByPerson(ctx, HOST, RUN, NOW + 1);
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user" });
+    expect(tables.tasks[0]).toMatchObject({ execution_status: "blocked", execution_concerns: "Cancelled by user" });
   });
 });
