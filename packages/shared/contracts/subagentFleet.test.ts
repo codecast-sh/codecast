@@ -6,12 +6,12 @@ const row = (id: string, slot: SlotRow["slot"], at: number, parent: string | nul
   ({ id, slot, at, parent, device, caps: c });
 
 describe("normalizeSubagentCaps", () => {
-  test("defaults are 10 per session and 24 per machine", () => {
-    expect(normalizeSubagentCaps()).toEqual({ per_session: 10, per_machine: 24 });
+  test("defaults are no cap: 0 per session and 0 per machine", () => {
+    expect(normalizeSubagentCaps()).toEqual({ per_session: 0, per_machine: 0 });
   });
   test("takes positive whole numbers, from strings too, and drops the rest", () => {
-    expect(normalizeSubagentCaps({ per_session: "6", per_machine: 0 })).toEqual({ per_session: 6, per_machine: 24 });
-    expect(normalizeSubagentCaps({ per_session: 2.5, per_machine: -1 })).toEqual({ per_session: 10, per_machine: 24 });
+    expect(normalizeSubagentCaps({ per_session: "6", per_machine: 0 })).toEqual({ per_session: 6, per_machine: 0 });
+    expect(normalizeSubagentCaps({ per_session: 2.5, per_machine: -1 })).toEqual({ per_session: 0, per_machine: 0 });
   });
 });
 
@@ -25,6 +25,12 @@ describe("admit", () => {
     const running = [row("a", "running", 1, "p"), row("b", "running", 2, "q"), row("c", "running", 3, "r", "linux")];
     expect(admit({ parent: "s", device: "mac", caps: caps(4, 2) }, running)).toEqual({ start: false, full: "machine" });
     expect(admit({ parent: "s", device: "linux", caps: caps(4, 2) }, running)).toEqual({ start: true });
+  });
+  test("0 means no limit: the default admits any number per session and per machine", () => {
+    const running: SlotRow[] = Array.from({ length: 40 }, (_, i) => ({ id: `w${i}`, parent: "p", device: "mac", slot: "running", at: i, caps: caps(0, 0) }));
+    expect(admit({ parent: "p", device: "mac", caps: caps(0, 0) }, running)).toEqual({ start: true });
+    expect(admit({ parent: "p", device: "mac", caps: caps(0, 2) }, running)).toEqual({ start: false, full: "machine" });
+    expect(admit({ parent: "p", device: "mac", caps: caps(2, 0) }, running)).toEqual({ start: false, full: "session" });
   });
 });
 

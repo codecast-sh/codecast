@@ -169,7 +169,9 @@ export const reactionsSig = makeCollectionSig<ChatReactionRow>(
 function railSig(rail: ChatRailRow[]): string {
   let out = "";
   for (const r of rail ?? []) {
-    out += `${r.channel_id}|${r.sort_at}|${r.unread}|${r.unread_mentions}|${r.notify_level}|${r.joined}|${r.last_message?._id ?? ""};`;
+    // The rosters too: the member panel paints the people and agents in a room from these rows.
+    const agents = (r.agents ?? []).map((a) => (a.kind === "role" ? a.role_id : a.conversation_id)).join(",");
+    out += `${r.channel_id}|${r.sort_at}|${r.unread}|${r.unread_mentions}|${r.notify_level}|${r.joined}|${r.last_message?._id ?? ""}|${(r.member_ids ?? []).join(",")}|${agents};`;
   }
   return out;
 }
