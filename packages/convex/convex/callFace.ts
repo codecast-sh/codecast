@@ -8,7 +8,7 @@
 //   agent_faces     The face says each reply the session posts to the call's
 //                   chat, word for word.
 //   agent_realtime  The worker also runs a fast live model that hears the
-//                   room, sees the speaker's camera and any shared screen,
+//                   room, sees every shared screen and camera that is on,
 //                   and answers at once; the session stays the agent's
 //                   working half, handed real work through `ask`, and its
 //                   replies reach the model to tell the room in its own

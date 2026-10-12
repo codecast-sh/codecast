@@ -87,14 +87,10 @@ export function AutoStage({
                       : "bg-black/45 text-white/70 hover:text-white"
                   }`}
                 >
-                  {t.isLocal ? (
-                    "your screen"
-                  ) : (
-                    <span className="flex items-center gap-1">
-                      {`${firstName(t.name)}'s screen`}
-                      <ParticipantTag identity={t.identity} />
-                    </span>
-                  )}
+                  <span className="flex items-center gap-1">
+                    {`${firstName(t.name)}'s screen`}
+                    <ParticipantTag identity={t.identity} />
+                  </span>
                 </button>
               ))}
             </div>
