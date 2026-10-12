@@ -4,7 +4,7 @@ import { Route } from "lucide-react";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { stepLocation } from "@codecast/shared/contracts/changeGuide";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { FilePatchDiff, getFileExtension } from "../FileDiffLayout";
+import { FilePatchDiff } from "../DiffView";
 import { cn } from "../../lib/utils";
 
 // The author's tour of a change (ct-57527): the steps in the order the session
@@ -61,7 +61,7 @@ export function ChangeGuideWalkthrough({ guide, className, compact = false }: { 
                 )}
                 {step.hunk ? (
                   <div className="mt-2 rounded-md border border-sol-border/40 bg-sol-bg/60 overflow-hidden">
-                    <FilePatchDiff patch={step.hunk} language={getFileExtension(step.file)} showLineNumbers wrap maxLines={compact ? 24 : 60} />
+                    <FilePatchDiff patch={step.hunk} fileName={step.file} showLineNumbers wrap maxLines={compact ? 24 : 60} />
                     {step.truncated && (
                       <div className="px-2 py-1 text-[10px] text-sol-text-dim border-t border-sol-border/30">Cut to fit; the full change is in the diff.</div>
                     )}
