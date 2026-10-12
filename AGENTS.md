@@ -6,7 +6,7 @@ Work directly in the main checkout. Other sessions may have uncommitted work in 
 
 ## Vendored platform packages
 
-`platform/packages/` is a GENERATED mirror of the shared `@platform/*` packages whose canonical home is `~/src/platform`. Never edit it by hand: change the canonical copy, then run `scripts/vendor-platform.sh` to refresh the mirror (`--check` reports drift). The script also purges bun's `node_modules/.bun/@platform+*` copies and `packages/web/node_modules/.vite` and reinstalls, because bun keeps serving the stale copy and vite the stale module graph otherwise. A running dev server restarts itself when that cache disappears (`plugins/depsCacheGuard.ts`); never delete the cache under a live server without that plugin, or every dep it has not served yet answers 504 "Outdated Optimize Dep". The mirror exists because Railway, the CLI release workflow and the desktop build all run from a fresh clone, so every `@platform` dep must point inside the checkout (`file:../../platform/packages/<name>`), never at `~/src/platform`. The package set is derived from the workspace `package.json` files, so adopting a new platform package is one dep line plus a rerun. A real vendor run also rewrites `platform/vendor-manifest.txt`, a content hash per mirrored package; commit it with the mirror. CI cannot run `--check`, because a runner has no `~/src/platform`, so the `test-platform` job runs `--check-manifest` instead: it re-hashes the mirror against that manifest and re-reads the dep lines the mirror was generated from, which catches a hand-edited mirror, a package adopted without a rerun, and a dep pointing outside the checkout. The same job runs each mirrored package's own `bun test`, installing inside the package first because the mirror is not a workspace member and its deps resolve nowhere from the repo root.
+`platform/packages/` is a GENERATED mirror of the shared `@platform/*` packages whose canonical home is `~/src/platform`. Never edit it by hand: change the canonical copy, then run `scripts/vendor-platform.sh` to refresh the mirror (`--check` reports drift). The script also purges bun's `node_modules/.bun/@platform+*` copies and `packages/web/node_modules/.vite` and reinstalls, because bun keeps serving the stale copy and vite the stale module graph otherwise. A running dev server restarts itself when that cache disappears (`plugins/depsCacheGuard.ts`); never delete the cache under a live server without that plugin, or every dep it has not served yet answers 504 "Outdated Optimize Dep". The mirror exists because Railway, the CLI release workflow and the desktop build all run from a fresh clone, so every `@platform` dep must point inside the checkout (`file:../../platform/packages/<name>`), never at `~/src/platform`. The package set is derived from the workspace `package.json` files, so adopting a new platform package is one dep line plus a rerun. A real vendor run also rewrites `platform/package.json`, the mirror's own workspace root generated from the canonical repo's root, and `platform/vendor-manifest.txt`, a content hash per mirrored package and of that root; commit both with the mirror. CI cannot run `--check`, because a runner has no `~/src/platform`, so the `test-platform` job runs `--check-manifest` instead: it re-hashes the mirror against that manifest and re-reads the dep lines the mirror was generated from, which catches a hand-edited mirror, a package adopted without a rerun, and a dep pointing outside the checkout. The same job runs `scripts/vendor-platform.sh --test`: it installs the mirror once as that workspace, the way the canonical repo installs, so a package's `@platform` peer resolves to its mirrored sibling rather than npm and the shared test tooling sits at the root; then it runs every mirrored package's own `bun test` and names each red one. The repo's own lockfile never sees the mirror's workspace.
 
 ## Typechecking
 
@@ -36,7 +36,7 @@ Web carries a second layer of defence. A query that merely ENRICHES a surface go
 
 ## Prompt dry runs
 
-A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`packages/cli/scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers reads from a captured world: the legacy org files, and any argv saved under `reads/` by its key, refusing a read that the dir's `frozen` list names and that was not captured; `calls.log` marks each call SERVED, UNSERVED, LIVE, HELP, UNKNOWN (a command the CLI does not have, answered by the guard and run nowhere) or REFUSED). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--serve <dir>] [--guard <dir>]`. `--model` is required, because an unpinned run takes the account default and two runs on different accounts cannot be compared; without it the harness exits 2. `--call` grades one model call instead of an agent: the prompt file is the whole user message, `--system <file>` is the system prompt, and there are no tools and one turn, so an eval of a prod prompt carries no Claude Code context the prod call lacks. `--max-output-tokens N` caps the reply the way prod's `max_tokens` does. The run leaves `args.json` (the knobs it used), `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. To grade a prod prompt against real moments, use `./evals` (below and `docs/architecture/evals.md`), which drives this harness. Never edit a harness script while a run is alive: bash reads a script as it executes it.
+Run any headless `claude -p` that grades a prompt through `packages/cli/scripts/prompt-dry-run.ts`, never a bare `claude -p`: the daemon syncs every transcript under `~/.claude/projects`, so a bare run lands in the founder's inbox, and only the harness isolates it and refuses its writes. `--model` is required. The script's header documents its flags, isolation and output files. Don't edit the harness or its guard while a run is alive (bash reads a script as it runs). To grade a prod prompt against real moments, use `./evals`, which drives this harness.
 
 ## CLI releases
 
@@ -70,6 +70,10 @@ Two separate fields, and conflating them is the bug class this replaced.
 **Do NOT "finish the migration" by deleting `teamVisibleConvTeam`.** It survives in exactly two correct roles: the writer inside `computeWorkspaceKey`, and the visibility rule for CONVERSATIONS, which keep their own graduated axis (`is_private`, `team_visibility`, membership visibility, redaction) and have no workspace key by design. Two axes on purpose: membership (binary) vs activity visibility (graduated). A table earns `workspace` only if a row can meaningfully be private to its owner inside a team — work items yes, session insights and pull requests no.
 
 `teamScopeSweep` is the reconciler: it recomputes every key and reports disagreement, so staleness is provable rather than assumed.
+
+## Writing for users (docs, blog posts, marketing pages)
+
+Most people use codecast through the app (web, desktop, phone), not the CLI. User-facing writing describes a feature the way they meet it: the screen, the menu, the button, what it shows and what happens next, with screenshots of the real UI. A CLI command can appear as a small aside for people who script or for agents, never as the spine of a piece, its section headings, or its main illustrations. When a feature has a UI, show the UI; when it is CLI-only today, say so plainly rather than presenting terminal output as the experience.
 
 ## UI conventions
 
@@ -182,49 +186,12 @@ Raw `setState` writes to `currentSessionId`/`pendingNavigateId` are reverted by 
 ## Prompt evals (`evals`)
 
 `./evals` replays the prod prompts in this tree against frozen codecast
-moments and grades the replies. Reads never change anything, and every read
-takes `--json`. The design is `docs/architecture/evals.md`.
+moments and grades the replies. The loop: freeze a moment, run `check` for a
+baseline, edit the prompt, `check` again. `./evals --help` and each
+command's `--help` carry the details; `./evals doctor` says what is missing.
 
-A surface is one prod prompt (title, settle, insight, call-summary, ask,
-handoff, suggest, org-review, role-wake, anchor-brief). A conversation is a
-codecast session: `convo inbox` lists your sessions and `convo show
-<session>` reads one. A ref names its surface, `<surface>@<ref>`:
-`title@jx7c6zk:142` (a session and line), `call-summary@<callId>`,
-`role-wake@tr-42`, `org-review@union-base8` (a snapshot name), or
-`<surface>@fixture:<case>` for a committed synthetic case.
-
-The loop: `./evals freeze create title@jx7c6zk:142` → `./evals check title
---reps 5` (the baseline) → edit the prompt → `./evals check title` →
-`./evals freeze results <id>`.
-
-```bash
-./evals                                   # every surface: route, model, freezes, last runs, stale
-./evals convo inbox | show <session> | find "<text>"
-./evals freeze create <surface>@<ref> [--judge "the reply must …"]
-./evals freeze list | show <id> | results <id> | diff <id> --run A --run B
-./evals freeze replay <id> --reps 3       # one freeze; check replays them all
-./evals freeze judge <id> "the reply must …" [--rejudge]
-./evals freeze label <id> '<json>'|-       # a private freeze's label: written, committed, pushed
-./evals check [surface…] [--reps n] [--model id] [--budget usd] [--dry]
-./evals stale [surface…]                  # the precheck: exit 0 when a surface changed
-./evals runs [show|score|diff] …          # every eval run, from the evidence folders
-./evals doctor                            # what is missing here
-```
-
-`check` replays every freeze of a surface through `prompt-dry-run.ts` on
-its pinned model and prints a verdict against the previous run set. Never
-claim a win without `separated: better` (a one-sided Mann-Whitney at
-p <= 0.05, exact at ablation sizes and sampled past them, with 5+ reps a side
-on a call surface and 8 on an agent surface). Gates are decided in code, and a
-single gate failure in any sample fails the variant. Agent surfaces (org-review,
-role-wake, anchor-brief) are run by hand only: the cadence triggers flag them
-and never run them.
-
-Two data homes. Synthetic fixtures and their freeze pointers are committed
-under `packages/evals`. Everything real (private freezes, snapshots, runs,
-labels, pages) lives in `EVALS_HOME` (`~/.local/share/codecast/evals`,
-or `CODECAST_EVALS_HOME`), and its `labels/` is a git repo pushed to the
-private `ashot/codecast-eval-labels`. The repo is public: real content,
-transcripts, names, ids or labels never enter git.
+- Claim a prompt win only when `check` prints `separated: better`.
+- Real data (freezes, runs, labels) lives in `EVALS_HOME`, never in git: this
+  repo is public. Only synthetic fixtures are committed.
 
 <!-- /platform-evals -->

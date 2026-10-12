@@ -1,81 +1,73 @@
-Choose by who owns the result. When an agent delegates implementation, review, or an audit and will report back with the result, it uses `cast spawn --subagent`. The worker nests under its parent. Plain `cast spawn` and `cast fork` create independent inbox threads for the human to steer separately; use those when the human asks for that handoff.
+One conversation is often not the right size for the work. Your agent may want a second agent to review its change, three workers to audit three modules at once, or a fresh look from Codex. You may want to try two approaches from the same starting point and keep the one that works. Codecast gives you both: workers your agent starts and manages for you, and forks you start yourself.
+
+The difference is who looks after the result. A worker reports to the session that started it, so your inbox shows one thread and its answer. A fork is a conversation of its own, in your inbox, for you to steer.
+
+![A session that delegated two workers and summarized what they found](/documentation/forks-and-spawn/workers.webp "Asked to split a small research job between two workers. The session starts both and names them as live links, steps back while they run, and is woken when they finish (the two rows above its answer) to write one combined reply.")
+
+## Turn it on
+
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Forks & Sessions** under *Working together*. Your agents can then start workers on any agent you have installed (Claude Code, Codex, Cursor and others), fork when you ask, and hand work to a fresh session.
+
+## Ask for workers in plain words
+
+- "Have one worker review the diff and another write the missing tests, then tell me what they found."
+- "Get Codex to review this change before I merge."
+- "Audit each of the three payment modules in parallel and summarize the risks."
+- "Reproduce the bug in the other repo while you keep working on the fix here."
+
+The agent writes each worker a brief, starts it, and waits. Each worker starts fresh, knowing only its brief, so the agent gives it what it needs. While it waits, the parent is **dormant**. It wakes when its workers finish, get stuck, or need a permission, and workers that finish together reach it as one message. Then it reads their results and gives you one answer.
+
+## What you see in the inbox
 
 ```figure
-OwnershipFigure
-The same two launches, nested under their parent or filed as cards of their own.
+InboxNestFigure
+Workers hang under the session that started them, each with its own agent and state.
 ```
 
-The forks snippet is installed via [the snippet system](/documentation/agent-snippets).
+- **Workers nest under their parent.** A worker row sits under the session that started it, with a ↳ arrow. The parent shows its first two; **+N more sub-sessions** expands the rest and **collapse** folds them away. The button at the top of the list hides or shows all subagent sessions at once.
+- **Every worker is a full session.** Click it to read what it did, or write to it like any conversation. A card links back to the session that spawned it.
+- **States say who acts next.** **working** means the agent is producing, **dormant** means it is waiting on something that will wake it, **needs input** means a person has to act, and **done** means it delivered.
 
-## Spawn a worker
+Your agent creates separate inbox threads only when you ask for them, for work you want to steer yourself. Asking for something to run in parallel gets you workers, not a stack of new cards.
 
-```bash
-cast spawn --subagent -- "audit the auth module" "review the billing changes"
-cast spawn --subagent --agent codex "review the diff"
-cast spawn --subagent -C ~/src/other-repo "reproduce issue #412"
-cast spawn --subagent --label rollout - - <<'EOF'
-Implement the first task. Report the result to the parent.
----
-Review the second task. Report the result to the parent.
-EOF
-```
+## Fork a conversation
 
-`--subagent` without a value uses the current session as parent. To name one explicitly, use `--subagent <session>`. When a prompt follows the bare flag directly, put `--` between them so the prompt is not parsed as the parent ID.
-
-Both spawn modes start fresh sessions with no shared history. Write a self-contained brief. A different backend, worktree, label, or plan binding does not decide whether the session belongs in the inbox: `--subagent` controls nesting.
-
-The parent manages its workers with `cast read` and `cast send`, then delivers the combined result. When a worker settles (finished, blocked, stopped, or waiting on a permission prompt), the parent is woken with a message naming it; workers that settle together arrive as one message. So a parent can delegate, declare itself dormant, and end its turn.
+A fork copies the conversation up to a point into a new session, which then goes its own way. Use it when the thread genuinely splits: two designs worth building, two theories about a bug, a risky refactor worth trying twice.
 
 ```figure
-WorkerSettleFigure
-The parent parks after launching; each settle wakes it a moment later, and workers that settle together arrive as one message.
+ForkFigure
+Each branch carries the conversation so far. The request to fork stays out, so no branch inherits it.
 ```
 
-To follow workers live, watch the returned IDs:
+You can fork yourself, from any message:
 
-```bash
-cast sessions <worker-id> <worker-id> -w --json
-```
+- Hover a message and click the fork icon (*Fork from this message*), or pick **Fork from here** from its menu, or press `Alt` `F`.
+- Write your next message and press `Cmd` `Shift` `Enter` (`Ctrl` `Shift` `Enter` off a Mac) to fork and send it in one step.
+- Press `T` or `Ctrl` `B` for the branch map: every branch of the conversation, which one you are in, and **fork here** from any point.
 
-Nested workers are omitted from top-level lists, including label filters, but always answer when named. A `done` transition means delivered; `needs_input` requires reading whether the worker finished or is blocked.
+Or ask your agent: "Fork this two ways: try the queue, and try per endpoint limits." This thread continues on the first direction, and each other direction appears in your inbox as a branch with a **Fork** badge. A branch doesn't know it is a fork and reports to nobody; you steer it like any conversation.
 
-![Two worker sessions side by side, one on Cursor and one on Codex, each starting on its half of a webhook retry feature](/documentation/shots/fanout.webp "Two workers on different agents, each briefed with its half of one feature.")
+Opening a teammate's session works the same way. Its message box reads *Reply to fork this session*, and replying gives you your own copy to continue, leaving theirs untouched.
 
-## Spawn an independent inbox thread
+## Change the agent or the model
 
-```bash
-cast spawn "the independent task the human asked to own"
-```
+The model chip in a session's header opens three ways to move a conversation:
 
-Without `--subagent`, spawn defaults to an inbox card even when an agent calls it. Reserve this for a human-requested thread they will review and steer separately. A request to build a feature or work in parallel does not by itself ask for separate inbox threads.
+| Choice | What it does |
+|--------|--------------|
+| **Switch agent** | Same session, another agent. The conversation continues under Codex (or another agent) with a divider marking the change |
+| **Fork as** | A copy of this session on another agent, alongside the original |
+| **Hand off to** | A fresh session, seeded with a brief of where the work stands |
 
-## Fork: branch the conversation
+**Change model & effort** in the command palette changes the model without changing the agent.
 
-```bash
-cast fork "try the optimistic locking approach" "try the queue-based approach"
-```
+To start something new yourself, click **+** (*New session*) in the sidebar or press `Ctrl` `N`.
 
-Each branch keeps the full conversation history up to the fork point, then pursues its own direction. By default the fork point is just before the latest user message, so the request to fork never enters a branch; `--at <line>` picks another spot, and `-s <id>` forks a different session entirely, including a teammate's. With two or more directions, the session that runs the command continues on the first and each other direction becomes a branch, which receives it as its next message.
+## When something is off
 
-```figure
-ForkPointFigure
-The fork point sits just before the request to fork; this thread takes the first direction and a branch takes each other one.
-```
-
-Use fork when a thread genuinely splits: two plausible designs, two hypotheses about a bug, a risky refactor worth attempting two ways.
-
-In the dashboard, forked conversations show a branch selector and a tree panel, so the human can compare branches and continue the one that wins.
-
-## Labels group work
-
-Forks inherit the label the caller filed their parent under. Spawns start with no label; `--label <name>` files them and creates the label if needed:
-
-```bash
-cast spawn --subagent --label rollout "task A" "task B"
-```
-
-Labels do not change inbox visibility. Watch nested workers by the returned IDs; `cast sessions --label rollout` lists independent sessions carrying that label.
-
-## Ownership stays with the parent
-
-Every launch starts working immediately. Delegated workers stay nested, and the parent reports their results. Independent spawns and fork branches appear in the human's inbox. Propose an independent handoff first when the human has not asked for one. Stashing a worker after it appears in the inbox is not a substitute for nesting it at creation.
+| What you notice | What to do |
+|-----------------|------------|
+| Workers show up as separate cards in your inbox | Ask the agent to start them as workers under its own session next time |
+| The parent looks stuck while its workers run | It is **dormant**, waiting for them. It wakes when they finish |
+| A worker is marked **needs input** | Open it. It may be asking a question or waiting on a permission prompt |
+| You can't find a worker | Expand **+N more sub-sessions** under its parent, or show subagent sessions with the button at the top of the list |

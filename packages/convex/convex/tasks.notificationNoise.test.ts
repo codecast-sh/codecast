@@ -73,6 +73,17 @@ describe("task comments ring whom the Threads inbox files them for", () => {
     expect(bell("task_commented").map((n) => n.recipient_user_id)).toEqual([BOB]);
   });
 
+  test("on an ephemeral task only a blocker or an @mention rings (TG9)", async () => {
+    const { ctx, tables, bell } = await makeCtx();
+    tables.tasks[0].ephemeral = true;
+    await (addComment as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1", text: "looks good" });
+    expect(bell("task_commented")).toHaveLength(0);
+    await (addComment as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1", text: "@carol this needs your approval" });
+    expect(bell("task_commented").map((n) => n.recipient_user_id)).toEqual([CAROL]);
+    await (addComment as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1", text: "need a prod key", comment_type: "blocker", conversation_id: "sess-1" });
+    expect(bell("task_commented", BOB)).toHaveLength(1);
+  });
+
   test("a bot account's note counts as an agent's even from a terminal", async () => {
     const { ctx, bell } = await makeCtx();
     await (addComment as any)._handler(ctx, { api_token: BOT_TOKEN, short_id: "ct-1", text: "READY FOR DECISION: waited 18 days" });
