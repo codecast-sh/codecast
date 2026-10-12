@@ -2,6 +2,8 @@
 // directly and so the send path can never grow a second, looser copy of the
 // mention grammar or the preview sanitizer.
 
+import { parseQueryTerms } from "@codecast/shared/search";
+
 // Chat rows sync to every team member's browser and land in IndexedDB on every
 // one of their devices, so the content cap is much tighter than the search
 // mirror's 32k: one enormous message would degrade the whole team's client.
@@ -95,6 +97,16 @@ export function plainPreview(content: string, max = 140): string {
   return flattened.slice(0, max - 1).trimEnd() + "…";
 }
 
+/** Whether a message holds every "quoted phrase" of a query, as a person
+ *  reads it (markdown flattened, whitespace folded). The search index matches
+ *  words loosely and has no phrases, so this is what makes quotes mean exact. */
+export function holdsQueryPhrases(content: string, query: string): boolean {
+  const { phrases } = parseQueryTerms(query);
+  if (phrases.length === 0) return true;
+  const plain = plainPreview(content, MAX_CHAT_CONTENT).toLowerCase().replace(/\s+/g, " ");
+  return phrases.every((p) => plain.includes(p.replace(/\s+/g, " ")));
+}
+
 /** A search snippet: the plain text WINDOWED around the first term hit, so a
  *  match deep in a long message still shows the words that matched — a head
  *  slice would render such a hit with nothing highlighted, which reads as a
@@ -104,7 +116,7 @@ export function searchSnippet(content: string, query: string, max = 200): string
   const plain = plainPreview(content, MAX_CHAT_CONTENT);
   if (plain.length <= max) return plain;
   const lower = plain.toLowerCase();
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = parseQueryTerms(query).all;
   let first = -1;
   for (const t of terms) {
     const i = lower.indexOf(t);

@@ -7,18 +7,14 @@ import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { getLabelColor } from "../../lib/labelColors";
 import { useHostedMode } from "../../lib/surfaces";
-import { sessionCardTitle } from "../../lib/sessionCard";
-import { stripMarkdown } from "@codecast/shared/contracts/plainText";
+import { formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
+import { hostedNoteLines } from "../../lib/hostedNoteRow";
 
-/** A note's first words after its title, as one line. */
-function noteSnippet(content: string | undefined, title: string): string {
-  const text = stripMarkdown((content ?? "").slice(0, 600)).replace(/\s+/g, " ").trim();
-  const body = text.startsWith(title) ? text.slice(title.length).trim() : text;
-  return body.slice(0, 160);
-}
-
-export function DocRow({ doc, onStar }: {
+export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
   doc: DocItem;
+  /** The time the row shows: the list's sort key (created or updated), so
+   *  the column agrees with the order. */
+  timeKey?: "created_at" | "updated_at";
   /** The list's row state; the doc row draws none of it. */
   state?: ItemRowState;
   /** Star or unstar. Without it the row stars through the store's pinDoc,
@@ -38,11 +34,11 @@ export function DocRow({ doc, onStar }: {
     return row ? sessionCardTitle(row as any) : null;
   });
   if (hosted) {
-    const snippet = noteSnippet(doc.content, title);
+    const { title: shownTitle, snippet } = hostedNoteLines(doc as any);
     return (
       <>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sol-text">{title}</span>
+          <span className="block truncate text-sol-text">{shownTitle}</span>
           {(snippet || source) && (
             <span data-cc-note-snippet className="mt-0.5 block truncate text-[12px] text-sol-text-dim">
               {snippet}
@@ -52,7 +48,8 @@ export function DocRow({ doc, onStar }: {
           )}
         </span>
         {doc.pinned && <Star aria-label="Starred" className="h-3 w-3 shrink-0 fill-current text-sol-yellow" />}
-        <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
+        {/* The rail's time words (formatRowTime), never "31m ago" beside "Mar 26". */}
+        <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-sol-text-dim">{formatRowTime(doc[timeKey] ?? doc.updated_at, true)}</span>
       </>
     );
   }
