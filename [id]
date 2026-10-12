@@ -1,0 +1,34 @@
+/opt/homebrew/opt/node@22/bin
+/Users/ashot/.local/bin
+/Users/ashot/.amp/bin
+/Users/ashot/bin
+/Users/ashot/.fly/bin
+/Users/ashot/.claude/scripts
+/Users/ashot/src/google-cloud-sdk/bin
+/Users/ashot/.cargo/bin
+/Users/ashot/src/agent-scripts/bin
+/Users/ashot/.antigravity/antigravity/bin
+/Users/ashot/.opencode/bin
+/Users/ashot/.codeium/windsurf/bin
+/Users/ashot/Library/Application Support/edgedb/bin
+/Users/ashot/.bun/bin
+/usr/local/opt/python@3.9/bin
+/Users/ashot/.meteor
+/Users/ashot/.poetry/bin
+/Users/ashot/.local/bin
+/Users/ashot/bin
+/opt/homebrew/bin
+/opt/homebrew/sbin
+/usr/local/bin
+/System/Cryptexes/App/usr/bin
+/usr/bin
+/bin
+/usr/sbin
+/sbin
+/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin
+/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin
+/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin
+/opt/pmk/env/global/bin
+/Library/Apple/usr/bin
+/opt/homebrew/bin
+/Users/ashot/.local/bin [--refresh] [--json]

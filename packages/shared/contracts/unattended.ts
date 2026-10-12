@@ -1,14 +1,18 @@
-// The mandate every unattended run opens with: the CLI's `cast task start
-// --spawn` and the line's nodes prefix it (packages/cli/src/unattended.ts),
-// and the server prefixes it on a hand a role starts (convex/spawn.ts). One
-// copy, so a hand and a spawned run read the same rules.
+// What every unattended session opens with: a workflow station's hand
+// (packages/cli/src/workflow/runner.ts stationBrief), a `cast spawn
+// --unattended` run, and a hand a role starts (convex/spawn.ts handBriefing).
+// It holds only what is true of all of them. What one kind of run may do (its
+// branch, its ending command) belongs to that run's own brief.
 export const UNATTENDED_MANDATE =
-  "This is an UNATTENDED run: no person is watching this session. Reversible actions run without asking. " +
-  "Anything in a protected decision category goes through `cast decide` and waits for the answer. " +
-  "Your own task branch is yours: committing and pushing it is part of the work. " +
-  "Never ask an inline question; nobody will answer it. End your turn with the structured command your briefing names, " +
-  "never with a bare summary.";
+  "This session was started by an automated codecast run, and no person is watching it. " +
+  "Whatever started it reads the outcome from the command your brief asks you to end with, so end your turn with that command. " +
+  "When the brief names none, pin the outcome with `cast state --status done`, or `--status blocked` when you could not finish. " +
+  "A closing summary on its own reaches nobody. " +
+  "Work without stopping to ask: a question typed into this session gets no answer. " +
+  "A choice that belongs to a person (one that is hard to undo, or that touches production, money, stored data, access or people outside the team) " +
+  "goes to them through `cast decide`, and you wait for the answer.";
 
-export function applyUnattended(prompt: string): string {
-  return `${UNATTENDED_MANDATE}\n\n${prompt}`;
+/** The mandate, the run that started the session when the caller can name it, then the brief. */
+export function applyUnattended(prompt: string, startedBy?: string): string {
+  return `${UNATTENDED_MANDATE}${startedBy ? `\nStarted by: ${startedBy}.` : ""}\n\n${prompt}`;
 }

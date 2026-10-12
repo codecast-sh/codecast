@@ -1,0 +1,207 @@
+// What the Apps tab shows, worked out from an app's manifest, grants, watch
+// state and call audit: its health as one word, a call's outcome as a short
+// reason, the audit folded into groups with what still fails first, and how
+// each reader has been used. The full text (an error, a description, a route)
+// stays on the rows these are built from. Pure: no React, no store.
+import { activeGrant, watchKey, type AppManifest, type AppWatch, type JsonSchema } from "@codecast/shared/contracts/appConnector";
+import type { OpsApp, OpsAppCall } from "./opsTypes";
+
+export type AppTone = "ok" | "warn" | "bad" | "off";
+
+const DAY_MS = 24 * 3600_000;
+/** A failure nobody has seen answered since stops counting as failing now once it is this old. */
+const LIVE_MS = DAY_MS;
+/** A watch that has missed this many of its own intervals is stale. */
+const STALE_INTERVALS = 3;
+
+// ── A call's outcome ──
+
+/** Who made a call: a session, the app's own watch poll, or a person at a terminal. */
+export type CallActor = "session" | "watch" | "cli";
+
+const WATCH_PREFIX = /^watch [^:\s]+:[^:\s]+: /;
+
+export function callActor(c: Pick<OpsAppCall, "conversation_id" | "error">): CallActor {
+  if (c.conversation_id) return "session";
+  return c.error && WATCH_PREFIX.test(c.error) ? "watch" : "cli";
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/** A call's outcome in a word or two. The full error stays on the call. */
+export function callReason(c: Pick<OpsAppCall, "status" | "http_status" | "error">): string {
+  if (c.status === "ok") return "OK";
+  if (c.status === "denied") return "Not granted";
+  const text = (c.error ?? "").replace(WATCH_PREFIX, "").trim();
+  if (/^no answer in/i.test(text)) return "Timed out";
+  if (/^could not reach/i.test(text)) return "Unreachable";
+  const http = c.http_status ?? Number(/^answered (\d{3})/.exec(text)?.[1]);
+  if (http) return `HTTP ${http}`;
+  if (/not JSON/i.test(text)) return "Bad answer";
+  if (/is paused$/i.test(text)) return "Paused";
+  if (!text) return "Failed";
+  const head = text.split(/[:(\n]|\. /)[0].trim();
+  return clip(head.charAt(0).toUpperCase() + head.slice(1), 28);
+}
+
+// ── The audit, folded ──
+
+export type CallGroup = {
+  key: string;
+  kind: OpsAppCall["kind"];
+  name: string;
+  status: OpsAppCall["status"];
+  reason: string;
+  actor: CallActor;
+  count: number;
+  /** Newest first. */
+  calls: OpsAppCall[];
+  latest: number;
+  oldest: number;
+  /** Still wrong: a failure with no good answer since, or a refusal of an action that is still not granted. */
+  live: boolean;
+};
+
+export type CallContext = { grants: OpsApp["grants"]; watchState: OpsApp["watch_state"]; watches: readonly AppWatch[]; now: number };
+
+/**
+ * Every call alike in one group, whatever came between them: what, how it
+ * went and who made it. Groups that are still wrong lead (failures, then
+ * refusals); the rest follow newest first.
+ */
+export function groupCalls(calls: readonly OpsAppCall[], ctx: CallContext): CallGroup[] {
+  const lastOk = new Map<string, number>();
+  for (const c of calls) if (c.status === "ok") lastOk.set(`${c.kind}:${c.name}`, Math.max(lastOk.get(`${c.kind}:${c.name}`) ?? 0, c.created_at));
+  // A watch polls without leaving an ok row, so its own state says when its reader last answered well.
+  for (const w of ctx.watches) {
+    const st = ctx.watchState.find((s) => s.key === watchKey(w));
+    if (st && !st.last_error) lastOk.set(`read:${w.reader}`, Math.max(lastOk.get(`read:${w.reader}`) ?? 0, st.polled_at));
+  }
+
+  const groups = new Map<string, CallGroup>();
+  for (const c of [...calls].sort((a, b) => b.created_at - a.created_at)) {
+    const reason = callReason(c);
+    const actor = callActor(c);
+    const key = [c.kind, c.name, c.status, reason, actor].join("|");
+    const g = groups.get(key);
+    if (g) {
+      g.count++;
+      g.calls.push(c);
+      g.oldest = c.created_at;
+    } else groups.set(key, { key, kind: c.kind, name: c.name, status: c.status, reason, actor, count: 1, calls: [c], latest: c.created_at, oldest: c.created_at, live: false });
+  }
+  for (const g of groups.values()) {
+    if (g.status === "error") g.live = ctx.now - g.latest < LIVE_MS && (lastOk.get(`${g.kind}:${g.name}`) ?? 0) < g.latest;
+    else if (g.status === "denied") g.live = ctx.now - g.latest < LIVE_MS && !activeGrant(ctx.grants, g.name, ctx.now);
+  }
+  const rank = (g: CallGroup) => (!g.live ? 2 : g.status === "error" ? 0 : 1);
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || b.latest - a.latest);
+}
+
+export const CALL_TONE: Record<OpsAppCall["status"], AppTone> = { ok: "ok", denied: "warn", error: "bad" };
+
+/** A group's ink: what is still wrong keeps its color, what has passed goes quiet. */
+export function groupTone(g: Pick<CallGroup, "status" | "live">): AppTone {
+  return g.status === "ok" ? "ok" : g.live ? CALL_TONE[g.status] : "off";
+}
+
+// ── Watches ──
+
+export type WatchRow = { key: string; watch: AppWatch; tone: AppTone; label: string; polledAt: number | null; error: string | null; failures: number; lastFailure: number | null };
+
+export function watchRows(watches: readonly AppWatch[], state: OpsApp["watch_state"], calls: readonly OpsAppCall[], now: number): WatchRow[] {
+  return watches.map((watch) => {
+    const key = watchKey(watch);
+    const st = state.find((s) => s.key === key);
+    const failed = calls.filter((c) => c.status === "error" && c.error?.startsWith(`watch ${key}: `));
+    const base = { key, watch, polledAt: st?.polled_at ?? null, failures: failed.length, lastFailure: failed.length ? Math.max(...failed.map((c) => c.created_at)) : null };
+    if (!st) return { ...base, tone: "off" as const, label: "Waiting", error: null };
+    if (st.last_error) return { ...base, tone: "bad" as const, label: callReason({ status: "error", error: st.last_error }), error: st.last_error };
+    if (now - st.polled_at > watch.every_ms * STALE_INTERVALS) return { ...base, tone: "warn" as const, label: "Stale", error: null };
+    return { ...base, tone: "ok" as const, label: "OK", error: null };
+  });
+}
+
+// ── Health ──
+
+export type AppHealth = { tone: AppTone; label: string; detail: string | null };
+
+/** The connection in one word: the source's own state first, then what its watches and recent calls say. */
+export function appHealth(source: { status: string; last_error?: string }, watches: readonly WatchRow[], groups: readonly CallGroup[]): AppHealth {
+  if (source.status === "error") return { tone: "bad", label: "Error", detail: source.last_error ?? null };
+  if (source.status === "paused") return { tone: "off", label: "Paused", detail: null };
+  const failing = watches.filter((w) => w.tone === "bad");
+  if (failing.length) return { tone: "bad", label: "Failing", detail: failing[0].error };
+  const live = groups.filter((g) => g.live && g.status === "error");
+  if (live.length) return { tone: "warn", label: "Degraded", detail: live[0].calls[0].error ?? null };
+  if (watches.some((w) => w.tone === "warn")) return { tone: "warn", label: "Stale", detail: null };
+  return { tone: "ok", label: "Healthy", detail: null };
+}
+
+/** How many things are wrong right now: failing watches, plus failures outside them that nothing has answered since. */
+export function failingNow(watches: readonly WatchRow[], groups: readonly CallGroup[]): number {
+  return watches.filter((w) => w.tone === "bad").length + groups.filter((g) => g.live && g.status === "error" && g.actor !== "watch").length;
+}
+
+// ── Use over time ──
+
+export type DayBucket = { start: number; ok: number; failed: number; denied: number };
+
+/** The audit by local day, oldest first, ending today. */
+export function dayBuckets(calls: readonly OpsAppCall[], now: number, days = 7): DayBucket[] {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const out: DayBucket[] = Array.from({ length: days }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (days - 1 - i));
+    return { start: d.getTime(), ok: 0, failed: 0, denied: 0 };
+  });
+  for (const c of calls) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (c.created_at < out[i].start) continue;
+      if (i === out.length - 1 || c.created_at < out[i + 1].start) out[i][c.status === "ok" ? "ok" : c.status === "denied" ? "denied" : "failed"]++;
+      break;
+    }
+  }
+  return out;
+}
+
+export type Usage = { count: number; failed: number; last: number | null };
+
+/** How each reader or action has been called, by `kind:name`. */
+export function usageByName(calls: readonly OpsAppCall[]): Map<string, Usage> {
+  const out = new Map<string, Usage>();
+  for (const c of calls) {
+    const k = `${c.kind}:${c.name}`;
+    const u = out.get(k) ?? { count: 0, failed: 0, last: null };
+    u.count++;
+    if (c.status === "error") u.failed++;
+    u.last = Math.max(u.last ?? 0, c.created_at);
+    out.set(k, u);
+  }
+  return out;
+}
+
+// ── A manifest entry's arguments ──
+
+export type Param = { name: string; type: string; required: boolean; description: string | null };
+
+export function schemaParams(input: JsonSchema | undefined): Param[] {
+  const required = new Set(input?.required ?? []);
+  return Object.entries(input?.properties ?? {}).map(([name, p]) => ({
+    name,
+    type: p.enum ? p.enum.map(String).join(" | ") : Array.isArray(p.type) ? p.type.join(" | ") : p.type ?? "any",
+    required: required.has(name),
+    description: p.description ?? null,
+  }));
+}
+
+/** The human title a call's name stands for, from the manifest that declares it. */
+export function titleLookup(manifest: Pick<AppManifest, "readers" | "actions"> | null, extra: readonly { name: string; title: string }[] = []): (kind: OpsAppCall["kind"], name: string) => string {
+  const titles = new Map<string, string>();
+  for (const r of manifest?.readers ?? []) titles.set(`read:${r.name}`, r.title);
+  for (const a of [...(manifest?.actions ?? []), ...extra]) titles.set(`do:${a.name}`, a.title);
+  return (kind, name) => titles.get(`${kind}:${name}`) ?? name;
+}
