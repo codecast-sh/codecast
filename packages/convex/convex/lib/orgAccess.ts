@@ -61,7 +61,7 @@ export async function userCanAdminRole(
 // The one seat per company that reviews the chart (org-staffing.md S6, S12).
 // A leaf constant so anchors.ts and mentionResolve.ts can name the seat
 // without importing orgRoles.ts, which imports both of them.
-import { HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
+import { HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 export { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole };
 
 // A role ref from the CLI is "or-N" or a raw id; the web passes ids.
@@ -100,6 +100,17 @@ export async function allRolesInBoundary(ctx: { db: any }, seat: { team_id?: any
   return seat.team_id
     ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", seat.team_id)).collect()
     : await ctx.db.query("org_roles").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", seat.scope_user_id)).collect();
+}
+
+/** The role that leads a task's project: who answers for that work when no
+ *  session does (a line run, a question from an agent account's session). */
+export async function projectLeadRole(ctx: { db: any }, task: any): Promise<any | null> {
+  if (!task?.project_id) return null;
+  const project = await ctx.db.get(task.project_id);
+  const team_id = project?.team_id ?? task.team_id;
+  if (!team_id) return null;
+  const lead = projectLeadOf(project, await allRolesInBoundary(ctx, { team_id }));
+  return lead.kind === "lead" ? lead.role : null;
 }
 
 // Every live role answering to a handle in one boundary. A retired role keeps
