@@ -33,6 +33,16 @@ const byId = (rows: InboxSession[]) =>
 const ids = (r: Record<string, InboxSession>) => Object.keys(r).sort();
 
 describe("filterInboxScope — mine", () => {
+  it("reuses one snapshot but invalidates on viewer, focus, team membership and rows", () => {
+    const sessions = byId([mk(cid(1), { user_id: ME }), mk(cid(2), { user_id: THEM })]);
+    const first = filterInboxScope(sessions, "mine", ME);
+    expect(filterInboxScope(sessions, "mine", ME)).toBe(first);
+    expect(ids(filterInboxScope(sessions, "mine", THEM))).toEqual([cid(2)]);
+    expect(ids(filterInboxScope(sessions, "mine", ME, undefined, cid(2)))).toEqual([cid(1), cid(2)]);
+    expect(ids(filterInboxScope(sessions, "team", ME, new Set([cid(2)])))).toEqual([cid(2)]);
+    expect(ids(filterInboxScope(sessions, "team", ME, new Set([cid(1)])))).toEqual([cid(1)]);
+    expect(ids(filterInboxScope({ ...sessions, [cid(2)]: { ...sessions[cid(2)], user_id: ME } }, "mine", ME))).toEqual([cid(1), cid(2)]);
+  });
   it("drops a teammate's row and keeps my own", () => {
     const mine = mk(cid(1), { user_id: ME });
     const theirs = mk(cid(2), { user_id: THEM });
