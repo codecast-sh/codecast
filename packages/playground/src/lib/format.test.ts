@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ago, chatTime, clock, forkName, ordinal, plural } from "./format";
+import { ago, chatTime, clock, forkName, ordinal, plural, since } from "./format";
 import { clipLine, clipText } from "../../convex/lib/text";
 
 const NOW = new Date("2026-10-06T16:00:00").getTime();
@@ -20,6 +20,12 @@ describe("format", () => {
     expect(chatTime(NOW - 20_000, NOW)).toBe("now");
     expect(chatTime(NOW - 2 * MIN, NOW)).toBe("2m");
     expect(chatTime(NOW - 3 * 60 * MIN, NOW)).toMatch(/^1:00$/);
+  });
+
+  test("since names the start time today, the weekday this week, the date before", () => {
+    expect(since(NOW - (10 * 60 + 11) * MIN, NOW)).toBe("since 5:49");
+    expect(since(new Date("2026-10-04T12:00:00").getTime(), NOW)).toBe("since Sunday");
+    expect(since(new Date("2026-09-20T12:00:00").getTime(), NOW)).toBe("since Sep 20");
   });
 
   test("history ages", () => {
