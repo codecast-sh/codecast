@@ -1,4 +1,5 @@
 import { useState, useMemo, Fragment } from "react";
+import { Button } from "../../ui/button";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { hasDecodedSrc, markSrcDecoded } from "../../../hooks/useStorageImageUrl";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -502,7 +503,9 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
                   placeholder="Type your answer..."
                   className="flex-1 text-xs px-2.5 py-1.5 rounded-md bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/60 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-sol-blue/50"
                 />
-                <button
+                <Button
+                  variant="blue"
+                  size="xs"
                   onClick={() => {
                     if (otherTexts[i]?.trim()) {
                       commitOther(i, otherTexts[i].trim(), q.options.length);
@@ -510,10 +513,9 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
                     }
                   }}
                   disabled={!otherTexts[i]?.trim()}
-                  className="sol-btn-solid text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-sol-blue text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   OK
-                </button>
+                </Button>
                 <button
                   onClick={() => setOtherOpen(prev => ({ ...prev, [i]: false }))}
                   className="text-[11px] px-1.5 py-1.5 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
@@ -527,19 +529,16 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
       })}
       {isInteractive && needsSubmit && (
         <div className="pt-0.5">
-          <button
+          <Button
+            variant={allAnswered ? "green" : "secondary"}
+            size="xs"
             onClick={handleSubmitAll}
             disabled={!allAnswered}
-            className={`text-[11px] font-medium px-3 py-1.5 rounded-md ${
-              allAnswered
-                ? "sol-btn-solid bg-sol-green text-white cursor-pointer"
-                : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
-            }`}
           >
             {isMultiQuestion
               ? `Submit answers (${questions.filter((_, qi) => (selections[qi]?.length ?? 0) > 0).length}/${questions.length})`
               : `Submit (${selections[0]?.length ?? 0} selected)`}
-          </button>
+          </Button>
         </div>
       )}
     </div>

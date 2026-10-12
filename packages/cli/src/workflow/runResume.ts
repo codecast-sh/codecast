@@ -107,6 +107,7 @@ export interface ResumeRow {
   node_statuses?: Array<{ node_id: string; status: string; outcome?: string | null; session_id?: string | null; completed_at?: number | null }>;
   gate_node_id?: string | null;
   gate_response?: string | null;
+  gate_decision_id?: string | null;
 }
 
 /** A row is mid-run when it is live and a runner reported past its start. */
@@ -122,7 +123,7 @@ export interface ResumePoint {
   completed: string[];
   node_outcomes: Record<string, NodeOutcome>;
   context: Record<string, string>;
-  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on one. */
+  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on a decision that was asked (a gate whose ask failed is asked again). */
   gate: { node_id: string; response: string | null; open: boolean } | null;
   /** The hand a session node had running when its runner died, to wait on again rather than start anew. */
   hand: string | null;
@@ -177,7 +178,7 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
 
   const asked = !routedOn && row.gate_node_id === nodeId;
   const gate = node.type === "human"
-    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" }
+    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" && !!row.gate_decision_id }
     : null;
   const hand = node.backend === "session" && atCheckpoint ? atCheckpoint.context[`${nodeId}.conversation_id`] ?? null : null;
   return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hand, from: atCheckpoint ? "checkpoint" : "row" };

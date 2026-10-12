@@ -5,7 +5,7 @@
 // split are per view mutations (the role row carries the result; the tree
 // re-syncs it), so each shows the server's answer and nothing is mirrored.
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { OrgObjectLink } from "../company/OrgObjectLink";
 import { toast } from "sonner";
 import { ArrowRightLeft, GitMerge, Scissors } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -98,7 +98,7 @@ const areaNames = (tree: OrgTree, role: OrgRole, ids: { project_ids?: string[]; 
 
 const roleLink = (tree: OrgTree, roleId: string, fallback: string) => {
   const r = tree.roles.find((x) => x._id === roleId);
-  return r ? <Link href={`/org/${r.short_id}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{r.name} <span style={{ color: "var(--sol-text-dim)" }}>@{r.handle}</span></Link> : <span style={{ color: "var(--sol-text)" }}>@{fallback}</span>;
+  return r ? <OrgObjectLink kind="role" objRef={r.short_id} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{r.name} <span style={{ color: "var(--sol-text-dim)" }}>@{r.handle}</span></OrgObjectLink> : <span style={{ color: "var(--sol-text)" }}>@{fallback}</span>;
 };
 
 const dayWords = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
