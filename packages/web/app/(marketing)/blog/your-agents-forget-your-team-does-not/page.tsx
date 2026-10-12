@@ -5,79 +5,19 @@ import { Button } from "@/components/ui/button";
 import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
+import { KeyCap } from "@/components/KeyCap";
 
-// Genuine CLI output captured from the author's account on 2026-08-15, all of it
-// from sessions in the codecast repository. Excerpts are trimmed; every omission
-// is marked with an editorial "…". Nothing is reconstructed.
+// Genuine material from the author's account on 2026-08-15, all of it from
+// sessions in the codecast repository. The quoted message is message 26 of
+// session jx7c9d2, trimmed where marked with an editorial "…"; one em dash in
+// it is set as a colon. The cast context capture is CLI output, excerpted the
+// same way.
 
-const SEARCH_OUTPUT = `Found 30 matches in 10 conversations
+const FOUND_IT = `Found it. Your SEO is bad for one dominant, fixable reason: **your own server serves Googlebot a blank page**. Everything else is secondary.
 
+\`packages/web/server/bot-meta.ts\` is a link-unfurl middleware built so Slack and Twitter cards look nice. But \`Googlebot\`, \`bingbot\`, and \`Applebot\` are in its \`BOT_UA_PATTERNS\` list. When Google crawls any page, the middleware returns \`ogHtml()\`: a head full of meta tags and a literal empty \`<body></body>\`. …
 
-── CodeCast SEO backlink campaign ──────────────────────────
-jx7c9d2 | yesterday | 465 msgs | ~/src/codecast
-edits: packages/web/src/compat/tabRouting.ts, packages/web/package.json, packages/web/scripts/indexnow.mjs +5
-
-  1: [assistant] ... it. Your SEO is bad for one dominant, fixable reason: **your own server serves Googlebot a blank page**. Everything else is secondary.
-
-## The root cause
-
-\`packages/web/server/bot-meta.ts\` is a link-unfurl middleware built so Slack and Twitter cards look nice. But \`Googlebot\`, \`bingbot\`, and \`Apple...
-
-  2: [assistant] ...ss="seo-grid">
-    <div class="seo-card"><h4>Before</h4>
-      <div class="bad">Googlebot got <b>&lt;body&gt;&lt;/body&gt;</b> on every page</div>
-      <div class="bad">robots.txt and sitemap.xml returned the SPA shell</div>
-      <div class="bad">9 of 14 marketing pages had title "codecast"</div>
-...
-
-  3: [assistant] ...e in prod.** The prerender commit (\`eaa0e6285\`) is on origin/main and deployed: Googlebot now receives 86KB of real HTML from codecast.sh with an \`h1\` and the new title, \`sitemap.xml\` serves as genuine XML, and robots.txt is up. Google's index just hasn't recrawled yet ...
-
-…  9 more conversations
-`;
-
-const SUMMARY_OUTPUT = `<SUMMARY session="jx7c9d2">
-# CodeCast SEO backlink campaign
-
-## Goal
-why is my seo so bad - we don't even rank for codecast
-
-## Approach
-- Let me confirm what Google has actually indexed and glance at the marketing page metadata handling before I summarize.
-- Your SEO is bad for one dominant, fixable reason: **your own server serves Googlebot a blank page**.
-- Setting up a task and grounding in the server code first.
-
-## Outcome
-The Gamma playbook is implemented — every one of the 23 items is now either shipped, spec'd as a task, routed to your kit, or consciously skipped.
-
-## Files Changed
-- ~/.../lib/seoRoutes.ts (+5 -4)
-- ~/.../src/prerender-entry.tsx (+5 -4)
-- ~/.../public/robots.txt (+8 -0)
-- ~/.../(marketing)/pageMeta.ts (+4 -3)
-- ~/.../scripts/prerender.mjs (+4 -3)
-…  4 more files
-</SUMMARY>
-`;
-
-const READ_OUTPUT = `── CodeCast SEO backlink campaign ──────────────────────────
-   jx7c9d2 | Yesterday | 465 msgs | ~/src/codecast
-
-  26: [assistant]
-       Found it. Your SEO is bad for one dominant, fixable reason: **your own server serves Googlebot a blank page**. Everything else is secondary.
-
-       ## The root cause
-
-       \`packages/web/server/bot-meta.ts\` is a link-unfurl middleware built so Slack and Twitter cards look nice. But \`Googlebot\`, \`bingbot\`, and \`Applebot\` are in its \`BOT_UA_PATTERNS\` list. When Google crawls any page, the middleware returns \`ogHtml()\` — a head full of meta tags and a literal empty \`<body></body>\`. I verified this live:
-
-       \`\`\`
-       curl -A "Googlebot..." https://codecast.sh/  →  <body></body>
-       \`\`\`
-
-       So Google's view of codecast.sh is: title "codecast", a one-line description, zero body text, zero links. …
-
-       The unfurl middleware and SEO have opposite needs that got conflated. Slack and Discord only read \`<head>\` tags, so an empty body is fine for them. Google reads the body and follows links. One \`isBot()\` list treating both audiences the same means the feature that makes share cards pretty is the same feature that blinds Google. The fix is to split the list, not delete the middleware.
-
-       …  secondary problems and the four-step fix trimmed  …
+The unfurl middleware and SEO have opposite needs that got conflated. Slack and Discord only read \`<head>\` tags, so an empty body is fine for them. Google reads the body and follows links. One \`isBot()\` list treating both audiences the same means the feature that makes share cards pretty is the same feature that blinds Google. The fix is to split the list, not delete the middleware.
 `;
 
 const CONTEXT_OUTPUT = `<CONTEXT query="add a new marketing page with SEO">
@@ -154,23 +94,9 @@ export default function YourAgentsForgetPost() {
           Here is a session from this repository, one week ago. The prompt was one line:{" "}
           <em>why is my seo so bad — we don&apos;t even rank for codecast</em>. Twenty-six
           messages later the agent had the root cause. Codecast recorded the session as it
-          happened, so today it is one query away. From the terminal:
-        </P>
-
-        <Terminal label="cast search" wrap>
-          <Cmd>cast search &quot;Googlebot blank page&quot;</Cmd>
-          {SEARCH_OUTPUT}
-        </Terminal>
-
-        <P>
-          The first hit is the diagnosis itself, with the sentence that mattered right there in
-          the excerpt. Search runs across every session on the team — yours and your teammates&apos;
-          — and matches message content, not just titles, so a phrase the agent said in passing
-          is enough to find the session that said it.
-        </P>
-        <P>
-          The same query in the web app, with the filters that scope it: everyone or only you,
-          everything or only your prompts, a time window, and sort by recency or relevance:
+          happened, so today it is one search away. Here is that search in the app, with the
+          filters that scope it: everyone or only you, everything or only your prompts, a time
+          window, and sort by recency or relevance:
         </P>
 
         <Screenshot
@@ -183,32 +109,25 @@ export default function YourAgentsForgetPost() {
           Read that card bottom to top and it is the whole arc: the question, the diagnosis two
           minutes later, the deploy confirmation two days after that, and the loose end (<em>has
           the fix actually deployed to prod?</em>) that came up in review. That is what a session
-          record looks like when it is kept.
+          record looks like when it is kept. Search runs across every session on the team,
+          yours and your teammates&apos;, and matches message content, not just titles, so a
+          phrase the agent said in passing is enough to find the session that said it. (In a
+          terminal, <Code>cast search</Code> returns the same hits.)
         </P>
 
         <H2>From a hit to the whole story</H2>
         <P>
-          A search result is a pointer. Three commands turn it into understanding, each one a
-          step deeper. <Code>cast summary</Code> gives you the shape of the session — goal,
-          approach, outcome, files touched — the way you would ask a colleague &ldquo;what
-          happened there?&rdquo;:
+          A search result is a pointer. Click a matching message and the session opens at that
+          message, with the conversation around it. This is message 26, the moment the agent
+          found it, including the mechanism, which is the part a diff can never tell you:
         </P>
 
-        <Terminal label="cast summary" wrap>
-          <Cmd>cast summary jx7c9d2</Cmd>
-          {SUMMARY_OUTPUT}
-        </Terminal>
-
-        <P>
-          <Code>cast read</Code> opens the transcript at any message. This is message 26 — the
-          moment the agent found it — including the mechanism, which is the part a diff can
-          never tell you:
-        </P>
-
-        <Terminal label="cast read" wrap>
-          <Cmd>cast read jx7c9d2 26</Cmd>
-          {READ_OUTPUT}
-        </Terminal>
+        <blockquote
+          className="my-6 rounded-xl border px-5 py-4 text-[15px] leading-7 whitespace-pre-wrap"
+          style={{ borderColor: SOL.base2, color: SOL.base01 }}
+        >
+          {FOUND_IT.trim()}
+        </blockquote>
 
         <P>
           Notice what you now know that <Code>git log</Code> would never have told you: the bug
@@ -216,17 +135,23 @@ export default function YourAgentsForgetPost() {
           exactly what it was designed to do, for an audience it was never meant to serve. If
           you had inherited that repository and touched <Code>bot-meta.ts</Code> without this
           context, you would have had a fair chance of putting Google back on the wrong list.
-          And <Code>cast diff jx7c9d2</Code> lists the nine files the session actually changed,
-          with <Code>--patch</Code> for the full diff — for the moment you need to see the code
+        </P>
+        <P>
+          Two more views sit in the session&apos;s header. <em>View density</em> set to{" "}
+          <em>Summary</em> folds a long session into one short narrative, each beat a click
+          from the message it came from: the answer to &ldquo;what happened there?&rdquo;
+          without reading 465 messages.{" "}
+          <em>Show git diff</em> (<KeyCap size="xs">d</KeyCap>) opens the nine files the
+          session changed beside the conversation, for the moment you need to see the code
           after all.
         </P>
 
         <H2>Agents remember through it too</H2>
         <P>
-          The interesting part is who else can run these commands. Every codecast agent session
-          gets the same CLI. An agent about to start a task can ask what came before it —
-          which is exactly what <Code>cast context</Code> is for. We ran this while drafting
-          this post:
+          The interesting part is who else reads the record. Every codecast agent session gets
+          a command line into it, and an agent about to start a task can ask what came before
+          it. This part has no screen, because its reader is an agent: <Code>cast context</Code>{" "}
+          ranks past sessions against a task. We ran it while drafting this post:
         </P>
 
         <Terminal label="cast context" wrap>
@@ -282,13 +207,14 @@ export default function YourAgentsForgetPost() {
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          All four terminal captures are genuine <Code>cast</Code> output from the author&apos;s
-          account on 2026-08-15, and the session they point at (<Code>jx7c9d2</Code>) is a real
-          session from the codecast repository, one week earlier. Excerpts are trimmed to the
-          codecast repository; every omission is marked <Code>…</Code>. The screenshot is the
-          web app&apos;s search page cropped to its content area, joined from two captures of
-          the same results — the query header, and the result card for that session; one card
-          between them, for the session that wrote this post, is left out.
+          The quoted message and the <Code>cast context</Code> capture are genuine, from the
+          author&apos;s account on 2026-08-15, and the session they point at (
+          <Code>jx7c9d2</Code>) is a real session from the codecast repository, one week
+          earlier. Excerpts are trimmed to the codecast repository; every omission is marked{" "}
+          <Code>…</Code>. The screenshot is the web app&apos;s search page cropped to its
+          content area, joined from two captures of the same results, the query header and
+          the result card for that session; one card between them, for the session that wrote
+          this post, is left out.
         </p>
       </article>
     </main>
