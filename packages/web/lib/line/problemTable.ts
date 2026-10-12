@@ -1,0 +1,275 @@
+// The Problems view's table (line-workspace.md LW1 Problems): one row per
+// problem with where it came from, where it stands in five words a person
+// acts on, whether it came back after a close, and how to sort and filter the
+// lot. Pure; the state underneath is timeline.ts problemState over the model's
+// history, so the table and a problem's page never disagree.
+import type { LineIssue } from "./lineModel";
+import { attemptEndWords, cameBackCount, offTopicComebacks, problemState, withoutOffTopic, type ProblemState } from "./timeline";
+import { sourceLabel } from "./loopSteps";
+import type { ProblemSource } from "./stepRuns";
+import type { FixStand } from "./problemsOverview";
+
+/** Where a problem stands, as a person acts on it. */
+export type ProblemStatus = "waiting" | "running" | "open" | "watching" | "closed";
+
+export const PROBLEM_STATUSES: ReadonlyArray<ProblemStatus> = ["waiting", "running", "open", "watching", "closed"];
+
+export const PROBLEM_STATUS_WORDS: Record<ProblemStatus, string> = {
+  waiting: "For you",
+  running: "Running",
+  open: "Open",
+  watching: "Watching",
+  closed: "Closed",
+};
+
+/**
+ * The five-way status from the finer state: running while an attempt is live;
+ * waiting on you when its last run stopped for a person (a card, a question) or
+ * it shipped past a card nobody answered, or it is in review; watching while a shipped fix is under
+ * watch; closed once a close held (or it folded into another cause); open
+ * otherwise, which includes a problem that came back (the row flags that apart).
+ */
+export function problemStatus(issue: Pick<LineIssue, "history" | "status"> & { ask?: string | null; forYou?: string | null }, state: ProblemState): ProblemStatus {
+  const h = issue.history;
+  // Fed the Inbox, waiting on you means in the Inbox: one definition for the header, the nav, the Inbox and this filter.
+  if (issue.forYou !== undefined) {
+    if (issue.forYou) return "waiting";
+    if (h.attempts.some((a) => a.live)) return "running";
+    if (state === "watching" || state === "unapproved") return "watching";
+    if (state === "held" || state === "closed" || state === "folded") return "closed";
+    return "open";
+  }
+  if (h.attempts.some((a) => a.live)) return "running";
+  if (issue.ask) return "waiting";
+  if (state === "unapproved") return "waiting";
+  if (state === "watching") return "watching";
+  if (state === "held" || state === "closed" || state === "folded") return "closed";
+  const last = h.attempts[h.attempts.length - 1];
+  if (last && !last.ended && last.outcome.tone === "waiting") return "waiting";
+  // In review is the person's (the inbox lists it); a problem the line has not started is open, whatever held it.
+  if (issue.status === "in_review") return "waiting";
+  return "open";
+}
+
+/** Why a problem waits on you, in a word or two: what the person opens to act on it. Null when it does not wait on you. */
+const INBOX_WHY: Record<string, string> = { decide: "card", unapproved: "not shipped", confirm: "confirm", question: "question", review: "in review", failed: "failed run", stalled: "silent run" };
+
+export function waitingWhy(issue: Pick<LineIssue, "history" | "status"> & { ask?: string | null; forYou?: string | null }, status: ProblemStatus): string | null {
+  if (status !== "waiting") return null;
+  if (issue.forYou) return INBOX_WHY[issue.forYou] ?? issue.forYou;
+  if (issue.ask) return "question";
+  const last = issue.history.attempts[issue.history.attempts.length - 1];
+  if (last?.unapproved && last.ended === "shipped") return "not shipped";
+  if (last && !last.ended && last.outcome.tone === "waiting") return last.card && !last.card.answer ? "card" : "question";
+  return issue.status === "in_review" ? "in review" : null;
+}
+
+const WAIT_VERB: Record<string, string> = {
+  card: "Decide", decide: "Decide", trial: "Decide", "not shipped": "Ask again", unapproved: "Ask again", confirm: "Confirm", question: "Answer",
+  "in review": "In review", review: "In review", "failed run": "Failed run", failed: "Failed run", "silent run": "Silent run", stalled: "Silent run",
+};
+
+/** What a problem waiting on you asks for, as its status says it: "Answer", "Confirm", "Decide sd-512", "Failed run". Null when it waits on nobody. */
+export function waitingAction(issue: Pick<LineIssue, "history" | "status"> & { ask?: string | null; forYou?: string | null }, status: ProblemStatus): string | null {
+  const why = waitingWhy(issue, status);
+  if (!why) return null;
+  const verb = WAIT_VERB[why] ?? why;
+  const card = issue.history.attempts[issue.history.attempts.length - 1]?.card?.ref;
+  return (verb === "Decide" || verb === "Card") && card ? `${verb} ${card}` : verb;
+}
+
+/** A status as a row or a page header says it: what a problem waiting on you asks for, else its status word. */
+export const statusWords = (issue: Parameters<typeof waitingAction>[0], status: ProblemStatus): string => waitingAction(issue, status) ?? PROBLEM_STATUS_WORDS[status];
+
+/**
+ * Where the problem stands now, as a few facts read off its newest attempt, always in one order (the run, what became
+ * of the fix, its card): "#3", "merged", "not deployed", "card unanswered". One reading every surface of the problem's header shows,
+ * so the pill, the chart and the run card never say three different things.
+ */
+export function problemNow(issue: Pick<LineIssue, "history">): string[] {
+  const h = issue.history;
+  const last = h.attempts[h.attempts.length - 1];
+  if (!last) return [];
+  const out = [`#${last.n}`];
+  if (last.live) return [...out, "running"];
+  const shipped = last.ended === "shipped" || !!last.merge || h.ships.some((s) => s.runId === last.runId);
+  // The run's one outcome (attemptVerdict): the same words its chip, its Runs row and its chart mark say.
+  out.push(...attemptEndWords(last, h).split(", "));
+  const card = last.card;
+  // A fix past a card nobody answered is unapproved, whatever became of the card; any other card says its state.
+  if (shipped && last.unapproved) out.push("card unanswered");
+  else if (card) {
+    const st = card.status.toLowerCase();
+    out.push(card.answer ? `card: ${card.answer.toLowerCase()}` : st === "pending" ? "card waiting" : `card ${st}`);
+  }
+  if (h.regressed) out.push("came back");
+  return out;
+}
+
+/** A source as the Problems filter counts it: its key (lowercased, the Sources view's), its name, how many. */
+export type SourceCount = { key: string; label: string; n: number };
+
+export type ProblemTableRow = {
+  id: string;
+  issue: LineIssue;
+  state: ProblemState;
+  status: ProblemStatus;
+  /** How many times it came back after any close; 0 when every close held. */
+  back: number;
+  /** Where its findings came from, most first, keyed by the source id lowercased (the Sources view's key). */
+  sources: SourceCount[];
+  /** The judges its findings name, as "source/judge" lowercased: a judge picked in Sources filters by these. */
+  judges: string[];
+  projectId: string | null;
+  /** Findings in all: what the cause holds, or the occurrences read when more. */
+  findings: number;
+  /** The newest thing that happened to it: a finding, a run, a ship. */
+  lastAt: number;
+};
+
+type SignalLike = { task_id: string; subject?: string | null; observed_at?: number; created_at?: number };
+type TaskLike = { _id: string; project_id?: string | null };
+
+/** Every problem's row. Where it came from is the workspace's one reading (`sources`, stepRuns problemOrigins), the
+ *  same the Source column, the Inbox and the Runs chips show; `signals` only tell a comeback from drift. */
+export function buildProblemRows(issues: ReadonlyArray<LineIssue>, sources: ReadonlyMap<string, Pick<ProblemSource, "all" | "judges">>, tasks: ReadonlyArray<TaskLike>, signals: ReadonlyArray<SignalLike> = []): ProblemTableRow[] {
+  const ownOf = new Map<string, Array<SignalLike & { created_at: number }>>();
+  for (const s of signals) if (s.task_id && s.subject) ownOf.set(s.task_id, [...(ownOf.get(s.task_id) ?? []), { ...s, created_at: s.created_at ?? s.observed_at ?? 0 }]);
+  const projectOf = new Map(tasks.map((t) => [t._id, t.project_id ?? null]));
+  return issues.map((issue) => {
+    const state = problemState(issue.history, issue.status);
+    const src = sources.get(issue.id);
+    const counts = new Map<string, number>();
+    for (const a of src?.all ?? []) counts.set(a.source.toLowerCase(), (counts.get(a.source.toLowerCase()) ?? 0) + a.n);
+    return {
+      id: issue.id,
+      issue,
+      state,
+      status: problemStatus(issue, state),
+      // A finding citing another expectation than the problem's own is drift, never a comeback (the problem page's count).
+      back: (() => { const off = offTopicComebacks(issue.history, ownOf.get(issue.id) ?? []); return cameBackCount(withoutOffTopic(issue.history, off), off); })(),
+      sources: [...counts].map(([key, n]) => ({ key, label: sourceLabel(key), n })).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)),
+      judges: src?.judges ?? [],
+      projectId: projectOf.get(issue.id) ?? null,
+      findings: Math.max(issue.findings, issue.history.occurrences.length),
+      lastAt: Math.max(issue.history.lastActivity || 0, issue.lastRunAt || 0),
+    };
+  });
+}
+
+/** A status filter: one status, every problem not closed (the default, what the nav counts), or all of them. */
+export type StatusFilter = ProblemStatus | "active" | "all";
+
+export type ProblemFilter = { status: StatusFilter; source: string | null; back: boolean; query: string; hideLessons?: boolean };
+
+/** A problem only a lesson filed: a note to the line, not an occurrence, listed apart from the problems by default. */
+export const isLessonRow = (r: Pick<ProblemTableRow, "sources">) => r.sources.length > 0 && r.sources.every((s) => s.key === "lesson");
+
+export const NO_FILTER: ProblemFilter = { status: "all", source: null, back: false, query: "" };
+
+const statusMatch = (f: StatusFilter, s: ProblemStatus) => f === "all" || (f === "active" ? s !== "closed" : s === f);
+
+/** The problems still open in any sense (not closed): the count the workspace's nav shows for Problems. */
+export const isActiveProblem = (i: LineIssue): boolean => problemStatus(i, problemState(i.history, i.status)) !== "closed";
+/** The problems only a lesson filed (isLessonRow), read off the findings in view: kept out of every active count, as the
+ *  Problems list keeps them out of its Active tab, so the nav, the headers and the tab say one number. */
+export function lessonOnlyIds(signals: ReadonlyArray<{ task_id: string; source: string }>): Set<string> {
+  const only = new Map<string, boolean>();
+  for (const s of signals) if (s.task_id) only.set(s.task_id, (only.get(s.task_id) ?? true) && s.source.toLowerCase() === "lesson");
+  return new Set([...only].filter(([, l]) => l).map(([id]) => id));
+}
+/** Active as every count of it reads: not closed, and not a lesson-only problem. */
+export const isCountedActive = (i: LineIssue, lessons?: ReadonlySet<string>): boolean => isActiveProblem(i) && !lessons?.has(i.id);
+export const activeProblemCount = (issues: ReadonlyArray<LineIssue>, lessons?: ReadonlySet<string>): number => issues.filter((i) => isCountedActive(i, lessons)).length;
+
+/** Whether a row came from a source key as Sources writes it: a source ("union.eval", any case) or one of its judges ("agentwatch/quality"). */
+export function fromSource(r: Pick<ProblemTableRow, "sources" | "judges">, key: string): boolean {
+  const k = key.toLowerCase();
+  return k.includes("/") ? r.judges.includes(k) || (k.endsWith("/") && r.sources.some((s) => s.key === k.slice(0, -1))) : r.sources.some((s) => s.key === k);
+}
+
+/** The rows a filter keeps; each filter part narrows, the query matches the title, the ref or a source's name. */
+export function filterProblems(rows: ReadonlyArray<ProblemTableRow>, f: ProblemFilter): ProblemTableRow[] {
+  const q = f.query.trim().toLowerCase();
+  return rows.filter((r) =>
+    statusMatch(f.status, r.status)
+    && (!f.source || fromSource(r, f.source))
+    && (!f.back || r.back > 0)
+    && (!f.hideLessons || !isLessonRow(r))
+    && (!q || r.issue.title.toLowerCase().includes(q) || (r.issue.ref ?? "").toLowerCase().includes(q) || r.sources.some((s) => s.label.toLowerCase().includes(q))));
+}
+
+/** Counts for the filter controls, each over the rows the other filter parts keep, so a count says what a click will show. */
+export function problemCounts(rows: ReadonlyArray<ProblemTableRow>, f: ProblemFilter) {
+  const status = new Map<StatusFilter, number>();
+  for (const r of filterProblems(rows, { ...f, status: "all" })) {
+    status.set(r.status, (status.get(r.status) ?? 0) + 1);
+    status.set("all", (status.get("all") ?? 0) + 1);
+    if (r.status !== "closed") status.set("active", (status.get("active") ?? 0) + 1);
+  }
+  const sources = new Map<string, SourceCount>();
+  for (const r of filterProblems(rows, { ...f, source: null })) {
+    for (const s of r.sources) {
+      const was = sources.get(s.key);
+      sources.set(s.key, { key: s.key, label: s.label, n: (was?.n ?? 0) + 1 });
+    }
+  }
+  return {
+    status,
+    sources: [...sources.values()].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)),
+    back: filterProblems(rows, { ...f, back: true }).length,
+    lessons: filterProblems(rows, { ...f, hideLessons: false }).filter(isLessonRow).length,
+  };
+}
+
+export type ProblemSortKey = "last" | "title" | "source" | "findings" | "attempts" | "status" | "back" | "conv" | "fix";
+export type ProblemSort = { key: ProblemSortKey; desc: boolean };
+/** The busiest first: a problem's findings are how much it costs, and what a person should see before the stragglers. */
+export const DEFAULT_SORT: ProblemSort = { key: "findings", desc: true };
+
+/** The direction a column sorts on its first click: numbers and time biggest first, words A to Z. */
+export const firstDesc = (key: ProblemSortKey) => key !== "title" && key !== "source" && key !== "status" && key !== "fix";
+
+const STATUS_RANK: Record<ProblemStatus, number> = { waiting: 0, running: 1, open: 2, watching: 3, closed: 4 };
+const FIX_RANK: Record<FixStand, number> = { waiting: 0, building: 1, answered: 2, none: 3, shipped: 4 };
+
+/** What a column reads off the window rather than the row: findings and conversations in the window, where the fix stands. */
+export type ProblemWindowFacts = { findings?: ReadonlyMap<string, number>; conv?: ReadonlyMap<string, number>; fix?: ReadonlyMap<string, FixStand> };
+
+/** Sorted by a column; ties fall to the newest activity, then the ref, so the order is stable across a rebuild.
+ *  With `by`, findings sort by the window's count (the number the row shows), and conversations and the fix sort too. */
+export function sortProblemRows(rows: ReadonlyArray<ProblemTableRow>, s: ProblemSort, by: ProblemWindowFacts = {}): ProblemTableRow[] {
+  const dir = s.desc ? -1 : 1;
+  const key = (r: ProblemTableRow): number | string => {
+    switch (s.key) {
+      case "title": return r.issue.title.toLowerCase();
+      case "source": return r.sources[0]?.label.toLowerCase() ?? "￿";
+      // The window's count first, the count in all breaking ties, so the quiet ones still read busiest first.
+      case "findings": return by.findings ? (by.findings.get(r.id) ?? 0) * 1e6 + r.findings : r.findings;
+      case "conv": return by.conv?.get(r.id) ?? 0;
+      case "fix": return FIX_RANK[by.fix?.get(r.id) ?? "none"];
+      case "attempts": return r.issue.history.attempts.length;
+      case "status": return STATUS_RANK[r.status];
+      case "back": return r.back;
+      default: return r.lastAt;
+    }
+  };
+  return [...rows].sort((a, b) => {
+    const x = key(a);
+    const y = key(b);
+    const c = x < y ? -1 : x > y ? 1 : 0;
+    return c * dir || b.lastAt - a.lastAt || (a.issue.ref ?? a.id).localeCompare(b.issue.ref ?? b.id);
+  });
+}
+
+/** Everything a row draws, so a model rebuild keeps the rows that did not move. */
+export function problemTableSig(r: ProblemTableRow): string {
+  const h = r.issue.history;
+  return [
+    r.id, r.issue.title, r.issue.ref ?? "", r.status, r.state, r.back, r.findings, r.lastAt, r.projectId ?? "",
+    r.sources.map((s) => `${s.key}:${s.n}`).join(","), r.judges.join(","),
+    h.occurrences.length, h.occurrences[h.occurrences.length - 1]?.at ?? 0,
+    h.closes.map((c) => `${c.kind}${c.at}`).join(","),
+    h.attempts.map((a) => `${a.runId}:${a.live ? 1 : 0}:${a.ended ?? ""}:${a.outcome.tone}`).join(","),
+  ].join("|");
+}

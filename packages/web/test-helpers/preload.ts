@@ -13,3 +13,19 @@ import { mock } from "bun:test";
 mock.module("@convex-dev/prosemirror-sync/tiptap", () => ({
   useTiptapSync: () => ({ isLoading: false, initialContent: null, extension: null, create: async () => {} }),
 }));
+
+// @pierre/diffs draws in a shadow root after Shiki loads, which never happens
+// under bun test; DiffView's tests read a light-DOM stand-in instead
+// (test-helpers/pierreFileDiff.tsx). The real exports stay, so anything else
+// the package provides behaves as in the app.
+const pierreReact = await import("@pierre/diffs/react");
+const { FileDiffStandIn } = await import("./pierreFileDiff");
+mock.module("@pierre/diffs/react", () => ({ ...pierreReact, FileDiff: FileDiffStandIn }));
+// With Pierre's drawing stood in, there is nothing to load first: a diff gets
+// its renderer at once instead of the plain-text fallback.
+const diffSetup = await import("../components/diff/pierre");
+const { PierreDiff, diffLanguage } = await import("../components/diff/PierreDiff");
+mock.module("../components/diff/pierre", () => ({
+  ...diffSetup,
+  useDiffRenderer: (name: string, language?: string) => ({ PierreDiff, lang: diffLanguage(name, language) }),
+}));

@@ -467,24 +467,27 @@ milestone with whether it was reached, the open and the answered questions,
 the decisions, and each source as the address a change would write for it,
 so a review that starts cold proposes none of them a second time.
 
-**Where it shows.** One header (`components/initiatives/IntentHeader`) on
-the goal page and the project page: stripe, glyph or face, title, id, then
-one chip line (status, owner or lead, health, target, progress, the first
-metric, the next milestone). The page's own title reads whole: it wraps as
-far as it needs, and only the phone header holds it to two lines, with the
-whole title as its tooltip. The target day is one control for both pages
-(`IntentTargetChip`): a click opens a date field, the day is written on blur
-or Enter and never from a half typed year, and only Clear removes it. Both
-headers paint the store row; a project's page asks the server only for what
-the store has not cached, and opens by its id or its `pj-` short id. A
-project's bar, on its page and on its card in `/projects`, counts tasks by
-the board's rule (`projectTaskCounts`) from the task store, never the
-server's enriched counts. The goal list lays a row out by the list's own
-width, not the window's: columns are used only where the title keeps 240px
-beside them (it holds two lines there), and narrower the title has a line of
-its own with the facts wrapped under it. A project's status is one table
-(`lib/projectStatus`) on its page, its card, the list and a role's scope
-view, and a goal's health is `HealthChip` there too. One set of atoms
+**Where it shows.** A goal and a project each open as a sheet on the Org
+screen (`/org/in-N`, `/org/pj-…`; org-staffing.md S42), in the frame every
+company object shares (`SheetFrame`, `components/org/company`): the crumb,
+glyph, title and id, then one head line in a fixed order (owner or lead,
+state, measure, date), then Serves, Ask, and the kind's sections. In the
+company's document and in a sheet's Carried by a goal and a project are one
+line each (`components/org/lines`: `GoalLine`, `ProjectLine`), on one column
+grid that drops the date under 860px and the owner and measure under 640px;
+the owner, lead and status on a line are the same pickers the sheet uses
+(`IntentPickChip`, `ProjectStatusPick`), so an edit made on a line is the
+sheet's. A project's work board (`/projects/pj-…`) keeps `IntentHeader` as
+its one-row header, with About back to the sheet; its target day is
+`IntentTargetChip`: a click opens a date field, the day is written on blur
+or Enter and never from a half typed year, and only Clear removes it. Every
+surface paints the store row; the board asks the server only for what the
+store has not cached, and opens by its id or its `pj-` short id. A project's
+task count, on its sheet, its line and its board, is the board's rule
+(`projectTaskCounts`) over the task store, never the server's enriched
+counts. A goal's progress is its metric, not a task bar. A project's status
+is one table (`lib/projectStatus`) everywhere it shows, and a goal's health
+is `HealthChip`. One set of atoms
 (`components/initiatives/InitiativeAtoms`) on every surface that names a
 goal, the chart's Goals lens included: `MetricTile` (now against the target,
 the trend arrow, a sparkline; sizes `tile`, `line`, `chip`),
@@ -510,14 +513,21 @@ entry's form on its own words (a milestone's title and day, a question's
 words and answer, a decision's words, a source's text and who said it),
 Enter saves what changed as one `edit` op and Escape leaves it as it was, so
 a milestone that slips keeps its key and its source. The record is keyed by
-its goal: a draft or an open form never follows the page to another goal.
+its goal: a draft or an open form never follows the sheet to another goal.
 
-The goal page has two tabs. **Goal** is the record in the order of the test
-above: what it is, why it matters, done when, measured by, milestones, open
-questions, decisions, sources, then the projects, the owner's updates and
-the goals under it. **Activity** (`?tab=activity`) is the scope feed
+The goal sheet (`sheets/GoalSheet.tsx`) is one scroll in the order of the
+test above: the head, **Why** (one editor that writes `why`, reading
+`description` as the fallback), **Measured by** (the metric tile with its
+sparkline, start, target and the chain it feeds), **Now**, **Carried by**
+(its projects with the trouble word, its sub goals, and "+ Project"), and
+**Latest from the owner** (the newest update with its health word, "Post an
+update" and older updates folded). Folded at the foot are **The record**
+(`InitiativeRecord`: done when, milestones, open questions, decisions,
+sources) and **Activity**. A fresh goal shows its head, Why, Measured by when
+it has a metric, and one line: "Nothing recorded yet. Ask <owner> to write
+what done looks like." **Activity** is the scope feed
 (scopes-and-feed.md F2), the same engine and the same component a role's
-page uses, over the goal's projects and its sub goals' projects. The scope
+sheet uses, over the goal's projects and its sub goals' projects. The scope
 takes `initiative_ids`, admitted by the initiatives' own access rule, and
 the feed gains what only a goal has: its updates (kind `update`), its
 reached milestones, asked and answered questions and decisions (kind
@@ -533,30 +543,26 @@ skipped when the scope holds nothing they could match. The Goals and Calls
 chips are offered only on a feed whose scope names goals (`feedKindsFor`).
 No second feed engine exists.
 
-**The company as a document.** `/company` (`components/company`) reads the
-whole company top to bottom from the store alone: the name and purpose (why
-each top level goal matters), the goals with owner, health, number, next
-milestone and target, the goals under each, the projects each carries with
-lead, status, last change and counts, the projects nothing carries, then the
-roles and the people. The outline is `goalsPlan`, the chart's own reading,
-so the document and the chart place every goal the same way; `companyDoc`
-(`companyModel.ts`, pure) joins the rest. Open proposal changes draw in
-place with Accept and Skip: a proposed goal where it would sit, a change to
-a goal under it, role changes among the roles, every change as the same
-tinted line with one quiet word. A change that writes a goal's record says
-so in a sentence and shows the words it writes. A project an open proposal
-places is drawn under its goal, marked proposed, and is not listed as
-carried by nothing. A project's lead is a role it names or whose scope lists
-it; a whole workspace role is nobody's lead. A project's counts are
-`projectTaskCounts` over the store's tasks, the number its own page shows.
-A goal's purpose is read one way (`goalPurpose`: why it matters, else the
-first sentence of its description), in the header and on the goal's own
-line; a top level goal a proposal sets says the purpose in the header,
-marked proposed, then accepted, until the store carries it. Every name is a
-link: a goal, a project, a role and a person to its page, a goal or a role a
-proposal sets to its place on the document, a proposed goal's name to its
-proposal. The layout follows the document's own width, not the window's: a
-narrow pane gets one column, and the contents list (every goal, a goal that
-feeds another under it) sits beside a wide document and folds to a line
-under the header in a narrower one. The tree is read from the roles feeder
-under a signature, so no session write repaints the document.
+**The company as a document.** The Org screen's Read lens
+(`components/company/CompanyDocument.tsx`, org-staffing.md S42; `/company`
+redirects to `/org`) reads the whole company top to bottom from the store
+alone: the workspace's name and one state line ("2 goals: 1 on track, 1 at
+risk · 4 projects, 3 with work moving · 4 people, 4 agent roles"), the goals
+with their sub goals, the projects no goal carries (only when there are
+any), then the people, each with the roles they host or that report to
+them, and the unhosted roles last. Every row is one of the four lines on the
+one grid, so the Goals, Projects and People filters line up column for
+column. A line's title opens its sheet; its background or chevron opens it
+in place, and what is open is the person's own (`clientState.ui.org_expanded`),
+kept across reloads and windows. An open goal shows why it matters, its
+owner's latest update, and the projects and goals that carry it. The outline
+is `goalsPlan`, the map's own reading, so the document and the map place
+every goal the same way; `companyDoc` (`companyModel.ts`, pure) joins the
+rest. A project's lead is a role it names or whose scope lists it; a whole
+workspace role is nobody's lead. A goal's purpose is read one way
+(`goalPurpose`: why it matters, else the first sentence of its description).
+An open proposal's goals, projects and roles stand where they would sit, in
+violet, with "op-N · answer in the conversation", which scrolls the thread to
+the card; hovering one lights its card. Nothing is approved here. The tree
+is read from the roles feeder under a signature, so no session write
+repaints the document.

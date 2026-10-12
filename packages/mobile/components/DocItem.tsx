@@ -5,6 +5,10 @@ import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { DocItem as DocItemType } from "@codecast/web/store/inboxStore";
 import { formatDateSmart, wasEdited } from "@codecast/shared/time";
 import { DOC_TYPES, DOC_TYPE_LABELS, type DocType } from "@codecast/shared/docs";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { useHostedMode } from "@codecast/web/lib/surfaces";
+import { formatRowTime, sessionCardTitle } from "@codecast/web/lib/sessionCard";
+import { hostedNoteLines } from "@codecast/web/lib/hostedNoteRow";
 
 type IconName = React.ComponentProps<typeof FontAwesome>["name"];
 
@@ -37,6 +41,35 @@ export function DocItemRow({
 }) {
   const Theme = useTheme();
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] ?? DOC_TYPE_CONFIG.note;
+  // Hosted mode lists notes as the web's DocRow does: the title over a line
+  // of what it says and the conversation it came from, with the rail's time
+  // words and no type icon or tag (every hosted note is a note).
+  const hosted = useHostedMode();
+  const source = useInboxStore((s) => {
+    const id = hosted ? (doc as any).conversation_id : undefined;
+    const row = id ? s.sessions[id] ?? s.conversations[id] : undefined;
+    return row ? sessionCardTitle(row as any) : null;
+  });
+
+  if (hosted) {
+    const { title, snippet } = hostedNoteLines(doc as any);
+    return (
+      <TouchableOpacity onPress={onPress} style={[styles.row, styles.hostedRow]} activeOpacity={0.6} accessibilityLabel={title}>
+        <RNView style={styles.hostedTopLine}>
+          <RNText style={[styles.title, styles.hostedTitle]} numberOfLines={1}>{title}</RNText>
+          {doc.pinned && <FontAwesome name="star" size={10} color={Theme.textMuted} />}
+          <RNText style={styles.hostedAge}>{formatRowTime(doc.updated_at, true)}</RNText>
+        </RNView>
+        {(snippet || source) ? (
+          <RNText style={styles.hostedSnippet} numberOfLines={1}>
+            {snippet}
+            {snippet && source ? " · " : null}
+            {source ? `From ${source}` : null}
+          </RNText>
+        ) : null}
+      </TouchableOpacity>
+    );
+  }
 
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.6}>
@@ -162,6 +195,32 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   moreLabels: {
     fontSize: 10,
+    color: Theme.textMuted0,
+  },
+  // The inbox rail's time (SessionItem hostedTime), so a time reads the
+  // same in every hosted list.
+  hostedAge: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontVariant: ["tabular-nums"],
+  },
+  hostedRow: {
+    paddingVertical: 12,
+    borderBottomColor: Theme.borderLight,
+  },
+  hostedTopLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  hostedTitle: {
+    fontSize: 15,
+    fontWeight: "500",
+    letterSpacing: 0,
+  },
+  hostedSnippet: {
+    marginTop: 3,
+    fontSize: 13,
     color: Theme.textMuted0,
   },
 }));
