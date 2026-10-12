@@ -8,13 +8,12 @@ import {
   collectHealthFlags,
   areaRows,
   cadenceLabel,
-  needsYou,
+  decisionSubject,
+  workspaceOpenProposals,
+  inWorkspace,
   rolesInTreeOrder,
-  findHeadOfPeople,
   groupChanges,
   isSyncChange,
-  pickProposal,
-  proposalParam,
   proposalProgress,
   proposalRefInContext,
   recordsInLine,
@@ -156,29 +155,41 @@ describe("health summary", () => {
     expect(rows[1].area?.standing?.text).toMatch(/^Two landing pages shipped/);
     expect(rows[1].nodeId).toBe("role:fixture-role-growth");
     // No health yet: the rows still stand, read from the role row alone.
-    expect(areaRows(tree, null).map((r) => r.status)).toEqual(["waiting_on_you", "on_track", "not_started"]);
+    // A blocked pin is not "waiting on you": only Waits on you says that.
+    expect(areaRows(tree, null).map((r) => r.status)).toEqual(["on_track", "on_track", "not_started"]);
+    const stale: typeof H = { ...H, roles: H.roles.map((r) => (r.area ? { ...r, area: { ...r.area, status: "waiting_on_you" as const } } : r)) };
+    expect(areaRows(tree, stale).some((r) => r.status === "waiting_on_you")).toBe(false);
     expect(areaRows(null, H)).toEqual([]);
   });
 
-  test("needs you: the org's decisions first, then a role waiting on the person, then an open proposal; a decision and its pin are one ask", () => {
-    const queue: any[] = [
-      { key: "decide:1", source: "decide", conversationId: "fixture-head-conv", question: "Which market goes first?", options: [{ label: "Texas" }, { label: "Ohio" }], blocking: true, createdAt: 10, decisionId: "sd1" },
-      { key: "decide:2", source: "decide", conversationId: "fixture-growth-conv", question: "Keep the ads?", options: [{ label: "Yes" }, { label: "No" }], kind: "multi", blocking: false, createdAt: 5, decisionId: "sd2" },
-      { key: "decide:3", source: "decide", conversationId: "somebody-elses-session", question: "Not ours", options: [], blocking: true, createdAt: 1, decisionId: "sd3" },
-      { key: "decide:4", source: "decide", conversationId: "fixture-growth-conv", question: "Held by the lead", options: [{ label: "a" }], blocking: true, createdAt: 2, decisionId: "sd4", heldByRole: true },
+  test("a decision opens the goal or project it cites when the workspace holds it, else the role that asked", () => {
+    const growth = { short_id: "or-3" };
+    const holds = (ref: string) => ref === "in-2" || ref === "pj-k3x";
+    expect(decisionSubject({ question: "Move pj-k3x under in-2?" }, growth, holds)).toEqual({ kind: "project", ref: "pj-k3x" });
+    expect(decisionSubject({ question: "Which list?", contextMd: "For In-2 only." }, growth, holds)).toEqual({ kind: "initiative", ref: "in-2" });
+    expect(decisionSubject({ question: "Close in-9 and in-app checkout?" }, growth, holds)).toEqual({ kind: "role", ref: "or-3" });
+    expect(decisionSubject({ question: "Anything" }, null, holds)).toBeNull();
+  });
+
+  test("open proposals of one workspace, newest first, by the one workspace rule", () => {
+    const rows = [
+      { _id: "a", status: "open" as const, created_at: 1, team_id: "t1" },
+      { _id: "b", status: "open" as const, created_at: 3, team_id: "t1" },
+      { _id: "c", status: "resolved" as const, created_at: 2, team_id: "t1" },
+      { _id: "d", status: "open" as const, created_at: 4 },
+      { _id: "e", status: "open" as const, created_at: 5, team_id: "t2" },
     ];
-    const items = needsYou(tree, H, queue, [P], null);
-    expect(items.map((i) => i.kind)).toEqual(["decision", "decision", "proposal"]);
-    // Oldest first; a multi-choice card opens rather than answers in place.
-    expect(items[0]).toMatchObject({ kind: "decision", canAnswerInPlace: false, role: { handle: "growth" } });
-    expect(items[1]).toMatchObject({ kind: "decision", canAnswerInPlace: true, role: { handle: "head-of-people" } });
-    // The Head of People's blocked pin is the same ask as its decision, so no second row for it.
-    expect(items.some((i) => i.kind === "blocked")).toBe(false);
-    expect(items[2]).toMatchObject({ kind: "proposal", remaining: 6 });
-    // Without the decision, the Head of People's pin is a row of its own; the shown proposal is not repeated.
-    const pin = needsYou(tree, H, [], [P], P);
-    expect(pin).toEqual([expect.objectContaining({ kind: "blocked", conversationId: "fixture-head-conv", line: "Which market goes first?" })]);
-    expect(needsYou(ORG_FIXTURE, H, [], [], null)).toEqual([]);
+    expect(workspaceOpenProposals(rows, { kind: "team", id: "t1" }).map((p) => p._id)).toEqual(["b", "a"]);
+    expect(workspaceOpenProposals(rows, { kind: "user", id: "u1" }).map((p) => p._id)).toEqual(["d"]);
+    expect(workspaceOpenProposals(rows, null).map((p) => p._id)).toEqual(["e", "d", "b", "a"]);
+  });
+
+  test("one workspace rule: a team's rows, the personal rows, or every row before a workspace is known", () => {
+    expect(inWorkspace({ team_id: "t1" }, { kind: "team", id: "t1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t2" }, { kind: "team", id: "t1" })).toBe(false);
+    expect(inWorkspace({}, { kind: "user", id: "u1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t1" }, { kind: "user", id: "u1" })).toBe(false);
+    expect(inWorkspace({ team_id: "t1" }, null)).toBe(true);
   });
 
   test("a cadence reads as words", () => {
@@ -188,27 +199,6 @@ describe("health summary", () => {
     expect(cadenceLabel(3 * 3_600_000)).toBe("every 3 hours");
     expect(cadenceLabel(3_600_000)).toBe("every hour");
     expect(cadenceLabel(null)).toBe("no schedule");
-  });
-});
-
-describe("the ?proposal= parameter", () => {
-  test("reads op-N in either case and rejects anything else", () => {
-    expect(proposalParam("?proposal=op-7")).toBe("op-7");
-    expect(proposalParam("proposal=OP-12&x=1")).toBe("op-12");
-    expect(proposalParam("?proposal=ds-3")).toBeNull();
-    expect(proposalParam("")).toBeNull();
-    expect(proposalParam(null)).toBeNull();
-  });
-
-  test("picks the named proposal, never another one in its place; unnamed, the newest open one", () => {
-    const older = { ...P, _id: "p-old", short_id: "op-3", created_at: P.created_at - 1000 };
-    const resolved = { ...P, _id: "p-res", short_id: "op-5", status: "resolved" as const, created_at: P.created_at + 5000 };
-    expect(pickProposal([older, P, resolved], "op-3")?.short_id).toBe("op-3");
-    // A link to a proposal outside these rows (another workspace, or beyond
-    // the list cap) opens nothing: the link line names where it is.
-    expect(pickProposal([older, P, resolved], "op-99")).toBeNull();
-    expect(pickProposal([older, P, resolved], null)?.short_id).toBe("op-7");
-    expect(pickProposal([resolved], null)).toBeNull();
   });
 });
 
@@ -259,17 +249,6 @@ describe("what a list answer is authoritative for", () => {
   });
 });
 
-describe("the ?compose= parameter", () => {
-  test("reads the decoded text and ignores an empty one", async () => {
-    const { composeParam } = await import("./staffingModel");
-    expect(composeParam("?compose=draft%20a%20charter%20for%20Growth")).toBe("draft a charter for Growth");
-    expect(composeParam("proposal=op-7&compose=hello")).toBe("hello");
-    expect(composeParam("?compose=%20%20")).toBeNull();
-    expect(composeParam("?proposal=op-7")).toBeNull();
-    expect(composeParam(null)).toBeNull();
-  });
-});
-
 describe("a parent reference as a proposal writes one", () => {
   test("the deciding person is me; another member is their id; a role with no live row is its id", async () => {
     const { orgParentRefAsProposal } = await import("./staffingModel");
@@ -281,19 +260,11 @@ describe("a parent reference as a proposal writes one", () => {
 });
 
 describe("a link into another workspace", () => {
-  test("resolves open, foreign, unreadable and loading", async () => {
-    const { resolveProposalLink, proposalWorkspace, orgPreviewEnabled } = await import("./staffingModel");
+  test("a proposal names its workspace", async () => {
+    const { proposalWorkspace } = await import("./staffingModel");
     const codecast = { kind: "team" as const, id: "fixture-team" };
-    const union = { kind: "team" as const, id: "team-union" };
     expect(proposalWorkspace(P)).toEqual(codecast);
     expect(proposalWorkspace({ scope_user_id: "u1" })).toEqual({ kind: "user", id: "u1" });
-    expect(resolveProposalLink(null, [P], union, { ready: false, missing: false })).toEqual({ kind: "open" });
-    expect(resolveProposalLink("op-7", [P], codecast, { ready: true, missing: false })).toEqual({ kind: "open" });
-    expect(resolveProposalLink("op-7", [P], union, { ready: true, missing: false })).toMatchObject({ kind: "foreign", shortId: "op-7", workspace: codecast });
-    expect(resolveProposalLink("op-7", [P], { kind: "user", id: "me" }, { ready: true, missing: false })).toMatchObject({ kind: "foreign" });
-    expect(resolveProposalLink("op-99", [P], union, { ready: true, missing: true })).toEqual({ kind: "unreadable", shortId: "op-99" });
-    expect(resolveProposalLink("op-99", [P], union, { ready: false, missing: false })).toEqual({ kind: "loading", shortId: "op-99" });
-    expect(resolveProposalLink("op-99", [P], union, { ready: true, missing: false })).toEqual({ kind: "loading", shortId: "op-99" });
   });
 
   test("the DEV preview needs the flag in the live URL", async () => {

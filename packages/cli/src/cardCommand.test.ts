@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseShortstat, runCost, taskWorkspaceScope } from "./cardCommand.js";
+import { mergeTreeConflicts, parseShortstat, runCost, taskWorkspaceScope } from "./cardCommand.js";
 
 describe("cast card build inputs", () => {
   test("parses git diff --shortstat in every plural form", () => {
@@ -9,12 +9,20 @@ describe("cast card build inputs", () => {
     expect(parseShortstat("")).toBeNull();
   });
 
-  test("sums agent minutes and tokens over the task's runs", () => {
-    expect(runCost([
-      { created_at: 0, updated_at: 30 * 60_000, tokens: 1000 },
+  test("reads the conflicted paths from git merge-tree --name-only", () => {
+    expect(mergeTreeConflicts("abc123\nf/a.jsonl\nf/a.jsonl\nf/b.jsonl\n")).toEqual(["f/a.jsonl", "f/b.jsonl"]);
+    expect(mergeTreeConflicts("abc123\nf/a.jsonl\n\nAuto-merging f/a.jsonl\nCONFLICT (content)\n")).toEqual(["f/a.jsonl"]);
+    expect(mergeTreeConflicts("abc123\n")).toEqual([]);
+  });
+
+  test("sums agent minutes over the task's runs and takes tokens and dollars from their priced sessions", () => {
+    const runs = [
+      { created_at: 0, updated_at: 30 * 60_000 },
       { created_at: 60_000, updated_at: 9 * 60_000 },
       { updated_at: 5 },
-    ])).toEqual({ tokens: 1000, minutes: 38 });
+    ];
+    expect(runCost(runs, { tokens: 1000, run_usd: 51.2 })).toEqual({ tokens: 1000, minutes: 38, usd: 51.2 });
+    expect(runCost(runs, null)).toEqual({ tokens: 0, minutes: 38, usd: 0 });
   });
 });
 
