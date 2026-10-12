@@ -2,6 +2,7 @@ import { describe, expect, it, test } from "bun:test";
 import {
   railRowTip,
   authorFor,
+  seatAuthorFor,
   buildHandleSets,
   foldReactions,
   memberHandles,
@@ -94,6 +95,24 @@ describe("authorFor", () => {
   it("degrades to a placeholder for a user the roster has not loaded", () => {
     expect(authorFor("u404", "user", byId)).toMatchObject({ id: "u404", name: "Someone" });
     expect(authorFor("u404", "agent", byId)).toMatchObject({ isAgent: true });
+  });
+});
+
+describe("seatAuthorFor", () => {
+  const byId = new Map([ME, ANCHOR].map((m) => [m._id, m]));
+  const seat = { name: "Rowan", title: "Escalations lead", shortId: "or-7", handle: "escalations", avatar: "fox" };
+  const seatFor = (id: string) => (id === ANCHOR._id ? seat : undefined);
+
+  it("names a role's standing agent by the role, with its face and page", () => {
+    expect(seatAuthorFor(ANCHOR._id, { members: byId, seatFor }, "agent")).toMatchObject({
+      name: "Rowan",
+      isAgent: true,
+      role: { shortId: "or-7", title: "Escalations lead", handle: "escalations", avatar: "fox" },
+    });
+  });
+
+  it("never dresses a person as a role", () => {
+    expect(seatAuthorFor(ME._id, { members: byId, seatFor: () => seat }, "user").role).toBeUndefined();
   });
 });
 
