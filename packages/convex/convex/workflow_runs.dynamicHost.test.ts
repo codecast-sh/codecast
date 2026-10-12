@@ -5,7 +5,7 @@
 // RunLogEndedBar as soon as the run ended.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ingestSnapshot, unmarkDynamicRunHosts } from "./workflow_runs";
+import { ingestSnapshot, unmarkRunHosts } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any;
@@ -62,20 +62,52 @@ describe("a dynamic run's host session is not the run's log", () => {
   });
 });
 
-describe("unmarkDynamicRunHosts repairs the sessions already stamped", () => {
+describe("unmarkRunHosts repairs the sessions already stamped", () => {
   test("clears the flag on a real host and reports it", async () => {
     const { ctx, tables } = await seed();
     const r = await snapshot(ctx, "completed");
     // The old stamp, as the rows in the wild carry it.
     await ctx.db.patch("conversations_host", { is_workflow_primary: true });
 
-    const dry = await (unmarkDynamicRunHosts as any)._handler(ctx, { dry_run: true });
+    const dry = await (unmarkRunHosts as any)._handler(ctx, { dry_run: true });
     expect(dry.cleared).toEqual(["sess-host"]);
     expect(tables.conversations.find((c) => c._id === "conversations_host")!.is_workflow_primary).toBe(true);
 
-    await (unmarkDynamicRunHosts as any)._handler(ctx, { dry_run: false });
+    await (unmarkRunHosts as any)._handler(ctx, { dry_run: false });
     expect(tables.conversations.find((c) => c._id === "conversations_host")!.is_workflow_primary).toBe(false);
     expect(r.run_id).toBeTruthy();
+  });
+
+  test("clears the flag on a session a run was launched from (started before its run)", async () => {
+    const RUN = "workflow_runs_takeover";
+    const { ctx, tables } = await seed({
+      conversations: [
+        { _id: "conversations_mine", session_id: "sess-mine", user_id: HOST, message_count: 30, workflow_run_id: RUN, is_workflow_primary: true, started_at: NOW - 60_000 },
+      ],
+      workflow_runs: [{
+        _id: RUN, user_id: HOST, status: "completed", node_statuses: [],
+        primary_conversation_id: "conversations_mine", created_at: NOW, updated_at: NOW,
+      }],
+    });
+    const out = await (unmarkRunHosts as any)._handler(ctx, { dry_run: false });
+    expect(out.cleared).toEqual(["sess-mine"]);
+    expect(tables.conversations.find((c) => c._id === "conversations_mine")!.is_workflow_primary).toBe(false);
+  });
+
+  test("leaves a log the daemon rebound to a real session id alone (born with its run)", async () => {
+    const RUN = "workflow_runs_rebound";
+    const { ctx, tables } = await seed({
+      conversations: [
+        { _id: "conversations_rebound", session_id: "7222ec51-real", user_id: HOST, message_count: 9, workflow_run_id: RUN, is_workflow_primary: true, started_at: NOW },
+      ],
+      workflow_runs: [{
+        _id: RUN, user_id: HOST, status: "completed", node_statuses: [],
+        primary_conversation_id: "conversations_rebound", created_at: NOW, updated_at: NOW,
+      }],
+    });
+    const out = await (unmarkRunHosts as any)._handler(ctx, { dry_run: false });
+    expect(out.cleared).toEqual([]);
+    expect(tables.conversations.find((c) => c._id === "conversations_rebound")!.is_workflow_primary).toBe(true);
   });
 
   test("leaves a log the line opened for its run alone", async () => {
@@ -89,7 +121,7 @@ describe("unmarkDynamicRunHosts repairs the sessions already stamped", () => {
         primary_conversation_id: "conversations_log", created_at: NOW, updated_at: NOW,
       }],
     });
-    const out = await (unmarkDynamicRunHosts as any)._handler(ctx, { dry_run: false });
+    const out = await (unmarkRunHosts as any)._handler(ctx, { dry_run: false });
     expect(out.cleared).toEqual([]);
     expect(tables.conversations.find((c) => c._id === "conversations_log")!.is_workflow_primary).toBe(true);
   });
