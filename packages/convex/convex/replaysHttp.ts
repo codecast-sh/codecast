@@ -25,7 +25,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { r2FreshGetUrl, r2Presign, replayChunkKey, replayDomChunkKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
 import { openReplayCap, replayCapKey } from "./lib/replayCap";
 import { signPlayerManifest } from "./replays";
-import { REPLAY_DOM_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
+import { REPLAY_DOM_LIMITS, REPLAY_FRAME_ADMIT_PATH, REPLAY_FRAME_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
+import { keyRateLimited } from "./lib/httpRateLimit";
+import { sha256Hex } from "./lib/hash";
 import { admitIngestKey, ingestCorsHeaders, ingestJson, ingestRoute } from "./ingestHttp";
 import { REPLAY_LIMITS } from "@codecast/shared/contracts/replay";
 
@@ -155,8 +157,8 @@ export const replayChunk = httpAction(async (ctx, request) => {
   return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...CHUNK_CORS } });
 });
 
-/** The path the player page exchanges its capability at (GET ?cap=). */
-export { REPLAY_PLAYER_MANIFEST_PATH };
+/** The path the player page exchanges its capability at (GET ?cap=), and the worker's frame admission (POST). */
+export { REPLAY_PLAYER_MANIFEST_PATH, REPLAY_FRAME_ADMIT_PATH };
 
 // The player reads from its own origin with no credentials: the capability is
 // the whole authorization, so any origin may ask.
@@ -184,4 +186,36 @@ export const replayPlayerManifest = httpAction(async (ctx, request) => {
   if (!row) return missing();
   const manifest = await signPlayerManifest(row, cap.exp, bucket, now);
   return new Response(JSON.stringify(manifest), { status: 200, headers: { "Content-Type": "application/json", ...headers } });
+});
+
+/**
+ * POST /cli/replays/frame-admit { cap } -> 204 | 404 | 429. The replay player
+ * worker asks this before every frame request starts a browser. A frame
+ * request is a billable Browser Rendering session from a pool every replay
+ * shares, so a capability, which anyone holding it may post for ten minutes,
+ * buys a fixed number of them (REPLAY_FRAME_LIMITS.requests_per_cap), and the
+ * person it names a fixed number per window across every capability they
+ * mint. Both counters fail closed: past them is exactly what a flood looks
+ * like. Nothing is signed here; a dead capability answers 404 like the
+ * manifest does.
+ */
+export const replayFrameAdmit = httpAction(async (ctx, request) => {
+  const headers = { "Cache-Control": "no-store", "Content-Type": "application/json" };
+  const missing = () => new Response(JSON.stringify({ error: "This replay link has expired or does not exist." }), { status: 404, headers });
+  let capText: unknown;
+  try {
+    capText = ((await request.json()) as { cap?: unknown })?.cap;
+  } catch {
+    return missing();
+  }
+  const cap = await openReplayCap(await replayCapKey(), typeof capText === "string" ? capText : null, Date.now());
+  if (!cap) return missing();
+  const row = await ctx.runQuery(internal.replays.playerManifestRow, { replay_id: cap.r, user_id: cap.u });
+  if (!row) return missing();
+  const w = REPLAY_FRAME_LIMITS.budget_window_ms;
+  const limited =
+    (await keyRateLimited(ctx, `replay-frame-cap:${await sha256Hex(capText as string)}`, REPLAY_FRAME_LIMITS.requests_per_cap, w, true)) ??
+    (await keyRateLimited(ctx, `replay-frame-person:${cap.u}`, REPLAY_FRAME_LIMITS.requests_per_person, w, true));
+  if (limited) return limited;
+  return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
 });

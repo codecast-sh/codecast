@@ -6,7 +6,8 @@ export type NodeShape =
   | "diamond"        // conditional
   | "component"      // parallel fan-out
   | "tripleoctagon"  // parallel fan-in
-  | "tab"            // prompt (single LLM call, no tools)
+  | "tab"            // prompt: a Claude Code session given one prompt
+  | "note"           // call: one model call, one answer, no tools (learning-loop.md LL1)
   | "box";           // agent (default)
 
 export type NodeType =
@@ -14,6 +15,7 @@ export type NodeType =
   | "exit"
   | "agent"
   | "prompt"
+  | "call"
   | "command"
   | "human"
   | "conditional"
@@ -45,6 +47,11 @@ export interface WorkflowNode {
   // and prompt. Node-level agent/model/reasoning_effort override its parts.
   definition?: string;
   temperature?: number;
+  // Call nodes (learning-loop.md LL1): the answer's cap and shape, and an
+  // optional system prompt. `prompt` and `model` are shared with agent nodes.
+  max_tokens?: number;
+  system?: string;
+  output?: "json" | "text";
   // Command nodes
   script?: string;
   // Command nodes: seconds the script may run (default 120).
@@ -63,6 +70,9 @@ export interface WorkflowNode {
   category?: string;
   // LE11: a built change card (card.json, $vars expand) the gate decides on.
   card?: string;
+  // The station whose session asks the gate: the decision lives in that
+  // session's thread (its own, when it posted one; else asked from it).
+  asker?: string;
 }
 
 export interface WorkflowEdge {
@@ -86,6 +96,8 @@ export interface WorkflowGraph {
   stack?: string;
   nodes: Map<string, WorkflowNode>;
   edges: WorkflowEdge[];
+  /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */
+  sources?: string[];
 }
 
 export interface WorkflowRunState {

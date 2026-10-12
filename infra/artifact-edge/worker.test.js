@@ -50,6 +50,16 @@ describe("artifact edge cache", () => {
     expect(calls[0].cf).toEqual({ cacheTtl: 0 });
   });
 
+  test("a page's live data is never stored, gated or not", async () => {
+    const calls = stubOrigin("max-age=14400");
+    const all = await get("/abcdefghijkl/_data");
+    const one = await get("/abcdefghijkl/_data/spend");
+    expect(calls.map((c) => c.cf)).toEqual([{ cacheTtl: 0 }, { cacheTtl: 0 }]);
+    expect(calls[1].url).toContain("/cli/a/abcdefghijkl/_data/spend");
+    expect(all.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(one.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
   test("a gated asset under a bundle is not stored", async () => {
     const calls = stubOrigin("private, no-store");
     await get("/abcdefghijkl/img/logo.png?k=tok");
