@@ -1854,9 +1854,11 @@ function isOwnBotEvent(install: Install, event: any): boolean {
   return !!(install.app_id && appId && appId === install.app_id);
 }
 
-// A token that could not read files (a DM grant from before files:read) left
-// images as link lines. Once the person's token can, bring each one over as
-// the image it should have been. Scheduled whenever a token is stored.
+// A file that could not be copied left a link line: a DM grant from before
+// files:read, or a video from before videos were copied. Once a token can
+// read it, bring each one over as the attachment it should have been. DMs
+// repair with their owner's token, scheduled whenever a token is stored;
+// channels with the app's token, run by hand after a change like that.
 const FILE_REPAIR_PAGE = 300;
 
 export const fileRepairContext = internalQuery({
@@ -1871,8 +1873,19 @@ export const fileRepairContext = internalQuery({
   },
 });
 
-// One page of a mirrored DM's history: the inbound lines still holding a
-// Slack file link where an image should be.
+export const channelFileRepairContext = internalQuery({
+  args: { installation_id: v.id("slack_installations") },
+  handler: async (ctx, args) => {
+    const install = await ctx.db.get(args.installation_id);
+    if (!install) return null;
+    const links = (await ctx.db.query("slack_channel_links").withIndex("by_installation", (q: any) => q.eq("installation_id", install._id)).collect())
+      .filter((l) => l.kind !== "dm" && l.options.files);
+    return { install, link_ids: links.map((l) => l._id) };
+  },
+});
+
+// One page of a mirrored conversation's history: the inbound lines still
+// holding a Slack file link where an attachment should be.
 export const fileRepairPage = internalQuery({
   args: { link_id: v.id("slack_channel_links"), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -1897,20 +1910,31 @@ export const repairFileLinks = internalAction({
   args: { installation_id: v.id("slack_installations"), user_id: v.id("users") },
   handler: async (ctx, args): Promise<{ repaired: number }> => {
     const c = await ctx.runQuery(internal.slackSync.fileRepairContext, args);
-    if (!c) return { repaired: 0 };
-    let repaired = 0;
-    for (const link_id of c.link_ids) {
-      let cursor: string | undefined;
-      do {
-        const page: { rows: Array<{ message_id: Id<"chat_messages">; content: string }>; cursor: string | null } =
-          await ctx.runQuery(internal.slackSync.fileRepairPage, { link_id, cursor });
-        for (const row of page.rows) if (await repairFileRow(ctx, c.install, row)) repaired++;
-        cursor = page.cursor ?? undefined;
-      } while (cursor);
-    }
-    return { repaired };
+    return c ? { repaired: await repairLinks(ctx, c.install, c.link_ids) } : { repaired: 0 };
   },
 });
+
+export const repairChannelFileLinks = internalAction({
+  args: { installation_id: v.id("slack_installations") },
+  handler: async (ctx, args): Promise<{ repaired: number }> => {
+    const c = await ctx.runQuery(internal.slackSync.channelFileRepairContext, args);
+    return c ? { repaired: await repairLinks(ctx, c.install, c.link_ids) } : { repaired: 0 };
+  },
+});
+
+async function repairLinks(ctx: ActionCtx, install: Install, link_ids: Id<"slack_channel_links">[]): Promise<number> {
+  let repaired = 0;
+  for (const link_id of link_ids) {
+    let cursor: string | undefined;
+    do {
+      const page: { rows: Array<{ message_id: Id<"chat_messages">; content: string }>; cursor: string | null } =
+        await ctx.runQuery(internal.slackSync.fileRepairPage, { link_id, cursor });
+      for (const row of page.rows) if (await repairFileRow(ctx, install, row)) repaired++;
+      cursor = page.cursor ?? undefined;
+    } while (cursor);
+  }
+  return repaired;
+}
 
 async function repairFileRow(ctx: ActionCtx, install: Install, row: { message_id: Id<"chat_messages">; content: string }): Promise<boolean> {
   const { attachments, content } = await recoverLinkedFiles(ctx, install, row.content);
@@ -3156,7 +3180,9 @@ export const pushReaction = internalAction({
   args: { message_id: v.id("chat_messages"), emoji: v.string(), add: v.boolean() },
   handler: async (ctx, args) => {
     const c = await pushableContext(ctx, args.message_id, { option: "reactions", ours: false });
-    if (!c) return;
+    // The app is not in a person's DM, so Slack answers channel_not_found, and
+    // that answer pauses the whole link. The reaction stays here.
+    if (!c || c.link.kind === "dm") return;
     const name = emojiToShortcode(args.emoji);
     if (!name) return;
     // Always the app's token. The context swaps in the message AUTHOR's own
