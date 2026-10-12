@@ -22,6 +22,9 @@ mock.module("../../../hooks/useFaceRow", () => ({ useFaceRowSelect: () => false 
 mock.module("../../../hooks/useWalkie", () => ({ useWalkieStatus: () => null }));
 mock.module("../../../lib/calls/walkie", () => ({ walkieHoldsRoom: () => false }));
 mock.module("../../../lib/avatarCache", () => ({ AvatarImg: () => null }));
+// HuddleWithGuest's guest door, beside the huddle button; not under test here.
+mock.module("../../calls/GuestDoor", () => ({ GuestInvite: () => null }));
+mock.module("../../../hooks/useLiveRooms", () => ({ useGuestsWaiting: () => [] }));
 const { HuddleButton } = await import("../../calls/OccupancyChip");
 const root = createRoot(document.getElementById("root")!);
 const roomKey = "channel:design";

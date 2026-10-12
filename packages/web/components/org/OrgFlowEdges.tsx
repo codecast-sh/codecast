@@ -1,5 +1,5 @@
 "use client";
-// The health map's two edges (HealthBoard, orgFlow.ts). A reporting edge into
+// This week's two edges on the People map (OrgMap, orgFlow.ts). A reporting edge into
 // a role carries the week's work that reached it: its width grows with the
 // count, dots travel down it faster the busier it is, and it turns orange
 // when the role sat at its daily limit. A handoff edge is one role sending

@@ -1,5 +1,6 @@
 import { useRouter } from "next/navigation";
 import { useBatchReview } from "./BatchReviewContext";
+import { Button } from "./ui/button";
 
 export function BatchCompletionModal() {
   const router = useRouter();
@@ -44,18 +45,12 @@ export function BatchCompletionModal() {
         </div>
 
         <div className="flex gap-3">
-          <button
-            onClick={handleExit}
-            className="sol-btn-primary flex-1"
-          >
+          <Button variant="secondary" className="flex-1" onClick={handleExit}>
             Return to Timeline
-          </button>
-          <button
-            onClick={() => window.location.reload()}
-            className="sol-btn-ghost"
-          >
+          </Button>
+          <Button variant="ghost" onClick={() => window.location.reload()}>
             Review Again
-          </button>
+          </Button>
         </div>
       </div>
     </div>
