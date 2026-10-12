@@ -13,7 +13,7 @@ mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) =>
 mock.module("../../../lib/convexUrl", () => ({ CONVEX_URL: "https://convex.test", getConvexUrl: () => "https://convex.test" }));
 mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined, error: null }) }));
 mock.module("../../../hooks/useSyncWorkflows", () => ({ useSyncWorkflowRun: () => {} }));
-mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true }));
+mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true, locateDecisionAsk: async () => null }));
 const markdownRenders: string[] = [];
 mock.module("../../tools/MarkdownRenderer", () => ({
   MarkdownRenderer: ({ content }: { content: string }) => { markdownRenders.push(content); return <div data-md>{content}</div>; },

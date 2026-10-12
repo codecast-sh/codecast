@@ -3943,6 +3943,93 @@ describe("inboxStore local-first state mutations", () => {
     });
   });
 
+  describe("a project created under a goal", () => {
+    const GOAL = "goal0000000000000000000000000000";
+    const REAL = "proj0000000000000000000000000000";
+    const STUB = "projstub-test-1";
+    const goalRow = (project_ids: string[]) => ({ _id: GOAL, short_id: "in-1", title: "Grow", status: "active", project_ids, health: "none", workspace: "user:user1", user_id: "user1", created_at: 1, updated_at: 1 }) as any;
+    const serverRow = { _id: REAL, client_key: STUB, short_id: "pj-x", title: "Launch", status: "active", workspace: "user:user1", user_id: "user1", created_at: 2, updated_at: 2 };
+    const acknowledge = (gate?: Promise<void>) => useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => {
+      await gate;
+      return { receiptVersion: 1, commandId: result.commandId, commandName: "projects.create/v2", status: "acknowledged", result: { id: REAL, short_id: "pj-x", row: serverRow }, coverage: [], retryUntil: null };
+    });
+    const create = () => useInboxStore.getState().createProject(
+      { title: "Launch", client_key: STUB, workspace: "personal" },
+      { version: 1, kind: "attachToInitiative", initiativeId: GOAL },
+    );
+    beforeEach(() => {
+      useInboxStore.setState({ currentUser: { _id: "user1" }, projects: {}, initiatives: { [GOAL]: goalRow(["projA"]) }, pending: {} } as any);
+    });
+
+    it("paints the stub under the goal at once, then moves both to the real id", async () => {
+      let release!: () => void;
+      acknowledge(new Promise<void>((r) => { release = r; }));
+      const done = create();
+      let s = useInboxStore.getState() as any;
+      expect(s.projects[STUB]).toMatchObject({ _id: STUB, client_key: STUB, title: "Launch", workspace: "user:user1" });
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", STUB]);
+      expect(s.pending[`initiatives:${GOAL}:project_ids`]?.value).toEqual(["projA", STUB]);
+      release();
+      await done;
+      s = useInboxStore.getState() as any;
+      expect(s.projects[STUB]).toBeUndefined();
+      expect(s.projects[REAL]).toMatchObject({ _id: REAL, title: "Launch" });
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", REAL]);
+      // The lock holds the real id, so the server's echo retires it.
+      expect(s.pending[`initiatives:${GOAL}:project_ids`]?.value).toEqual(["projA", REAL]);
+      useInboxStore.getState().syncTable("initiatives", [goalRow(["projA", REAL])]);
+      expect((useInboxStore.getState() as any).pending[`initiatives:${GOAL}:project_ids`]).toBeUndefined();
+    });
+
+    it("a feed push that lands before the answer supersedes the stub by its key", async () => {
+      let release!: () => void;
+      acknowledge(new Promise<void>((r) => { release = r; }));
+      const done = create();
+      useInboxStore.getState().syncTable("projects", [serverRow]);
+      let s = useInboxStore.getState() as any;
+      expect(s.projects[STUB]).toBeUndefined();
+      expect(s.projects[REAL]).toBeTruthy();
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", REAL]);
+      release();
+      await done;
+      s = useInboxStore.getState() as any;
+      expect(Object.keys(s.projects)).toEqual([REAL]);
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", REAL]);
+    });
+
+    it("the goal's own push before the answer keeps the real id, and no lock holds the stub", async () => {
+      let release!: () => void;
+      acknowledge(new Promise<void>((r) => { release = r; }));
+      const done = create();
+      // The server attaches the project in the create's transaction, so both
+      // feeds can push before the acknowledgement does.
+      useInboxStore.getState().syncTable("projects", [serverRow]);
+      useInboxStore.getState().syncTable("initiatives", [goalRow(["projA", REAL])]);
+      let s = useInboxStore.getState() as any;
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", REAL]);
+      const holdsStub = () => Object.values((useInboxStore.getState() as any).pending)
+        .some((p: any) => Array.isArray(p?.value) && p.value.includes(STUB));
+      expect(holdsStub()).toBe(false);
+      release();
+      await done;
+      s = useInboxStore.getState() as any;
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA", REAL]);
+      expect(holdsStub()).toBe(false);
+    });
+
+    it("a refused create leaves no stub behind, in the projects or the goal", async () => {
+      useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+        receiptVersion: 1, commandId: result.commandId, commandName: "projects.create/v2", status: "rejected",
+        rejection: { code: "FORBIDDEN", message: "Not allowed" }, coverage: [], retryUntil: null,
+      }));
+      await expect(create()).rejects.toMatchObject({ name: "CommandReceiptRejectedError" });
+      const s = useInboxStore.getState() as any;
+      expect(s.projects[STUB]).toBeUndefined();
+      expect(s.pending[`projects:${STUB}`]).toBeUndefined();
+      expect(s.initiatives[GOAL].project_ids).toEqual(["projA"]);
+    });
+  });
+
   // Triage gestures on a session that was never OPENED on this client — no
   // conversations[id] meta row exists. The gesture writes the session row, and
   // the sessions→conversations field-whitelist dispatch mapping must carry it
