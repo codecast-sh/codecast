@@ -1,0 +1,70 @@
+/* Trial cards in the line app (trialCards.tsx, InboxView's Trial cards group). */
+.lwt-wait { text-decoration: none; cursor: pointer; }
+.lwt-wait b { font-weight: 600; }
+.lwt-wait:hover { box-shadow: inset 0 0 0 1px currentColor; }
+
+/* A trial row's ref is the card's (tc-N). */
+.lwi-group[data-kind="trial"] .lwi-ref { color: var(--lw-person-deep); }
+/* Revise takes a note: a field under the row, in the row's own grid. */
+.lwt-note { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 34px; border-bottom: 1px solid var(--lw-rule-2); background: color-mix(in srgb, var(--lw-paper-2) 45%, transparent); }
+.lwt-note input { flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--lw-rule); border-radius: 6px; background: var(--lw-paper); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-sm); }
+.lwt-note input:focus { outline: none; border-color: var(--lw-person); }
+.lwt-note .lw-act { height: 26px; font-size: var(--lw-fs-xs); padding: 0 10px; }
+
+/* A failing check on a trial row: the one red a busy reader must see before Ship. */
+.lwt-red { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; margin-right: 4px; border-radius: 5px; font-size: var(--lw-fs-xs); font-weight: 600; background: var(--lw-bad-soft); color: var(--lw-bad); }
+.lw-act[data-armed] { background: var(--lw-bad); color: var(--lw-paper); border-color: var(--lw-bad); }
+.lwi-row[aria-current="true"] { background: var(--lw-person-soft); }
+
+/* A card opened from the Inbox: the rows on the left, the card on the right, the app around both. */
+.lwi-split { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(480px, 1.3fr); height: 100%; min-height: 0; }
+.lwi-split > .lwi { overflow: auto; min-height: 0; border-right: 1px solid var(--lw-rule); }
+.lwt-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.lwt-panel-h { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--lw-rule-2); }
+.lwt-panel-ref { color: var(--lw-person-deep); font-variant-numeric: tabular-nums; }
+.lwt-panel-state { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwt-panel-state[data-state="waiting"] { color: var(--lw-person); }
+.lwt-panel-age { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwt-panel-body { overflow: auto; padding: 16px 24px 48px; }
+.lwi-group[data-kind="trial"] .lwi-row { grid-template-columns: minmax(0, 1fr) 170px 140px 44px 252px; }
+.lwt-red { white-space: nowrap; }
+/* Beside an open card the list keeps what names each row: its ref, title, age and action. */
+.lwi-split .lwi-row, .lwi-split .lwi-group[data-kind="trial"] .lwi-row { grid-template-columns: minmax(0, 1fr) 40px auto; }
+.lwi-split .lwi-src, .lwi-split .lwi-meta, .lwi-split .lwi-detail { display: none; }
+
+/* The Inbox's pane beside its list: a problem's timeline or a run's detail, scrolled on its own. */
+.lwi-pane { position: relative; min-width: 0; min-height: 0; overflow: auto; }
+.lwi-pane.lwt { max-width: none; margin: 0; padding: var(--lw-s4) var(--lw-s5) 64px; }
+.lwi-mark { white-space: nowrap; }
+/* Beside a pane the list is the way around: the timeline's own back and prev/next give way to a close, and a trial
+   row's answers wait in its card, so the titles keep their room. */
+.lwi-pane .lwt-crumbs .lwt-back, .lwi-pane .lwt-crumbs .lw-iconbtn { display: none; }
+.lwi-pane-close { position: sticky; top: 0; float: right; z-index: 2; margin: -4px -8px 0 8px; background: var(--lw-paper); }
+.lwi-split .lwi-group[data-kind="decide"] .lwi-hold, .lwi-split .lwi-group[data-kind="decide"] .lwt-red { display: none; }
+/* Why the pipeline would rather a fix wait: a quiet chip that gives way before the Decide button does. */
+.lwi-hold { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lwi-pane-run .rd-back { display: none; }
+.lwi-pane-run > .lwi-pane-close { position: absolute; top: 10px; right: 12px; float: none; margin: 0; z-index: 3; }
+
+/* A card with no session behind it is read here, never answered (TrialCardPanel): its answer rows stay hidden. */
+.lwt-readonly [data-card-answer],
+.lwt-readonly div:has(> [data-option-list]),
+.lwt-readonly [data-trial-record] { display: none; }
+.lwt-ask-run {
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  background: var(--lw-person-soft); border-bottom: 1px solid color-mix(in srgb, var(--lw-person) 25%, transparent);
+  font-size: var(--lw-fs-sm);
+}
+.lwt-ask-run-t { color: var(--lw-person-deep); font-weight: 600; flex: 1 1 auto; }
+/* Narrow beside a pane: the secondary chips go first, and a mark ellipsizes rather than push the title out. */
+.lwi-split .lwi-hold, .lwi-split .lwt-red { display: none; }
+.lwi-split .lwi-act { min-width: 0; }
+.lwi-split .lwi-mark { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Beside a decision the list is the way around, and the pane holds every answer: a row keeps its ref, title and age. */
+.lwi-split[data-wide] .lwi-row, .lwi-split[data-wide] .lwi-group[data-kind] .lwi-row { grid-template-columns: minmax(0, 1fr) 40px; }
+.lwi-split[data-wide] .lwi-act { display: none; }
+.lwi-split[data-wide] .lwi-title { flex: 1 1 auto; }
+.lwi-hold { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The not-shipped mark says two things: its column is wide enough to say both whole. */
+.lwi-group[data-kind="unapproved"] .lwi-row { grid-template-columns: minmax(0, 1fr) 170px 140px 44px 252px; }
+.lwi-split:not([data-wide]) .lwi-group[data-kind="unapproved"] .lwi-row { grid-template-columns: minmax(0, 1fr) 40px auto; }

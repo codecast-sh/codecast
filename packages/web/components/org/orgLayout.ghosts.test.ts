@@ -3,7 +3,8 @@
 // per change kind, then the accept stub, supersession, skip and focus.
 import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import { describe, expect, it } from "bun:test";
-import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, roleMetaLine, runningSessions, wrappedLines, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
+import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, quietChipLines, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
+import { CARD, changeLines, roleCardRows } from "./orgCardModel";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import type { OrgChange, OrgProposalChange } from "./orgStaffingTypes";
@@ -164,9 +165,11 @@ describe("ghostsFor", () => {
       '@growth runs "Weekly growth review" every week',
     ]);
     expect(JSON.stringify(ghosts.chips)).not.toMatch(/800|tokens/);
-    // The middle card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
+    // The card grows by a line per change (orgCardModel), so the layout never overlaps.
     const role = byId(nodes).get(GROWTH) as Extract<OrgLayoutNode, { kind: "role" }>;
-    expect(role.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
+    const plainH = (byId(lay([]).nodes).get(GROWTH) as Extract<OrgLayoutNode, { kind: "role" }>).h;
+    expect(role.h).toBe(plainH + 6 + changeLines(3) * CARD.changeLine);
+    expect(role.h).toBe(roleCardRows(role.role, { changes: 3, tenure: role.role.tenure?.kind === "program" }).h);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
     // Accepted stays as a solid chip; applied drops.
     expect(lay([{ ...cs[2], status: "accepted" }]).ghosts.chips[GROWTH]?.[0].status).toBe("accepted");
@@ -179,7 +182,8 @@ describe("ghostsFor", () => {
     const c = change({ kind: "trust", handle: "nobody", trust: "decide" });
     const { ghosts, nodes } = lay([c]);
     expect(ghosts.chips[ME]?.[0].change_id).toBe(c._id);
-    expect((byId(nodes).get(ME) as Extract<OrgLayoutNode, { kind: "person" }>).h).toBe(ORG_SIZES.person.h + ORG_SIZES.chipRow);
+    const plain = (byId(lay([]).nodes).get(ME) as Extract<OrgLayoutNode, { kind: "person" }>).h;
+    expect((byId(nodes).get(ME) as Extract<OrgLayoutNode, { kind: "person" }>).h).toBe(plain + ORG_SIZES.chipRow + Math.max(0, quietChipLines(1) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow));
   });
 
   it("file: a chip on the role whose scope names the plan or project, else the viewer", () => {
@@ -366,23 +370,20 @@ describe("a role's standing line", () => {
     const { nodes } = lay([]);
     type RoleNode = Extract<OrgLayoutNode, { kind: "role" }>;
     const node = byId(nodes).get(roleNodeId(withLine._id)) as RoleNode;
-    expect(node.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow);
-    // Each zoom level is laid out at its own card size (orgZoom). The far card
-    // is as tall as the middle one; the close card adds the line under the
-    // name on its own row, the charter, the open work line and the running
-    // sessions with the gap above them.
-    expect(byId(lay([], undefined, "far").nodes).get(roleNodeId(withLine._id))!.h).toBe(node.h);
+    const rows = roleCardRows(withLine, { tenure: withLine.tenure?.kind === "program" });
+    expect(node.h).toBe(rows.h);
+    expect(rows.standing).toBe(6 + rows.standingLines * CARD.standingLine);
+    // Far is the compact card; every nearer level draws the full card at the same height.
+    expect(byId(lay([], undefined, "far").nodes).get(roleNodeId(withLine._id))!.h).toBe(ORG_SIZES.role.h);
     const closeNodes = lay([], undefined, "close").nodes;
-    const running = runningSessions(withLine).length;
-    const metaLines = wrappedLines(roleMetaLine(withLine), ORG_SIZES.closeMetaChars);
-    expect(byId(closeNodes).get(roleNodeId(withLine._id))!.h).toBe(node.h + ORG_SIZES.closeMetaRow + (metaLines - 1) * ORG_SIZES.closeMetaLine + (withLine.charter ? ORG_SIZES.charterRows : 0) + ORG_SIZES.workRow + (running ? running * ORG_SIZES.runningRow + 6 : 0));
-    // Without a standing line the seat is the base height; with a chips row both stack.
+    expect(byId(closeNodes).get(roleNodeId(withLine._id))!.h).toBe(node.h);
+    // Without a standing line the card drops exactly that block; a change adds its line.
     const bare = { ...ORG_FIXTURE, roles: ORG_FIXTURE.roles.map((r) => ({ ...r, standing: undefined })) };
     const plain = layoutOrgTree(bare, none, undefined, "mid").nodes.find((n) => n.id === roleNodeId(withLine._id)) as RoleNode;
-    expect(plain.h).toBe(ORG_SIZES.role.h);
+    expect(plain.h).toBe(node.h - rows.standing);
     const c = change({ kind: "trust", handle: withLine.handle, trust: "decide" });
     const chipped = byId(lay([c]).nodes).get(roleNodeId(withLine._id)) as RoleNode;
-    expect(chipped.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
+    expect(chipped.h).toBe(node.h + 6 + changeLines(1) * CARD.changeLine);
     for (const at of [nodes, closeNodes]) for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) expect(rectsOverlap(at[i], at[j])).toBe(false);
   });
 });
