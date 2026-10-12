@@ -5,12 +5,15 @@
 // missingBackend.tsx), the live site between a web push and its convex
 // deploy. The chart paints the orgTree collection; org.tree and the proposal
 // list only refresh and annotate it, so the cached people and roles stay on
-// screen and no part of the page falls into an ErrorBoundary.
+// screen and no part of the page falls into an ErrorBoundary. The test DOM is
+// 800px wide, below ORG_STACK_BELOW, so the screen stacks and opens on its
+// conversation; `?show=map` puts the company side in front, where the chart
+// paints, while the conversation stays mounted behind it.
 // Run: cd packages/web && bun test --isolate components/__tests__/org.degrade.test.tsx
 import { expect, test } from "bun:test";
 import { describeFailures, installDom, installMissingBackend, seedViewer, TEAM_ID } from "../../test-helpers/missingBackend";
 
-const { mountPage } = installDom("https://app.test/org");
+const { mountPage } = installDom("https://app.test/org?show=map");
 const backend = await installMissingBackend();
 await seedViewer();
 
@@ -21,7 +24,7 @@ const { default: OrgPage } = await import("../../app/org/page");
 useInboxStore.setState({ orgTree: { ...ORG_FIXTURE, workspace: { kind: "team", id: TEAM_ID, name: "Degrade Co" } } } as any);
 
 test("the org chart paints its cached people and roles with every query missing", async () => {
-  const page = await mountPage("/org", { org: <OrgPage /> });
+  const page = await mountPage("/org?show=map", { org: <OrgPage /> });
   try {
     expect(describeFailures(page)).toBe("");
     const text = page.text();

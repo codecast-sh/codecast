@@ -60,7 +60,7 @@ describe("editLineProfile", () => {
 
   test("refuses a row no current cast has published (no machine to send to)", async () => {
     const { ana, project, dispatch } = await seed({ root: "/src/codecast" });
-    await expect(dispatch(String(ana), ["req-1", String(project), EDITS])).rejects.toThrow(/No machine has published/);
+    await expect(dispatch(String(ana), ["req-1", String(project), EDITS])).rejects.toThrow(/No machine has uploaded/);
   });
 
   test("refuses when the checkout is on another person's machine", async () => {

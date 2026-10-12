@@ -1,4 +1,4 @@
-// How work flows through the org (the health page): each role's week as a
+// How work flows through the org (the map's This week): each role's week as a
 // daily series, the weight of every edge on the map, and what a change to a
 // limit or a share of load would have done to the same week. Pure: it reads
 // org.tree and org.health and nothing else, so the map, the volume table and
@@ -67,21 +67,6 @@ export function roleFlows(tree: OrgTree | null, health: OrgHealth | null, now: n
       stalls: h?.load.open_stalls ?? 0,
     };
   }).sort((a, b) => b.wakesTotal - a.wakesTotal || b.doneTotal - a.doneTotal || a.role.name.localeCompare(b.role.name));
-}
-
-export type CompanyFlow = { wakes: number[]; done: number[]; decisions: number[]; stalls: number; liveHands: number; atCap: number };
-
-/** The company's week: the roles' series added day by day. */
-export function companyFlow(flows: RoleFlow[]): CompanyFlow {
-  const add = (pick: (f: RoleFlow) => number[]) => Array.from({ length: FLOW_DAYS }, (_, i) => sum(flows.map((f) => pick(f)[i] ?? 0)));
-  return {
-    wakes: add((f) => f.wakes),
-    done: add((f) => f.done),
-    decisions: add((f) => f.decisions),
-    stalls: sum(flows.map((f) => f.stalls)),
-    liveHands: sum(flows.map((f) => f.liveHands)),
-    atCap: flows.filter((f) => f.daysAtCap > 0).length,
-  };
 }
 
 /** A line of work between two cards on the map, with the week's count. */
