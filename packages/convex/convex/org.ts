@@ -8,7 +8,7 @@ import { classifyWorkStates } from "./conversations";
 import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { derivePresenceState } from "./presenceState";
-import { WORKING_SET_RECENCY_MS, addressesAgent, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
+import { WORKING_SET_RECENCY_MS, addressesAgent, inboxEpoch, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { accessJudgeFor, canAccessDoc, workspaceKey } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
@@ -16,7 +16,7 @@ import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
 import { pendingOnLadder } from "./sessionDecisions";
 import { isScopeless, type Scope } from "./lib/orgScope";
-import { capsFor, countersFor } from "./lib/orgCaps";
+import { capsFor, countersFor, trustOf } from "./lib/orgCaps";
 import { findRoleRoutine } from "./lib/orgRoutine";
 import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { extractPlanTitleForWeb } from "./docs";
@@ -364,7 +364,13 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
     roles,
     anchors,
     truncated: scan.truncated,
-    generated_at: now,
+    // Every org result is stamped at the minute, never the raw clock: a raw
+    // Date.now() made each re-run a new value, so every session write in the
+    // workspace pushed the tree, brief and scope summary to every subscriber
+    // with nothing else changed (about 30 pushes a minute each, 2026-10-11).
+    // At the minute a re-run over unchanged data is byte identical, and Convex
+    // sends nothing.
+    generated_at: inboxEpoch(now),
   };
 }
 
@@ -432,7 +438,7 @@ export async function computeOrgRoles(ctx: Ctx, userId: Id<"users">, teamId: Id<
     roles: await Promise.all(roles.map((role: any) => orgRoleRow(ctx, role, anchorRows))),
     anchors: anchorRows,
     roles_only: true as const,
-    generated_at: now,
+    generated_at: inboxEpoch(now),
   };
 }
 
@@ -609,6 +615,10 @@ export type ResolvedScope = {
   projects: any[];
   plans: any[];
   tasks: any[];
+  /** Ephemeral bookkeeping in scope (task-graph.md TG9). It is no work of the
+   *  scope's, so `tasks` leaves it out (the feed, the counts, the brief); a
+   *  session bound to one still works here, so sessionsInScope reads these. */
+  ephemeral_task_ids?: string[];
   initiatives?: any[];
   initiative_ids?: Id<"initiatives">[];
 };
@@ -655,8 +665,14 @@ export async function resolveScope(
   // Tasks: by project, by plan (a plan's project may be outside the listed
   // projects, so both reads run), deduped.
   const taskById = new Map<string, any>();
+  const ephemeralIds = new Set<string>();
   const admit = async (rows: any[]) => {
-    for (const t of rows) if (!taskById.has(t._id.toString()) && (await mayRead("tasks", t))) taskById.set(t._id.toString(), t);
+    for (const t of rows) {
+      const id = t._id.toString();
+      if (taskById.has(id) || ephemeralIds.has(id) || !(await mayRead("tasks", t))) continue;
+      if (t.ephemeral) ephemeralIds.add(id);
+      else taskById.set(id, t);
+    }
   };
   for (const project of projects) {
     await admit(await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect());
@@ -672,7 +688,7 @@ export async function resolveScope(
     if (goal) goalById.set(goal._id.toString(), goal);
   }
   const initiatives = Array.from(goalById.values());
-  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()), initiatives, initiative_ids: initiatives.map((g) => g._id) };
+  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()), ephemeral_task_ids: [...ephemeralIds], initiatives, initiative_ids: initiatives.map((g) => g._id) };
 }
 
 // F1's session rule over the org scan (org-staffing.md S35): bound to a task
@@ -682,7 +698,7 @@ export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
 export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
   if (isScopeless(resolved.scope) && !resolved.role) return [];
   const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
-  const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
+  const taskIds = new Set([...resolved.tasks.map((t) => t._id.toString()), ...(resolved.ephemeral_task_ids ?? [])]);
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
   const roleId = resolved.role?._id?.toString();
   const out: Array<{ session: OrgSession; raw: any }> = [];
@@ -1268,7 +1284,7 @@ export async function computeScopeSummary(ctx: Ctx, resolved: ResolvedScope, now
     sessions: { ...counts, total: sessions.length },
     decisions,
     overlaps,
-    generated_at: now,
+    generated_at: inboxEpoch(now),
   };
 }
 
@@ -1353,12 +1369,18 @@ const WHOLE_WORKSPACE_TASK_CAP = 2000;
 // its boundary (org-staffing.md S26); resolveScope answers nothing for that
 // case, so read them here. Projects ride along so the Head of People reads
 // every charter in its frame.
-async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; plans: any[] }> {
+async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; ephemeral_task_ids: string[]; plans: any[] }> {
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
   const projects: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(200);
   const tasks: any[] = await ctx.db.query("tasks").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(WHOLE_WORKSPACE_TASK_CAP);
   const plans: any[] = await ctx.db.query("plans").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(500);
-  return { projects: projects.filter((p) => p.status !== "done"), tasks: tasks.filter((t) => t.status !== "dropped"), plans };
+  const live = tasks.filter((t) => t.status !== "dropped");
+  return {
+    projects: projects.filter((p) => p.status !== "done"),
+    tasks: live.filter((t) => !t.ephemeral),
+    ephemeral_task_ids: live.filter((t) => t.ephemeral).map((t) => String(t._id)),
+    plans,
+  };
 }
 
 // `viewerId` is whose grants the facts are read with: the caller of
@@ -1372,7 +1394,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   }
   if (whole) {
     const items = await wholeWorkspaceItems(ctx, role);
-    resolved = { ...resolved, projects: items.projects, tasks: items.tasks, plans: items.plans };
+    resolved = { ...resolved, ...items };
   }
   // One org scan serves the summary's sessions and the hands: the same
   // membership (recent, visible, top level) and the same classifier inputs
@@ -1453,7 +1475,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
     changed_since: since,
     decisions,
     usage: { ...counters, caps: capsFor(role), uncounted_sessions: uncounted },
-    generated_at: now,
+    generated_at: inboxEpoch(now),
   };
 }
 
@@ -1491,7 +1513,7 @@ export const roleCard = query({
     const charter = charterText.replace(/^#+[^\n]*\n+/, "").split(/\n\s*\n/)[0]?.trim().slice(0, 280) ?? "";
     return {
       _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role),
-      status: role.status, tenure: role.tenure ?? { kind: "standing" }, trust: role.trust ?? "understand",
+      status: role.status, tenure: role.tenure ?? { kind: "standing" }, trust: trustOf(role),
       charter, reports_to,
       scope: {
         projects: projects.filter(Boolean).map((p: any) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id ?? null })),
@@ -1524,7 +1546,7 @@ export const brief = query({
     return {
       role: {
         _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, status: role.status,
-        trust: role.trust ?? "understand", reports_to: role.reports_to, review_backend: role.review_backend ?? null,
+        trust: trustOf(role), reports_to: role.reports_to, review_backend: role.review_backend ?? null,
         authority: role.authority ?? [],
         standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id ?? null,
         checked_at: role.checked_at ?? null,
