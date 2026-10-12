@@ -44,6 +44,14 @@ export function laneOf(ui: { lane?: string } | null | undefined): Lane {
   return ui?.lane === "simple" ? "simple" : "full";
 }
 
+/** Whether hosted mode and its doors (the Mode switch, /welcome, the
+ *  assistant's Whisk card, the first run's assistant start) are open to this
+ *  person: Codecast staff only for now. Everyone else stays in developer
+ *  mode whatever their lane says. */
+export function simpleModeAllowed(user: { staff?: boolean } | null | undefined): boolean {
+  return user?.staff === true;
+}
+
 /** Hosted mode: the person lives in the hosted assistant's lane. Every
  *  reader of hosted mode asks this rather than comparing the lane string. */
 export function isHostedUi(ui: { lane?: string } | null | undefined): boolean {
