@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalAction } from "./functions";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { computeWorkspaceKey, linkedConversationId } from "./lib/access";
 
 // Workspace reconciler + backfill for the stored ACCESS key on work items.
@@ -45,6 +46,7 @@ export const sweepPage = internalMutation({
     const findings: any[] = [];
     let missing = 0;
     let stale = 0;
+    const movedTasks: Id<"tasks">[] = [];
     for (const row of page.page as any[]) {
       const conv = await convOf(linkedConversationId(row));
       const expected = computeWorkspaceKey(row, conv);
@@ -61,8 +63,15 @@ export const sweepPage = internalMutation({
           reason: conv ? "linked conversation visibility" : "raw team tag / owner",
         });
       }
-      if (args.apply) await ctx.db.patch(row._id, { workspace: expected });
+      if (args.apply) {
+        await ctx.db.patch(row._id, { workspace: expected });
+        if (args.table === "tasks") movedTasks.push(row._id);
+      }
     }
+    // A task whose key moved may sit on a dependency edge or parent link into
+    // its old workspace, which readiness cannot read across (as in
+    // recomputeWorkspaceForConversation).
+    if (movedTasks.length) await ctx.scheduler.runAfter(0, internal.taskLinks.cutCrossedEdges, { task_ids: movedTasks });
 
     return {
       findings,
