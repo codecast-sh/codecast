@@ -66,10 +66,16 @@ function looksLikePath(path: string): boolean {
   if (!first.startsWith(".") && first.includes(".")) return false;
   // Dates: 08/20/2026.
   if (segs.every((s) => /^\d+$/.test(s))) return false;
+  // A git ref (origin/codecast/agentwatch-ct-57467) names a branch, not a file.
+  if (!explicit && GIT_REF_ROOTS.has(first)) return false;
   if (explicit || path.endsWith("/")) return true;
   if (EXTENSION.test(segs[segs.length - 1])) return true;
-  return segs.length >= 3;
+  // Without an extension, depth is the evidence. Three bare words are as often a list
+  // ("booked/unbooked/missed", "read/write/admin") as a directory, so three plain-word
+  // segments are not enough; a fourth, or a segment no word looks like, is.
+  return segs.length >= 4 || (segs.length === 3 && segs.some((s) => !/^[A-Za-z]+$/.test(s)));
 }
+const GIT_REF_ROOTS = new Set(["origin", "upstream", "refs", "remotes"]);
 
 /** Interpret one regex match (from FILE_PATH_SCAN_RE or the whole-string form). */
 export function mentionFromMatch(full: string, rawPath: string, line?: string): FilePathMention | null {
