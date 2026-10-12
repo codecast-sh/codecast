@@ -30,11 +30,18 @@
 //   plan        only at risk = plan; a person approves it at plan_gate (LE7)
 //   analyze     acceptance criteria for the reviewer
 //   prove, red  the miss shown failing first; one that does not reproduce
-//               dissolves the cause with its evidence (LE8)
+//               dissolves the cause with its evidence (LE8). A change to the
+//               line itself (category line, line-map.md LX6) has its own
+//               prove_line, which names the recorded runs that show the miss
+//               in line-proof.json, and red checks them against the records
 //   implement, verify, green
 //               the change, the project's check command, the reproduction
-//               now passing; a prompt change, or a change to the line itself
-//               (category line, line-map.md LX6), goes from verify to eval
+//               now passing; a prompt change goes from verify to eval. A
+//               line cause is built by implement_line, on the line's own files
+//   ask         a builder that stops to ask (a needs_context or blocked
+//               handoff, or a pin that says blocked) puts its question to the
+//               person who answers for the project; Answer sends their note
+//               back to the builder, Drop closes the cause
 //   eval        the project's eval command (it picks what the branch owes),
 //               then `cast line eval-result` for the verdict (LP4); an eval
 //               that could not judge the change (exit 2: no scored reps on a
@@ -44,6 +51,11 @@
 //               the change card: assembled by code, three fields by a model,
 //               validated and published (LE10)
 //   decide      Ship, Revise or Drop on the card (LE11)
+//   rebase      the branch put on the default branch as the remote has it, and
+//               the project's check run on the result, since a card waits and
+//               the default branch moves; a conflict or a failing check goes
+//               back to implement with what happened on the task, and a change
+//               already on the default branch goes on to watch
 //   ship        the project's ship command, when it has one: it lands the
 //               change its own way and says in one line what is true now;
 //               without one, `cast ship run --task`: a ship session opens the
@@ -77,6 +89,9 @@ digraph line {
   // replays real moments through an agent, or whose eval owes a gate suite,
   // takes hours, not minutes (Union's gate alone averages fifty minutes). The
   // timeouts are sized for that; a command that hangs is still cut off.
+  // A change to the line itself shows its miss on the line's recorded runs.
+  prove_line [label="Prove line", backend=session, agent=claude, isolated=true, max_visits=2, timeout=10800, prompt="@line/prove_line.md"]
+
   red [label="Red", shape=parallelogram, timeout=5400, script="@line/red.sh"]
 
   dissolve [label="Dissolve", shape=parallelogram, script="@line/dissolve.sh"]
@@ -84,6 +99,14 @@ digraph line {
   // The builder runs the project's check and its failing check, which for a
   // prompt is the proof's replays: the same hours as prove.
   implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
+
+  implement_line [label="Build line", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement_line.md"]
+
+  // The builder's own words (its handoff evidence, or its blocked pin) are the
+  // question; the gate climbs to the person who answers for the project.
+  ask [label="Builder asks", shape=hexagon, category=approach,
+    prompt="The builder stopped on $task_title ($handoff) and needs an answer to go on.",
+    doc="$handoff_note"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=3600,
@@ -116,6 +139,9 @@ digraph line {
   drop [label="Drop", shape=parallelogram,
     script="note=$human_message; cast task drop $task_id -m \"Dropped at the gate.${note:+ $note}\""]
 
+  // The check runs again when the base moved: the same hour verify has.
+  rebase [label="Rebase", shape=parallelogram, timeout=3600, script="@line/rebase.sh"]
+
   ship [label="Ship", shape=parallelogram, timeout=3600, script="@line/ship.sh"]
 
   watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days $line.watch_days"]
@@ -129,28 +155,44 @@ digraph line {
   plan -> plan_gate
   plan_gate -> analyze [label="[A] Approve :: Build to this plan"]
   plan_gate -> plan    [label="[R] Revise :: Your note goes back to the planner"]
-  plan_gate -> drop    [label="[D] Drop :: Close the cause with your reason"]
+  plan_gate -> drop    [label="[D] Drop :: Close the problem with your reason"]
 
-  analyze -> prove
+  // A line cause takes its own prove and build stations; every route back to
+  // the builder goes to the one its category names.
+  analyze -> prove      [condition="category != line"]
+  analyze -> prove_line [condition="category = line"]
   prove -> red       [condition="prove.json.reproduced = true"]
   prove -> dissolve  [condition="prove.json.reproduced = false"]
-  red -> implement   [condition="red.json.red = true"]
-  red -> prove       [condition="red.json.red != true", label="no miss shown"]
+  prove_line -> red      [condition="prove_line.json.reproduced = true"]
+  prove_line -> dissolve [condition="prove_line.json.reproduced = false"]
+  red -> implement      [condition="red.json.red = true and category != line"]
+  red -> implement_line [condition="red.json.red = true and category = line"]
+  red -> prove          [condition="red.json.red != true and category != line", label="no miss shown"]
+  red -> prove_line     [condition="red.json.red != true and category = line", label="no miss shown"]
   dissolve -> exit
 
-  implement -> verify    [condition="handoff = done"]
-  verify -> green        [condition="outcome = success and category != prompt and category != line"]
-  verify -> eval         [condition="outcome = success and (category = prompt or category = line)"]
-  verify -> implement    [condition="outcome = failure", label="checks failed"]
-  green -> eval          [condition="outcome = success"]
-  green -> implement     [condition="outcome = failure", label="still red"]
-  eval -> review         [condition="outcome = success"]
-  eval -> implement      [condition="outcome = failure and eval.exit_code = 1", label="eval failed"]
+  implement -> verify      [condition="handoff = done"]
+  implement_line -> verify [condition="handoff = done"]
+  implement -> ask         [condition="handoff = needs_context or handoff = blocked"]
+  implement_line -> ask    [condition="handoff = needs_context or handoff = blocked"]
+  ask -> reopen            [label="[A] Answer :: Your answer goes back to the builder"]
+  ask -> drop              [label="[D] Drop :: Close the problem with your reason"]
+  verify -> green          [condition="outcome = success and category != prompt"]
+  verify -> eval           [condition="outcome = success and category = prompt"]
+  verify -> implement      [condition="outcome = failure and category != line", label="checks failed"]
+  verify -> implement_line [condition="outcome = failure and category = line", label="checks failed"]
+  green -> eval            [condition="outcome = success"]
+  green -> implement       [condition="outcome = failure and category != line", label="still red"]
+  green -> implement_line  [condition="outcome = failure and category = line", label="still red"]
+  eval -> review           [condition="outcome = success"]
+  eval -> implement        [condition="outcome = failure and eval.exit_code = 1 and category != line", label="eval failed"]
+  eval -> implement_line   [condition="outcome = failure and eval.exit_code = 1 and category = line", label="eval failed"]
   eval -> unscored       [condition="outcome = failure and eval.exit_code != 1", label="eval could not score"]
   unscored -> exit
 
   review -> card_draft [condition="review_verdict = approve"]
-  review -> implement  [condition="review_verdict = changes", label="changes"]
+  review -> implement      [condition="review_verdict = changes and category != line", label="changes"]
+  review -> implement_line [condition="review_verdict = changes and category = line", label="changes"]
   review -> exit       [condition="review_verdict = reject"]
 
   card_draft -> card_write
@@ -158,12 +200,18 @@ digraph line {
   card -> decide     [condition="outcome = success"]
   card -> card_write [condition="outcome = failure", label="card refused"]
 
-  decide -> ship   [label="[S] Ship :: Land the change, then watch the cause"]
+  decide -> rebase [label="[S] Ship :: Land the change, then watch for the problem"]
   decide -> reopen [label="[R] Revise :: Your note goes back to the builder"]
-  decide -> drop   [label="[D] Drop :: Close the cause with your reason"]
-  reopen -> implement
+  decide -> drop   [label="[D] Drop :: Close the problem with your reason"]
+  reopen -> implement      [condition="category != line"]
+  reopen -> implement_line [condition="category = line"]
   drop -> exit
 
+  rebase -> ship      [condition="outcome = success and rebase.json.landed != true"]
+  rebase -> watch     [condition="outcome = success and rebase.json.landed = true", label="already landed"]
+  rebase -> implement      [condition="outcome = failure and rebase.exit_code = 1 and category != line", label="conflict or check failed"]
+  rebase -> implement_line [condition="outcome = failure and rebase.exit_code = 1 and category = line", label="conflict or check failed"]
+  rebase -> ship      [condition="outcome = failure and rebase.exit_code != 1", label="could not rebase"]
   ship -> watch  [condition="outcome = success"]
   ship -> exit   [condition="outcome = failure", label="not shipped"]
   watch -> exit
