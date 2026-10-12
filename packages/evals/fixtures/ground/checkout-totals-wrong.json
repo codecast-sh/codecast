@@ -1,0 +1,36 @@
+{
+  "asOf": "2026-09-20T12:00:00.000Z",
+  "notes": "a product bug that plainly threatens one project's charter goal (orders charged the amount shown): ground should name that project, as code, ready",
+  "label": { "goal_ref": "pj-12", "category": "code", "readiness": "ready" },
+  "snapshot": {
+    "now": 1789905600000,
+    "cause": {
+      "short_id": "ct-9101",
+      "title": "Checkout total ignores the discount code after the shipping step",
+      "description": "Opened by a bug signal from sdk:shop-web.\n\nA shopper who applies a discount code on the cart page and then changes the shipping method is charged the full price. The cart shows the discounted total; the payment step charges the undiscounted one.",
+      "priority": "high",
+      "created_at": 1789819200000,
+      "signal_count": 3,
+      "first_seen": 1789732800000,
+      "last_seen": 1789898400000,
+      "signals": [
+        { "source": "support", "kind": "complaint", "title": "Charged 84.00, cart said 71.40 with SPRING15", "subject": "ticket 4471", "detail_md": "Customer applied SPRING15, switched to express shipping, paid 84.00. Screenshot of the cart shows 71.40 + shipping.", "observed_at": 1789898400000 },
+        { "source": "support", "kind": "complaint", "title": "Discount vanished at payment", "subject": "ticket 4462", "detail_md": "Second report this week: the code is accepted, then the total at payment is the full price.", "observed_at": 1789819200000 },
+        { "source": "sdk:shop-web", "kind": "bug", "title": "Order total mismatch between cart and payment intent", "subject": "eg-88", "detail_md": "payment_intent.amount (8400) != cart.total (7140) after shipping_method change. Seen 9 times in 3 days.", "observed_at": 1789732800000 }
+      ],
+      "comments": [
+        { "author": "Dana", "text": "Reproduced on staging: apply a code, change shipping, the payment step recomputes from the undiscounted subtotal.", "created_at": 1789822800000 }
+      ]
+    },
+    "brief": {
+      "workspace": "team:fixture",
+      "workspace_name": "Fernway",
+      "initiatives": [],
+      "projects": [
+        { "short_id": "pj-12", "title": "Shop: checkout", "status": "active", "priority": "p0", "owner_role": "@checkout", "goal": "Every shopper who reaches the cart can pay in under a minute and is charged exactly the total the cart shows.", "success_metrics": ["Checkout completion above 70%", "Zero charge disputes caused by a wrong total"], "non_goals": ["Loyalty points"], "risks": ["Payment provider rate limits on sale days"] },
+        { "short_id": "pj-14", "title": "Shop: catalog", "status": "active", "priority": "p1", "owner_role": "@catalog", "goal": "Shoppers find the product they came for in two searches or fewer.", "success_metrics": ["Search to product view above 60%"] },
+        { "short_id": "pj-19", "title": "Marketing site", "status": "active", "priority": "p2", "goal": "The marketing pages load fast and turn visitors into shoppers.", "success_metrics": ["Largest paint under 2s"] }
+      ]
+    }
+  }
+}

@@ -11,9 +11,13 @@
 //   3. a project's line profile, `.codecast/line.toml`, and its own line, the
 //      plain files in `.codecast/line/` (line-map.md LX5), inside a tracked
 //      root, for line_profile_edit and reading only;
-//   4. for config_create and config_delete, only the per-file directories
+//   4. for line_graph_edit only, a published graph's files: a `.cast` and the
+//      prompt and script files it names, inside a tracked root and outside
+//      `.git` (line-workspace.md LW4); the edit itself writes only the files
+//      the .cast names;
+//   5. for config_create and config_delete, only the per-file directories
 //      (agents, commands, skills, prompts) under ~/.claude and ~/.codex;
-//   5. nothing else.
+//   6. nothing else.
 // Every check runs on the canonical path (realpath of the directory), so a
 // symlinked segment cannot walk a write out of the tree it was admitted to.
 import fs from "node:fs";
@@ -81,10 +85,20 @@ const isRepoLinePath = (resolved: string) =>
  *   "config"       config_write: home subtrees and agent config basenames in a tracked root;
  *   "line_profile" line_profile_edit: a tracked line profile and nothing else, the only
  *                  writer of that file (it validates, checks `base` and republishes);
+ *   "line_graph"   line_graph_edit: a published graph's files in a tracked root;
  *   "read"         config_read: what either writer admits, plus an agent config basename
  *                  anywhere (config_list advertises project files outside tracked roots).
  */
-export type FenceKind = "config" | "line_profile" | "read";
+export type FenceKind = "config" | "line_profile" | "line_graph" | "read";
+
+/** The files a published graph is made of: the .cast and the text files its steps name. */
+const GRAPH_FILE_RE = /\.(cast|md|txt|sh|prompt)$/;
+
+/** True when `realTarget` is a graph file (GRAPH_FILE_RE) inside a tracked root and outside its `.git`. */
+export function isTrackedGraphFile(realTarget: string, roots: readonly string[]): boolean {
+  if (!GRAPH_FILE_RE.test(path.basename(realTarget))) return false;
+  return canonicalRoots(roots).some((root) => under(realTarget, root) && !path.relative(root, realTarget).split(path.sep).includes(".git"));
+}
 
 /** Whether `p` names a line profile by its path, so the fence judges it by the file it resolves to. */
 export const isLineProfilePath = (p: string) => {
@@ -104,6 +118,7 @@ export function fenceAdmits(realTarget: string, opts: { home: string; roots: rea
   const kind = opts.kind ?? "config";
   if (isTrackedLineProfile(realTarget, opts.roots)) return kind !== "config";
   if (kind === "line_profile") return false;
+  if (kind === "line_graph") return isTrackedGraphFile(realTarget, opts.roots);
   // Canonical too, so a ~/.claude linked into a dotfiles repo is still home.
   const home = opts.home ? canonicalRoots([path.join(opts.home, ".claude"), path.join(opts.home, ".codex")]) : [];
   if (home.some((a) => realTarget === a || under(realTarget, a))) return true;

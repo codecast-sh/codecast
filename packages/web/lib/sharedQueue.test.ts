@@ -1,12 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { inFlightPending, serverPendingBubbles } from "./pendingBanner";
-import { canSteer, isHeldForTurnEnd, mergeQueueRows, queueRowsOf, reorderQueueRows, type QueueRow } from "./sharedQueue";
+import { canSteer, heldQueueRowsOf, isHeldForTurnEnd, mergeQueueRows, queueRowsOf, reorderQueueRows, type QueueRow } from "./sharedQueue";
 
 const row = (id: string, at: number, from: string, content: string, status = "pending", queued?: boolean): QueueRow =>
   ({ message_id: id, created_at: at, status, content, from_name: from, from_user_id: `u_${from}`, queued });
 
 describe("shared queue", () => {
+  // Sent now (or sent plainly) a row is the transcript's bubble, never also a
+  // row in the queue above the composer: "Send now" left both on screen.
+  test("the queue holds only rows waiting for the turn to end; a released row moves to the transcript", () => {
+    const status = { inflight: [row("a", 1, "Ann", "plain send"), row("b", 2, "Ann", "later", "held", true)] };
+    expect(heldQueueRowsOf(status).map((r) => r.message_id)).toEqual(["b"]);
+    const released = { inflight: status.inflight.map((r) => (r.status === "held" ? { ...r, status: "pending" } : r)) };
+    expect(heldQueueRowsOf(released)).toEqual([]);
+    const seen = { seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (c: string) => c };
+    expect(serverPendingBubbles(released as any, seen).map((b) => b.content)).toEqual(["plain send", "later"]);
+  });
+
   test("reads the waiting rows, never settled ones", () => {
     expect(queueRowsOf({ inflight: [row("a", 1, "Ann", "x"), row("b", 2, "Bob", "y", "cancelled")] }).map((r) => r.message_id)).toEqual(["a"]);
     expect(queueRowsOf(null)).toEqual([]);
