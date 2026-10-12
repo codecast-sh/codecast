@@ -30,6 +30,7 @@ import { notFound } from "./lib/auth";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { nextShortId } from "./counters";
 import { askCore, finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
+import { removeWaitCore } from "./taskWaits";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { answererOf } from "./orgLine";
 import { personName } from "./sessionOwnership";
@@ -46,6 +47,7 @@ import {
   normalizeOp,
   opErrors,
   personEditApplies,
+  personEditSummary,
   personOp,
   renderExpectations,
   renderProposal,
@@ -122,8 +124,19 @@ function proposalView(p: any, decision: any, web = false) {
     ...(p.since ? { since: p.since } : {}),
     ...(p.until ? { until: p.until } : {}),
     created_at: p.created_at,
+    ...(p.resolved_at ? { resolved_at: p.resolved_at } : {}),
     ...(web ? { ops: p.ops, ...(decision ? { card_id: String(decision._id), card_status: decision.status } : {}) } : {}),
   };
+}
+
+/** What changed in a version, read off its lines: added in it, changed in it, retired in it. */
+function versionChanges(items: any[], version: number) {
+  let added = 0, changed = 0, retired = 0;
+  for (const e of items) {
+    if (e.added_in === version) added++;
+    else if (e.changed_in === version) { if (e.status === "retired") retired++; else changed++; }
+  }
+  return { added, changed, retired };
 }
 
 /** The read every surface shares: one version (the current one by default), the history, recent proposals, the cursor. */
@@ -136,15 +149,128 @@ async function readExpectations(ctx: Ctx, project: Doc<"projects">, version?: nu
   const shown = proposals.slice(0, PROPOSALS_SHOWN);
   const decisions = await Promise.all(shown.map((p) => (p.decision_id ? ctx.db.get(p.decision_id) : null)));
   const cursor = proposals.reduce((max: number | null, p) => (p.status !== "retracted" && p.until && (max === null || p.until > max) ? p.until : max), null);
+  const names = new Map<string, string>();
+  const nameOf = async (id: any) => {
+    const key = String(id);
+    if (!names.has(key)) names.set(key, personName(await ctx.db.get(id)));
+    return names.get(key)!;
+  };
   return {
     project: { id: String(project._id), title: project.title },
     current_version: versions[0]?.version ?? 0,
     doc: row ? await versionView(ctx, project, row) : null,
-    versions: await Promise.all(versions.map(async (r) => ({ version: r.version, summary: r.summary, how: r.how, applied_at: r.created_at, applied_by: personName(await ctx.db.get(r.user_id)), active: r.items.filter((e: any) => e.status === "active").length }))),
-    proposals: shown.map((p, i) => proposalView(p, decisions[i], web && p.status === "open")),
+    versions: await Promise.all(versions.map(async (r) => {
+      const proposal = r.proposal_id ? await ctx.db.get(r.proposal_id) : null;
+      return {
+        version: r.version, summary: r.summary, how: r.how, applied_at: r.created_at, applied_by: await nameOf(r.user_id),
+        active: r.items.filter((e: any) => e.status === "active").length,
+        ...versionChanges(r.items, r.version),
+        ...(proposal ? { proposal: proposal.short_id, proposed_by: await nameOf(proposal.user_id), ...(proposal.conversation_id ? { from_session: true } : {}) } : {}),
+      };
+    })),
+    proposals: await Promise.all(shown.map(async (p, i) => {
+      const view = proposalView(p, decisions[i], web && p.status === "open");
+      return web && p.status === "open" ? { ...view, proposed_by: await nameOf(p.user_id), ...(p.conversation_id ? { from_session: true } : {}) } : view;
+    })),
     cursor,
   };
 }
+
+/** The opening of a finding's detail, as plain words: what the judge saw. */
+const firstWords = (md: string) => md.replace(/[#*_`>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 600);
+
+// How far back a line's breaks are counted, and how many findings one line lists.
+const USAGE_DAYS = 30;
+const USAGE_READ = 200;
+const FINDINGS_LISTED = 6;
+// The sources whose speaker the web names, at most, per read.
+const SOURCES_NAMED = 150;
+
+/**
+ * How often findings cite each line (LM5): a finder that judges behavior files
+ * the line's id as its signal's subject, so a line's breaks are the signals
+ * with that subject. Counted over the last 7 and 30 days, with the newest
+ * findings and the causes they opened.
+ */
+async function lineUsage(ctx: Ctx, project: Doc<"projects">, items: any[], now: number, listFindings = true) {
+  const workspace = project.workspace ?? computeWorkspaceKey(project, null);
+  const since = now - USAGE_DAYS * 86_400_000;
+  const week = now - 7 * 86_400_000;
+  const tasks = new Map<string, any>();
+  const lines: Record<string, { d7: number; d30: number; last_at?: number; findings: any[] }> = {};
+  for (const e of items) {
+    const signals: any[] = await ctx.db.query("signals")
+      .withIndex("by_workspace_subject", (q: any) => q.eq("workspace", workspace).eq("subject", e.id).gte("created_at", since))
+      .order("desc").take(USAGE_READ);
+    if (!signals.length) continue;
+    const findings = [];
+    for (const sg of listFindings ? signals.slice(0, FINDINGS_LISTED) : []) {
+      const key = String(sg.task_id);
+      if (!tasks.has(key)) tasks.set(key, sg.task_id ? await ctx.db.get(sg.task_id) : null);
+      const t = tasks.get(key);
+      findings.push({
+        short_id: sg.short_id, title: sg.title, kind: sg.kind, source: sg.source, created_at: sg.created_at,
+        ...(sg.detail_md ? { detail: firstWords(sg.detail_md) } : {}),
+        ...(sg.evidence_url ? { evidence_url: sg.evidence_url } : {}),
+        ...(t ? { cause: { id: String(t._id), short_id: t.short_id, title: t.title, status: t.status } } : {}),
+      });
+    }
+    lines[e.id] = { d7: signals.filter((sg) => sg.created_at >= week).length, d30: signals.length, last_at: signals[0].created_at, findings };
+  }
+  return { since, lines };
+}
+
+/**
+ * Who said each source's words, where the record names them: the person who
+ * typed a chat line, who answered a decision, who spoke on a call, a
+ * person's own words. Keyed `<kind>:<ref>`. Only records in
+ * the project's own team are read.
+ */
+async function sourceSpeakers(ctx: Ctx, project: Doc<"projects">, citations: ExpectationCitation[]) {
+  const out: Record<string, { who?: string }> = {};
+  const seen = new Set<string>();
+  for (const c of citations) {
+    const key = `${c.kind}:${c.ref}`;
+    if (seen.has(key) || seen.size >= SOURCES_NAMED) continue;
+    seen.add(key);
+    if (c.kind === "person") {
+      const id = ctx.db.normalizeId("users", c.ref);
+      if (id) out[key] = { who: personName(await ctx.db.get(id)) };
+    } else if (c.kind === "chat") {
+      const id = ctx.db.normalizeId("chat_messages", c.ref.slice(c.ref.lastIndexOf("/") + 1));
+      const m = id ? await ctx.db.get(id) : null;
+      if (m && m.team_id === project.team_id) out[key] = { who: m.author_kind === "agent" ? "an agent" : personName(await ctx.db.get(m.user_id)) };
+    } else if (c.kind === "decision") {
+      const d = await ctx.db.query("session_decisions").withIndex("by_short_id", (q: any) => q.eq("short_id", c.ref.split(/[:/]/)[0])).first();
+      const answerer = d?.answered_by?.kind === "user" ? d.answered_by.id : d?.resolved_by;
+      if (answerer && (await inProjectWorkspace(ctx, project, String(answerer)))) out[key] = { who: personName(await ctx.db.get(answerer)) };
+    } else if (c.kind === "call") {
+      const [short, at] = c.ref.split(":");
+      const t = await ctx.db.query("transcripts").withIndex("by_short_id", (q: any) => q.eq("short_id", short)).first();
+      if (!t || t.team_id !== project.team_id) continue;
+      const seg = at && /^\d+$/.test(at) ? await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id).eq("seq", Number(at))).first() : null;
+      if (seg?.speaker_name) out[key] = { who: seg.speaker_name };
+    }
+  }
+  return out;
+}
+
+/** The routine that proposes changes from the team's context, when the project has one installed (LM5): its trigger, so a person can run it now. */
+async function proposerRoutine(ctx: Ctx, project: Doc<"projects">) {
+  const workspace = project.workspace ?? computeWorkspaceKey(project, null);
+  const instances: any[] = await ctx.db.query("org_template_instances").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).take(50);
+  for (const inst of instances) {
+    if (String(inst.project_id) !== String(project._id) || inst.phase === "retired") continue;
+    const bound = inst.routines?.[EXPECTATIONS_ROUTINE];
+    const id = bound?.triggerId && !bound.retired ? ctx.db.normalizeId("agent_tasks", bound.triggerId) : null;
+    const t = id ? await ctx.db.get(id) : null;
+    if (t) return { trigger_id: String(t._id), ...(t.short_id ? { short_id: t.short_id } : {}), status: t.status, ...(t.run_at ? { run_at: t.run_at } : {}), ...(t.last_run_at ? { last_run_at: t.last_run_at } : {}) };
+  }
+  return null;
+}
+
+/** The line template's routine that proposes expectation changes (org-templates/line). */
+const EXPECTATIONS_ROUTINE = "expectations-daily";
 
 /** `cast expectations show`: a version of the project's document with its history. */
 export const show = query({
@@ -165,8 +291,76 @@ export const forProject = query({
     const project = await ctx.db.get(args.project_id);
     if (!project || !(await canAccessProject(ctx, userId, project))) return null;
     // `you_answer`: the viewer is the project's person (LM4), whose own edits
-    // apply as they make them (personEditApplies).
-    return { ...(await readExpectations(ctx, project, args.version, true)), you_answer: String(await projectPerson(ctx, project)) === String(userId) };
+    // apply as they make them (personEditApplies). `usage` is how often
+    // findings cite each line; `sources` names who said each source's words;
+    // `routine` is the proposer routine, when one is installed.
+    const read = await readExpectations(ctx, project, args.version, true);
+    const items: any[] = read.doc?.items ?? [];
+    const openOps = read.proposals.flatMap((p: any) => p.ops ?? []);
+    const citations: ExpectationCitation[] = [...items.flatMap((e) => e.citations), ...openOps.flatMap((op: any) => op.citations)];
+    const person = await projectPerson(ctx, project);
+    return {
+      ...read,
+      you_answer: String(person) === String(userId),
+      person: personName(await ctx.db.get(person)),
+      usage: await lineUsage(ctx, project, items, Date.now()),
+      sources: await sourceSpeakers(ctx, project, citations),
+      routine: await proposerRoutine(ctx, project),
+    };
+  },
+});
+
+// The projects one overview reads, at most.
+const OVERVIEW_PROJECTS = 80;
+const CLOSED_PROJECT = new Set(["done", "archived", "cancelled", "canceled"]);
+
+/**
+ * Every project's document in a workspace, as one summary row each (the
+ * /expectations overview): how many lines, how many proposals wait, how often
+ * findings broke a line in the last 7 and 30 days, and the lines broken most.
+ * A live project with no document yet is listed too, so starting one is a
+ * click away. Rows carry the workspace key the store filters by.
+ */
+export const overview = query({
+  args: { team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) return [];
+    let key: string;
+    try {
+      key = (await createWorkContext(ctx, { userId, workspace: args.team_id ? "team" : "personal", team_id: args.team_id })).db.workspaceKey;
+    } catch {
+      return [];
+    }
+    const projects: any[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).take(OVERVIEW_PROJECTS);
+    const now = Date.now();
+    const rows = [];
+    for (const project of projects) {
+      if (!(await canAccessProject(ctx, userId, project))) continue;
+      const doc = await latestExpectations(ctx, project._id);
+      if (!doc && CLOSED_PROJECT.has(project.status)) continue;
+      const items: any[] = doc?.items ?? [];
+      const active = items.filter((e) => e.status === "active");
+      const open = await ctx.db.query("expectation_proposals").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).order("desc").take(PROPOSALS_READ);
+      const usage = active.length ? await lineUsage(ctx, project, active, now, false) : { lines: {} as Record<string, { d7: number; d30: number }> };
+      const counts = active.map((e) => ({ id: e.id, text: e.text, part: e.part, d7: usage.lines[e.id]?.d7 ?? 0, d30: usage.lines[e.id]?.d30 ?? 0 }));
+      rows.push({
+        _id: String(project._id),
+        workspace: key,
+        project: { id: String(project._id), short_id: project.short_id, title: project.title, status: project.status },
+        version: doc?.version ?? 0,
+        applied_at: doc?.created_at ?? null,
+        active: active.length,
+        retired: items.length - active.length,
+        parts: new Set(active.map((e) => e.part)).size,
+        open_proposals: open.filter((p) => p.status === "open").length,
+        breaks7: counts.reduce((n, c) => n + c.d7, 0),
+        breaks30: counts.reduce((n, c) => n + c.d30, 0),
+        broken: counts.filter((c) => c.d30 > 0).length,
+        most_broken: counts.filter((c) => c.d30 > 0).sort((a, b) => b.d30 - a.d30).slice(0, 3),
+      });
+    }
+    return rows;
   },
 });
 
@@ -210,6 +404,8 @@ export const brief = query({
       project: { id: String(project._id), title: project.title },
       version: doc?.version ?? 0,
       text: doc ? renderExpectations(doc, { brief: true }) : `${project.title} has no expectations yet.\n`,
+      // The ids a finding may cite, so a judge tried off the server (cast line judges try) parses its reply the way a published one does.
+      ids: doc ? doc.items.filter((e) => e.status === "active").map((e) => e.id) : [],
     };
   },
 });
@@ -284,8 +480,41 @@ async function citationsPersonSaid(ctx: Ctx, project: Doc<"projects">, ops: Expe
   return said;
 }
 
-/** Put an open proposal in the project's person's queue from the session that proposed it. */
+/**
+ * True when every change adds a line word for word as another project in the
+ * workspace holds it now, naming that line by its id in a citation (a trial
+ * project seeded from the projects it shadows). Those words were applied by
+ * that project's person already, so the copy applies on its own.
+ */
+async function copiesAppliedLines(ctx: Ctx, project: Doc<"projects">, ops: ExpectationOp[]): Promise<boolean> {
+  if (!ops.length) return false;
+  const workspace = project.workspace ?? computeWorkspaceKey(project, null);
+  const docs = new Map<string, any>();
+  for (const op of ops) {
+    if (op.op !== "add") return false;
+    let matched = false;
+    for (const c of op.citations) {
+      if (!isExpectationId(c.ref)) continue;
+      const prefix = expectationIdPrefix(c.ref);
+      if (!docs.has(prefix)) {
+        const any = await ctx.db.query("project_expectations").withIndex("by_workspace_prefix", (q: any) => q.eq("workspace", workspace).eq("prefix", prefix)).first();
+        docs.set(prefix, any && String(any.project_id) !== String(project._id) ? await latestExpectations(ctx, any.project_id) : null);
+      }
+      const line = docs.get(prefix)?.items.find((e: any) => e.id === c.ref);
+      if (line?.status === "active" && line.text === op.text) { matched = true; break; }
+    }
+    if (!matched) return false;
+  }
+  return true;
+}
+
+/**
+ * Put an open proposal in the project's person's queue from the session that
+ * proposed it. A trial project asks nobody (LL12): its proposals wait on the
+ * trial review page's Our tooling lane, never in a person's queue.
+ */
 async function postCard(ctx: Ctx, userId: Id<"users">, conversation: any, project: Doc<"projects">, proposal: any, current: any[]): Promise<{ card?: string; card_error?: string }> {
+  if (project.line_trial) return {};
   const person = await projectPerson(ctx, project);
   const n = proposal.ops.length;
   const asked = await askCore(ctx as any, { userId }, {
@@ -372,7 +601,7 @@ async function proposeCore(
   const proposal = await ctx.db.get(id);
   if (!ops.length) return { short_id, status: "empty", version: base };
   const said = args.hold || applyAs !== undefined ? new Set<ExpectationCitation>() : await citationsPersonSaid(ctx, project, ops);
-  const how = applyAs !== undefined ? applyAs : !args.hold && autoApplies(ops, (c) => said.has(c)) ? "auto" : null;
+  const how = applyAs !== undefined ? applyAs : !args.hold && (autoApplies(ops, (c) => said.has(c)) || (await copiesAppliedLines(ctx, project, ops))) ? "auto" : null;
   if (how) {
     const applied = await performApply(ctx, proposal, userId, how, now);
     if (applied.ok) return { short_id, status: "applied", version: applied.version, auto: how === "auto" };
@@ -391,18 +620,18 @@ async function webProject(ctx: Ctx, userId: Id<"users">, projectId: string): Pro
 
 /**
  * A person's own edit from the web (line-map.md LX3, LX5): a line in their
- * words or a retirement with the reason, cited as them (personOp). It is a
+ * words (with a source they name), a change to a line, or a retirement with
+ * the reason, cited as them (personOp). It is a
  * proposal like any other and applies by personEditApplies: at once for the
  * project's person, on the rule for anyone else's line, and otherwise it
  * waits open on the Line tab.
  */
 export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: string, edit: PersonEdit) {
-  if (edit?.op !== "add" && edit?.op !== "retire") throw new Error("A person adds a line or retires one here");
+  if (edit?.op !== "add" && edit?.op !== "edit" && edit?.op !== "retire") throw new Error("A person adds, changes or retires a line here");
   const project = await webProject(ctx, userId, projectId);
   const op = personOp(edit, String(userId), Date.now());
   const youAnswer = String(await projectPerson(ctx, project)) === String(userId);
-  const who = personName(await ctx.db.get(userId));
-  const summary = edit.op === "add" ? `${who} added: ${edit.text}` : `${who} retired ${edit.id}: ${edit.reason}`;
+  const summary = personEditSummary(edit, personName(await ctx.db.get(userId)));
   const applyAs = personEditApplies(op, youAnswer) ? (youAnswer ? "person" : "auto") : null;
   return proposeCore(ctx, userId, project, null, { summary, ops: [op] }, applyAs);
 }
@@ -410,16 +639,29 @@ export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: s
 /**
  * A person applies or drops a proposal (LM5): from a terminal or the web,
  * never from an agent session, which proposes and leaves the answer to the
- * person (resolveProposalCore).
+ * person (resolveProposalCore). A trial project asks nobody (LL12), so there
+ * an agent session answers as a stand-in, the way it answers a trial run's
+ * earlier gates, and the version records that it did.
  */
 export const resolve = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), action: v.union(v.literal("apply"), v.literal("drop")), conversation_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    if (args.conversation_id) throw new Error("Applying or dropping expectations is a person's act: an agent session proposes (cast expectations propose) and the project's person answers the card");
     const userId = await requireUser(ctx, args.api_token);
+    if (args.conversation_id) {
+      const proposal = await proposalByRef(ctx, args.proposal);
+      const project = proposal ? await ctx.db.get(proposal.project_id) : null;
+      if (!project?.line_trial) throw new Error("Applying or dropping expectations is a person's act: an agent session proposes (cast expectations propose) and the project's person answers the card");
+      return resolveProposalCore(ctx, userId, args.proposal, args.action, { standIn: true });
+    }
     return resolveProposalCore(ctx, userId, args.proposal, args.action);
   },
 });
+
+async function proposalByRef(ctx: Ctx, proposalRef: string): Promise<Doc<"expectation_proposals"> | null> {
+  const ref = proposalRef.trim();
+  return (await ctx.db.query("expectation_proposals").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first())
+    ?? (ctx.db.normalizeId("expectation_proposals", ref) ? await ctx.db.get(ctx.db.normalizeId("expectation_proposals", ref)!) : null);
+}
 
 /**
  * Apply or drop an open proposal as a person. A card the person holds is
@@ -429,18 +671,17 @@ export const resolve = mutation({
  * accepts a proposal already where the person asked it to go: the web's
  * dispatch may follow the queue's own answer to the card.
  */
-export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposalRef: string, action: "apply" | "drop", opts: { settled?: boolean } = {}) {
-  const ref = proposalRef.trim();
-  const proposal = (await ctx.db.query("expectation_proposals").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first())
-    ?? (ctx.db.normalizeId("expectation_proposals", ref) ? await ctx.db.get(ctx.db.normalizeId("expectation_proposals", ref)!) : null);
+export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposalRef: string, action: "apply" | "drop", opts: { settled?: boolean; standIn?: boolean } = {}) {
+  const proposal = await proposalByRef(ctx, proposalRef);
   const project = proposal ? await ctx.db.get(proposal.project_id) : null;
-  if (!proposal || !project || !(await canAccessProject(ctx, userId, project))) notFound(`Proposal ${ref} not found`);
+  if (!proposal || !project || !(await canAccessProject(ctx, userId, project))) notFound(`Proposal ${proposalRef.trim()} not found`);
   const want = action === "apply" ? "applied" : "dropped";
   if (opts.settled && proposal!.status === want) return { short_id: proposal!.short_id, status: want, ...(proposal!.applied_version ? { version: proposal!.applied_version } : {}) };
   if (proposal!.status !== "open") throw new Error(`${proposal!.short_id} is already ${proposal!.status}`);
   const now = Date.now();
   const card = proposal!.decision_id ? await ctx.db.get(proposal!.decision_id) : null;
-  if (card?.status === "pending" && personMayResolve(card, userId)) {
+  // A stand-in never answers the person's card: the card is withdrawn below.
+  if (!opts.standIn && card?.status === "pending" && personMayResolve(card, userId)) {
     await finalizeAnswer(ctx as any, card, { status: "answered", answer_index: EXPECTATION_CARD_OPTIONS.indexOf(action === "apply" ? "Apply" : "Drop") }, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
     const after = await ctx.db.get(proposal!._id);
     if (after?.status !== want) throw new Error(`${proposal!.short_id} cannot apply:\n${after?.refused ?? "the document changed under it"}`);
@@ -448,7 +689,7 @@ export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposa
   }
   let result: { status: string; version?: number };
   if (action === "apply") {
-    const applied = await performApply(ctx, proposal, userId, "person", now);
+    const applied = await performApply(ctx, proposal, userId, opts.standIn ? "stand_in" : "person", now);
     if (!applied.ok) throw new Error(`${proposal!.short_id} cannot apply:\n${applied.error}`);
     result = { status: "applied", version: applied.version };
   } else {
@@ -458,6 +699,52 @@ export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposa
   if (card?.status === "pending") await withdrawCore(ctx as any, card, now);
   return { short_id: proposal!.short_id, ...result };
 }
+
+/**
+ * One-off repair (packages/convex/run.sh expectations:settleTrialCards): a
+ * trial project's open proposals leave every person's queue. Each pending card
+ * is withdrawn and unlinked, and a task waiting on that card stops waiting
+ * (the proposal waits on the trial review page instead). A proposal written
+ * against an older version is re-based onto the current one when its changes
+ * still apply there, or keeps the reason it cannot. `dry` reports only.
+ */
+export const settleTrialCards = internalMutation({
+  args: { dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const projects: Doc<"projects">[] = (await ctx.db.query("projects").collect()).filter((p: Doc<"projects">) => !!p.line_trial);
+    const out: Array<{ project: string; proposal: string; card?: string; withdrawn?: boolean; unwaited?: string[]; rebased?: string; refused?: string }> = [];
+    for (const project of projects) {
+      const latest = await latestExpectations(ctx, project._id);
+      const version = latest?.version ?? 0;
+      const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
+      const open: Doc<"expectation_proposals">[] = (await ctx.db.query("expectation_proposals").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).collect()).filter((p: any) => p.status === "open");
+      for (const p of open) {
+        const row: (typeof out)[number] = { project: project.title, proposal: p.short_id };
+        const card = p.decision_id ? await ctx.db.get(p.decision_id) : null;
+        if (card) {
+          row.card = card.short_id;
+          const waiting = tasks.filter((t) => (t.waits ?? []).some((w: any) => w.kind === "decision" && String(w.decision).toLowerCase() === String(card.short_id).toLowerCase()));
+          row.unwaited = waiting.map((t) => t.short_id);
+          row.withdrawn = card.status === "pending";
+          if (!args.dry) {
+            for (const t of waiting) await removeWaitCore(ctx as any, project.line_trial!.by, t.short_id, { ref: card.short_id });
+            if (card.status === "pending") await withdrawCore(ctx as any, card, now);
+            await ctx.db.patch(p._id, { decision_id: undefined, updated_at: now });
+          }
+        }
+        if (p.base_version < version) {
+          const trial = applyOps({ items: latest?.items ?? [], prefix: latest?.prefix ?? "x", next_n: latest?.next_n ?? 1 }, p.ops, version + 1, p.base_version);
+          if (trial.ok) row.rebased = `${p.base_version} -> ${version}`;
+          else row.refused = trial.errors.join("\n");
+          if (!args.dry) await ctx.db.patch(p._id, trial.ok ? { base_version: version, refused: undefined, updated_at: now } : { refused: row.refused, updated_at: now });
+        }
+        out.push(row);
+      }
+    }
+    return out;
+  },
+});
 
 /**
  * An operator withdraws a proposal that should never have been made (a test

@@ -80,7 +80,7 @@ import {
   type CloudSeed,
 } from "./transfer.js";
 import { ROOT_WORKSPACE_NAME } from "../workspace/lifecycle.js";
-import { sharedCheckoutOccupant, type CheckoutOccupantRow, type CloudStartFrom, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { otherSessionInCheckout, sharedCheckoutOccupant, type CheckoutOccupantRow, type CloudStartFrom, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 export { refreshRemoteCheckout, type CloudSeed } from "./transfer.js";
 export type { HostGitState } from "./hostGit.js";
 export type { CloudStartFrom } from "@codecast/shared/contracts";
@@ -738,10 +738,23 @@ export async function fetchRootOccupant(
   deviceId: string,
   repoPath: string,
   excludeId?: string,
+  opts: { merging?: boolean } = {},
 ): Promise<RootOccupant | null> {
   const rows = (await client.query(api.cloud.hostSessions, { api_token: token, device_id: deviceId })) as CheckoutOccupantRow[];
-  const hit = sharedCheckoutOccupant(rows ?? [], { projectPath: repoPath, excludeId });
+  const hit = sharedCheckoutOccupant(rows ?? [], { projectPath: repoPath, excludeId, merging: opts.merging });
   return hit ? { conversation_id: hit.conversation_id, short_id: hit.short_id ?? hit.conversation_id.slice(0, 7), title: hit.title ?? null } : null;
+}
+
+/**
+ * For a session leaving the host: asks, with the host checkout's path, whether
+ * no other live session on that device works in it (otherSessionInCheckout),
+ * which is what lets the departing session's leftovers be cleared.
+ */
+export function checkoutAloneProbe(client: any, api: any, token: string, deviceId: string, conversationId: string): (root: string) => Promise<boolean> {
+  return async (root) => {
+    const rows = (await client.query(api.cloud.hostSessions, { api_token: token, device_id: deviceId })) as CheckoutOccupantRow[];
+    return otherSessionInCheckout(rows ?? [], root, conversationId) === null;
+  };
 }
 
 /**

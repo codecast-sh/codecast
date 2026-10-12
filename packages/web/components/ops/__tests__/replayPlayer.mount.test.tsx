@@ -54,15 +54,12 @@ beforeAll(async () => {
   React = await import("react");
   const h = React.createElement;
   const convexReact = await import("convex/react");
-  // One function for every render, as Convex's own useAction returns: the
-  // player's mint effect depends on it.
-  const mint = async (args: any) => {
-    minted.push(args);
-    return answer;
-  };
   mock.module("convex/react", () => ({
     ...convexReact,
-    useAction: () => mint,
+    useAction: () => async (args: any) => {
+      minted.push(args);
+      return answer;
+    },
   }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
   ({ createRoot } = await import("react-dom/client"));
@@ -116,6 +113,14 @@ test("the ops page drives the player from its scrubber and list, and follows its
   expect(sent.map((s) => s.msg.type)).toEqual(["pause", "seek"]);
   expect(sent[1].msg.t_ms).toBe(5_000);
 
+  // A time post the player queued before the seek lands after it and is not followed; the seek's echo is.
+  fromPlayer(frame, { type: "time", t_ms: 2_000, playing: true });
+  expect(document.querySelector("[data-current='true']")!.getAttribute("data-ev")).toBe("1");
+  expect(document.querySelector("button[aria-label='Pause']")).toBeNull();
+  fromPlayer(frame, { type: "time", t_ms: 5_000, playing: false });
+  expect(document.querySelector("[data-current='true']")!.getAttribute("data-ev")).toBe("1");
+  await React.act(async () => { await new Promise((r) => setTimeout(r, 320)); });
+
   // Its time posts move the list and the play state.
   fromPlayer(frame, { type: "time", t_ms: 21_000, playing: true });
   expect(document.querySelector("[data-current='true']")!.getAttribute("data-ev")).toBe("2");
@@ -165,10 +170,42 @@ test("rp-N@m:ss embeds the player with its own bar at that second", async () => 
   const frame = document.querySelector("iframe")!;
   expect(frame.getAttribute("src")).toBe(`${PLAYER}/p/CAP?t=83000`);
   expect(frame.style.opacity).toBe("0");
+  // A player that cannot see this page's origin says hello; the host answers to the player's origin alone.
+  const sent = spyOn(frame);
+  fromPlayer(frame, { type: "hello" });
+  expect(sent).toEqual([{ msg: { source: "codecast-replay-host", type: "hello" }, origin: PLAYER }]);
+  fromPlayer(frame, { type: "hello" }, "https://evil.example");
+  expect(sent.length).toBe(1);
+  expect(frame.style.opacity).toBe("0");
   fromPlayer(frame, { type: "ready", duration_ms: 185_000, width: 1280, height: 800, t_ms: 83_000 });
   expect(frame.style.opacity).toBe("1");
   expect(document.querySelector("a")!.getAttribute("href")).toBe("/ops/replays/rp-7?t=83000");
   expect(document.body.textContent).toContain("1:23");
+  React.act(() => root.unmount());
+});
+
+test("a page of moments opens only a few players by itself; the rest wait for a click", async () => {
+  minted.length = 0;
+  answer = { short_id: "rp-7", has_dom: true, cap: "CAP", player_url: `${PLAYER}/p/CAP`, frame_url: "", expires_at: 0 };
+  const { LIVE_PLAYERS_MAX } = await import("../ReplayMomentEmbed");
+  const n = LIVE_PLAYERS_MAX + 1;
+  const root = mount(
+    React.createElement(
+      "div",
+      null,
+      Array.from({ length: n }, (_, i) => React.createElement(ReplayMomentEmbed, { key: i, rawId: `rp-7@0:0${i}`, entity: REPLAY, served: true, href: "/ops/replays/rp-7" })),
+    ),
+  );
+  await flush();
+  await flush();
+  expect(minted.length).toBe(LIVE_PLAYERS_MAX);
+  expect(document.querySelectorAll("iframe").length).toBe(LIVE_PLAYERS_MAX);
+  const waiting = Array.from(document.querySelectorAll("button")).filter((b) => b.textContent?.includes("Play the page at"));
+  expect(waiting.length).toBe(1);
+  React.act(() => (waiting[0] as HTMLElement).click());
+  await flush();
+  expect(minted.length).toBe(n);
+  expect(document.querySelectorAll("iframe").length).toBe(n);
   React.act(() => root.unmount());
 });
 
