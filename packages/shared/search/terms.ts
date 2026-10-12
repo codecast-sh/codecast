@@ -298,6 +298,24 @@ export function termSpans(text: string, terms: { all: string[]; joins?: string[]
   return merged;
 }
 
+/** Machine wrappers a message can carry (a session message, a reminder, a
+ *  command tag): a tag-shaped name, lower case, its attributes, or the cut
+ *  tail of one at either edge of a stored snippet (`…98fq7bh">Run`). */
+const WRAPPER_TAG = /<\/?[a-z][a-z0-9]*(?:[-:_][a-z0-9]+)+(?:\s[^<>]*)?>|^(?:\.\.\.)?[^\s<>"]*"\s*>|^(?:\.\.\.)?[a-z0-9-]*(?:\s[a-z_]+="[^"]*")+\s*>|<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?$/g;
+
+/** Message text as a person reads it in a search hit: machine wrappers
+ *  (`<session-message from="…">`, `<system-reminder>`) go and the words
+ *  inside them stay. Line breaks survive, so the text still renders as
+ *  markdown. Search cuts a snippet from this, never from the raw row, so a
+ *  window never opens inside a wrapper's attributes. */
+export function stripWrapperTags(text: string): string {
+  return text
+    .replace(WRAPPER_TAG, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** The stretch of `content` that shows the most of the query: the window is
  *  anchored on the hit with the most other terms inside it, with a quarter of
  *  the budget as lead-in. No hit: the opening of the text. */

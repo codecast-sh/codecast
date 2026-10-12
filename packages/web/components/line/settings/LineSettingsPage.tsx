@@ -7,12 +7,15 @@
 // on the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
 // LineStations.
-import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
+import { useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { useSyncDevices } from "../../../hooks/useSyncDevices";
-import { ALL_PROJECTS, NO_PROJECT, buildLineFlow, scopeLine } from "../../../lib/lineFlow";
-import { LINE_SECTIONS, lineSettingsTarget, type LineWriteGate } from "../../../lib/lineSettings";
+import Link from "next/link";
+import { NO_PROJECT, buildLineFlow, scopeLine, type LineAdmission, type LineProject, type RollupRow } from "../../../lib/lineFlow";
+import { LINE_SECTIONS, lineSettingsHref, lineSettingsTarget, type LineWriteGate } from "../../../lib/lineSettings";
+import { lineFilterParam } from "../../../lib/line/lineWorkspaceUrl";
+import { useLineProjectId } from "../../../hooks/useLineWorkspace";
 import { useLineFloor } from "../useLineFloor";
 import { LineFinders } from "./LineFinders";
 import { ProfileFieldRow } from "./ProfileFieldRow";
@@ -20,26 +23,32 @@ import { useLineProfileEditor } from "./useLineProfileEdits";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { LineStations } from "./LineStations";
 import "../line.css";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./settings.css";
 
 const NAV = [...LINE_SECTIONS.map((s) => ({ id: s.id, title: s.title })), { id: "stations", title: "Stations" }];
 
-/** `project` names the map's project; without it the URL's ?project= does. */
+/** `project` names the project's row id; without it the URL's ?project= does (a short id, row id or name slug). */
 export function LineSettingsPage({ project: pinned }: { project?: string } = {}) {
   useSyncDevices();
-  const { now, projects, lineRows, rollup, line } = useLineFloor(pinned);
-  const project = useMemo(() => projects.find((p) => p._id === line.key) ?? null, [projects, line.key]);
+  const search = useSearchParams();
+  const asked = useLineProjectId(pinned ? null : search?.get("project") ?? null);
+  const projectId = pinned ?? asked ?? null;
+  const { now, projects, lineRows, rollup, admissions } = useLineFloor(projectId);
+  const project = useMemo(() => (projectId ? projects.find((p) => p._id === projectId) ?? null : null), [projects, projectId]);
   // The published copy with the edits still travelling laid over it.
   const { edits, gate, device } = useLineProfileEditor(project?._id ?? null);
-  const lp = edits.lp;
+  // Nothing uploaded yet, but a machine of yours holds the project's folder:
+  // the defaults show, editable, and the first change writes the file there.
+  const lp = edits.lp ?? (gate.writable && gate.first ? UNPUBLISHED : null);
   // A link in names a section or a station (lineSettingsHref): the page opens
   // scrolled to it, and the target carries data-lset-target, which flashes once.
-  const target = lineSettingsTarget(useSearchParams());
+  const target = lineSettingsTarget(search);
   const body = useRef<HTMLDivElement>(null);
   const ready = !!project && !!lp;
   // Once per arrival: a later render must never pull the reader back up.
   const landed = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     // A station scrolls itself into view once its panel opens (LineStations).
     if (!ready || !target.section || target.station) return;
     const key = `${project?._id}:${target.section}`;
@@ -83,7 +92,7 @@ export function LineSettingsPage({ project: pinned }: { project?: string } = {})
   return (
     <div className="line-floor lset-floor h-full flex flex-col min-h-0" data-line-settings>
       {!project || !lp ? (
-        <Unset lineKey={line.key} titled={project?.title} hasLines={rollup.length > 0} />
+        project ? <Unset titled={project.title} /> : <PickProject rollup={rollup} projects={projects} admissions={admissions} asked={search?.get("project") ?? null} />
       ) : (
         <div ref={body} className="flex-1 min-h-0 overflow-y-auto" onKeyDown={onKeyDown} onScroll={onScroll}>
           <div className="lset-body px-4 sm:px-6 pb-10">
@@ -120,7 +129,7 @@ export function LineSettingsPage({ project: pinned }: { project?: string } = {})
 
               <section id="lset-stations" className="lset-section" data-lset-section="stations" data-lset-target={target.section === "stations" && !target.station ? "true" : undefined}>
                 <h2 className="lset-section-title">Stations</h2>
-                <p className="lset-section-what">The steps a cause takes from admitted to a change card, and what each one is told.</p>
+                <p className="lset-section-what">The steps a problem takes from admitted to a change card, and what each one is told.</p>
                 {/* Mount point for the Stations section (ct-56913, components/line/settings/LineStations.tsx). */}
                 <LineStations projectId={project._id} focusStation={target.station} />
               </section>
@@ -144,6 +153,8 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
       <p className="lset-plate-says" data-lset-gate={gate.writable ? "writable" : "read-only"}>
         {!gate.writable
           ? <>Read only. {gate.reason}</>
+          : gate.first
+            ? <>These are the defaults: nothing has been uploaded for this line yet. Your first change writes the file on <b>{gate.device}</b> and uploads it.</>
           : gate.away
             ? <><b>{gate.device}</b> has not checked in for a few minutes. An edit waits for it up to {Math.round(DAEMON_COMMAND_TTL_MS / 60_000)} minutes, then is dropped with nothing written.</>
             : <>Edits are written into the file on <b>{gate.device}</b>, comments and order kept, then republished here.</>}
@@ -153,18 +164,40 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
   );
 }
 
-/** No single project chosen, or a project whose line has no profile yet. */
-function Unset({ lineKey, titled, hasLines }: { lineKey: string; titled?: string; hasLines: boolean }) {
-  const say = lineKey === ALL_PROJECTS
-    ? hasLines
-      ? "Settings belong to one project's line. Pick a project above."
-      : <>No project in this workspace has a line yet. A line lives in its repo, in <code>.codecast/line.toml</code>: run <code>cast line profile --publish</code> in the checkout and its settings appear here. A repo without the file publishes the defaults.</>
-    : lineKey === NO_PROJECT
-      ? "Work filed under no project has no line file to set."
-      : <>{titled ?? "This project"} has no line file published yet. In its checkout, run <code>cast line profile --publish</code>; a repo without <code>.codecast/line.toml</code> publishes the defaults.</>;
+/** A line nothing has uploaded: every value reads as its default (lineValue). */
+const UNPUBLISHED: PublishedLineProfile = { finders: [], changed_at: 0 };
+
+/** A project whose line has no profile yet. */
+function Unset({ titled }: { titled?: string }) {
   return (
     <div className="flex-1 min-h-0 px-4 sm:px-6 pt-6">
-      <p className="lset-empty max-w-[60ch]" data-lset-unset>{say}</p>
+      <p className="lset-empty max-w-[60ch]" data-lset-unset>{`${titled ?? "This project"}'s line settings have not been uploaded, and codecast does not know which folder holds the project. Run one session in the project's folder on your machine: its settings then show here, and your first change writes them into the repository.`}</p>
+    </div>
+  );
+}
+
+/** No project named (or one the store does not hold): settings are per project, so the page is the list to pick from. */
+function PickProject({ rollup, projects, admissions, asked }: { rollup: RollupRow[]; projects: LineProject[]; admissions: ReadonlyMap<string, LineAdmission>; asked: string | null }) {
+  const rows = rollup.filter((r) => r.key !== NO_PROJECT).sort((a, b) => a.title.localeCompare(b.title));
+  if (!rows.length) {
+    return <div className="flex-1 min-h-0 px-4 sm:px-6 pt-6"><p className="lset-empty max-w-[60ch]" data-lset-unset>{asked ? `No project named ${asked}.` : "No project has a line yet."}</p></div>;
+  }
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pt-4" data-lset-pick>
+      <div className="lw-pop lw-autostart-pop lset-pick" role="list" aria-label="Project">
+        <div className="lw-pop-h lw-autostart-h"><span className="lw-filter-name">{asked ? `No project named ${asked}` : "Project"}</span><span>Waiting</span><span>Auto</span></div>
+        {rows.map((r) => {
+          const p = projects.find((x) => x._id === r.key);
+          const a = admissions.get(r.key);
+          return (
+            <Link key={r.key} role="listitem" href={lineSettingsHref({ project: p ? lineFilterParam(p, projects) : r.short_id ?? r.key })} className="lw-autostart-row" data-lset-pick-row={r.short_id ?? r.key}>
+              <span className="lw-filter-name">{r.title}</span>
+              <span className="lw-num">{r.causes}</span>
+              <span className="lw-num" data-on={a?.on ? "" : undefined}>{!a?.role ? "no lead" : a.on ? "on" : "off"}</span>
+            </Link>
+          );
+        })}
+      </div>
     </div>
   );
 }

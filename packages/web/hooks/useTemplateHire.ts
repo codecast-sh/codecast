@@ -1,14 +1,17 @@
 // The web's reads and writes for roles hired from a template (docs/architecture/
 // org-hire.md H3, H11). One module, so the hire dialog and the role page share
 // it and a mount test can stand in for the server with one mock.
+import { useState } from "react";
 import { useMutation } from "convex/react";
+import { captureException } from "@sentry/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
 
 /** Dev builds only: a fixture set from the console stands in for the server
- *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: {...} }`), so the
+ *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: { role_id, ... } }`,
+ *  the instance shown on the role whose id it names), so the
  *  gallery and the host step can be looked at with data the deployment does not
  *  hold. Read at render; set it before opening the dialog or the role page. */
 function fixture(): { catalog?: any[]; instance?: any } | null {
@@ -30,7 +33,9 @@ export function useTemplateCatalog(teamId: string | undefined) {
 export function useTemplateInstance(roleId: string | undefined) {
   const { data, error } = useQueryNoThrow(api.orgTemplates.instanceForRole, roleId ? { role_id: roleId as Id<"org_roles"> } : "skip");
   const fx = fixture();
-  if (fx && "instance" in fx) return { instance: fx.instance as any, ready: true, error: undefined };
+  // A fixture instance stands in only for the role it names (`role_id`): one
+  // left in localStorage would otherwise dress every role as a template hire.
+  if (fx && "instance" in fx && fx.instance?.role_id === roleId) return { instance: fx.instance as any, ready: true, error: undefined };
   return { instance: data as any, ready: data !== undefined, error };
 }
 
@@ -40,6 +45,22 @@ export function useTemplateLearning(teamId: string | undefined) {
   const fx = fixture() as any;
   if (fx?.learning) return { learning: fx.learning as { enabled: boolean; can_change: boolean; changed_by: string | null }, ready: true };
   return { learning: data as { enabled: boolean; can_change: boolean; changed_by: string | null } | undefined, ready: data !== undefined };
+}
+
+/** The learning opt-in as one switch, shared by team settings, the hire gallery and the role page: its state, who may flip it, and the flip. */
+export function useLearningSwitch(teamId: string | undefined, canEdit = true) {
+  const { learning, ready } = useTemplateLearning(teamId);
+  const { setLearning } = useTemplateActions();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const enabled = !!learning?.enabled;
+  const may = canEdit && !!learning?.can_change;
+  const flip = async (next = !enabled) => {
+    if (!may || busy || next === enabled) return;
+    setBusy(true); setError(null);
+    try { await setLearning(teamId, next); } catch (e) { captureException(e); setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  return { learning, ready, enabled, may, busy, error, flip };
 }
 
 /** The lessons that left this instance's workspace (H9, H12) and where each stands with the publisher. */

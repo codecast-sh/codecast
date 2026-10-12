@@ -36,7 +36,7 @@ mock.module("../../ActivityFeed", () => ({ ActivityFeed: () => <div data-home />
 for (const name of ["SharePopover", "PlanContextPanel", "WorkflowContextPanel", "TriggerContextPanel", "EmptyState"]) {
   mock.module(`../../${name}`, () => ({ [name]: () => null }));
 }
-mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null, sessionLooksAbandoned: () => false }));
+mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");

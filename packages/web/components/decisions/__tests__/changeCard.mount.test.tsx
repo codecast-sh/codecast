@@ -9,7 +9,9 @@ import { CARD_DECISION_OPTIONS, suiteGateCheck, SUITE_GATE_CHECK, type ChangeCar
 
 // A decision about a change card (LE11) draws the card natively and answers
 // Ship, Revise or Drop with the keys; Revise carries a note.
-mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
+// Wraps the real renderer rather than replacing it: bun shares this mock with every later file in a run, and those read real markdown.
+const RealMarkdown = (await import("../../tools/MarkdownRenderer")).MarkdownRenderer;
+mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: (props: any) => <div data-md><RealMarkdown {...props} /></div> }));
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
 const restoreGlobals = replaceGlobals({
@@ -62,7 +64,7 @@ test("the full card draws every section from the contract", async () => {
   expect(container.querySelector(".cc-cause-head > .cc-cause-ref")!.textContent).toBe(card.cause.task);
   expect(container.querySelector(".cc-wrong-label")!.textContent).toBe("What is wrong");
   expect(metas).toHaveLength(2);
-  expect(metas[0].textContent).toContain(`${card.cause.signals} signals from ${card.cause.sources[0]}`);
+  expect(metas[0].textContent).toContain(`${card.cause.signals} reports from ${card.cause.sources[0]}`);
   expect(metas[1].textContent).toMatch(/first seen .* · serves /);
   // No kicker: the card opens on what was wrong, muted, then the proof.
   expect(container.querySelector("[data-cc-head]")).toBeNull();
@@ -178,7 +180,7 @@ test("a settled card says what happened in place of the recommendation", async (
 
 test("a withdrawn or dismissed card ends on that, muted, not on the recommendation", async () => {
   const withdrawn = cardOutcome({ ...decision, status: "withdrawn", resolved_at: Date.now() - 9 * 60_000 }, "Ashot", Date.now())!;
-  expect(withdrawn.pill).toBe("Withdrawn by the agent · 9m ago");
+  expect(withdrawn.pill).toBe("Withdrawn with no answer · 9m ago");
   expect(withdrawn.tone).toBe("dim");
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={withdrawn.line} />);
   expect(container.querySelector("article [data-cc-recommended]")).toBeNull();
@@ -406,7 +408,7 @@ test("a goal named only by its key is said in words, and the generic signal kind
   const facts = container.querySelector(".cc-cause-facts")!.textContent!;
   expect(facts).not.toContain("sd7dqnq9hny1dtzy83as2av4z18c9z2z");
   expect(facts).toContain("serves a project in another workspace");
-  expect(facts).toContain("1 signal");
+  expect(facts).toContain("1 report");
   expect(facts).not.toContain("from signal");
   await unmount();
 });
@@ -441,4 +443,23 @@ test("a card without a guide draws no walkthrough", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} />);
   expect(container.querySelector("[data-change-guide]")).toBeNull();
   await unmount();
+});
+
+// LW5: the earlier shipped fix reads beside the new change, red when the problem came back.
+test("a card for a new attempt shows the cause's earlier shipped fixes and whether each held", async () => {
+  const earlier = [
+    { attempt: 1, ref: null, change: "Reword the follow-up block", live: "Merged Sep 2; no deploy recorded since", held: "The watch after it ended quiet.", back: null },
+    { attempt: 2, ref: "sd-9", change: "Pin the persona on the thread's first send", live: "Deployed to backend Oct 13", held: null, back: "Came back 2 times after the deploy of Oct 13." },
+  ];
+  const { container, unmount } = await mount(<ChangeCardView card={{ ...card, earlier }} />);
+  const section = container.querySelector("[data-cc-earlier]")!;
+  expect(section.querySelector(".cc-label")!.textContent).toBe("Shipped before");
+  const rows = Array.from(section.querySelectorAll("li"));
+  expect(rows.map((r) => r.className)).toEqual(["is-held", "is-back"]);
+  expect(rows[1].textContent).toContain("Attempt 2 · sd-9");
+  expect(rows[1].querySelector(".cc-text-red")!.textContent).toBe("Came back 2 times after the deploy of Oct 13.");
+  await unmount();
+  const plain = await mount(<ChangeCardView card={card} />);
+  expect(plain.container.querySelector("[data-cc-earlier]")).toBeNull();
+  await plain.unmount();
 });
