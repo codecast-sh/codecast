@@ -4,6 +4,7 @@ import {
   atTheMachine,
   chooseDoorWindow,
   machineInputAt,
+  readWindows,
   walkieDoorOpen,
   type DoorWindow,
 } from "../calls/walkieDoor";
@@ -183,5 +184,32 @@ describe("walkie: which window speaks for the app", () => {
     const elected = windows.filter((w) => chooseDoorWindow(windows, NOW) === w.id);
     expect(elected.length).toBe(1);
     expect(elected[0].id).toBe("c");
+  });
+});
+
+describe("walkie: window records", () => {
+  it("deletes records of windows that died without saying so, and keeps live ones", () => {
+    const store = new Map<string, string>();
+    const fake = {
+      get length() { return store.size; },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+    const prev = (globalThis as { localStorage?: unknown }).localStorage;
+    (globalThis as { localStorage?: unknown }).localStorage = fake;
+    try {
+      const now = 10_000_000;
+      store.set("cc.walkie.window.live", JSON.stringify({ aliveAt: now - 5_000, inputAt: 1, focusedAt: 2 }));
+      store.set("cc.walkie.window.quiet", JSON.stringify({ aliveAt: now - 5 * 60_000 }));
+      store.set("cc.walkie.window.dead", JSON.stringify({ aliveAt: now - 11 * 60_000 }));
+      store.set("cc.walkie.window.junk", "{not json");
+      store.set("unrelated", "kept");
+      expect(readWindows(now).map((w) => w.id).sort()).toEqual(["live", "quiet"]);
+      expect([...store.keys()].sort()).toEqual(["cc.walkie.window.live", "cc.walkie.window.quiet", "unrelated"]);
+    } finally {
+      (globalThis as { localStorage?: unknown }).localStorage = prev;
+    }
   });
 });
