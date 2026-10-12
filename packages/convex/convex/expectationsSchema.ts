@@ -50,7 +50,7 @@ export const expectationTables = {
     next_n: v.number(),
     items: v.array(expectationValidator),
     summary: v.string(),
-    how: v.union(v.literal("person"), v.literal("auto")),
+    how: v.union(v.literal("person"), v.literal("auto"), v.literal("stand_in")),
     proposal_id: v.optional(v.id("expectation_proposals")),
     created_at: v.number(),
   })

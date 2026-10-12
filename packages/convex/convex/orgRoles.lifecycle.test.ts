@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
 import { briefingFor, performRebriefRoles } from "./anchors";
-import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
+import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, performMoveRole, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
+import { roleRunner, seatPlace } from "./lib/seatPlace";
 import { performReparentSession } from "./sessionOwnership";
 import { killConversation } from "./conversations";
 import { applyHideTransition } from "./cleanup";
@@ -305,5 +308,75 @@ describe("a wake reaches the role the way cast send does", () => {
     const res = await performWakeRole(ctx, PEER as any, { role_id: String(role._id), message: "how is infra?" });
     const row = tables.pending_messages.find((m) => String(m._id) === String(res.pending_message_id))!;
     expect(row.content).toContain('<user-message from="Peer"');
+  });
+});
+
+describe("moving a role to the caller's machine", () => {
+  async function peerHostedLead() {
+    const w = world({
+      devices: [{ _id: "d1", user_id: ME, device_id: "mydev", label: "My-MacBook" }, { _id: "d2", user_id: PEER, device_id: "peerdev", label: "Peer-MacBook" }],
+    });
+    w.tables.conversations.push({ _id: "peerseat", user_id: PEER, session_id: "s-peer", short_id: "jxpeer1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 3, team_id: TEAM, project_path: "/Users/peer/repo", owner_device_id: "peerdev", owner_user_id: ME });
+    w.tables.session_owners.push({ _id: "so-peer", conversation_id: "peerseat", user_id: ME });
+    const role = await performCreateRole(w.ctx, ME as any, { name: "Infra lead", handle: "infra", team_id: TEAM, host_user_id: PEER as any });
+    await performProvisionRole(w.ctx, ME as any, { role_id: String(role._id), adopt_conversation_id: "peerseat" });
+    const anchor = () => w.tables.anchors.find((a) => String(a.org_role_id) === String(role._id))!;
+    const seat = () => w.tables.conversations.find((c) => c._id === "peerseat")!;
+    return { ...w, role, anchor, seat };
+  }
+
+  test("the standing session moves to the caller's device and account; the role and anchor rows are not rewritten", async () => {
+    const { ctx, tables, role, anchor, seat } = await peerHostedLead();
+    const roleBefore = { ...tables.org_roles.find((r) => String(r._id) === String(role._id)) };
+    const anchorBefore = { ...anchor() };
+    const result = await performMoveRole(ctx, ME as any, { role_id: String(role._id), device_id: "mydev" });
+
+    expect(seat().owner_device_id).toBe("mydev");
+    expect(String(seat().user_id)).toBe(ME);
+    expect(result).toMatchObject({ handle: "infra", device_id: "mydev", label: "My-MacBook", cross_user: true });
+    expect(tables.org_roles.find((r) => String(r._id) === String(role._id))).toMatchObject({ host_user_id: roleBefore.host_user_id });
+    expect(anchor()).toMatchObject({ host_user_id: anchorBefore.host_user_id });
+    expect(anchor().project_path).toBeUndefined();
+    const resume = tables.daemon_commands.find((c) => c.command === "resume_session" && c.target_device_id === "mydev");
+    expect(String(resume.user_id)).toBe(ME);
+    expect(JSON.parse(resume.args)).toMatchObject({ reparented: true, cross_user: true });
+  });
+
+  test("after the move, the role runs as the caller and in the session's folder, wherever the daemon placed it", async () => {
+    const { ctx, role, seat } = await peerHostedLead();
+    const fresh = () => ctx.db.get(role._id);
+    expect(String(await roleRunner(ctx, await fresh()))).toBe(PEER);
+    await performMoveRole(ctx, ME as any, { role_id: String(role._id), device_id: "mydev" });
+    // The destination daemon resolves this machine's checkout and records it.
+    seat().project_path = "/Users/me/src/repo";
+    const r = await fresh();
+    expect(String(await roleRunner(ctx, r))).toBe(ME);
+    expect(seatPlace(r, seat())).toEqual({ runner_user_id: ME, project_path: "/Users/me/src/repo" });
+  });
+
+  test("a member who neither hosts nor admins the role is refused, and the session stays where it was", async () => {
+    const { ctx, tables, role, seat } = await peerHostedLead();
+    const OTHER = "u".repeat(31) + "o";
+    tables.users.push({ _id: OTHER, name: "Other", email: "other@x.ai" });
+    tables.team_memberships.push({ _id: "m3", user_id: OTHER, team_id: TEAM, role: "member", joined_at: 1 });
+    tables.devices.push({ _id: "d3", user_id: OTHER, device_id: "otherdev", label: "Other-MacBook" });
+    await expect(performMoveRole(ctx, OTHER as any, { role_id: String(role._id), device_id: "otherdev" })).rejects.toThrow();
+    expect(seat().owner_device_id).toBe("peerdev");
+    expect(String(seat().user_id)).toBe(PEER);
+  });
+
+  // cliRoute strips device_id unless the route forwards it; without that the
+  // destination never reached the mutation.
+  test("the CLI route forwards the destination device", () => {
+    const http = fs.readFileSync(path.join(import.meta.dir, "http.ts"), "utf-8");
+    const at = http.indexOf('cliRoute("/cli/role/move"');
+    expect(at).toBeGreaterThan(-1);
+    expect(http.slice(at, at + 200)).toContain("{ forwardDeviceId: true }");
+  });
+
+  test("a role with no standing session says how to seat one", async () => {
+    const { ctx } = world();
+    const role = await performCreateRole(ctx, ME as any, { name: "Data lead", handle: "data", team_id: TEAM });
+    await expect(performMoveRole(ctx, ME as any, { role_id: String(role._id), device_id: "mydev" })).rejects.toThrow(/cast role provision/);
   });
 });
