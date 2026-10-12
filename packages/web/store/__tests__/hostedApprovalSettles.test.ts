@@ -79,6 +79,17 @@ describe("an answered hosted approval settles", () => {
     expect(sections.find(([, k]) => k === "done")?.[0].map((s) => s._id)).toEqual(["conv_parked", CONV]);
   });
 
+  it("reads Your turn as one queue, oldest first, whatever bucket each row came from", () => {
+    const ask = hosted({ _id: "conv_ask", updated_at: 5_000 });
+    const oldWait = hosted({ _id: "conv_old", updated_at: 1_000 });
+    const awaiting = hosted({ _id: "conv_awaiting", agent_status: "done", updated_at: 3_000 });
+    const sections = hostedStatusSections(
+      { pinned: [], questions: [ask], needsInput: [oldWait], newSessions: [], working: [], done: [awaiting], dormant: [] },
+      (id) => id === "conv_awaiting",
+    );
+    expect(sections.find(([, k]) => k === "needs_input")?.[0].map((s) => s._id)).toEqual(["conv_old", "conv_awaiting", "conv_ask"]);
+  });
+
   it("files a just-sent stub under Working on it from the first frame", () => {
     // The optimistic stub has no message_count or last_user_message until the
     // server echoes, but its first message is already on the way.
