@@ -203,7 +203,7 @@ export function TaskLineChip({ task, className = "", watch = true }: { task: Tas
   const [text, tone] = dep(s).split("|");
   if (!text && watching) {
     return (
-      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-[10px] shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line counts its signals again until this day, and reopens it if one comes back" data-task-line-chip="watch">
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-[10px] shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line watches for the problem until this day, and reopens it if it comes back" data-task-line-chip="watch">
         <Eye className="w-3 h-3" />
         watching until {shortDay(watching)}
       </span>
