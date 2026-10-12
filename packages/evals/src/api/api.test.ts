@@ -7,6 +7,7 @@ import { EVALS_ROUTE_KEYS, matchEvalsRoute, runRowProblems, type EvalsBridgeResp
 
 import { harnessExit, harnessTookMs, thenFiles, unitDirs } from '../layout';
 import { REPO_ROOT } from '../paths';
+import { surfaces } from '../registry';
 import { notComparedOf, simGrid, simReplay, simSessions } from './simHistory';
 import { guardEntriesOf } from './files';
 import { bisectPlanArgs, bisectStartArgs } from './bisects';
@@ -299,7 +300,8 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     expect(echo.spendByDay.reduce((t: number, d: any) => t + d.usd + d.judgeUsd, 0)).toBeCloseTo(0.012, 6);
     for (const d of echo.spendByDay) expect(d.usd + d.judgeUsd).toBeLessThanOrEqual(o.spendByDay.find((t: any) => t.day === d.day).usd + o.spendByDay.find((t: any) => t.day === d.day).judgeUsd + 1e-9);
     expect(['fresh', 'stale', 'waiting', 'due', 'blocked']).toContain(echo.staleness);
-    expect(o.surfaces.length).toBe(15);
+    // Every registered surface has a row, the test-only echo among them.
+    expect(new Set(o.surfaces.map((x: any) => x.id))).toEqual(new Set([...surfaces().map((m) => m.id), 'echo']));
     expect(o.moved.some((m: any) => m.kind === 'flips' && m.surface === 'echo' && m.broke === 1)).toBe(true);
     expect(o.bisects.map((b: any) => b.id)).toEqual(['echo-20260930-100000']);
     expect(o.sim.id).toBe(SIM_SESSION);
