@@ -5,7 +5,7 @@ import "fake-indexeddb/auto";
 
 const id = "j".repeat(32);
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: `http://localhost/inbox?s=${id}` });
-for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "getComputedStyle"]) {
+for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "getComputedStyle", "localStorage"]) {
   Object.defineProperty(globalThis, key, { configurable: true, value: (dom.window as any)[key] });
 }
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

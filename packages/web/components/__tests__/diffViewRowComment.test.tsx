@@ -1,40 +1,78 @@
-import { describe, expect, test } from "bun:test";
-import { renderToStaticMarkup } from "react-dom/server";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act } from "react";
+import { JSDOM } from "jsdom";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { fileDiffRenders } from "../../test-helpers/pierreFileDiff";
+import { useInboxStore } from "../../store/inboxStore";
 import { DiffView } from "../DiffView";
 
-// Where the comment affordance lives. A surface that owns its comments (the
-// pull request page) sits the diff flush inside a clipped card, so a handle
-// hung in the margin outside the block is invisible there, which is how
-// commenting on a line came to look impossible. Those rows carry their own
-// "+" instead; a diff inside a message keeps the one handle in its gutter.
-const client = new ConvexReactClient("https://example.convex.cloud");
-const render = (el: React.ReactElement) => renderToStaticMarkup(<ConvexProvider client={client}>{el}</ConvexProvider>);
-const count = (html: string, needle: string) => html.split(needle).length - 1;
+// The comment affordance is Pierre's gutter button. What it produces is ours:
+// the side and line (or run) a comment anchors to, the code it quotes, and,
+// inside a message, a pending comment whose composer opens under that line.
+const dom = new JSDOM("<!doctype html><html><body></body></html>");
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  HTMLElement: dom.window.HTMLElement,
+  Element: dom.window.Element,
+  Node: dom.window.Node,
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+const { createRoot } = await import("react-dom/client");
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
+const client = new ConvexReactClient("https://example.convex.cloud");
 const OLD = "one\ntwo\nthree";
 const NEW = "one\n2\nthree";
 
+async function mount(el: React.ReactElement) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(() => root.render(<ConvexProvider client={client}>{el}</ConvexProvider>));
+  return { container, unmount: () => act(() => root.unmount()) };
+}
+const lastOptions = () => fileDiffRenders.at(-1)!.options!;
+
+beforeEach(() => { fileDiffRenders.length = 0; });
+
 describe("DiffView comment affordance", () => {
-  test("a surface that owns the comments gets a + on every row and no margin handle", () => {
-    const html = render(<DiffView oldStr={OLD} newStr={NEW} showLineNumbers onLineComment={() => {}} />);
-    // one, -two, +2, three
-    expect(count(html, 'class="cc-row-plus"')).toBe(4);
-    expect(html).not.toContain("cc-diff-quote");
-    expect(html).toContain('aria-label="Comment on this line"');
+  test("a surface that owns the comments gets the anchor and code of the line or run", async () => {
+    const onLineComment = mock(() => {});
+    const view = await mount(<DiffView oldStr={OLD} newStr={NEW} showLineNumbers onLineComment={onLineComment} />);
+    expect(lastOptions().enableGutterUtility).toBe(true);
+    await act(() => lastOptions().onGutterUtilityClick!({ start: 2, end: 2, side: "additions" }));
+    expect(onLineComment.mock.calls[0]).toEqual([{ side: "RIGHT", lineNumber: 2 }, "2", expect.anything()]);
+    await act(() => lastOptions().onGutterUtilityClick!({ start: 2, end: 2, side: "deletions" }));
+    expect(onLineComment.mock.calls[1].slice(0, 2)).toEqual([{ side: "LEFT", lineNumber: 2 }, "two"]);
+    await act(() => lastOptions().onGutterUtilityClick!({ start: 1, end: 3, side: "additions" }));
+    expect(onLineComment.mock.calls[2].slice(0, 2)).toEqual([{ side: "RIGHT", lineNumber: 1, lineEnd: 3 }, "three"]);
+    await view.unmount();
   });
 
-  test("a diff inside a message keeps the single margin handle and no row buttons", () => {
-    const html = render(
+  test("a diff inside a message starts a pending comment and opens its composer under the line", async () => {
+    const view = await mount(
       <DiffView oldStr={OLD} newStr={NEW} showLineNumbers commentContext={{ conversationId: "c1", anchorKey: "m1", filePath: "a.ts" }} />,
     );
-    expect(count(html, "cc-diff-quote")).toBe(1);
-    expect(html).not.toContain("cc-row-plus");
+    await act(() => lastOptions().onGutterUtilityClick!({ start: 2, end: 2, side: "additions" }));
+    const pending = useInboxStore.getState().reviewComments.c1 ?? [];
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ messageId: "m1", filePath: "a.ts", fileLine: 2, quote: "a.ts:2\n2" });
+    expect(fileDiffRenders.at(-1)!.lineAnnotations).toEqual([{ side: "additions", lineNumber: 2, metadata: expect.anything() }]);
+    expect(view.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Comment on this line…");
+    await view.unmount();
+    useInboxStore.getState().removeReviewComment("c1", pending[0].id);
   });
 
-  test("an inert diff has neither", () => {
-    const html = render(<DiffView oldStr={OLD} newStr={NEW} showLineNumbers />);
-    expect(html).not.toContain("cc-row-plus");
-    expect(html).not.toContain("cc-diff-quote");
+  test("an inert diff offers no comment or selection", async () => {
+    const view = await mount(<DiffView oldStr={OLD} newStr={NEW} showLineNumbers />);
+    expect(lastOptions().enableGutterUtility).toBe(false);
+    expect(lastOptions().onGutterUtilityClick).toBeUndefined();
+    expect(lastOptions().enableLineSelection).toBe(false);
+    await view.unmount();
   });
 });

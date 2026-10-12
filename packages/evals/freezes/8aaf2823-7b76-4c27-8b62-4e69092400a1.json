@@ -1,0 +1,26 @@
+{
+  "name": "ground extension-error-noise",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:extension-error-noise"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "ground:extension-error-noise",
+    "title": "ground extension-error-noise"
+  },
+  "asOf": "2026-09-20T12:00:00.000Z",
+  "trigger": {
+    "type": "ground"
+  },
+  "meta": {
+    "surface": "ground",
+    "visibility": "public",
+    "snapshot": "fixtures/ground/extension-error-noise.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "8aaf2823-7b76-4c27-8b62-4e69092400a1",
+  "createdAt": "2026-10-07T17:29:33.983Z"
+}

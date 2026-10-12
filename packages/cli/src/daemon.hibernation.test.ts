@@ -32,6 +32,7 @@ import {
 } from "./daemon.js";
 import { HIBERNATE_SUBAGENT_QUIET_MS, HIBERNATE_RESUME_GRACE_MS } from "./hibernation.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
+import { defaultConfigDir } from "./config/configDir.js";
 import type { ConversationLifecycle } from "./syncService.js";
 
 const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -500,5 +501,31 @@ describe("the park mark and the server stamp", async () => {
     clearSessionTrackingForKill("mark-killed");
     expect(sessionParkStateForTests("mark-killed").parked).toBe(false);
     expect(writes).toEqual([]);
+  });
+});
+
+describe("after a daemon restart", () => {
+  // The in-memory status is gone after every restart and an idle session never
+  // speaks again, so the hook's own file is the status the pass must read.
+  const statusFile = (id: string) => path.join(defaultConfigDir(), "agent-status", `${id}.json`);
+  const written: string[] = [];
+  afterEach(() => { for (const f of written.splice(0)) fs.rmSync(f, { force: true }); });
+  const writeStatus = (id: string, status: AgentStatus) => {
+    fs.mkdirSync(path.dirname(statusFile(id)), { recursive: true });
+    fs.writeFileSync(statusFile(id), JSON.stringify({ status, ts: NOW }));
+    written.push(statusFile(id));
+  };
+
+  test("a session idle on disk parks though the daemon never heard it speak", async () => {
+    const f = fixture({ count: 1, facts: () => ({ status: undefined }) });
+    writeStatus(f.sessions[0], "idle");
+    expect(await f.hibernate(f.sessions[0])).toEqual({ result: "hibernated" });
+  });
+
+  test("a session working on disk still keeps its pane", async () => {
+    const f = fixture({ count: 1, facts: () => ({ status: undefined }) });
+    writeStatus(f.sessions[0], "working");
+    expect((await f.hibernate(f.sessions[0])).result).toBe("skipped_status-working");
+    expect(f.parked).toEqual([]);
   });
 });
