@@ -9,7 +9,8 @@
 // The query string is forwarded verbatim: ?v=N opens a past version, ?r=N is
 // the in-page reload badge's cache-buster (new URL → new cache key → fresh
 // document), ?meta=1 is the version JSON (never cached — it exists to detect
-// staleness). Each distinct query is its own cache entry.
+// staleness). Each distinct query is its own cache entry. <slug>/_data is the
+// page's live query results: refreshed on read at the origin, never cached here.
 //
 // Origin redirects (e.g. bundle trailing-slash normalization) point at the
 // origin host — rewrite Location back onto this host so the browser stays on
@@ -49,6 +50,7 @@ export default {
       return new Response("Invalid artifact path", { status: 404 });
     }
     const isMeta = reqUrl.searchParams.get("meta") === "1";
+    const isData = tail === "_data" || tail.startsWith("_data/");
     const isGated = GATE_PARAMS.some((p) => reqUrl.searchParams.has(p));
     // Preserve the exact path shape: bare slug, trailing slash (bundle docs),
     // or a nested asset path.
@@ -58,7 +60,7 @@ export default {
       // cacheEverything overrides the origin's own Cache-Control, so it is for
       // public content only. Gated requests and the staleness probe bypass the
       // cache entirely.
-      cf: isMeta || isGated ? { cacheTtl: 0 } : { cacheEverything: true, cacheTtl: EDGE_TTL },
+      cf: isMeta || isGated || isData ? { cacheTtl: 0 } : { cacheEverything: true, cacheTtl: EDGE_TTL },
     });
     // Re-wrap so the response is mutable and the Location rewrite can be made.
     const res = new Response(upstream.body, upstream);
@@ -73,7 +75,7 @@ export default {
     // worker cannot relay the origin's policy; it states the two it can know.
     // A gated request is never stored. Everything else is public content, or
     // a gate page that holds nothing, and gets the edge's own short bound.
-    res.headers.set("Cache-Control", isGated ? "private, no-store" : PUBLIC_POLICY);
+    res.headers.set("Cache-Control", isGated || isData ? "private, no-store" : PUBLIC_POLICY);
     return res;
   },
 };

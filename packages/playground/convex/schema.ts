@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { buildStatus, elementRef, messageKind, narrationLine, systemNote, touchedFile, versionKind, versionRef } from "./validators";
+import { buildStatus, elementRef, failureKind, messageKind, narrationLine, systemNote, touchedFile, versionKind, versionRef } from "./validators";
 
 export default defineSchema({
   /** Anonymous people. The secret lives in their browser; only its hash here.
@@ -28,9 +28,12 @@ export default defineSchema({
     /** Changes Clay suggests next, written with each version it builds; the
      *  empty room offers them. A fork starts with its source's. */
     ideas: v.optional(v.array(v.string())),
+    /** Kept out of the home gallery and feed (a test harness's app, or one
+     *  taken down); its link still works. A fork inherits it. */
+    unlisted: v.optional(v.literal(true)),
   })
     .index("by_slug", ["slug"])
-    .index("by_last_activity", ["last_activity_at"])
+    .index("by_listed_activity", ["unlisted", "last_activity_at"])
     .index("by_forked_from", ["forked_from.app_id", "forked_from.version"]),
 
   /** Immutable. File contents live in version_files -> blobs, so reading a
@@ -111,6 +114,7 @@ export default defineSchema({
     /** Why it failed, in one line for people; `error_detail` is the raw cause. */
     error: v.optional(v.string()),
     error_detail: v.optional(v.string()),
+    failure: v.optional(failureKind),
     started_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
   })
@@ -133,7 +137,6 @@ export default defineSchema({
     visitor_id: v.id("visitors"),
     joined_at: v.number(),
     last_seen: v.number(),
-    typing_until: v.number(),
     viewing_version: v.union(v.number(), v.null()),
     /** The app's own per-person state (usePresence().setMyState). */
     state: v.optional(v.any()),
@@ -141,6 +144,25 @@ export default defineSchema({
     .index("by_app_visitor", ["app_id", "visitor_id"])
     .index("by_app_seen", ["app_id", "last_seen"])
     .index("by_seen", ["last_seen"]),
+
+  /** How many people are in each app with anyone in it, and the first few
+   *  to arrive (presence.ts keeps it on every arrival and departure), so the
+   *  gallery reads one row per busy app and never wakes for a heartbeat. */
+  crowds: defineTable({
+    app_id: v.id("apps"),
+    count: v.number(),
+    faces: v.array(v.id("visitors")),
+  })
+    .index("by_app", ["app_id"])
+    .index("by_count", ["count"]),
+
+  /** Who is typing in which app, until when; apart from presence so a typing
+   *  ping wakes only the room's typing readers. */
+  typing: defineTable({
+    app_id: v.id("apps"),
+    visitor_id: v.id("visitors"),
+    until: v.number(),
+  }).index("by_app_visitor", ["app_id", "visitor_id"]),
 
   /** The runtime data layer (appData.ts): per-app documents grouped in
    *  collections. A useShared value is a doc in the "~shared" collection
