@@ -54,6 +54,16 @@ export type ChatAttachmentView = {
   preview_url?: string;
 };
 
+/** What an attachment is, from its mime: every surface that draws, plays or
+ *  prefetches attachments branches on this one answer. No mime is an image,
+ *  which is what every upload was before mimes were recorded. */
+export type ChatAttachmentKind = "image" | "video" | "audio";
+export function attachmentKind(att: { mime?: string }): ChatAttachmentKind {
+  if (att.mime?.startsWith("audio/")) return "audio";
+  if (att.mime?.startsWith("video/")) return "video";
+  return "image";
+}
+
 export type ChatMessageView = {
   id: string;
   author: ChatAuthor;
