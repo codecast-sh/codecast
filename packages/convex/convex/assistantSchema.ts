@@ -150,6 +150,27 @@ export const assistantTables = {
     closed_at: v.optional(v.number()),
   }).index("by_provider_closed", ["provider", "closed_at"]),
 
+  // Which account a mailbox's Free allowance serves (assistant/freeGate.ts).
+  // One row per mailbox, written by that account's first Free turn: the
+  // aliases a big mail provider hands out for nothing (Gmail's dots and any
+  // provider's +tags) name one mailbox, so new accounts on aliases of one
+  // address share a single Free month rather than each taking one.
+  assistant_free_mailboxes: defineTable({
+    mailbox: v.string(),
+    user_id: v.id("users"),
+    at: v.number(),
+  }).index("by_mailbox", ["mailbox"]),
+
+  // What every Free turn together spent in one UTC day (assistant/freeGate.ts).
+  // Past the day's ceiling new Free turns pause until the next day, and the
+  // operator is told once (`alerted_at`).
+  assistant_free_days: defineTable({
+    day: v.string(),
+    spent_usd: v.number(),
+    turns: v.number(),
+    alerted_at: v.optional(v.number()),
+  }).index("by_day", ["day"]),
+
   // Every movement of a wallet, append only.
   wallet_ledger: defineTable({
     user_id: v.id("users"),

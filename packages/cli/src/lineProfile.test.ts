@@ -131,6 +131,13 @@ describe("line profile (LP2)", () => {
     expect(sentence.warnings).toEqual(['[[line.finders]] "a" kind = "prompt_miss, bug or request" is a sentence; write the list: kind = ["prompt_miss", "bug", "request"]']);
   });
 
+  test("opens_causes is the finder's explicit conversion step: true keeps it, false drops it, anything else is refused", () => {
+    const parse = (v: string) => parseLineProfileText(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nopens_causes = ${v}`, ".codecast/line.toml");
+    expect(parse("true").values.finders![0].opens_causes).toBe(true);
+    expect("opens_causes" in parse("false").values.finders![0]).toBe(false);
+    expect(() => parse(`"yes"`)).toThrow('[[line.finders]] "a" opens_causes must be true or false');
+  });
+
   test("the loader walks up from a subdirectory to the profile, and stops at the repository root", () => {
     const repo = tmpRepo({ ".codecast/line.toml": `[line]\nproject = "Agent Quality"\n`, "outreach/backend/x.ts": "" });
     const r = loadLineProfile(path.join(repo, "outreach", "backend"));
