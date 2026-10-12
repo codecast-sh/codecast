@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { Check, LogOut, Plus, Search, UserPlus, Users, X } from "lucide-react";
+import { Bot, Check, LogOut, Plus, Search, UserPlus, Users, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { useInboxStore } from "../../store/inboxStore";
@@ -25,6 +25,8 @@ import { SlackLogo } from "../SlackLogo";
 import "./chat.css";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { AgentCount, AgentPicker, ChannelAgentRows } from "./ChannelAgents";
+import { chatAgentId } from "../../store/chatSlice";
 
 // The people layer of a chat room: who a DM is with, who is inside a private
 // channel, and how someone new gets in. Three surfaces, one file, because they
@@ -106,11 +108,17 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
   const now = useCoarseNow(30_000);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [addingAgents, setAddingAgents] = useState(false);
   const [q, setQ] = useState("");
+  const addAgents = useInboxStore((s) => s.addChatChannelAgents);
+  const removeAgent = useInboxStore((s) => s.removeChatChannelAgent);
   const [slackReadError, setSlackReadError] = useState<string | null>(null);
 
   const isDm = channel.kind === "dm";
   const isPrivate = channel.kind === "private" || (!!channel.isPrivate && !isDm);
+  // Roles and sessions can sit in any room but a DM or a community room.
+  const takesAgents = !isDm && channel.kind !== "community";
+  const agents = useMemo(() => channel.agents ?? [], [channel.agents]);
   const slackPeople = useMemo(() => Object.values(slackPeopleById ?? {}), [slackPeopleById]);
   const rows = useMemo(
     () => buildChannelRoster({
@@ -187,6 +195,11 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
   if (!inRoom.length && !link) return null;
   const faces = inRoom.slice(0, 3);
   const count = inRoom.length;
+  const toggleAgent = (agent: Parameters<typeof addAgents>[1][number]) => {
+    const id = chatAgentId(agent);
+    if (agents.some((a) => chatAgentId(a) === id)) removeAgent(channel.id, id);
+    else addAgents(channel.id, [agent]);
+  };
 
   const renderRow = (r: RosterRow, candidate: boolean) => {
     const state = r.member ? memberPresenceVisual(r.member as any) : "offline";
@@ -234,7 +247,7 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
   };
 
   return (
-    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setAdding(false); setQ(""); } }}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setAdding(false); setAddingAgents(false); setQ(""); } }}>
       <PopoverTrigger asChild>
         <button type="button" className="ch-tool ch-members-btn" title={`${count} ${count === 1 ? "member" : "members"}`}>
           <span className="ch-dm-faces" aria-hidden="true">
@@ -243,6 +256,7 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
             ))}
           </span>
           <span className="ch-members-count">{count}</span>
+          {takesAgents && <AgentCount n={agents.length} />}
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className={`ch-people-pop${link ? " ch-roster-pop-wide" : ""}`}>
@@ -310,10 +324,31 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
         {link && !slackWritable && (
           <SlackReconnect teamId={link.team_id} returnTo={`/chat/${channel.id}`} isAdmin={viewerRole === "admin"} isPrivate={!!link.slack_channel_private} />
         )}
-        {!isDm && !adding && (canAddHere || canAddSlack) && (
-          <button type="button" className="ch-people-add" onClick={() => setAdding(true)}>
-            <UserPlus className="w-3 h-3" /> Add people
-          </button>
+        {takesAgents && (agents.length > 0 || addingAgents) && (
+          <>
+            <div className="ch-roster-divider ch-agents-head">
+              <Bot className="w-3 h-3" /> Agents
+              <span className="ch-roster-count">{agents.length}</span>
+            </div>
+            <div className="ch-people-list">
+              <ChannelAgentRows channelId={channel.id} agents={agents} />
+            </div>
+          </>
+        )}
+        {addingAgents && <AgentPicker picked={agents} onToggle={toggleAgent} />}
+        {!adding && !addingAgents && (
+          <div className="ch-people-actions">
+            {!isDm && (canAddHere || canAddSlack) && (
+              <button type="button" className="ch-people-add" onClick={() => setAdding(true)}>
+                <UserPlus className="w-3 h-3" /> Add people
+              </button>
+            )}
+            {takesAgents && (
+              <button type="button" className="ch-people-add" onClick={() => setAddingAgents(true)}>
+                <Bot className="w-3 h-3" /> Add agents
+              </button>
+            )}
+          </div>
         )}
       </PopoverContent>
     </Popover>
