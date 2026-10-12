@@ -49,8 +49,8 @@ interface DiffFileSection {
   additions: number;
   deletions: number;
   // True when the patch carries the whole file in one hunk (git diff -U<huge>).
-  // Only then can DiffView's oldStr/newStr mode re-collapse and expand context
-  // client-side; a plain -U3 patch renders its hunks as-is, nothing to expand.
+  // Only then can DiffView's oldStr/newStr mode collapse the unchanged lines
+  // and open them again; a plain -U3 patch renders its hunks as-is.
   fullContext: boolean;
 }
 
@@ -132,7 +132,6 @@ function languageFromPath(path: string): string | undefined {
   return ext ? EXT_TO_LANGUAGE[ext] : undefined;
 }
 
-const COLLAPSED_CONTEXT_LINES = 3;
 const COLLAPSED_MAX_LINES = 40;
 const UNLIMITED = Number.MAX_SAFE_INTEGER;
 
@@ -193,12 +192,11 @@ function DiffFileCard({
           <DiffView
             oldStr={file.oldContent}
             newStr={file.newContent}
-            contextLines={expanded ? UNLIMITED : COLLAPSED_CONTEXT_LINES}
+            expandUnchanged={expanded}
             maxLines={expanded ? UNLIMITED : COLLAPSED_MAX_LINES}
             showLineNumbers
             language={language}
             commentContext={commentContext}
-            onExpandContext={expanded ? undefined : () => setExpanded(true)}
           />
         ) : (
           <DiffView

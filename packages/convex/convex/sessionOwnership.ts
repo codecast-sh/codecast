@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalAction } from "./functions";
+import { roleRunner } from "./lib/seatPlace";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -679,9 +680,10 @@ async function rehomeSessions(
 ): Promise<RehomeResult> {
   const result: RehomeResult = { sessions: [], kept_in_front: [], over_cap: 0, told: { sessions: 0, roles: 0, deferred: 0 } };
   const eligible: any[] = [];
+  const runner = String(await roleRunner(ctx, role));
   for (const { raw: c } of candidates) {
     if ((opts.by_rule ? String(c.org_role_id ?? "") !== String(role._id ?? "") : !c.org_role_id) && !c.standing_role_id && !c.anchor_id
-      && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
+      && String(c.owner_user_id ?? c.user_id) === runner
       && await roleMayHoldSession(ctx, role, c)) eligible.push(c);
   }
   result.over_cap = Math.max(0, eligible.length - REHOME_CAP);

@@ -195,11 +195,11 @@ describe("chat header: one voice control per room", () => {
 
   test("the DM key carries the ring, and the huddle button is a channel's alone", () => {
     expect(header).toMatch(/<WalkiePttButton[\s\S]*?ring=\{\{ toUserIds: activeChannel\.dmMemberIds/);
-    // The huddle button renders only where there is no key: never for a DM.
-    const huddleAt = header.indexOf("<HuddleButton");
+    // The huddle control (HuddleWithGuest wraps HuddleButton) renders only where there is no key: never for a DM.
+    const huddleAt = header.indexOf("<HuddleWithGuest");
     expect(huddleAt).toBeGreaterThan(-1);
     const guard = header.slice(header.lastIndexOf("{activeChannel", huddleAt), huddleAt);
     expect(guard).toContain('activeChannel.kind !== "dm"');
-    expect(header).not.toMatch(/<HuddleButton[\s\S]*?ring=/);
+    expect(header).not.toMatch(/<HuddleWithGuest[\s\S]*?ring=/);
   });
 });
