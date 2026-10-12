@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { syncLogScopeMetaKey, useInboxStore } from "../inboxStore";
-import { applyUpdatesToStore, followerActionTee, forgetSeenBeforeOwnEcho } from "../syncReplication";
+import { applyUpdatesToStore, followerActionTee, forgetSeenBeforeOwnEcho, replicationHostFor } from "../syncReplication";
 import {
   CLIENT_SYNC_REGISTRY,
   REPLICATION_CLASSIFICATION,
@@ -26,6 +26,23 @@ describe("replication classification", () => {
     expect(isReplicatedCollectionKey("sessions")).toBe(true);
     expect(isReplicatedCollectionKey("teams")).toBe(false); // meta list
     expect(isReplicatedCollectionKey("pending")).toBe(false); // local
+    // A row map persisted as one meta blob still replicates per row.
+    expect(isReplicatedCollectionKey("conversations")).toBe(true);
+  });
+
+  it("broadcasts only the conversation row a write touched", () => {
+    const rows = Object.fromEntries(
+      Array.from({ length: 50 }, (_, i) => [`c${i}`, { _id: `c${i}`, title: `t${i}` }]),
+    );
+    let state: any = { conversations: rows };
+    const posted: any[] = [];
+    const host = replicationHostFor("host", { post: (m) => posted.push(m), onMessage: () => () => {} }, () => state);
+    // A write that replaces the map object, as a feed push or a draft does.
+    state = { conversations: { ...rows, c7: { _id: "c7", title: "renamed" } } };
+    host.tee([{ op: "replace", path: ["conversations"], value: state.conversations }], state);
+    host.stop();
+    expect(posted).toHaveLength(1);
+    expect(posted[0].updates).toEqual([{ key: "conversations", upserts: [{ _id: "c7", title: "renamed" }] }]);
   });
 });
 
