@@ -9,7 +9,7 @@
 //
 // No icon stands alone: a button here is a word, and an icon beside it.
 import { Headphones, MessageSquare, Mic, Square } from "lucide-react";
-import { startHuddle } from "../../lib/calls/actions";
+import { requestHuddleStart } from "../../lib/calls/huddleStart";
 import { talkToggleProps, walkieJoinReason, type PushToTalk } from "../../hooks/useWalkie";
 import "./faceActions.css";
 
@@ -77,7 +77,7 @@ export function FaceActions({
             e.preventDefault();
             e.stopPropagation();
             if (huddle) huddle.go();
-            else void startHuddle({ roomKey, toUserIds: ringIds });
+            else requestHuddleStart({ roomKey, toUserIds: ringIds });
           }}
         >
           <Headphones className="face-action-icon" />

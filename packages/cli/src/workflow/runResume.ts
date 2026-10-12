@@ -17,6 +17,27 @@ export function runnerPidFile(runId: string): string {
   return codecastPath("workflow-runs", `${runId.replace(/[^\w-]/g, "")}.pid`);
 }
 
+/** The tmux session a run's runner lives in on this machine. */
+export const runPaneName = (runId: string): string => `wf-${runId.slice(-6)}`;
+
+const SHELLS = new Set(["bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
+/** A fresh pane's runner has this long to claim the run before the pane counts as dead. */
+export const PANE_CLAIM_GRACE_S = 120;
+
+/**
+ * Whether a run's existing pane may be replaced by a new launch. One run, one
+ * pane: a run_workflow command can arrive twice (a daemon restart between
+ * launching and reporting hands it to the next daemon), and killing the first
+ * pane before its runner claimed the run left the run pending forever. So a
+ * pane still running something other than its shell, or created moments ago,
+ * stays; a pane back at its shell (the runner exited) is replaced.
+ */
+export function paneReplaceable(pane: { command: string; createdS: number } | null, nowS: number): boolean {
+  if (!pane) return true;
+  if (!SHELLS.has(pane.command.replace(/^-/, ""))) return false;
+  return nowS - pane.createdS >= PANE_CLAIM_GRACE_S;
+}
+
 /** The pid driving `runId` on this machine, or null when no live process does. */
 export function liveRunnerPid(runId: string): number | null {
   try {
@@ -90,12 +111,25 @@ export function writeCheckpoint(runDir: string, runId: string, state: WorkflowRu
 }
 
 export function readCheckpoint(runDir: string, runId: string): RunCheckpoint | null {
+  const read = (dir: string): RunCheckpoint | null => {
+    try {
+      const cp = JSON.parse(fs.readFileSync(checkpointPath(dir, runId), "utf-8"));
+      return cp?.run_id === runId && typeof cp.node_id === "string" && cp.context ? cp : null;
+    } catch {
+      return null;
+    }
+  };
+  const here = read(runDir);
+  if (here) return here;
+  // A run moved onto a renamed graph (a trial card sent back to rebuild on the current line) has a new run directory;
+  // its checkpoint, named by the run's id, still sits in the directory the old graph gave it.
   try {
-    const cp = JSON.parse(fs.readFileSync(checkpointPath(runDir, runId), "utf-8"));
-    return cp?.run_id === runId && typeof cp.node_id === "string" && cp.context ? cp : null;
-  } catch {
-    return null;
-  }
+    for (const sibling of fs.readdirSync(path.dirname(runDir))) {
+      const cp = read(path.join(path.dirname(runDir), sibling));
+      if (cp) return cp;
+    }
+  } catch {}
+  return null;
 }
 
 // ─── Where a run continues ────────────────────────────────
@@ -107,6 +141,7 @@ export interface ResumeRow {
   node_statuses?: Array<{ node_id: string; status: string; outcome?: string | null; session_id?: string | null; completed_at?: number | null }>;
   gate_node_id?: string | null;
   gate_response?: string | null;
+  gate_decision_id?: string | null;
 }
 
 /** A row is mid-run when it is live and a runner reported past its start. */
@@ -122,7 +157,7 @@ export interface ResumePoint {
   completed: string[];
   node_outcomes: Record<string, NodeOutcome>;
   context: Record<string, string>;
-  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on one. */
+  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on a decision that was asked (a gate whose ask failed is asked again). */
   gate: { node_id: string; response: string | null; open: boolean } | null;
   /** The hand a session node had running when its runner died, to wait on again rather than start anew. */
   hand: string | null;
@@ -159,7 +194,9 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
     visit_counts = {};
     completed = [];
     node_outcomes = {};
-    context = {};
+    // A row moved to another node than the checkpoint stands at (a trial card's run sent back to rebuild on main)
+    // keeps the values the run had made: its worktree, its proof's files. The row's outcomes below still decide history.
+    context = checkpoint ? structuredClone(checkpoint.context) : {};
     const done = (row.node_statuses ?? [])
       .filter((n) => n.node_id !== nodeId && (n.status === "completed" || n.status === "failed"))
       .sort((a, b) => (a.completed_at ?? 0) - (b.completed_at ?? 0));
@@ -177,7 +214,7 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
 
   const asked = !routedOn && row.gate_node_id === nodeId;
   const gate = node.type === "human"
-    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" }
+    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" && !!row.gate_decision_id }
     : null;
   const hand = node.backend === "session" && atCheckpoint ? atCheckpoint.context[`${nodeId}.conversation_id`] ?? null : null;
   return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hand, from: atCheckpoint ? "checkpoint" : "row" };
