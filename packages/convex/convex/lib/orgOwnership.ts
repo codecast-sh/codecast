@@ -5,6 +5,7 @@
 // orgRoles.ts, tasks.ts, plans.ts and orgLine.ts all import it without
 // closing a cycle.
 
+import { roleRunner } from "./seatPlace";
 import type { Id } from "../_generated/dataModel";
 import { coverDepth, isWholeWorkspaceRole, ownerOf, ownsWork, type OwnedWork } from "@codecast/shared/contracts/orgLead";
 import { rolesInBoundary } from "./orgAccess";
@@ -111,13 +112,14 @@ export async function holdChangeFor(ctx: Ctx, c: any): Promise<HoldChange> {
   const owner = ownerOf(await sessionWork(ctx, c), roles);
   const lead = owner.kind === "owner" && !isWholeWorkspaceRole(owner.role) ? owner.role : null;
   const hostOf = String(c.owner_user_id ?? c.user_id);
+  const leadRunner = lead ? String(await roleRunner(ctx, lead)) : null;
   if (c.org_role_id) {
     if (lead && String(lead._id) === String(c.org_role_id)) return { kind: "keep", why: "still bound to its area" };
-    if (lead && String(lead.host_user_id) === hostOf) return { kind: "move", role: lead };
+    if (lead && leadRunner === hostOf) return { kind: "move", role: lead };
     const from = roles.find((r) => String(r._id) === String(c.org_role_id)) ?? { _id: c.org_role_id };
     return { kind: "release", from };
   }
   if (!lead) return { kind: "keep", why: isBoundSession(c) ? "no lead owns its work" : "unbound" };
-  if (String(lead.host_user_id) !== hostOf) return { kind: "keep", why: "another person's session" };
+  if (leadRunner !== hostOf) return { kind: "keep", why: "another person's session" };
   return { kind: "file", role: lead };
 }
