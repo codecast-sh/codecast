@@ -6,7 +6,7 @@
 // so the encrypt + mutation logic (and the codegen casts) live exactly once. The key
 // only ever leaves the browser as ciphertext, via encryptProviderKey.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation, useQuery } from "convex/react";
 import { captureError } from "./analytics";
@@ -14,6 +14,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CLOUD_AGENT_ACTIONS, cloudAgentPageUrl, getProviderKeySpec, type CloudAgentActionName, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { encryptProviderKey } from "./providerKeyCrypto";
+import { useInboxStore } from "../store/inboxStore";
 /** The fields of a machine these hooks read (listDevices' row is one); kept structural so the phone can call them without the web's device badge. */
 type Device = { device_id: string; online?: boolean; label?: string };
 
@@ -38,27 +39,24 @@ export function deviceManagedKeys(device: Device): { pubkey?: string; managedIds
 
 /** Encrypt-and-enqueue actions for a device, shared by both key-entry surfaces. */
 export function useProviderKeyCommand() {
-  // pl-207: resolves on next convex codegen
-  const enqueue = useMutation((api.devices as any).enqueueProviderKeyCommand);
-
-  return useMemo(
-    () => ({
-      /** Seal `apiKey` to the device's public key and enqueue a "set" command.
-       *  Resolves to the command's id, so a caller can watch the daemon's verdict
-       *  (devices.watchedCommandOutcome). */
-      async setKey(deviceId: string, pubkey: string, provider: string, apiKey: string): Promise<string | undefined> {
-        const payload = await encryptProviderKey(pubkey, provider, apiKey);
-        const res = await enqueue({ device_id: deviceId, op: "set", provider, payload });
-        return (res as { command_id?: string } | undefined)?.command_id;
-      },
-      /** Remove a managed key — no encryption, just the provider id. */
-      async removeKey(deviceId: string, provider: string) {
-        await enqueue({ device_id: deviceId, op: "remove", provider });
-      },
-    }),
-    [enqueue],
-  );
+  return PROVIDER_KEY_COMMANDS;
 }
+
+/** The store's setProviderKey action: the roster row shows the change at once. */
+const PROVIDER_KEY_COMMANDS = {
+  /** Seal `apiKey` to the device's public key and send a "set" command.
+   *  Resolves to the command's id, so a caller can watch the daemon's verdict
+   *  (devices.watchedCommandOutcome). */
+  async setKey(deviceId: string, pubkey: string, provider: string, apiKey: string): Promise<string | undefined> {
+    const payload = await encryptProviderKey(pubkey, provider, apiKey);
+    const res = await useInboxStore.getState().setProviderKey(deviceId, { op: "set", payload });
+    return res?.command_id;
+  },
+  /** Remove a managed key — no encryption, just the provider id. */
+  async removeKey(deviceId: string, provider: string) {
+    await useInboxStore.getState().setProviderKey(deviceId, { op: "remove", provider });
+  },
+};
 
 /**
  * One daemon command the page waits on (devices.watchedCommandOutcome):

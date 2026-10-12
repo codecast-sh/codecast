@@ -43,7 +43,7 @@ import { liveTranscriptFor, postEvent } from "./callChat";
 import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
 import { endGuestAdmissions } from "./lib/callGuestAdmission";
 import { signLivekitJwt } from "./lib/livekitJwt";
-import { livekitConfigFromEnv } from "./lib/livekitServer";
+import { livekitConfigFromEnv, removeParticipant } from "./lib/livekitServer";
 import { publicPersonLabel, teammateLabel } from "./lib/personLabel";
 import {
   CALL_PUSH_CATEGORY,
@@ -1298,6 +1298,30 @@ export const authForToken = internalQuery({
       name: publicPersonLabel(user),
       image: user?.image ?? user?.github_avatar_url ?? undefined,
     };
+  },
+});
+
+/** May the caller put this teammate out of the room? Only someone sitting
+ *  in the call, and never themselves (that is leaving). */
+export const mayPutOut = internalQuery({
+  args: { room_key: v.string(), identity: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId || args.identity === String(userId)) return false;
+    if (!ctx.db.normalizeId("users", args.identity)) return false;
+    return !!(await liveSeat(ctx, userId, args.room_key)) && (await authorizeRoom(ctx, userId, args.room_key)).ok;
+  },
+});
+
+/** Put a teammate out of the call now. Their client hears the removal and
+ *  leaves its seat (callManager's Disconnected); they may join again. */
+export const putOutOfCall = action({
+  args: { room_key: v.string(), identity: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    const cfg = livekitConfigFromEnv();
+    if (!cfg) throw new Error("Calling is not configured");
+    if (!(await ctx.runQuery(internal.calls.mayPutOut, args))) throw new Error("You can't remove them from this call");
+    await removeParticipant(cfg, args.room_key, args.identity);
   },
 });
 
