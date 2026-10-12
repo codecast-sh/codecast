@@ -42,7 +42,7 @@ import {
 } from "./run.js";
 import { printStepResults, readStepPlan, runSteps, type StepResult } from "../stepBatch.js";
 import { inlineImageMarker } from "../inlineImage.js";
-import { asComputerError } from "./errors.js";
+import { asComputerError, grantSetupLines } from "./errors.js";
 
 const ALIASES: Record<string, ComputerVerb> = {
   snapshot: "get-app-state",
@@ -205,7 +205,7 @@ export async function runComputerBatch(
         runStep(args).catch((err: unknown) => {
           // A step failure reads like the single command's: message, then its recovery.
           const error = asComputerError(err);
-          throw new Error([error.message, ...error.toJSON().recovery].join("\n"));
+          throw new Error([error.message, ...error.toJSON().recovery, ...grantSetupLines(error)].join("\n"));
         }),
       { keepGoing: opts.keepGoing },
     );
@@ -258,6 +258,7 @@ export async function runComputerDo(
     const error = asComputerError(err);
     console.error(`✗ ${error.message}`);
     for (const line of error.toJSON().recovery) console.error(`  ${line}`);
+    for (const line of grantSetupLines(error)) console.error(line);
     return (deps.exit ?? process.exit)(1) as never;
   }
 }
