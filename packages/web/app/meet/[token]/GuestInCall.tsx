@@ -17,6 +17,7 @@ import { DeviceSelect, NoticePills } from "./MeetChrome";
 import { LogoMark } from "../../../components/Logo";
 import { PLACE, RecordingMark, RecordingStopControl, STOP_RECORDING_ASK } from "../../../components/calls/RecordingMark";
 import { guestNoticeLines, humanizeConvexError, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
+import { Button } from "../../../components/ui/button";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
@@ -397,15 +398,17 @@ export function GuestInCall({
           )}
           <DevicesButton call={call} disabled={resting} />
           <div className="mx-1.5 h-5 w-px bg-white/10" />
-          <button
+          <Button
             type="button"
+            variant="red"
+            size="sm"
             onClick={onLeave}
-            className="sol-btn-solid flex items-center gap-1.5 rounded-full bg-sol-red px-3.5 py-2 font-mono text-[12px] font-medium text-white"
+            className="rounded-full font-mono"
             title="Leave the call"
           >
-            <PhoneOff className="h-4 w-4" />
+            <PhoneOff />
             leave
-          </button>
+          </Button>
         </div>
       </div>
     </div>
