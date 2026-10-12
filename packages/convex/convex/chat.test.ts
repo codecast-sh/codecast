@@ -64,6 +64,7 @@ import { PREFERENCE_MAP } from "./notificationRouter";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { dayBucket, hourBucket } from "./lib/chatQuota";
 import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
+import { addChannelAgents, removeChannelAgent } from "./chatAgents";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -3894,5 +3895,126 @@ describe("community channels", () => {
     await call(deleteMessage, as(ctx, STAFF), { message_id: theirs.message_id });
     const visible = messagesIn(ctx).filter((m: any) => !m.deleted_at);
     expect(visible).toEqual([]);
+  });
+});
+
+describe("roles and sessions inside a room (C5)", () => {
+  const ROLE = "org_roles_growth" as any;
+  const SEAT = "anchor-growth" as any;
+  const PRIVATE = "chat_channels_private" as any;
+
+  // A team role @growth hosted by Bob, Alice's own session jx7alic, Bob's
+  // team-visible session jx7bobb, Carol's private one, and a private room
+  // with Alice and Bob in it.
+  function seed() {
+    return {
+      chat_channels: [...channels(), {
+        _id: PRIVATE, team_id: TEAM, name: "war-room", kind: "private", created_by: ALICE, created_at: 1_000, updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "cm-a", channel_id: PRIVATE, user_id: ALICE, added_by: ALICE, added_at: 1 },
+        { _id: "cm-b", channel_id: PRIVATE, user_id: BOB, added_by: ALICE, added_at: 1 },
+      ],
+      chat_channel_agents: [],
+      anchors: [{
+        _id: SEAT, team_id: TEAM, bot_user_id: "user-growth-bot", host_user_id: BOB,
+        status: "active", name: "Head of Growth", conversation_id: "conv-growth", org_role_id: ROLE,
+      }],
+      org_roles: [{
+        _id: ROLE, short_id: "or-7", scope_type: "team", team_id: TEAM, host_user_id: BOB,
+        name: "Head of Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] },
+        reports_to: { kind: "user", user_id: BOB }, status: "active", anchor_id: SEAT,
+        created_by: BOB, created_at: 1, updated_at: 1,
+      }],
+      conversations: [
+        { _id: "conv-growth", user_id: BOB, title: "Head of Growth", status: "active", updated_at: 1 },
+        { _id: "conv-alice", short_id: "jx7alic", user_id: ALICE, session_id: "sess-alice", title: "Alice's session", status: "active", updated_at: 1, is_private: true },
+        { _id: "conv-bob", short_id: "jx7bobb", user_id: BOB, session_id: "sess-bob", title: "Bob's session", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
+        { _id: "conv-carol", short_id: "jx7caro", user_id: CAROL, session_id: "sess-carol", title: "Carol's spike", status: "active", updated_at: 1, is_private: true },
+      ],
+      session_owners: [
+        { _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 },
+        { _id: "so-2", conversation_id: "conv-bob", user_id: BOB, added_at: 1 },
+        { _id: "so-3", conversation_id: "conv-carol", user_id: CAROL, added_at: 1 },
+      ],
+      chat_agent_quota: [],
+      managed_sessions: [],
+    };
+  }
+  const pending = (ctx: any) => ctx.db._tables.pending_messages;
+
+  test("a person's line reaches every member once; an agent's line reaches none", async () => {
+    const ctx = context(ALICE, seed());
+    const added = await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["@growth", "jx7alic", "jx7bobb"] });
+    expect(added.added.map((a: any) => a.short_id)).toEqual(["or-7", "jx7alic", "jx7bobb"]);
+    // Adding again is a no-op that says so.
+    const again = await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["or-7"] });
+    expect(again.added).toEqual([]);
+    expect(again.already.map((a: any) => a.short_id)).toEqual(["or-7"]);
+
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "standup in five" });
+    expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 2, folded: 0, skipped: [] });
+    expect(pending(ctx).map((p: any) => p.conversation_id).sort()).toEqual(["conv-alice", "conv-bob", "conv-growth"]);
+    const body = pending(ctx)[0].content;
+    expect(body.startsWith(`<chat-mention channel="#general" thread="${sent.message_id}" from="Alice">\n`)).toBe(true);
+    expect(body).toContain("a channel you are a member of");
+    expect(body).toContain(`cast chat send --channel ${CHANNEL} "<your reply>"`);
+    expect(isMachineDeliveredMessage(body)).toBe(true);
+
+    // Naming a member in a person's line still delivers once, and spends no mention cap.
+    const named = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth @jx7bobb look" });
+    expect(named.mention_wakes).toEqual({ roles: 1, sessions: 2, folded: 0, skipped: [] });
+    expect(pending(ctx).length).toBe(6);
+
+    // A session typing in the room wakes no member.
+    const agent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "done", origin: "agent", origin_session_id: "sess-alice" });
+    expect(agent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: [] });
+    expect(pending(ctx).length).toBe(6);
+  });
+
+  test("the rail names members; removing one stops its lines", async () => {
+    const ctx = context(ALICE, seed());
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["@growth", "jx7bobb"] });
+    const rail = (await call(listChannels, ctx, { team_id: TEAM })).rail.find((r: any) => r.channel_id === CHANNEL);
+    expect(rail.agents).toEqual([
+      { kind: "role", role_id: ROLE, short_id: "or-7" },
+      { kind: "session", conversation_id: "conv-bob", short_id: "jx7bobb" },
+    ]);
+    expect((await call(removeChannelAgent, ctx, { channel_id: CHANNEL, ref: "jx7bobb" })).removed).toBe(true);
+    expect((await call(removeChannelAgent, ctx, { channel_id: CHANNEL, ref: "@growth" })).removed).toBe(true);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "anyone?" });
+    expect(pending(ctx).length).toBe(0);
+  });
+
+  test("only agents the caller may reach go in, and never into a DM", async () => {
+    const ctx = context(ALICE, seed());
+    // Carol's private session is not Alice's to message.
+    await expect(call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7caro"] })).rejects.toThrow(/No role or session/);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    await expect(call(addChannelAgents, ctx, { channel_id: dm.channel_id, refs: ["@growth"] })).rejects.toThrow(/direct message/);
+    // An outsider cannot touch the room at all.
+    await expect(call(addChannelAgents, as(ctx, OUTSIDER), { channel_id: CHANNEL, refs: ["@growth"] })).rejects.toThrow();
+  });
+
+  test("a private room lets the person running a member agent read and answer there", async () => {
+    const ctx = context(ALICE, seed());
+    // Carol is on the team but not in #war-room.
+    await expect(call(sendMessage, as(ctx, CAROL), { channel_id: PRIVATE, content: "hi" })).rejects.toThrow();
+    // Agents Carol does not run change nothing for her.
+    await call(addChannelAgents, ctx, { channel_id: PRIVATE, refs: ["@growth", "jx7alic"] });
+    await expect(call(sendMessage, as(ctx, CAROL), { channel_id: PRIVATE, content: "hi" })).rejects.toThrow();
+
+    // A role hosted by Carol is added: Carol may now answer for it.
+    ctx.db._tables.org_roles.push({
+      _id: "org_roles_ops", short_id: "or-9", scope_type: "team", team_id: TEAM, host_user_id: CAROL,
+      name: "Ops", handle: "ops", scope: { project_ids: [], plan_ids: [] },
+      reports_to: { kind: "user", user_id: CAROL }, status: "active", created_by: CAROL, created_at: 1, updated_at: 1,
+    });
+    await call(addChannelAgents, ctx, { channel_id: PRIVATE, refs: ["or-9"] });
+    const reply = await call(sendMessage, as(ctx, CAROL), { channel_id: PRIVATE, content: "ops here", origin: "agent" });
+    expect(reply.created).toBe(true);
+    // The room still does not appear in Carol's rail.
+    const rail = await call(listChannels, as(ctx, CAROL), { team_id: TEAM });
+    expect(rail.channels.map((c: any) => c._id)).not.toContain(PRIVATE);
   });
 });

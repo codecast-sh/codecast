@@ -1,6 +1,6 @@
 import { captureException } from "@sentry/react";
-import { awaitingOkIds, hostedDeclinedSince } from "../lib/decisionQueue";
-import { hostedNoticeKind } from "../lib/hostedNotice";
+import { awaitingOkIds } from "../lib/decisionQueue";
+import { hostedComposerWords, hostedLastExchange, type HostedLast } from "../lib/hostedComposer";
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { MODE_WORDS, useSurface } from "../lib/surfaces";
@@ -14,10 +14,12 @@ import { armJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
 import { compressImage } from "../lib/compressImage";
+import { captureError } from "../lib/analytics";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, isHostedAgentType, type AgentStatus } from "@codecast/shared/contracts";
-import { HOSTED_IMAGE_REFUSAL, replyAsksPerson } from "@codecast/shared/contracts/assistant";
+import { useRunnerSilence } from "../hooks/useRunnerSilence";
+import { HOSTED_IMAGE_REFUSAL } from "@codecast/shared/contracts/assistant";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
@@ -197,7 +199,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, composerFoot, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, composerFoot, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -293,7 +295,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     30_000,
   );
   // Suggestion pills pref — off by default; the strip mounts only when on.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const suggestionShown = useSurface("composer.suggestion");
+  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true) && suggestionShown;
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId
@@ -331,23 +334,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // A stop notice (an error, an outage) points at its own Try again; a no
   // invites a change only for DECLINE_HINT_MS, so a cold revisit reads as
   // an answered conversation rather than an ask still pending.
-  const hostedLast = useInboxStore((s): "asked" | "answered" | "declined" | "stopped" | "sent" | null => {
-    if (!hostedConversation) return null;
-    const rows = s.messages[conversationId] ?? [];
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      if (row?.role === "assistant" && row.content?.trim()) {
-        const notice = hostedNoticeKind(row);
-        if (notice === "error" || notice === "unavailable") return "stopped";
-        return replyAsksPerson(row.content) ? "asked" : "answered";
-      }
-      if (row?.role === "user" && row.content?.trim()) {
-        const since = row.timestamp ?? 0;
-        return hostedDeclinedSince(s.sessionDecisions, conversationId, since, Date.now()) ? "declined" : "sent";
-      }
-    }
-    return null;
-  });
+  const hostedLast = useInboxStore((s): HostedLast => (hostedConversation ? hostedLastExchange(s.messages[conversationId], s.sessionDecisions, conversationId, Date.now()) : null));
   const [stuckBannerRaised, setShowStuckBanner] = useState(false);
   const showStuckBanner = stuckBannerRaised && !hostedConversation;
   const [isResuming, setIsResuming] = useState(false);
@@ -609,6 +596,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const canQueryServer = isConvexId(conversationId);
   // In-flight only: the query's settled fallback row is for the transcript bubble.
   const existingPending = inFlightPending(usePendingMessageStatus(canQueryServer ? conversationId : null));
+  // A message waiting with no agent to answer usually waits on the machine
+  // the session runs on; when that machine is silent, the status line names
+  // it instead of "Processing...", which read as live for days while a
+  // teammate's laptop was off.
+  const runnerSilence = useRunnerSilence(conversationId, canQueryServer && !hostedConversation && !agentStatus && !!(pendingMessageId || existingPending));
 
   // The send is fire-and-forget through the store sync, so we no longer get the
   // message id back. Recover precise per-message status tracking from the
@@ -977,6 +969,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           useInboxStore.getState().markServerDeleted(conversationId);
           toast.error("This conversation no longer exists on the server", { description: "Use Restore to bring its session back." });
         } else {
+          captureError(err instanceof Error ? err : new Error(msg), { source: "auto-restart-undeliverable", conversationId });
           toast.error(`Session restart failed: ${msg}`);
         }
       });
@@ -1344,8 +1337,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   useLayoutEffect(resetTextareaHeight, [message]);
 
   const mountConvIdRef = useRef(conversationId);
-  // A conversation opened inline in a reveal band keeps its composer folded
-  // (globals.css folds it until focused), so it never takes focus by itself.
+  // A conversation opened inline in a reveal band keeps its composer behind
+  // a button (ConversationView), so it never takes focus by itself.
   const inRevealBand = useContext(RevealInBandCtx);
   useWatchEffect(() => {
     // An open dialog owns focus — never yank it down to the composer behind it.
@@ -1511,6 +1504,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         return storageId as string;
       }
       console.error("[uploadImage] failed after retries");
+      captureError(new Error("image upload failed after retries"), { source: "uploadImage", conversationId, bytes: uploaded.size, type: uploaded.type });
       toast.error("Failed to upload image");
       settleDraftImageUpload(previewUrl, null);
       clearImageByPreview(previewUrl);
@@ -1569,7 +1563,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     submitRefusedRef.current = true;
     return true;
   };
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, forkTail = false) => {
     e.preventDefault();
     if (allowanceOut) return false;
     submitRefusedRef.current = false;
@@ -1648,63 +1642,35 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // no separate "add to message" step. They prepend the typed reply and the batch
     // is cleared. (The gate path above takes it the same way; workflow does not.) Images
     // quoted from the gallery ride along as attachments after the composer's own,
-    // and each quote names its picture by that attachment number. A fork from a
-    // selection sends text only, so its image quotes point by address instead.
+    // and each quote names its picture by that attachment number. A fork leaves
+    // quoted pictures out, so its image quotes point by address instead.
+    // A message selected forks from it; fork-and-send forks from the tail.
     const forkingFromSelection = !!(isSelectionActive && selectedMessageUuid && onForkFromMessage);
+    const forking = forkingFromSelection || (forkTail && !!onForkTail);
     // Each quoted picture is sent as a copy with its notes' points drawn on as
     // numbered markers; the bubble shows the original until that copy lands.
-    const quoted = forkingFromSelection ? [] : quotedImages(conversationId);
+    const quoted = forking ? [] : quotedImages(conversationId);
     message = attachReviewToMessage(conversationId, message, quoted.length ? submitImages.length + 1 : undefined);
     // "Send together" (lib/jointSend): others' live drafts fold in as named parts.
-    if (!forkingFromSelection) message = takeJointSend(conversationId, message);
+    if (!forking) message = takeJointSend(conversationId, message);
     const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
     const quotedUploads = quoted.map(q => uploadMarkedImage(convex, q));
     const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0;
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
 
-    // If a message is selected, fork from it then send the new content
-    if (forkingFromSelection) {
-      sendingRef.current = true;
-      cancelPendingDraft();
-      isSelectionEditedRef.current = true;
-      savedDraftRef.current = null;
-      const content = message.trim();
-      setMessage("");
-      messageRef.current = "";
-      useInboxStore.getState().clearDraftFinal(conversationId);
-      sendingRef.current = false;
-      onClearSelection?.();
-      const savedPopulateFn = onPopulateInput?.current ?? null;
-      if (onPopulateInput) onPopulateInput.current = null;
-      await onForkFromMessage(selectedMessageUuid);
-      setTimeout(() => { if (onPopulateInput) onPopulateInput.current = savedPopulateFn; }, 200);
-      // After fork: navigateToSession has been called, so currentSessionId is the new fork.
-      const forkId = useInboxStore.getState().currentSessionId;
-      if (!forkId || forkId === conversationId) {
-        addOptimistic(conversationId, content);
-        toast.error("Fork not ready — message saved locally");
-        return;
+    // A fork is opened first and the send below targets it like any other
+    // conversation, so the composer's images go with the text.
+    let targetConvId = conversationId;
+    if (forking) {
+      const forkId = await openFork(forkingFromSelection);
+      if (!forkId) {
+        toast.error("Fork not ready, message kept in the composer");
+        return false;
       }
-      const clientId = addOptimistic(forkId, content);
-      onMessageSent?.();
-      try {
-        const resolvedId = await waitForConvexId(forkId);
-        sendMessage(resolvedId, content, undefined, clientId);
-        setSentAt(Date.now());
-        sentContentRef.current = content;
-      } catch (error) {
-        // The fork/create and this optimistic rewrite are still durable. Live
-        // session-id reconciliation will rekey the stub and redrive the pending
-        // message; reporting failure here would lie and invite a duplicate retry.
-        if (isParkedDispatchError(error)) return;
-        toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
-      }
-      return;
+      targetConvId = forkId;
     }
-
-    const targetConvId = conversationId;
-    const targetCanQuery = canQueryServer;
+    const targetCanQuery = isConvexId(targetConvId);
     const trimmed = message.trim() || (submitImages.length > 0 ? "[image]" : "");
     // The optimistic bubble shows ready images via storage_id, and still-
     // uploading ones via their local preview + a spinner (dropped on resolve).
@@ -1735,7 +1701,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // When images are still uploading their blobs now belong to the pending
     // bubble; the background task revokes them once the upload resolves.
     clearAllImages(!hasUploadingImages);
-    useInboxStore.getState().clearDraftFinal(targetConvId);
+    useInboxStore.getState().clearDraftFinal(conversationId);
     if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
     sendingRef.current = false;
     requestAnimationFrame(() => textareaRef.current?.focus());
@@ -1884,25 +1850,26 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleForkSend = () => {
-    if (!onForkSend) return;
-    // With a message selected, plain submit already forks from the selection —
-    // delegate so the gesture honors the selection anchor instead of the tail.
-    if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
-      void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent);
-      return;
-    }
-    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
-    const text = attachReviewToMessage(conversationId, raw).trim();
-    if (!text) return;
-    sendingRef.current = true;
-    cancelPendingDraft();
-    composeRef.current?.clear();
-    setMessage("");
-    messageRef.current = "";
-    useInboxStore.getState().clearDraftFinal(conversationId);
-    sendingRef.current = false;
-    onForkSend(text);
-    onMessageSent?.();
+    if (!onForkTail) return;
+    void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent, true);
+  };
+
+  // Opens the branch a fork send delivers into and returns its id, or null when
+  // no fork came of it.
+  const openFork = async (fromSelection: boolean): Promise<string | null> => {
+    if (!fromSelection) return (await onForkTail?.()) ?? null;
+    isSelectionEditedRef.current = true;
+    savedDraftRef.current = null;
+    onClearSelection?.();
+    // Forking from a user message refills the composer with that message;
+    // this send replaces it, so the refill is switched off for the fork.
+    const savedPopulateFn = onPopulateInput?.current ?? null;
+    if (onPopulateInput) onPopulateInput.current = null;
+    await onForkFromMessage!(selectedMessageUuid!);
+    setTimeout(() => { if (onPopulateInput) onPopulateInput.current = savedPopulateFn; }, 200);
+    // The fork navigated, so the visible session is the new branch.
+    const forkId = useInboxStore.getState().currentSessionId;
+    return forkId && forkId !== conversationId ? forkId : null;
   };
 
   // Hand off: the box empties the moment a teammate is picked (the marker is
@@ -2212,7 +2179,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     // Fork-and-send: branch the session from its latest message and deliver the
     // composed text into the fork, leaving the parent thread untouched.
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && onForkSend) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && onForkTail) {
       e.preventDefault();
       handleForkSend();
       return;
@@ -2283,7 +2250,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
   const { colWidth, colClass } = composerColumn({ inline, expanded: isExpanded });
-  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} />;
+  // A hosted turn at work with an empty box: the disc is the visible Stop
+  // (store stopHostedTurn), so stopping never rests on a key a person who
+  // does not code would not know.
+  const hostedStop = hostedConversation && (agentStatus === "working" || agentStatus === "thinking") && !canSubmit
+    ? { label: MODE_WORDS.hosted.stopWorking, onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
+    : undefined;
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop} />;
   // Expand, stash, hand off and fork: beside the text, or in the surface's foot
   // row next to send when it brings one.
   const rowActions = (
@@ -2334,7 +2307,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </ShortcutTooltip>
         </HandoffPicker>
       )}
-      {onForkSend && !hostedConversation && canSubmit && !onGateSend && !onWorkflowLaunch && (
+      {onForkTail && !hostedConversation && canSubmit && !onGateSend && !onWorkflowLaunch && (
         <button
           type="button"
           onClick={handleForkSend}
@@ -2388,6 +2361,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     allowanceOut={allowanceOut}
                     escapeHint={!escapeCloses && isFocused && message.length === 0}
                     awaitsOk={hostedAwaitsOk}
+                    stopInDisc={!!hostedStop && !bareComposer}
                   />
                 ) : ((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -2403,10 +2377,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     {agentStatus === "resuming" ? "Resuming session..." : isAgentStarting ? "Starting session..." : "Delivering..."}
                   </span>
                 ) : (pendingMessageId || existingPending) && !showStuckBanner && !agentStatus ? (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    Processing...
-                  </span>
+                  runnerSilence ? (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-sol-text-dim/50" />
+                      Waiting for {runnerSilence}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
+                      Processing...
+                    </span>
+                  )
                 ) : limitPhase.phase === "recovering" && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5 text-sol-cyan">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan animate-pulse" />
@@ -2527,13 +2508,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : hasPendingSend ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    {hostedConversation ? "Sending..." : "Resuming session..."}
+                    {hostedConversation ? "Sending…" : "Resuming session..."}
                   </span>
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
       // A hosted conversation has no Claude Code permission mode to cycle: its
       // status line owns the whole meta row.
       metaEnd={permissionMode && !hostedConversation && (
-                  <div className="relative">
+                  <div className="relative" data-composer-mode={permissionMode}>
                     <button
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => { onCycleMode?.(); flashModeLabel(); }}
@@ -2814,7 +2795,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (hostedAwaitsOk ? MODE_WORDS.hosted.composerApproval : hostedLast === "asked" ? "Reply…" : hostedLast === "declined" ? MODE_WORDS.hosted.composerDeclined : hostedLast === "stopped" ? MODE_WORDS.hosted.composerAfterStop : hostedLast ? MODE_WORDS.hosted.composerFollowUp : MODE_WORDS.hosted.composerPlaceholder) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
