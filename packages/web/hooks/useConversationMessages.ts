@@ -504,6 +504,7 @@ export function useConversationMessages(
   const recoveryInFlightRef = useRef(false);
   const countMismatchRef = useRef<{ id: string; ticks: number }>({ id: conversationId, ticks: 0 });
   const lastRevisionRef = useRef<{ id: string; rev: number } | null>(null);
+  const settledRef = useRef<{ id: string; count: number } | null>(null);
   // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
   useEffect(() => {
     if (!canQuery || targetMode) return; // recovery only applies to live normal-mode view
@@ -543,10 +544,18 @@ export function useConversationMessages(
       }
       countMismatchRef.current.ticks = 0;
       if (local.length >= serverCount) return;
+      // A read forward that found nothing past the newest local row settles
+      // this count: the rows it is short of are older than the window held
+      // here (a long thread opened on its tail), not missing from the end.
+      // Until the server's count moves, reading forward again finds the same.
+      if (settledRef.current?.id === conversationId && settledRef.current.count === serverCount) return;
 
       recoveryInFlightRef.current = true;
       try {
+        const before = local.length;
         const fetched = await readForward(convex, convId, rereadAnchor(local, (meta as any)?.agent_type) ?? 0);
+        const after = (useInboxStore.getState().messages[conversationId] ?? []).length;
+        if (fetched !== null && after <= before) settledRef.current = { id: conversationId, count: serverCount };
         // null is unauth/no-access: a transient failure, logged so it doesn't
         // silently strand the UI in the loading state.
         if (fetched === null) console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
@@ -719,7 +728,7 @@ export function useConversationMessages(
   useEffect(() => {
     if (!canQuery || !targetMode || targetLoadOlderTs === undefined) return;
     let cancelled = false;
-    fetchOlderMessages(convex, conversationId, targetLoadOlderTs, 50)
+    fetchOlderMessages(convex, conversationId, targetLoadOlderTs, WARM_DEEP_ROWS)
       .then((res: any) => {
         if (cancelled || !res?.messages) return;
         setTargetAroundData((prev: any) => {
@@ -751,7 +760,7 @@ export function useConversationMessages(
   useEffect(() => {
     if (!canQuery || !targetMode || targetLoadNewerTs === undefined) return;
     let cancelled = false;
-    fetchMessagesAround(convex, conversationId, targetLoadNewerTs, 0, 50)
+    fetchMessagesAround(convex, conversationId, targetLoadNewerTs, 0, WARM_DEEP_ROWS)
       .then((res: any) => {
         if (cancelled || !res?.messages) return;
         setTargetAroundData((prev: any) => {

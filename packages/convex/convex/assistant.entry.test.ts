@@ -50,7 +50,8 @@ afterEach(() => {
 async function setup() {
   const t = convexTest(schema, modules);
   const user = await t.run(async (ctx) => {
-    const user = await ctx.db.insert("users", {});
+    // A proven address: the Free plan serves only one (assistant/freeGate.ts).
+    const user = await ctx.db.insert("users", { emailVerificationTime: 1 });
     await ctx.db.insert("api_tokens", { user_id: user, token_hash: await hashToken(TOKEN), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any);
     return user;
   });
@@ -645,7 +646,7 @@ describe("a hosted status row is not a daemon's", () => {
   });
 
   test("a running turn's heartbeat never vouches for the user's daemon", () => {
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 60_000) * 60_000;
     const maps = sessionMapsFromManagedRows([
       { conversation_id: "hosted", last_heartbeat: now, agent_status: "working", hosted: true },
       { conversation_id: "local", last_heartbeat: now - 30 * 60 * 1000, agent_status: "working" },
@@ -812,7 +813,7 @@ describe("hosted status rows stay off daemon surfaces", () => {
     await t.run((ctx) => ctx.db.insert("managed_sessions", {
       session_id: "elsewhere", user_id: user, pid: 42, started_at: daemonBeat, last_heartbeat: daemonBeat, agent_status: "idle",
     }));
-    expect((await named()).latestHeartbeat).toBe(daemonBeat);
+    expect((await named()).latestHeartbeat).toBe(Math.floor(daemonBeat / 60_000) * 60_000);
   });
 
   test("a row stamped hosted: false is a daemon row on neither path", async () => {

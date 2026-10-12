@@ -15,8 +15,8 @@ import {
   themeLabelOf,
 } from '@/components/settings/SettingsPages';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { useSurface } from '@codecast/web/lib/surfaces';
-import { LANE_COPY, meterShort } from '@codecast/web/components/simple/lane';
+import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
+import { LANE_COPY, meterWords } from '@codecast/web/components/simple/lane';
 import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
 
@@ -42,10 +42,12 @@ export default function SettingsScreen() {
   // typed-route union only regenerates when Metro runs.
   const open = (section: string) => router.push(`/settings/${section}` as never);
 
+  // Hosted mode speaks in sentence case, as the family's other labels do.
+  const signOutLabel = useHostedMode() ? 'Sign out' : 'Sign Out';
   const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    Alert.alert(signOutLabel, 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: signOut },
+      { text: signOutLabel, style: 'destructive', onPress: signOut },
     ]);
   };
 
@@ -70,14 +72,14 @@ export default function SettingsScreen() {
         <NavRow
           icon="tachometer"
           label="Plan"
-          description={meter.known ? meterShort(meter.figures) : undefined}
+          description={meter.known ? meterWords(meter.figures) : undefined}
           detail={meter.known ? meter.plan.label : undefined}
           onPress={() => open('plan')}
         />
         <NavRow
           icon="envelope-o"
           label={LANE_COPY.connections.mail}
-          detail={mail.known ? (mail.connected ? LANE_COPY.connections.on : LANE_COPY.connections.off) : undefined}
+          detail={mail.known ? (mail.connected ? LANE_COPY.connections.on : mail.available === false ? LANE_COPY.connections.coming : LANE_COPY.connections.off) : undefined}
           onPress={() => open('mail')}
         />
       </SettingsGroup>
@@ -110,7 +112,7 @@ export default function SettingsScreen() {
       </SettingsGroup>
 
       <TouchableOpacity style={styles.signOut} onPress={handleSignOut} activeOpacity={0.7}>
-        <RNText style={styles.signOutText}>Sign Out</RNText>
+        <RNText style={styles.signOutText}>{signOutLabel}</RNText>
       </TouchableOpacity>
     </SettingsScroll>
   );

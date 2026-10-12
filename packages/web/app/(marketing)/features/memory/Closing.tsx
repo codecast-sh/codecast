@@ -6,29 +6,29 @@ import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
 import { C, VIOLET } from "./kit";
-import { Whole, CopyCommand } from "../kit";
+import { Whole } from "../kit";
 
-/** Four real situations, each a short chain of commands from a question to its answer. */
-const SCENARIOS: { when: string; chain: string[]; get: string }[] = [
+/** Four real situations, each a short path through the app from a question to its answer. */
+const SCENARIOS: { when: string; steps: string[]; get: string }[] = [
   {
     when: "A reviewer asks why the retry cap is 5 and not 3.",
-    chain: ["cast blame src/webhooks/retry.ts:5", 'cast read jx7k2qa --ask "why 5?"'],
+    steps: ["Open retry.ts, Blame: Sessions, line 5", "Ask this session: why 5?"],
     get: "The session that set it, the message where 3 was chosen, and the load test that changed it to 5.",
   },
   {
     when: "Webhooks started failing after this morning's deploy.",
-    chain: ["cast search commit:4b1c9e2", "cast diff jx7k2qa"],
+    steps: ["Search commit:4b1c9e2", "Open the session, Show git diff"],
     get: "The session behind the suspect commit, every file it changed, and the conversation explaining each change.",
   },
   {
     when: "An agent picks up a half-finished branch.",
-    chain: ["cast context --auto"],
+    steps: ["Nothing to do: the agent looks first"],
     get: "The sessions that already touched the changed files, so it starts from their conclusions.",
   },
   {
     when: "Someone proposes removing signature checks to speed up ingest.",
-    chain: ['cast decisions --search "signature"', 'cast search "repo:payments signature"'],
-    get: "The recorded decision and its reason, plus the session where the team worked it out.",
+    steps: ["Search repo:payments signature", "Ask your agent what the team decided"],
+    get: "The session where the team worked it out, and the recorded decision with its reason.",
   },
 ];
 
@@ -37,17 +37,17 @@ export function Scenarios() {
     <section className="py-16 sm:py-24" style={{ backgroundColor: SOL.base03 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-6">
         <h2 className="font-mono text-2xl sm:text-3xl font-bold tracking-tight mb-3" style={{ color: SOL.base3 }}>From a question to the conversation that answers it</h2>
-        <p className="text-[16px] sm:text-[17px] leading-7 max-w-2xl mb-10" style={{ color: SOL.base1 }}>Most questions about code are questions about a past conversation. Each of these takes one or two commands.</p>
+        <p className="text-[16px] sm:text-[17px] leading-7 max-w-2xl mb-10" style={{ color: SOL.base1 }}>Most questions about code are questions about a past conversation. Each of these takes one or two steps.</p>
         <ol className="divide-y" style={{ borderColor: "#0a4352" }}>
           {SCENARIOS.map((s, i) => (
             <li key={s.when} className="grid gap-4 md:grid-cols-[48px_minmax(0,4fr)_minmax(0,5fr)_minmax(0,4fr)] md:gap-6 py-6" style={{ borderColor: "#0a4352" }}>
               <span className="font-mono text-[13px] tabular-nums" style={{ color: VIOLET }}>{String(i + 1).padStart(2, "0")}</span>
               <p className="text-[16px] leading-[1.55]" style={{ color: SOL.base2 }}>{s.when}</p>
               <div className="space-y-1.5 min-w-0">
-                {s.chain.map((c, k) => (
+                {s.steps.map((c, k) => (
                   <div key={c} className="flex items-start gap-2 font-mono text-[12.5px] leading-[1.5]">
-                    <span className="shrink-0" style={{ color: k === 0 ? SOL.green : SOL.base01 }}>{k === 0 ? "$" : "→"}</span>
-                    <span className="break-all" style={{ color: "#b9bcf0" }}>{c}</span>
+                    <span className="shrink-0" style={{ color: k === 0 ? VIOLET : SOL.base01 }}>{k === 0 ? "1" : "→"}</span>
+                    <span style={{ color: "#b9bcf0" }}>{c}</span>
                   </div>
                 ))}
               </div>
@@ -63,7 +63,7 @@ export function Scenarios() {
 const LIMITS: { q: string; a: ReactNode }[] = [
   {
     q: "Who can search my sessions?",
-    a: <>Sessions in a project shared with your team are searchable by the team. Sessions in a private project are searchable only by you. Nothing is searchable that you did not choose to share. <C>-g</C> widens a search to every team you belong to, never past them.</>,
+    a: <>Sessions in a project shared with your team are searchable by the team. Sessions in a private project are searchable only by you. Nothing is searchable that you did not choose to share. An agent can widen a search to every team you belong to, never past them.</>,
   },
   {
     q: "How far back does search reach?",
@@ -79,7 +79,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "What does asking cost?",
-    a: <><C>cast read --ask</C> runs a small model on the server and prints the tokens and cost of each answer. <C>cast ask</C> runs on your machine and needs <C>ANTHROPIC_API_KEY</C> in your environment; it uses the model to expand your question into search terms and returns the matching passages with their sources.</>,
+    a: <>Asking a session runs a small model on the server; the CLI form prints the tokens and cost of each answer. <C>cast ask</C>, which searches across sessions, runs on your machine and needs <C>ANTHROPIC_API_KEY</C> in your environment; it uses the model to expand your question into search terms and returns the matching passages with their sources.</>,
   },
   {
     q: "Do agents search on their own?",
@@ -154,7 +154,8 @@ export function Reference() {
   return (
     <section id="reference" className="py-16 sm:py-24" style={{ backgroundColor: SOL.base2 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-6">
-        <h2 className="font-mono text-2xl sm:text-3xl font-bold tracking-tight mb-8" style={{ color: SOL.base03 }}>Command reference</h2>
+        <h2 className="font-mono text-2xl sm:text-3xl font-bold tracking-tight mb-3" style={{ color: SOL.base03 }}>For scripts and agents</h2>
+        <p className="text-[15.5px] leading-7 max-w-2xl mb-8" style={{ color: SOL.base01 }}>Your agents run these on their own once memory is on. They work from any shell too.</p>
         <div className="grid gap-5 md:grid-cols-2">
           {REFERENCE.map((g) => (
             <div key={g.group} className="rounded-xl overflow-hidden" style={{ backgroundColor: SOL.base3, border: `1px solid color-mix(in srgb, ${SOL.base1} 40%, transparent)` }}>
@@ -204,7 +205,6 @@ export function Closing() {
             <p className="text-[16px] leading-7 mb-6" style={{ color: SOL.base1 }}>
               Install codecast and your sessions become searchable, askable and blameable. Answer yes to agent memory and your agents start reading it too.
             </p>
-            <CopyCommand cmd='cast search "file:src/auth.ts"' />
           </div>
           <div className="min-w-0">
             <InstallTabs location="feature_memory" />
