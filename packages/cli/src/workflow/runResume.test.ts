@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
-import { checkpointPath, claimRun, isMidRun, readCheckpoint, resumePoint, runnerPidFile, type ResumeRow } from "./runResume.js";
+import { checkpointPath, claimRun, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, type ResumeRow } from "./runResume.js";
 import { lineRunDir } from "./runner.js";
 
 // A runner that dies is a runner whose next request never comes back: the
@@ -127,10 +127,17 @@ describe("workflow/runResume (a run outlives its runner)", () => {
 
   test("a run killed at a gate still open waits on that gate without asking it twice", async () => {
     gateAnswer = "S";
-    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide" }) }));
+    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide", gate_decision_id: "sd_1" }) }));
     expect(outcome).toBe("completed");
     expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(false);
     expect(calls.some((c) => c.route === "/cli/workflow-runs/poll-gate")).toBe(true);
+  }, 30000);
+
+  test("a run paused at a gate whose ask never made a decision asks it again on resume", async () => {
+    gateAnswer = "S";
+    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide" }) }));
+    expect(outcome).toBe("completed");
+    expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(true);
   }, 30000);
 
   test("a run killed mid-station resumes that station, waiting on the hand it left working", async () => {
@@ -222,11 +229,36 @@ describe("workflow/runResume resumePoint", () => {
     expect(p.gate).toEqual({ node_id: "decide", response: null, open: false });
   });
 
+  test("a row moved off the checkpoint's node keeps the values the run made, and counts each finished node once (a stale card rebuilt from fresh)", () => {
+    const p = resumePoint(graph(), {
+      status: "running", current_node_id: "build",
+      node_statuses: [{ node_id: "start", status: "completed", outcome: "partial_success", completed_at: 1 }, { node_id: "build", status: "completed", outcome: "success", completed_at: 2 }],
+    }, {
+      run_id: "r", node_id: "decide", started: true, visit_counts: { build: 3, decide: 1 }, completed: ["start", "build"],
+      node_outcomes: { build: "success" }, context: { worktree: "agentwatch-trial-ct-1", "red.json": "{\"dir\":\"/x\"}", "start.outcome": "success" }, at: 1,
+    })!;
+    expect(p.node_id).toBe("build");
+    expect(p.context.worktree).toBe("agentwatch-trial-ct-1");
+    expect(p.context["red.json"]).toBe('{"dir":"/x"}');
+    expect(p.context["start.outcome"]).toBe("partial_success");
+    expect(p.visit_counts).toEqual({ start: 1 });
+    expect(p.from).toBe("row");
+  });
+
   test("a row stands mid-run once a runner reported past its start, and not before", () => {
     expect(isMidRun({ status: "pending", node_statuses: [] })).toBe(false);
     expect(isMidRun({ status: "running", current_node_id: "decide", node_statuses: [{ node_id: "start", status: "completed" }] })).toBe(true);
     expect(isMidRun({ status: "completed", current_node_id: "exit", node_statuses: [{ node_id: "exit", status: "completed" }] })).toBe(false);
     expect(resumePoint(graph(), { status: "running", current_node_id: "gone" }, null)).toBeNull();
     expect(checkpointPath("/x", "r1")).toBe("/x/runs/r1.json");
+  });
+});
+
+describe("workflow/runResume paneReplaceable (one run, one pane)", () => {
+  test("a pane running its runner, or created moments ago, is never replaced; a pane back at its shell is", () => {
+    expect(paneReplaceable(null, 1000)).toBe(true);
+    expect(paneReplaceable({ command: "bun", createdS: 0 }, 10_000)).toBe(false);
+    expect(paneReplaceable({ command: "bash", createdS: 1000 }, 1000 + PANE_CLAIM_GRACE_S - 1)).toBe(false);
+    expect(paneReplaceable({ command: "-zsh", createdS: 1000 }, 1000 + PANE_CLAIM_GRACE_S)).toBe(true);
   });
 });
