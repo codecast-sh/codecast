@@ -10,9 +10,10 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { buildMod, findModDir, MANIFEST_FILE, TYPES_FILE, authoringTypes, type ModBuild } from "./mods/build.js";
 import { scaffoldFiles } from "./mods/scaffold.js";
+import { tscInTree } from "./check.js";
 import { MOD_NAME_RE } from "@codecast/shared/contracts/mods";
 import { webBaseUrl } from "./config/readLocalConfig.js";
-import { localHash, readApprovals, writeApproval } from "./mods/localRunner.js";
+import { localDeviceName, localHash } from "./mods/localRunner.js";
 
 const cwd = () => process.env.CODECAST_CWD || process.cwd();
 
@@ -72,6 +73,7 @@ async function printLogs(deps: PublishDeps, name: string, since: number, limit =
 
 /** Typecheck the mod's folder with `cast check` (a watcher for that folder). Absent TypeScript, says so instead of failing. */
 function typecheck(dir: string): { checked: boolean; errors: string[]; note?: string } {
+  if (!tscInTree("/", path.join(dir, "tsconfig.json"))) return { checked: false, errors: [], note: "the folder has no TypeScript; bun add -d typescript @types/bun" };
   const res = Bun.spawnSync(["cast", "check", "--json"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
   try {
     const out = JSON.parse(res.stdout.toString());
@@ -105,6 +107,9 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
       for (const [file, text] of Object.entries(scaffoldFiles(name))) fs.writeFileSync(path.join(dir, file), text);
       console.log(`Created ${path.relative(cwd(), dir) || "."}/`);
       for (const file of Object.keys(scaffoldFiles(name))) console.log(`  ${file}`);
+      // The compiler `cast mod build` typechecks with; without it nothing is checked.
+      const install = Bun.spawnSync(["bun", "install", "--silent"], { cwd: dir, stdout: "ignore", stderr: "pipe" });
+      if (install.exitCode !== 0) console.log(`\nbun install failed, so cast mod build cannot typecheck yet: ${install.stderr.toString().trim().split("\n").pop() ?? ""}`);
       console.log(`\nNext: read codecast-mod.d.ts, change ui.tsx, then cd ${path.relative(cwd(), dir) || "."} && cast mod push`);
       console.log(`It goes live at ${modUrl(name, "main")}; that link alone on a line in a reply shows it inside the conversation.`);
     });
@@ -171,7 +176,7 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
       }
       if (build.manifest.fences?.length) console.log(`Show a fence by writing an example \`\`\`${build.manifest.fences[0].lang} block in your reply.`);
       console.log(`cast mod logs ${res.name} shows what it printed and threw.`);
-      if (build.local) console.log(`Its local half runs where the person approves this version: ask them to run  ! cast mod approve ${res.name}`);
+      if (build.local) console.log(`Its local half runs on each of your machines within 30s (cast mod local; cast mod revoke ${res.name} stops it on one)`);
     });
 
   mod
@@ -271,12 +276,14 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
     });
 
   mod
-    .command("pull <name>")
-    .description("Write a published version's source into a folder, to read or fork it")
-    .option("--version <n>", "Which version (default: the latest)")
+    // The version is an argument: the program's own --version flag would
+    // answer before a subcommand option of that name could.
+    .command("pull <name> [version]")
+    .description("Write a published version's source into a folder, to read or fork it (version: the latest unless named)")
     .option("--dir <path>", "Where (default: ./<name>)")
-    .action(async (name: string, options: { version?: string; dir?: string }) => {
-      const res = await apiPost(deps, "/cli/mods/get-version", { name, ...(options.version ? { version: Number(options.version) } : {}) }, { read: true });
+    .action(async (name: string, version: string | undefined, options: { dir?: string }) => {
+      if (version !== undefined && !/^v?\d+$/.test(version)) fail(`a version is a number, e.g. cast mod pull ${name} 2 (cast mod versions ${name} lists them)`);
+      const res = await apiPost(deps, "/cli/mods/get-version", { name, ...(version ? { version: Number(version.replace(/^v/, "")) } : {}) }, { read: true });
       const dir = path.resolve(cwd(), options.dir ?? name);
       for (const [rel, text] of Object.entries(res.source as Record<string, string>)) {
         const file = path.join(dir, rel);
@@ -345,7 +352,7 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
         if (m.agents) console.log(`\n${m.agents}`);
         for (const f of m.fences) console.log(`- \`\`\`${f.lang} blocks draw through it${f.description ? `: ${f.description}` : ""}`);
         for (const k of m.objects) {
-          console.log(`- ${k.title} objects (${k.prefix}-N): cast obj create ${k.prefix} "<title>"${k.fields.length ? " [--set <field>=<value>]" : ""}`);
+          console.log(`- ${k.title} objects (${k.prefix}-N): mention one by its short id in prose and it reads as a live reference; file a new one with cast obj create ${k.prefix} "<title>"${k.fields.length ? " [--set <field>=<value>]" : ""}`);
           if (k.fields.length) console.log(`  fields: ${k.fields.join(", ")}${k.statuses?.length ? `; statuses: ${k.statuses.join(" -> ")}` : ""}  (cast obj kinds has their types)`);
         }
         console.log("");
@@ -354,38 +361,10 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
 
   mod
     .command("approve <name>")
-    .description("Let this machine run a mod's local half, at its current version (a person, in a terminal)")
+    .description("Run a mod's local half on this machine again, after cast mod revoke (the Mods page has the same switch)")
     .action(async (name: string) => {
-      const res = await apiPost(deps, "/cli/mods/local", {}, { read: true });
-      const m = (res.mods ?? []).find((x: any) => x.name === name);
-      if (!m) fail(`${name} has no local half (its manifest names one under "local")`);
-      const code: string = m.local_code;
-      const hash = localHash(code);
-      const uses = [
-        ...new Set([...code.matchAll(/from\s*["'](node:[a-z_/]+|bun:[a-z_]+|[a-z][\w-]*)["']/g)].map((x) => x[1])),
-      ].filter((x) => !x.startsWith("codecast-mod"));
-      const reaches = [
-        /Bun\.spawn|child_process|\.sh\(|\.cast\(/.test(code) && "runs processes",
-        /\bfetch\(/.test(code) && "makes network requests",
-        /node:fs|Bun\.file|Bun\.write/.test(code) && "reads or writes files",
-        /process\.env/.test(code) && "reads environment variables",
-      ].filter(Boolean);
-      console.log(`${m.title ?? name}: the local half ${hash} (${Math.round(code.length / 100) / 10} KB), rev ${m.rev}`);
-      if (m.manifest?.local?.description) console.log(`  ${m.manifest.local.description}`);
-      console.log(`  runs on this machine with your access. A quick scan of the bundle (not a review; read the code) finds: ${reaches.length ? reaches.join(", ") : "no process, network, file or env use"}`);
-      if (uses.length) console.log(`  imports: ${uses.join(", ")}`);
-      console.log(`  read it: cast mod pull ${name}  (after a publish), or the bundle in the mod's folder`);
-      const approved = readApprovals()[name];
-      if (approved?.hash === hash) return console.log(`Already approved here. It runs within 30s while the mod is on.`);
-      if (!process.stdin.isTTY) {
-        fail(`approving runs this code on this machine with your access, so a person approves it in a terminal. Ask them to run: ! cast mod approve ${name}`);
-      }
-      process.stdout.write(`Type ${name} to approve it here: `);
-      const answer = await new Promise<string>((resolve) => process.stdin.once("data", (d) => resolve(String(d).trim())));
-      process.stdin.pause();
-      if (answer !== name) fail("not approved");
-      writeApproval(name, hash);
-      console.log(`ok approved ${name} (${hash}) on this machine; the daemon starts it within 30s. cast mod revoke ${name} stops it.`);
+      await apiPost(deps, "/cli/mods/local-device", { name, device_name: localDeviceName(), on: true });
+      console.log(`ok ${name} runs on this machine again; the daemon starts it within 30s while the mod is on`);
     });
 
   mod
@@ -408,10 +387,10 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
 
   mod
     .command("revoke <name>")
-    .description("Stop running a mod's local half on this machine")
+    .description("Stop running a mod's local half on this machine (the Mods page has the same switch)")
     .action(async (name: string) => {
-      writeApproval(name, null);
-      console.log(`ok ${name} no longer runs here; the daemon stops it within 30s`);
+      await apiPost(deps, "/cli/mods/local-device", { name, device_name: localDeviceName(), on: false });
+      console.log(`ok ${name} no longer runs here; the daemon stops it within 30s. cast mod approve ${name} brings it back.`);
     });
 
   mod
@@ -419,13 +398,13 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
     .description("The local halves your mods have, and which this machine runs")
     .action(async () => {
       const res = await apiPost(deps, "/cli/mods/local", {}, { read: true });
-      const approvals = readApprovals();
       if (!res.mods?.length) return console.log(`None of your mods has a local half.`);
+      const here = localDeviceName();
       for (const m of res.mods) {
-        const a = approvals[m.name];
         const hash = localHash(m.local_code);
-        const state = !m.enabled ? "off" : a?.hash === hash ? "runs here" : a ? "new version waits: cast mod approve" : "not approved here";
+        const state = !m.enabled ? "off" : (m.local_off ?? []).includes(here) ? "off here: cast mod approve" : "runs here";
         console.log(`${m.name.padEnd(24)} ${hash}  ${state}`);
+        for (const d of m.local_devices ?? []) if (d.device !== here) console.log(`  ${d.device.padEnd(22)} ${d.state}${d.error ? `: ${d.error}` : ""}`);
       }
     });
 

@@ -16,6 +16,8 @@ import { AgentLogoSvg } from '@/components/AgentLogo';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { isHostedAgentType } from '@codecast/shared/contracts';
 import { conversationState, conversationSubline, conversationTitle, titleIsAsk } from '@codecast/web/components/simple/lane';
+import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
+import { hostedRowTime } from '@codecast/web/lib/sameNameSuffix';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 
 export type SessionData = {
@@ -191,7 +193,16 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, roleSessions, onOpenRole, awaiting, asked }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void }) {
+/** A hosted row's one mark, in the web rail's terms: the working dot is ink
+ *  with a soft pulse, unread is a neutral dot, and anything else keeps the
+ *  slot empty so titles stay aligned. */
+function HostedRowDot({ working, unread }: { working: boolean; unread: boolean }) {
+  const Theme = useTheme();
+  if (working) return <PulsingDot color={Theme.text} />;
+  return <RNView style={[styles.statusDot, { backgroundColor: unread ? Theme.text : 'transparent' }]} />;
+}
+
+export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; titleSuffix?: string }) {
   const Theme = useTheme();
   // Hosted mode hides project chips (lib/surfaces gitChips).
   const gitChips = useSurface('gitChips');
@@ -202,8 +213,6 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
   // else what the person asked. The generated summary is left out: it is
   // written as bullets about "the user", for someone triaging a fleet.
   const internals = useSurface('inbox.rowInternals');
-  const agent = agentLabel(session.agent_type ?? "");
-  const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
   const sColor = statusColor(session);
   const sLabel = statusLabel(session);
   const showAuthor = session.author_name && session.is_own === false;
@@ -240,9 +249,13 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
   // A title still on its way is the person's own ask (titleIsAsk), and the
   // quiet line never says the ask a second time under it.
   const hostedRow = isHostedAgentType(session.agent_type);
-  const title = sessionTitle(session);
+  // Hosted mode names a row by the one hosted name rule (hostedRowTitle), as
+  // the web rail and the conversation's header do.
+  const storeTitle = useInboxStore((s) => (hostedRow && !internals ? hostedRowTitle(s, session._id) : ''));
+  const title = storeTitle || sessionTitle(session);
+  const laneState = internals ? null : conversationState(session as any, awaiting ? 1 : 0, Date.now());
   const quiet = internals ? '' : (
-    conversationSubline({ last_user_message: null }, conversationState(session as any, awaiting ? 1 : 0, Date.now()), asked)
+    conversationSubline({ last_user_message: null }, laneState!, asked)
     || stateView?.cardLine
     || (userMessage && userMessage !== title && !(hostedRow && titleIsAsk(session)) ? userMessage : '')
   );
@@ -259,14 +272,15 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            <StatusDot session={session} />
+            {internals ? <StatusDot session={session} /> : <HostedRowDot working={laneState === 'working'} unread={!!isUnread} />}
           </RNView>
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
           )}
           {/* Unread carries by WEIGHT plus a leading dot — the same two signals
-              the web card and the chat rail use, never a count. */}
-          {isUnread && <RNView style={styles.unreadDot} />}
+              the web card and the chat rail use, never a count. Hosted mode's
+              dot is the row's one mark, drawn in the status slot. */}
+          {internals && isUnread && <RNView style={styles.unreadDot} />}
           {/* Personified: the face, then the name leading the title (the web
               card's order). Nobody opted in: the row reads as it always did. */}
           <MobileIdentityFace
@@ -278,12 +292,19 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
           <MobileSessionIdentityLine
             row={identityRow}
             title={title}
-            style={[styles.conversationTitle, isUnread && styles.conversationTitleUnread]}
+            suffix={titleSuffix}
+            style={internals
+              ? [styles.conversationTitle, isUnread && styles.conversationTitleUnread]
+              : [styles.conversationTitle, styles.hostedTitle, isUnread && styles.hostedTitleUnread]}
           />
         </RNView>
         <RNView style={styles.rightMeta}>
           {internals && sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          <RNText style={styles.timeText}>{formatRelativeTime(session.updated_at)}</RNText>
+          {/* Hosted times read as the web rail's ("now", a clock time,
+              Yesterday, a weekday, a date), the accent only on unread rows. */}
+          <RNText style={[styles.timeText, !internals && styles.hostedTime, !internals && isUnread && styles.hostedTimeUnread]}>
+            {internals ? formatRelativeTime(session.updated_at) : hostedRowTime(session.updated_at, Date.now())}
+          </RNText>
           {session.is_pinned && (
             <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} />
           )}
@@ -331,7 +352,7 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
           <RNText maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: Theme.textSecondary }}>{roleSessions} {roleSessions === 1 ? 'session' : 'sessions'}</RNText>
         </Pressable>
       )}
-      {quiet ? <RNText style={styles.summaryText} numberOfLines={1}>{quiet}</RNText> : null}
+      {quiet ? <RNText style={[styles.summaryText, !internals && styles.hostedQuiet]} numberOfLines={1}>{quiet}</RNText> : null}
       {internals && stateView ? (
         // The agent's pinned "where this stands" line (cast state) replaces the
         // generated summary — same rule as the web card. The pin marks it as
@@ -358,13 +379,15 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
           </RNText>
         </RNView>
       ) : null}
+      {/* A phone row carries one line of detail: the agent's pinned state,
+          else the generated summary, else what the person last asked. */}
       {internals && !stateView && (session.idle_summary || session.subtitle) ? (
-        <RNText style={styles.summaryText} numberOfLines={2}>
+        <RNText style={styles.summaryText} numberOfLines={1}>
           {session.idle_summary || session.subtitle}
         </RNText>
       ) : null}
 
-      {internals && userMessage && (
+      {internals && !stateView && !(session.idle_summary || session.subtitle) && userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
           <RNText style={styles.userMessageCaret}>&gt; </RNText>
           {userMessage}
@@ -380,15 +403,6 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
         )}
         {blockedBadge && (
           <RNText style={styles.blockedBadge}>{blockedBadge.label}</RNText>
-        )}
-        {internals && agent ? (
-          <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
-        ) : null}
-        {internals && formatModelShort(session.model) && (
-          <RNText style={styles.modelBadge} numberOfLines={1}>{formatModelShort(session.model)}</RNText>
-        )}
-        {internals && session.message_count > 0 && (
-          <RNText style={styles.messageCount}>{session.message_count} msgs</RNText>
         )}
       </RNView>
       </RNView>
@@ -408,7 +422,7 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
   );
 }
 
-export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, roleSessions, onOpenRole, awaiting, asked }: {
+export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: {
   session: SessionData;
   isUnread?: boolean;
   onPress: () => void;
@@ -421,6 +435,8 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
   awaiting?: boolean;
   /** The open question a waiting row asks, shown as its quiet line. */
   asked?: string;
+  /** Tells two same-name rows apart (lib/sameNameSuffix). */
+  titleSuffix?: string;
 }) {
   const Theme = useTheme();
   const words = useModeWords();
@@ -529,7 +545,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} awaiting={awaiting} asked={asked} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+      <SessionItem session={session} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
     </RNAnimated.View>
   );
 
@@ -650,6 +666,26 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
   conversationTitleUnread: {
     fontWeight: '700',
   },
+  // Hosted mode: unread titles are 600 in ink, read ones muted.
+  hostedTitle: {
+    fontWeight: '500',
+    color: Theme.textMuted,
+  },
+  hostedTitleUnread: {
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  hostedTime: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  hostedQuiet: {
+    color: Theme.textDim,
+  },
+  hostedTimeUnread: {
+    color: Theme.accent,
+  },
   unreadDot: {
     width: 6,
     height: 6,
@@ -695,19 +731,6 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     borderRadius: 4,
     paddingHorizontal: 4,
     overflow: 'hidden',
-  },
-  messageCount: {
-    fontSize: 11,
-    color: Theme.orange,
-    fontVariant: ['tabular-nums'],
-    fontWeight: '400',
-  },
-  modelBadge: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontWeight: '500',
-    letterSpacing: 0.2,
-    maxWidth: 90,
   },
   userMessage: {
     fontSize: 13,

@@ -1,0 +1,12 @@
+/* Trial cards in the line app (trialCards.tsx, InboxView's Trial cards group). */
+.lwt-wait { text-decoration: none; cursor: pointer; }
+.lwt-wait b { font-weight: 600; }
+.lwt-wait:hover { box-shadow: inset 0 0 0 1px currentColor; }
+
+/* A trial row's ref is the card's (tc-N). */
+.lwi-group[data-kind="trial"] .lwi-ref { color: var(--lw-person-deep); }
+/* Revise takes a note: a field under the row, in the row's own grid. */
+.lwt-note { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 34px; border-bottom: 1px solid var(--lw-rule-2); background: color-mix(in srgb, var(--lw-paper-2) 45%, transparent); }
+.lwt-note input { flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--lw-rule); border-radius: 6px; background: var(--lw-paper); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-sm); }
+.lwt-note input:focus { outline: none; border-color: var(--lw-person); }
+.lwt-note .lw-act { height: 26px; font-size: var(--lw-fs-xs); padding: 0 10px; }

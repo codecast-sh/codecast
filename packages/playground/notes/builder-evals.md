@@ -161,3 +161,19 @@ more samples to judge, or a seed of its own.
 | kanban | 3 | make it feel calmer | 23.0s | $0.056 | 2/-/2 | hit |
 
 Raw results, served files and source of every version: `/tmp/pg-evals/<run>/`.
+
+## r8-summary (2026-10-07): short, verb-first summaries
+
+Prompt change only (convex/prompts.ts "Working", finish's summary
+description): one present-tense sentence starting with a verb, under 70
+characters, naming the most visible change; detail goes in "about" lines.
+No finish-side check. Measured on change summaries (step > 0):
+
+| | n | over 70 chars | verb-first | more than one sentence | median length |
+|---|---|---|---|---|---|
+| before (every change version in dev, 2026-10-07) | 368 | 308 (84%) | 347 (94%) | 10 | 105 |
+| after (`bun scripts/builder-evals.ts r8-summary poll todo guestbook kanban emoji`) | 15 | 1 (7%, 74 chars) | 15 | 0 | 50 |
+
+Quality held: 16/20 hits, 4 look defects (poll "make it more fun" again,
+kanban calm contrast, guestbook wiggle, emoji clutter), median change 10.5s,
+$1.07 total.
