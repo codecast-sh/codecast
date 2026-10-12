@@ -70,3 +70,8 @@ export const KEY_OWNERSHIP: Pick<KeydownOptions<ShortcutAction>, "inputLikeSelec
     { selector: '[data-undo-timeline="interactive"]', allow: ["palette.toggle", ...UNDO_CARD_CHORDS] },
   ],
 };
+
+/** A focused control the browser activates on Enter or Space itself (a button, a link, a switch): a list's own
+ *  Enter, which opens its cursor row, leaves the key to it. */
+export const controlFocused = (t: EventTarget | null | undefined): boolean =>
+  !!(t as HTMLElement | null | undefined)?.closest?.("button, a[href], [role=switch], [role=button], summary");

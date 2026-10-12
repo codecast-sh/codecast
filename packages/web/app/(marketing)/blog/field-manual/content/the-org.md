@@ -108,20 +108,20 @@ The flags (overloaded, bypassed, stuck on review, stale plan, unowned) feed the 
 
 ## The line: a project that fixes itself
 
-Roles answer "who owns this?". The **line** answers "how does this project change itself?". It is one fixed path every change follows, from a signal in the world to a shipped and watched change, shown on the line page as six stations:
+Roles answer "who owns this?". The **line** answers "how does this project change itself?". It is one fixed path every change follows, from a finding in the world to a shipped and watched change, shown on the line page as six stations:
 
-- **Sense.** Finders file signals: an error, a failed job, a call grader's finding.
-- **Causes.** Signals that share a root become one task.
+- **Sense.** Finders file findings: an error, a failed job, something a call grader caught.
+- **Problems.** Findings about the same thing become one problem.
 - **In build.** An agent builds the fix in its own worktree.
 - **Awaiting you.** A change card with its proof waits on a person.
-- **Watching.** After it ships, the cause's signals are counted again; a repeat reopens it.
+- **Watching.** After it ships, the line watches for the problem; if it is reported again, it reopens.
 - **Closed.**
 
-![The /line page titled 'The line: a signal in the world to a shipped, watched change' with 'Nothing waiting on you', and six stations left to right: Sense 4 (two finders), Causes 3 (a ranked list of error causes with their signal counts), In build 0 marked starved, Awaiting you 0, Watching 0 and Closed 0, each empty station explaining what it holds](/blog/field-manual/org-line.webp "The line page shows one project's line as stations, and the pills switch projects or roll them all up. Here three causes wait but &quot;In build&quot; reads *starved*: causes wait and nothing is building them.")
+![The /line page titled 'The line: a signal in the world to a shipped, watched change' with 'Nothing waiting on you', and six stations left to right: Sense 4 (two finders), Causes 3 (a ranked list of error causes with their signal counts), In build 0 marked starved, Awaiting you 0, Watching 0 and Closed 0, each empty station explaining what it holds](/blog/field-manual/org-line.webp "The line page shows one project's line as stations, and the pills switch projects or roll them all up. Here three problems wait but &quot;In build&quot; reads *starved*: problems wait and nothing is building them.")
 
 Each project has one line, defined in its repo next to the code: how to check, prove and ship a change, which finders feed it, how many open cards each person may have waiting, and how long a shipped change is watched. A repo without one gets sensible defaults.
 
-Roles and lines meet at admission. A line runs without any role: you start a run from a cause yourself. A role whose area holds the project adds autonomy: it admits causes in priority order, but only as fast as people answer cards, and your card cap counts across every line you answer for, so a busy week never buries you. Goals rank the causes. A project's *expectations*, a living document of how the system should behave with the quotes it came from, are what the judges compare behavior against.
+Roles and lines meet at admission. A line runs without any role: you start a run from a problem yourself. A role whose area holds the project adds autonomy: it admits problems in priority order, but only as fast as people answer cards, and your card cap counts across every line you answer for, so a busy week never buries you. Goals rank the problems. A project's *expectations*, a living document of how the system should behave with the quotes it came from, are what the judges compare behavior against.
 
 ## Hiring a role ready-made
 
