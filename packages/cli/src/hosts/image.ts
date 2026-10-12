@@ -51,6 +51,91 @@ export function listImages(opts: { region: string; profile?: string }, platform:
 }
 
 /**
+ * The public base images: a clean macOS with codecast's runtimes, a managed
+ * `codecast` login signed into the desktop, and the computer helper's
+ * Accessibility and Screen Recording grants, which macOS only takes from a
+ * person at the screen. Built once by codecast and published from this
+ * account, so nobody's first Mac needs that person. They carry no logins,
+ * keys or device identity; each host sets its own password and takes its own
+ * launch key on first provision (hosts/macLogin.ts).
+ */
+export const BASE_IMAGE_OWNER = "767398104971";
+export const BASE_IMAGE_LOGIN = "codecast";
+
+export function baseImageName(platform: string, now = new Date()): string {
+  return `codecast-base-${platform}-${now.toISOString().slice(0, 10)}`;
+}
+
+/** Regions a base image is copied to, besides the one it is built in. */
+export const BASE_IMAGE_REGIONS = ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "eu-central-1"];
+
+/**
+ * What leaves a base Mac before it is imaged: everything that is one
+ * machine's or one person's. SSH keys (the launch key comes back per instance
+ * from ec2-macos-init, sshd regenerates host keys on first connection), the
+ * desktop password file (each host sets its own), codecast's state except the
+ * granted computer helper, and shell history. The autologin and the helper's
+ * grants stay: they are the point of the image.
+ */
+export function macBaseScrubScript(login = BASE_IMAGE_LOGIN): string {
+  return `set -euo pipefail
+sudo -n true
+for home in /Users/${login} /Users/ec2-user; do
+  sudo rm -rf "$home/.ssh" "$home/.zsh_history" "$home/.bash_history" "$home/.zsh_sessions" "$home/.lesshst"
+done
+sudo find /Users/${login}/.codecast -mindepth 1 -maxdepth 1 ! -name computer -exec rm -rf {} +
+sudo rm -f /etc/ssh/ssh_host_*
+echo MAC-BASE-SCRUBBED`;
+}
+
+export function createBaseImageArgs(sourceId: string, platform: string, name: string): string[] {
+  const tags = [{ Key: "codecast-base", Value: platform }, { Key: "Name", Value: name }];
+  return ["ec2", "create-image", "--instance-id", sourceId, "--name", name,
+    "--description", `codecast ${platform} base image: runtimes, a managed codecast desktop login, and cast computer's grants`,
+    "--tag-specifications", JSON.stringify([{ ResourceType: "image", Tags: tags }, { ResourceType: "snapshot", Tags: tags }])];
+}
+
+/** Make this account's available base images public in every base region,
+ *  copying the newest into regions that lack it. Returns one line per region. */
+export function publishBaseImages(opts: { region: string; profile?: string }, platform: string): string[] {
+  const own = (region: string) => (aws({ ...opts, region }, ["ec2", "describe-images", "--owners", "self", "--filters", `Name=name,Values=codecast-base-${platform}-*`]).Images ?? [])
+    .sort((a: any, b: any) => (a.CreationDate < b.CreationDate ? 1 : -1));
+  const source = own(opts.region).find((i: any) => i.State === "available");
+  if (!source) return [`${opts.region}: no available ${platform} base image yet`];
+  const lines: string[] = [];
+  for (const region of [...new Set([opts.region, ...BASE_IMAGE_REGIONS])]) {
+    const ro = { ...opts, region };
+    const here = own(region).find((i: any) => i.Name === source.Name);
+    if (!here) {
+      const copy = aws(ro, ["ec2", "copy-image", "--source-region", opts.region, "--source-image-id", source.ImageId, "--name", source.Name,
+        "--description", source.Description ?? "", "--copy-image-tags"]);
+      lines.push(`${region}: copying ${source.Name} as ${copy.ImageId}; publish again once it is available`);
+    } else if (here.State !== "available") {
+      lines.push(`${region}: ${here.ImageId} is ${here.State}; publish again once it is available`);
+    } else if (!here.Public) {
+      // AWS blocks public images per region by default; lifting it is the account owner's call.
+      const blocked = aws(ro, ["ec2", "get-image-block-public-access-state"]).ImageBlockPublicAccessState !== "unblocked";
+      if (blocked) {
+        lines.push(`${region}: public images are blocked in this account; aws ec2 disable-image-block-public-access --region ${region}, then publish again`);
+        continue;
+      }
+      aws(ro, ["ec2", "modify-image-attribute", "--image-id", here.ImageId, "--launch-permission", JSON.stringify({ Add: [{ Group: "all" }] })]);
+      lines.push(`${region}: ${here.ImageId} is public`);
+    } else {
+      lines.push(`${region}: ${here.ImageId} was already public`);
+    }
+  }
+  return lines;
+}
+
+/** The newest public codecast base image for a platform in this region, or null. */
+export function latestBaseImage(opts: { region: string; profile?: string }, platform: string): ImageRef | null {
+  const out = aws(opts, ["ec2", "describe-images", "--owners", BASE_IMAGE_OWNER, "--filters", `Name=name,Values=codecast-base-${platform}-*`, "Name=state,Values=available"]);
+  const newest = (out.Images ?? []).sort((a: any, b: any) => (a.CreationDate < b.CreationDate ? 1 : -1))[0];
+  return newest ? { id: newest.ImageId, name: newest.Name, created: newest.CreationDate, platform } : null;
+}
+
+/**
  * cloud-init user data for a host launched from a codecast image: once per
  * instance, early in boot, before the codecast daemon starts.
  */

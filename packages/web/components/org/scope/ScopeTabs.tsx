@@ -427,7 +427,7 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
           narrative below, read against the live rows. */}
       {(facts.people ?? []).map((person) => (
         <section key={person.user_id} data-brief-person={person.user_id}>
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Goals: {person.name}</h3>
+          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{person.name}'s focus</h3>
           <PersonGoals person={person} roleHandle={roleHandle} now={now} own={false} />
         </section>
       ))}
@@ -456,7 +456,7 @@ export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, b
     <div className="space-y-5">
       {goals && (
         <section data-scope-section="goals">
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Your goals</h3>
+          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Your focus</h3>
           {goals}
         </section>
       )}

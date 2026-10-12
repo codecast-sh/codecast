@@ -11,6 +11,7 @@
  * raises the same class, so a caller has one shape to catch.
  */
 
+import { agentSetupLines } from "@codecast/shared/contracts";
 import type { ComputerErrorCode } from "./types.js";
 
 export class ComputerError extends Error {
@@ -94,6 +95,18 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "Do not loop while availability is unchanged.",
   ],
 };
+
+/**
+ * The lines that put the setup card under a failure only a person can fix: a
+ * missing Accessibility or Screen Recording grant. The helper names the grant
+ * in every such message; a token or peer failure (also permission_denied)
+ * names neither, and a rerun fixes that one.
+ */
+export function grantSetupLines(error: ComputerError): string[] {
+  const grantCodes: ComputerErrorCode[] = ["permission_denied", "screenshot_failed", "accessibility_error"];
+  if (!grantCodes.includes(error.code) || !/Accessibility|Screen Recording/.test(error.message)) return [];
+  return agentSetupLines("computer");
+}
 
 const CODES = new Set(Object.keys(RECOVERY) as ComputerErrorCode[]);
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { SOL } from "../../blog/blogChrome";
 import { KeyCap } from "@/components/KeyboardShortcutsHelp";
-import { C, Face, Frame, PAPER, PEOPLE, Prompt, SessionPill, T, Term } from "./kit";
+import { Face, Frame, PAPER, PEOPLE, SessionPill } from "./kit";
 import { NOTES, PR_NUMBER, REPO, REVIEWER, SESSION } from "./data";
 
 type Verdict = "approve" | "request-changes" | "comment";
@@ -45,21 +45,19 @@ export function Batch() {
       </div>
 
       <div className="min-w-0 space-y-5 lg:sticky lg:top-24">
-        <Term title="hold notes on lines, then look at the batch" wrap>
-          <Prompt>cast pr comment {PR_NUMBER} --hold --file src/retry.ts --line 42 &quot;{NOTES[0].text}&quot;</Prompt>
-          {T.green("ok")} held for your review of {T.cyan(`${REPO}#${PR_NUMBER}`)} {T.dim("(`cast pr notes` lists it, `cast pr review` sends the batch)")}{"\n"}
-          <Prompt>cast pr notes {PR_NUMBER}</Prompt>
-          {T.cyan(`${REPO}#${PR_NUMBER}`)} 2 held notes{"\n"}
-          {NOTES.map((n) => <span key={n.id}>  {T.dim(n.id)}  {n.file}:{n.line}  {n.text}{"\n"}</span>)}
-          {T.dim("`cast pr review --approve|--request-changes|--comment` sends them as one review.")}
-        </Term>
+        <ol className="space-y-3 text-[14.5px] leading-[1.65]" style={{ color: SOL.base01 }}>
+          <Step n={1}>In <b style={{ color: SOL.base02 }}>Files</b>, hover a line and press <b style={{ color: SOL.base02 }}>+</b>. <b style={{ color: SOL.base02 }}>Start a review</b> holds the note; <b style={{ color: SOL.base02 }}>Post now</b> sends it straight to GitHub.</Step>
+          <Step n={2}>A bar at the bottom counts the notes not sent yet. Only you can see them.</Step>
+          <Step n={3}>Click <b style={{ color: SOL.base02 }}>Review</b> or press <KeyCap size="xs">r</KeyCap>. <b style={{ color: SOL.base02 }}>Finish your review</b> lists your notes, takes a summary and a verdict, and <b style={{ color: SOL.base02 }}>Submit review</b> sends them.</Step>
+        </ol>
 
         {dest === "github" ? (
-          <Term title="send it as one review, under your own account" wrap>
-            <Prompt>cast pr review {PR_NUMBER} --{verdict}{body ? ` -b "${body}"` : ""}</Prompt>
-            {T.green("ok")} {verdict === "approve" ? T.green("approved") : verdict === "request-changes" ? T.yellow("requested changes on") : "commented on"} {T.cyan(`${REPO}#${PR_NUMBER}`)} {T.dim(`with 2 notes as ${REVIEWER} https://github.com/${REPO}/pull/${PR_NUMBER}#pullrequestreview-2841907733`)}{"\n"}
-            {"   "}{T.dim(`delivered to session ${SESSION.id}`)}
-          </Term>
+          <div className="rounded-xl border p-4 text-[13.5px] leading-relaxed" style={{ borderColor: SOL.base2, backgroundColor: PAPER, color: SOL.base01 }}>
+            <div className="font-mono text-[12px] font-semibold" style={{ color: SOL.base03 }}>
+              {verdict === "approve" ? "Approved" : verdict === "request-changes" ? "Requested changes" : "Commented"} on {REPO}#{PR_NUMBER}, with 2 notes
+            </div>
+            One review on GitHub under {REVIEWER}&apos;s name, and one message to <SessionPill>{SESSION.id}</SessionPill> carrying the verdict, the summary and every note.
+          </div>
         ) : (
           <div className="rounded-xl border p-4 font-mono text-[12px] leading-relaxed" style={{ borderColor: "rgba(42,161,152,0.35)", backgroundColor: "rgba(42,161,152,0.06)", color: SOL.base01 }}>
             <div className="font-semibold" style={{ color: SOL.cyan }}>Send to session, from the page</div>
@@ -71,7 +69,7 @@ export function Batch() {
         <p className="text-[14.5px] leading-[1.7]" style={{ color: SOL.base01 }}>
           {verdict === "approve"
             ? <>An approval needs no body. GitHub refuses an approval of your own pull request, and the refusal comes back in its own words.</>
-            : <><C>--{verdict}</C> needs a body: <C>-b &quot;text&quot;</C>, or <C>-b -</C> to read it from stdin.</>}
+            : <>{verdict === "comment" ? "A comment" : "A request for changes"} needs a summary.</>}
           {" "}A verdict goes out under your GitHub account, never the app&apos;s, so it needs your account connected.
         </p>
       </div>
@@ -198,5 +196,14 @@ function ReviewBar({ verdict, setVerdict, dest, setDest }: { verdict: Verdict; s
         </button>
       </div>
     </div>
+  );
+}
+
+function Step({ n, children }: { n: number; children: ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="mt-[2px] inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[12px] font-bold" style={{ backgroundColor: "rgba(181,137,0,0.12)", color: SOL.yellow }}>{n}</span>
+      <span>{children}</span>
+    </li>
   );
 }
