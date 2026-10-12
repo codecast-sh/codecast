@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useLabelColor } from "../../lib/labelColors";
 import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
 import { sessionCardTitle } from "../../lib/sessionCard";
@@ -8,7 +9,7 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useModeWords, useSurface } from "../../lib/surfaces";
+import type { ModeWords } from "../../lib/surfaceRules";
 
 // The pieces of the full inbox card (SessionCardView) that stand on their own:
 // each draws from the row and the few facts handed to it, and every gesture
@@ -324,6 +325,8 @@ export function CardPinBadge({ session, fadeGround, onPin }: { session: InboxSes
 /** The hover toolbar on a live card: pin, kill, label, stash. */
 export function CardHoverToolbar({
   session,
+  words,
+  labels,
   fadeGround,
   onPin,
   onDismiss,
@@ -331,14 +334,16 @@ export function CardHoverToolbar({
   onStash,
 }: {
   session: InboxSession;
+  /** The mode's words and whether the Labels action shows: the card reads
+   *  both on its one store subscription, so the toolbar holds none. */
+  words: ModeWords;
+  labels: boolean;
   fadeGround: string | null;
   onPin?: (id: string, e: React.MouseEvent) => void;
   onDismiss?: (id: string) => void;
   onOpenLabels?: (session: InboxSession) => void;
   onStash?: (id: string, e: React.MouseEvent) => void;
 }) {
-  const words = useModeWords();
-  const labels = useSurface("inbox.labelStrip");
   return (
         <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
@@ -498,5 +503,38 @@ export function SelectTick({ sessionId, isSelected, selecting, onToggle }: { ses
     >
       <Icon className="h-4 w-4" />
     </button>
+  );
+}
+
+/** The project a session runs in, as its card shows it: the project's dot and
+ *  name in its color, or a label as a path under its project (a faded prefix,
+ *  then the label in its own color). Hover names the directory. Nothing for a
+ *  session with neither. */
+export function SessionProjectChip({ project, label, directory, className = "" }: {
+  /** getProjectName's answer; "unknown" when the session has no directory. */
+  project: string;
+  label?: string | null;
+  directory?: string | null;
+  className?: string;
+}) {
+  const getLabelColor = useLabelColor();
+  if (project === "unknown" && !label) return null;
+  return (
+    <span
+      className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(label ?? project).text}${className ? ` ${className}` : ""}`}
+      title={`${project} · ${directory || "no directory"}`}
+    >
+      {project !== "unknown" && (
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
+      )}
+      {label && project !== "unknown" && label.toLowerCase() !== project.toLowerCase() ? (
+        <span className="flex min-w-0">
+          <span className={`truncate font-normal opacity-60 ${getLabelColor(project).text}`}>{project}/</span>
+          <span className="flex-shrink-0 max-w-[10rem] truncate">{label}</span>
+        </span>
+      ) : (
+        <span className="truncate">{label ?? project}</span>
+      )}
+    </span>
   );
 }
