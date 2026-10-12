@@ -227,15 +227,20 @@ export function extractStateArgs(args: string): StateArgs {
 // ── cast decide ─────────────────────────────────────────────────────────────
 // `cast decide "<question>" -o … -o … --context - <<'EOF' …` posts a decision;
 // `cast decide edit [id] …` changes it; `cast decide cancel [id]` withdraws it;
-// `cast decide ls` lists them. The transcript renders the first three as a
+// `cast decide ls` lists them; `show`, `answer` and `recommend` name one
+// decision by `sd-N`. The transcript renders the first three as a
 // decision card — the same card the queue shows — so the agent never has to
 // restate the question in prose. What is parsed here is the recorded argv; the
 // live row in the store (status, the answer, an edited text) overrides it when
 // the conversation view can find it.
 export interface DecideArgs {
-  verb: "ask" | "edit" | "cancel" | "ls";
+  verb: "ask" | "edit" | "cancel" | "ls" | "show" | "answer" | "recommend";
   /** Positional id on edit/cancel, when given. */
   decisionId?: string;
+  /** The decision show/answer/recommend name (`sd-N` or an id). */
+  ref?: string;
+  /** answer/recommend: the choice as typed (`2`, `1,3`, `2>1>3`), or "form" for --form. */
+  choice?: string;
   /** The question (ask positional, or edit --question). Null when absent or shell-expanded. */
   question: string | null;
   options: Array<{ label: string; description?: string }>;
@@ -251,6 +256,7 @@ export interface DecideArgs {
 
 const DECIDE_VERBS: Record<string, DecideArgs["verb"]> = {
   edit: "edit", cancel: "cancel", rm: "cancel", withdraw: "cancel", ls: "ls", list: "ls",
+  show: "show", answer: "answer", recommend: "recommend",
 };
 const DECIDE_VALUE_FLAGS = new Set(["-o", "--option", "--context", "--report", "--default", "--session", "--question"]);
 
@@ -272,6 +278,12 @@ export function extractDecideArgs(subcommand: string, args: string): DecideArgs 
   if (out.verb === "ls") return out;
 
   const tokens = tokenizeShellArgs(rest);
+  if (out.verb === "show" || out.verb === "answer" || out.verb === "recommend") {
+    const words = tokens.filter((t) => t.quoted || !FLAG_RE.test(t.value));
+    out.ref = words[0]?.value;
+    out.choice = tokens.some((t) => !t.quoted && t.value === "--form") ? "form" : words[1]?.value;
+    return out;
+  }
   const positional: ShellToken[] = [];
   let contextToken: ShellToken | null = null;
   let questionFlag: ShellToken | null = null;
@@ -335,13 +347,14 @@ export function normalizeCastCategory(category: string): string {
   return CAST_CATEGORY_ALIASES[category] || category;
 }
 
-// `cast decide` (not `ls`) is the authored twin of AskUserQuestion: the
-// human needs to see the card in a condensed feed, not a "ran 1 command"
-// receipt they have to open.
+// `cast decide` (not a read: `ls`, `show`) is the authored twin of
+// AskUserQuestion: the human needs to see the card in a condensed feed, not a
+// "ran 1 command" receipt they have to open.
 export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
   if (!cast) return false;
   if (normalizeCastCategory(cast.category) !== "decide") return false;
-  return extractDecideArgs(cast.subcommand, cast.args).verb !== "ls";
+  const verb = extractDecideArgs(cast.subcommand, cast.args).verb;
+  return verb !== "ls" && verb !== "show";
 }
 
 export interface CastBodyPart {
