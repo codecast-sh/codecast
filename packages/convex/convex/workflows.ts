@@ -40,6 +40,16 @@ const edgeV = v.object({
   condition: v.optional(v.string()),
 });
 
+// Where a pushed graph lives (schema workflows.origin, line-workspace.md LW4).
+export const graphOriginV = v.object({
+  device_id: v.string(),
+  root: v.string(),
+  file: v.string(),
+  files: v.array(v.object({ node: v.string(), prompt: v.optional(v.string()), script: v.optional(v.string()) })),
+  graph_hash: v.string(),
+  nodes: v.array(v.object({ id: v.string(), h: v.string() })),
+});
+
 const upsertArgs = {
   name: v.string(),
   slug: v.string(),
@@ -53,6 +63,8 @@ const upsertArgs = {
   // back from `source` (daemonGraph.ts). Store it here once
   // `workflows.stack` exists in the schema.
   stack: v.optional(v.string()),
+  // Only a push from a file in a checkout carries it (cli lineGraphEdit.graphOrigin).
+  origin: v.optional(graphOriginV),
 };
 
 // One body for the CLI push and the web's edit: a row per (user, slug).
@@ -60,7 +72,20 @@ const upsertArgs = {
 const workflowBySlug = (ctx: any, userId: Id<"users">, slug: string) =>
   ctx.db.query("workflows").withIndex("by_user_slug", (q: any) => q.eq("user_id", userId).eq("slug", slug)).first();
 
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean }) {
+/**
+ * A new version of the graph when its hash moved (LW4: every save is a
+ * version of the step): each station's hash, and which stations changed
+ * since the version before.
+ */
+export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now = Date.now()) {
+  const last = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
+  if (last?.graph_hash === origin.graph_hash) return null;
+  const was = new Map<string, string>((last?.nodes ?? []).map((n: any) => [n.id, n.h]));
+  const changed = origin.nodes.filter((n) => was.get(n.id) !== n.h).map((n) => n.id);
+  return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now });
+}
+
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -73,8 +98,11 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
       nodes: args.nodes,
       edges: args.edges,
       model_stylesheet: args.model_stylesheet,
+      // A push that does not say where the graph lives leaves what an earlier one said.
+      ...(args.origin ? { origin: args.origin } : {}),
       updated_at: now,
     });
+    if (args.origin) await recordGraphVersion(ctx, existing._id, userId, args.origin, now);
     return { id: existing._id, updated: true };
   }
 
@@ -90,9 +118,11 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
     nodes: args.nodes,
     edges: args.edges,
     model_stylesheet: args.model_stylesheet,
+    ...(args.origin ? { origin: args.origin } : {}),
     created_at: now,
     updated_at: now,
   });
+  if (args.origin) await recordGraphVersion(ctx, id, userId, args.origin, now);
   return { id, updated: false };
 }
 
@@ -111,7 +141,8 @@ export const upsert = mutation({
 // rides dispatch here. A line slug must be one a role's line may name.
 export const webUpsert = mutation({
   args: { ...upsertArgs, create_only: v.optional(v.boolean()) },
-  handler: async (ctx, { stack: _stack, ...args }) => {
+  // Only a machine's push says where a graph lives; the web never does.
+  handler: async (ctx, { stack: _stack, origin: _origin, ...args }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");

@@ -20,7 +20,7 @@ import { agentName, agentTitle, deriveAnchorStatus, useAnchors, useRootAgent, ty
 import { AnchorAvatar, AnchorScopePill } from "./AnchorIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { anchorIdentityWords, globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
+import { anchorIdentityWords, defaultPinOf, globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
 import { Pin, PinOff, Plus } from "lucide-react";
 import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { ContextMenu, CtxCheckItem, CtxHeader, CtxItem, CtxLabel, CtxSeparator, useContextMenu } from "../ui/context-menu";
@@ -47,16 +47,19 @@ export function AnchorPanel() {
   const pins = useHeaderPins();
   const target = useInboxStore((st) => st.anchorPanel.target);
   const anchors = useAnchors();
+  const activeTeamId = useInboxStore((st) => (st.clientState.ui?.active_team_id as string | undefined) ?? null);
+  // With no pin to show (a person who unpinned everything), the panel still
+  // opens on the assistant or the workspace's agent, never on a hire form for
+  // a seat that already stands.
   const shown: ResolvedPin | null = (target?.kind === "anchor"
     ? pins.find((p) => p.anchor && p.anchor._id === target.id) ?? pinOfAnchor(anchors.find((a) => a._id === target.id) ?? null)
     : target?.kind === "session" ? pins.find((p) => p.conversationId === target.id) ?? sessionPin(target.id)
-    : null) ?? pins[0] ?? null;
+    : null) ?? pins[0] ?? defaultPinOf(anchors, activeTeamId);
   const current = shown?.anchor ?? null;
   // What the seat offers next, above its composer: the Head of People's
   // review (RoleOffer renders nothing for any other thread).
   const offerFor = shown?.conversationId ?? null;
   const offer = useMemo(() => (offerFor ? <RoleOffer conversationId={offerFor} /> : null), [offerFor]);
-  const root = useRootAgent();
   const router = useRouter();
   // No global assistant yet: the panel offers the hire above whatever it shows (S30).
   const hasGlobalAssistant = !!globalAssistantOf(anchors);
@@ -134,9 +137,6 @@ export function AnchorPanel() {
             shown.conversationId
               ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns composerNode={offer} />
               : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
-          ) : root ? (
-            // The workspace has its agent but nothing is pinned: the way to a right hand (S30).
-            <HireAssistantCard compact />
           ) : (
             <AnchorOnboarding compact />
           )}
@@ -215,16 +215,19 @@ function sessionPin(id: string): ResolvedPin | null {
 /** The header pins (org-staffing.md S30): one face per pinned role or
  *  session, the person's global Executive Assistant by default, else the active
  *  workspace's agent. One glance says whether a role needs you or is
- *  working; one click opens the panel on it. A right click unpins. */
+ *  working; one click opens the panel on it. A right click unpins. A person
+ *  who unpinned everything gets an empty header; the panel stays on its
+ *  shortcut, and its Pin button brings a face back. */
 export function HeaderPins() {
   const pins = useHeaderPins();
+  const chosen = useInboxStore((st) => readHeaderPins(st) !== null);
   const root = useRootAgent();
   const orgOn = useWorkspaceFeature("org");
   const menu = useContextMenu<ResolvedPin | null>();
   // In hosted mode's Assistant scope the assistant is the one face: a pinned
   // agent beside it would read as a second assistant.
   const assistantOnly = useAssistantScope().only;
-  if (!orgOn || assistantOnly) return null;
+  if (!orgOn || assistantOnly || (chosen && !pins.length)) return null;
   return (
     <span className="inline-flex items-center gap-0.5" data-header-pins>
       {pins.length
