@@ -14,18 +14,26 @@
  * and the web derives a queued row's place in line from the same function.
  */
 
-export const SUBAGENT_CAP_DEFAULTS = { per_session: 10, per_machine: 24 } as const;
+/**
+ * No cap unless a person configures one (sd-460): 0 means no limit, and it is
+ * the default for both. A configured limit is a positive whole number from
+ * `cast config set subagents.per_session N` (or per_machine).
+ */
+export const SUBAGENT_CAP_DEFAULTS = { per_session: 0, per_machine: 0 } as const;
+export const NO_SUBAGENT_CAP = 0;
 
 export interface SubagentCaps {
+  /** 0 = no limit. */
   per_session: number;
+  /** 0 = no limit. */
   per_machine: number;
 }
 
-/** A configured value, or the default when it is missing or not a positive whole number. */
+/** A configured value (0 or a positive whole number), or the default when it is missing or malformed. */
 export function normalizeSubagentCaps(raw?: { per_session?: unknown; per_machine?: unknown } | null): SubagentCaps {
   const pick = (v: unknown, fallback: number) => {
     const n = typeof v === "string" ? Number(v) : v;
-    return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : fallback;
+    return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : fallback;
   };
   return {
     per_session: pick(raw?.per_session, SUBAGENT_CAP_DEFAULTS.per_session),
@@ -52,9 +60,9 @@ export type Admission = { start: true } | { start: false; full: "session" | "mac
 /** Whether a worker with these facts may start beside the running ones. */
 export function admit(candidate: Pick<SlotRow, "parent" | "device" | "caps">, running: Pick<SlotRow, "parent" | "device">[]): Admission {
   const sameSession = candidate.parent ? running.filter((r) => r.parent === candidate.parent).length : 0;
-  if (candidate.parent && sameSession >= candidate.caps.per_session) return { start: false, full: "session" };
+  if (candidate.parent && candidate.caps.per_session > NO_SUBAGENT_CAP && sameSession >= candidate.caps.per_session) return { start: false, full: "session" };
   const sameMachine = candidate.device ? running.filter((r) => r.device === candidate.device).length : 0;
-  if (candidate.device && sameMachine >= candidate.caps.per_machine) return { start: false, full: "machine" };
+  if (candidate.device && candidate.caps.per_machine > NO_SUBAGENT_CAP && sameMachine >= candidate.caps.per_machine) return { start: false, full: "machine" };
   return { start: true };
 }
 
