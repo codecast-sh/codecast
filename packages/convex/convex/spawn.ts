@@ -6,7 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -425,7 +425,11 @@ export const createSessionFromCli = mutation({
       spawnerConversationId: spawner?._id,
       handoffFrom,
       prompt,
-      fleet: subagentFields ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
+      // A worker joins the fleet when its spawner declares the fleet's limits
+      // (`cast spawn --subagent` always does). A workflow station's hand is
+      // nested under its run but paced by it, one station at a time, so it
+      // never waits for a slot behind the machine's other workers.
+      fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
@@ -531,7 +535,7 @@ export function handBriefing(
     `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
     `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
     `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
-    `- End EVERY turn with a handoff, never a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
+    `- End every turn with a handoff, not a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
   ].join("\n");
-  return `${UNATTENDED_MANDATE}\n\n${header}\n\n${(prompt ?? "").trim()}`.trim();
+  return applyUnattended(`${header}\n\n${(prompt ?? "").trim()}`.trim(), `the role ${role.name} (@${role.handle})`);
 }
