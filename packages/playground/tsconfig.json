@@ -18,5 +18,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["vite/client", "bun"]
   },
-  "include": ["src", "convex", "runtime", "scripts", "vite.config.ts"]
+  "include": ["src", "convex", "runtime", "scripts", "worker", "vite.config.ts"]
 }
