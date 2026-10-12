@@ -1,83 +1,48 @@
-The visual canvas lets an agent answer with a designed page instead of a wall of text. When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), the agent emits a `cast-canvas` block of self-contained HTML, CSS, and SVG, and codecast renders it inline in the conversation: themed to match the app, expandable to fullscreen. The same block renders in a `cast decide` context, so a decision in the queue can open with its options laid side by side instead of described in paragraphs.
+Some answers are easier to see than to read: a comparison, a before and after, a breakdown, a flow. With the Visual Canvas on, an agent can answer with a small designed panel right in the conversation, with charts, cards, tables and diagrams, instead of a wall of text or ASCII art. Plain text stays the default. The agent reaches for a canvas only when the shape of the answer carries the meaning.
 
-Everything in the figure below is live. Each example is a real canvas rendered by the same component the app uses in a conversation, and the theme row switches the classes the app puts on the page. Nothing in the canvas source changes between themes.
+![A conversation where the agent answered with a canvas: a bar chart of build times and three comparison cards](/documentation/visual-canvas/conversation.webp "Asked to compare three static site generators. The answer is one canvas, a chart and a row of cards, and one sentence of recommendation under it.")
+
+## Turn it on
+
+1. Open **Agent features** from your account menu and pick the computer your agents run on.
+2. Switch on **Visual Canvas**, under *Showing the work*.
+
+That's all. Agents started from then on know how to draw one. Click **How it works** on the card to see what it adds and a request to try.
+
+![The Visual Canvas detail in Agent features](/documentation/visual-canvas/visual-feature.webp "The Visual Canvas detail. The switch at the top right turns it on for the selected computer.")
+
+## Ask for it in plain words
+
+Say what you want to see. Mentioning a visual helps, but agents also choose one on their own when it fits:
+
+- "Compare the three caching options as a visual."
+- "Show me the error rate by hour, before and after the fix."
+- "Draw the flow of a webhook from the provider to our database."
+- "Lay out the open pull requests by status."
+
+## What you see
 
 ```figure
 CanvasThemesFigure
-Four canvases, four themes, one source each. Pick an example or a theme; the swatches are the tokens the canvas reads.
+Real canvases, drawn by the same component the app uses. Pick an example or a theme: a canvas follows whichever theme you use.
 ```
 
-The visual snippet teaches agents the format and, just as important, the restraint: reach for a canvas when a visual beats prose; the default stays markdown. It is installed via [the snippet system](/documentation/agent-snippets).
+- **It matches the app.** A canvas uses the app's fonts and colors, and follows you when you switch between light and dark themes.
+- **Controls in its header.** The header shows the canvas's title, a button to see the source behind it, a copy button, and a fullscreen button. Press **Esc** to leave fullscreen.
+- **Long ones fold.** A tall canvas folds behind a **Show all** button so it never swallows the conversation.
+- **Small interactions work.** Tabs, tables you sort by clicking a header, tooltips on hover, and charts with hover labels.
+- **Pictures, not file paths.** When an agent wants to show you a screenshot or a chart it rendered, it uploads the image, and the picture appears in the message instead of a path on its machine that your browser can't open.
 
-## The format
+A canvas is part of the message. It stays in the transcript, appears for teammates reading the session, and shows in shared links and in [decisions](/documentation/decisions), where an agent can lay options side by side. On the iPhone app a canvas shows as a card with its title; tap it to open it full screen.
 
-A canvas is a fenced block:
+## What it will and won't do
 
-````
-```cast-canvas
-<div data-canvas-title="Shown in the header">
-  …HTML/CSS/SVG…
-</div>
-```
-````
+Conversations sync across your team, so a canvas is something other people see without having written it. It is built to be safe to look at:
 
-`data-canvas-title` names the block in its header; `data-canvas-size="wide"` on the root lets a dashboard take the full screen width. The header also carries a source toggle, a copy button, and fullscreen. A canvas taller than 620 pixels folds behind a "Show all" control so it never swallows the conversation.
+- **No code runs.** Scripts, forms, embedded frames and anything that reacts to clicks are removed before the canvas appears. Tabs, sorting and charts are codecast's own, not the agent's.
+- **Nothing phones home.** Images from other websites are dropped, so a canvas can't track who opened it. Images an agent uploaded to codecast, and images drawn inside the canvas, show normally.
+- **It stays in its box.** A canvas can't restyle the app around it, and links in it open in a new tab (links to codecast's own sessions and tasks open in the app).
 
-## How a canvas matches the theme
+## Canvas or page?
 
-Theming rides on CSS variables. The snippet instructs agents to color everything with the `--sol-*` tokens (`--sol-text`, `--sol-card`, `--sol-border`, and the eight accents) and never hardcode colors. A token names a role, not a color: `--sol-red` is "the bad number", and each theme decides what that looks like. Solarized dark keeps the accents and inverts the surfaces; the minimal themes swap in their own quieter accents.
-
-```figure
-TokenAnatomyFigure
-The agent writes roles. Each of the app's four themes resolves them to its own colors.
-```
-
-The tokens reach the canvas because it renders into a shadow root rather than an iframe. CSS custom properties inherit through the shadow boundary, so the canvas reads the live theme with no setup and follows a theme switch the moment it happens. The shadow root also works the other way: the canvas's own `<style>` stays scoped inside it, so an agent's `.card { … }` cannot restyle the app around it, and the app's prose styles cannot distort the canvas.
-
-For a soft fill, mix a token with transparency rather than inventing a lighter shade: `color-mix(in srgb, var(--sol-blue) 14%, transparent)` stays correct on light and dark backgrounds alike.
-
-## Sandboxed by design
-
-Canvas HTML runs with no scripts and no third-party network. Before it mounts, the block goes through a sanitizer that removes scripts, event handlers, iframes, forms and embeds, drops any image that is not an inline `data:` URI or a codecast-hosted image, and rewrites remote `url()` references in CSS to `none`. Links open in a new tab, except links to codecast's own objects, which navigate inside the app.
-
-```figure
-SandboxPipelineFigure
-Sanitize, mount in a shadow root that inherits the theme, then hydrate. The interactive parts are codecast's code, never the agent's.
-```
-
-This is what makes it safe to render agent-authored HTML inside the app. Conversations sync across a team, so a canvas is untrusted content shown to people who did not write it: the block can lay out anything, but it cannot phone home, run code, or read anything outside itself.
-
-## Declarative interactivity
-
-Because scripts are stripped, interactivity is declarative: the agent writes a class or attribute, codecast supplies the behavior.
-
-- **Tabs**: `<div class="cast-tabs"><section data-tab="Label">…</section>…</div>`
-- **Sortable table**: `<table class="cast-table">`, whose headers become click to sort (try the "Sortable table" example above)
-- **Tooltips**: `data-tip="text"` on any element (hover "deliver" in the "Flow" example)
-- **Charts**: a `cast-chart` div with a JSON spec
-
-```html
-<div class="cast-chart" data-spec='{
-  "marks": [{"type":"barY","data":[…],"x":"label","y":"value"}],
-  "y": {"grid": true}
-}'></div>
-```
-
-Charts compile to Observable Plot, and the whole mark and transform vocabulary is available by name: `dot`, `boxY`, `density`, `cell` heatmaps, stacked `areaY`, `arrow`, `vector`, and the rest. Multi-series charts set `fill` or `stroke` to a data field with a legend; facets use `fx`/`fy`; aggregation happens declaratively in the spec (`binX`, `groupX`, `hexbin`, `windowY`) rather than by pre-summing data. The agent describes the data and the form; codecast renders it in the canvas's mono font with the theme's colors. Plot loads only when a chart appears, so a canvas without one costs nothing extra.
-
-## Screenshots and images
-
-Agents constantly have images worth showing: a screenshot of the UI they just built, a chart they rendered, a diagram from the web. A link to a local file path is dead in your browser, so the snippet teaches `cast image` instead:
-
-```bash
-cast image shot.png                    # local file
-cast image https://…/diagram.png       # remote image, re-hosted
-```
-
-The command uploads the image to codecast's storage and prints a stable URL plus ready-to-paste markdown. That URL renders inline, with no click-to-load gate, in message markdown (`![alt](url)`) and inside a canvas (`<img src="url">`), for you and for teammates reading the session. Arbitrary third-party image URLs stay gated behind a click, because an auto-fetching remote image is a tracking pixel.
-
-## Where canvases show up
-
-Anywhere conversations render: the web dashboard, the desktop app, and mobile. A canvas is part of the message, so it survives in the transcript, shows up in shared links, and appears wherever the session is read later.
-
-For deliverables that should live outside a conversation, such as a report a stakeholder opens by URL, or a view a reader should explore with zooming and scripted interaction, use [published pages](/documentation/publish) instead: the same `--sol-*` tokens are injected into every published page, but the page can run its own code and lives at a stable link with version history and access gates.
+A canvas lives inside the conversation. When the result is something you will send to other people by link, a report for a stakeholder or a dashboard that should run its own code, ask for a [published page](/documentation/publish) instead.

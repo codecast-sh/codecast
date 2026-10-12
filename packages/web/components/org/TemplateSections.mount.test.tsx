@@ -26,7 +26,7 @@ async function verifyTemplateSections() {
     // search-console carries the guide the host rendered at bind; measurement names one the page does not hold yet.
     setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly", how: "org/setup/search-console.md", guide: "# Verify acme.io\n\n1. Add the TXT record from /src/acme." }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [], how: "org/setup/measurement.md" }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
     ask: { id: "search-console", title: "Verify the domain", unlocks: ["seo-weekly"] },
-    readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["runs as propose: trust is understand"] } },
+    readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["only recommends: Starts work on its own is off"] } },
     routines: [
       { id: "cmo-weekly", title: "CMO weekly", every: "7d", mode: "propose", trigger: { id: "tasks_1", short_id: "tr-1", status: "paused" } },
       { id: "seo-weekly", title: "SEO weekly", every: "7d", mode: "apply", trigger: { id: "tasks_2", short_id: "tr-2", status: "paused" } },
@@ -66,8 +66,8 @@ async function verifyTemplateSections() {
   // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
   assert.match(text, /Let Codecast learn from this workspace's template roles/);
   assert.match(text, /never transcripts, quotes, names, customer data or code/);
-  const learning = () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!;
-  assert.equal(learning().checked, false);
+  const learning = () => document.querySelector<HTMLElement>('[data-template-learning] [role="switch"]')!;
+  assert.equal(learning().getAttribute("aria-checked"), "false");
   assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
   await act(async () => learning().click());
   assert.deepEqual(learningSet, [true]);
@@ -165,7 +165,9 @@ async function verifyTemplateSections() {
   assert.match(body, /Setting up on MacBook…/);
   assert.equal(document.querySelector("[data-host-run]"), null, "no second request while one runs");
   body = await rerender({ phase: "awaiting_host", host_step: { state: "failed", device_label: "MacBook", error: "Instance is proposal; reconcile first" } });
-  assert.match(body, /MacBook: Instance is proposal; reconcile first/);
+  // The machine's CLI-worded error is said in a person's words (hostErrorWords).
+  assert.match(body, /MacBook: The role and its routines are not set up yet\./);
+  assert.doesNotMatch(body, /reconcile first/);
   assert.equal(run().textContent, "Try again on MacBook");
   body = await rerender({ phase: "awaiting_host", bind_host: { device: null, dir: null, reason: "No machine has run codecast for this workspace's host recently." } });
   assert.match(body, /No machine has run codecast/);
