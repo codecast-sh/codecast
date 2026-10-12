@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
-import { MODE_WORDS, useSurfaceMode, type DevSurface } from "../../lib/surfaces";
+import { MODE_WORDS, useSimpleModeAllowed, useSurfaceMode, type DevSurface } from "../../lib/surfaces";
 import { useIsDesktop } from "../../lib/desktop";
 import { ErrorBoundary } from "../ErrorBoundary";
 import type { SettingsSectionId } from "../../lib/settingsSections";
@@ -74,6 +74,9 @@ interface SectionDef {
   surface?: DevSurface | "hosted";
   /** Hosted mode shows it only to someone on a team. */
   hostedNeedsTeam?: boolean;
+  /** The assistant's own section, shown only where hosted mode's doors are
+   *  open (lanePaths simpleModeAllowed). */
+  assistantOnly?: boolean;
   /** Extra words the nav search matches beyond the label. */
   keywords: string;
   desktopOnly?: boolean;
@@ -89,7 +92,7 @@ const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
     label: "Account",
     sections: [
       { id: "general", label: "General", icon: User, desc: "Your profile and how the app looks and behaves", keywords: "profile preferences appearance theme bio timezone username public simple view badges" },
-      { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
+      { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", assistantOnly: true, keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", hostedDesc: "What this device says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", hostedNeedsTeam: true, keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
@@ -134,6 +137,7 @@ export function SettingsModal() {
   const { shows, words } = useSurfaceMode();
   const hosted = words === MODE_WORDS.hosted;
   const onTeam = useMyTeams().length > 0;
+  const assistant = useSimpleModeAllowed();
   const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -217,11 +221,12 @@ export function SettingsModal() {
         if (d.desktopOnly && !isDesktop) return false;
         if (d.surface === "hosted" ? !hosted : d.surface && !shows(d.surface)) return false;
         if (hosted && d.hostedNeedsTeam && !onTeam) return false;
+        if (d.assistantOnly && !assistant) return false;
         if (!q) return true;
         return `${d.label} ${d.desc} ${d.keywords} ${group.label}`.toLowerCase().includes(q);
       }),
     })).filter((g) => g.sections.length > 0);
-  }, [q, isDesktop, shows, hosted, onTeam]);
+  }, [q, isDesktop, shows, hosted, onTeam, assistant]);
   const firstMatch = visibleGroups[0]?.sections[0];
   const go = (d: NavDef) => {
     if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
@@ -234,7 +239,8 @@ export function SettingsModal() {
   // Sync & Privacy and Privacy are one place in two modes: a link to either
   // opens the one this mode has.
   const shown = hosted && section === "sync" ? "privacy" : !hosted && section === "privacy" ? "sync" : section;
-  const active = ALL_SECTIONS.find((d) => d.id === shown) ?? ALL_SECTIONS[0];
+  const found = ALL_SECTIONS.find((d) => d.id === shown);
+  const active = found && (assistant || !found.assistantOnly) ? found : ALL_SECTIONS[0];
   const Panel = PANELS[active.id];
 
   return (
