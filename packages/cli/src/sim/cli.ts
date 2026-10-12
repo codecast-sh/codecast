@@ -101,6 +101,7 @@ function axeOrDie(args: string[]): string {
 export function registerSimCommand(program: Command, deps: PublishDeps): void {
   const sim = program
     .command("sim")
+    .alias("simulator")
     .description(commandGroup("sim").description)
     .addHelpText("after", `
 A session acquires one pool simulator and every other verb targets it:

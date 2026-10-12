@@ -8,6 +8,7 @@
 // on the task, the eval station's eval-result.json (evalResult.ts), the
 // verify, review and PR evidence on the task, and the run's cost.
 
+import type { EarlierFix } from "./causeHistory";
 import type { EvalResult, EvalSurfaceResult } from "./evalResult";
 
 export type ChangeVerdict = "ship" | "revise" | "drop";
@@ -32,6 +33,18 @@ export interface CardExample {
   note: string;
 }
 
+/** A conversation behind the cause, as the card shows it: the finding, the
+ *  contact's own stated need it broke in a few words, and the words sent that
+ *  show the miss (empty when no sent words show it; the finding's text stands in). */
+export interface CardSeen {
+  signal: string;
+  asked: string;
+  quote: string;
+}
+export const MAX_SEEN = 2;
+const MAX_ASKED_CHARS = 90;
+const MAX_RISK_CHARS = 90;
+
 export interface ChangeCard {
   cause: { task: string; title: string; signals: number; first_seen: number | null; sources: string[] };
   goal: { ref: string; name: string; why: string };
@@ -39,15 +52,21 @@ export interface ChangeCard {
   headline?: string;
   /** One sentence on what the affected part of the product is and who sees it. */
   context?: string;
+  /** With a Revise recommendation, the note the author suggests sending back: the Revise answer starts from it. */
+  ask?: string;
   wrong: string;
   change: string;
   proof: { before: CardCheck[]; after: CardCheck[] };
   examples: CardExample[];
+  /** The author's picks of the conversations most central to the cause, for "What contacts got today". Absent on older cards. */
+  seen?: CardSeen[];
   checks: CardCheck[];
   diff: { files: number; added: number; removed: number; pr?: string };
   risk: { class: RiskClass; reason: string };
   recommend: { verdict: ChangeVerdict; why: string };
   cost: { tokens: number; usd: number; minutes: number };
+  /** The cause's earlier shipped fixes, oldest first, so a person sees what was tried beside what is proposed now, and whether it held (line-workspace.md LW5). Absent when nothing shipped before. */
+  earlier?: EarlierFix[];
 }
 
 // ── validation ───────────────────────────────────────────────────────────────
@@ -133,6 +152,10 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     str("goal.why", goal.why, false);
   }
 
+  if (c.ask !== undefined) {
+    str("ask", c.ask, false);
+    if (typeof c.ask === "string" && c.ask.length > MAX_SENTENCE_CHARS) err("ask", `${c.ask.length} characters; keep it under ${MAX_SENTENCE_CHARS}`);
+  }
   if (c.headline !== undefined) {
     str("headline", c.headline);
     if (typeof c.headline === "string" && c.headline.length > MAX_HEADLINE_CHARS) err("headline", `${c.headline.length} characters; keep it under ${MAX_HEADLINE_CHARS}`);
@@ -169,6 +192,22 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     });
   }
 
+  if (c.seen !== undefined) {
+    if (!Array.isArray(c.seen)) err("seen", `expected an array, got ${show(c.seen)}`);
+    else {
+      if (c.seen.length > MAX_SEEN) err("seen", `${c.seen.length} conversations; at most ${MAX_SEEN}`);
+      c.seen.forEach((x, i) => {
+        const p = `seen[${i}]`;
+        if (!isObj(x)) return err(p, `expected { signal, asked, quote }, got ${show(x)}`);
+        str(`${p}.signal`, x.signal);
+        if (typeof x.signal === "string" && x.signal && !/^sg-\d+$/.test(x.signal)) err(`${p}.signal`, `expected a finding id (sg-N), got ${show(x.signal)}`);
+        str(`${p}.asked`, x.asked);
+        if (typeof x.asked === "string" && x.asked.length > MAX_ASKED_CHARS) err(`${p}.asked`, `${x.asked.length} characters; a few words, under ${MAX_ASKED_CHARS}`);
+        str(`${p}.quote`, x.quote, false);
+      });
+    }
+  }
+
   const cardChecks = checks("checks", c.checks);
 
   const diff = section("diff", c.diff);
@@ -183,6 +222,7 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
   if (risk) {
     oneOf("risk.class", risk.class, RISK_CLASSES);
     str("risk.reason", risk.reason);
+    if (typeof risk.reason === "string" && risk.reason.length > MAX_RISK_CHARS) err("risk.reason", `${risk.reason.length} characters; a few words, under ${MAX_RISK_CHARS}`);
   }
 
   const rec = section("recommend", c.recommend);
@@ -217,6 +257,18 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     count("cost.tokens", cost.tokens);
     count("cost.usd", cost.usd);
     count("cost.minutes", cost.minutes);
+  }
+
+  if (c.earlier !== undefined) {
+    if (!Array.isArray(c.earlier)) err("earlier", `expected an array, got ${show(c.earlier)}`);
+    else c.earlier.forEach((f, i) => {
+      const p = `earlier[${i}]`;
+      if (!isObj(f)) return err(p, `expected { attempt, change, live, held, back }, got ${show(f)}`);
+      count(`${p}.attempt`, f.attempt);
+      str(`${p}.change`, f.change);
+      str(`${p}.live`, f.live);
+      for (const k of ["ref", "held", "back"] as const) if (f[k] !== null && typeof f[k] !== "string") err(`${p}.${k}`, `expected a string or null, got ${show(f[k])}`);
+    });
   }
 
   return errors.length ? { ok: false, errors } : { ok: true, card: input as unknown as ChangeCard };
@@ -348,10 +400,21 @@ export function isLineRun(nodes: ReadonlyArray<{ node_id: string }> | undefined)
 }
 
 /** The latest end station a line run completed and when, or null when it reached none. */
+/** A run that went on past a card nobody answered (its decide gate failed)
+ *  and still reached ship. Nothing approved it, so nothing after the card is
+ *  a ship, on any graph. */
+export function passedUnansweredCard(nodes: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null }> | undefined): boolean {
+  // An answered gate records the chosen key as its outcome ("s"); only a gate
+  // that came back with no answer records "failure".
+  const decide = nodes?.find((n) => n.node_id === CARD_GATE_NODE_ID);
+  const ship = nodes?.find((n) => n.node_id === "ship");
+  return decide?.outcome === "failure" && ship?.status === "completed";
+}
+
 export function lineRunOutcome(
   nodes: ReadonlyArray<{ node_id: string; status: string; started_at?: number; completed_at?: number }> | undefined,
 ): { kind: LineRunEnd; at: number } | null {
-  if (!nodes || !isLineRun(nodes)) return null;
+  if (!nodes || !isLineRun(nodes) || passedUnansweredCard(nodes)) return null;
   let best: { kind: LineRunEnd; at: number } | null = null;
   for (const n of nodes) {
     const kind = LINE_END_NODES[n.node_id];
@@ -372,7 +435,7 @@ export function verdictOfOption(label: string | undefined): ChangeVerdict | null
 
 /** The three answers a card's decision offers, in this order, so 1 2 3 read Ship Revise Drop everywhere. */
 export const CARD_DECISION_OPTIONS: ReadonlyArray<{ label: string; description: string }> = [
-  { label: "Ship", description: "Merge the change and watch the cause." },
+  { label: "Ship", description: "Merge the change and watch for the problem." },
   { label: "Revise", description: "Send it back to build with a note." },
   { label: "Drop", description: "Close it without merging." },
 ];
@@ -413,6 +476,8 @@ export interface CardEvidenceInput {
 export interface CardAssemblyInput {
   task: CardTaskInput;
   evidence?: CardEvidenceInput | null;
+  /** The current run's own Verify step (runVerify), which outranks a handoff an earlier run left. */
+  verify?: CardCheck | null;
   evalResult?: EvalResult | null;
   /** A proof recorded outside evals (a failing test's red and green run). Merged ahead of the eval proof. */
   proof?: ChangeCard["proof"] | null;
@@ -420,9 +485,18 @@ export interface CardAssemblyInput {
   cost?: { tokens?: number; minutes?: number; usd?: number } | null;
   headline?: string;
   context?: string;
+  ask?: string;
   wrong?: string;
   change?: string;
   recommend?: { verdict: ChangeVerdict; why: string } | null;
+  /** The cause's earlier shipped fixes (causeHistory earlierFixes). */
+  earlier?: EarlierFix[] | null;
+  /** The author's reading of the risk: what the change touches and how much traffic reaches it. Outranks the task's ground rating. */
+  risk?: { class: RiskClass; reason: string } | null;
+  /** The author's picks of the conversations behind the cause (CardSeen). */
+  seen?: CardSeen[] | null;
+  /** Real cases before and after, written by the card's author from the run's record, for a change no eval replayed. Eval flips win when there are any. */
+  examples?: CardExample[] | null;
 }
 
 /** The judge's first sentence: the verdict a reader needs, before the reasoning. */
@@ -481,8 +555,21 @@ export function evalExamples(result: EvalResult): CardExample[] {
  * a test build it the same way. Fields the model writes come in as given and
  * stay empty when absent, so validateChangeCard names them.
  */
+/** The Verify check from a run's own verify step, once it finished: what this run's checks said, not what an earlier
+ *  run's handoff left on the task. Null while the step has not run. */
+export function runVerify(nodes: ReadonlyArray<{ node_id: string; status?: string; outcome?: string; result_preview?: string; error?: string }> | null | undefined): CardCheck | null {
+  const v = nodes?.find((n) => n.node_id === "verify");
+  if (!v || (v.status !== "completed" && v.status !== "failed")) return null;
+  const ok = v.status === "completed" && v.outcome !== "failure";
+  return { name: "Verify", ok, detail: ok ? "Typecheck and tests passed on this run" : firstSentence(firstLine(v.error || v.result_preview)) || "Typecheck or tests failed on this run" };
+}
+
 /** The Eval check of a prompt or line change no eval judged. */
 export const UNSCORED_DETAIL = "Unscored: this project's line has no eval command, so no eval replayed the changed prompt";
+/** A check that never ran (the unscored Eval): it fails nothing, and it passed nothing either, so a card draws it neither green nor red. */
+export const checkNotRun = (c: CardCheck): boolean => c.detail === UNSCORED_DETAIL;
+/** Whether the card owes an eval nobody scored: a Ship it recommends then reads "Ship after evals". */
+export const evalsOwed = (card: Pick<ChangeCard, "checks">): boolean => card.checks.some(checkNotRun);
 
 export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
   const { task, evidence, evalResult } = input;
@@ -496,13 +583,14 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
   };
 
   const checks: CardCheck[] = [];
-  if (evidence?.execution_status || evidence?.verification_evidence) {
+  if (input.verify) checks.push(input.verify);
+  else if (evidence?.execution_status || evidence?.verification_evidence) {
     const ok = evidence.execution_status === "done" && !reportsFailure(firstLine(evidence.verification_evidence));
     // A pass says what passed; a failure quotes the builder's own first sentence, the reason a reader needs.
     checks.push({
       name: "Verify",
       ok,
-      detail: ok ? "The builder handed it over as done" : firstSentence(firstLine(evidence.verification_evidence)) || `handoff status ${evidence.execution_status}`,
+      detail: ok ? "The builder handed it over as done" : firstSentence(firstLine(evidence.verification_evidence)) || `the builder marked its handoff ${evidence.execution_status}`,
     });
   }
   if (evalResult) {
@@ -545,11 +633,13 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       why: task.goal_why?.trim() ?? "",
     },
     ...(input.headline?.trim() ? { headline: input.headline.trim() } : {}),
+    ...(input.ask?.trim() && input.recommend?.verdict === "revise" ? { ask: input.ask.trim() } : {}),
     ...(input.context?.trim() ? { context: input.context.trim() } : {}),
     wrong: input.wrong?.trim() ?? "",
     change: input.change?.trim() ?? "",
     proof,
-    examples: evalResult ? evalExamples(evalResult) : [],
+    examples: evalResult && evalExamples(evalResult).length ? evalExamples(evalResult) : (input.examples ?? []).slice(0, MAX_EXAMPLES),
+    ...(input.seen?.length ? { seen: input.seen.slice(0, MAX_SEEN) } : {}),
     checks,
     diff: {
       files: input.diff?.files ?? evidence?.files_changed.length ?? 0,
@@ -557,15 +647,18 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       removed: input.diff?.removed ?? 0,
       ...(pr ? { pr } : {}),
     },
-    risk: {
-      class: risk,
-      reason: task.risk_reason?.trim() || (task.risk ? `Ground rated it ${risk}.` : "Not grounded yet, so it gets a careful look."),
-    },
+    risk: input.risk && (RISK_CLASSES as readonly string[]).includes(input.risk.class) && input.risk.reason.trim()
+      ? { class: input.risk.class, reason: input.risk.reason.trim() }
+      : {
+          class: risk,
+          reason: task.risk_reason?.trim() || (task.risk ? `An agent rated it ${risk === "review" ? "worth a human review" : `${risk} risk`}.` : "Not grounded yet, so it gets a careful look."),
+        },
     recommend: input.recommend ?? ({ verdict: "", why: "" } as unknown as ChangeCard["recommend"]),
     cost: {
       tokens: Math.round(input.cost?.tokens ?? 0),
       usd: Math.round(((input.cost?.usd ?? 0) + (evalResult?.costUsd ?? 0)) * 100) / 100,
       minutes: Math.round(input.cost?.minutes ?? 0),
     },
+    ...(input.earlier?.length ? { earlier: input.earlier } : {}),
   };
 }
