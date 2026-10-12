@@ -14,12 +14,14 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyCap";
-import { MODE_WORDS, actionLabel, actionShownIn, helpContextSurface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
+import { MODE_WORDS, Surface, actionLabel, actionShownIn, helpContextSurface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
 
 /** The most keys a chord hint shows with in hosted mode. */
 const HOSTED_CHORD_MAX_KEYS = 2;
 
 const MODE_WORDS_HOSTED = MODE_WORDS.hosted;
+/** The sheet's sections named by hosted mode's pages. */
+const HOSTED_HELP_LABELS: Record<string, string> = { Tasks: MODE_WORDS_HOSTED.tasksPage, Docs: MODE_WORDS_HOSTED.docsPage };
 
 export { KeyCap };
 
@@ -74,7 +76,9 @@ export function KeyboardShortcutsPanel() {
         return actionShownIn(mode, d.action);
       });
       if (defs.length > 0) {
-        result.push({ label, accent, rows: defs.map((d) => ({ key: d.action, description: actionLabel(d.action, d.description, hosted), parts: formatShortcutParts(d) })) });
+        // Hosted mode names a section by its page ("To-dos", "Notes") and
+        // draws every dot in quiet ink rather than a colour per context.
+        result.push({ label: hosted ? HOSTED_HELP_LABELS[label] ?? label : label, accent: hosted ? "bg-sol-text-dim" : accent, rows: defs.map((d) => ({ key: d.action, description: actionLabel(d.action, d.description, hosted), parts: formatShortcutParts(d) })) });
       }
       // The composer's send chords live in their own table (they run from a
       // focused textarea, outside the registry); they read as the
@@ -82,7 +86,7 @@ export function KeyboardShortcutsPanel() {
       if (when === "conversation") {
         result.push({
           label: "Composer",
-          accent: "bg-sol-violet",
+          accent: hosted ? "bg-sol-text-dim" : "bg-sol-violet",
           rows: SEND_CHORDS.filter((c) => !c.surface || mode.shows(c.surface)).map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
         });
       }
@@ -145,19 +149,24 @@ export function KeyboardShortcutsPanel() {
           <KeyCap size="xs">?</KeyCap> toggles this panel
           <span className="ml-auto flex items-center gap-3">
             {triageBarHidden && (
+              <Surface name="triageBar">
+                <button
+                  onClick={toggleTriageBarCompact}
+                  className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+                >
+                  Show triage bar
+                </button>
+              </Surface>
+            )}
+            {/* Tours open from the fleet's actions (ui.openTours). */}
+            <Surface name="actions.fleet">
               <button
-                onClick={toggleTriageBarCompact}
+                onClick={() => s.setToursPanelOpen(true)}
                 className="text-sol-text-dim hover:text-sol-cyan transition-colors"
               >
-                Show triage bar
+                Tours
               </button>
-            )}
-            <button
-              onClick={() => s.setToursPanelOpen(true)}
-              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-            >
-              Tours
-            </button>
+            </Surface>
           </span>
         </div>
       </div>}

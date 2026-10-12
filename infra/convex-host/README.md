@@ -51,6 +51,24 @@ and already holds ports 80 and 443.
 Both mean that `docker compose up -d` in `/srv/convex` is NOT how you restart
 this stack. Restart one container by name instead.
 
+## Function logs
+
+The backend keeps its function log only in memory, about 70 seconds at
+production load, so `npx convex logs --history` cannot reach anything older.
+`logtail/` (its own compose project in `/srv/convex-logtail`, started
+2026-10-09) streams it to `/srv/convex/logs/<YYYY-MM-DD>/<HH>*.jsonl.gz`, UTC
+hours, one `convex logs --jsonl --success` event per line, kept 14 days. That is
+about 1.1 GB a day gzipped. An hour can have several files (one per tail
+restart); read them together:
+
+```bash
+ssh convex-prod 'zcat /srv/convex/logs/2026-10-09/17*.jsonl.gz' | grep '"accountSwitch:'
+```
+
+The tail starts from "now" whenever it restarts, so a restart leaves a gap of
+seconds. The current hour's file is still open: it reads up to the last
+5-second flush and then zcat warns "unexpected end of file", which is expected. Its admin key lives only in `/srv/convex-logtail/.env`.
+
 ## Stopping and starting the machine
 
 Downtime is about two and a half minutes. Do it in the overnight trough (the box
