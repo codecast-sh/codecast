@@ -34,7 +34,7 @@ mock.module("convex/react", () => ({
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { RoomThread } = await import("../RoomThread");
 
-const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh" });
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
 // The composer measures its own row; jsdom has no observer to do it with.
 class TestResizeObserver {
   observe() {}
@@ -51,6 +51,9 @@ const restoreGlobals = replaceGlobals({
   Node: dom.window.Node,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   ResizeObserver: TestResizeObserver,
+  // useFrameTheme posts the theme to a framed page on the next frame.
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 // react-dom/client decides at load whether a DOM exists, so it is loaded

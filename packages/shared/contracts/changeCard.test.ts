@@ -20,6 +20,7 @@ import {
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
+  runVerify,
 } from "./changeCard";
 import { renderChangeCardHtml } from "../render/changeCardHtml";
 
@@ -84,6 +85,14 @@ describe("assembleChangeCard", () => {
     expect(evalOf("line")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("prompt")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("code")).toBeUndefined();
+  });
+
+  it("takes the author's real cases when no eval flipped any, at most three; eval flips win", () => {
+    const ex = (n: number) => ({ input: `case ${n}`, before: "still waiting note", after: "no message; reminder moved", note: "" });
+    const authored = assembleChangeCard({ task: { short_id: "ct-1", title: "T", category: "prompt" }, examples: [ex(1), ex(2), ex(3), ex(4)] });
+    expect(authored.examples.map((e) => e.input)).toEqual(["case 1", "case 2", "case 3"]);
+    expect(sample().examples.length).toBeGreaterThan(0);
+    expect(assembleChangeCard({ ...sampleAssemblyInput(), examples: [ex(9)] }).examples.map((e) => e.input)).not.toContain("case 9");
   });
 
   it("merges the recorded proof ahead of the eval proof and adds eval cost to the run's", () => {
@@ -303,5 +312,47 @@ describe("headline and context", () => {
     expect(long.ok).toBe(false);
     const two = validateChangeCard({ ...base, context: "It is a summary. People read it." });
     expect(two.ok ? [] : two.errors.join(" ")).toContain("context");
+  });
+});
+
+// LW5: a new attempt's card shows the cause's earlier shipped fix beside its own change.
+describe("earlier shipped fixes", () => {
+  const earlier = [{ attempt: 2, ref: "sd-9", change: "Pin the persona on the thread's first send", live: "Deployed to backend Oct 13", held: null, back: "Came back 2 times after the deploy of Oct 13." }];
+
+  test("assembly carries them, validation accepts them, and a card with none has no field", () => {
+    const c = assembleChangeCard({ ...sampleAssemblyInput(), earlier });
+    expect(c.earlier).toEqual(earlier);
+    expect(validateChangeCard(c).ok).toBe(true);
+    expect("earlier" in sample()).toBe(false);
+    expect("earlier" in assembleChangeCard({ ...sampleAssemblyInput(), earlier: [] })).toBe(false);
+  });
+
+  test("a malformed entry is named by its path", () => {
+    const c = clone(assembleChangeCard({ ...sampleAssemblyInput(), earlier }));
+    c.earlier[0].change = "";
+    c.earlier[0].back = 3;
+    expect(errorsOf(c)).toEqual(["earlier[0].change: is empty", "earlier[0].back: expected a string or null, got 3"]);
+  });
+
+  test("the page shows the earlier fix and that it came back, before the proof", () => {
+    const html = renderChangeCardHtml(assembleChangeCard({ ...sampleAssemblyInput(), earlier }));
+    expect(html).toContain("Shipped before");
+    expect(html).toContain("Pin the persona on the thread&#39;s first send");
+    expect(html).toContain('<li class="back">');
+    expect(html.indexOf("Shipped before")).toBeLessThan(html.indexOf("<h2>Proof"));
+    expect(renderChangeCardHtml(sample())).not.toContain("Shipped before");
+  });
+});
+
+describe("the Verify check speaks for the current run", () => {
+  test("a run whose verify passed outranks an earlier run's blocked handoff", () => {
+    const verify = runVerify([{ node_id: "build", status: "completed" }, { node_id: "verify", status: "completed", outcome: "success" }]);
+    expect(verify).toEqual({ name: "Verify", ok: true, detail: "Typecheck and tests passed on this run" });
+    const card = assembleChangeCard({ task: { short_id: "ct-1", title: "t" } as any, evidence: { execution_status: "blocked", verification_evidence: "Build hit its visit cap.", files_changed: [] } as any, verify });
+    expect(card.checks.find((c) => c.name === "Verify")).toEqual(verify!);
+  });
+  test("a verify that has not run leaves the handoff to speak", () => {
+    expect(runVerify([{ node_id: "verify", status: "pending" }])).toBeNull();
+    expect(runVerify([{ node_id: "verify", status: "failed", error: "3 tests failed.\nmore" }])).toMatchObject({ ok: false, detail: "3 tests failed." });
   });
 });

@@ -21,7 +21,7 @@ function SyncChip() {
   return (
     <Pane
       machine="laptop"
-      title={<>session {SESSION} · machine menu</>}
+      title={<>session {SESSION} · sync chip</>}
       right={<span className="inline-flex items-center gap-1.5" style={{ color: SOL.cyan }}><span className="w-1.5 h-1.5 rounded-full cl-breathe" style={{ backgroundColor: SOL.cyan }} />syncing</span>}
       bodyClassName="p-0"
     >
@@ -66,7 +66,7 @@ export function MirrorSection() {
         <div>
           <SyncChip />
           <Note className="mt-5">
-            Pick &ldquo;Sync with {LAPTOP}&rdquo; in a cloud session&apos;s machine menu, or run <C>cast remote sync {SESSION}</C> (the same as <C>cast sync start</C>). The agent&apos;s edits land in the laptop copy within a few seconds; your edits there reach the agent the same way. <C>--watch-only</C> sends changes one way, cloud to laptop.
+            Open the machine menu in a cloud session&apos;s header and pick <b style={{ color: SOL.base02 }}>Sync with {LAPTOP}</b>, under &ldquo;Keep a copy on a laptop, in step&rdquo;. The agent&apos;s edits land in the laptop copy within a few seconds; your edits there reach the agent the same way. A sync chip in the header then shows what is held and what stayed put; <b style={{ color: SOL.base02 }}>Cloud to laptop only</b> sends changes one way. From a terminal, <C>cast remote sync {SESSION}</C> does the same.
           </Note>
         </div>
         <div className="space-y-4">
@@ -80,7 +80,7 @@ export function MirrorSection() {
       </div>
 
       <div className="mt-14 grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-8 items-start">
-        <Term machine="host" label={`agent on the host · ${SESSION}`}>
+        <Term machine="host" label={`the agent on the host · ${SESSION}`}>
           <Out tone={SOL.base01}># the same verbs, carried out by your laptop</Out>
           <P$ host>cast sync status</P$>
           <P$ host>cast sync pull .env.local ~/data/export.csv</P$>
