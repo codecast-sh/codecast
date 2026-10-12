@@ -2,12 +2,14 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { SOL } from "../../blog/blogChrome";
+import { KeyCap } from "@/components/KeyboardShortcutsHelp";
 import { Layer, Pane, Run, C, t, Note, VIOLET } from "./kit";
+import { ForScripts, Shot } from "../kit";
 
 /**
- * Layer 02: `cast read <id> --ask`. A session drawn as a core of 214
- * messages, with the lines the answer rests on lit up, above the answer in
- * the CLI's own format.
+ * Layer 02: Ask this session. The real panel leads; a session drawn as a core
+ * of 214 messages shows which lines an answer rests on, and the CLI form an
+ * agent uses sits under it.
  */
 
 const TOTAL = 214;
@@ -57,18 +59,27 @@ export function AskLayer() {
       lede={
         <>
           <p>
-            A long session is a lot to page through. <C>cast read &lt;id&gt; --ask</C> answers one question from that one session, leads with the direct answer, and backs each point with the messages it rests on, so you can open them with <C>cast read</C>.
+            A long session is a lot to page through. Press <KeyCap size="xs">A</KeyCap> in any session, or <b>Ask</b> in its search bar, and <b>Ask this session</b> opens beside it. It answers one question from that one session, leads with the direct answer, and backs each point with message pills that jump to the line.
           </p>
           <p>
             It reads forward past the first relevant passage. People change their minds and agents try things that fail, so when a later message revised the answer, you get the later one, with the earlier one named as history.
           </p>
-          <Note label="this session">
-            <C>cast read --ask &quot;what did the user ask for first?&quot;</C> with no id asks the session you are in, past its own compactions.
+          <Note label="agents too">
+            Agents ask other sessions the same way, with <C>cast read &lt;id&gt; --ask</C>, before they message them, and ask their own session past its compactions.
           </Note>
         </>
       }
     >
+      <Shot
+        className="mb-6 max-w-md"
+        src="/features/memory/ask-session.webp"
+        alt="The Ask this session panel beside a codecast session: the question What factual errors did it find on the cloud page?, a direct answer, and bullets citing msg 1, msg 6, msg 8 and msg 28-38"
+        width={880}
+        height={1130}
+        caption="Asked of one of codecast's own sessions. Each msg pill opens the conversation at that message."
+      />
       <Core />
+      <ForScripts note="The same question from a script or an agent, with the cost of the answer printed under it.">
       <Pane label="cast read --ask" right="answered server side" wrap>
         <Run>cast read jx7k2qa --ask &quot;what retry cap did we settle on?&quot;</Run>
         {t.head(<>── Retry cap for failed webhooks<span className="hidden sm:inline"> ─────────────────</span></>)}{"\n"}
@@ -78,21 +89,22 @@ export function AskLayer() {
         <Bullet>msg 139: the load test shows a deploy keeps the queue down for longer than three attempts cover.</Bullet>
         <Bullet>msg 141: MAX_ATTEMPTS becomes 5. The cap of 3 is history.</Bullet>{"\n"}
         {t.y("read:")} {t.v("cast read jx7k2qa 88")}  {t.v("cast read jx7k2qa 139:141")}{"\n"}
-        {t.dim("claude-haiku-4-5 · read 214 lines, 35 matched, showed 214 · 41.2k in / 298 out, $0.043 · 8.9s")}
+        {t.dim("claude-haiku-5-5 · read 214 lines, 35 matched, showed 214 · 41.2k in / 298 out, $0.004 · 8.9s")}
       </Pane>
+      </ForScripts>
       <div className="grid sm:grid-cols-2 gap-3 mt-5">
         <Note label="huge sessions">
           Too long to read whole, it reads the end first, then the start, and names the stretch it did not read, since that stretch could change the answer.
         </Note>
         <Note label="not found" color={SOL.cyan}>
-          When the session does not hold the answer, it says so and points at the closest lines instead of guessing. <C>--json</C> returns the same as data.
+          When the session does not hold the answer, it says so and points at the closest lines instead of guessing.
         </Note>
       </div>
     </Layer>
   );
 }
 
-/** Layer 03: before starting work, `cast context`; across history, `cast ask`. */
+/** Layer 03: agent-facing. Before starting work, `cast context`; across history, `cast ask`. */
 export function ContextLayer() {
   return (
     <Layer
@@ -102,7 +114,7 @@ export function ContextLayer() {
       lede={
         <>
           <p>
-            Most rediscovery happens in the first ten minutes of a task, when an agent reads the code cold. <C>cast context</C> is the step before that: describe the work, name a file, or pass <C>--auto</C> to read your branch name and changed files, and it returns the sessions that already worked on it and the files they touched.
+            This part is for your agents, and it has no screen in the app. Most rediscovery happens in the first ten minutes of a task, when an agent reads the code cold. <C>cast context</C> is the step before that: describe the work, name a file, or pass <C>--auto</C> to read your branch name and changed files, and it returns the sessions that already worked on it and the files they touched.
           </p>
           <p>
             <C>cast ask</C> goes the other way, from a question to the history. It expands the question into search terms, reads the top sessions (three by default, <C>-n</C> for more) and returns the passages that answer it, each with its session and message range.

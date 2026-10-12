@@ -13,7 +13,7 @@ import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
 import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
-import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
+import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
 import { dmOtherIds, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
@@ -436,7 +436,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
           transcribing: row.voice.transcribing,
         }
       : row.attachments?.length === 1 &&
-          row.attachments[0].mime?.startsWith("audio/") &&
+          attachmentKind(row.attachments[0]) === "audio" &&
           !row.content.trim()
         ? { status: "done" as const, inferred: true }
         : undefined,
