@@ -2,23 +2,22 @@ import { TopbarButton } from "./TopbarButton";
 import { useState, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShortcutAction } from "../shortcuts";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { highlightMatch, getSnippet, parseSearchTerms } from "../lib/searchHighlight";
-import { searchedTermsText } from "@codecast/shared/search";
+import { parseSessionQuery, searchedTermsText } from "@codecast/shared/search";
 import { useInstantSessionRows, mergeSearchRows } from "../lib/instantSessionSearch";
 import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
 import { SearchField, SearchGlyph } from "./search/SearchField";
-import { SearchResultRow } from "./search/SearchResultRow";
+import { SessionHit } from "./search/SessionHit";
+import { useRemoteSearch } from "../hooks/useRemoteSearch";
 import { useAssistantScope, useModeWords, useSurface } from "../lib/surfaces";
 import { bySessionAgent, withinScope } from "../lib/assistantScope";
 
@@ -59,7 +58,6 @@ export function GlobalSearch() {
   const hideCaps = slotSize !== "wide";
   const compact = slotSize === "compact";
   const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchIsSlow, setSearchIsSlow] = useState(false);
   // Selection follows the SESSION, not its position: the content tier lands
   // after the instant rows are already on screen and reorders the list, and a
@@ -72,13 +70,6 @@ export function GlobalSearch() {
   const router = useRouter();
 
   const userTeams = useInboxStore((s) => s.teams);
-
-  useWatchEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(query);
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [query]);
 
   // The results panel is viewport-centered (position: fixed), so anchor its
   // vertical offset to the input's bottom edge rather than relying on top-full.
@@ -93,17 +84,18 @@ export function GlobalSearch() {
 
   useEventListener("resize", recomputePanelTop);
 
-  // Non-throwing: when the budget blowout comes back as a TERMINAL error, bare
-  // useQuery re-throws it in render and crashes the component (ct-37627). The
-  // breaker unsubscribes a never-resolving search so its silent retry loop
-  // stops flapping the shared websocket (1011) for the rest of the app.
-  const { data: searchResults, error: searchError } = useQueryNoThrow(
-    api.conversations.searchConversations,
-    debouncedQuery.length >= 2
-      ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
-      : "skip",
-    { breakAfterMs: 15_000 }
-  );
+  // The server tier every search surface shares (hooks/useRemoteSearch):
+  // session content and titles, non-throwing, with a breaker on a search that
+  // never resolves (ct-37627).
+  const remote = useRemoteSearch(query, {
+    enabled: true,
+    limit: 30,
+    userOnly,
+    activeTeamId: selectedTeamId,
+    debounceMs: 200,
+  });
+  const { debouncedQuery, searchError, contentData: searchData, titleData } = remote;
+  const searchResults = remote.contentLoaded ? searchData : undefined;
 
   // A broad term scans the whole message history and can exceed Convex's per-query
   // budget; the reactive client treats that system error as retryable and never
@@ -117,20 +109,6 @@ export function GlobalSearch() {
     const timer = setTimeout(() => setSearchIsSlow(true), 9000);
     return () => clearTimeout(timer);
   }, [debouncedQuery, searchResults]);
-
-  const searchData = searchResults && "results" in searchResults ? searchResults : null;
-
-  // Cheap always-fast companion: title/subtitle/summary matches come from the
-  // small conversations table and land while (or even if never) the message
-  // content search resolves — the user always gets something (ct-37627).
-  // userOnly filters by message role, which title rows don't have — skip.
-  const { data: titleResults } = useQueryNoThrow(
-    api.conversations.searchConversationTitles,
-    debouncedQuery.length >= 2 && !userOnly
-      ? { query: debouncedQuery, limit: 30, activeTeamId: selectedTeamId ?? undefined }
-      : "skip"
-  );
-  const titleData = titleResults && "results" in titleResults ? titleResults : null;
 
   // Instant tier: the sessions already in the store, matched off the RAW query
   // — no debounce, no round trip. The panel therefore has real rows on the
@@ -199,6 +177,21 @@ export function GlobalSearch() {
 
   const autocomplete = useSessionQueryAutocomplete(query, setQuery, inputRef);
 
+  const closePanel = () => {
+    setIsOpen(false);
+    setIconOpen(false);
+    setQuery("");
+    inputRef.current?.blur();
+  };
+  // The words searched for, operators stripped: what each hit marks.
+  const highlightTerms = useMemo(() => parseSessionQuery(query).text, [query]);
+  const hrefFor = (row: { conversationId: string }, messageId?: string) =>
+    `/conversation/${row.conversationId}?highlight=${encodeURIComponent(searchedTermsText(highlightTerms || query))}${messageId ? `#msg-${messageId}` : ""}`;
+  const handleResultClick = (conversationId: string) => {
+    router.push(hrefFor({ conversationId }));
+    closePanel();
+  };
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (autocomplete.onKeyDown(e)) return;
@@ -213,13 +206,7 @@ export function GlobalSearch() {
         e.preventDefault();
         if (query.trim().length < 2) return;
         if (!e.shiftKey && results[selectedIndex]) {
-          router.push(
-            `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(searchedTermsText(query))}`
-          );
-          setIsOpen(false);
-          setIconOpen(false);
-          setQuery("");
-          inputRef.current?.blur();
+          handleResultClick(results[selectedIndex].conversationId);
         } else {
           // Shift+Enter always jumps to the full search page; plain Enter
           // lands here too while results are still loading (or empty), so
@@ -230,15 +217,6 @@ export function GlobalSearch() {
     },
     [autocomplete, groupedResults, selectedIndex, router, query, goToFullSearch]
   );
-
-  const handleResultClick = (conversationId: string) => {
-    const url = `/conversation/${conversationId}?highlight=${encodeURIComponent(searchedTermsText(query))}`;
-    router.push(url);
-    setIsOpen(false);
-    setIconOpen(false);
-    setQuery("");
-    inputRef.current?.blur();
-  };
 
   // One cursor menu for all result rows. The full triage menu (pin, label,
   // stash…) mutates the inbox-store row, so it needs both proof of ownership
@@ -355,13 +333,15 @@ export function GlobalSearch() {
                 </div>
                 <div className="space-y-1 py-1">
                 {groupedResults.map((session, sessionIndex) => (
-                  <SearchResultRow
+                  <SessionHit
                     key={session.conversationId}
-                    session={session}
-                    query={query}
+                    row={session}
+                    highlight={highlightTerms}
+                    hrefFor={hrefFor}
                     selected={sessionIndex === selectedIndex}
-                    onClick={() => handleResultClick(session.conversationId)}
-                    onContextMenu={(e) => openSessionMenu(e, session)}
+                    onHover={() => setSelectedId(session.conversationId)}
+                    onNavigate={closePanel}
+                    onSessionMenu={(e) => openSessionMenu(e, session)}
                   />
                 ))}
                 </div>

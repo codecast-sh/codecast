@@ -1,0 +1,256 @@
+// The line app's selection lives in its URL (line-workspace.md LW1), so any
+// state is a link and every view reads the same one. The line is one app over
+// the process; a project is a filter on it, never a line of its own:
+//   project  the filter (a project's short id or row id); absent is every project
+//   view     inbox, sources, problems, runs, process, chat (the left nav, keys 1 to 6)
+//   mode     the Process view's mode: graph (default) or notebook
+//   graph    which process (codecast's line, AgentWatch, ...)
+//   step     a station id; steptab, the step drawer's open tab (its own key, so
+//            a host page's `tab`, the project page's, is never touched)
+//   run      a run id: Runs opens it as the run detail (Replay)
+//   case     a problem's task id: Problems opens its timeline
+//   source   a source's name: Sources opens its findings
+//   finding  a finding's (signal's) id: Sources opens it
+//   ask      1: the open problem's question, its answer box focused
+//   card     a trial card's ref: Inbox opens it beside its rows
+//   decision a fix decision's ref (sd-N): Inbox and Problems open it (LineDecision)
+// The Inbox is a list with a detail beside it: the card, the decision, the
+// problem (case) or the run (its step the playhead) it has open; arriving from
+// another view, it opens on the list unless the move names one.
+// Selecting a run keeps its case; selecting a case drops a run of another
+// case; moving to another step drops the tab; another view keeps only what it
+// reads (a run's detail: the step its playhead is on; Chat: whatever was open,
+// which rides along with the next question; Process opens with no step unless
+// the move names one, so a drawer opens only when asked for); another graph
+// or project drops what named the old one. Keys the line does not own stay as
+// they are. The views'
+// earlier names (graph, notebook, replay, timeline) still read and write, as
+// the view that now holds them. Pure, so a test reads and writes addresses.
+
+export const LINE_VIEWS = ["inbox", "sources", "problems", "runs", "process", "chat"] as const;
+export type LineView = (typeof LINE_VIEWS)[number];
+export const DEFAULT_LINE_VIEW: LineView = "problems";
+
+export const LINE_MODES = ["graph", "notebook"] as const;
+export type LineMode = (typeof LINE_MODES)[number];
+export const DEFAULT_LINE_MODE: LineMode = "graph";
+
+/** The views' earlier names, each the view and mode that hold it now. */
+const LEGACY_VIEWS = { graph: ["process", "graph"], notebook: ["process", "notebook"], replay: ["runs", null], timeline: ["problems", null] } as const;
+type LegacyView = keyof typeof LEGACY_VIEWS;
+/** A view as a link may name it: its own name, or an earlier one. */
+export type LineViewName = LineView | LegacyView;
+
+export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; ask: boolean; card: string | null; decision: string | null };
+export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; ask: string | null; card: string | null; decision: string | null }>;
+
+type Search = { get(key: string): string | null } | null | undefined;
+
+const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "ask", "card", "decision"] as const;
+type Key = (typeof KEYS)[number];
+/** Where a key lives in the address: the drawer's tab has its own name, `tab` belongs to the page hosting the app. */
+const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", ask: "ask", card: "card", decision: "decision" };
+/** The drawer's tabs, which an older link named as `tab`. */
+const DRAWER_TABS = new Set(["prompt", "decisions", "try", "ask"]);
+const legacyTab = (search: Search) => { const t = search?.get("tab"); return t && DRAWER_TABS.has(t) ? t : null; };
+const isView = (v: string | null | undefined): v is LineView => !!v && (LINE_VIEWS as readonly string[]).includes(v);
+const isLegacy = (v: string | null | undefined): v is LegacyView => !!v && v in LEGACY_VIEWS;
+const isMode = (v: string | null | undefined): v is LineMode => !!v && (LINE_MODES as readonly string[]).includes(v);
+/** The selection each view reads; moving to a view drops the rest, unless the move names it. */
+const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "ask", "card", "decision"] as const;
+const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]>> = {
+  inbox: ["card", "decision"], sources: ["source", "finding"], problems: ["case", "ask", "source", "decision"], runs: ["run", "case", "step"], process: [], chat: ["step", "run", "case"],
+};
+/** The views that read a step of their own (Runs too, as an open run's playhead). */
+const STEP_VIEWS = new Set<LineView>(["process", "chat"]);
+/** The views that open a run's detail, where a step is that run's playhead. */
+const RUN_VIEWS = new Set<LineView>(["runs", "inbox"]);
+/** What /line names when it names every project. */
+const ALL = new Set(["all", ""]);
+
+/** A view name, its own or an earlier one, as the view and the mode it opens (null: the mode stays). */
+function resolveView(v: string | null | undefined): [LineView, LineMode | null] | null {
+  if (isView(v)) return [v, null];
+  if (isLegacy(v)) return [LEGACY_VIEWS[v][0], LEGACY_VIEWS[v][1]];
+  return null;
+}
+
+export function readLineSelection(search: Search): LineSelection {
+  const asked = resolveView(search?.get("view"));
+  const mode = search?.get("mode");
+  const project = search?.get("project")?.trim() ?? "";
+  return {
+    view: asked?.[0] ?? DEFAULT_LINE_VIEW,
+    mode: asked?.[1] ?? (isMode(mode) ? mode : DEFAULT_LINE_MODE),
+    project: ALL.has(project) ? null : project,
+    graph: search?.get("graph") || null,
+    step: search?.get("step") || null,
+    tab: search?.get(PARAM.tab) || legacyTab(search),
+    run: search?.get("run") || null,
+    case: search?.get("case") || null,
+    source: search?.get("source") || null,
+    finding: search?.get("finding") || null,
+    ask: search?.get("ask") === "1",
+    card: search?.get("card") || null,
+    decision: search?.get("decision") || null,
+  };
+}
+
+/**
+ * The same address with the selection changed; null removes a key, and the
+ * default view and mode are left out. `runCase` names the case of the run
+ * being selected, so selecting a run moves the case with it.
+ */
+export function lineSelectionSearch(current: (Search & { toString(): string }) | null | undefined, patch: LineSelectionPatch, runCase?: string | null): string {
+  const q = new URLSearchParams(current?.toString() ?? "");
+  const before = readLineSelection(q);
+  // An earlier view name in the address settles on the view that holds it now.
+  const legacy = resolveView(q.get("view"));
+  if (legacy && isLegacy(q.get("view"))) {
+    q.set("view", legacy[0]);
+    if (legacy[1]) q.set("mode", legacy[1]);
+  }
+  const p: LineSelectionPatch = { ...patch };
+  // A step names a place in the Process view: picked from a view that has no step of its own, it opens there.
+  if (p.step && p.view === undefined && !STEP_VIEWS.has(before.view) && !(RUN_VIEWS.has(before.view) && (p.run ?? before.run))) p.view = "process";
+  if (p.view) {
+    const [view, mode] = resolveView(p.view) ?? [DEFAULT_LINE_VIEW, null];
+    p.view = view;
+    if (mode && p.mode === undefined) p.mode = mode;
+  }
+  // An older link's drawer tab settles on the drawer's own key.
+  const old = legacyTab(q);
+  if (old) { q.delete("tab"); if (!q.get(PARAM.tab)) q.set(PARAM.tab, old); }
+  const del = (k: Key) => q.delete(PARAM[k]);
+  const set = (k: Key, v: string | null | undefined) => {
+    if (v == null || v === "" || (k === "view" && v === DEFAULT_LINE_VIEW) || (k === "mode" && v === DEFAULT_LINE_MODE) || (k === "project" && ALL.has(v))) del(k);
+    else q.set(PARAM[k], v);
+  };
+  for (const k of KEYS) if (p[k] !== undefined) set(k, p[k]);
+  if (q.get("view") !== "process") q.delete("mode");
+  if (p.project !== undefined && (p.project || null) !== before.project) {
+    for (const k of ["graph", "step", "tab", "run", "case", "finding", "ask"] as const) if (p[k] === undefined) del(k);
+  }
+  if (p.graph !== undefined && p.graph !== before.graph) {
+    for (const k of ["step", "tab", "run", "case", "ask"] as const) if (p[k] === undefined) del(k);
+  }
+  // Another view keeps only the selection that belongs to it.
+  const view = resolveView(q.get("view"))?.[0] ?? DEFAULT_LINE_VIEW;
+  if (p.view !== undefined && view !== before.view) {
+    for (const k of SELECTION_KEYS) if (p[k] === undefined && !VIEW_KEEPS[view].includes(k)) del(k);
+    // Runs and the Inbox read a step only as an open run's playhead: their lists have no step of their own.
+    if (RUN_VIEWS.has(view) && p.step === undefined && !q.get(PARAM.run)) del("step");
+  }
+  if (p.step !== undefined && p.step !== before.step && p.tab === undefined) del("tab");
+  if (p.run && runCase !== undefined && p.case === undefined) set("case", runCase);
+  if (p.case !== undefined && p.case !== before.case) {
+    if (p.run === undefined) del("run");
+    if (p.ask === undefined) del("ask");
+  }
+  if (p.source !== undefined && p.source !== before.source && p.finding === undefined) del("finding");
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/** The keys that name a place: a change to any of them is a move Back and Forward walk. The drawer's tab, a
+ *  finding opened in its source's list and the answer box's focus change what a place shows, not the place. */
+const PLACE_KEYS = ["project", "view", "mode", "graph", "step", "run", "case", "source", "card", "decision"] as const;
+
+/** Whether moving from one address to the next is a new history entry (push) rather than a correction of the
+ *  current one (replace): true when any place key differs, the default view and mode read as named. */
+export function lineSelectionPushes(from: Search, to: Search): boolean {
+  const a = readLineSelection(from);
+  const b = readLineSelection(to);
+  return PLACE_KEYS.some((k) => a[k] !== b[k]);
+}
+
+/** A project's name as a URL slug: lowercase words joined by dashes. */
+export const projectSlug = (name: string): string => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/** Slugs the line's own paths hold (/line/all, /line/settings, /line/trace): a project so named goes by its short id. */
+const RESERVED_SLUG = /^(all|settings|trace)$/;
+
+type ProjectRef = { _id: string; short_id?: string | null; title?: string | null };
+
+/** How the line's filter names a project in its address: by its name's slug, the form /line/<slug> redirects to,
+ *  when no other project in `all` (the workspace the line reads) shares it; else by its short id. resolveLineProject reads either back. */
+export function lineFilterParam(project: ProjectRef, all: Iterable<ProjectRef>): string {
+  const slug = projectSlug(project.title ?? "");
+  if (!slug || RESERVED_SLUG.test(slug)) return project.short_id || project._id;
+  for (const p of all) if (p._id !== project._id && projectSlug(p.title ?? "") === slug) return project.short_id || project._id;
+  return slug;
+}
+
+/**
+ * The project a `?project=` (or `/line/<project>`) names: a row id, a short id, else a name's slug. A slug resolves
+ * among `projects` (every project the store holds); when several share it, the one `inWorkspace` holds wins, so a
+ * personal and a team project of the same name never cancel each other out. Undefined when nothing, or more than
+ * one in the workspace, matches.
+ */
+export function resolveLineProject(param: string | null | undefined, projects: Iterable<ProjectRef & { workspace?: string | null }>, inWorkspace?: (p: ProjectRef & { workspace?: string | null }) => boolean): string | undefined {
+  if (!param) return undefined;
+  const list = [...projects];
+  const byId = list.find((p) => p._id === param) ?? list.find((p) => p.short_id === param);
+  if (byId) return byId._id;
+  const slug = projectSlug(param);
+  if (!slug || RESERVED_SLUG.test(slug)) return undefined;
+  const named = list.filter((p) => projectSlug(p.title ?? "") === slug);
+  if (named.length === 1) return named[0]._id;
+  const here = inWorkspace ? named.filter(inWorkspace) : [];
+  return here.length === 1 ? here[0]._id : undefined;
+}
+
+/** A view's name in the nav, in nav order (keys 1 to 6). */
+export const LINE_VIEW_LABELS: Record<LineView, string> = { inbox: "Inbox", sources: "Sources", problems: "Problems", runs: "Runs", process: "Process", chat: "Chat" };
+export const LINE_MODE_LABELS: Record<LineMode, string> = { graph: "Graph", notebook: "Notebook" };
+
+/** The view a digit key opens: "1" is the first view, "6" the last; null for any other key. */
+export const lineViewForKey = (key: string): LineView | null => {
+  const n = Number(key);
+  return Number.isInteger(n) && n >= 1 && n <= LINE_VIEWS.length ? LINE_VIEWS[n - 1] : null;
+};
+
+/** The line app, `/line`, filtered to `project` (null: every project) with the selection `patch` names.
+ *  `project` is how the line pages name a project (lineStations lineProjectParam). */
+export function lineWorkspaceHref(project: string | null, patch: LineSelectionPatch = {}): string {
+  return `/line${lineSelectionSearch(null, { ...patch, project })}`;
+}
+
+/** The node the old map opened for the line's settings, and for the queue of problems. */
+const SETTINGS_NODE = "line";
+const QUEUE_NODE = "causes";
+
+/**
+ * Where an old address goes now, or null when it stays. `/line/<project>`
+ * (`path`, the segment) is the app filtered to that project, its query kept.
+ * An old map address on /line (`?project=&node=`, `edge`, `trace`) keeps its
+ * meaning: a node opens that step, an edge the step it leaves, the problems'
+ * queue the Problems view, the line's settings panel the settings page, a
+ * trace the ref's own place.
+ */
+export function lineWorkspaceRedirect(search: Search & { toString(): string } | null | undefined, path?: string | null): string | null {
+  const project = (path ?? search?.get("project") ?? "").trim();
+  const node = search?.get("node") || null;
+  const section = search?.get("section") || null;
+  const trace = search?.get("trace");
+  const edge = search?.get("edge");
+  if (!path && !node && !trace && !edge) return null;
+  if (node === SETTINGS_NODE) return `/line/settings?${new URLSearchParams({ ...(project && !ALL.has(project) ? { project } : {}), ...(section ? { section } : {}) }).toString()}`;
+  if (trace) return `/line/trace/${encodeURIComponent(trace)}`;
+  const step = node && node !== QUEUE_NODE ? node : edge ? edge.split("->")[0] || null : search?.get("step") || null;
+  // The project leads the address, and what the old one named stays named.
+  const kept = new URLSearchParams(project && !ALL.has(project) ? { project } : {});
+  for (const [k, v] of new URLSearchParams(search?.toString() ?? "")) if (!["project", "node", "edge", "section", "window", "trace"].includes(k)) kept.append(k, v);
+  return `/line${lineSelectionSearch(kept, { ...(step ? { step } : {}), ...(node === QUEUE_NODE ? { view: "problems" as const } : {}) })}`;
+}
+
+/** Any ref the line knows (a problem, a finding, a fingerprint, a run, a card)
+ *  at its place in the line app: `/line/trace/<ref>` resolves it
+ *  (LineRefRedirect). The path keeps its old name so links already sent still open. */
+export const lineRefHref = (ref: string) => `/line/trace/${encodeURIComponent(ref)}`;
+
+/** The ref a /line/trace/<ref> segment names. The router may have decoded it
+ *  already, so a ref holding a bare "%" stays as it is rather than throwing. */
+export function lineRefOf(segment: string): string {
+  try { return decodeURIComponent(segment).trim(); } catch { return segment.trim(); }
+}
