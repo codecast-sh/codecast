@@ -39,6 +39,15 @@ import { defaultConfigDir } from "../config/configDir.js";
 
 /** How long a browser whose owner is `unverifiable` may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
+/**
+ * How long any session's tab may sit undriven before it is closed, its owner
+ * alive or not. A tab is a whole live page in the human's Chrome: a codecast
+ * app tab left in the background holds its sync feeders open and costs a
+ * sixth of a core or more for as long as it stays, and agents leave tabs
+ * behind for hours while they work on other things (2026-10-09). Reopening
+ * costs the agent one `cast browser open`.
+ */
+export const TAB_IDLE_MS = 30 * 60 * 1000;
 /** Startup-path reaps are throttled to this; `stop --all` and tests force. */
 const THROTTLE_MS = 5 * 60 * 1000;
 
@@ -171,6 +180,15 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
 }
 
 /**
+ * The owners as scanned, except one session the caller just watched end (the
+ * daemon killed it: daemon.ts killConversationBackends). Its exit is observed,
+ * not inferred, so its tabs close now rather than after the idle rule.
+ */
+export function withEndedSession(live: LiveOwners, sessionId: string): LiveOwners {
+  return { ...live, session: (id) => (id === sessionId ? "exited" : live.session(id)) };
+}
+
+/**
  * Is the agent behind this session key still around? Mirrors engineSession():
  * the key is ownerKey() with `:` and other punctuation turned into `-`, so
  * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane-12`.
@@ -217,6 +235,8 @@ export function authorizesReap(owner: LivenessVerdict, idle: boolean): boolean {
 
 export interface ReapReport {
   closed: string[];
+  /** Tabs closed for sitting undriven, their sessions kept (TAB_IDLE_MS). */
+  idled: string[];
   killed: number;
   cleaned: string[];
   tmpDirsRemoved: number;
@@ -231,6 +251,8 @@ export interface ReapOptions {
   keep?: string | null;
   now?: number;
   idleMs?: number;
+  /** Close (not reap) a tab undriven this long; see TAB_IDLE_MS. */
+  tabIdleMs?: number;
   live?: LiveOwners;
   stateDir?: string;
   /** Close a session's tab and daemon; injectable for tests. */
@@ -306,18 +328,34 @@ async function engineOptionsFor(key: string): Promise<(EngineOptions & { session
  * and awaited by its callers: a reap that runs right before `process.exit`
  * (the `open` passthrough) would otherwise drop the close on the floor.
  */
-export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): Promise<void> {
-  if (!endpoint) return;
+export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): Promise<boolean> {
+  if (!endpoint) return false;
   try {
     const conn = await CdpConnection.fromPort(endpoint, 3_000);
     try {
       await conn.send("Target.closeTarget", { targetId }, undefined, 3_000);
+      return true;
     } finally {
       conn.close();
     }
   } catch {
-    /* the browser or the tab is already gone */
+    return false; // the browser or the tab is already gone
   }
+}
+
+/**
+ * Close a tab nobody is driving, whoever owns it, and let go of its daemon.
+ * The binding stays: the agent's next verb finds its tab gone and is told to
+ * open it again (cliEngine.ts, tab_gone), instead of landing on a blank tab.
+ * True only when a tab was still open to close, so a later pass over the same
+ * binding reports nothing.
+ */
+export async function closeIdleTab(key: string, stateDir = engineStateDir(), binary: string | null = findEngine()): Promise<boolean> {
+  if (isPaneSession(key)) return false;
+  const target = sessionTargetId(key, stateDir);
+  if (!target) return false;
+  if (listEngineSessions(stateDir).some((session) => session.key === key && session.running)) detachSessionDaemon(key, binary);
+  return closeTargetLater(target, await sessionEndpoint(key));
 }
 
 /**
@@ -368,7 +406,7 @@ function chromePids(userDataDirs: Set<string>): Array<{ pid: number; dir: string
  * on every start: it is throttled, and it never touches `keep`.
  */
 export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapReport> {
-  const report: ReapReport = { closed: [], killed: 0, cleaned: [], tmpDirsRemoved: 0, skipped: false };
+  const report: ReapReport = { closed: [], idled: [], killed: 0, cleaned: [], tmpDirsRemoved: 0, skipped: false };
   const now = opts.now ?? Date.now();
   if (!opts.force) {
     try {
@@ -389,6 +427,7 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
 
   const stateDir = opts.stateDir ?? engineStateDir();
   const idleMs = opts.idleMs ?? ENGINE_IDLE_MS;
+  const tabIdleMs = opts.tabIdleMs ?? TAB_IDLE_MS;
   const keep = opts.keep === undefined ? engineSession() : opts.keep;
   const sessions = listEngineSessions(stateDir);
   const live = opts.live ?? scanLiveOwners();
@@ -402,7 +441,10 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
     if (keep && baseSessionKey(s.key) === baseSessionKey(keep)) continue;
     const owner = ownerState(s.key, live);
     const idle = now - s.lastSeen > idleMs;
-    if (!authorizesReap(owner, idle)) continue;
+    if (!authorizesReap(owner, idle)) {
+      if (now - s.lastSeen > tabIdleMs && (await closeIdleTab(s.key, stateDir))) report.idled.push(s.key);
+      continue;
+    }
     if (s.running) {
       await close(s.key);
       report.closed.push(s.key);
@@ -419,10 +461,7 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
       // Counted like any other close: a tab that vanished from the human's
       // Chrome must show up in the summary the caller prints.
       const target = sessionTargetId(s.key, stateDir);
-      if (target) {
-        await closeTargetLater(target, await sessionEndpoint(s.key));
-        report.closed.push(s.key);
-      }
+      if (target && (await closeTargetLater(target, await sessionEndpoint(s.key)))) report.closed.push(s.key);
     }
     gone.add(s.key);
   }
@@ -465,6 +504,7 @@ export function describeReap(r: ReapReport): string | null {
   const parts: string[] = [];
   const n = r.closed.length;
   if (n) parts.push(`closed ${n} abandoned tab${n === 1 ? "" : "s"}${r.killed ? ` (${r.killed} daemons by force)` : ""}`);
+  if (r.idled.length) parts.push(`closed ${r.idled.length} tab${r.idled.length === 1 ? "" : "s"} idle over ${TAB_IDLE_MS / 60_000} minutes`);
   if (r.tmpDirsRemoved) parts.push(`removed ${r.tmpDirsRemoved} stale profile cop${r.tmpDirsRemoved === 1 ? "y" : "ies"}`);
   return parts.length ? parts.join(", ") : null;
 }

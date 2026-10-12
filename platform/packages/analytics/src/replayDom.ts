@@ -17,25 +17,23 @@
 // recorder treats it the same way); anything inside [data-private] is
 // blocked whole (the player shows an empty box its size).
 //
-// Checkouts (a fresh full snapshot) every DOM_CHECKOUT_MS, or after
-// DOM_CHECKOUT_EVERY_NTH events, are what bound the ring buffer: the recorder
-// keeps the current segment and the one before, so a recording that is never
-// kept holds at most two segments, and the oldest segment it does ship opens
-// on a full snapshot the player can start from.
+// Checkouts (a fresh full snapshot) are what bound the ring buffer: the
+// recorder keeps the current segment and the one before, so a recording that
+// is never kept holds at most two segments, and the oldest segment it does
+// ship opens on a full snapshot the player can start from. The timed ones are
+// the recorder's (./replay DOM_CHECKOUT_MS: every half ring until the DOM
+// ships, rarely after, which rrweb's fixed checkoutEveryNms cannot do); rrweb
+// adds one after DOM_CHECKOUT_EVERY_NTH events.
 
 import { record } from "@rrweb/record";
-import { REPLAY_LIMITS } from "./replay";
 import type { DomEvent, DomRecording, StartDomRecording } from "./replay";
 
-/** Half the semantic ring, so two segments always cover its minute. */
-export const DOM_CHECKOUT_MS = REPLAY_LIMITS.ring_buffer_ms / 2;
 /** A mutation storm checks out early instead of growing one segment without bound. */
 export const DOM_CHECKOUT_EVERY_NTH = 5_000;
 
 const EDITABLE = '[contenteditable]:not([contenteditable="false"])';
 
 export const DOM_RECORD_OPTIONS = {
-  checkoutEveryNms: DOM_CHECKOUT_MS,
   checkoutEveryNth: DOM_CHECKOUT_EVERY_NTH,
   maskAllInputs: true,
   maskTextSelector: EDITABLE,
