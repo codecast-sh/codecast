@@ -21,7 +21,7 @@ import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
-import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "../../components/SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
 import { useFirstRun } from "../../lib/firstRun";
@@ -95,8 +95,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     setResumeState("idle");
     forceRestartAttemptedRef.current = false;
   }
-
-  const looksAbandoned = sessionLooksAbandoned(conversation, isIdle);
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
@@ -172,9 +170,8 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     : resumeState === "resuming" || resumeState === "sent" ? "Resuming…"
     : resumeState === "failed" ? "Resume timed out"
     : sessionError ? "Session error"
-    : looksAbandoned ? "Unresponsive"
     : null;
-  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" || stallWord === "Unresponsive" ? "Resume" : null;
+  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" ? "Resume" : null;
   const seatHeadState = useMemo(() => {
     if (!seat || headOpen) return undefined;
     const stall: SeatStall = stallWord ? { word: stallWord, ...(stallAction ? { action: { label: stallAction, onClick: handleManualResume } } : {}) } : null;
@@ -220,7 +217,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       {isOwnSession && chromeShown && (
         <SessionResumeBanner
           resumeState={resumeState}
-          looksAbandoned={looksAbandoned && !sessionError}
           onResume={handleManualResume}
         />
       )}
