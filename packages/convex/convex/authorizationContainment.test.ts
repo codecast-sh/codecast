@@ -21,6 +21,7 @@ import {
   webUpdate as webTaskUpdate,
   webGet as webTaskGet,
   update as updateTaskForCLI,
+  create as createTaskForCLI,
   addDep,
   addComment as addTaskComment,
   recalcPlanProgress,
@@ -329,6 +330,12 @@ describe("Phase 0 task boundary", () => {
       short_id: "ct-personal",
       blocks: "ct-team",
     })).rejects.toThrow("Forbidden");
+    // create and update refuse the same edge: readiness never reads across
+    // workspaces, so it would hold the personal task forever.
+    await expect((createTaskForCLI as any)._handler(testCtx, { api_token: token, title: "x", blocked_by: ["ct-team"] }))
+      .rejects.toThrow("dependency task belongs to another workspace");
+    await expect((updateTaskForCLI as any)._handler(testCtx, { api_token: token, short_id: "ct-personal", blocked_by: ["ct-team"] }))
+      .rejects.toThrow("dependency task belongs to another workspace");
     await (addTaskComment as any)._handler(testCtx, {
       api_token: token,
       short_id: "ct-personal",

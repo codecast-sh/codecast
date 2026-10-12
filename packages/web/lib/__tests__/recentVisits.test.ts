@@ -76,22 +76,27 @@ describe("resolveRecentVisits", () => {
     expect(row.title).toBe("Old task");
   });
 
-  it("drops a session the inbox scope hides, keeps one only the conversation cache knows", () => {
+  it("keeps a teammate's session you opened, drops another team's work", () => {
+    const mine = "k7abcdefghijklmnopqrstuvwxyz0123";
+    const teammate = "k7tttttttttttttttttttttttttttttt";
+    const otherTeam = "k7zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
     const state = {
       ...base,
-      clientState: { ui: { inbox_scope: "team" } },
-      teamInboxIds: new Set(["k7abcdefghijklmnopqrstuvwxyz0123"]),
+      // The inbox scope hides the teammate's row; history must not.
+      clientState: { ui: { inbox_scope: "mine", active_team_id: "team_a" } },
       sessions: {
-        k7abcdefghijklmnopqrstuvwxyz0123: { _id: "k7abcdefghijklmnopqrstuvwxyz0123", title: "Mine", message_count: 1 },
-        k7zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz: { _id: "k7zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", title: "Other team", message_count: 1 },
+        [mine]: { _id: mine, title: "Mine", message_count: 1, user_id: ME, team_id: "team_b" },
+        [teammate]: { _id: teammate, title: "x influence", message_count: 4, user_id: "user_pal", team_id: "team_a" },
+        [otherTeam]: { _id: otherTeam, title: "Other team", message_count: 1, user_id: "user_far", team_id: "team_b" },
       },
       conversations: { convOnly: { _id: "convOnly", title: "From search", message_count: 2 } },
       recentVisits: [
-        { kind: "session", key: "k7zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", ts: 3 },
-        { kind: "session", key: "k7abcdefghijklmnopqrstuvwxyz0123", ts: 2 },
+        { kind: "session", key: otherTeam, ts: 4 },
+        { kind: "session", key: teammate, ts: 3 },
+        { kind: "session", key: mine, ts: 2 },
         { kind: "session", key: "convOnly", ts: 1 },
       ],
     };
-    expect(resolveRecentVisits(state, 10).map((r) => r.title)).toEqual(["Mine", "From search"]);
+    expect(resolveRecentVisits(state, 10).map((r) => r.title)).toEqual(["x influence", "Mine", "From search"]);
   });
 });
