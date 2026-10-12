@@ -95,6 +95,30 @@ describe("parseAppManifest", () => {
     expect(parseAppManifest([]).ok).toBe(false);
     expect(parseAppManifest({ readers: [] }).ok).toBe(false);
   });
+
+  test("keeps the views an app declares, and refuses a bad one", () => {
+    const out = parseAppManifest({
+      ...manifest,
+      views: [
+        { name: "conversation", title: "Conversation", path: "/embed/conversation", params: ["at"] },
+        { name: "call", path: "/embed/call" },
+      ],
+    });
+    if (!out.ok) throw new Error(out.errors.join("\n"));
+    expect(out.manifest.views).toEqual([
+      { name: "conversation", title: "Conversation", path: "/embed/conversation", params: ["at"] },
+      { name: "call", title: "call", path: "/embed/call", params: [] },
+    ]);
+    expect(parseAppManifest(manifest).ok && (parseAppManifest(manifest) as any).manifest.views).toEqual([]);
+    const bad = parseAppManifest({
+      name: "x",
+      views: [{ name: "a", path: "https://evil.example/" }, { name: "b", path: "/b", params: ["ok", "no spaces"] }, { name: "c", path: "/c" }, { name: "c", path: "/c2" }],
+    });
+    const errors = (bad as any).errors.join("\n");
+    expect(errors).toContain("view a: path");
+    expect(errors).toContain("view b: params");
+    expect(errors).toContain("view c: declared twice");
+  });
 });
 
 describe("validateJson", () => {
