@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 import { useHoverCard } from "../../hooks/useHoverCard";
+import { HoverCardClose } from "../../lib/hoverCardsOff";
 
 export function HoverCard({
   card, children, side = "top", align = "start", className = "w-80", disabled, triggerClassName, focusable,
@@ -49,7 +50,7 @@ export function HoverCard({
       >
         {/* Invisible bridge over the offset gap to the trigger. */}
         <span aria-hidden className={`absolute inset-x-0 h-2 ${side === "bottom" ? "bottom-full" : "top-full"}`} />
-        {card}
+        <HoverCardClose.Provider value={h.closeNow}>{card}</HoverCardClose.Provider>
       </PopoverContent>
     </Popover>
   );

@@ -13,7 +13,10 @@
 //                    and its credentials can touch nothing else.
 //
 // Retention differs on purpose. Replays are working material and expire by a
-// bucket lifecycle rule. Call recordings get none: a recording is the meeting
+// lifecycle rule on their prefix. Moment bodies expire the same way when
+// their source keeps them 30 days, and stay when it keeps them (the rules
+// live on the bucket: replays/ and moments-30d/ expire after 30 days,
+// moments/ has none). Call recordings get none: a recording is the meeting
 // kept, and an age based rule would take a call away from the people it
 // belongs to without anyone choosing that. A recording leaves the bucket when
 // a person deletes its run (the presser or a team admin), or when its team is
@@ -57,8 +60,8 @@ export function callRecordingsBucketFromEnv(): R2Bucket | null {
 
 /** The private session replays bucket (codecast-replays, external-data.md
  *  X5), or null when replays are not configured. Like call recordings: the
- *  account endpoint, and a token scoped to this bucket alone. A lifecycle
- *  rule on the bucket expires every object after 30 days. */
+ *  account endpoint, and a token scoped to this bucket alone. Lifecycle
+ *  rules expire REPLAYS_ROOT and MOMENTS_30D_ROOT after 30 days. */
 export function replaysBucketFromEnv(): R2Bucket | null {
   const endpoint = process.env.R2_ENDPOINT;
   const bucket = process.env.REPLAYS_R2_BUCKET || "codecast-replays";
@@ -70,6 +73,10 @@ export function replaysBucketFromEnv(): R2Bucket | null {
 
 /** Where every replay chunk lives in its bucket. */
 export const REPLAYS_ROOT = "replays/";
+/** Moment bodies a source keeps: no lifecycle rule covers this prefix. */
+export const MOMENTS_KEPT_ROOT = "moments/";
+/** Moment bodies a source keeps 30 days: the bucket's lifecycle rule deletes them. */
+export const MOMENTS_30D_ROOT = "moments-30d/";
 
 /** One chunk's key: content addressed under its source and recording, the
  *  sequence number zero padded so a recording's chunks list in order.
@@ -98,7 +105,7 @@ export function parseReplayChunkKey(key: string): { seq: number; sha256: string 
 
 /** One chunk of a recording's DOM capture (raw rrweb events, for the player):
  *  beside its semantic chunks, under `dom/`, content addressed the same way
- *  and expired by the same bucket-wide lifecycle rule. */
+ *  and expired by the same lifecycle rule. */
 export function replayDomChunkKey(opts: { sourceId: string; replay: string; seq: number; sha256: string }): string {
   return `${REPLAYS_ROOT}${opts.sourceId}/${opts.replay}/dom/${String(opts.seq).padStart(4, "0")}-${opts.sha256}.json.gz`;
 }
