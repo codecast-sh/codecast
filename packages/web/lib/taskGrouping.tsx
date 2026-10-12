@@ -19,7 +19,8 @@ import { ReactNode } from "react";
 import Link from "next/link";
 import { User, MessageSquare, FolderKanban, Tag, ListChecks, Flag } from "lucide-react";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import { byListOrder, initiativeHref } from "./initiatives";
+import { byListOrder } from "./initiatives";
+import { objectHref } from "./entityLinks";
 import { HealthChip, OwnerChip } from "../components/initiatives/InitiativeAtoms";
 import { INITIATIVE_ACCENT } from "./initiativeColors";
 import { isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
@@ -123,9 +124,9 @@ const assigneeAxis: TaskAxis = {
   header: (b, ctx) => {
     const info = assigneeOfKey(b.key, b.sample, ctx);
     const href = ctx.plainHeaders ? null : isRoleAssignee(info)
-      ? { to: `/org/${info.role_short_id}`, label: "Open role" }
+      ? { to: objectHref("role", info.role_short_id), label: "Open role" }
       : info?.github_username
-        ? { to: `/team/${info.github_username}`, label: "Profile" }
+        ? { to: objectHref("person", info.github_username), label: "Profile" }
         : null;
     return {
       label: assigneeLabelOf(b.key, info),
@@ -275,7 +276,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
         extra: row ? (
           <span className="flex items-center gap-2 flex-shrink-0">
             <OwnerChip owner={row.owner} size={14} />
-            <Link href={initiativeHref(row)} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
+            <Link href={objectHref("initiative", row.short_id || row._id)} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
               View goal
             </Link>
           </span>
