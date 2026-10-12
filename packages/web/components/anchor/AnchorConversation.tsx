@@ -5,6 +5,7 @@
 // talking to the agent feels identical wherever you open it.
 
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../ConversationDiffLayout";
+import { Button } from "../ui/button";
 import type { ConversationData } from "../conversation/types";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
@@ -241,13 +242,15 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
           </div>
         </div>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
-        <button
+        <Button
+          variant="cyan"
+          size="lg"
           onClick={create}
           disabled={busy || !tree || !meId}
-          className="sol-btn-solid mt-5 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60"
+          className="mt-5 w-full rounded-lg"
         >
           {busy ? "Bringing it online…" : `Hire ${HEAD_OF_PEOPLE_NAME}`}
-        </button>
+        </Button>
         <p className="text-[11px] text-sol-text-dim mt-3">You can rename it and give it a face on its page.</p>
       </div>
     </div>
@@ -305,7 +308,7 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
         </div>
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2 text-center`}>Hire your {EXECUTIVE_ASSISTANT_NAME}</h1>
         <p className="text-sm text-sol-text-muted mb-4 leading-relaxed text-center">
-          Your right hand: it keeps your goals in view, answers anything, sends what a lead owns to that lead, and brings every decision with a recommendation. It lives here in the header, on every page.
+          Your right hand: it keeps your focus in view, answers anything, sends what a lead owns to that lead, and brings every decision with a recommendation. It lives here in the header, on every page.
         </p>
         <div className="space-y-3">
           <div>
@@ -324,9 +327,9 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
           </div>
         </div>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
-        <button onClick={hire} disabled={busy || !tree} className="sol-btn-solid mt-4 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60" data-assistant-hire>
+        <Button variant="cyan" size="lg" onClick={hire} disabled={busy || !tree} className="mt-4 w-full rounded-lg" data-assistant-hire>
           {busy ? "Bringing it online…" : `Hire ${EXECUTIVE_ASSISTANT_NAME}`}
-        </button>
+        </Button>
       </div>
     </div>
   );

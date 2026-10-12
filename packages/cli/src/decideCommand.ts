@@ -253,7 +253,7 @@ export interface DecisionRow {
   station?: string;
   stack_id?: string;
   holder?: { kind: "user" | "role"; id: string };
-  hops?: { role_id: string; recommendation?: number; note?: string; at: number }[];
+  hops?: { role_id: string; recommendation?: number; note?: string; at: number; passed_at?: number }[];
   answered_by?: { kind: "user" | "role" | "policy"; id: string };
   answer_json?: any;
   blocking: boolean;
@@ -291,7 +291,7 @@ export function isStaleDecision(row: DecisionRow, now: number = Date.now()): boo
   return now - row.created_at >= STALE_AGE_MS || (row.messages_since ?? 0) >= STALE_MESSAGES_SINCE;
 }
 
-const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "answer"]);
+const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "pass", "answer"]);
 
 // An `sd-N` short id, or a raw Convex id (opaque lowercase alphanumerics of
 // 20+ chars); nothing else an agent types here (a question, a subcommand)
@@ -521,14 +521,15 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--mine", "ls: every pending decision you hold, across sessions")
-    .option("--note <text>", stdinText("recommend: a short note for the card"))
+    .option("--note <text>", stdinText("recommend / pass: what the person should know that the card does not say"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
+    .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")
     .action(async (question: string | undefined, rest: string[], options: any) => {
       // `answer` is the one verb a person runs from a plain shell: without a
       // session the server treats the caller as the person; with one, only
-      // the holder role under a grant may answer (a session never answers
-      // as a person).
+      // the holder role under a grant may answer, or the session's human at
+      // their explicit word (--for-human).
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       if (!sessionId && question !== "answer") fail("No session detected. Run inside a codecast session or pass --session <id>.");
 
@@ -570,9 +571,9 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       }
 
       // ── show / recommend / answer: the race verbs, by sd-N ──
-      if (sub === "show" || sub === "recommend" || sub === "answer") {
+      if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "answer") {
         const target = rest[0];
-        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : ""}`.trim());
+        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--note -]" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : ""}`.trim());
         if (sub === "show") {
           const result = await decideApi(deps, { decision_id: target }, "/cli/decide/show");
           if (options.json) {
@@ -586,7 +587,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           if (result.holder_role) console.log(fmt.muted(`  holder: role ${result.holder_role.name} (@${result.holder_role.handle}) under a grant`));
           for (const hop of result.ladder ?? []) {
             const who = hop.role ? `${hop.role.name} (@${hop.role.handle})` : hop.role_id;
-            const what = hop.recommendation !== undefined ? `recommends ${hop.recommendation + 1}${hop.note ? ` — ${hop.note}` : ""}` : hop.note ?? "no recommendation yet";
+            const note = hop.note ? ` — ${hop.note}` : "";
+            const what = hop.recommendation !== undefined ? `recommends ${hop.recommendation + 1}${note}` : hop.passed_at ? `passed it up${note}` : hop.note ?? "no recommendation yet";
             console.log(fmt.muted(`  ladder: ${who}: ${what}`));
           }
           if (result.doc?.content) {
@@ -605,15 +607,20 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           }
           return;
         }
-        if (sub === "recommend") {
-          const n = parseInt(rest[1] ?? "", 10);
-          if (isNaN(n) || n < 1 || n > 9) fail("Usage: cast decide recommend <sd-N> <n> [--note -]");
-          const result = await decideApi(deps, { decision_id: target, session_id: sessionId, recommendation: n - 1, note: options.note?.trim() || undefined }, "/cli/decide/recommend");
+        // recommend and pass both hand the same card up to its people; a
+        // pass carries only the role's note.
+        if (sub === "recommend" || sub === "pass") {
+          const n = sub === "recommend" ? parseInt(rest[1] ?? "", 10) : undefined;
+          if (n !== undefined && (isNaN(n) || n < 1 || n > 9)) fail("Usage: cast decide recommend <sd-N> <n> [--note -]");
+          const result = await decideApi(deps, { decision_id: target, session_id: sessionId, ...(n !== undefined ? { recommendation: n - 1 } : {}), note: options.note?.trim() || undefined }, "/cli/decide/recommend");
           if (options.json) console.log(JSON.stringify(result, null, 2));
           else {
-            console.log(`${fmt.success("Recommended:")} option ${n} on ${decisionHandle(result)} as ${result.role?.name ?? "your role"}.`);
-            if (result.late) console.log(fmt.muted("  Past the 5 minute hop deadline; the recommendation still lands on the card."));
-            console.log(fmt.muted("  The people decide. If your role holds a grant for this category here, answer instead: cast decide answer."));
+            const as = result.role?.name ?? "your role";
+            console.log(n !== undefined
+              ? `${fmt.success("Recommended:")} option ${n} on ${decisionHandle(result)} as ${as}.`
+              : `${fmt.success("Passed up:")} ${decisionHandle(result)} as ${as}${options.note?.trim() ? ", with your note" : ""}.`);
+            if (result.late && n !== undefined) console.log(fmt.muted("  Past the 5 minute hop deadline; the recommendation still lands on the card."));
+            console.log(fmt.muted("  The card is in its people's queue now; they decide. If your role holds a grant for this category here, answer instead: cast decide answer."));
           }
           return;
         }
@@ -628,11 +635,12 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         // No session means a person at a plain shell: omit the key rather
         // than send null, which the route's validator refuses.
-        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...parsed }, "/cli/decide/answer");
+        if (options.forHuman && !sessionId) fail("--for-human answers from a session for its human; at a plain shell you are the person, so drop it.");
+        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...(options.forHuman ? { for_human: true } : {}), ...parsed }, "/cli/decide/answer");
         if (options.json) console.log(JSON.stringify(result, null, 2));
         else if (result.already_resolved) console.log(fmt.muted(`${decisionHandle(result)} was already resolved; the first answer stands.`));
         else {
-          console.log(`${fmt.success("Answered:")} ${decisionHandle(result)} → ${result.answer_label ?? "recorded"} (as ${result.answered_by?.kind === "role" ? "the holder role under a grant" : "a person"}).`);
+          console.log(`${fmt.success("Answered:")} ${decisionHandle(result)} → ${result.answer_label ?? "recorded"} (as ${result.answered_by?.kind === "role" ? "the holder role under a grant" : result.answered_by?.via ? "your human, at their word" : "a person"}).`);
           if (result.resumed_run) console.log(fmt.muted("  The paused run takes this answer and resumes."));
           else if (result.delivered !== false) console.log(fmt.muted("  The answer is delivered to the asking session as a message."));
         }
