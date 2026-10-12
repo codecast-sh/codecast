@@ -135,13 +135,34 @@ is_read() {
     pr) case "${2:-}" in ls|show|events|threads) return 0 ;; *) return 1 ;; esac ;;
     # Team chat's reads; marking read is its own verb (/cli/chat/mark-read).
     chat) case "${2:-}" in read|thread|channels|ls|search) return 0 ;; *) return 1 ;; esac ;;
-    # Only show and ls: a bare `cast decide "<question>"` posts a decision.
-    decide) case "${2:-}" in show|ls) return 0 ;; *) return 1 ;; esac ;;
+    # show, ls and kit (the report page kit: its guide, or a page written as
+    # served beside itself): a bare `cast decide "<question>"` posts a decision.
+    decide) case "${2:-}" in show|ls|kit) return 0 ;; *) return 1 ;; esac ;;
+    # The CLI's own guides, printed.
+    guide) return 0 ;;
     # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
     stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
-    # A project's expectations; propose, apply and drop write.
-    expectations) [ "${2:-}" = show ] ;;
+    # A project's expectations; propose, apply and drop write. `routine` prints a pass.
+    expectations) [ "${2:-}" = show ] || [ "${2:-}" = routine ] ;;
+    # The line's reads (learning-loop.md LL4, LL7): the setup pass, the profile
+    # unpublished, moments listed, the budget unset, and a judge's request
+    # printed without sending (a sent try spends the team's budget).
+    line) case "${2:-}" in
+        judging) return 0 ;;
+        profile) ! has_flag --publish "$@" ;;
+        moments) [ "${3:-}" = ls ] || [ "${3:-}" = show ] ;;
+        budget) ! has_flag --set "$@" ;;
+        judges) [ "${3:-}" = try ] && has_flag --prompt "$@" ;;
+        # The trial's spend and cards, listed; its verbs (run, dispatch, spend, recard...) write.
+        trial) [ -z "${3:-}" ] || [ "${3#--}" != "${3}" ] ;;
+        *) return 1 ;;
+      esac ;;
+    sources) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
+    # What a connected product lets codecast read; every other connector verb runs an action.
+    connector) case "${2:-}" in ls|readers) return 0 ;; *) return 1 ;; esac ;;
+    # A finder's observations; add, move, merge and split write.
+    signal) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
     *) return 1 ;;
   esac
 }

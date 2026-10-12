@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSAL_OPTIONS, type OrgRoleProposal } from "@codecast/shared/contracts/orgProposal";
+import { autonomyOn, autonomySentence, defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
@@ -176,7 +177,7 @@ async function recoverStack(deps: OrgInitDeps, receipt: TemplateReceipt): Promis
     receipt.stack.decisionAttempted = true;
     save(receipt);
     const artifact = verifiedArtifact(receipt);
-    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${fill(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), receipt, artifact.manifest)}`;
+    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; its recurring jobs are not extra managers. ${autonomySentence(autonomyOn(receipt.proposal.trust))} Its recurring jobs are created paused after you approve; you turn each on from the role page.\n\nProposed shared charter:\n${fill(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), receipt, artifact.manifest)}`;
     const created = await request(deps, "/cli/decide", { session_id: receipt.sourceSession, stack: receipt.stack.id, question: `Create ${receipt.proposal.name} for ${receipt.project.name}? (${receipt.instance})`, kind: "single", category: "access", blocking: true, options: ORG_PROPOSAL_OPTIONS.role.map((label) => ({ label })), context_md: context });
     receipt.stack.decisionId = created.short_id || created.id;
     if (!receipt.stack.decisionId) throw new Error("Decision creation returned no id");
@@ -238,7 +239,7 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
     if (!(tree.roles ?? []).some((r: any) => r.status !== "retired" && `@${r.handle}` === reportsTo)) throw new Error(`No active role ${reportsTo} in this workspace`);
   }
   if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) throw new Error(`Project ${project.ref} already has a lead, @${leads[0].handle}. Hire under it with --reports-to @${leads[0].handle}, or name that role as the seat; a second role beside a project's lead is refused.`);
-  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: "understand", charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
+  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: defaultTrustFor({ handle }), charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
 }
@@ -639,7 +640,6 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
     if (![0, 1].includes(decision.answer_index)) throw new Error("Unrecognized template decision answer");
     const proposed = decision.answer_index === 1 ? applyProposalChanges(receipt.proposal, decision.answer_text).proposal : receipt.proposal;
     if (proposed.scope?.projects?.length !== 1 || ![receipt.project.ref, receipt.project.id].includes(proposed.scope.projects[0]) || (proposed.scope.plans?.length ?? 0) !== 0) throw new Error("Approved scope differs from the explicit instance project; refusing provisioning");
-    if (proposed.trust !== "understand") throw new Error("Template roles must start at understand");
     if (!receipt.role) {
       const applied = await request(deps, "/cli/org/apply-decision", { decision: receipt.stack.decisionId, provision: false });
       if (applied.status !== "applied" && !(applied.status === "skipped" && applied.note?.startsWith("already applied:"))) throw new Error(`Role was not applied: ${applied.note || applied.status}`);
@@ -651,7 +651,7 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
         if (!recoveredRef || role.short_id !== recoveredRef) throw new Error("Previously applied role identity cannot be recovered safely");
       }
       if (applied.role && applied.role.id !== role._id) throw new Error("Applied role identity mismatch");
-      if ((role.trust ?? "understand") !== "understand") throw new Error("New role is not at understand; manual review required");
+      if (autonomyOn(role.trust ?? defaultTrustFor(role)) !== autonomyOn(proposed.trust ?? defaultTrustFor(role))) throw new Error("New role's Starts work on its own differs from what was approved; manual review required");
       // The line it owns (line-profile.md LP7) is part of what the person approved.
       if (proposed.line && role.line_workflow_slug !== proposed.line) throw new Error(`New role does not run the approved line ${proposed.line}; manual review required`);
       if (proposed.caps?.cards !== undefined && role.caps?.cards !== proposed.caps.cards) throw new Error(`New role's cards cap is not the approved ${proposed.caps.cards}; manual review required`);
@@ -708,7 +708,7 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
     schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: "web", phase: "provisioning",
     template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root: releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash }) },
     stack: { title: `Org template ${instance} for ${project.ref} [${key}]` },
-    proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: "understand" },
+    proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: role.trust ?? defaultTrustFor(role) },
     config: row.config ?? {}, role: { id: role._id, handle: role.handle }, instanceId: String(row._id),
     routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every, ...(row.routines?.[r.id]?.external ? { triggerId: row.routines[r.id].triggerId, external: true } : {}) }])),
   };
@@ -724,7 +724,7 @@ export async function templateStatus(deps: OrgInitDeps, instance: string, option
   const rows = await triggerRows(deps);
   const artifact = verifiedArtifact(receipt);
   const roleRow = receipt.role ? verifyRole(tree, receipt) : undefined;
-  const trust = roleRow?.trust ?? "understand";
+  const trust = roleRow ? roleRow.trust ?? defaultTrustFor(roleRow) : "understand";
   const held = { ...receipt, authority: (roleRow?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) };
   await pullSetupMarks(deps, receipt);
   const words = setupText(artifact, receipt, false);
@@ -764,7 +764,7 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     if (!["scheduled", "running"].includes(row.status) || row.precheck === "exit 1") throw new Error("Routine remains paused or gated for review");
     file = entry.prompt;
     const roleRow = verifyRole(tree, receipt);
-    header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? "understand")[routine]);
+    header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? defaultTrustFor(roleRow))[routine]);
   }
   return `${pinned}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${fill(artifact.files.get(file)!.toString("utf8"), receipt, artifact.manifest)}`;
 }
