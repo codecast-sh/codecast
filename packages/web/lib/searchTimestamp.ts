@@ -6,7 +6,7 @@ export function formatSearchTimestamp(ts: number) {
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
   const isYesterday = date.toDateString() === yesterday.toDateString();
-  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (isToday) return timeStr;
   if (isYesterday) return `Yesterday ${timeStr}`;
   return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
