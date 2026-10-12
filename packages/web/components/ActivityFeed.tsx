@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useCallback, type ReactNode } from "react";
+import { useMemo, useState, useRef, useCallback, useLayoutEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AvatarImg } from "../lib/avatarCache";
@@ -11,8 +11,10 @@ import { useStableOrder } from "../hooks/useStableOrder";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
 import { ImageLightbox } from "./ImageGallery";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { fitPeopleRow } from "../lib/peopleRowFit";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { feedActorId, derivePeople, type FeedPerson } from "../lib/liveEntities";
+import { feedActorId, derivePeople, resolveSessionAuthor, type FeedPerson } from "../lib/liveEntities";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, ownTeamRowsSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
@@ -300,28 +302,76 @@ function PeopleRow({ people, onSelect, selectedId }: {
   onSelect: (id: Id<"users"> | undefined) => void;
   selectedId?: Id<"users">;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState<number[] | null>(null);
+  const selectedIdx = people.findIndex((p) => p.id === selectedId?.toString());
+
+  // Pills render once off-screen at full size; the row shows the ones that fit
+  // and folds the rest into the "+N" menu.
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    const measure = measureRef.current;
+    if (!row || !measure) return;
+    const fit = () => {
+      const kids = [...measure.children] as HTMLElement[];
+      const more = kids.pop()!;
+      const next = fitPeopleRow(kids.map((k) => k.offsetWidth), row.clientWidth, PEOPLE_GAP, more.offsetWidth, selectedIdx);
+      setVisible((prev) => (prev && prev.join() === next.join() ? prev : next));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, [people, selectedIdx]);
+
   if (people.length < 2) return null;
+  const shown = visible ?? people.map((_, i) => i);
+  const hidden = people.filter((_, i) => !shown.includes(i));
+  const pill = (p: FeedPerson) => {
+    const isSel = selectedId?.toString() === p.id;
+    return (
+      <button
+        key={p.id}
+        onClick={() => onSelect(isSel ? undefined : (p.id as Id<"users">))}
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors shrink-0 ring-1 ${isSel ? "bg-sol-bg-alt text-sol-text ring-sol-border/40" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ring-transparent"}`}
+      >
+        <span className={`rounded-full ring-2 ${AVATAR_RING[hashIndex(p.id, AVATAR_RING.length)]}`}>
+          <Avatar name={p.name} image={p.image} size={20} />
+        </span>
+        <span className="font-medium">{p.name.split(" ")[0]}</span>
+        <span className="opacity-40 tabular-nums">{p.sessions}</span>
+      </button>
+    );
+  };
+  const moreClass = "flex items-center px-2 py-1 rounded-md text-[11px] font-medium tabular-nums shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text transition-colors";
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-      {people.map((p) => {
-        const isSel = selectedId?.toString() === p.id;
-        return (
-          <button
-            key={p.id}
-            onClick={() => onSelect(isSel ? undefined : (p.id as Id<"users">))}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors shrink-0 ring-1 ${isSel ? "bg-sol-bg-alt text-sol-text ring-sol-border/40" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ring-transparent"}`}
-          >
-            <span className={`rounded-full ring-2 ${AVATAR_RING[hashIndex(p.id, AVATAR_RING.length)]}`}>
-              <Avatar name={p.name} image={p.image} size={20} />
-            </span>
-            <span className="font-medium">{p.name.split(" ")[0]}</span>
-            <span className="opacity-40 tabular-nums">{p.sessions}</span>
-          </button>
-        );
-      })}
+    <div className="relative">
+      <div ref={measureRef} aria-hidden className="absolute left-0 top-0 flex invisible pointer-events-none" style={{ gap: PEOPLE_GAP }}>
+        {people.map(pill)}
+        <span className={moreClass}>+{people.length}</span>
+      </div>
+      <div ref={rowRef} className="flex items-center overflow-hidden px-0.5 py-0.5" style={{ gap: PEOPLE_GAP }}>
+        {shown.map((i) => pill(people[i]))}
+        {hidden.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger className={moreClass}>+{hidden.length}</DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+              {hidden.map((p) => (
+                <DropdownMenuItem key={p.id} onSelect={() => onSelect(p.id as Id<"users">)} className="gap-2 text-xs">
+                  <Avatar name={p.name} image={p.image} size={18} />
+                  <span className="flex-1 truncate">{p.name}</span>
+                  <span className="opacity-40 tabular-nums">{p.sessions}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
     </div>
   );
 }
+const PEOPLE_GAP = 6;
 
 // Server-side page size for listConversations (its default `limit`). A live page
 // at least this long implies older pages exist.
@@ -1094,14 +1144,9 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   const viewer = useViewerIdentity();
   const orgEnabled = useTeamFeature("org");
   const rosterKey = settingsDataKey("teamMembers", viewer?._id, activeTeamId);
-  const memberSignature = useInboxStore((s) => {
-    const members = rosterKey ? s.settingsData[rosterKey]?.value : undefined;
-    return Array.isArray(members) ? members.map((m) => String(m._id)).sort().join("|") : undefined;
-  });
-  const memberIds = useMemo(
-    () => memberSignature === undefined ? undefined : new Set(memberSignature.split("|").filter(Boolean)),
-    [memberSignature],
-  );
+  const roster = useInboxStore((s) => rosterKey ? s.settingsData[rosterKey]?.value : undefined);
+  const members = Array.isArray(roster) ? roster : undefined;
+  const memberIds = useMemo(() => members && new Set(members.map((m) => String(m._id))), [members]);
   const sourceConvs = useMemo(() => {
     if (!activeTeamId) return [];
     const dirLeaf = directoryFilter ? directoryFilter.split("/").filter(Boolean).pop() : null;
@@ -1118,18 +1163,24 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
         }
         return shouldShowSession(sess, { excludeDefaultTitles: false });
       },
-      toConv: (sess) => ({
-        ...inboxSessionToConv(sess),
-        user_id: viewer?._id ?? "",
-        author_name: viewer?.name ?? viewer?.email ?? "",
-        author_avatar: viewer?.image ?? viewer?.github_avatar_url ?? null,
-        is_private: sess.is_private ?? false,
-        team_visibility: sess.team_visibility ?? null,
-      }),
+      toConv: (sess) => {
+        // A role seat the viewer hosts renders as its bot, like the server's
+        // rows: the people pills key on acting_user_id, so the viewer's name
+        // here would add one more chip of them per seat.
+        const bot = sess.acting_user_id ? resolveSessionAuthor(sess, null, viewer, members) : null;
+        return {
+          ...inboxSessionToConv(sess),
+          user_id: viewer?._id ?? "",
+          author_name: bot ? bot.name : viewer?.name ?? viewer?.email ?? "",
+          author_avatar: bot ? bot.avatar : viewer?.image ?? viewer?.github_avatar_url ?? null,
+          is_private: sess.is_private ?? false,
+          team_visibility: sess.team_visibility ?? null,
+        };
+      },
     }), memberIds, orgEnabled);
     // coarseNow: the mapped rows carry time-driven fields (duration, liveness).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedRows, st.sessions, activeTeamId, directoryFilter, viewer, coarseNow, memberIds, orgEnabled]);
+  }, [feedRows, st.sessions, activeTeamId, directoryFilter, viewer, coarseNow, members, memberIds, orgEnabled]);
 
   // Read the store the team feeder fills; the feeder itself is mounted globally.
   // The externalEvents store key is one shared overlay: a conversation, task or

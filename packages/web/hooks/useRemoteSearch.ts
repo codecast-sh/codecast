@@ -21,33 +21,49 @@ export function useRemoteSearch(query: string, opts: {
   chatTeamId?: string | null;
   limit?: number;
   chatLimit?: number;
+  /** Match only what the person wrote. Title rows have no author, so the
+   *  title tier stands down. */
   userOnly?: boolean;
+  /** Only the viewer's own sessions. */
+  mineOnly?: boolean;
+  /** Sessions active since this time. */
+  since?: number;
+  sort?: "recent" | "relevance";
+  debounceMs?: number;
 }) {
-  const { enabled, chatTeamId, limit = 10, chatLimit = 5, userOnly } = opts;
+  const { enabled, chatTeamId, limit = 10, chatLimit = 5, userOnly, mineOnly, since, sort, debounceMs = 250 } = opts;
   const [debouncedQuery, setDebouncedQuery] = useState("");
   useWatchEffect(() => {
     if (!enabled) { setDebouncedQuery(""); return; }
-    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    const timer = setTimeout(() => setDebouncedQuery(query), debounceMs);
     return () => clearTimeout(timer);
-  }, [query, enabled]);
+  }, [query, enabled, debounceMs]);
 
   // A lone operator being typed (`pr:`) searches nothing; its completions answer instead.
   const sessionSearchOn = useMemo(
     () => debouncedQuery.length >= 2 && sessionQuerySearches(parseSessionQuery(debouncedQuery)),
     [debouncedQuery],
   );
-  const args = enabled && sessionSearchOn ? { query: debouncedQuery, limit, ...(userOnly ? { userOnly } : {}) } : "skip";
-  const { data: contentResults, error: searchError } = useQueryNoThrow(api.conversations.searchConversations, args as any, { breakAfterMs: 15_000 });
+  const on = enabled && sessionSearchOn;
+  const filters = { ...(mineOnly ? { mineOnly } : {}), ...(since ? { since } : {}) };
+  const { data: contentResults, error: searchError } = useQueryNoThrow(
+    api.conversations.searchConversations,
+    on ? { query: debouncedQuery, limit, ...filters, ...(userOnly ? { userOnly } : {}), ...(sort && sort !== "recent" ? { sort } : {}) } : "skip",
+    { breakAfterMs: 15_000 },
+  );
   // Cheap always-fast companion: title/subtitle/summary matches land while (or
   // even if never) the message content search resolves.
-  const { data: titleResults } = useQueryNoThrow(api.conversations.searchConversationTitles, args as any);
+  const { data: titleResults } = useQueryNoThrow(
+    api.conversations.searchConversationTitles,
+    on && !userOnly ? { query: debouncedQuery, limit, ...filters } : "skip",
+  );
   const contentData = contentResults && "results" in contentResults ? contentResults : null;
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
   const searchRows = useMemo(
     () => mergeSearchRows(contentData?.results as any, titleData?.results as any),
     [contentData, titleData],
   );
-  const titlesLoaded = titleData != null;
+  const titlesLoaded = titleData != null || (on && !!userOnly);
   const contentLoaded = contentData != null;
   const searchAwaiting = query.trim().length >= 2 && searchRows.length === 0 && !(titlesLoaded && (contentLoaded || !!searchError));
 
@@ -59,5 +75,5 @@ export function useRemoteSearch(query: string, opts: {
   );
   const chatHits = (chatSearchData?.results ?? []) as any[];
 
-  return { debouncedQuery, sessionSearchOn, searchRows, searchError, contentLoaded, titlesLoaded, searchAwaiting, chatHits };
+  return { debouncedQuery, sessionSearchOn, searchRows, searchError, contentData, titleData, contentLoaded, titlesLoaded, searchAwaiting, chatHits };
 }
