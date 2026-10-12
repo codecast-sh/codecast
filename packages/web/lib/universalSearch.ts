@@ -2,12 +2,15 @@
 // of every search surface (web's Cmd-K palette, the phone's search). Server
 // search lands on top of it (hooks/useRemoteSearch).
 
-import { collapseSameTitle, score } from "./mentionRanking";
+import { collapseSameTitle, matchScore } from "./mentionRanking";
 import { inActiveWorkspace } from "./workspaceScope";
-import { isActiveTask } from "@codecast/shared/tasks";
+import { isActiveTask, isOnHumanBoard } from "@codecast/shared/tasks";
+import { isOnNotesShelf } from "@codecast/shared/docs";
+import { inAssistantScope, isAssistantDoc, isAssistantTask } from "./assistantScope";
 
 // One matcher for tasks/docs/plans over the globally-synced mention index.
-// Reuses score() (exact > prefix > substring) with a short_id fallback, and
+// Reuses matchScore() (exact > prefix > substring, every typed word required
+// in any order) with a short_id fallback, and
 // mirrors the Tasks/Docs pages' team scoping: in a team view keep this team's
 // items plus teamless orphans; in the personal view keep only teamless items.
 export type MentionRecord = {
@@ -38,8 +41,8 @@ export function matchEntities(
     if (exclude?.(rec)) continue;
     if (!inActiveWorkspace(rec, teamId)) continue;
     if (!q) { ranked.push({ rec, rank: 0 }); continue; }
-    const titleRank = score(rec.title || "", q);
-    const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
+    const titleRank = matchScore(rec.title || "", q);
+    const goalRank = rec.goal ? matchScore(rec.goal, q) : Infinity;
     // File-synced docs are titled from their content heading, not their filename;
     // score the source file too so a doc is findable by name/path. Score the
     // basename (strong prefix match) and the full path (matches "dir/file.md").
@@ -47,7 +50,7 @@ export function matchEntities(
     if (rec.source_file) {
       const path = rec.source_file.toLowerCase();
       const base = path.split("/").pop() || path;
-      fileRank = Math.min(score(base, q), score(path, q));
+      fileRank = Math.min(matchScore(base, q), matchScore(path, q));
     }
     let rank = Math.min(titleRank, goalRank, fileRank);
     if (rank === Infinity) {
@@ -94,7 +97,76 @@ export function searchIndexOf(s: {
   };
 }
 
-/** Tasks, plans and docs a query names, each ranked and capped, as every search surface groups them: dropped tasks, abandoned plans and plan-type docs left out. */
+/** The search index as hosted mode's Assistant scope sees it: the to-dos and
+ *  notes the To-dos and Notes pages list on their Assistant tab, and no
+ *  plans. Read from the store's own rows, since the mention index's slim
+ *  rows carry no project or conversation to judge a row by (an engineering
+ *  task there would pass as the person's own). The palette and /search read
+ *  this one rule, so they agree with the pages. */
+export function assistantSearchIndex(s: {
+  tasks?: Record<string, any>; docs?: Record<string, any>; sessions?: Record<string, { agent_type?: string | null } | undefined>;
+}): { tasks: Record<string, MentionRecord>; docs: Record<string, MentionRecord>; plans: Record<string, MentionRecord> } {
+  const sessions = s.sessions ?? {};
+  const assistantConversations = new Set(Object.keys(sessions).filter((id) => inAssistantScope(sessions[id]?.agent_type)));
+  const tasks = Object.values(s.tasks ?? {}).filter((t: any) => isActiveTask(t) && isOnHumanBoard(t) && isAssistantTask({
+    ...t,
+    source_agent_type: t.created_from_conversation ? sessions[String(t.created_from_conversation)]?.agent_type ?? null : null,
+  }));
+  const docs = Object.values(s.docs ?? {}).filter((d: any) => isOnNotesShelf(d) && isAssistantDoc(d, assistantConversations));
+  const byId = (rows: any[]) => Object.fromEntries(rows.map((r) => [String(r._id), r]));
+  return { tasks: byId(tasks), docs: byId(docs), plans: {} };
+}
+
+/** The search index as the everyday surfaces see it: every scope's notes and
+ *  plans, and only the to-dos the human's board shows. */
+export function humanSearchIndex(s: Parameters<typeof searchIndexOf>[0]): ReturnType<typeof searchIndexOf> {
+  const all = searchIndexOf(s);
+  return { ...all, tasks: Object.fromEntries(Object.entries(all.tasks).filter(([, t]) => isOnHumanBoard(t as any))) };
+}
+
+/** Open to-dos before closed ones, each kind keeping its rank. */
+export function openTasksFirst<T extends { status?: string }>(rows: readonly T[]): T[] {
+  const closed = (t: T) => t.status === "done" || t.status === "dropped";
+  return [...rows.filter((t) => !closed(t)), ...rows.filter(closed)];
+}
+
+/** The kinds a query can name by their own word. */
+export type SearchKind = "task" | "doc" | "routine";
+
+const KIND_WORDS: Record<SearchKind, readonly string[]> = {
+  task: ["to-do", "todo", "to do", "task"],
+  doc: ["note", "doc", "document"],
+  routine: ["routine", "schedule", "reminder", "trigger"],
+};
+
+/** The shortest start of a kind word that names the kind ("rou", "not"),
+ *  so the list shows while the word is still being typed. */
+const KIND_PREFIX_MIN = 3;
+
+/** The kind a query names by its word, its plural or a start of it of
+ *  KIND_PREFIX_MIN letters or more ("routines", "to-d", "rou"), or null. A
+ *  person who types the kind of thing they want is asking to see their
+ *  things of that kind. */
+export function kindOfQuery(query: string): SearchKind | null {
+  const q = query.trim().toLowerCase().replace(/s$/, "");
+  if (!q) return null;
+  for (const kind of Object.keys(KIND_WORDS) as SearchKind[]) if (KIND_WORDS[kind].includes(q)) return kind;
+  if (q.length < KIND_PREFIX_MIN) return null;
+  for (const kind of Object.keys(KIND_WORDS) as SearchKind[]) if (KIND_WORDS[kind].some((w) => w.startsWith(q))) return kind;
+  return null;
+}
+
+/** A query that names `kind` lists that kind: its title hits first, then the
+ *  rest, newest first, up to `cap`. Any other query keeps its hits. */
+function withKindRows<T extends { _id?: unknown }>(hits: T[], listed: () => T[], named: boolean, cap: number): T[] {
+  if (!named) return hits;
+  const seen = new Set(hits.map((r) => String(r._id)));
+  return [...hits, ...listed().filter((r) => !seen.has(String(r._id)))].slice(0, cap);
+}
+
+/** Tasks, plans and docs a query names, each ranked and capped, as every
+ *  search surface groups them: dropped tasks, abandoned plans and plan-type
+ *  docs left out. A query that is a kind's word ("notes") lists that kind. */
 export function matchMentionGroups(
   index: { tasks: Record<string, any>; docs: Record<string, any>; plans: Record<string, any> },
   query: string,
@@ -102,29 +174,68 @@ export function matchMentionGroups(
   cap: number,
   browse: { task?: boolean; doc?: boolean; plan?: boolean } = {},
 ): { tasks: MentionRecord[]; docs: MentionRecord[]; plans: MentionRecord[] } {
+  const kind = kindOfQuery(query);
+  const dropped = (t: MentionRecord) => t.status === "dropped";
+  const planDoc = (d: MentionRecord) => d.doc_type === "plan";
   return {
-    tasks: matchEntities(index.tasks, query, teamId, cap, (t) => t.status === "dropped", browse.task),
-    docs: matchEntities(index.docs, query, teamId, cap, (d) => d.doc_type === "plan", browse.doc),
+    tasks: withKindRows(matchEntities(index.tasks, query, teamId, cap, dropped, browse.task), () => matchEntities(index.tasks, "", teamId, cap, dropped, true), kind === "task", cap),
+    docs: withKindRows(matchEntities(index.docs, query, teamId, cap, planDoc, browse.doc), () => matchEntities(index.docs, "", teamId, cap, planDoc, true), kind === "doc", cap),
     plans: matchEntities(index.plans, query, teamId, cap, (p) => p.status === "abandoned", browse.plan),
   };
 }
 
 /** Routines a query names, best first: by title or instruction, else by
  *  short id; ended routines left out. Queries under two characters match
- *  nothing. The palette and the search page read this one matcher. */
+ *  nothing, and a query that is the kind's word ("routines") lists them all,
+ *  newest first, after any title hit. The palette and the search page read
+ *  this one matcher. */
 export function matchRoutines<T extends { title?: string; prompt?: string; short_id?: string; status?: string; updated_at?: number; _creationTime?: number }>(rows: readonly T[], query: string, cap: number): T[] {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
+  const listAll = kindOfQuery(q) === "routine";
   const ranked: Array<{ t: T; rank: number }> = [];
   for (const t of rows) {
     if (t.status === "completed" || t.status === "cancelled") continue;
-    let rank = Math.min(score(t.title || "", q), score(t.prompt || "", q));
+    let rank = Math.min(matchScore(t.title || "", q), matchScore(t.prompt || "", q));
     if (rank === Infinity) {
-      if (!t.short_id?.toLowerCase().includes(q)) continue;
-      rank = 50;
+      if (t.short_id?.toLowerCase().includes(q)) rank = 50;
+      else if (listAll) rank = 100;
+      else continue;
     }
     ranked.push({ t, rank });
   }
   ranked.sort((a, b) => a.rank - b.rank || (b.t.updated_at || b.t._creationTime || 0) - (a.t.updated_at || a.t._creationTime || 0));
   return ranked.slice(0, cap).map((r) => r.t);
+}
+
+/** Rows a query names by any of their words, best first, capped: each row's
+ *  rank is its best field (matchScore: every typed word, in any order), the
+ *  newest wins a tie. The org's objects and published pages are few, so a
+ *  scan of the store's rows answers them as the person types. */
+export function matchRows<T>(rows: readonly T[], query: string, fields: (row: T) => Array<string | null | undefined>, cap: number, at: (row: T) => number = () => 0): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const ranked: Array<{ row: T; rank: number }> = [];
+  for (const row of rows) {
+    let rank = Infinity;
+    for (const f of fields(row)) if (f) rank = Math.min(rank, matchScore(f, q));
+    if (rank !== Infinity) ranked.push({ row, rank });
+  }
+  ranked.sort((a, b) => a.rank - b.rank || at(b.row) - at(a.row));
+  return ranked.slice(0, cap).map((r) => r.row);
+}
+
+/** Projects by title or short id. */
+export function matchProjects<T extends { title?: string; short_id?: string; updated_at?: number }>(rows: readonly T[], query: string, cap: number): T[] {
+  return matchRows(rows, query, (p) => [p.title, p.short_id], cap, (p) => p.updated_at ?? 0);
+}
+
+/** Goals by title or short id; a dropped goal is not offered. */
+export function matchGoals<T extends { title?: string; short_id?: string; status?: string; updated_at?: number }>(rows: readonly T[], query: string, cap: number): T[] {
+  return matchRows(rows.filter((g) => g.short_id && g.status !== "dropped"), query, (g) => [g.title, g.short_id], cap, (g) => g.updated_at ?? 0);
+}
+
+/** Roles by name, `@handle` as written, or short id; a retired role is not offered. */
+export function matchRoles<T extends { name?: string; handle?: string; short_id?: string; status?: string }>(rows: readonly T[], query: string, cap: number): T[] {
+  return matchRows(rows.filter((r) => r.status !== "retired"), query.trim().replace(/^@/, ""), (r) => [r.name, r.handle, r.short_id], cap);
 }

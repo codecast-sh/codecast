@@ -18,6 +18,8 @@ import { homePaths } from '../paths';
 import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
 import type { SurfaceMeta } from '../surface';
+import { sendsThinkingOff } from '../models';
+import { evalsApiKey } from '../adapters/apiCall';
 import { publishSite } from './publish';
 import { pickSurfaces } from './stale';
 import { batchSet, BISECT_CADENCE, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdict } from './verdict';
@@ -160,6 +162,16 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
       console.log('nothing changed');
       return 0;
     }
+  }
+
+  // A call rep goes out as prod posts it only with the evals' API key. Without
+  // one it runs through Claude Code, which cannot turn a model's thinking off,
+  // so a model prod posts with thinking off would be measured on a request prod
+  // never sends.
+  if (!flags.dry && !evalsApiKey()) {
+    const unmatched = metas.filter((m) => m.route === 'call' && m.model && sendsThinkingOff(m.model));
+    for (const m of unmatched) console.log(`skipped ${m.id}: prod posts ${m.model} with thinking off, which a replay through Claude Code cannot send; put the evals' API key in the keychain (codecast-evals-anthropic-key) or CODECAST_EVALS_ANTHROPIC_KEY (./evals doctor prints the command)`);
+    metas = metas.filter((m) => !unmatched.includes(m));
   }
 
   const all = await store.list();
@@ -357,6 +369,17 @@ export function registerCheck(program: Command, sources: EvalSources): void {
   program
     .command('check [surfaces...]')
     .description('replay every freeze of each surface, grade every rep, and compare with the previous run set')
+    .addHelpText(
+      'after',
+      `
+Reading the verdict: a prompt change is a win only at "separated: better", a one-sided Mann-Whitney at p <= 0.05.
+Give it 5+ reps a side on a call surface and 8 on an agent surface; fewer print "too few samples to separate".
+A "worse" counts as a regression only when it holds across every surface the check weighed (Holm). Gates are
+decided in code, and one failed gate in any rep fails the variant.
+Call reps post prod's exact request with the evals API key (CODECAST_EVALS_ANTHROPIC_KEY, or the keychain item
+codecast-evals-anthropic-key); ./evals doctor checks it. Agent surfaces run by hand only: --stale and the cadence
+triggers name them and never run them.`,
+    )
     .option('--stale', 'only the surfaces `stale` names; agent surfaces get a manual-run notice instead')
     .option('--route <route>', 'call or agent')
     .option('--freeze <id>', 'only this freeze (repeatable, prefix ok)', (v: string, all: string[]) => [...all, v], [] as string[])
