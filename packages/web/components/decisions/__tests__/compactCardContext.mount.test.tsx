@@ -12,11 +12,15 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) => <a href={typeof href === "string" ? href : "#"} {...rest}>{children}</a> }));
 mock.module("../../../lib/convexUrl", () => ({ CONVEX_URL: "https://convex.test", getConvexUrl: () => "https://convex.test" }));
 mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined, error: null }) }));
-mock.module("../../../hooks/useSyncWorkflows", () => ({ useSyncWorkflowRun: () => {} }));
-mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true }));
+// Spread the real module: bun shares this mock with every later file in a run.
+const realWorkflows = await import("../../../hooks/useSyncWorkflows");
+mock.module("../../../hooks/useSyncWorkflows", () => ({ ...realWorkflows, useSyncWorkflowRun: () => ({ ready: true }) }));
+mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true, locateDecisionAsk: async () => null }));
 const markdownRenders: string[] = [];
+// Wraps the real renderer rather than replacing it: bun shares this mock with every later file in a run, and those read real markdown.
+const RealMarkdown = (await import("../../tools/MarkdownRenderer")).MarkdownRenderer;
 mock.module("../../tools/MarkdownRenderer", () => ({
-  MarkdownRenderer: ({ content }: { content: string }) => { markdownRenders.push(content); return <div data-md>{content}</div>; },
+  MarkdownRenderer: (props: any) => { markdownRenders.push(props.content); return <div data-md><RealMarkdown {...props} /></div>; },
 }));
 
 import { DecisionCompactCard } from "../DecisionCompactCard";
@@ -32,6 +36,8 @@ const restoreGlobals = replaceGlobals({
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
+  // The real canvas fence measures itself.
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 // react-dom/client decides at load whether a DOM exists, so it is loaded
@@ -57,11 +63,12 @@ const decision: any = {
   created_at: Date.now() - 60_000,
 };
 
+const { MemoryRouter } = await import("react-router");
 async function mount(ui: React.ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(() => root.render(ui));
+  await act(() => root.render(<MemoryRouter>{ui}</MemoryRouter>));
   return { container, unmount: () => act(() => root.unmount()) };
 }
 

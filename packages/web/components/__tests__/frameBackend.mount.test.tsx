@@ -23,6 +23,9 @@ const restoreGlobals = replaceGlobals({
   }),
   HTMLElement: dom.window.HTMLElement,
   MutationObserver: dom.window.MutationObserver,
+  // useFrameTheme posts the theme to a framed page on the next frame.
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   fetch: (url: string) => {
     fetched.push(url);
     return answer === "answer" ? Promise.resolve({}) : Promise.reject(new TypeError("Failed to fetch"));

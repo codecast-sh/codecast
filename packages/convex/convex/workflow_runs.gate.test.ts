@@ -11,6 +11,7 @@ import {
   cancel,
   createFromCli,
   listRunsCore,
+  graphOfRun,
   pollGateResponse,
 } from "./workflow_runs";
 import { resolve, withdraw, answerCore, askCore, settleClientResolution } from "./sessionDecisions";
@@ -146,6 +147,22 @@ describe("pauseAtGate asks through the decision rail (the-line.md L4)", () => {
     expect(tables.decision_stacks[0].decision_ids).toEqual(tables.session_decisions.map((d) => d._id));
     // Answering the first gate closed the stack; the second gate reopened it.
     expect(tables.decision_stacks[0].status).toBe("open");
+  });
+
+  test("a spawner session another account owns (the project lead's) still asks, as its owner", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations[0].user_id = MATE;
+    const r: any = await pause(ctx);
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_spawner");
+    expect(tables.workflow_runs[0].gate_decision_id).toBe(tables.session_decisions[0]._id);
+  });
+
+  test("a gate that could not ask anyone says so instead of waiting in silence", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].spawner_conversation_id = "conversations_missing";
+    const r: any = await pause(ctx);
+    expect(r.error).toMatch(/could not ask anyone/);
   });
 
   test("the primary conversation asks when the run has no spawner", async () => {
@@ -320,6 +337,16 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     void tables;
   });
 
+  test("a teammate reads a run's graph without where it lives; its owner sees the origin", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflows[0].origin = { device_id: "dev_1", root: "/Users/owner/src/app", file: "line.cast" };
+    const asMate: any = await (graphOfRun as any)._handler(asUser(ctx, MATE), { run_id: RUN });
+    expect(asMate?.name).toBe("line");
+    expect(asMate?.origin).toBeUndefined();
+    const asOwner: any = await (graphOfRun as any)._handler(asUser(ctx, HOST), { run_id: RUN });
+    expect(asOwner?.origin?.root).toBe("/Users/owner/src/app");
+  });
+
   test("createFromCli stamps workspace and team_id from the bound task", async () => {
     const { ctx, tables } = await seed();
     tables.workflow_runs[0].status = "completed";
@@ -341,6 +368,19 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     const free = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line" });
     const own = tables.conversations.find((c) => c._id === free.primary_conversation_id);
     expect(own.inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a run started from outside any session runs as the lead of its cause's project, so its gates reach a person", async () => {
+    const { ctx, tables } = await seed({
+      projects: [{ _id: "projects_aq", team_id: TEAM, title: "Agent Quality", owner_role_id: "org_roles_aq" }],
+      anchors: [{ _id: "anchors_aq", conversation_id: "conversations_spawner" }],
+      org_roles: [{ _id: "org_roles_aq", team_id: TEAM, handle: "agent-quality", status: "active", anchor_id: "anchors_aq", reports_to: { kind: "user", user_id: HOST } }],
+    });
+    tables.workflow_runs[0].status = "completed";
+    tables.tasks[0].project_id = "projects_aq";
+    const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
+    expect(tables.workflow_runs.find((x) => x._id === r.run_id).spawner_conversation_id).toBe("conversations_spawner");
+    expect(r.spawner_conversation_id).toBe("conversations_spawner");
   });
 
   test("createFromCli refuses a second run while the cause's run is live (LE1.4), and --force overrides", async () => {
@@ -381,5 +421,50 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     const run = tables.workflow_runs.find((x) => x._id === r.run_id);
     expect(run.workspace).toBe(`user:${HOST}`);
     expect(run.team_id).toBeUndefined();
+  });
+});
+
+// A gate that names its asking station (`asker=`): the decision lives in the thread of the session that wrote the card,
+// so a person reads it and talks to that session before answering.
+describe("a gate asks from the station that wrote its card", () => {
+  const station = { _id: "conversations_card", session_id: "sess-card", user_id: HOST, team_id: TEAM, message_count: 40 };
+  const cardChoices = [
+    { key: "S", label: "[S] Ship", target: "trial_ship" },
+    { key: "R", label: "[R] Revise", target: "revise_build" },
+    { key: "D", label: "[D] Drop", target: "trial_drop" },
+  ];
+
+  test("adopts the decision the session posted itself, routes its own options, and resumes the run on an answer", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    // The card session's last act: its own question, options in its own words and order, and its page.
+    const posted = await askCore(ctx, { userId: HOST }, {
+      session_id: "sess-card",
+      question: "Stop sending 'still waiting' notes with nothing new?",
+      context_md: "Two real threads where the note went out twice; the change sends none and every check passed.",
+      options: [{ label: "Drop: the cases are too thin" }, { label: "Ship it" }, { label: "Revise: keep one note at day 7" }],
+      blocking: true,
+    });
+    expect(posted.error).toBeUndefined();
+
+    const r = await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    expect((r as any)?.error).toBeUndefined();
+    expect(tables.session_decisions).toHaveLength(1);
+    const row = tables.session_decisions[0];
+    expect(String(row.conversation_id)).toBe("conversations_card");
+    expect(row).toMatchObject({ workflow_run_id: RUN, gate_node_id: "decide", blocking: true, task_id: TASK });
+    expect(tables.workflow_runs[0].gate_decision_id).toBe(row._id);
+    expect(tables.workflow_runs[0].gate_choices.map((c: any) => c.key)).toEqual(["D", "S", "R"]);
+
+    await answerCore(ctx, { userId: HOST }, { decision_id: String(row._id), answer_index: 1 });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: "S" });
+  });
+
+  test("with no decision of its own, the gate asks from that session, not the run's spawner", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    expect(tables.session_decisions).toHaveLength(1);
+    expect(String(tables.session_decisions[0].conversation_id)).toBe("conversations_card");
   });
 });
