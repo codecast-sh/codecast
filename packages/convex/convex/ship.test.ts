@@ -3,7 +3,7 @@
 // (shared/contracts/shipPlan.test.ts); this pins what feeds it.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { gatherShipFacts, shipParent } from "./ship";
+import { gatherShipFacts, shipParent, startShipCore } from "./ship";
 import { resolveShipPlan } from "@codecast/shared/contracts/shipPlan";
 
 const OWNER = "users_owner" as any;
@@ -88,6 +88,14 @@ describe("gatherShipFacts", () => {
   test("someone else's task is not found", async () => {
     const got: any = await gatherShipFacts(world(), "users_stranger" as any, { kind: "task", id: "ct-7" });
     expect(got.error).toBe("Task not found");
+  });
+});
+
+describe("startShipCore", () => {
+  test("a trial project's change never ships: the press is refused before anything starts", async () => {
+    const ctx = world();
+    await ctx.db.patch("projects_p1", { line_trial: { by: OWNER, at: 1 } });
+    await expect(startShipCore(ctx, OWNER, { kind: "task", id: "ct-7" })).rejects.toThrow(/trial/);
   });
 });
 
