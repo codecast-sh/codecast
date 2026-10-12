@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseShortstat, runCost, taskWorkspaceScope } from "./cardCommand.js";
+import { mergeTreeConflicts, parseShortstat, runCost, taskWorkspaceScope } from "./cardCommand.js";
 
 describe("cast card build inputs", () => {
   test("parses git diff --shortstat in every plural form", () => {
@@ -7,6 +7,12 @@ describe("cast card build inputs", () => {
     expect(parseShortstat(" 1 file changed, 1 insertion(+)")).toEqual({ files: 1, added: 1, removed: 0 });
     expect(parseShortstat(" 1 file changed, 3 deletions(-)")).toEqual({ files: 1, added: 0, removed: 3 });
     expect(parseShortstat("")).toBeNull();
+  });
+
+  test("reads the conflicted paths from git merge-tree --name-only", () => {
+    expect(mergeTreeConflicts("abc123\nf/a.jsonl\nf/a.jsonl\nf/b.jsonl\n")).toEqual(["f/a.jsonl", "f/b.jsonl"]);
+    expect(mergeTreeConflicts("abc123\nf/a.jsonl\n\nAuto-merging f/a.jsonl\nCONFLICT (content)\n")).toEqual(["f/a.jsonl"]);
+    expect(mergeTreeConflicts("abc123\n")).toEqual([]);
   });
 
   test("sums agent minutes and tokens over the task's runs", () => {

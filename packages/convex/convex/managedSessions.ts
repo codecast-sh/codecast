@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { noteWriteCause } from "./lifecycleEvents";
 import { releaseQueuedRows } from "./pendingMessageWrites";
 import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -534,6 +535,7 @@ export const unregisterManagedSession = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "daemon:unregisterManagedSession");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication required");
@@ -1323,6 +1325,7 @@ const REAP_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const reapStaleManagedSessions = internalMutation({
   args: { cutoffMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cron:reapStaleManagedSessions");
     const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
     const readStart = Date.now();
     const dead = await ctx.db

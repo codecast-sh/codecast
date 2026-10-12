@@ -133,6 +133,17 @@ export async function cursorLag(world: InvariantWorld, w: InvariantWindow): Prom
   return out;
 }
 
+// Entities with a change saved but not yet in a sync-log scope the principal
+// holds: a pending sync_outbox slot (docs/architecture/sync-outbox.md). The
+// save commits first and a scheduled drain appends it to the log, so until the
+// drain runs the head has not moved and no cursor can lag behind it.
+export function undeliveredEntities(world: InvariantWorld, held: Iterable<string>): Set<string> {
+  const scopes = new Set(held);
+  return new Set(tableRows(world, "sync_outbox")
+    .filter((r) => r.pending && scopes.has(r.scope_key))
+    .map((r) => String(r.entity_id)));
+}
+
 // The scope a window's inbox shows: "mine", or "team:<id>" in team mode.
 export function teamOf(state: any): string | null {
   const ui = state.clientState?.ui;
