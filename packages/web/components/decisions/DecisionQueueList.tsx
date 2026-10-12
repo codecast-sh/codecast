@@ -1,7 +1,7 @@
 "use client";
 
 import { useAssistantConversationIds, useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
-import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD } from "../../lib/hostedPage";
+import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD, HOSTED_PAGE_TOP } from "../../lib/hostedPage";
 import { AssistantScopeSwitch, MoreInEverything } from "../AssistantScopeSwitch";
 import { PageHeading } from "../PageHeading";
 import { useCallback, useMemo, useState } from "react";
@@ -21,7 +21,9 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, stackDue, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
-import { answeredLabel, answerSaid, isStackedAsk, questionAsStatement } from "../../lib/decisionQueue";
+import { answeredLabel, answeredLine, answerSaid, isStackedAsk, questionAsStatement } from "../../lib/decisionQueue";
+import { useWaitingOnPerson } from "../../hooks/useNeedsInputCount";
+import { sessionCardTitle } from "../../lib/sessionCard";
 import { StackChecklist } from "./StackChecklist";
 import { QueueEmpty, type LastClosed } from "./QueueEmpty";
 import { cardOutcome, settledAgo } from "./ChangeCardView";
@@ -96,10 +98,10 @@ export function DecisionQueueList() {
     const outcome = d.card ? cardOutcome(d, "you", now) : null;
     if (outcome) return { verdict: outcome.verdict, title: d.card!.change, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
     // Lead with what was answered, so "did I just let it do something?" is
-    // read off the line: "You said no: set up the routine "Take vitamins"".
+    // read off the line: 'You said no to the routine "Take vitamins"'.
     const label = answeredLabel(d);
     return label
-      ? { verdict: answerSaid(label), title: questionAsStatement(d.question), ago: settledAgo(d.resolved_at, now), href: decisionHref(d) }
+      ? { verdict: answerSaid(label), title: questionAsStatement(d.question), line: answeredLine(label, d.question), ago: settledAgo(d.resolved_at, now), href: decisionHref(d) }
       : { verdict: "Answered", title: d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
   }, [answered, now, inScope]);
   // "Waiting on you" counts what a person must answer. Rows a lead holds
@@ -118,7 +120,7 @@ export function DecisionQueueList() {
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
-      <div className={`${HOSTED_PAGE_FRAME} ${HOSTED_PAGE_PAD} py-6`}>
+      <div className={`${HOSTED_PAGE_FRAME} ${HOSTED_PAGE_PAD} ${HOSTED_PAGE_TOP} pb-6`}>
         <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-5">
           <PageHeading title={words.questionsPage} />
           {/* Under the title on a phone, beside it from sm up. */}
@@ -167,7 +169,8 @@ export function DecisionQueueList() {
         )}
 
         {empty && (
-          <QueueEmpty last={last} title={words.queueEmptyTitle} lede={words.queueEmptyLede}>
+          <QueueEmpty last={last} title={words.queueEmptyTitle} lede={words.queueEmptyLede} top={!internals}>
+            {!internals && <WaitingOnReplyLine />}
             {/* An empty list's overflow belongs under its words, not at the page's foot. */}
             {handled.length === 0 && <MoreInEverything hidden={outOfScope} centered />}
           </QueueEmpty>
@@ -341,5 +344,22 @@ function HandledSection({ rows }: { rows: HandledDecisionItem[] }) {
         </ul>
       )}
     </section>
+  );
+}
+
+/** Under hosted mode's empty Approvals: a conversation waiting on a reply is
+ *  a question, not an approval, so the queue is honestly empty; this line
+ *  says where the person's move is, so the home's "Your move" and an empty
+ *  Approvals never read as a contradiction. */
+function WaitingOnReplyLine() {
+  const rows = useWaitingOnPerson();
+  const first = rows[0];
+  if (!first) return null;
+  const open = () => useInboxStore.getState().navigateToSession(first._id);
+  const more = rows.length - 1;
+  return (
+    <button type="button" onClick={open} data-queue-waiting-reply className="max-w-md truncate px-4 text-[12px] text-sol-text-dim transition-colors hover:text-sol-text">
+      {`${sessionCardTitle(first)}${more > 0 ? ` and ${more} more` : ""} ${more > 0 ? "are" : "is"} waiting on your answer.`}
+    </button>
   );
 }

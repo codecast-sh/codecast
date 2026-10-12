@@ -188,7 +188,7 @@ export function RepoSessionsContent({ repository, family }: { repository: string
             <>
               <p className="text-[13px] mb-1">No public sessions yet.</p>
               <p className="text-[12px] text-sol-text-dim">
-                A session becomes public when its owner runs <code className="font-mono text-sol-text">cast share &lt;session&gt; --public</code>.
+                A session becomes public when its owner shares it with Anyone from its Share menu.
               </p>
             </>
           ) : (
