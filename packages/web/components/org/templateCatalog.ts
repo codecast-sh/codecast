@@ -30,7 +30,7 @@ export const EXECUTIVE_ASSISTANT_HIRE: BuiltinHire = {
   name: EXECUTIVE_ASSISTANT_NAME,
   handle: EXECUTIVE_ASSISTANT_HANDLE,
   description: "Your right hand: answers anything you ask about any part of the work, routes a request in a lead's area to that lead, and brings you decisions with a recommendation. Starts no work and reorganizes nothing.",
-  does: ["Answers you about any area", "Routes requests to the lead", "Keeps your goals in view"],
+  does: ["Answers you about any area", "Routes requests to the lead", "Keeps your focus in view"],
 };
 
 /** The built-in hires this workspace can still make: each hidden once one

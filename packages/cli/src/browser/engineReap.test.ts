@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeSessionTab, closeTargetLater, ownerState, reapEngineOrphans, sessionEndpoint, type LiveOwners } from "./engineReap.js";
+import { closeSessionTab, closeTargetLater, ownerState, reapEngineOrphans, sessionEndpoint, withEndedSession, type LiveOwners } from "./engineReap.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 import { writeBridgeState } from "./bridge/host.js";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
@@ -130,6 +130,41 @@ describe("reapEngineOrphans in real mode", () => {
       expect(closes()).toEqual([]);
       expect(files()).toEqual([`${key}.target`]);
       expect(report.cleaned).toEqual([]);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a live owner's tab undriven past the tab idle window is closed once, and its binding kept", async () => {
+    const { host, closes } = await bridgeWithTabs(7, 8);
+    try {
+      const key = realSessionKey("env-busy");
+      writeBoundTarget(key, targetIdOfTab(7), stateDir);
+      const old = new Date(Date.now() - 31 * 60_000);
+      fs.utimesSync(path.join(stateDir, `${key}.target`), old, old);
+      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("live") });
+      expect(closes()).toEqual([7]);
+      expect(report.idled).toEqual([key]);
+      // The binding stays, so the agent's next verb is told its tab is gone.
+      expect(files()).toEqual([`${key}.target`]);
+      expect(report.cleaned).toEqual([]);
+      // Nothing left to close: a later pass reports nothing.
+      expect((await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("live") })).idled).toEqual([]);
+      expect(closes()).toEqual([7]);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a session the daemon just killed loses its tab and files at once, however recently it drove them", async () => {
+    const { host, closes } = await bridgeWithTabs(7, 8);
+    try {
+      writeBoundTarget(realSessionKey("env-killed"), targetIdOfTab(7), stateDir);
+      writeBoundTarget(realSessionKey("env-other"), targetIdOfTab(8), stateDir);
+      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: withEndedSession(owners("live"), "killed") });
+      expect(closes()).toEqual([7]);
+      expect(report.cleaned).toEqual([realSessionKey("env-killed")]);
+      expect(files()).toEqual([`${realSessionKey("env-other")}.target`]);
     } finally {
       await host.close();
     }
