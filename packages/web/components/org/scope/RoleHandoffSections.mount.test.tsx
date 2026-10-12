@@ -17,19 +17,6 @@ async function verify() {
   const { act } = React;
 
   const calls: Array<{ fn: string; args: any }> = [];
-  const realConvexReact = { ...(await import("convex/react")) };
-  // The mutation reference is the api path object; name it by the key the
-  // component reached for (orgLineMerge.setLineMerge, orgHandoff.settle, orgSplit.split).
-  const { getFunctionName } = await import("convex/server");
-  const nameOf = (ref: any) => getFunctionName(ref).split(":").pop() ?? "unknown";
-  mock.module("convex/react", () => ({
-    ...realConvexReact,
-    useMutation: (ref: any) => async (args: any) => {
-      calls.push({ fn: nameOf(ref), args });
-      if (nameOf(ref) === "split") return { roles: [{ handle: args.halves[0].handle }, { handle: args.halves[1].handle }], handoff: { deadline: Date.now() + 86_400_000 } };
-      return {};
-    },
-  }));
   mock.module("sonner", () => ({ toast: { success: () => {}, error: () => {} } }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => Date.now() }));
@@ -49,6 +36,16 @@ async function verify() {
   const tree = { ...base, roles: [...base.roles, second] } as OrgTree;
   const { createRoot } = await import("react-dom/client");
   const { HandingOverSection, MergeStepSwitch, SplitRoleSection, SuccessionSection, mergeStepWords, splitReadiness } = await import("./RoleHandoffSections");
+  // The three writes are store actions that ride dispatch to orgLineMerge.setLineMerge,
+  // orgHandoff.settle and orgSplit.split; each spy records the server call its
+  // dispatch handler makes (convex/dispatch.ts), by the mutation's name.
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const record = (fn: string, args: any, answer: any = {}) => { calls.push({ fn, args }); return answer; };
+  useInboxStore.setState({
+    setOrgLineMerge: async (role_id: string, on: boolean, per_day?: number) => record("setLineMerge", { role_id, on, ...(per_day !== undefined ? { per_day } : {}) }),
+    settleOrgHandoff: async (role_id: string, how: "run" | "close") => record("settle", { role_id, how }),
+    splitOrgRole: async (args: any) => record("split", { role_id: args.role_id, halves: args.halves, standing_session: args.standing_session }, { roles: [{ handle: args.halves[0].handle }, { handle: args.halves[1].handle }], handoff: { deadline: Date.now() + 86_400_000 } }),
+  } as any);
   const root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = <T extends Element = HTMLElement>(sel: string) => [...document.querySelectorAll<T>(sel)];
@@ -134,7 +131,6 @@ async function verify() {
   assert.equal(q("[data-split-section]"), null);
 
   await act(async () => { root.unmount(); });
-  mock.module("convex/react", () => realConvexReact);
 }
 
 test("merge step, handoff banner, succession and split on the role page (L12, S32, S34)", verify, 60_000);
