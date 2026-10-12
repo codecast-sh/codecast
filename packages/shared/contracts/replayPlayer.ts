@@ -29,6 +29,14 @@ export const REPLAY_PLAYER_MANIFEST_PATH = "/cli/replays/player";
 export const REPLAY_FRAME_PATH = "/frame";
 
 /**
+ * Where the worker asks Convex to admit a frame request before it starts a
+ * browser (POST { cap }): 204 when the capability opens and its budget has
+ * room, 404 for a dead one, 429 with Retry-After past the budget. Nothing is
+ * signed there, so a frame request costs Convex one query and two counters.
+ */
+export const REPLAY_FRAME_ADMIT_PATH = "/cli/replays/frame-admit";
+
+/**
  * How long a capability opens its replay. Long enough to load the player and
  * render a batch of frames, short enough that a copied player URL is dead by
  * the time anyone else holds it. The page reads its events once, at load.
@@ -50,6 +58,28 @@ export const REPLAY_DOM_LIMITS = {
 export const REPLAY_CHUNK_KINDS = ["events", "dom"] as const;
 export type ReplayChunkKind = (typeof REPLAY_CHUNK_KINDS)[number];
 
+/**
+ * Why rrweb could not draw a capture, or null when it can. rrweb rebuilds a
+ * page only from a full snapshot (type 2) that holds a serialized document;
+ * anything else draws a blank frame, so the import keeps no such capture and
+ * the player says this instead of showing white. A PostHog mobile recording
+ * stored before the import converted its wireframes is the known case.
+ */
+export function replayCaptureProblem(events: readonly unknown[]): string | null {
+  let snapshot = false;
+  let wireframes = false;
+  for (const e of events as readonly { type?: unknown; data?: any }[]) {
+    if (e?.type !== 2) continue;
+    snapshot = true;
+    const node = e.data?.node;
+    if (node && typeof node === "object" && node.type === 0 && Array.isArray(node.childNodes)) return null;
+    if (Array.isArray(e.data?.wireframes)) wireframes = true;
+  }
+  if (!snapshot) return "This capture has no full snapshot of the page, so there is nothing to draw.";
+  if (wireframes) return "This mobile recording was stored before its screens could be drawn. Reading the replay again (cast replay show, or its page) imports it in a form the player draws.";
+  return "This recording is in a format the player cannot draw, so there is no frame to show. Its text timeline still reads.";
+}
+
 // ── The player URL ──────────────────────────────────────────────────────────
 
 export const REPLAY_PLAYER_MODES = ["interactive", "frame"] as const;
@@ -65,10 +95,18 @@ export interface ReplayPlayerParams {
   controls?: boolean;
   /** Interactive only: start playing at once. */
   autoplay?: boolean;
+  /**
+   * Interactive only: let the replayed page load the images, stylesheets and
+   * fonts it names from their own hosts. Off unless the viewer asks for it on
+   * this view: a recording uploaded with a source's public ingest key names
+   * any URL it likes, and loading one tells that host the viewer's IP and
+   * that they opened the replay. Frame mode never loads them.
+   */
+  remote_assets?: boolean;
 }
 
 /**
- * `<origin>/p/<cap>?t=<ms>&mode=frame&controls=0&autoplay=1`. The capability
+ * `<origin>/p/<cap>?t=<ms>&mode=frame&controls=0&autoplay=1&assets=remote`. The capability
  * rides the path so the page reads it without a query parser and so it never
  * reaches the replayed document as a referrer (the page sends no-referrer).
  */
@@ -78,6 +116,7 @@ export function replayPlayerUrl(p: ReplayPlayerParams, origin: string = REPLAY_P
   if (p.mode === "frame") q.set("mode", "frame");
   if (p.controls === false) q.set("controls", "0");
   if (p.autoplay) q.set("autoplay", "1");
+  if (p.remote_assets && p.mode !== "frame") q.set("assets", "remote");
   const qs = q.toString();
   return `${origin.replace(/\/$/, "")}/p/${encodeURIComponent(p.cap)}${qs ? `?${qs}` : ""}`;
 }
@@ -94,12 +133,14 @@ export function parseReplayPlayerUrl(href: string): ReplayPlayerParams | null {
   if (!m) return null;
   const t = u.searchParams.get("t");
   const tMs = t !== null && /^\d+$/.test(t) ? Number(t) : null;
+  const mode: ReplayPlayerMode = u.searchParams.get("mode") === "frame" ? "frame" : "interactive";
   return {
     cap: decodeURIComponent(m[1]),
     t_ms: tMs,
-    mode: u.searchParams.get("mode") === "frame" ? "frame" : "interactive",
+    mode,
     controls: u.searchParams.get("controls") !== "0",
     autoplay: u.searchParams.get("autoplay") === "1",
+    remote_assets: mode === "interactive" && u.searchParams.get("assets") === "remote",
   };
 }
 
@@ -143,18 +184,30 @@ export interface ReplayPlayerLink {
 //
 // Every message is a plain object tagged with `source`, so either side can
 // ignore everything else on the channel. Times are always replay time (ms,
-// the semantic stream's clock), never rrweb offsets. The player posts to its
-// parent with targetOrigin "*" (it says nothing private: times and sizes),
-// and the host checks event.origin === REPLAY_PLAYER_ORIGIN before trusting
-// a message. The player obeys any parent: whoever holds a capability can
-// embed the page anyway.
+// the semantic stream's clock), never rrweb offsets. The host checks
+// event.origin === REPLAY_PLAYER_ORIGIN and event.source is its own iframe
+// before trusting a message. The player obeys commands only from its parent
+// window (any parent may embed it: whoever holds a capability can open the
+// page anyway), and posts only to that parent's origin. It knows the origin
+// from location.ancestorOrigins where the browser has it; elsewhere it holds
+// its messages and posts a bare `hello` (no payload) until the parent sends
+// any command, whose origin it then posts to. A host answers `hello` with
+// `hello`.
 
 export const REPLAY_PLAYER_SOURCE = "codecast-replay-player";
 export const REPLAY_HOST_SOURCE = "codecast-replay-host";
 
 /** Player to host. */
 export type ReplayPlayerMessage =
-  | { source: typeof REPLAY_PLAYER_SOURCE; type: "ready"; duration_ms: number; width: number; height: number; t_ms: number }
+  /** The player does not know its host's origin yet and holds every other message until a command arrives. Carries nothing. */
+  | { source: typeof REPLAY_PLAYER_SOURCE; type: "hello" }
+  /**
+   * `duration_ms` is the replay's length on its clock (the row's duration).
+   * `below_px` is what the player draws under the recorded page (its control
+   * bar, the remote-assets strip): a host sizing the iframe to the page's
+   * shape adds it. Absent from players older than the field.
+   */
+  | { source: typeof REPLAY_PLAYER_SOURCE; type: "ready"; duration_ms: number; width: number; height: number; t_ms: number; below_px?: number }
   /** Posted on every seek, and about four times a second while playing. */
   | { source: typeof REPLAY_PLAYER_SOURCE; type: "time"; t_ms: number; playing: boolean }
   | { source: typeof REPLAY_PLAYER_SOURCE; type: "state"; playing: boolean; speed: number }
@@ -164,6 +217,8 @@ export type ReplayPlayerMessage =
 
 /** Host to player. */
 export type ReplayHostMessage =
+  /** The answer to the player's `hello`: it tells the player the host's origin and does nothing else. */
+  | { source: typeof REPLAY_HOST_SOURCE; type: "hello" }
   | { source: typeof REPLAY_HOST_SOURCE; type: "seek"; t_ms: number; play?: boolean }
   | { source: typeof REPLAY_HOST_SOURCE; type: "play" }
   | { source: typeof REPLAY_HOST_SOURCE; type: "pause" }
@@ -177,13 +232,13 @@ export function isReplayPlayerMessage(d: unknown): d is ReplayPlayerMessage {
   return isObj(d) && d.source === REPLAY_PLAYER_SOURCE && typeof d.type === "string";
 }
 
-/** A host message, checked field by field (the player reads it from any parent). */
+/** A host message, checked field by field (the player reads it from whatever page embeds it). */
 export function parseReplayHostMessage(d: unknown): ReplayHostMessage | null {
   if (!isObj(d) || d.source !== REPLAY_HOST_SOURCE) return null;
   if (d.type === "seek" && typeof d.t_ms === "number" && Number.isFinite(d.t_ms)) {
     return { source: REPLAY_HOST_SOURCE, type: "seek", t_ms: Math.max(0, d.t_ms), ...(d.play === true ? { play: true } : {}) };
   }
-  if (d.type === "play" || d.type === "pause") return { source: REPLAY_HOST_SOURCE, type: d.type };
+  if (d.type === "play" || d.type === "pause" || d.type === "hello") return { source: REPLAY_HOST_SOURCE, type: d.type };
   if (d.type === "speed" && typeof d.speed === "number" && (REPLAY_PLAYER_SPEEDS as readonly number[]).includes(d.speed)) {
     return { source: REPLAY_HOST_SOURCE, type: "speed", speed: d.speed };
   }
@@ -204,6 +259,14 @@ export const REPLAY_FRAME_LIMITS = {
   max_height: 1600,
   /** How long a frame waits for the replayed page's images and fonts. */
   settle_ms: 4_000,
+  /**
+   * Frame requests (each a browser session) one capability may make in its
+   * lifetime: a 50 frame snap is 5, so this leaves room for its retries.
+   */
+  requests_per_cap: 8,
+  /** Frame requests one person may make per window, across every capability they mint. */
+  requests_per_person: 30,
+  budget_window_ms: REPLAY_CAP_TTL_MS,
 } as const;
 
 export interface ReplayFrameRequest {
