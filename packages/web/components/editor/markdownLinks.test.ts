@@ -44,3 +44,11 @@ describe("links in the editor", () => {
     expect(e.getHTML()).not.toContain("<a ");
   });
 });
+
+describe("image tokens in the editor", () => {
+  test("an [Image N] token writes back unescaped while other brackets stay escaped", () => {
+    const e = make("");
+    e.commands.insertContent("[Image 1] crop it like [Image 2], not [this] when a < b");
+    expect(md(e)).toBe("[Image 1] crop it like [Image 2], not \\[this\\] when a &lt; b");
+  });
+});
