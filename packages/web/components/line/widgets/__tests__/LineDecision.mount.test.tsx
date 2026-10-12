@@ -1,0 +1,206 @@
+import { afterAll, beforeEach, expect, test } from "bun:test";
+import { act } from "react";
+import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { mock } from "bun:test";
+import { replaceGlobals } from "../../../../test-helpers/globals";
+import { closeDomWindow } from "../../../../test-helpers/domGlobals";
+import { CARD_DECISION_OPTIONS, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { openFixDecisionFor, openFixDecisions } from "../../../../lib/line/fixDecision";
+
+// The line's fix decision (LineDecision): a header naming the problem, the
+// project and the session that asked; the session's own words as the sweet
+// spot with its answers right under them; a chat with that session; and the
+// full proposal folded below. A structured card leads with the card's top.
+
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/line?view=inbox&decision=sd-9" });
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  HTMLElement: dom.window.HTMLElement,
+  Element: dom.window.Element,
+  Node: dom.window.Node,
+  KeyboardEvent: dom.window.KeyboardEvent,
+  localStorage: dom.window.localStorage,
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+
+// No server: every query is still loading, every mutation exists. Keep the other exports real.
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => undefined, useConvex: () => ({ query: async () => null, mutation: async () => null }) }));
+const noThrow = await import("../../../../hooks/useQueryNoThrow");
+mock.module("../../../../hooks/useQueryNoThrow", () => ({ ...noThrow, useQueryNoThrow: () => ({ data: undefined }) }));
+mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) => <a href={typeof href === "string" ? href : "#"} {...rest}>{children}</a> }));
+
+const { createRoot } = await import("react-dom/client");
+const { MemoryRouter } = await import("react-router");
+const { useInboxStore } = await import("../../../../store/inboxStore");
+const { LineDecisionBody } = await import("../LineDecision");
+afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
+
+const card: ChangeCard = JSON.parse(readFileSync(join(import.meta.dir, "../../../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+
+beforeEach(() => {
+  useInboxStore.setState({
+    currentUser: { _id: "u1", name: "Ashot" },
+    sessions: { c1: { _id: "c1", title: "Fix run for ct-100", project_path: "/Users/x/src/codecast", status: "running" } },
+    projects: { p1: { _id: "p1", title: "AgentWatch" } },
+    trialProjects: {},
+  } as any);
+});
+
+async function mount(ui: React.ReactNode) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(() => root.render(<MemoryRouter>{ui}</MemoryRouter>));
+  return { container, unmount: () => act(() => root.unmount()) };
+}
+
+const CONTEXT = [
+  "The rep stops promising a reply the third party never sent.",
+  "",
+  "> Before: \"They'll get back to you today.\"",
+  "",
+  "| | Before | After |",
+  "|---|---|---|",
+  "| Replies | 4 | 0 |",
+].join("\n");
+
+const decisionRow = (over: Record<string, unknown> = {}): any => ({
+  _id: "d9", short_id: "sd-9", conversation_id: "c1", question: "Ship the honest-reply change?",
+  options: [{ label: "Ship it" }, { label: "Try a softer wording" }], blocking: true, status: "pending", created_at: Date.now() - 60_000,
+  task_id: "t100", workflow_run_id: "run1", context_md: CONTEXT, ...over,
+});
+const detailOf = (decision: any, doc: string | null = "## Full plan\n\nEvery file the change touches."): any => ({
+  _id: decision._id, decision, doc: doc ? { _id: "doc1", content: doc } : null,
+  task: { _id: "t100", short_id: "ct-100", title: "Rep promises replies that never come", project_id: "p1" },
+  stack: null, ladder: [], asked_users: [], holder_role: null, grant_offer: null, grant: null,
+});
+
+test("leads with the session's words and its answers, chat beside, full proposal folded", async () => {
+  const decision = decisionRow();
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision)} answerable source="AgentWatch" />);
+  const head = container.querySelector(".ld-head")!;
+  expect(head.querySelector("[data-line-decision-problem]")!.textContent).toBe("ct-100");
+  expect(head.textContent).toContain("Rep promises replies that never come");
+  expect(head.textContent).toContain("AgentWatch");
+  expect(head.querySelector("[data-line-decision-asker]")!.textContent).toContain("Fix run for ct-100");
+  expect(container.querySelector("[data-line-decision]")!.hasAttribute("data-trial")).toBe(false);
+
+  const sweet = container.querySelector("[data-line-decision-sweet]")!;
+  expect(sweet.querySelector("[data-line-decision-question]")!.textContent).toBe("Ship the honest-reply change?");
+  // The session's own words lead, before and after included (read as text: other files in a run stub the markdown renderer).
+  const context = sweet.querySelector("[data-line-decision-context]")!.textContent!;
+  expect(context).toContain("The rep stops promising a reply");
+  expect(context).toContain("They'll get back to you today.");
+  expect(context).toContain("Replies");
+  // The session's own options, then a typed answer that goes to the session.
+  const answers = sweet.querySelector("[data-line-decision-answers]")!;
+  expect(answers.textContent).toContain("Ship it");
+  expect(answers.textContent).toContain("Try a softer wording");
+  expect(answers.textContent!.toLowerCase()).toContain("own words");
+
+  expect(container.querySelector("[data-line-decision-talk]")).not.toBeNull();
+  const full = container.querySelector("details[data-line-decision-full]") as HTMLDetailsElement;
+  expect(full.open).toBe(false);
+  expect(full.textContent).toContain("Every file the change touches.");
+  // The sweet spot never repeats the full proposal.
+  expect(sweet.textContent).not.toContain("Every file the change touches.");
+  unmount();
+});
+
+test("a trial run's decision asks what you would do, carries its card's proof, and its answer takes it off every list at once", async () => {
+  const { trialCardWaits } = await import("../../../../lib/line/lineInbox");
+  const decision = decisionRow({ trial: true, question: "Ship this change? Missed-call notes lead with the open intro", options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }] });
+  const trialCard = {
+    _id: "tc1", workspace: "user:u1", short_id: "tc-58", project_id: "p1", project_title: "AgentWatch", task_id: "t100", task_short_id: "ct-100", task_title: "Rep promises replies", task_status: "open",
+    run_id: "run1", run_status: "paused", node_id: "card", kind: "card", question: decision.question, options: [{ key: "S", label: "Ship" }, { key: "R", label: "Revise" }, { key: "D", label: "Drop" }],
+    card: {
+      ...card,
+      seen: [{ signal: "sg-1", asked: "Dana, weighing an intro", quote: "Tried you by phone just now.", missing: "The intro waiting on her" }],
+      proof: { before: [{ name: "repro", ok: false, detail: "0 pass\n 20 fail" }], after: [{ name: "repro", ok: true, detail: "20 pass\n 0 fail" }] },
+      reach: { conversations: 19, of: 20 }, diff: { files: 4, added: 61, removed: 8 }, cost: { tokens: 1, usd: 17.62, minutes: 672 },
+    },
+    decision: { _id: "d9", short_id: "sd-9", status: "pending", report_slug: null, session: null },
+    status: "waiting", created_at: 1, updated_at: 1,
+  };
+  // The decision's detail is in the store, as the page feeds it: an answer adopts the row from there.
+  useInboxStore.setState({ trialCards: { tc1: trialCard }, sessionDecisions: {}, decisionDetails: { d9: detailOf(decision) } } as any);
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision)} answerable />);
+  expect(container.querySelector("[data-line-decision]")!.hasAttribute("data-trial")).toBe(true);
+  // Never worded as shipping: the question and every option say what you would do, and one mark sits on the answers.
+  expect(container.querySelector("[data-line-decision-question]")!.textContent).toBe("Would you ship this? Missed-call notes lead with the open intro");
+  const answers = container.querySelector("[data-line-decision-answers]")!;
+  expect(answers.textContent).toContain("Would ship");
+  expect(answers.textContent).toContain("Would drop");
+  expect(answers.querySelector("[data-line-decision-trial-note]")!.textContent).toContain("Trial");
+  // The card's own evidence under the session's words: a real message today against the change, and the proof as numbers.
+  const band = container.querySelector("[data-line-decision-evidence]")!;
+  expect(band.textContent).toContain("Tried you by phone just now.");
+  expect(band.textContent).toContain(trialCard.card.change);
+  const proof = band.querySelector("[data-line-decision-proof]")!.textContent!;
+  expect(proof).toContain("0/20");
+  expect(proof).toContain("20/20");
+  expect(proof).toContain("19/20");
+  expect(proof).toContain("$17.62");
+  // Answered here, the decision's own row flips at once, and the card waits on nobody: the Inbox row and a run's chip read that row.
+  expect(trialCardWaits(trialCard as never)).toBe(true);
+  const ship = [...answers.querySelectorAll("button")].find((b) => b.textContent?.includes("Would ship"))!;
+  await act(async () => { ship.click(); });
+  const live = (useInboxStore.getState() as any).sessionDecisions.d9;
+  expect(live?.status).toBe("answered");
+  expect(trialCardWaits(trialCard as never, live.status)).toBe(false);
+  unmount();
+});
+
+test("a decision with no short context leads with its doc, and has nothing left to fold", async () => {
+  const decision = decisionRow({ context_md: undefined });
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, "The plan, in the session's words.")} answerable />);
+  expect(container.querySelector("[data-line-decision-context]")!.textContent).toContain("The plan, in the session's words.");
+  expect(container.querySelector("[data-line-decision-full]")).toBeNull();
+  unmount();
+});
+
+test("a decision with neither context nor doc leads with its published proposal, above the answers", async () => {
+  const decision = decisionRow({ context_md: undefined, report_slug: "rep1" });
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, null)} answerable />);
+  const sweet = container.querySelector("[data-line-decision-sweet]")!;
+  const lead = sweet.querySelector("[data-line-decision-report]");
+  expect(lead).not.toBeNull();
+  expect(lead!.compareDocumentPosition(sweet.querySelector("[data-line-decision-answers]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector("[data-line-decision-full]")).toBeNull();
+  unmount();
+});
+
+test("a structured card leads with the card's top; the whole card folds into the full proposal", async () => {
+  const decision = decisionRow({ card, context_md: undefined, options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), gate_node_id: "card" });
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, null)} answerable />);
+  const sweet = container.querySelector("[data-line-decision-sweet]")!;
+  expect(sweet.querySelector("[data-card-headline]")!.textContent!.length).toBeGreaterThan(10);
+  expect(sweet.querySelector(".ccd-today")!.textContent).toContain(card.wrong);
+  expect(sweet.querySelector("[data-line-decision-answers]")).not.toBeNull();
+  expect(container.querySelector("[data-line-decision-full]")).not.toBeNull();
+  unmount();
+});
+
+test("the open fix decision for a problem: pending, asked by a run, newest wins, own row over the line's copy", () => {
+  const own: any = { a: { _id: "a", status: "pending", task_id: "t1", workflow_run_id: "r1", created_at: 5 } };
+  const line: any = {
+    a: { _id: "a", status: "answered", task_id: "t1", workflow_run_id: "r1", created_at: 5 },
+    b: { _id: "b", status: "pending", task_id: "t1", workflow_run_id: "r0", created_at: 1 },
+    c: { _id: "c", status: "pending", task_id: "t2", created_at: 9 },
+    d: { _id: "d", status: "withdrawn", task_id: "t3", workflow_run_id: "r3", created_at: 9 },
+  };
+  expect(openFixDecisionFor(own, line, "t1")?._id).toBe("a");
+  expect(openFixDecisionFor(own, line, "t2")).toBeNull();
+  expect(openFixDecisionFor(own, line, "t3")).toBeNull();
+  expect(openFixDecisionFor(own, line, null)).toBeNull();
+  // Cached by the collections' refs: a selector gets the same map back.
+  expect(openFixDecisions(own, line)).toBe(openFixDecisions(own, line));
+});
