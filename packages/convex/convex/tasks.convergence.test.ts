@@ -42,7 +42,9 @@ function world(): Record<string, any[]> {
     ],
     tasks: [
       { _id: "k_team", short_id: "ct-1", title: "Team task", user_id: MATE, team_id: TEAM, workspace: `team:${TEAM}`, assignee: VIEWER, ...taskDefaults, updated_at: 30 },
-      { _id: "k_quiet", short_id: "ct-2", title: "No comments", user_id: VIEWER, team_id: TEAM, workspace: `team:${TEAM}`, ...taskDefaults, updated_at: 20 },
+      { _id: "k_quiet", short_id: "ct-2", title: "No comments", user_id: VIEWER, team_id: TEAM, workspace: `team:${TEAM}`, ...taskDefaults, updated_at: 20, blocked_by: ["ct-1", "ct-4", "ct-404", "ct-5"], parent_id: "k_team" },
+      { _id: "k_done", short_id: "ct-4", title: "Finished blocker", user_id: VIEWER, team_id: TEAM, workspace: `team:${TEAM}`, ...taskDefaults, status: "done", updated_at: 15 },
+      { _id: "k_foreign", short_id: "ct-5", title: "Mate's own", user_id: MATE, workspace: `user:${MATE}`, ...taskDefaults, updated_at: 5 },
       { _id: "k_personal", short_id: "ct-3", title: "Personal", user_id: VIEWER, workspace: `user:${VIEWER}`, ...taskDefaults, updated_at: 10 },
     ],
     task_comments: [
@@ -87,5 +89,20 @@ describe("tasks: one row, every channel", () => {
     expect(comments[1].session_info).toBeNull();
     expect(comments[1].conversation_id).toBeUndefined();
     expect(comments[2].session_info).toBeNull();
+  });
+
+  test("a row carries its blockers' and parent's state, read past the page, never across a workspace", async () => {
+    const expected = [
+      { ref: "ct-1", short_id: "ct-1", status: "open" },
+      { ref: "ct-4", short_id: "ct-4", status: "done" },
+      { ref: "ct-404", status: null },
+      { ref: "k_team", short_id: "ct-1", status: "open" },
+    ];
+    const { list } = await channels({ workspace: "team", team_id: TEAM });
+    expect(list.k_quiet.graph_status).toEqual(expected);
+    // Alone in its page, every ref is read from the database and lands the same.
+    const alone = (await (webGetByIds as any)._handler(ctx(world()), { ids: ["k_quiet"] })).items[0];
+    expect(alone.graph_status).toEqual(expected);
+    expect(list.k_team.graph_status).toBeUndefined();
   });
 });

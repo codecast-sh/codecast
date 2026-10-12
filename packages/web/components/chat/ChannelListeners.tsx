@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Bot, Check } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { orgRoleHref } from "../../lib/remarkChatMentions";
+import { objectHref } from "../../lib/entityLinks";
 import { channelListeners, orgRolesListenSig } from "../../lib/chatListeners";
 import type { OrgTree } from "../org/orgTypes";
 import "./chat.css";
@@ -92,7 +92,7 @@ export function ChannelListeners({ channel }: { channel: ListenersChannel }) {
             <div className="ch-listen-empty">No role follows this channel.</div>
           ) : (
             listening.map((r) => (
-              <Link key={r._id} href={orgRoleHref(r.short_id)} className="ch-listen-row" role="menuitem">
+              <Link key={r._id} href={objectHref("role", r.short_id)} className="ch-listen-row" role="menuitem">
                 <span className="ch-listen-handle">@{r.handle}</span>
                 <span className="ch-listen-name">{r.name}</span>
               </Link>
