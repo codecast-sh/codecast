@@ -84,14 +84,19 @@ export const register: Register = (on) => {
       strict: true,
       noEmit: true,
       skipLibCheck: true,
+      types: ["bun"],
     },
     include: ["*.ts", "*.tsx", TYPES_FILE],
   };
+  // Its own compiler, so `cast mod build` typechecks the mod on any machine
+  // rather than finding no tsc; @types/bun types a local half's node: imports.
+  const pkg = { name, private: true, devDependencies: { typescript: "^5.7.2", "@types/bun": "^1.3.3" } };
   return {
     [MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
+    "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
     "ui.tsx": ui,
     "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
     [TYPES_FILE]: authoringTypes(),
-    ".gitignore": `${TYPES_FILE}\n`,
+    ".gitignore": `${TYPES_FILE}\nnode_modules\n`,
   };
 }
