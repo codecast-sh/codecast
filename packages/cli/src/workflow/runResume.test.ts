@@ -127,10 +127,17 @@ describe("workflow/runResume (a run outlives its runner)", () => {
 
   test("a run killed at a gate still open waits on that gate without asking it twice", async () => {
     gateAnswer = "S";
-    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide" }) }));
+    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide", gate_decision_id: "sd_1" }) }));
     expect(outcome).toBe("completed");
     expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(false);
     expect(calls.some((c) => c.route === "/cli/workflow-runs/poll-gate")).toBe(true);
+  }, 30000);
+
+  test("a run paused at a gate whose ask never made a decision asks it again on resume", async () => {
+    gateAnswer = "S";
+    const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide" }) }));
+    expect(outcome).toBe("completed");
+    expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(true);
   }, 30000);
 
   test("a run killed mid-station resumes that station, waiting on the hand it left working", async () => {

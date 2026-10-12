@@ -4,6 +4,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { PeoplePanel } from "../../components/people/PeoplePanel";
 import { TeamMembersPump } from "../../components/TeamAvatarBar";
+import { HuddleStartHost } from "../../components/calls/HuddleStartHost";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../../hooks/useSyncTeamInboxSessions";
@@ -54,6 +55,7 @@ function PeopleWindow() {
       <ErrorBoundary name="People" level="inline">
         <PeoplePanel />
       </ErrorBoundary>
+      <HuddleStartHost />
     </>
   );
 }
