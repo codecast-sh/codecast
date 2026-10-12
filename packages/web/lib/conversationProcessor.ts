@@ -171,6 +171,7 @@ export function getCommandType(content: string): string | undefined {
 
 export function cleanContent(content: string): string {
   if (!content) return "";
+  if (!content.includes("<") && !content.includes("\x1b") && !content.includes("Caveat:")) return content.trim();
 
   return content
     .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
@@ -211,20 +212,18 @@ export function getConversationPreview(
   title: string,
   maxMessages: number = 4
 ): ProcessedMessage[] {
-  const processed = processMessageAlternates(alternates);
   const titleNorm = title?.toLowerCase().trim().slice(0, 80) || "";
-
-  return processed
-    .filter(m => {
-      if (isSystemMessage(m.cleanContent)) return false;
-      if (isContextOnlyUserMessage(m.content)) return false;
-      if (m.role === "user") {
-        const msgNorm = m.cleanContent.toLowerCase().trim().slice(0, 80);
-        if (msgNorm === titleNorm) return false;
-      }
-      return true;
-    })
-    .slice(0, maxMessages);
+  const limit = maxMessages < 0 ? Infinity : Math.trunc(maxMessages);
+  const result: ProcessedMessage[] = [];
+  for (const alternate of alternates ?? []) {
+    if (result.length >= limit) break;
+    const m = processMessage(alternate);
+    if (m.isCommand || !m.cleanContent.length) continue;
+    if (isSystemMessage(m.cleanContent) || isContextOnlyUserMessage(m.content)) continue;
+    if (m.role === "user" && m.cleanContent.toLowerCase().trim().slice(0, 80) === titleNorm) continue;
+    result.push(m);
+  }
+  return result.slice(0, maxMessages);
 }
 
 export function cleanTitle(title: string): string {

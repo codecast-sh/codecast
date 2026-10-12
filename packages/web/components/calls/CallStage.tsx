@@ -38,6 +38,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { usePressOutside } from "../../hooks/usePressOutside";
 import { useRoomTranscribeOff, useRoomWordsPublic } from "../../hooks/useRoomTranscribeOff";
+import { stageTiles } from "../../lib/calls/callMedia";
 import { TRANSCRIPT_SHARED_WORDS } from "../../lib/calls/roomRecordingEnd";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
@@ -325,8 +326,7 @@ export function CallStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [collapse, panel]);
 
-  const screens = tiles.filter((t) => t.kind === "screen");
-  const cameras = tiles.filter((t) => t.kind === "camera");
+  const { screens, cameras } = stageTiles(tiles);
 
   const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
   const { label } = useRoomDescription(call.roomKey);
