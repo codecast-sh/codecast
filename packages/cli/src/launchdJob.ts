@@ -65,12 +65,15 @@ ${vars}
  * (not macOS, no GUI domain over SSH, a launchctl failure); the caller falls
  * back to a detached child.
  */
-export function startLaunchdJob(job: { label: string; argv: string[]; plistPath: string; logPath: string; env?: Record<string, string | undefined> }): boolean {
+export function startLaunchdJob(job: { label: string; argv: string[]; plistPath: string; logPath: string; env?: Record<string, string | undefined>; exportLabel?: boolean }): boolean {
   if (process.platform !== "darwin") return false;
   const uid = process.getuid?.();
   if (uid === undefined) return false;
   const service = `gui/${uid}/${job.label}`;
-  const env: Record<string, string> = { [LAUNCHD_LABEL_ENV]: job.label };
+  // A job that hands its environment on to work of its own (a tmux server to
+  // its panes) does not export its label: every process under it would read
+  // itself as that job.
+  const env: Record<string, string> = job.exportLabel === false ? {} : { [LAUNCHD_LABEL_ENV]: job.label };
   for (const [k, v] of Object.entries(job.env ?? process.env)) if (v !== undefined && (job.env || JOB_ENV.test(k) && !SECRET_ENV.test(k)) && k !== LAUNCHD_LABEL_ENV) env[k] = v;
   try {
     fs.writeFileSync(job.plistPath, launchdJobPlistXml(job.label, job.argv, env, job.logPath), { mode: 0o600 });
