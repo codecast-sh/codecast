@@ -42,11 +42,23 @@ interface BuildOptions {
   change?: string;
   recommend?: string;
   why?: string;
+  ask?: string;
+  words?: string;
   base?: string;
   dir?: string;
   out?: string;
   publish?: boolean;
   json?: boolean;
+}
+
+/** --words: a JSON object, inline or a file path. */
+function parseWords(raw: string): Record<string, any> {
+  const text = fs.existsSync(raw) ? fs.readFileSync(raw, "utf-8") : raw;
+  try {
+    const v = JSON.parse(text);
+    if (v && typeof v === "object" && !Array.isArray(v)) return v;
+  } catch {}
+  fail("--words takes a JSON object (or a file holding one) with headline, context, wrong, change, recommend, why and examples");
 }
 
 function fail(message: string): never {
@@ -121,13 +133,15 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   if (!task?.short_id) fail(`Task not found: ${options.task}`);
   const optional = (p: Promise<any>) => p.catch(() => null);
   const goalRef: string | undefined = task.goal_ref && task.goal_ref !== "none" ? task.goal_ref : undefined;
-  const [evidence, runs, signals, brief] = await Promise.all([
+  const [evidence, runs, signals, brief, history] = await Promise.all([
     optional(apiPost(deps, "/cli/work/evidence", { task_id: task.short_id }, { read: true, exitOnError: false })),
     optional(apiPost(deps, "/cli/workflow-runs/list", { task_id: task.short_id }, { read: true, exitOnError: false })),
     // The finders behind the cause, and the goal its ref names: the task
     // carries the ref and the signal count, the card says them in words.
     optional(apiPost(deps, "/cli/signal/ls", { task: task.short_id, limit: 200 }, { read: true, exitOnError: false })),
     goalRef ? optional(apiPost(deps, "/cli/goals/brief", taskWorkspaceScope(task), { read: true, exitOnError: false })) : null,
+    // The cause's earlier shipped fixes, shown beside this change (line-workspace.md LW5).
+    optional(apiPost(deps, "/cli/work/history", { short_id: task.short_id }, { read: true, exitOnError: false })),
   ]);
   const goal = goalRef && brief?.projects ? goalRefLabel(brief as GoalsBrief, goalRef) : null;
   const sources = [...new Set<string>((signals?.signals ?? []).map((sg: { source: string }) => sg.source))];
@@ -144,6 +158,17 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   const proofFile = options.proof ?? inDir("proof.json");
   const evalResult = evalFile ? readJson<EvalResult>(evalFile, "eval result") : null;
   const proof = proofFile ? readJson<ChangeCard["proof"]>(proofFile, "proof") : null;
+  // The card's author's fields in one object (a card-words node's whole JSON); a flag of the same name wins.
+  const words = options.words ? parseWords(options.words) : {};
+  for (const k of ["headline", "context", "wrong", "change", "recommend", "why", "ask"] as const) {
+    if (options[k] === undefined && typeof words[k] === "string") options[k] = words[k] as string;
+  }
+  const examples = Array.isArray(words.examples) ? words.examples.map((ex: any) => ({
+    input: String(ex?.input ?? "").trim(),
+    before: String(ex?.before ?? "").trim(),
+    after: String(ex?.after ?? "").trim(),
+    note: String(ex?.note ?? "").trim(),
+  })) : null;
   if (options.recommend && !CHANGE_VERDICTS.includes(options.recommend as ChangeVerdict)) {
     fail(`--recommend takes ${CHANGE_VERDICTS.join(" | ")}, got "${options.recommend}"`);
   }
@@ -161,6 +186,9 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
     wrong: options.wrong,
     change: options.change,
     recommend: options.recommend ? { verdict: options.recommend as ChangeVerdict, why: options.why?.trim() ?? "" } : null,
+    ask: options.ask,
+    earlier: Array.isArray(history?.earlier) ? history.earlier : null,
+    examples,
   });
 
   const validation = validateChangeCard(card);
@@ -207,7 +235,7 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
   card
     .command("build")
     .description("Assemble, validate and render the change card for a task (LE10)")
-    .requiredOption("--task <ct-N>", "The cause the card is for")
+    .requiredOption("--task <ct-N>", "The problem the card is for")
     .option("--eval-result <file>", "The eval station's eval-result.json: verdicts, proven freezes, flipped examples")
     .option("--proof <file>", "A proof recorded outside evals: { before: Check[], after: Check[] }, red then green")
     .option("--headline <text>", stdinText("The card's title in plain words, under 80 characters"))
@@ -216,6 +244,7 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
     .option("--change <text>", stdinText("What behaves differently after this change, one or two sentences"))
     .option("--recommend <verdict>", `${CHANGE_VERDICTS.join(" | ")}`)
     .option("--why <text>", stdinText("One sentence on why that recommendation"))
+    .option("--words <json>", "The author's fields in one JSON object (or a file): headline, context, wrong, change, recommend, why, ask (the suggested Revise note), and examples [{ input, before, after, note }]; a flag of the same name wins")
     .option("--base <ref>", "Base for the diff stats (default: the eval result's base, else origin/main)")
     .option("--dir <dir>", "A run's directory: reads eval-result.json and proof.json from it when present, and writes card.json there")
     .option("--out <file>", "Where card.json goes (default: card.json, in --dir when given); the page goes beside it as .html")
