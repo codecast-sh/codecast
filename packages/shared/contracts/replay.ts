@@ -59,14 +59,34 @@ export type ReplayProvider = (typeof REPLAY_PROVIDERS)[number];
  * next read or backfill pass. 2: performance entries other than resources
  * and navigations are no longer failed requests. 3: the rrweb capture itself
  * is kept beside the stream (DOM chunks, contracts/replayPlayer.ts), so the
- * player can play it and agents can see frames.
+ * player can play it and agents can see frames. 4: a fetch whose entry has
+ * no status field (Safari) is a failed request only when its timings show no
+ * response arrived. 5: a PostHog mobile recording (wireframes, not a DOM) is
+ * converted into a page the player draws, its taps become clicks and its
+ * screens' text outlines; a capture rrweb could not draw is not kept.
  */
-export const VENDOR_CONVERTER_VERSION = 3;
+export const VENDOR_CONVERTER_VERSION = 5;
 
-/** A mirrored recording that has not been imported, or was imported by an older converter. */
-export function needsVendorImport(row: { provider: string; imported_at?: number | null; converter_version?: number | null }): boolean {
+/**
+ * How long a copy whose refresh failed waits before the vendor is asked
+ * again: an hour after a rate limit or an outage, a month (past any
+ * vendor's retention and the bucket's own) once the vendor says the
+ * recording is gone. Without it every read of an older copy would call the
+ * vendor again, against PostHog's ~60 snapshot reads an hour.
+ */
+export const VENDOR_REFRESH_RETRY = { failed_ms: 60 * 60_000, gone_ms: 30 * 24 * 60 * 60_000 } as const;
+
+/**
+ * A mirrored recording that has not been imported, or was imported by an
+ * older converter and is not waiting out a failed refresh (`vendor_refresh_after`).
+ */
+export function needsVendorImport(
+  row: { provider: string; imported_at?: number | null; converter_version?: number | null; vendor_refresh_after?: number | null },
+  now: number = Date.now(),
+): boolean {
   if (row.provider === "sdk" || !(REPLAY_PROVIDERS as readonly string[]).includes(row.provider)) return false;
-  return !row.imported_at || (row.converter_version ?? 1) < VENDOR_CONVERTER_VERSION;
+  if (!row.imported_at) return true;
+  return (row.converter_version ?? 1) < VENDOR_CONVERTER_VERSION && !(row.vendor_refresh_after && row.vendor_refresh_after > now);
 }
 
 export const REPLAY_LIMITS = {

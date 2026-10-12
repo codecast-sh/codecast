@@ -63,3 +63,8 @@ export function partsOf(row: QueueRow): JointPart[] {
 export function isHeldForTurnEnd(row: QueueRow): boolean {
   return row.status === "held" && !!row.queued;
 }
+
+/** The shared queue above the composer: rows held for the end of the turn. A row someone sends now leaves it for the transcript. */
+export function heldQueueRowsOf(status: { inflight?: QueueRow[] } | null | undefined): QueueRow[] {
+  return queueRowsOf(status).filter(isHeldForTurnEnd);
+}
