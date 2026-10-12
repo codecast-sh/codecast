@@ -143,8 +143,7 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(c.querySelector(".entity-card")!.getAttribute("data-entity-card")).toBe("proposal");
   expect(c.querySelector("a[title='Open proposal']")).not.toBeNull();
   // The letter's lead, then the totals in one sentence.
-  expect(c.querySelector("[data-proposal-letter]")!.textContent).toBe("Why bring platform under one lead.");
-  expect(c.querySelector("[data-letter-more]")).toBeNull();
+  expect(c.querySelector("[data-proposal-letter]")).toBeNull();
   expect(c.querySelector("[data-proposal-totals]")!.textContent).toBe("2 changes: 1 new role and 1 move.");
   expect(c.querySelector("[data-proposal-card]")!.getAttribute("data-proposal-card")).toBe("op-1");
   expect(c.querySelector("[data-proposal-card]")!.getAttribute("data-proposal-work")).toBe("structure");
@@ -163,7 +162,7 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(reports.getAttribute("data-field-after")).toBe("Head of Platform");
   expect(reports.querySelector("[data-face='person']")).not.toBeNull();
   expect(reports.querySelector("[data-face='role']")).not.toBeNull();
-  expect(c.querySelector("[data-subject='role:platform'] [data-subject-reasons]")!.textContent).toBe("Because c1-role.");
+  expect(c.textContent).not.toContain("Because c1-role.");
   expect(c.querySelector("[data-tree-row], [data-ghost-tag], [data-proposal-rationale], [data-subject-edit], [data-send-answers], [data-proposal-reply], [data-subject-pending]")).toBeNull();
   expect(c.textContent).not.toMatch(/accept|skip|\bask\b|on your next message|\bEdit\b|Send \d/i);
 
@@ -214,8 +213,8 @@ test("Reject opens the field inside the band; typing writes the body; Enter clos
   expect(platform().querySelector("[data-staged] [data-subject-you]")!.textContent).toBe("You: Not yet");
   // Every card answered: nothing is left for "Approve the rest".
   click(c.querySelector("[data-subject='role:growth'] [data-subject-approve]")!);
-  expect(foot(c).querySelector("[data-approve-rest]")).toBeNull();
-  // Open, the card is the same ledger under the whole letter, reading the same batch.
+  expect(c.querySelector("[data-approve-rest]")).toBeNull();
+  // Open, the card is the same ledger, reading the same batch.
   click(c.querySelector(".entity-card")!);
   expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("true");
   const open = c.querySelector<HTMLElement>(".entity-card-expand")!;
@@ -321,8 +320,8 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   expect(alone.querySelector("[data-field]")).toBeNull();
   expect(alone.textContent).not.toMatch(/wakes|tokens|caps|limit/i);
   expect(alone.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 to decide");
-  // One card is the whole decision: its own Approve is the frame's filled button, the body has no totals line, and the foot adds no "Approve the rest".
-  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.style.background).toBe("var(--sol-violet)");
+  // One card is the whole decision: its Approve is an outline like any other, the body has no totals line, and the foot adds no "Approve the rest".
+  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.style.background).toBe("");
   expect(alone.querySelector("[data-approve-rest], [data-proposal-totals], [data-subject-ordinal]")).toBeNull();
   click(alone.querySelector("[data-subject-approve]")!);
   expect(batch()).toEqual([["role:growth", "approve", "", [1], ["c4-limit"], 1, "Head of Growth"]]);
@@ -337,26 +336,13 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   clearBatch();
 });
 
-test("the letter: a long lead draws Read the rest; pressed, the whole letter reads in place and the frame stays collapsed", () => {
+test("the letter stays in the author's conversation: neither the card nor its open frame draws it", () => {
   const root = mount(inThread(card("op-8")));
   const c = q("[data-card='op-8']");
-  const more = () => c.querySelector<HTMLElement>("[data-letter-more]")!;
-  expect(more().getAttribute("data-letter-more")).toBe("closed");
-  expect(more().textContent).toBe("Read the rest");
-  expect(c.querySelector("[data-proposal-letter] p")!.className).toContain("line-clamp-4");
-  expect(c.querySelector("[data-proposal-letter]")!.textContent).not.toContain("names the sessions this would move");
-  click(more());
-  expect(more().getAttribute("data-letter-more")).toBe("open");
-  expect(more().textContent).toBe("Read less");
-  expect(c.querySelector("[data-proposal-letter]")!.textContent).toContain("names the sessions this would move");
-  expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("false");
-  click(more());
-  expect(more().getAttribute("data-letter-more")).toBe("closed");
-  // The open frame shows the whole letter and no word.
+  expect(c.querySelector("[data-proposal-letter], [data-letter-more]")).toBeNull();
+  expect(c.textContent).not.toContain("names the sessions this would move");
   click(c.querySelector(".entity-card")!);
-  const open = c.querySelector<HTMLElement>(".entity-card-expand")!;
-  expect(open.querySelector("[data-letter-more]")).toBeNull();
-  expect(open.querySelector("[data-proposal-letter]")!.textContent).toContain("names the sessions this would move");
+  expect(c.querySelector(".entity-card-expand [data-proposal-letter]")).toBeNull();
   React.act(() => root.unmount());
 });
 

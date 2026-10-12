@@ -1,6 +1,7 @@
 // The runtime's URL space on the deployment's .convex.site origin:
 //
 //   /run/sdk                     the SDK every app imports as "playground"
+//   /run/sdk/<hash>              the same, at the build it names
 //   /run/<slug>/live             redirects to the live version's folder
 //   /run/<slug>/v/<n>/           version n's index.html
 //   /run/<slug>/v/<n>/<path>     one file of version n (transpiled if JSX/TS)
@@ -23,7 +24,8 @@ export function livePath(slug: string): string {
 }
 
 export type RunRoute =
-  | { kind: "sdk" }
+  /** `hash`: the build asked for, when the URL names one. */
+  | { kind: "sdk"; hash?: string }
   | { kind: "live"; slug: string }
   /** A version folder asked for without its trailing slash. */
   | { kind: "folder"; location: string }
@@ -36,6 +38,10 @@ const VERSION_NUMBER = /^(0|[1-9]\d{0,5})$/;
  *  serve (bad slug, bad version, a path no version could hold). */
 export function runRoute(pathname: string): RunRoute | null {
   if (pathname === SDK_PATH) return { kind: "sdk" };
+  if (pathname.startsWith(`${SDK_PATH}/`)) {
+    const hash = pathname.slice(SDK_PATH.length + 1);
+    return /^[a-z0-9]{1,64}$/.test(hash) ? { kind: "sdk", hash } : null;
+  }
   if (!pathname.startsWith(RUN_PREFIX)) return null;
   const [slug, segment, number, ...rest] = pathname.slice(RUN_PREFIX.length).split("/");
   if (!isSlug(slug)) return null;
