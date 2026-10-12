@@ -1,4 +1,5 @@
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
+import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
@@ -1064,6 +1065,7 @@ export const updateMessageStatus = mutation({
     device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "daemon:updateMessageStatus");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1320,6 +1322,7 @@ export const cancelPendingMessage = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cancelPendingMessage");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1924,6 +1927,7 @@ async function notifyStuckCrossUserSend(
 
 export const retryStuckMessages: RegisteredMutation<"internal", Record<string, never>, Promise<void>> = internalMutation({
   handler: async (ctx) => {
+    noteWriteCause(ctx, "cron:retryStuckMessages");
     await healAndNotifyStuckMessages(ctx, Date.now());
   },
 });
