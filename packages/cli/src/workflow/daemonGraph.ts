@@ -1,4 +1,6 @@
-import { parseWorkflowSource } from "./parser.js";
+import fs from "node:fs";
+import path from "node:path";
+import { parseWorkflowFile, parseWorkflowSource } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
 import type { WorkflowGraph } from "./types.js";
 import { repoLineForRun } from "../repoLine.js";
@@ -15,11 +17,26 @@ import { repoLineForRun } from "../repoLine.js";
 // The graph attribute stack (the-line.md L4: one decision stack per run)
 // comes from the row when it carries one, else from the stored DOT source,
 // so a daemon run creates the same stack a local run does.
+//
+// A run the server queued against a graph pushed from a file on this machine
+// (a trial's rerun or dispatch: `fresh_branch`) reads that file again, so
+// station edits made since the last push take effect, as they would for
+// `cast workflow run <file>`. So does a resume of any run pushed from a file
+// here (`resume`): a run that waited at a gate continues on the stations as
+// they are now, when the file still has the station it stands at.
 export function graphForDaemonRun(
-  run: { workflow_name?: string | null; goal_override?: string | null; project_path?: string | null; task_short_id?: string | null },
-  wf: { name?: string; slug?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string } | null | undefined,
+  run: { workflow_name?: string | null; goal_override?: string | null; project_path?: string | null; task_short_id?: string | null; fresh_branch?: boolean | null; current_node_id?: string | null },
+  wf: { name?: string; slug?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string; origin?: { device_id: string; root: string; file: string } | null } | null | undefined,
   cwd: string = run.project_path || process.cwd(),
+  deviceId?: string,
+  resume = false,
 ): WorkflowGraph | null {
+  const origin = (run.fresh_branch || resume) && deviceId && wf?.origin?.device_id === deviceId ? path.join(wf.origin.root, wf.origin.file) : null;
+  if (origin && fs.existsSync(origin)) {
+    const graph = parseWorkflowFile(origin);
+    if (run.goal_override) graph.goal = run.goal_override;
+    if (run.fresh_branch || !run.current_node_id || graph.nodes.has(run.current_node_id)) return graph;
+  }
   // A task-bound run of a line in a checkout with its own line runs that,
   // ahead of the role's pushed line and the shipped one (line-map.md LX5).
   const repo = repoLineForRun(run, wf, cwd);
