@@ -1,6 +1,6 @@
 .modal { width: 440px; max-width: 100%; }
 .body { padding: var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
-.title { font: var(--t-h2); font-variation-settings: var(--voice-axes); }
+.title { font: var(--t-h2); }
 .lede { font: 400 14px/1.45 var(--ui); color: var(--ink-2); }
 .already { padding: 8px 10px; border-radius: var(--r-md); background: var(--sunk); font: 400 13px/1.4 var(--ui); color: var(--ink-2); }
 .already a { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }

@@ -5,13 +5,13 @@
 // animated constellation, and streams the actual messages alongside it.
 import { useMemo, useState, useCallback, Component, type ReactNode } from "react";
 import Link from "next/link";
+import { agentFeatureHref } from "../../lib/agentFeatureHref";
 import { useRouter } from "next/navigation";
 import { useSessionThreads } from "../../hooks/useSyncSessionThreads";
 import { useTrackedStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
-import { copyToClipboard } from "../../lib/utils";
 import {
   SessionConstellation,
   hueFor,
@@ -27,7 +27,6 @@ import {
   CornerDownRight,
   Users,
   Sparkles,
-  Copy,
 } from "lucide-react";
 
 
@@ -369,8 +368,7 @@ function Header({ model }: { model: any }) {
             Crosstalk
           </h1>
           <p className="mt-1.5 text-[13px] text-sol-text-muted">
-            What your agents are saying to each other — every{" "}
-            <span className="font-mono text-sol-text-dim">cast send</span> between sessions.
+            What your agents are saying to each other: every message one session sends another.
           </p>
         </div>
         {model && (
@@ -589,29 +587,6 @@ function MessageCard({
   );
 }
 
-function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={async () => {
-        await copyToClipboard(command);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-      className="group flex items-center gap-2 w-full max-w-[280px] px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 hover:border-sol-border/60 transition-colors font-mono text-[12.5px] text-sol-text"
-      title="Copy command"
-    >
-      <span className="text-sol-text-dim select-none">$</span>
-      <span className="flex-1 text-left truncate">{command}</span>
-      {copied ? (
-        <Check className="w-3.5 h-3.5 text-sol-green flex-shrink-0" />
-      ) : (
-        <Copy className="w-3.5 h-3.5 text-sol-text-dim group-hover:text-sol-text flex-shrink-0" />
-      )}
-    </button>
-  );
-}
-
 function GraphEmpty({ loading }: { loading: boolean }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
@@ -627,15 +602,12 @@ function GraphEmpty({ loading }: { loading: boolean }) {
           </div>
           <div className="text-sm font-medium text-sol-text">No crosstalk yet</div>
           <p className="text-[12.5px] text-sol-text-muted leading-relaxed">
-            Crosstalk lights up when your agents message each other. Install the
-            messaging snippet so every session learns the{" "}
-            <span className="font-mono text-sol-text-dim">cast send</span> command:
+            Crosstalk lights up when your agents message each other. Switch on Messaging in Agent
+            features and every new session learns to reach the others.
           </p>
-          <CopyCommand command="cast messaging install" />
-          <p className="text-[11.5px] text-sol-text-dim leading-relaxed">
-            Then any session can run{" "}
-            <span className="font-mono">cast send &lt;id&gt; "…"</span> — and it shows up here.
-          </p>
+          <Link href={agentFeatureHref("messaging")} className="text-[12.5px] text-sol-cyan hover:underline">
+            Open Agent features
+          </Link>
         </div>
       )}
     </div>

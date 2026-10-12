@@ -13,7 +13,8 @@ describe("answer keys have one owner", () => {
   test("the queue passes keys to one group, and inside it to the first row only", () => {
     const src = read("DecisionQueueList.tsx");
     expect(src).toMatch(/const keysGroup = \(groups\.find\(\(g\) => g\.kind !== "role"\) \?\? groups\[0\]\)\?\.key;/);
-    expect(src).toMatch(/keys=\{g\.key === keysGroup\}/);
+    // Digit keys are developer-mode machinery (questions.internals); hosted mode gets none.
+    expect(src).toMatch(/keys=\{internals && g\.key === keysGroup\}/);
     // Every compact card in the queue takes keys only as the group's first row.
     const cards = src.match(/<DecisionCompactCard[^>]*>/g) ?? [];
     expect(cards.length).toBeGreaterThan(0);
