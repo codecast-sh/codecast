@@ -1,9 +1,12 @@
-import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
+import { Pressable, StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
+import { useInboxStore, type TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
+import { useHostedMode } from "@codecast/web/lib/surfaces";
+import { formatRowTime, sentenceCase } from "@codecast/web/lib/sessionCard";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
@@ -66,6 +69,57 @@ export function TaskItemRow({
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
   const labels = task.labels?.slice(0, 2) ?? [];
   const extraLabels = (task.labels?.length ?? 0) - 2;
+  const hosted = useHostedMode();
+
+  if (hosted) {
+    // Hosted mode draws a to-do as the web's TaskRow does: an ink circle (a
+    // check once done), an accent mark before the title for high and urgent
+    // only (every row keeps its slot so titles share one edge), the title
+    // with a capital first letter, and no ids, plans or labels. An open
+    // to-do has no time beside it, since a clock time reads as when to do
+    // it; a closed one says when it closed, in the rail's words.
+    const closed = task.status === "done" || task.status === "dropped";
+    const marked = task.priority === "high" || task.priority === "urgent";
+    const title = sentenceCase(task.title);
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        onLongPress={onLongPress}
+        style={[styles.row, styles.hostedRow, indent > 0 && { paddingLeft: Spacing.lg + indent * 12 }]}
+        activeOpacity={0.6}
+        accessibilityLabel={closed ? `${title}, ${task.status === "done" ? "done" : "dropped"}` : title}
+      >
+        {/* The circle checks the to-do off, or opens it again, in one tap:
+            the store's updateTask paints it at once. */}
+        <Pressable
+          onPress={() => {
+            void Haptics.selectionAsync().catch(() => {});
+            void useInboxStore.getState().updateTask(task.short_id, { status: closed ? "open" : "done" }).catch(() => {});
+          }}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`Mark ${title} ${closed ? "not done" : "done"}`}
+        >
+          <FontAwesome
+            name={task.status === "done" ? "check-circle" : task.status === "dropped" ? "times-circle" : "circle-thin"}
+            size={16}
+            color={closed ? Theme.textMuted0 : Theme.textMuted}
+          />
+        </Pressable>
+        <RNView
+          style={[styles.hostedMark, marked && { backgroundColor: Theme.orange, opacity: task.priority === "high" ? 0.55 : 1 }]}
+          accessibilityLabel={marked ? (task.priority === "urgent" ? "Urgent" : "High priority") : undefined}
+        />
+        <RNText style={[styles.hostedTitle, closed && { color: Theme.textMuted }]} numberOfLines={1}>{title}</RNText>
+        {progress && progress.total > 0 && (
+          <RNText style={styles.age}>{progress.done}/{progress.total}</RNText>
+        )}
+        {closed && (
+          <RNText style={styles.hostedAge}>{`${task.status === "done" ? "Done" : "Dropped"} ${formatRowTime(task.updated_at, true)}`}</RNText>
+        )}
+      </TouchableOpacity>
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -231,6 +285,29 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 11,
     color: Theme.textMuted0,
     fontVariant: ["tabular-nums"],
+  },
+  // The inbox rail's time (SessionItem hostedTime).
+  hostedAge: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontVariant: ["tabular-nums"],
+  },
+  hostedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 13,
+    borderBottomColor: Theme.borderLight,
+  },
+  hostedMark: {
+    width: 3,
+    height: 14,
+    borderRadius: 2,
+  },
+  hostedTitle: {
+    flex: 1,
+    fontSize: 15,
+    color: Theme.text,
   },
   subtaskChip: {
     flexDirection: "row",
