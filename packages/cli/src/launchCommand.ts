@@ -403,7 +403,7 @@ export interface PrintArgsInput {
 }
 
 /** `--session-id <id>` for a claude launch, unless the configured args already pin one. */
-function claudeSessionIdArgs(assigned: string | null | undefined, configuredArgs: string): string[] {
+export function claudeSessionIdArgs(assigned: string | null | undefined, configuredArgs: string): string[] {
   return assigned && !configuredArgs.includes("--session-id") ? ["--session-id", assigned] : [];
 }
 
@@ -583,7 +583,7 @@ function pushOutputFormat(
   ignored.push("--output-format");
 }
 
-/** Shell-quote a binary + args for `--dry-run` display. */
+/** Shell-quote a binary + args: the `--dry-run` display, and a command line sh runs. */
 export function formatPrintCommand(binary: string, args: string[]): string {
   return [binary, ...args].map(shellQuote).join(" ");
 }
