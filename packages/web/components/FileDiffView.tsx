@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { FilePatchDiff } from "./DiffView";
 
 // One changed file inside a pull request or a commit: the status chip, the
 // path, the +/- counts, and the patch behind a click. PRCard, CommitCard and
@@ -13,14 +14,6 @@ export type DiffFile = {
   patch?: string;
 };
 
-function patchLineClass(line: string): string {
-  if (line.startsWith("+") && !line.startsWith("+++")) return "text-sol-green bg-sol-green/10";
-  if (line.startsWith("-") && !line.startsWith("---")) return "text-sol-red bg-sol-red/10";
-  if (line.startsWith("@@")) return "text-sol-cyan";
-  if (line.startsWith("diff") || line.startsWith("index") || line.startsWith("---") || line.startsWith("+++")) return "text-sol-text-dim";
-  return "text-sol-text-muted";
-}
-
 const STATUS_CHIP: Record<string, string> = {
   added: "bg-sol-green/20 text-sol-green",
   removed: "bg-sol-red/20 text-sol-red",
@@ -29,7 +22,6 @@ const STATUS_CHIP: Record<string, string> = {
 
 export function FileDiffView({ file }: { file: DiffFile }) {
   const [expanded, setExpanded] = useState(false);
-  const lines = file.patch?.split("\n") || [];
 
   return (
     <div className="border-t border-sol-border/30">
@@ -62,14 +54,8 @@ export function FileDiffView({ file }: { file: DiffFile }) {
       </button>
 
       {expanded && file.patch && (
-        <div className="bg-sol-bg/50 px-3 py-2 overflow-x-auto">
-          <pre className="font-mono text-[11px] leading-relaxed">
-            {lines.map((line, idx) => (
-              <div key={idx} className={`${patchLineClass(line)} whitespace-pre`}>
-                {line}
-              </div>
-            ))}
-          </pre>
+        <div className="px-1 pb-1">
+          <FilePatchDiff patch={file.patch} fileName={file.filename} showLineNumbers maxLines={200} />
         </div>
       )}
     </div>
