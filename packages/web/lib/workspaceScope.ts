@@ -93,9 +93,14 @@ export function workspaceDisplayName(
   return ws.id === viewerId ? "your personal workspace" : "another workspace";
 }
 
+/** A row's own access key, from its stored key (or the legacy team tag): the
+ *  scope of a view relative to that row, such as a task's blockers. */
+export function workspaceKeyOfRow(row: WorkspaceScoped): WorkspaceKey | null {
+  return row.workspace ?? (row.team_id ? `team:${row.team_id}` : null);
+}
+
 /** A row's workspace as a ref, from its stored key (or the legacy team tag). */
 export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; id: string } | null {
-  const key = row.workspace ?? (row.team_id ? `team:${row.team_id}` : null);
-  const m = key?.match(/^(team|user):(.+)$/);
+  const m = workspaceKeyOfRow(row)?.match(/^(team|user):(.+)$/);
   return m ? { kind: m[1] as "team" | "user", id: m[2] } : null;
 }

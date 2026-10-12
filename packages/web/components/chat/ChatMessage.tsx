@@ -14,9 +14,9 @@ import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard, sharePageUrl } from "../../lib/utils";
-import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
+import { attachmentKind, type ChatAttachmentView, type ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { useStorageImageSrc } from "../../hooks/useStorageImageUrl";
+import { useStorageImageSrc, useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
 import { CallTranscriptDisclosure } from "../calls/TranscriptTurns";
 import { CallVideoStretchChip } from "../calls/CallVideoStretchChip";
@@ -71,6 +71,26 @@ function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src
   );
 }
 
+/** One attached video: the browser's own player, streaming from storage.
+ *  Only the URL is resolved here; the bytes stay out of the image byte cache,
+ *  so a scrolled-past video costs nothing until someone presses play. */
+function VideoTile({ att }: { att: ChatAttachmentView }) {
+  const url = useStorageImageUrl(att.storage_id);
+  if (url === null) return <span className="ch-att ch-att-missing">video unavailable</span>;
+  if (!url) return <span className="ch-att ch-att-loading" />;
+  return (
+    <video
+      className="ch-att ch-att-video"
+      src={url}
+      controls
+      playsInline
+      preload="metadata"
+      title={att.name}
+      style={att.width && att.height ? { aspectRatio: `${att.width} / ${att.height}` } : undefined}
+    />
+  );
+}
+
 export function ChatAttachments({
   messageId,
   attachments,
@@ -86,8 +106,9 @@ export function ChatAttachments({
   // ONLY attachment is audio becomes a voice bubble upstream and never reaches
   // this grid; these are the mixed rows, and they get the same play control the
   // bubble uses rather than a second one invented here.
-  const audio = attachments.filter((a) => a.mime?.startsWith("audio/"));
-  const images = attachments.filter((a) => !a.mime?.startsWith("audio/"));
+  const audio = attachments.filter((a) => attachmentKind(a) === "audio");
+  const videos = attachments.filter((a) => attachmentKind(a) === "video");
+  const images = attachments.filter((a) => attachmentKind(a) === "image");
   return (
     <>
       {audio.map((att) => (
@@ -98,6 +119,12 @@ export function ChatAttachments({
           <span className="ch-voice-text">{att.name || "recording"}</span>
         </div>
       ))}
+      {/* Videos never tile: a square crop hides most of a frame. */}
+      {videos.length > 0 && (
+        <div className="ch-atts">
+          {videos.map((att) => <VideoTile key={att.storage_id} att={att} />)}
+        </div>
+      )}
       {images.length > 0 && (
         <div className={`ch-atts ${images.length > 1 ? "ch-atts-grid" : ""}`}>
           {images.map((att) => (
