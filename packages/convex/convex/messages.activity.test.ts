@@ -114,3 +114,41 @@ describe("message ingest stamps conversations.activity", () => {
     expect(conv(ctx).activity).toEqual({ text: "editing app/chat.ts", tool: "Edit", at: NOW });
   });
 });
+
+// updated_at is the inbox's activity clock (SessionCard's idle age, every
+// recency sort). A transcript uploaded again weeks after it was written must
+// keep its own age on both ingest paths, not take the upload's.
+describe("message ingest keeps updated_at on the message's own time", () => {
+  const AUG = NOW - 52 * 24 * 3600_000;
+  function setup() {
+    const db = makeFakeDb({
+      conversations: [{ _id: "conversation", user_id: "owner", is_private: true, started_at: AUG - 60_000, updated_at: AUG - 60_000 }],
+      messages: [],
+      file_changes: [],
+    });
+    return { db, auth: { getUserIdentity: async () => ({ subject: "owner|session" }) }, scheduler: { runAfter: async () => {} } } as any;
+  }
+  const conv = (ctx: any) => ctx.db._tables.conversations[0];
+
+  test("addMessage of an old message leaves the row old", async () => {
+    const ctx = setup();
+    await (addMessage as any)._handler(ctx, { conversation_id: "conversation", message_uuid: "m1", role: "assistant", timestamp: AUG, content: "old reply" });
+    expect(conv(ctx).updated_at).toBe(AUG);
+  });
+
+  test("addMessages of old messages leaves the row old", async () => {
+    const ctx = setup();
+    await (addMessages as any)._handler(ctx, {
+      conversation_id: "conversation",
+      messages: [{ message_uuid: "m1", role: "user", timestamp: AUG - 1000, content: "hi" }, { message_uuid: "m2", role: "assistant", timestamp: AUG, content: "old reply" }],
+    });
+    expect(conv(ctx).updated_at).toBe(AUG);
+  });
+
+  test("an older message never moves updated_at backwards", async () => {
+    const ctx = setup();
+    conv(ctx).updated_at = NOW;
+    await (addMessage as any)._handler(ctx, { conversation_id: "conversation", message_uuid: "m1", role: "assistant", timestamp: AUG, content: "late backfill" });
+    expect(conv(ctx).updated_at).toBe(NOW);
+  });
+});
