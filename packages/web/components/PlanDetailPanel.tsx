@@ -1,5 +1,7 @@
 import { RepositoryLinks } from "./repo/RepositoryLinks";
+import { Button } from "./ui/button";
 import { ShortId } from "./ShortId";
+import { PLAN_STATUS_CONFIG } from "../lib/planStatus";
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
@@ -48,17 +50,12 @@ import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
 import { PlanOriginSession } from "./PlanOriginSession";
+import { TaskBlockedMark } from "./tasks/TaskBlockedMark";
 import { LivePulseDot } from "./SessionActivityLine";
 
 const api = _api as any;
 
-export const PLAN_STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string; bg: string }> = {
-  draft: { icon: Circle, label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10 border-sol-text-dim/30" },
-  active: { icon: CircleDot, label: "Active", color: "text-sol-cyan", bg: "bg-sol-cyan/10 border-sol-cyan/30" },
-  paused: { icon: PauseCircle, label: "Paused", color: "text-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
-  abandoned: { icon: XCircle, label: "Abandoned", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10 border-sol-text-dim/30" },
-};
+export { PLAN_STATUS_CONFIG };
 
 const STATUS_CONFIG = PLAN_STATUS_CONFIG;
 
@@ -707,9 +704,9 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
             placeholder="Task title..."
             className="flex-1 text-sm px-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
           />
-          <button onClick={handleAdd} disabled={!newTitle.trim()} className="sol-btn-solid px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg disabled:opacity-40">
+          <Button variant="cyan" size="sm" onClick={handleAdd} disabled={!newTitle.trim()} className="rounded-lg">
             Create
-          </button>
+          </Button>
         </div>
       )}
 
@@ -752,6 +749,11 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     {taskSessions.length} sess
                   </span>
                 )}
+                {/* Fixed slots, so the priority and chevron line up down the list
+                    whether the mark is an hourglass, one with a count, or nothing. */}
+                <span className="w-7 flex justify-end flex-shrink-0">
+                  <TaskBlockedMark task={task} small />
+                </span>
                 {PriorityIcon && pc && (
                   <button
                     onClick={() => cyclePriority(task.short_id, task.priority || "medium")}
@@ -761,10 +763,12 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
                   </button>
                 )}
-                {hasDetail && (
+                {hasDetail ? (
                   <button onClick={() => setExpandedTask(isExpanded ? null : task._id)}>
                     <ChevronRight className={`w-3 h-3 text-gray-400 dark:text-gray-500 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                   </button>
+                ) : (
+                  <span className="w-3 flex-shrink-0" aria-hidden />
                 )}
               </div>
               {isExpanded && (
