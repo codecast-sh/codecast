@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { pickReusableConversationTmux, startedSessionGuard, STARTED_SESSION_BOOT_WINDOW_MS } from "./daemon.js";
+import { freshDeliveryStartVerdict, pickReusableConversationTmux, startedSessionGuard, STARTED_SESSION_BOOT_WINDOW_MS } from "./daemon.js";
 
 // Regression coverage for the web new-session double-start (root-caused 2026-05-25).
 //
@@ -105,7 +105,7 @@ describe("double-start fix invariants", () => {
   });
 
   test("first-message startup rechecks app-server registration while waiting", () => {
-    const start = daemonSource.indexOf("Waiting up to 12s for start_session");
+    const start = daemonSource.indexOf("Waiting for start_session to register a session");
     expect(start).toBeGreaterThan(-1);
     const waitLoop = daemonSource.slice(start, start + 2500);
     // The recheck runs inside `deliveryStep`, which times the step; the await
@@ -209,5 +209,38 @@ describe("adopted panes keep their tmux creation time", () => {
     expect(find.slice(0, 1500)).toContain("startedAt: await tmuxSessionCreatedAtMs(match)");
     const warm = source.slice(source.indexOf("const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);"));
     expect(warm.slice(0, 1200)).toContain("startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession)");
+  });
+});
+
+// A spawned station's brief was in flight while its start_session was still
+// creating a worktree (2026-10-12). Delivery's wait ran out, it started a blank
+// claude of its own, and that pane's link took the conversation's session
+// binding: the real session synced into a new conversation and the workflow
+// run read its hand as empty. A start_session owns the launch.
+describe("freshDeliveryStartVerdict", () => {
+  const conv = "jx7aq8wvcwppnq11b85c2e51h98g5953";
+  const entry = { tmuxSession: "cc-claude-2e51h98g5953", projectPath: "/repo", startedAt: 1, agentType: "claude" as const };
+
+  test("reuses the session a start already registered", async () => {
+    let polled = 0;
+    const verdict = await freshDeliveryStartVerdict(conv, { started: () => entry, startPending: () => false, pollCommands: async () => { polled++; } });
+    expect(verdict).toEqual({ kind: "reuse", entry });
+    expect(polled).toBe(0);
+  });
+
+  test("holds while this daemon is running the conversation's start", async () => {
+    const verdict = await freshDeliveryStartVerdict(conv, { started: () => undefined, startPending: () => true, pollCommands: async () => {} });
+    expect(verdict).toEqual({ kind: "held" });
+  });
+
+  test("a start still queued on the server runs before delivery decides, and its session is reused", async () => {
+    let started: typeof entry | undefined;
+    const verdict = await freshDeliveryStartVerdict(conv, { started: () => started, startPending: () => false, pollCommands: async () => { started = entry; } });
+    expect(verdict).toEqual({ kind: "reuse", entry });
+  });
+
+  test("starts fresh only when no start exists anywhere, even if the queue cannot be read", async () => {
+    const verdict = await freshDeliveryStartVerdict(conv, { started: () => undefined, startPending: () => false, pollCommands: async () => { throw new Error("offline"); } });
+    expect(verdict).toEqual({ kind: "start" });
   });
 });

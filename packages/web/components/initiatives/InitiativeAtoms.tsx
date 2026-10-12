@@ -43,13 +43,13 @@ export function StatusGlyph({ status, className }: { status: InitiativeStatus; c
 export const shortDate: (ts: number, now: number) => string = formatShortDate;
 
 /** Health is whatever the owner said last, with the date it was said. */
-export function HealthChip({ health, at, now, bare, className }: { health: InitiativeHealth; at?: number; now: number; /** The dot alone, its word as the title (a far card on the org chart). */ bare?: boolean; className?: string }) {
+export function HealthChip({ health, at, now, bare, lower, className }: { health: InitiativeHealth; at?: number; now: number; /** The dot alone, its word as the title (a far card on the org chart). */ bare?: boolean; /** The word in lowercase, as every state cell of a line and a sheet's facts says it. */ lower?: boolean; className?: string }) {
   const color = HEALTH_COLOR[health];
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", className)} style={{ color: health === "none" ? color : "var(--sol-text-secondary)" }} title={bare ? INITIATIVE_HEALTH_LABEL[health] : undefined} data-initiative-health={health}>
       <span className="w-[7px] h-[7px] rounded-full shrink-0" style={health === "none" ? { border: `1px solid ${color}` } : { background: color }} aria-hidden />
-      {!bare && INITIATIVE_HEALTH_LABEL[health]}
-      {!bare && health !== "none" && at ? <span style={{ color: "var(--sol-text-dim)" }}>{shortDate(at, now)}</span> : null}
+      {!bare && (lower ? INITIATIVE_HEALTH_LABEL[health].toLowerCase() : INITIATIVE_HEALTH_LABEL[health])}
+      {!bare && health !== "none" && at ? <span style={{ color: "var(--sol-text-dim)" }} data-health-date>{shortDate(at, now)}</span> : null}
     </span>
   );
 }
@@ -144,7 +144,7 @@ function MetricBar({ reading, className }: { reading: MetricReading; className?:
  * is the page's block with a big number and a sparkline; `line` is one row
  * for a list or a card, with the bar toward the target until two reports
  * make a sparkline; `chip` is the name and the number for a crowded row
- * (`named={false}` where a column heading already names it). The words are
+ * (`named={false}` where a column already names it, on a chip or a line). The words are
  * the contract's (metricAgainst): a value reads "of" a number to reach, and
  * a number to stay under or a target that is not a number is named as the
  * target.
@@ -168,15 +168,15 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
   }
   if (size === "line") {
     return (
-      <span className={cn("inline-flex items-center gap-2 min-w-0 text-[12px]", className)} data-metric={reading.key} data-metric-size="line">
+      <span className={cn("inline-flex items-center gap-2 min-w-0 text-[12px]", className)} title={named ? undefined : metricLine(reading, now)} data-metric={reading.key} data-metric-size="line">
         <MetricStandingDot standing={reading.standing} />
-        <span className="truncate" style={{ color: "var(--sol-text)" }}>{reading.name}</span>
+        {named && <span className="truncate" style={{ color: "var(--sol-text)" }}>{reading.name}</span>}
         <span className="tabular-nums whitespace-nowrap" style={{ color: unreported ? "var(--sol-text-dim)" : "var(--sol-text-secondary)" }}>{metricAgainst(reading)}</span>
         {trend && <TrendGlyph trend={trend} />}
         {series.length >= 2
           ? <SparkLine values={series} target={metricNumber(reading.target)} width={48} height={14} tone={standingColor} className="text-sol-text-dim" />
           : <MetricBar reading={reading} className="w-[56px] shrink-0" />}
-        {reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
+        {named && reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
       </span>
     );
   }
