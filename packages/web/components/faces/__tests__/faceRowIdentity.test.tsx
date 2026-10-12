@@ -30,7 +30,7 @@ const ptt: PushToTalk = {
   release: () => {},
 };
 mock.module("../../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
-mock.module("../../../hooks/useOpenDm", () => ({ useOpenDm: () => () => {} }));
+mock.module("../../../hooks/useOpenDm", () => ({ useOpenDm: () => () => {}, useOpenChatPath: () => () => {} }));
 
 // ── a browser that can animate ──────────────────────────────────────────────
 
