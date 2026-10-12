@@ -2,31 +2,13 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Screenshot } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
-// Genuine `cast` output captured on 2026-08-22, a few minutes into a run of
-// trigger tr-39 — the run that wrote this post. The `cast trigger ls` excerpt is
-// trimmed to codecast triggers; every omission is marked with an editorial "…".
-
-const TRIGGER_LS = `  tr-34   scheduled   Google Ads: codecast campaign daily optimization  every 1d
-           Reviews yesterday's Google Ads performance (impressions, clicks, spend) and makes small adjustments
-
-  tr-39   scheduled   Weekly blog post  every 7d
-           Write and publish a new blog post showcasing an uncovered codecast feature with real terminal output
-
-  tr-120  scheduled   Weekly SEO + AI citations  every 7d
-           Verify codecast.sh renders correctly for search engines, track AI citation performance, respond to b
-           last: Health: all green (prod crawler HTML with h1 on all 4 spot-checks, sitemap XML,
-
-…  15 more triggers
-`;
-
-const TRIGGER_LOG = `Last run conversation: jx76eg3as339k77x4zvqrwgv758c29tv (Weekly CodeCast blog posts)
-Ran 1m ago
-Use: cast read jx76eg3as339k77x4zvqrwgv758c29tv
-`;
+// The trigger card and dashboard screenshots were taken on 2026-08-22 by a run
+// of trigger tr-39, the run that wrote this post. The New trigger form was
+// captured on 2026-10-09.
 
 export default function ThisPostWroteItselfPost() {
   const post = getPost("this-post-wrote-itself");
@@ -102,50 +84,48 @@ export default function ThisPostWroteItselfPost() {
           must pass before the post counts as done.
         </P>
         <P>
-          Setting one up is one command. The prompt can be a single line or a full markdown
-          briefing from stdin:
+          Setting one up is a short form. On the <em>Triggers</em> page, <em>New trigger</em>{" "}
+          opens it at the top:
         </P>
 
-        <Terminal label="cast trigger — the shapes">
-          <Cmd>cast trigger add &quot;Check if CI is green on main&quot; --in 30m</Cmd>
-          <Cmd>cast trigger add &quot;Respond to new PR review comments&quot; --on pr_comment</Cmd>
-          <Cmd>cast trigger add &quot;Review open PRs and summarize findings&quot; --every 4h --spawn</Cmd>
-        </Terminal>
+        <Screenshot
+          src="/blog/this-post-wrote-itself/new-trigger.png"
+          alt="The New trigger form on the codecast Triggers page: a Prompt box, an optional Title, When with the choices now, in, every and on event, an Agent choice of claude or codex with a read-only checkbox, an optional Project path, and a Set trigger button"
+          caption="New trigger: what the agent should do, when, with which agent, and whether it may change anything."
+        />
 
         <P>
-          Three shapes: a delay (<Code>--in 30m</Code> — follow-up work that should happen
-          after you walk away), an event (<Code>--on pr_comment</Code> — fire when the world
-          changes, not when the clock does), and a cadence (<Code>--every 4h</Code>). By
-          default a trigger&apos;s runs continue an existing session with its full history;{" "}
-          <Code>--spawn</Code> starts a fresh session per run instead, briefed only by the
-          prompt. Add <Code>--safe</Code> and the run is read-only — it can look and report,
-          not act.
+          The <em>When</em> row holds the three shapes. A delay (<em>in…</em>) is follow-up
+          work that should happen after you walk away. An event (<em>on event</em>, such as a
+          pull request opening or its checks going red) fires when the world changes, not when
+          the clock does. A cadence (<em>every…</em>) is the weekly blog post. Tick{" "}
+          <em>read-only: report, don&apos;t change anything</em> and the run can look and
+          report, not act. A trigger&apos;s runs can continue one session with its full
+          history, or start a fresh session each time, briefed only by the prompt; the list
+          marks the second kind <em>Fresh session per run</em>. Agents set the same triggers
+          from a terminal with <Code>cast trigger add</Code>, which is how most of ours were
+          made: an agent finishing a job arms its own follow-up.
         </P>
 
         <H2>Each run is a session, not a log line</H2>
         <P>
           When a trigger fires, what you get is not a cron mail. It is a full session that
           lands in your inbox like any other agent&apos;s work — watchable live, steerable
-          mid-run, searchable forever. From the terminal:
-        </P>
-
-        <Terminal label="cast trigger log" wrap>
-          <Cmd>cast trigger log tr-39</Cmd>
-          {TRIGGER_LOG}
-        </Terminal>
-
-        <P>
-          <em>Ran 1m ago</em> — that is this run, reporting on itself. The session it names is
-          the one writing this sentence, and by the time you read this, its transcript will
-          show every command behind every capture on this page. That is the part cron never
-          gave you: when a scheduled job does something surprising, the full reasoning is one{" "}
-          <Code>cast read</Code> away.
+          mid-run, searchable forever. Open a trigger and its page lists every run under{" "}
+          <em>Run history</em>; click a run and you are in its session, at the message the
+          trigger sent.
         </P>
         <P>
-          The contract runs both directions. A run that finishes calls{" "}
-          <Code>cast trigger complete</Code> with a summary, which becomes the{" "}
-          <Code>last:</Code> line on the trigger card — so the list of triggers doubles as a
-          status board. A run that gets stuck files itself under <em>needs input</em> in your
+          When we captured this page, the newest row in that history was one minute old: this
+          run, the session writing this sentence. By the time you read this, its transcript
+          shows every step behind every capture on this page. That is the part cron never gave
+          you: when a scheduled job does something surprising, the full reasoning is one click
+          away.
+        </P>
+        <P>
+          The contract runs both directions. A run that finishes reports a summary, which
+          becomes the last-result line on the trigger&apos;s row, so the list of triggers
+          doubles as a status board. A run that gets stuck files itself under <em>needs input</em> in your
           inbox, exactly like any blocked agent. Quiet when things work, loud when they
           don&apos;t.
         </P>
@@ -154,19 +134,11 @@ export default function ThisPostWroteItselfPost() {
         <P>
           One trigger is a convenience. A dozen is something else: a roster of recurring jobs
           your team used to carry in their heads, each now owned by an agent with a briefing
-          and a paper trail. Here are this repository&apos;s, from <Code>cast trigger ls</Code>:
-        </P>
-
-        <Terminal label="cast trigger ls" wrap>
-          <Cmd>cast trigger ls</Cmd>
-          {TRIGGER_LS}
-        </Terminal>
-
-        <P>
-          Ads optimization daily, blog weekly, crawler health weekly — and the SEO
-          trigger&apos;s <Code>last:</Code> line already reporting <em>all green</em> from its
-          latest run. The dashboard draws the same roster as a timeline, every run in the next
-          and last twenty-four hours on one axis:
+          and a paper trail. This repository&apos;s list, the day this post was written, had
+          an ads optimization run every day, this blog every week, and a crawler health check
+          every week, its last-result line already reporting <em>all green</em> from its latest
+          run. The top of the page draws the whole roster as a timeline, every run in the
+          next and last twenty-four hours on one axis:
         </P>
 
         <Screenshot
@@ -213,14 +185,12 @@ export default function ThisPostWroteItselfPost() {
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          Both screenshots and both terminal captures are genuine, taken on 2026-08-22 by a run
-          of trigger <Code>tr-39</Code> — the run that wrote this post — minutes after it
-          started. The <Code>cast trigger ls</Code> excerpt is trimmed to triggers for the
-          codecast repository, with the omission marked <Code>…</Code>; the trigger card
-          screenshot is cropped to the card, and its prompt continues past the crop. The
-          example <Code>cast trigger add</Code> commands are shown as commands only, without
-          output. In the run history, #2 is the capturing run itself, listed
-          mid-flight at six minutes old.
+          The trigger card and the dashboard header are genuine screenshots taken on 2026-08-22
+          by a run of trigger <Code>tr-39</Code>, the run that wrote this post, minutes after
+          it started; the card is cropped, and its prompt continues past the crop. In the run
+          history, #2 is the capturing run itself, listed mid-flight at six minutes old. The
+          roster described above is the codecast repository&apos;s share of the trigger list
+          that day. The New trigger form was captured empty on 2026-10-09 and cancelled.
         </p>
       </article>
     </main>
