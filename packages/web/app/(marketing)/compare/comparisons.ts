@@ -94,6 +94,73 @@ const SHARED_ROWS = {
 
 export const COMPARISONS: Comparison[] = [
   {
+    slug: "codecast-vs-t3-code",
+    competitor: "T3 Code",
+    competitorUrl: "https://t3.codes",
+    title: "Codecast vs T3 Code",
+    dek: "T3 Code is an open source control surface for the coding agents on your own machine. Codecast is the workspace a team and its agents share. They answer different questions, and threads you start in T3 Code sync into Codecast like any other session.",
+    verifiedOn: "2026-10-12",
+    codecastIs:
+      "Codecast is a workspace for a team and its coding agents. A daemon syncs every session your team runs, on any supported agent and any machine, into one searchable, steerable record, and the team's chat, tasks, plans, docs, pull requests and decisions live on that record with agents taking part in each.",
+    competitorIs:
+      "T3 Code describes itself as an agent harness control surface: a desktop app, web app and iOS and Android apps for starting and steering agent threads on a machine you own. It works with your own subscriptions to Claude Code, Codex, Cursor, Grok Build, OpenCode and Google Antigravity, gives each thread its own branch or worktree, and opens the pull request for you. It is MIT licensed, and its README calls the project very early.",
+    bottomLine:
+      "If the question is \"what is the best window for running my own agents\", T3 Code is a strong answer and you should try it. If the question is \"what are all of us and all our agents doing, what did they decide, and who needs to act\", that is Codecast. Nothing stops you using both: keep T3 Code as the place you run a thread, and let Codecast be the record your team reads.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "Starts and drives agent threads itself, one person's machines at a time",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor: "Claude Code, Codex, Cursor, Grok Build, OpenCode and Google Antigravity",
+      },
+      {
+        dimension: "Whose work it shows",
+        codecast: "Everyone on the team, across every machine a daemon runs on",
+        competitor: "Yours: the environments you have paired to your own account or devices",
+      },
+      {
+        ...SHARED_ROWS.team,
+        competitor: "No team or organization features in its docs or on its site",
+      },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "Thread history inside the app; no search across a team's sessions is documented",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not documented; each turn shows its own diff for review" },
+      {
+        ...SHARED_ROWS.remote,
+        competitor: "iOS and Android apps, web and desktop, through T3 Connect or direct pairing; the host machine must stay running",
+      },
+      {
+        dimension: "Git and pull requests",
+        codecast: "Pull requests linked to the sessions that wrote them, with review in the app",
+        competitor: "A branch or worktree per thread, one button to commit, push and open the pull request, on GitHub, GitLab, Bitbucket and others",
+      },
+      {
+        dimension: "Around the sessions",
+        codecast: "Team chat, calls, tasks, plans, docs and decisions, with agents taking part in each",
+        competitor: "The threads themselves; a terminal, a simulator panel and an MCP server other agents can connect to",
+      },
+      { ...SHARED_ROWS.oss, competitor: "MIT; built to be forked" },
+    ],
+    whenCompetitor: [
+      "You work alone and want one fast window to start, watch and review your own agent threads.",
+      "You want the widest choice of harnesses on your own subscriptions, including Grok Build, OpenCode and Antigravity.",
+      "You want the app itself to own the branch, the worktree and the pull request for each thread.",
+      "You want something you can fork and reshape.",
+    ],
+    whenCodecast: [
+      "More than one person runs agents, and you need to see each other's sessions, hand work over and answer what is waiting.",
+      "You keep running agents in your own terminals and want them recorded without changing how you start them.",
+      "You want a permanent record your agents can search, and any line of code traced back to the conversation that wrote it.",
+      "The work around the code matters as much as the sessions: tasks, plans, docs, chat and decisions in the same place.",
+    ],
+    together:
+      "They compose. T3 Code drives the agents' own harnesses, which keep their transcripts on disk, so a Codecast daemon on the same machine syncs a T3 Code thread like any other session. We checked this on 2026-10-12 with a Codex thread started in the T3 Code desktop app: it appeared in Codecast with no setup. Run threads in T3 Code, and let Codecast give them a team, a search box and a history.",
+  },
+  {
     slug: "codecast-vs-delta",
     competitor: "Delta",
     competitorUrl: "https://delta.dev",
@@ -532,6 +599,46 @@ export const COMPARISONS: Comparison[] = [
     ],
     together:
       "They compose, and many people use both: Remote Control is a live connection to one Claude Code session, and codecast records that same session like any other. Use Anthropic's for the phone, codecast for the team record and the memory.",
+  },
+  {
+    slug: "codecast-vs-resumecontext",
+    competitor: "ResumeContext",
+    competitorUrl: "https://resumecontext.com",
+    title: "Codecast vs ResumeContext",
+    dek: "Both sync the agent sessions your team already runs into one shared record. ResumeContext is that record for agents to read; Codecast is also where the team watches and steers the sessions while they run.",
+    codecastIs:
+      "Codecast is a workspace for a team and its coding agents. A daemon syncs every session your team runs into one searchable record, and the team watches, steers and answers those sessions live from web, desktop and phone, alongside the chat, tasks, docs and pull requests built on that record.",
+    competitorIs:
+      "ResumeContext is a shared memory layer for coding agents: a background daemon reads the session history agents write to disk and syncs it, about every twenty seconds, into one archive per project, which agents read back through a plain MCP server. Its site shows Claude Code, Cursor and Codex.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "A per project archive of past sessions that agents query through MCP",
+      },
+      { ...SHARED_ROWS.agents, competitor: "Claude Code, Cursor and Codex are shown on its site" },
+      {
+        dimension: "How sessions are captured",
+        codecast: "A daemon syncs the history files agents already write to disk",
+        competitor: "The same approach: a daemon reads the history agents write, with no plugin or wrapper",
+      },
+      { ...SHARED_ROWS.team, competitor: "One archive per project shared by its members; revoking a member keeps their history attributed" },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "Agents search the archive mid task through MCP tools, including read only SQL",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not documented" },
+      { ...SHARED_ROWS.remote, competitor: "Not offered: the archive is history, and a running session appears after its next sync" },
+      { ...SHARED_ROWS.oss, competitor: "Not stated on its site" },
+    ],
+    whenCompetitor: [
+      "What you want is exactly a shared memory your agents query: past sessions in, answers out, through a plain MCP server.",
+      "You do not need people to watch or steer sessions while they run.",
+    ],
+    whenCodecast: [
+      "People need to see and steer the team's running sessions, including answering permission prompts from a phone.",
+      "You want that record to carry the team's work around it: tasks, plans, docs, chat and pull requests linked to the sessions that did the work.",
+      "You need to trace a line of code back to the conversation that wrote it.",
+    ],
   },
   {
     slug: "codecast-vs-happy",
