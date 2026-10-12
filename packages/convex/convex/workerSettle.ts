@@ -4,6 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES, WORKER_SETTLE_WORDS, formatScheduledTask, isToolResultCarrier, parseUserMessage, threadStateFreshness, threadStateHeadline } from "@codecast/shared/contracts";
 import { isUserMessageNoise, stripMessageTags } from "./lib/userSend";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { drainFleet } from "./subagentFleet";
 import { NEEDS_INPUT_IDLE_CHECK_DELAY_MS } from "./inboxFilters";
 import { internal } from "./_generated/api";
 
@@ -134,6 +135,8 @@ export async function performTellParent(
     const why = workerSettleWhy(c, status?.agent_status, now);
     if (why) told.push({ worker: c, why });
   }
+  // A settled worker gives its slot back, and the queue behind it starts.
+  if ((worker as any).subagent_slot === "running") await drainFleet(ctx, worker.user_id);
   if (told.length === 0) return { told: 0, reason: "already" };
   for (const t of told) {
     if (!threadStateHeadline(t.worker.thread_state ?? "")) t.typed = await lastTypedLine(ctx, t.worker._id);

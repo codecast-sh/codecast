@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createReplicationFollower, createReplicationHost, type ReplicationChannel, type ReplicationMessage } from "@platform/engine";
-import { replicationChannelName, replicationLockName, startSyncReplication, stopSyncReplication } from "../syncReplication";
+import { replicationChannelName, replicationLockName, replicationTransport, startSyncReplication, stopSyncReplication } from "../syncReplication";
 import { useInboxStore } from "../inboxStore";
 
 // Replication is scoped to the account a window acts for: channel and lock
@@ -86,7 +86,10 @@ describe("startSyncReplication", () => {
   it("opens the account's channel and requests the account's lock", async () => {
     startSyncReplication({ eligible: true, principalId: "userA" });
     await new Promise((r) => setTimeout(r, 0));
-    expect(hub.opened).toEqual(["codecast-replication-v1:userA"]);
+    // The account's shared channel, and this window's own for snapshots addressed to it.
+    expect(hub.opened).toHaveLength(2);
+    expect(hub.opened[0]).toBe("codecast-replication-v1:userA");
+    expect(hub.opened[1]).toStartWith("codecast-replication-v1:userA:to:");
     expect(hub.locks).toEqual(["codecast-sync-host:userA"]);
     expect((window as any).__syncReplication().principalId).toBe("userA");
   });
@@ -96,7 +99,7 @@ describe("startSyncReplication", () => {
     stopSyncReplication();
     // A fresh start for the next account opens that account's channel, not the old one.
     startSyncReplication({ eligible: false, principalId: "userB" });
-    expect(hub.opened).toEqual(["codecast-replication-v1:userA", "codecast-replication-v1:userB"]);
+    expect(hub.opened.filter((n) => !n.includes(":to:"))).toEqual(["codecast-replication-v1:userA", "codecast-replication-v1:userB"]);
     expect(useInboxStore.getState().syncRole).toBe("host");
   });
 });
@@ -171,5 +174,57 @@ describe("host and follower of different accounts", () => {
     expect(appliedA.length).toBe(before);
     followerB.stop();
     hostA.stop();
+  });
+});
+
+// A snapshot is ~100 MB in a real store and every window that receives one
+// pays to decode it. It must reach only the window that asked, while the
+// live update stream still reaches everyone.
+describe("replicationTransport", () => {
+  const g = globalThis as any;
+  let saved: unknown;
+  let hub: ReturnType<typeof makeHub>;
+  beforeEach(() => {
+    hub = makeHub();
+    saved = g.BroadcastChannel;
+    g.BroadcastChannel = hub.FakeBroadcastChannel;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete g.BroadcastChannel; else g.BroadcastChannel = saved;
+  });
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+
+  it("delivers a snapshot only to the follower that asked, and updates to all", async () => {
+    const name = replicationChannelName("userA");
+    const state: any = { sessions: { s1: { _id: "s1", title: "first" } } };
+    const hostT = replicationTransport(name, "host");
+    const host = createReplicationHost({
+      hostId: "host", channel: hostT.channel, getState: () => state,
+      replicatedKeys: ["sessions"], isCollectionKey: () => true, applyUpdates: () => {},
+    });
+    const seen: Record<string, ReplicationMessage[]> = { a: [], b: [] };
+    const followers = (["a", "b"] as const).map((id) => {
+      const t = replicationTransport(name, id);
+      t.channel.onMessage((m) => seen[id].push(m));
+      return { t, f: createReplicationFollower({
+        selfId: id, channel: t.channel, replicatedKeys: ["sessions"],
+        isCollectionKey: () => true, applyUpdates: () => {}, helloRetryMs: 1000,
+      }) };
+    });
+    await settle();
+    expect(followers.every(({ f }) => f.synced())).toBe(true);
+    const snapshotsTo = (id: string) => seen[id].filter((m) => m.type === "snapshot" || m.type === "snapshotChunk");
+    expect(snapshotsTo("a").length).toBeGreaterThan(0);
+    expect(snapshotsTo("a").every((m: any) => m.to === "a")).toBe(true);
+    expect(snapshotsTo("b").every((m: any) => m.to === "b")).toBe(true);
+
+    state.sessions = { ...state.sessions, s2: { _id: "s2", title: "second" } };
+    host.tee([{ op: "add", path: ["sessions", "s2"], value: state.sessions.s2 }] as any, state);
+    await settle();
+    for (const id of ["a", "b"]) expect(seen[id].some((m) => m.type === "update")).toBe(true);
+    expect(followers.every(({ f }) => f.synced())).toBe(true);
+
+    for (const { t, f } of followers) { f.stop(); t.close(); }
+    host.stop(); hostT.close();
   });
 });

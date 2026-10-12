@@ -23,11 +23,9 @@ import {
   writeMoves,
 } from "../remote/cli.js";
 import {
-  cwdToSlug,
   ensureRemoteClaudeReady,
   gitEnv,
   gitSshUrl,
-  hostCheckoutDirty,
   isWorktree,
   pullSession,
   pushSession,
@@ -38,6 +36,7 @@ import {
   type MoveResult,
   type RemoteHost,
 } from "../remote/session-move.js";
+import { claudeProjectDirName } from "../projectPathResolver.js";
 import type { BeginResult, RunnerIo, TransferResult } from "./runner.js";
 
 type Facts = Extract<BeginResult, { ok: true }>;
@@ -200,27 +199,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
 
     transferToCloud: async (facts: Facts, o) => {
       const { host } = await prepareHost(facts.to_device_id);
-      // The push resets the host checkout it lands in, so a checkout another
-      // session already works in is never the landing: this move takes its own
-      // clone beside it (shared by the batch's siblings from the same folder).
-      const move = await pushSession(facts.session_id, host, {
-        skipTree: o.skipTree,
-        pushedHead: o.pushedHead,
-        landing: async (main) => {
-          const own = `${main}-mv-${o.batchId.replace(/^mg-/, "").slice(0, 8)}`;
-          const holder = await client.query(api.sessionMigrations.checkoutHolder, { api_token: token, migration_id: o.migrationId, project_path: main });
-          if (holder) {
-            log(`  ${main} on the host is in use by ${holder.short_id ?? holder.conversation_id} (${holder.title ?? "untitled"}); landing in ${own}`);
-            return own;
-          }
-          // Edits nobody is moving here (an earlier session's, left behind) refuse the push and are not ours to discard.
-          if (!o.skipTree && hostCheckoutDirty(host, main)) {
-            log(`  ${main} on the host has uncommitted changes no session holds; landing in ${own}`);
-            return own;
-          }
-          return main;
-        },
-      });
+      // The move merges into the host's checkout of the repository, beside
+      // whatever sessions already work there (gitPushWorktree).
+      const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree, pushedHead: o.pushedHead });
       // Resuming on a tree that is not this session's (a stale checkout, a push
       // that never landed) hands over the conversation without its work.
       if (move.verification && !move.verification.headsMatch) {
@@ -237,7 +218,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       return {
         pushedHead: move.pushedHead,
         destinationPath: move.remoteCwd,
-        gitRoot: isWorktree(move.localCwd) ? move.remoteCwd : undefined,
+        gitRoot: move.remoteRoot,
         sourcePath: `${move.localCwd}`,
         verification: describeVerification(move.verification),
         localCwd: move.localCwd,
@@ -253,12 +234,14 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       const recorded = readMoves()[facts.session_id]?.remoteCwd;
       const remoteCwd = facts.project_path?.startsWith(`${remoteHome(host)}/`) || !recorded ? facts.project_path : recorded;
       if (!remoteCwd || !remoteCwd.startsWith("/")) throw new Error(`the session's path on the host is unknown (${remoteCwd ?? "none"})`);
-      const remoteProjectDir = path.posix.join(remoteHome(host), ".claude", "projects", cwdToSlug(remoteCwd));
+      const remoteProjectDir = path.posix.join(remoteHome(host), ".claude", "projects", claudeProjectDirName(remoteCwd));
       let remoteOrigin: string | null = null;
       let remoteBranch: string | null = null;
+      let remoteRoot: string | undefined;
       try {
         remoteOrigin = ssh(host, `git -C ${shq(remoteCwd)} remote get-url origin 2>/dev/null || true`).trim() || null;
         remoteBranch = ssh(host, `git -C ${shq(remoteCwd)} rev-parse --abbrev-ref HEAD 2>/dev/null || true`).trim() || null;
+        remoteRoot = ssh(host, `git -C ${shq(remoteCwd)} rev-parse --show-toplevel 2>/dev/null || true`).trim() || undefined;
       } catch { /* not a repo on the host: rsync fallback below */ }
       const me = (await listDevices()).find((d: any) => d.device_id === myDeviceId);
       const roots: string[] = Array.isArray(me?.local_project_roots) ? me.local_project_roots : [];
@@ -291,8 +274,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
           execFileSync("git", ["-C", dest.createIn, "worktree", "add", "--detach", dest.localCwd, ref], { stdio: "pipe" });
         }
       }
-      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteProjectDir, pushedHead: readMoves()[facts.session_id]?.pushedHead ?? readMoves()[facts.session_id]?.verification?.remoteHead ?? undefined };
-      const pulled = await pullSession(facts.session_id, host, move);
+      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteRoot, remoteProjectDir, pushedHead: readMoves()[facts.session_id]?.pushedHead ?? readMoves()[facts.session_id]?.verification?.remoteHead ?? undefined };
+      const { checkoutAloneProbe } = await import("../cloud/prepare.js");
+      const pulled = await pullSession(facts.session_id, host, move, { aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
       let verification = "synced via rsync (non-git directory)";
       let gitRoot: string | undefined;

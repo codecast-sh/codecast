@@ -29,6 +29,7 @@ import { useLineForks, type LineForkProject } from "../../hooks/useLineForks";
 import { lineRunKind } from "../../lib/line/lineStations";
 import { lineSettingsHref } from "../../lib/lineSettings";
 import { CustomizedLineChip } from "../../components/line/CustomizedLineChip";
+import { Button } from "../../components/ui/button";
 
 const api = _api as any;
 
@@ -230,14 +231,10 @@ function RunDialog({ workflowId, onClose }: { workflowId: string; onClose: () =>
           >
             Cancel
           </button>
-          <button
-            onClick={handleRun}
-            disabled={running}
-            className="sol-btn-solid flex-1 px-3 py-1.5 text-xs font-medium text-sol-bg bg-sol-cyan rounded-lg disabled:opacity-50 flex items-center justify-center gap-1"
-          >
-            {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+          <Button variant="cyan" size="sm" className="flex-1" onClick={handleRun} disabled={running}>
+            {running ? <Loader2 className="animate-spin" /> : <Play />}
             Run
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -464,7 +461,7 @@ function WorkflowsContent() {
         <div>
           <p className="text-sm text-sol-text-muted">No routines yet</p>
           <p className="text-xs text-sol-text-dim mt-1">
-            Push a routine with <code className="font-mono text-sol-text-muted">cast workflow push</code>
+            Ask an agent to write one for a process you repeat.
           </p>
         </div>
       </div>
@@ -671,7 +668,7 @@ export function RunsTab() {
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No runs yet</p>
-            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or with <code className="font-mono text-sol-text-muted">cast workflow run</code>.</p>
+            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or when you ask an agent to run a routine on one.</p>
           </div>
         ) : (
           <ul className="space-y-1">

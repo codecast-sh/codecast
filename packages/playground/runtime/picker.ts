@@ -87,7 +87,7 @@ function tagCss(t: PickTheme): string {
     .tag {
       position: absolute; left: -5px; bottom: calc(100% + 10px); max-width: 280px;
       padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      font: 500 11.5px/1.4 ${t.font}; font-variation-settings: "CASL" 0, "MONO" 1;
+      font: 500 11.5px/1.4 ${t.font};
       color: #fffdf9; background: ${t.ink}; border-radius: 5px;
     }
     .box.below .tag { bottom: auto; top: calc(100% + 10px); }
