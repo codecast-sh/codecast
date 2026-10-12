@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Maximize2, MicOff, Minimize2, MonitorUp } from "lucide-react";
 import { callParticipantKind } from "@codecast/shared/contracts";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
@@ -33,6 +33,14 @@ function PersonActions(p: { identity: string; name: string; variant: "tile" | "r
   return <>{host.personActions?.(p) ?? null}</>;
 }
 
+/** A right click on someone opens what the viewer may do to them (the
+ *  host's menu); no host menu, the browser's own. */
+function usePersonMenu(identity: string, name: string, self = false): { onContextMenu?: (e: MouseEvent) => void } {
+  const host = useStageHost();
+  if (!host.openPersonMenu || self || identity === host.selfIdentity) return {};
+  return { onContextMenu: (e) => host.openPersonMenu!(e, { identity, name }) };
+}
+
 /** Actions beside a centred name, out of the layout: a face whose name row
  *  grew by an invisible button would sit off the line of every other face. */
 function SideActions({ identity, name }: { identity: string; name: string }) {
@@ -40,6 +48,15 @@ function SideActions({ identity, name }: { identity: string; name: string }) {
     <span className="absolute left-full top-1/2 ml-1 -translate-y-1/2">
       <PersonActions identity={identity} name={name} variant="row" />
     </span>
+  );
+}
+
+/** A box around one person that opens their menu on a right click. */
+function PersonMenuArea({ identity, name, className, children }: { identity: string; name: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={className} {...usePersonMenu(identity, name)}>
+      {children}
+    </div>
   );
 }
 
@@ -87,14 +104,10 @@ export function AutoStage({
                       : "bg-black/45 text-white/70 hover:text-white"
                   }`}
                 >
-                  {t.isLocal ? (
-                    "your screen"
-                  ) : (
-                    <span className="flex items-center gap-1">
-                      {`${firstName(t.name)}'s screen`}
-                      <ParticipantTag identity={t.identity} />
-                    </span>
-                  )}
+                  <span className="flex items-center gap-1">
+                    {`${firstName(t.name)}'s screen`}
+                    <ParticipantTag identity={t.identity} />
+                  </span>
                 </button>
               ))}
             </div>
@@ -244,8 +257,8 @@ export function SpeakerStage({
               String(m.user_id) !== String(focusMember?.user_id ?? ""),
           )
           .map((m) => (
+            <PersonMenuArea key={m.user_id} identity={String(m.user_id)} name={m.user_name}>
             <button
-              key={m.user_id}
               onClick={() => onPin(String(m.user_id))}
               className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
                 speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
@@ -256,6 +269,7 @@ export function SpeakerStage({
               <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12px] text-sol-text" />
               {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
             </button>
+            </PersonMenuArea>
           ))}
       </div>
     </div>
@@ -295,8 +309,10 @@ export function GridStage({
         />
       ))}
       {voices.map((m) => (
-        <div
+        <PersonMenuArea
           key={m.user_id}
+          identity={String(m.user_id)}
+          name={m.user_name}
           className={`group flex flex-col items-center justify-center gap-2.5 rounded-xl bg-white/[0.05] transition-shadow ${
             speaking.has(String(m.user_id)) ? SPEAKING_RING : ""
           }`}
@@ -307,7 +323,7 @@ export function GridStage({
             {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
             <SideActions identity={String(m.user_id)} name={m.user_name} />
           </div>
-        </div>
+        </PersonMenuArea>
       ))}
       {n === 0 && (
         <div className="flex items-center justify-center font-mono text-[13px] text-sol-text-muted">
@@ -361,9 +377,11 @@ export function StageVideo({
   const frameRef = useRef<HTMLDivElement>(null);
   const natural = useNaturalSize(ref, tile.track);
   const zoom = useShareZoom(boxRef, scrollRef, natural, zoomable, ref);
+  const menu = usePersonMenu(tile.identity, tile.name, tile.isLocal);
   return (
     <div
       ref={boxRef}
+      {...menu}
       data-sv-screen-tile={cursorsOn ? "cursors" : undefined}
       onPointerMove={cursorsOn ? sender.onPointerMove : undefined}
       onPointerLeave={cursorsOn ? sender.onPointerLeave : undefined}
@@ -469,8 +487,10 @@ export function VoiceRows({
           and on one line that crushed the face and the name it is asking
           about. Its actions take their own line instead. */}
       {voices.map((m) => (
-        <div
+        <PersonMenuArea
           key={m.user_id}
+          identity={String(m.user_id)}
+          name={m.user_name}
           className={`group flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1.5 transition-colors ${
             speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
           }`}
@@ -484,7 +504,7 @@ export function VoiceRows({
               <host.FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
             )}
           </span>
-        </div>
+        </PersonMenuArea>
       ))}
     </div>
   );
@@ -531,7 +551,7 @@ export function AudioOnlyStage({
           </div>
         ))}
         {roster.map((m) => (
-          <div key={m.user_id} className="group flex flex-col items-center gap-3">
+          <PersonMenuArea key={m.user_id} identity={String(m.user_id)} name={m.user_name} className="group flex flex-col items-center gap-3">
             <div
               className={`rounded-full transition-all duration-300 ${
                 speaking.has(String(m.user_id))
@@ -547,7 +567,7 @@ export function AudioOnlyStage({
               {m.sharing && <MonitorUp className="h-3 w-3 shrink-0 text-sol-violet" />}
               <SideActions identity={String(m.user_id)} name={m.user_name} />
             </div>
-          </div>
+          </PersonMenuArea>
         ))}
       </div>
       {settledLine && (
