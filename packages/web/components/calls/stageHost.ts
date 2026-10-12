@@ -1,4 +1,4 @@
-import { createContext, useContext, type ComponentType, type ReactNode } from "react";
+import { createContext, useContext, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import type { Room } from "livekit-client";
 import { LayoutGrid, User, Wand2 } from "lucide-react";
 
@@ -21,6 +21,9 @@ export type StageHost = {
   /** What the viewer may do to this participant, beside their name (a
    *  member putting a guest out). Null for nothing. */
   personActions?: (p: { identity: string; name: string; variant: "tile" | "row" }) => ReactNode;
+  /** Open what the viewer may do to this participant (put them out of the
+   *  call), on a right click of their tile or row. */
+  openPersonMenu?: (e: MouseEvent, p: { identity: string; name: string }) => void;
   /** The viewer's own identity, so their row in a list reads "you" the way
    *  their own tile does. */
   selfIdentity?: string;

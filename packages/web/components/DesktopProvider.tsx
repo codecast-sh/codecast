@@ -46,6 +46,7 @@ import { useNotificationDelivery } from "../hooks/useNotificationDelivery";
 import { agentAlertsSuppressed } from "../lib/notificationDelivery";
 
 import { useMountEffect } from "../hooks/useMountEffect";
+import { Button } from "./ui/button";
 // A native banner is for something that JUST happened. Rows older than this at
 // the time we first see them (a sleep/offline gap replaying on reconnect) stay
 // in the bell but don't banner — the phone already covered the away window,
@@ -579,29 +580,20 @@ export function DesktopProvider() {
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             {ready && (
-              <button
-                onClick={() => restartForUpdate()}
-                className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
-              >
+              <Button variant="cyan" size="xs" onClick={() => restartForUpdate()}>
                 Restart now
-              </button>
+              </Button>
             )}
             {showStalled && (
-              <button
-                onClick={startUpdate}
-                className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
-              >
+              <Button variant="cyan" size="xs" onClick={startUpdate}>
                 Try again
-              </button>
+              </Button>
             )}
             {!inProgress && !ready && (
               <>
-                <button
-                  onClick={startUpdate}
-                  className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
-                >
+                <Button variant="cyan" size="xs" onClick={startUpdate}>
                   Update now
-                </button>
+                </Button>
                 {!belowFloor && (
                   <button
                     onClick={() => setDismissedVersion(latest)}
