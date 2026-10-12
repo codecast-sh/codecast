@@ -66,8 +66,8 @@ async function verifyTemplateSections() {
   // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
   assert.match(text, /Let Codecast learn from this workspace's template roles/);
   assert.match(text, /never transcripts, quotes, names, customer data or code/);
-  const learning = () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!;
-  assert.equal(learning().checked, false);
+  const learning = () => document.querySelector<HTMLElement>('[data-template-learning] [role="switch"]')!;
+  assert.equal(learning().getAttribute("aria-checked"), "false");
   assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
   await act(async () => learning().click());
   assert.deepEqual(learningSet, [true]);
@@ -165,7 +165,9 @@ async function verifyTemplateSections() {
   assert.match(body, /Setting up on MacBook…/);
   assert.equal(document.querySelector("[data-host-run]"), null, "no second request while one runs");
   body = await rerender({ phase: "awaiting_host", host_step: { state: "failed", device_label: "MacBook", error: "Instance is proposal; reconcile first" } });
-  assert.match(body, /MacBook: Instance is proposal; reconcile first/);
+  // The machine's CLI-worded error is said in a person's words (hostErrorWords).
+  assert.match(body, /MacBook: The role and its routines are not set up yet\./);
+  assert.doesNotMatch(body, /reconcile first/);
   assert.equal(run().textContent, "Try again on MacBook");
   body = await rerender({ phase: "awaiting_host", bind_host: { device: null, dir: null, reason: "No machine has run codecast for this workspace's host recently." } });
   assert.match(body, /No machine has run codecast/);

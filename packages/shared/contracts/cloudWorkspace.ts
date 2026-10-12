@@ -88,6 +88,9 @@ export interface CheckoutMatch {
   excludeId?: string;
   /** Rows that share the checkout with the claimer by design (siblings moved together from one laptop folder). */
   sharedWith?: readonly string[];
+  /** The claimer works in the checkout as it stands (a moved session merged in, a start in the host's own folder),
+   * the way sessions share a laptop folder: only a SHARED row, which holds the checkout on a branch of its own, occupies it. */
+  merging?: boolean;
 }
 
 /** The last path segment (trailing slashes ignored): the repo name a checkout is keyed by. */
@@ -107,7 +110,8 @@ export function posixRepoBasename(p: string): string {
  *   (b) legacy: any other alive row whose `project_path` is exactly P — a
  *       session moved onto the root, or a row placed there before the stamp
  *       existed. A shared row is judged by (a) alone, so a failed pending
- *       one cannot re-occupy the root through its path.
+ *       one cannot re-occupy the root through its path. A `merging` claimer
+ *       is judged by (a) alone too: it shares the checkout with those rows.
  */
 export function sharedCheckoutOccupant(
   rows: CheckoutOccupantRow[],
@@ -126,7 +130,23 @@ export function sharedCheckoutOccupant(
       }
       continue;
     }
-    if (match.projectPath && row.project_path === match.projectPath) return row;
+    if (!match.merging && match.projectPath && row.project_path === match.projectPath) return row;
+  }
+  return null;
+}
+
+/**
+ * The first alive row other than `excludeId` working in the host checkout at
+ * `root`: in it or a folder of it, but not in a worktree of its own under
+ * `<root>/.codecast/`, which is a checkout of its own. Null when the checkout
+ * has nobody else, so what a departing session left in it is nobody's work.
+ */
+export function otherSessionInCheckout(rows: CheckoutOccupantRow[], root: string, excludeId?: string): CheckoutOccupantRow | null {
+  const trimmed = root.replace(/\/+$/, "");
+  for (const row of rows) {
+    if (row.conversation_id === excludeId || row.inbox_killed_at || row.status === "completed") continue;
+    const at = (row.cloud_checkout_path ?? row.project_path ?? "").replace(/\/+$/, "");
+    if (at === trimmed || (at.startsWith(`${trimmed}/`) && !at.startsWith(`${trimmed}/.codecast/`))) return row;
   }
   return null;
 }
