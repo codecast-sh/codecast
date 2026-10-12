@@ -314,6 +314,29 @@ describe("cascadeHideToNestedChildren", () => {
     expect(db._inserted.filter((i: any) => i.table === "daemon_commands")).toHaveLength(2);
   });
 
+  // A lead with 175 subagents could not be stashed, killed or restored: every
+  // child's teardown ran in the gesture's transaction and passed Convex's
+  // 4096-read cap (2026-10-08). One batch runs now, the rest is scheduled.
+  test("a big group hides one batch inline and schedules the rest", async () => {
+    const tables = mkTables();
+    for (let i = 0; i < 50; i++) {
+      tables.conversations.push({ _id: `conv_big_${i}`, user_id: "u1", parent_conversation_id: LEAD, is_subagent: true, message_count: 5 });
+    }
+    const db = makeFakeDb(tables);
+    const scheduled: any[] = [];
+    const scheduler = { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } };
+    const lead = tables.conversations[0];
+
+    const cascaded = await cascadeHideToNestedChildren({ db, scheduler } as any, lead, { inbox_stashed_at: 444 });
+    expect(cascaded).toBe(52);
+    const stashed = tables.conversations.filter((r: any) => r.inbox_stashed_at === 444);
+    expect(stashed).toHaveLength(20);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].child_ids).toHaveLength(32);
+    expect(scheduled[0]).toMatchObject({ lead_id: LEAD, field: "inbox_stashed_at", stamp: 444 });
+    expect(scheduled[0].child_ids.some((id: string) => stashed.some((r: any) => r._id === id))).toBe(false);
+  });
+
   test("stash cascade sets inbox_stashed_at only — agents stay alive", async () => {
     const tables = mkTables();
     const db = makeFakeDb(tables);
@@ -420,6 +443,20 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
       expect(tables.pending_messages.find((row) => row._id === id)?.status).toBe("pending");
     }
     expect(tables.conversations[0]).toMatchObject({ pending_kill_generation: 2, has_pending_messages: true, inbox_killed_at: 111 });
+  });
+
+  // The command names who asked, and the daemon logs it with the teardown:
+  // without it, finding what killed jx7970z (2026-10-06) took a prod dump of
+  // daemon_commands plus PostHog forensics.
+  test("the kill command carries the cause its caller named", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    await applyHideTransition({ db }, doc, patch, { forceKill: true, cause: "web:killSession" });
+    expect(JSON.parse(kills(db)[0].doc.args)).toMatchObject({ conversation_id: CONV, cause: "web:killSession" });
   });
 
   test("a re-asserted EXPLICIT kill enqueues teardown again", async () => {

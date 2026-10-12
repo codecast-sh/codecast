@@ -30,7 +30,9 @@ async function verifyAuthorPill() {
   const asked: string[] = [];
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useTrackedStore: () => state }));
-  mock.module("../../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles, workspace: null }) }));
+  // Spread the real module: lines/lineTree reads its orgRolesSig, and a mock without it breaks every later import.
+  const realOrgRoles = { ...(await import("../../hooks/useOrgRoles")) };
+  mock.module("../../hooks/useOrgRoles", () => ({ ...realOrgRoles, useOrgRoles: () => ({ roles, workspace: null }) }));
   mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: (_fn: unknown, args: any) => {
     if (args === "skip") return { data: undefined, error: undefined, retry: () => {} };
     asked.push(args.proposal);
