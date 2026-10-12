@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 
-// One image on a chat line: a stored blob plus what the tile needs to lay it
+// One image or video on a chat line: a stored blob plus what the tile needs to lay it
 // out before it loads. Team chat, the huddle chat and the Slack mirror all
 // store this shape on chat_messages, so they all validate it here.
 export const chatAttachmentValidator = v.object({

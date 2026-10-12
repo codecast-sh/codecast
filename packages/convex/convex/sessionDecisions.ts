@@ -22,19 +22,22 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { teamVisibleConvTeam } from "./privacy";
 import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, decisionAnswerLabel, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
+import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
+import { internal } from "./_generated/api";
 import { enqueuePendingMessage, reachableRole, tellRole, wakeHostedConversation } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
-import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { projectLeadRole, roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
-import { listSessionOwnerIds } from "./sessionOwners";
+import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { settleExpectationCard } from "./lib/expectationsApply";
+import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
@@ -176,7 +179,7 @@ export async function joinStack(
 // (a standing session; that field may not exist yet on every deployment).
 export { roleOfConversation } from "./lib/actor";
 
-type Hop = { role_id: Id<"org_roles">; recommendation?: number; note?: string; at: number };
+type Hop = { role_id: Id<"org_roles">; recommendation?: number; note?: string; at: number; passed_at?: number };
 
 // The ladder (D2): the roles from the asker up to the first person. A paused
 // or retired role is recorded as a skipped hop so the card can show the gap;
@@ -211,7 +214,9 @@ export async function buildLadder(
 // The people a decision is visible to — whose question stack it sits on.
 // The session's owners, never the runner (conversations.user_id). Assignment
 // is how a question moves; including the runner kept it on the previous
-// person's stack after they handed the session over.
+// person's stack after they handed the session over. Only a person can be
+// asked: an agent account (users.is_bot) runs sessions but reads no queue, so
+// an unowned session it runs has no people here and routeFor finds them.
 //
 // `firstPersonId` is the person the reporting line ends at, when the caller
 // wants them in (routeFor): the first person above a hand's role, so a
@@ -223,7 +228,7 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
   // after the seat was assigned away) must not keep questions on that person.
   const ids: Id<"users">[] = [...owners];
   if (ids.length === 0) {
-    const implicit = conversation.owner_user_id ?? conversation.user_id;
+    const implicit = conversation.owner_user_id ?? (await humanStarterUser(ctx, conversation))?._id;
     if (implicit) ids.push(implicit);
   }
   if (firstPersonId) ids.push(firstPersonId);
@@ -237,10 +242,17 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
 // owners alone, and its parent role reads it first. `hears` is the one role
 // told about the decision, the first on the ladder, when it can be told
 // (reachableRole). While a role hears, the decision enters no person's queue:
-// the role answers, recommends, or raises it in its own thread, and the
-// person's queue holds only what a lead that reports to them asks. With no
-// role to hear, the people's queue is where it lands, so it is never lost.
-export async function routeFor(ctx: Ctx, conversation: any, now: number) {
+// the role answers it under a grant, or hands it up (handUp): it recommends,
+// passes it up with its note, or lets HOP_DEADLINE_MS lapse, and the same
+// card enters the people's queue with the role's word on its ladder line.
+// With no role to hear, the people's queue is where it lands at once, so it
+// is never lost.
+//
+// A session no person answers for (an agent account runs it, nobody owns it)
+// asks on behalf of the work: the question climbs the line of the task's
+// project lead to the person it ends at, and the lead hears it first. With no
+// such line, the workspace's admins are asked. Every decision has a person.
+export async function routeFor(ctx: Ctx, conversation: any, now: number, task?: any) {
   // A hosted conversation's question is its owner's alone (hostedAnswerRefusal):
   // no role hears it and nobody else is asked.
   if (isHostedAgentType(conversation.agent_type)) {
@@ -252,7 +264,25 @@ export async function routeFor(ctx: Ctx, conversation: any, now: number) {
   const ladder = await buildLadder(ctx, first, now);
   const people = await peopleFor(ctx, conversation, parent ? (parent.kind === "user" ? parent.user_id : undefined) : ladder.firstPersonId);
   const hears = first && (await reachableRole(ctx, first._id)) ? first : null;
-  return { role, ladder, people, hears };
+  if (people.length > 0) return { role, ladder, people, hears };
+  const lead = await projectLeadRole(ctx, task);
+  const leadLadder = lead ? await buildLadder(ctx, lead, now) : null;
+  if (lead && leadLadder?.firstPersonId) {
+    return { role, ladder: leadLadder, people: [leadLadder.firstPersonId], hears: (await reachableRole(ctx, lead._id)) ? lead : null };
+  }
+  return { role, ladder, people: await workspaceAdmins(ctx, conversation.team_id), hears };
+}
+
+async function workspaceAdmins(ctx: Ctx, teamId: Id<"teams"> | undefined): Promise<Id<"users">[]> {
+  if (!teamId) return [];
+  const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
+  const admins: Id<"users">[] = [];
+  for (const m of members) {
+    if (m.role !== "admin") continue;
+    const u = await ctx.db.get(m.user_id);
+    if (u && !u.is_bot) admins.push(m.user_id);
+  }
+  return admins;
 }
 
 // Keep decision_inbox in lockstep with asked_user_ids: insert missing pending
@@ -307,15 +337,47 @@ export async function reroutePendingDecisionsForConversation(
   if (openRows.length === 0) return { moved: 0 };
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { moved: 0 };
-  const { people, hears } = await routeFor(ctx, conversation, now);
   for (const row of openRows) {
-    await ctx.db.patch(row._id, { asked_user_ids: people });
-    await syncDecisionInbox(ctx, row._id, people, now, !hears);
+    const task = row.task_id ? await ctx.db.get(row.task_id) : null;
+    const { people, hears, ladder } = await routeFor(ctx, conversation, now, task);
+    // A row asked with no ladder takes the one it now climbs, and its first
+    // role hears; a row that has one keeps it and the recommendations on it.
+    const climbs = !row.hops?.length && ladder.hops.length > 0;
+    await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
+    const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
+    await syncDecisionInbox(ctx, row._id, people, now, !hears || (climbs && woken.length === 0));
     const updated = await ctx.db.get(row._id);
     if (updated) await refreshHolder(ctx, updated, now);
   }
   return { moved: openRows.length };
 }
+
+// Repair for questions asked before routing knew an agent account is nobody's
+// reader: every open decision whose people include one is routed again.
+export const rerouteDecisionsHeldByAgents = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const open: DecisionRow[] = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_status_created", (q: any) => q.eq("status", "pending"))
+      .collect();
+    const conversations = new Set<string>();
+    const held: string[] = [];
+    for (const row of open) {
+      for (const id of row.asked_user_ids ?? [row.user_id]) {
+        const u = await ctx.db.get(id);
+        if (!u?.is_bot) continue;
+        conversations.add(String(row.conversation_id));
+        held.push(row.short_id ?? String(row._id));
+        break;
+      }
+    }
+    if (!args.dry_run) {
+      for (const id of conversations) await reroutePendingDecisionsForConversation(ctx, id as Id<"conversations">, Date.now());
+    }
+    return { held, conversations: conversations.size, dry_run: !!args.dry_run };
+  },
+});
 
 // Repair path for a session that was assigned before questions followed
 // owners: recompute people and inbox rows from the current owner set.
@@ -422,9 +484,9 @@ export async function refreshHolder(
 ): Promise<void> {
   const excluded = new Set((opts.excludeRoleIds ?? []).map(String));
   const roleIds = (row.hops ?? [])
-    // "escalated" is a note only rows from before S28 carry: a role that
-    // passed the question up without a recommendation gave up its hold.
-    .filter((h) => !h.note?.startsWith("skipped") && !h.note?.startsWith("escalated"))
+    // A role that passed the question up gave up its hold ("escalated" is
+    // the same fact on rows from before S28).
+    .filter((h) => !h.note?.startsWith("skipped") && !h.note?.startsWith("escalated") && !h.passed_at)
     .map((h) => h.role_id)
     .filter((id) => !excluded.has(String(id)));
   const delegate = await stackDelegateRoleId(ctx, row.stack_id);
@@ -461,8 +523,53 @@ async function tellHearingRole(
     decision: row.short_id ?? String(row._id),
     state: row.question.split("\n")[0].slice(0, 200),
   }, `decision:${row._id}:${role._id}`);
-  return id ? [role._id] : [];
+  if (!id) return [];
+  await ctx.scheduler.runAfter(HOP_DEADLINE_MS, internal.sessionDecisions.handUpLapsed, { decision_id: row._id });
+  return [role._id];
 }
+
+// The role that heard a decision is done with it: the same card enters its
+// people's queue, carrying whatever the role wrote on its ladder line.
+// Idempotent, so a recommendation and the lapse after it hand up once.
+async function handUp(ctx: Ctx, row: DecisionRow, now: number): Promise<void> {
+  if (row.status !== "pending") return;
+  await syncDecisionInbox(ctx, row._id, row.asked_user_ids ?? [row.user_id], now);
+}
+
+// The hearing role's window closed. A role holding a live grant still owns
+// the answer, so the card stays with it.
+export async function handUpLapsedCore(ctx: Ctx, decisionId: Id<"session_decisions">, now: number): Promise<void> {
+  const row: DecisionRow | null = await ctx.db.get(decisionId);
+  if (!row || row.holder?.kind === "role") return;
+  await handUp(ctx, row, now);
+}
+
+export const handUpLapsed = internalMutation({
+  args: { decision_id: v.id("session_decisions") },
+  handler: (ctx, args) => handUpLapsedCore(ctx, args.decision_id, Date.now()),
+});
+
+// Repair for decisions asked before a lapse was scheduled: an open one a role
+// heard, past its window, that no person's queue holds yet.
+export const handUpStranded = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const open: DecisionRow[] = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_status_created", (q: any) => q.eq("status", "pending").lt("created_at", now - HOP_DEADLINE_MS))
+      .collect();
+    const stranded: string[] = [];
+    for (const row of open) {
+      if (!row.hops?.length || row.holder?.kind === "role") continue;
+      const queued = await ctx.db.query("decision_inbox").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
+      if (queued) continue;
+      stranded.push(row.short_id ?? String(row._id));
+      if (!args.dry_run) await handUp(ctx, row, now);
+    }
+    return { stranded, dry_run: !!args.dry_run };
+  },
+});
 
 // ── Answers ───────────────────────────────────────────────────────────────────
 
@@ -474,6 +581,12 @@ export type Verdict = {
   answer_text?: string;
   answer_json?: any;
 };
+
+/** The verdict a resolved row stands at, or null while it is pending. */
+export function verdictOfRow(row: DecisionRow): Verdict | null {
+  if (row.status === "answered") return { status: "answered", answer_index: row.answer_index, answer_text: row.answer_text, answer_json: row.answer_json };
+  return row.status === "pending" ? null : { status: row.status };
+}
 
 // The one line the asking agent acts on, per kind.
 export function answerLabel(row: { kind?: string; options: { label: string }[] }, verdict: Verdict): string | undefined {
@@ -518,7 +631,7 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
   return { status: "answered", answer_json: values, answer_text: raw.answer_text };
 }
 
-export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants"> };
+export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations"> };
 
 export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
 
@@ -562,7 +675,7 @@ export async function finalizeAnswer(
     answer_json: verdict.answer_json,
     resolved_at: now,
     resolved_by: by.user_id,
-    answered_by: { kind: by.kind, id: by.id },
+    answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) },
     grant_id: by.grant_id,
   });
   const consumed = await settleResolution(ctx, row, verdict, by, now);
@@ -645,8 +758,11 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await learnFromCardGate(ctx, row, verdict, by.user_id);
   // Its "card waiting" notice stops claiming a card waits (LE16).
   await settleCardWaiting(ctx, row);
+  await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // Tasks waiting on this decision settle (task-graph.md TG2).
+  await scheduleDecisionSettle(ctx as any, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).
@@ -655,6 +771,31 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
     if (conversation) await wakeHostedConversation(ctx, conversation, "approval");
   }
   return await settleGateRun(ctx, row, verdict, now);
+}
+
+// Any reader of a decision may answer it, not only the people it was asked
+// of (userMayRead); hosted conversations keep their owner-only rule
+// (hostedAnswerRefusal). When someone outside the people acts, the people
+// hear who answered for them, so an answer they did not give never lands
+// unannounced.
+async function noticeAnsweredForPeople(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy) {
+  if (by.kind !== "user" || !by.user_id) return;
+  const people = (row.asked_user_ids ?? [row.user_id]).map(String);
+  if (people.includes(by.id)) return;
+  const question = row.question.length > 120 ? `${row.question.slice(0, 117)}...` : row.question;
+  const label = answerLabel(row, verdict);
+  await emitNotification(ctx as any, {
+    event_type: "decision_answered_for_you",
+    actor_user_id: by.user_id,
+    entity_type: "conversation",
+    entity_id: String(row.conversation_id),
+    conversation_id: row.conversation_id,
+    message: verdict.status === "dismissed" || !label
+      ? `dismissed "${question}" for you`
+      : `answered "${question}" for you: ${label}`,
+    ...(row.short_id ? { link: `/decisions/${row.short_id}` } : {}),
+    recipient_ids: people.map((id) => ctx.db.normalizeId("users", id)).filter((id): id is Id<"users"> => !!id),
+  });
 }
 
 // A web client resolved the row through the dispatch collection patch (the
@@ -673,10 +814,12 @@ export async function settleClientResolution(
   if (patch.status !== "answered" && patch.status !== "dismissed") return;
   // A person changing an advisory answer (advisoryAnswerOpen): the client sent
   // the new answer into the session, and the side effects already ran when
-  // the row first settled, so the row only learns who answered last.
+  // the row first settled, so the row only learns who answered last, and the
+  // waits it met carry the new answer (taskWaits.restateAnswer).
   if (row.status !== "pending") {
     if (patch.status === "answered" && advisoryAnswerOpen(row)) {
       await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
+      await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
     }
     return;
   }
@@ -906,7 +1049,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
-  const routed = await routeFor(ctx, conversation, now);
+  const routed = await routeFor(ctx, conversation, now, task);
   // A hosted conversation asks its owner only, so an address (--to) is ignored.
   const addressed = args.to?.length && !isHostedAgentType(conversation.agent_type)
     ? await resolveAskedPeople(ctx, conversation, args.to)
@@ -1198,14 +1341,14 @@ export const withdraw = mutation({
     if (row.status !== "pending") {
       return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
     }
-    return withdrawCore(ctx, row, Date.now());
+    return withdrawCore(ctx, row, Date.now(), row.conversation_id);
   },
 });
 
 // The one withdraw for every path (`cast decide cancel`, workflow_runs.cancel
 // taking back its open gate). A gate decision (the-line.md L4) fails its run
 // with "gate withdrawn" unless the run is already past it.
-export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number) {
+export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">) {
   await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now });
   if (row.workflow_run_id) {
     const run = await ctx.db.get(row.workflow_run_id);
@@ -1217,7 +1360,8 @@ export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number) {
   // close, the stack closes when this was its last member, and the ladder
   // roles receive the withdrawal as a passive fact. The run is failed above,
   // so the gate settle finds it past the pause and leaves "gate withdrawn".
-  await settleResolution(ctx, row, { status: "withdrawn" }, { kind: "user", id: String(row.user_id), user_id: row.user_id }, now);
+  // `via`: the session withdrawing, so a task it parked on this is not woken by its own act.
+  await settleResolution(ctx, row, { status: "withdrawn" }, { kind: "user", id: String(row.user_id), user_id: row.user_id, ...(via ? { via } : {}) }, now);
   return { id: row._id, short_id: row.short_id, status: "withdrawn" };
 }
 
@@ -1364,25 +1508,33 @@ async function callerHop(
 export async function recommendCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { decision_id: string; session_id?: string; recommendation: number; note?: string },
+  args: { decision_id: string; session_id?: string; recommendation?: number; note?: string },
 ): Promise<any> {
   const row = await findDecision(ctx, args.decision_id);
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
-  if (!Number.isInteger(args.recommendation) || args.recommendation < 0 || args.recommendation >= row.options.length) {
+  // No recommendation is a pass: the role hands the card up with only its note.
+  const passes = args.recommendation === undefined;
+  if (!passes && (!Number.isInteger(args.recommendation) || args.recommendation! < 0 || args.recommendation! >= row.options.length)) {
     return { error: "recommendation out of range" };
   }
   const found = await callerHop(ctx, auth, row, args.session_id);
   if ("error" in found) return found;
+  if (passes && row.holder?.kind === "role" && row.holder.id === String(found.role._id)) {
+    return { error: `${found.role.name} holds this decision under a grant: answer it (cast decide answer), or recommend an option` };
+  }
   const now = Date.now();
   const hops = [...(row.hops ?? [])];
-  hops[found.hopIndex] = { role_id: found.role._id, recommendation: args.recommendation, note: args.note, at: now };
+  hops[found.hopIndex] = passes
+    ? { role_id: found.role._id, note: args.note, at: now, passed_at: now }
+    : { role_id: found.role._id, recommendation: args.recommendation, note: args.note, at: now };
   await ctx.db.patch(row._id, { hops, updated_at: now });
+  await handUp(ctx, row, now);
   return {
     id: row._id,
     short_id: row.short_id,
     role: { id: found.role._id, name: found.role.name },
-    recommendation: args.recommendation,
+    ...(passes ? { passed: true } : { recommendation: args.recommendation }),
     late: now - row.created_at > HOP_DEADLINE_MS,
   };
 }
@@ -1392,7 +1544,7 @@ export const recommend = mutation({
     api_token: v.string(),
     decision_id: v.string(),
     session_id: v.optional(v.string()),
-    recommendation: v.number(),
+    recommendation: v.optional(v.number()),
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1410,8 +1562,14 @@ export const recommend = mutation({
 // would otherwise answer its own question. WITHOUT a session (a signed in
 // web user, or `cast decide answer` from a plain human shell), the caller is
 // the person, who must be in asked_user_ids.
+//
+// The one exception is the person's own word: `--for-human` (for_human) from
+// a session answers AS the session's human, because they told their agent to
+// in that conversation. It is recorded as their answer with the session as
+// its route (answered_by.via). An agent account speaks for nobody, and a
+// session never answers a question it asked.
 export const SESSION_CANNOT_ANSWER_AS_PERSON =
-  "A session cannot answer as a person. Only the holder role under a grant answers from a session; a person answers from the web or from a plain shell (no session).";
+  "A session cannot answer as a person on its own judgment. If your human explicitly told you in this conversation to answer this decision (or agreed to this choice), pass --for-human. Otherwise they answer it from the web or a plain shell; only the holder role under a grant answers on its own.";
 
 async function answererFor(
   ctx: Ctx,
@@ -1419,6 +1577,7 @@ async function answererFor(
   row: DecisionRow,
   sessionId: string | undefined,
   now: number,
+  forHuman = false,
 ): Promise<AnsweredBy | { error: string }> {
   if (sessionId) {
     const conversation = await ctx.db
@@ -1427,6 +1586,13 @@ async function answererFor(
       .first();
     if (!conversation) return { error: "Session not found" };
     if (conversation.user_id.toString() !== auth.userId.toString()) return { error: "Unauthorized: not your session" };
+    if (forHuman) {
+      const person = await ctx.db.get(auth.userId);
+      if (!person || person.is_bot) return { error: "This session runs on an agent account, which answers for no person. A person answers it from the web." };
+      if (String(row.conversation_id) === String(conversation._id)) return { error: "A session cannot answer its own question; your human answers it." };
+      if (!(await userMayRead(ctx, auth.userId, row))) return { error: "Unauthorized: not your human's decision" };
+      return { kind: "user", id: String(auth.userId), user_id: auth.userId, via: conversation._id };
+    }
     const role = await roleOfConversation(ctx, conversation);
     if (!role) return { error: SESSION_CANNOT_ANSWER_AS_PERSON };
     if (row.holder?.kind !== "role" || String(role._id) !== row.holder.id) {
@@ -1442,28 +1608,27 @@ async function answererFor(
     if (!grant) return { error: `${role.name} no longer holds a grant for this decision; a person answers it` };
     return { kind: "role", id: String(role._id), grant_id: grant._id };
   }
-  const people = (row.asked_user_ids ?? [row.user_id]).map(String);
-  if (people.includes(String(auth.userId))) return { kind: "user", id: String(auth.userId), user_id: auth.userId };
-  return { error: "Not a holder of this decision: only the people it was asked of may answer" };
+  if (await userMayRead(ctx, auth.userId, row)) return { kind: "user", id: String(auth.userId), user_id: auth.userId };
+  return { error: "Unauthorized: not your decision" };
 }
 
 export async function answerCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { decision_id: string; session_id?: string; answer_index?: number; answer_json?: any; answer_text?: string },
+  args: { decision_id: string; session_id?: string; for_human?: boolean; answer_index?: number; answer_json?: any; answer_text?: string },
 ): Promise<any> {
   const row = await findDecision(ctx, args.decision_id);
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
   const now = Date.now();
-  const by = await answererFor(ctx, auth, row, args.session_id, now);
+  const by = await answererFor(ctx, auth, row, args.session_id, now, !!args.for_human);
   if ("error" in by) return by;
   const refusal = await hostedAnswerRefusal(ctx, row, by);
   if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });
-  return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id } };
+  return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) } };
 }
 
 export const answer = mutation({
@@ -1471,6 +1636,7 @@ export const answer = mutation({
     api_token: v.string(),
     decision_id: v.string(),
     session_id: v.optional(v.string()),
+    for_human: v.optional(v.boolean()),
     answer_index: v.optional(v.number()),
     answer_json: v.optional(v.any()),
     answer_text: v.optional(v.string()),
@@ -1514,8 +1680,7 @@ export const resolve = mutation({
 
     const row = await ctx.db.get(args.decision_id);
     if (!row) throw new Error("Decision not found");
-    const people = (row.asked_user_ids ?? [row.user_id]).map(String);
-    if (!people.includes(String(userId))) throw new Error("Unauthorized: not your decision");
+    if (!(await userMayRead(ctx, userId, row))) throw new Error("Unauthorized: not your decision");
     // Answering an already-resolved row is a no-op, not an error — two devices
     // can race and the first resolution wins.
     if (row.status !== "pending") return { already_resolved: true };
@@ -1552,6 +1717,7 @@ export async function reopenCore(ctx: Ctx, userId: Id<"users">, decisionId: Id<"
       updated_at: now,
     });
     await setInboxStatus(ctx, row._id, "pending");
+    await reopenTaskWaits(ctx as any, row);
     const stack = row.stack_id ? await ctx.db.get(row.stack_id) : null;
     if (stack && stack.status === "done") await ctx.db.patch(stack._id, { status: "open", updated_at: now });
     return { reopened: true };
