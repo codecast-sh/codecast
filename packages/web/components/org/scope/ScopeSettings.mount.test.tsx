@@ -74,11 +74,15 @@ async function verify() {
   // decide reads as on (S23.1).
   await render({ ...growth, trust: "decide" } as OrgRole);
   assert.equal(q("[data-autonomy-switch]")!.getAttribute("data-autonomy-switch"), "on");
-  // Off: the hint says the person starts the work; a click turns it on.
+  // Off: the hint says the person starts the work; a click opens the review of what the role may then do, and the review's own button turns it on.
   await render({ ...growth, trust: "understand" } as OrgRole);
   assert.equal(q("[data-autonomy-switch]")!.getAttribute("data-autonomy-switch"), "off");
   assert.match(text(), /you start the work, or turn this on/);
+  const before = calls.length;
   await act(async () => { q<HTMLButtonElement>("[data-autonomy-switch]")!.click(); });
+  assert.equal(calls.length, before, "the switch alone turns nothing on");
+  assert.ok(document.querySelector('[data-switch-figure="paid sessions a day at most"]'), "the review leads with the role's daily sessions");
+  await act(async () => { document.querySelector<HTMLButtonElement>("[data-switch-confirm]")!.click(); });
   assert.equal(calls.pop(), 'update:{"trust":"direct"}');
 
   // ── the limits: a closed disclosure holding the three defaults and today's use ──
