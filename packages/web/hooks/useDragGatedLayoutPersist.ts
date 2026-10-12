@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type RefObject } from "react";
 import { useEventListener } from "./useEventListener";
 
 const CAPTURE = { capture: true } as const;
@@ -16,8 +16,15 @@ const CAPTURE = { capture: true } as const;
 // with role="separator". A pointer held down on a separator (or arrow keys on
 // a focused one) marks the change as user-driven; the latest layout is
 // buffered and persisted once when the gesture ends.
+//
+// The listeners sit on the window, so `group` names the Group element (its
+// elementRef) whose gestures count: only a separator whose nearest Group is
+// this one opens the gate. Without that, dragging any other seam on the page
+// (including a nested Group's, or the parent's) would let this Group's clamped
+// echo of the width change be written back as the person's choice.
 export function useDragGatedLayoutPersist(
   persist: (layout: { [key: string]: number }) => void,
+  group: RefObject<HTMLElement | null>,
 ): (layout: { [key: string]: number }) => void {
   const draggingRef = useRef(false);
   const pendingRef = useRef<{ [key: string]: number } | null>(null);
@@ -25,8 +32,11 @@ export function useDragGatedLayoutPersist(
   const persistRef = useRef(persist);
   persistRef.current = persist;
 
-  const isSeparator = (target: EventTarget | null) =>
-    target instanceof Element && !!target.closest('[role="separator"]');
+  const isSeparator = (target: EventTarget | null) => {
+    if (!(target instanceof Element) || !group.current) return false;
+    const sep = target.closest('[role="separator"]');
+    return !!sep && sep.closest("[data-group]") === group.current;
+  };
 
   const endGesture = useCallback(() => {
     if (!draggingRef.current) return;
