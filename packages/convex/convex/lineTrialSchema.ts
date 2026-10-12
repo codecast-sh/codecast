@@ -1,0 +1,43 @@
+// A trial project's cards (lineTrial.ts). A line run on a trial project's
+// problem goes through every station for real and stops at its gates without
+// asking anyone: each gate it reaches is one row here, holding exactly what
+// the decision would have carried (question, document, options and the
+// change card), answered only on the trial review page. The answer routes the
+// run like a gate's answer does; at the card it records what the person would
+// have done, and the trial graph ends there, so nothing ships.
+
+import { defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export const lineTrialTables = {
+  trial_cards: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    project_id: v.id("projects"),
+    task_id: v.id("tasks"),
+    run_id: v.id("workflow_runs"),
+    short_id: v.string(), // "tc-N"
+    node_id: v.string(),
+    /** card: the change card gate (the run's last stop); gate: any earlier gate, such as the proposal. */
+    kind: v.union(v.literal("card"), v.literal("gate")),
+    question: v.string(),
+    context_md: v.optional(v.string()),
+    doc_md: v.optional(v.string()),
+    category: v.optional(v.string()),
+    options: v.array(v.object({ key: v.string(), label: v.string(), description: v.optional(v.string()) })),
+    /** The change card, as validated for a decision (shared/contracts/changeCard). */
+    card: v.optional(v.any()),
+    /** The proposal gate's card (shared/contracts/proposalCard), when its words node wrote one. */
+    proposal: v.optional(v.any()),
+    /** waiting: the run is paused on it. answered: a person answered here. closed: the run moved on or ended without an answer. */
+    status: v.union(v.literal("waiting"), v.literal("answered"), v.literal("closed")),
+    /** stand_in: an agent session answered an earlier gate so the run reaches its card; the card itself is only a person's. */
+    answer: v.optional(v.object({ key: v.string(), label: v.string(), note: v.optional(v.string()), by: v.id("users"), at: v.number(), stand_in: v.optional(v.boolean()) })),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace_created", ["workspace", "created_at"])
+    .index("by_project_created", ["project_id", "created_at"])
+    .index("by_run", ["run_id"])
+    .index("by_short_id", ["short_id"]),
+};

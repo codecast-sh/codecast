@@ -163,10 +163,10 @@ export const generateShortTitle = internalAction({
       });
       if (!reply) return;
       // An answer that fails the name rule is stored as "" (asked, no usable
-      // name), which readers treat as absent and the cron's index skips. The
-      // request runs at temperature 0, so asking again gets the same answer:
-      // leaving the field unset re-asked the same 80 rows every two minutes
-      // and held the scheduler's slots doing it.
+      // name), which readers treat as absent and the cron's index skips. Asking
+      // again mostly gets the same answer: leaving the field unset re-asked
+      // the same 80 rows every two minutes and held the scheduler's slots
+      // doing it.
       const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title) ?? "";
       await ctx.runMutation(internal.titleGeneration.setShortTitle, { id: args.id, short_title: shortTitle });
     } catch (error) {
@@ -207,7 +207,6 @@ export function shortTitleRequest(input: { kind: "session" | "task" | "plan"; ti
   return {
     model: CHEAP_MODEL,
     max_tokens: 60,
-    temperature: 0,
     prompt: buildShortTitlePrompt(input.kind, input.title, input.context),
   };
 }
@@ -591,9 +590,6 @@ export function titleRequest(input: TitleInput): SurfaceRequest {
   return {
     model: CHEAP_MODEL,
     max_tokens: 400,
-    // Deterministic: the same conversation state must yield the same
-    // title, otherwise every regeneration re-rolls borderline keeps.
-    temperature: 0,
     prompt: (input.hosted ? buildHostedTitlePrompt : buildTitlePrompt)({
       messageText: buildTitleMessageContext(input.spine, input.recent),
       currentTitle: input.currentTitle,
