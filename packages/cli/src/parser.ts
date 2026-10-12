@@ -19,6 +19,9 @@ export interface ClaudeSessionEntry {
   uuid?: string;
   parentUuid?: string;
   sessionId?: string;
+  // Set on every line of a subagent's transcript (Task tool, workflow agent,
+  // warmup); sessionId on those lines is the PARENT session's id.
+  isSidechain?: boolean;
   // Agent-team stamps: Claude Code writes these on every line of a TEAMMATE
   // session's transcript (the lead's transcript is never stamped). teamName is
   // the team dir under ~/.claude/teams/; agentName is this member's name.
@@ -487,6 +490,19 @@ export function extractParentUuid(content: string): string | undefined {
     const entry = parseSessionLine(line);
     if (entry?.type === "user") {
       return entry.parentUuid || undefined;
+    }
+  }
+  return undefined;
+}
+
+// A sidechain transcript is a subagent wherever its file sits (older Claude
+// Code wrote them beside top-level sessions, not under subagents/). Its first
+// message names the session it runs inside.
+export function extractSidechain(content: string): { parentSessionId?: string } | undefined {
+  for (const line of content.split("\n")) {
+    const entry = parseSessionLine(line, { quiet: true });
+    if (entry?.type === "user" || entry?.type === "assistant") {
+      return entry.isSidechain === true ? { parentSessionId: entry.sessionId || undefined } : undefined;
     }
   }
   return undefined;
