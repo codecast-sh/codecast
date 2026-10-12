@@ -196,7 +196,7 @@ export function huddleVoiceAskHeader(name: string, speaker: string | null): stri
  *  doing. `recent` is the session's last few replies, newest last. */
 export function huddleVoiceInstructions(opts: { name: string; title: string; recent: string[] }): string {
   return [
-    `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room, and you see the active speaker's camera and any shared screen when you are asked something.`,
+    `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room. When you answer, you see every shared screen and every camera that is on, taken at that moment and labeled with whose they are; when nobody is sharing or on camera, you are told so, and that is the whole picture.`,
     `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
     "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat.",
     "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. You speak when someone talks to you; several people may be in the room.",
