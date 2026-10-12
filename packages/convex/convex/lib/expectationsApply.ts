@@ -5,7 +5,7 @@
 // module: sessionDecisions calls the card half from the one settle path every
 // answer takes, so it imports nothing that imports sessionDecisions.
 import type { Id } from "../_generated/dataModel";
-import { applyOps, expectationPrefix } from "@codecast/shared/contracts/expectations";
+import { applyOps, expectationPrefix, type ExpectationsHow } from "@codecast/shared/contracts/expectations";
 
 type Ctx = { db: any };
 
@@ -32,7 +32,7 @@ async function freePrefix(ctx: Ctx, workspace: string, title: string): Promise<s
  * by `userId`. Refuses, and leaves the proposal open with the reason, when the
  * document moved under it in a way that touches its changes.
  */
-export async function performApply(ctx: Ctx, proposal: any, userId: Id<"users">, how: "person" | "auto", now: number): Promise<{ ok: true; version: number } | { ok: false; error: string }> {
+export async function performApply(ctx: Ctx, proposal: any, userId: Id<"users">, how: ExpectationsHow, now: number): Promise<{ ok: true; version: number } | { ok: false; error: string }> {
   if (proposal.status !== "open") return { ok: false, error: `${proposal.short_id} is ${proposal.status}` };
   const project = await ctx.db.get(proposal.project_id);
   if (!project) return { ok: false, error: "The project is gone" };
