@@ -49,6 +49,7 @@ import {
   CONTEXT_MIN_GAP_MS,
   DELIVER_RETRY_MAX,
   DELIVER_RETRY_MS,
+  removeAgentFromRoom,
 } from "./transcripts";
 import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
@@ -1169,6 +1170,58 @@ describe("the room's thread sees transcription go on", () => {
     expect(c.db._tables.transcripts[0].status).toBe("ended");
     expect(c.db._tables.call_agent_feeds).toHaveLength(0);
     expect(c.db._tables.call_chat_messages).toHaveLength(1);
+  });
+});
+
+// Anyone in the room may put an agent out of it, not only its scribe: the
+// thread says it left, its feed ends, and an outsider is refused.
+describe("putting an agent out of the room", () => {
+  const now = 1_800_000_000_000;
+  const tables = () => ({
+    call_members: [
+      { _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: now, expires_at: now + 60_000 },
+      { _id: "cm2", room_key: "session:conv1", user_id: "ub", team_id: "team1", last_seen: now, expires_at: now + 60_000 },
+    ],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    users: [{ _id: "ua", name: "Ada", email: "ada@x.org" }, { _id: "ub", name: "Bo", email: "bo@x.org" }, { _id: "uz", name: "Zed", email: "z@y.org" }],
+    team_members: [{ team_id: "team1", user_id: "ua" }, { team_id: "team1", user_id: "ub" }],
+    team_memberships: [{ team_id: "team1", user_id: "ua" }, { team_id: "team1", user_id: "ub" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1" }],
+    messages: [],
+    call_agent_feeds: [],
+    call_session_links: [],
+    transcripts: [],
+    transcript_segments: [],
+    call_chat_messages: [],
+  });
+  const ctx = (t: Record<string, any[]>) => ({
+    db: makeFakeDb(t),
+    auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+    scheduler: { async runAfter() {} },
+  });
+  const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
+  let clock: any;
+  beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(now); });
+  afterEach(() => { clock.mockRestore(); });
+
+  test("a teammate who is not the scribe removes it, and the thread says it left", async () => {
+    const c = ctx(tables());
+    await call(start, c, { room_key: "session:conv1", auto: true });
+    expect(c.db._tables.call_agent_feeds).toHaveLength(1);
+    await call(removeAgentFromRoom, c, { user_id: "ub", room_key: "session:conv1", conversation_id: "conv1" });
+    expect(c.db._tables.call_agent_feeds).toHaveLength(0);
+    expect(c.db._tables.transcripts[0].routes).toEqual([]);
+    expect(c.db._tables.call_chat_messages.map((r: any) => r.event)).toEqual(["agent_joined", "agent_left"]);
+  });
+
+  test("someone outside the room is refused and the agent stays", async () => {
+    const c = ctx(tables());
+    await call(start, c, { room_key: "session:conv1", auto: true });
+    await expect(call(removeAgentFromRoom, c, { user_id: "uz", room_key: "session:conv1", conversation_id: "conv1" })).rejects.toThrow("Not in this room");
+    expect(c.db._tables.call_agent_feeds).toHaveLength(1);
   });
 });
 
