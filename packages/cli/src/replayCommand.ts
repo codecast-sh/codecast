@@ -61,6 +61,7 @@ export interface ReplayRow {
   has_timeline?: boolean;
   imported_at: number | null;
   converter_version?: number | null;
+  vendor_refresh_after?: number | null;
   /** Chunks of the page capture the player plays; 0 when the replay reads as text only. */
   dom_chunks?: number;
 }
@@ -181,45 +182,76 @@ export function replayFramePath(shortId: string, tMs: number): string {
   return agentTempPath("replays", `${shortId}-${Math.floor(tMs / 1000)}s-${process.pid}-${Date.now().toString(36)}.png`);
 }
 
+/** The frames a snap draws, and where it stopped when the stretch held more than REPLAY_FRAME_LIMITS.max_frames. */
+export interface SnapPlan {
+  times: number[];
+  /** Set when frames were dropped: the stretch went on past `last_ms`, and `wanted` frames would have covered it. */
+  truncated: { last_ms: number; wanted: number } | null;
+}
+
 /**
  * The moments a snap draws: the one named, a stretch every `--every`, or with
- * `--every` and no stretch, the whole recording. Held to the recording.
+ * `--every` and no stretch, the whole recording. Held to the recording, and
+ * to REPLAY_FRAME_LIMITS.max_frames, saying so when a stretch is cut short.
+ * A lone moment with `--every` is refused: the person meant a stretch.
  */
-export function snapTimes(ref: { at_ms?: number; range?: { from_ms: number; to_ms: number } }, everyMs: number | null, durationMs: number): number[] {
+export function snapTimes(ref: { replay?: string; at_ms?: number; range?: { from_ms: number; to_ms: number } }, everyMs: number | null, durationMs: number): SnapPlan {
   const hold = (t: number) => Math.min(Math.max(0, t), Math.max(0, durationMs));
-  if (ref.range) return [...new Set(replayFrameTimes({ from_ms: hold(ref.range.from_ms), to_ms: hold(ref.range.to_ms) }, everyMs ?? 10_000).map(hold))];
-  if (everyMs !== null) return replayFrameTimes({ from_ms: 0, to_ms: Math.max(0, durationMs) }, everyMs);
-  return [hold(ref.at_ms ?? 0)];
+  if (ref.at_ms !== undefined && everyMs !== null) {
+    const name = ref.replay ?? "rp-N";
+    throw new Error(`--every samples a stretch: name one, ${name}@1:00-2:30 --every 10s, or leave the moment off for the whole replay`);
+  }
+  if (ref.at_ms !== undefined) return { times: [hold(ref.at_ms)], truncated: null };
+  const range = ref.range ? { from_ms: hold(ref.range.from_ms), to_ms: hold(ref.range.to_ms) } : { from_ms: 0, to_ms: Math.max(0, durationMs) };
+  const all = [...new Set(replayFrameTimes(range, everyMs ?? 10_000, Number.POSITIVE_INFINITY).map(hold))];
+  const times = all.slice(0, REPLAY_FRAME_LIMITS.max_frames);
+  return { times, truncated: all.length > times.length ? { last_ms: times[times.length - 1], wanted: all.length } : null };
 }
 
 /**
  * Ask the replay player worker for frames, a batch per request. A busy
- * browser pool (429) is waited out once; any other refusal fails the batch
- * with the worker's words.
+ * browser pool (429) is waited out once. A capability that lapses partway
+ * (404, a long snap outlives its ten minutes) is minted again through
+ * `remint` once per batch. A batch that still fails after earlier ones drew
+ * keeps what was drawn: its times and the rest come back as frames with the
+ * error. Only a snap that drew nothing fails with the worker's words.
  */
 export async function fetchReplayFrames(
   link: Pick<ReplayPlayerLink, "cap" | "frame_url">,
   times: number[],
-  opts: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> } = {},
+  opts: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void>; remint?: () => Promise<Pick<ReplayPlayerLink, "cap" | "frame_url">> } = {},
 ): Promise<ReplayFrame[]> {
   const doFetch = opts.fetchImpl ?? fetch;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const out: ReplayFrame[] = [];
+  let current = link;
   for (let i = 0; i < times.length; i += REPLAY_FRAME_LIMITS.max_frames_per_request) {
     const batch = times.slice(i, i + REPLAY_FRAME_LIMITS.max_frames_per_request);
-    for (let attempt = 0; ; attempt++) {
-      const res = await doFetch(link.frame_url, {
+    let waited = false;
+    let reminted = false;
+    for (;;) {
+      const res = await doFetch(current.frame_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cap: link.cap, times_ms: batch }),
+        body: JSON.stringify({ cap: current.cap, times_ms: batch }),
         signal: AbortSignal.timeout(180_000),
       });
-      if (res.status === 429 && attempt === 0) {
+      if (res.status === 429 && !waited) {
+        waited = true;
         await sleep(Math.min(120, Number(res.headers.get("Retry-After")) || 30) * 1000);
         continue;
       }
+      if (res.status === 404 && !reminted && opts.remint) {
+        reminted = true;
+        current = await opts.remint();
+        continue;
+      }
       const body = (await res.json().catch(() => ({}))) as Partial<ReplayFrameResponse> & { error?: string };
-      if (!res.ok) throw new Error(body.error ?? `the frame renderer answered ${res.status}`);
+      if (!res.ok) {
+        const error = body.error ?? `the frame renderer answered ${res.status}`;
+        if (!out.length) throw new Error(error);
+        return [...out, ...times.slice(i).map((t) => ({ t_ms: t, url: null, outline: "", width: 0, height: 0, error }))];
+      }
       out.push(...(body.frames ?? []));
       break;
     }
@@ -373,14 +405,21 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
       const events = detail.chunk_urls.length ? await readReplayEvents(detail.chunk_urls) : [];
       const start = replayClockStart(events);
       const duration = Math.max(replayClockDuration(events), detail.duration_ms ?? 0);
-      const times = snapTimes(ref!, every!, duration).slice(0, REPLAY_FRAME_LIMITS.max_frames);
+      let plan: SnapPlan;
+      try {
+        plan = snapTimes(ref!, every!, duration);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+      const { times, truncated } = plan!;
       if (o.out && times.length > 1) fail("--out writes one frame; a stretch writes its frames to the scratch directory");
 
-      const link: ReplayPlayerLink = await apiPost(deps, "/cli/replays/player-link", { replay: detail.short_id, mode: "frame" }, { read: true });
+      const mintLink = async (): Promise<ReplayPlayerLink> => apiPost(deps, "/cli/replays/player-link", { replay: detail.short_id, mode: "frame" }, { read: true });
+      const link = await mintLink();
       let frames: ReplayFrame[] = [];
       if (link.has_dom && link.cap) {
         try {
-          frames = await fetchReplayFrames(link, times);
+          frames = await fetchReplayFrames(link, times, { remint: mintLink });
         } catch (err) {
           fail(`${detail.short_id}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -402,6 +441,9 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
       } catch {
         // Best effort: an unremembered frame syncs as a picture, the snap still stands.
       }
+      const cutShort = truncated
+        ? `Stopped at ${replayRefId(detail.short_id, truncated.last_ms)}: a snap draws at most ${REPLAY_FRAME_LIMITS.max_frames} frames and this stretch wanted ${truncated.wanted}. Name a later stretch from there, or a longer --every.`
+        : null;
       const noCapture = !link.has_dom
         ? `${detail.short_id} keeps no page capture (it was recorded as events only, or imported before captures were kept), so there is no frame: here is what the stream says.`
         : null;
@@ -410,6 +452,7 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
         {
           replay: detail.short_id,
           has_dom: link.has_dom,
+          truncated: truncated ? { last_ref: replayRefId(detail.short_id, truncated.last_ms), last_t_ms: truncated.last_ms, wanted: truncated.wanted, max_frames: REPLAY_FRAME_LIMITS.max_frames } : null,
           frames: shots.map((s) => ({ ref: s.ref, t_ms: s.t_ms, path: s.file, url: s.frame?.url ?? s.moment.url, visible_text: s.frame?.outline ?? null, error: s.frame?.error ?? null, moment: s.moment })),
         },
         () => {
@@ -423,6 +466,7 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
             const text = formatReplayMoment(s.moment, start, { visible: s.frame?.outline ?? null, frame_url: s.frame?.url ?? null });
             out.push(events.length || s.frame?.outline ? fenceProductText(text, `replay ${s.ref}`) : fmt.muted("No events in this replay yet."));
           }
+          if (cutShort) out.push("", fmt.warning(cutShort));
           return out.join("\n").trim();
         },
       );
