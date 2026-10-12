@@ -46,6 +46,8 @@ export type ArtifactRow = {
   manage_url: string | null;
   edit_url: string | null;
   mine: boolean;
+  workspace?: string;
+  author_id?: string;
   author: { name: string | null; image: string | null } | null;
   can_team_edit: boolean;
   has_password?: boolean;
@@ -88,12 +90,48 @@ function GateBadges({ a }: { a: ArtifactRow }) {
   );
 }
 
+function Author({ a }: { a: ArtifactRow }) {
+  if (!a.author) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted min-w-0">
+      {a.author.image ? <AvatarImg src={a.author.image} alt="" className="w-3.5 h-3.5 rounded-full" /> : null}
+      <span className="truncate">{a.author.name ?? "teammate"}</span>
+    </span>
+  );
+}
+
+function Stats({ a }: { a: ArtifactRow }) {
+  return (
+    <>
+      <span className="inline-flex items-center gap-1" title={`${a.views} views`}>
+        <Eye className="w-3 h-3" /> {a.views}
+      </span>
+      {a.comments_open > 0 && (
+        <span
+          className="inline-flex items-center gap-1 text-sol-orange"
+          title={`${a.comments_open} open comment${a.comments_open === 1 ? "" : "s"}`}
+        >
+          <MessageSquare className="w-3 h-3" /> {a.comments_open}
+        </span>
+      )}
+      <GateBadges a={a} />
+    </>
+  );
+}
+
+/** `card` is the gallery tile; `row` is one line of the timeline, with the
+ *  same menu, stats and provenance. */
 export function ArtifactCard({
   artifact: a,
   onTeamEdit,
+  layout = "card",
+  time,
 }: {
   artifact: ArtifactRow;
   onTeamEdit?: (a: ArtifactRow) => void;
+  layout?: "card" | "row";
+  /** The moment a row is placed at on the timeline. Default: last update. */
+  time?: number;
 }) {
   const deleteArtifact = useMutation(api.artifacts.deleteForWeb);
   const kind = KIND_GLYPH[a.kind] ?? KIND_GLYPH.html;
@@ -162,6 +200,95 @@ export function ArtifactCard({
     </>
   );
 
+  const thumb = (
+    <PageThumb
+      slug={a.slug}
+      version={a.version}
+      hasThumb={a.has_thumb}
+      gated={gated}
+      title={a.title}
+      fallback={
+        <div className={`w-full h-full flex items-center justify-center ${kind.cls}`}>
+          <span className={`font-mono opacity-70 select-none ${layout === "row" ? "text-sm" : "text-3xl"}`}>{kind.glyph}</span>
+        </div>
+      }
+    />
+  );
+
+  const kebab = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="p-1.5 rounded bg-sol-bg/90 border border-sol-border/60 text-sol-text-muted hover:text-sol-text shadow-sm"
+          aria-label="Page actions"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[190px]">
+        {menuItems}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  // Cursor-anchored twin of the kebab — same items, same handlers.
+  const cursorMenu = (
+    <ContextMenu state={ctxMenu}>
+      {() => (
+        <>
+          <CtxHeader title={a.title || a.slug} />
+          {menuItems}
+        </>
+      )}
+    </ContextMenu>
+  );
+
+  if (layout === "row") {
+    const at = new Date(time ?? a.updated_at);
+    return (
+      <div
+        className="group relative flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/70 transition-colors"
+        onContextMenu={(e) => ctxMenu.open(e, undefined)}
+      >
+        <span className="w-16 flex-shrink-0 whitespace-nowrap text-[11px] font-mono tabular-nums text-sol-text-dim" title={at.toLocaleString()}>
+          {at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+        </span>
+        <a
+          href={a.url}
+          target="_blank"
+          rel="noreferrer"
+          className={`block w-16 aspect-[1.91/1] flex-shrink-0 rounded overflow-hidden border border-sol-border/30 ${expired ? "opacity-50" : ""}`}
+          title={`Open ${a.url}`}
+        >
+          {thumb}
+        </a>
+        <a
+          href={a.url}
+          target="_blank"
+          rel="noreferrer"
+          className="flex-1 min-w-0 text-sm text-sol-text truncate hover:text-sol-cyan transition-colors"
+          title={a.title}
+        >
+          {a.title || a.slug}
+        </a>
+        <span className="hidden md:inline-flex items-center gap-2 text-[11px] font-mono text-sol-text-dim flex-shrink-0">
+          <span>v{a.version}</span>
+          <span>{kind.label}</span>
+          {expired && <span className="text-sol-red">expired</span>}
+        </span>
+        <span className="hidden sm:inline-flex items-center gap-3 text-[11px] text-sol-text-dim w-20 flex-shrink-0">
+          <Stats a={a} />
+        </span>
+        <span className="hidden lg:flex w-36 flex-shrink-0 min-w-0"><Author a={a} /></span>
+        <span className="hidden lg:flex w-40 flex-shrink-0 min-w-0 overflow-hidden whitespace-nowrap [&_*]:whitespace-nowrap">
+          {a.session_short_id && <EntityIdPill shortId={a.session_short_id} type="session" />}
+        </span>
+        <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex-shrink-0">{kebab}</div>
+        {cursorMenu}
+      </div>
+    );
+  }
+
   return (
     <div
       className="group relative flex flex-col rounded-lg border border-sol-border/40 bg-sol-bg-alt/40 overflow-hidden transition-colors hover:border-sol-border hover:bg-sol-bg-alt/70"
@@ -175,46 +302,15 @@ export function ArtifactCard({
         className={`block aspect-[1.91/1] w-full overflow-hidden border-b border-sol-border/30 ${expired ? "opacity-50" : ""}`}
         title={`Open ${a.url}`}
       >
-        <PageThumb
-          slug={a.slug}
-          version={a.version}
-          hasThumb={a.has_thumb}
-          gated={gated}
-          title={a.title}
-          fallback={
-            <div className={`w-full h-full flex items-center justify-center ${kind.cls}`}>
-              <span className="font-mono text-3xl opacity-70 select-none">{kind.glyph}</span>
-            </div>
-          }
-        />
+        {thumb}
       </a>
 
       {/* Hover actions */}
       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              className="p-1.5 rounded bg-sol-bg/90 border border-sol-border/60 text-sol-text-muted hover:text-sol-text shadow-sm"
-              aria-label="Page actions"
-            >
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[190px]">
-            {menuItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {kebab}
       </div>
 
-      {/* Cursor-anchored twin of the kebab — same items, same handlers. */}
-      <ContextMenu state={ctxMenu}>
-        {() => (
-          <>
-            <CtxHeader title={a.title || a.slug} />
-            {menuItems}
-          </>
-        )}
-      </ContextMenu>
+      {cursorMenu}
 
       {/* Body */}
       <div className="flex flex-col gap-1.5 p-3">
@@ -243,30 +339,12 @@ export function ArtifactCard({
         </div>
 
         <div className="flex items-center gap-3 text-[11px] text-sol-text-dim">
-          <span className="inline-flex items-center gap-1" title={`${a.views} views`}>
-            <Eye className="w-3 h-3" /> {a.views}
-          </span>
-          {a.comments_open > 0 && (
-            <span
-              className="inline-flex items-center gap-1 text-sol-orange"
-              title={`${a.comments_open} open comment${a.comments_open === 1 ? "" : "s"}`}
-            >
-              <MessageSquare className="w-3 h-3" /> {a.comments_open}
-            </span>
-          )}
-          <GateBadges a={a} />
+          <Stats a={a} />
         </div>
 
         {(a.session_short_id || a.author) && (
           <div className="flex items-center gap-2 min-w-0 max-w-full overflow-hidden whitespace-nowrap">
-            {a.author && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted min-w-0">
-                {a.author.image ? (
-                  <AvatarImg src={a.author.image} alt="" className="w-3.5 h-3.5 rounded-full" />
-                ) : null}
-                <span className="truncate">{a.author.name ?? "teammate"}</span>
-              </span>
-            )}
+            <Author a={a} />
             {a.session_short_id && <EntityIdPill shortId={a.session_short_id} type="session" />}
           </div>
         )}

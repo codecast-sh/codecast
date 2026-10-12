@@ -11,6 +11,7 @@
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { resolveAssigneeToUserId, roleAssigneeOf } from "./tasks";
+import { roleRunner } from "./lib/seatPlace";
 
 const LINE_SENDER = "The line";
 
@@ -18,7 +19,7 @@ const LINE_SENDER = "The line";
 async function assigneePerson(ctx: any, task: any): Promise<Id<"users"> | null> {
   if (!task.assignee) return null;
   const role = await roleAssigneeOf(ctx, task.assignee);
-  if (role) return role.host_user_id ?? null;
+  if (role) return (await roleRunner(ctx, role)) ?? null;
   return resolveAssigneeToUserId(ctx, task.assignee, task.team_id);
 }
 

@@ -1,3 +1,5 @@
+import { isRunLog } from "@codecast/shared/contracts";
+
 export type FilterableSession = {
   title?: string | null;
   message_count?: number;
@@ -9,6 +11,9 @@ export type FilterableSession = {
   parent_conversation_id?: string | null;
   is_subagent?: boolean;
   is_workflow_sub?: boolean;
+  is_workflow_primary?: boolean;
+  session_id?: string | null;
+  workflow_run_id?: string | null;
 };
 
 export function isSubagent(c: FilterableSession): boolean {
@@ -74,5 +79,6 @@ export function shouldShowSession(c: FilterableSession, options?: { excludeDefau
   if (isTrivialSubagent(c) || isWarmupSession(c) || isSystemMessageSession(c)) return false;
   if (options?.excludeDefaultTitles && isDefaultTitleSession(c)) return false;
   if (c.is_workflow_sub && !options?.showWorkflowSubs) return false;
+  if (isRunLog(c)) return false;
   return true;
 }
