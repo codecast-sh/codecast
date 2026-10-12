@@ -54,6 +54,16 @@ export type ChatAttachmentView = {
   preview_url?: string;
 };
 
+/** What an attachment is, from its mime: every surface that draws, plays or
+ *  prefetches attachments branches on this one answer. No mime is an image,
+ *  which is what every upload was before mimes were recorded. */
+export type ChatAttachmentKind = "image" | "video" | "audio";
+export function attachmentKind(att: { mime?: string }): ChatAttachmentKind {
+  if (att.mime?.startsWith("audio/")) return "audio";
+  if (att.mime?.startsWith("video/")) return "video";
+  return "image";
+}
+
 export type ChatMessageView = {
   id: string;
   author: ChatAuthor;
@@ -120,6 +130,11 @@ export type ChatMessageView = {
   failReason?: string;
 };
 
+/** A role or session inside a room (convex chat.ts ChannelAgentRef). */
+export type ChatChannelAgentRef =
+  | { kind: "role"; role_id: string; short_id: string }
+  | { kind: "session"; conversation_id: string; short_id: string };
+
 export type ChatChannelView = {
   id: string;
   name: string;
@@ -131,6 +146,8 @@ export type ChatChannelView = {
   dmMemberIds?: string[];
   /** Roster of a restricted room, viewer included (the members panel). */
   memberIds?: string[];
+  /** Roles and sessions inside the room (any kind but a DM). */
+  agents?: ChatChannelAgentRef[];
   topic?: string;
   unreadCount?: number;
   /** Mentions of you specifically. This is the count allowed to shout. */

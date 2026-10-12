@@ -1,0 +1,132 @@
+/* A line fix decision (LineDecision): a header line, the session's own words
+   at a reading measure, the answers, the chat beside them when there is room,
+   and the full proposal folded under. Reads the app's --sol-* theme directly
+   so it holds outside the line workspace too. */
+
+.ld {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  color: var(--sol-text);
+  outline: none;
+}
+.ld-empty { padding: 48px 24px; color: var(--sol-text-dim); font-size: 13px; }
+
+/* Header: what problem, from where, in which project, who asked. */
+.ld-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 20px 8px;
+  background: color-mix(in srgb, var(--sol-bg) 92%, transparent);
+  backdrop-filter: blur(6px);
+  font-size: 12.5px;
+}
+.ld-ref {
+  font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--sol-violet); padding: 1px 7px; border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-violet) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-violet) 28%, transparent);
+  text-decoration: none; transition: border-color 120ms ease;
+}
+.ld-ref:hover { border-color: var(--sol-violet); }
+.ld-title { min-width: 0; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sol-text); font-weight: 500; }
+.ld-project { color: var(--sol-text-dim); }
+.ld-trial {
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-magenta) 35%, transparent);
+}
+.ld-spacer { flex: 1 1 auto; }
+.ld-asker {
+  display: inline-flex; align-items: center; min-width: 0; max-width: 30ch;
+  padding: 2px 9px 2px 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  background: var(--sol-card);
+}
+.ld-close { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--sol-text-dim); }
+.ld-close:hover { color: var(--sol-text); background: var(--sol-bg-alt); }
+
+.ld-sub {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 0 20px 10px; font-size: 11.5px; color: var(--sol-text-dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+}
+.ld-sub [data-tone="wait"] { color: var(--sol-yellow); }
+.ld-sub [data-tone="ask"] { color: var(--sol-blue); }
+.ld-run, .ld-id { color: var(--sol-text-dim); text-decoration: underline dotted; text-underline-offset: 2px; }
+.ld-run:hover, .ld-id:hover { color: var(--sol-text); }
+.ld-id { font-family: var(--font-mono); margin-left: auto; }
+
+/* Reading column, and the chat beside it when the surface is wide. */
+.ld-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 24px 20px 64px; }
+@container (min-width: 960px) {
+  .ld-grid { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 36px; padding-inline: 32px; }
+  .ld-talk { position: sticky; top: 56px; align-self: start; max-height: calc(100cqh - 80px); overflow: auto; }
+}
+.ld-main { min-width: 0; max-width: 74ch; }
+.ld-banner { margin-bottom: 16px; }
+
+.ld-question {
+  font-family: var(--font-serif), serif; font-weight: 500;
+  font-size: clamp(1.35rem, 1.1rem + 1.1cqi, 1.9rem); line-height: 1.22;
+  letter-spacing: -0.01em; text-wrap: balance; margin: 0 0 18px;
+}
+
+/* The session's words: generous type, quotes and before/after given room. */
+.ld-prose { font-size: 15px; line-height: 1.68; color: var(--sol-text); }
+.ld-prose :where(p, ul, ol) { margin: 0 0 0.9em; }
+.ld-prose :where(li) { margin: 0.25em 0; }
+.ld-prose :where(h1, h2, h3, h4) { font-size: 1.02em; font-weight: 600; margin: 1.6em 0 0.5em; color: var(--sol-text); }
+.ld-prose :where(h1, h2, h3, h4):first-child { margin-top: 0; }
+.ld-prose :where(strong) { color: var(--sol-text); font-weight: 600; }
+.ld-prose :where(blockquote) {
+  margin: 1em 0; padding: 10px 14px; border-radius: 8px;
+  border-left: 3px solid color-mix(in srgb, var(--sol-cyan) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 7%, transparent);
+  color: var(--sol-text-muted); font-size: 14px;
+}
+.ld-prose :where(blockquote p:last-child) { margin-bottom: 0; }
+.ld-prose :where(:not(pre) > code) { font-size: 0.86em; padding: 1px 5px; border-radius: 4px; background: var(--sol-bg-alt); }
+.ld-prose :where(pre) { font-size: 12.5px; line-height: 1.5; border-radius: 8px; overflow: auto; }
+.ld-prose :where(table) { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 1em 0; }
+.ld-prose :where(th) { text-align: left; font-weight: 600; color: var(--sol-text-muted); border-bottom: 1px solid var(--sol-border); padding: 6px 10px 6px 0; }
+.ld-prose :where(td) { vertical-align: top; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); padding: 7px 10px 7px 0; }
+.ld-prose :where(hr) { border: 0; height: 1px; background: color-mix(in srgb, var(--sol-border) 50%, transparent); margin: 1.5em 0; }
+
+/* The answers sit right under the words they answer. */
+.ld-answers { margin-top: 22px; }
+.ld-sweet .change-card .ld-answers { margin: 18px 0; }
+.ld-trial-note {
+  margin: 0 0 10px; font-size: 12.5px; color: var(--sol-magenta);
+  display: inline-block; padding: 3px 9px; border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-magenta) 9%, transparent);
+}
+.ld-outcome { font-size: 13px; color: var(--sol-text-muted); }
+
+/* Full proposal, folded under the sweet spot. */
+.ld-full { margin-top: 36px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); padding-top: 14px; }
+.ld-full > summary {
+  cursor: pointer; width: fit-content; list-style: none;
+  font-size: 13px; font-weight: 600; color: var(--sol-text-muted);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.ld-full > summary::-webkit-details-marker { display: none; }
+.ld-full > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 160ms ease; }
+.ld-full[open] > summary::before { transform: rotate(45deg); }
+.ld-full > summary:hover { color: var(--sol-text); }
+.ld-full-body { margin-top: 18px; display: flex; flex-direction: column; gap: 24px; }
+
+/* The chat with the session that asked. */
+.ld-talk {
+  min-width: 0; border-radius: 12px; padding: 14px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 45%, var(--sol-card));
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+}
+.ld-talk-h { font-size: 12.5px; font-weight: 600; color: var(--sol-text-muted); margin-bottom: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ld-full > summary::before { transition: none; }
+}

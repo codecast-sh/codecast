@@ -21,7 +21,7 @@ import type { ClientSyncStoreKey } from "../store/clientSyncRegistry";
 import { resolveVisit, type ResolvedVisit, type VisitResolveMemo } from "./recentVisits";
 import { visitDetailParts } from "./recentVisitDetails";
 import { paletteObjectPath } from "./paletteActions";
-import { initiativeHref } from "./initiatives";
+import { objectHref } from "./entityLinks";
 import { checkMilestone } from "../tips/useTips";
 import { isOpen as isUndoTimelineOpen } from "./undoTimelineOpen";
 
@@ -91,7 +91,7 @@ const OBJECT_KINDS: Partial<Record<ClientSyncStoreKey, { noun: string; path?: (i
   projects: { noun: "project", path: (id) => paletteObjectPath("project", { _id: id }) },
   agentTasks: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
   foreignTriggers: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
-  initiatives: { noun: "goal", path: (id, row) => initiativeHref({ _id: id, short_id: row?.short_id }) },
+  initiatives: { noun: "goal", path: (id, row) => objectHref("initiative", row?.short_id || id) },
   chatChannels: { noun: "channel", path: (id) => `/chat/${id}` },
   decisionStacks: { noun: "stack", path: (id, row) => `/decisions/stacks/${row?.short_id ?? id}` },
   savedViews: { noun: "view" },
