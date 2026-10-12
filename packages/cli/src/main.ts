@@ -3,7 +3,7 @@
 // from-source wrapper scripts all start here. Hot-path verbs run from
 // fastPath.ts's small graph; everything else loads the full CLI. The dynamic
 // import() is load-bearing: it keeps index.js lazy in the compiled bundle.
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { runFastPath } from "./fastPath.js";
 import { installSyncStdio } from "./syncStdio.js";
 
