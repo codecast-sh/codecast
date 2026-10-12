@@ -1,0 +1,101 @@
+/* The Problems home's chart (line-workspace.md LW1 Problems): one stacked
+   histogram of every problem in view, the busiest in their own colors, the
+   rest gray; what came back hatched red; fixes shipped as green diamonds and
+   closes without a change as magenta ticks under the bars. */
+
+.lwo {
+  --lwo-0: var(--sol-blue); --lwo-1: var(--sol-violet); --lwo-2: var(--sol-cyan);
+  --lwo-3: var(--sol-orange); --lwo-4: var(--sol-magenta); --lwo-5: var(--sol-yellow);
+  --lwo-other: color-mix(in srgb, var(--lw-ink-3) 42%, var(--lw-paper));
+  padding: var(--lw-s4) var(--lw-s5) var(--lw-s3); border-bottom: 1px solid var(--lw-rule); background: var(--lw-paper);
+}
+.lwo-head { display: flex; align-items: center; gap: var(--lw-s4); flex-wrap: wrap; }
+.lwo-totals { display: flex; gap: var(--lw-s5); margin: 0; }
+.lwo-totals > div { display: flex; align-items: baseline; gap: 7px; }
+.lwo-totals dt { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwo-totals dd { margin: 0; font-size: var(--lw-fs-lg); font-weight: 700; color: var(--lw-ink); letter-spacing: -.01em; }
+.lwo-totals > div[data-tone="bad"] dd { color: var(--lw-bad); }
+.lwo-totals > div[data-tone="ok"] dd { color: var(--lw-ok); }
+.lwo-focus { max-width: 46ch; }
+.lwo-focus svg { width: 12px; height: 12px; flex: none; }
+
+.lwo-chart { position: relative; margin-top: var(--lw-s3); }
+.lwo-box { width: 100%; overflow: hidden; }
+.lwo-svg { display: block; user-select: none; touch-action: none; cursor: crosshair; }
+.lwo-grid line { stroke: var(--lw-rule-2); stroke-width: 1; }
+.lwo-grid line[data-major] { stroke: var(--lw-rule); }
+.lwo-grid .lwo-base { stroke: var(--lw-rule); }
+.lwo-ymax { font-size: 10px; fill: var(--lw-ink-3); text-anchor: end; font-variant-numeric: tabular-nums; }
+.lwo-ticks text { font-size: 10.5px; fill: var(--lw-ink-3); text-anchor: middle; }
+.lwo-ticks text[data-major] { fill: var(--lw-ink-2); font-weight: 600; }
+.lwo-hit { fill: transparent; }
+.lwo-bars g[data-hover] .lwo-hit { fill: color-mix(in srgb, var(--lw-ink) 5%, transparent); }
+.lwo-seg { fill: var(--lwo-other); transition: opacity var(--lw-fast); cursor: pointer; }
+.lwo-seg[data-slot="0"] { fill: var(--lwo-0); }
+.lwo-seg[data-slot="1"] { fill: var(--lwo-1); }
+.lwo-seg[data-slot="2"] { fill: var(--lwo-2); }
+.lwo-seg[data-slot="3"] { fill: var(--lwo-3); }
+.lwo-seg[data-slot="4"] { fill: var(--lwo-4); }
+.lwo-seg[data-slot="5"] { fill: var(--lwo-5); }
+.lwo-seg[data-dim] { opacity: .22; }
+.lwo-back { fill: url(#lwo-back); stroke: var(--lw-bad); stroke-width: 1; }
+.lwo-back-bg { fill: color-mix(in srgb, var(--lw-bad) 30%, transparent); }
+.lwo-back-stripe { fill: var(--lw-bad); }
+.lwo-picked { fill: color-mix(in srgb, var(--lw-person) 10%, transparent); stroke: color-mix(in srgb, var(--lw-person) 45%, transparent); stroke-dasharray: 3 3; }
+.lwo-brush { fill: color-mix(in srgb, var(--lw-person) 16%, transparent); stroke: var(--lw-person); stroke-width: 1; }
+.lwo-none { font-size: var(--lw-fs-sm); fill: var(--lw-ink-3); text-anchor: middle; }
+.lwo-ship { fill: var(--lw-ok); }
+.lwo-close { fill: var(--lw-closed); }
+.lwo-mark { cursor: default; }
+.lwo-mark-n { font-size: 9.5px; fill: var(--lw-ink-3); font-variant-numeric: tabular-nums; }
+
+.lwo-tip { max-width: 340px; }
+.lwo-tip .lwo-tip-when { margin-bottom: 3px; }
+.lwo-tip .lwo-tip-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 7px; }
+.lwo-tip .lwo-tip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lwo-tip .lw-num { color: var(--lw-paper); font-weight: 650; }
+
+.lwo-legend { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: var(--lw-s2); }
+.lwo-key { all: unset; display: inline-flex; align-items: center; gap: 6px; max-width: 36ch; height: 24px; padding: 0 8px; border-radius: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap; }
+button.lwo-key { cursor: pointer; transition: background var(--lw-fast); }
+button.lwo-key:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
+button.lwo-key[aria-pressed="true"] { background: var(--lw-paper-2); color: var(--lw-ink); box-shadow: inset 0 0 0 1px var(--lw-rule); }
+button.lwo-key:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); }
+.lwo-key .lw-mono { color: var(--lw-ink-3); font-size: var(--lw-fs-2xs); }
+.lwo-key-t { overflow: hidden; text-overflow: ellipsis; }
+.lwo-key .lw-num { color: var(--lw-ink-3); }
+.lwo-key i, .lwo-tip-row i { flex: none; width: 9px; height: 9px; border-radius: 2px; background: var(--lwo-other); }
+[data-slot="0"] > i { background: var(--lwo-0); }
+[data-slot="1"] > i { background: var(--lwo-1); }
+[data-slot="2"] > i { background: var(--lwo-2); }
+[data-slot="3"] > i { background: var(--lwo-3); }
+[data-slot="4"] > i { background: var(--lwo-4); }
+[data-slot="5"] > i { background: var(--lwo-5); }
+.lwo-key[data-slot="back"] i, .lwo-tip-row[data-slot="back"] i { background: repeating-linear-gradient(45deg, var(--lw-bad) 0 2px, color-mix(in srgb, var(--lw-bad) 30%, transparent) 2px 4px); }
+.lwo-key[data-slot="ship"] i { width: 8px; height: 8px; transform: rotate(45deg); background: var(--lw-ok); }
+.lwo-key[data-slot="close"] i { width: 3px; height: 11px; background: var(--lw-closed); }
+
+/* What waits on you, at the top of Problems: one strip into the Inbox. */
+.lwp-waiting {
+  display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px var(--lw-s5);
+  background: var(--lw-person-soft); color: var(--lw-person-deep); border-bottom: 1px solid color-mix(in srgb, var(--lw-person) 25%, transparent);
+  font-size: var(--lw-fs-sm); font-weight: 600; text-decoration: none; cursor: pointer;
+}
+.lwp-waiting:hover { background: color-mix(in srgb, var(--lw-person) 18%, var(--lw-card)); }
+.lwp-waiting .lw-num { font-size: var(--lw-fs-md); font-weight: 800; }
+.lwp-waiting svg { width: 14px; height: 14px; margin-left: auto; }
+.lwp-waiting-refs { font-weight: 500; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The Fix column: where the fix stands, the one that waits on you a button. */
+.lwp-fix { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.lwp-fix[data-fix="waiting"] { all: unset; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--lw-person); color: var(--lw-on-accent); font-size: var(--lw-fs-xs); font-weight: 650; cursor: pointer; }
+.lwp-fix[data-fix="waiting"]:hover { background: var(--lw-person-deep); }
+.lwp-fix[data-fix="waiting"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 1px; }
+.lwp-fix[data-fix="building"] { color: var(--lw-live); font-weight: 600; }
+.lwp-fix[data-fix="shipped"] { color: var(--lw-ok); font-weight: 600; }
+.lwp-fix[data-fix="answered"] { color: var(--lw-ink-2); }
+.lwp-c-conv { text-align: right; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+
+/* An open problem's fix leads its page. */
+.lwp-lead { border-bottom: 1px solid var(--lw-rule); }
+.lwp-lead .lwt-panel { position: static; }
