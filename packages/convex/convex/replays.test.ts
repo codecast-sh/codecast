@@ -11,6 +11,7 @@ import {
   chunkReplayEvents,
   cliGet,
   get,
+  webGetReplay,
   gunzipCapped,
   linkReplayToGroup,
   list,
@@ -195,6 +196,18 @@ describe("reads", () => {
     expect(await h(get)(w.as("u2"), { replay: "rp-1" })).toBeNull();
     expect(await h(get)(w.as("u2"), { replay: "rp-404" })).toBeNull();
     expect(await h(chunkObject)(w.internalCtx, { user_id: "u2", replay: "rp-1", seq: 0 })).toBeNull();
+  });
+
+  // A pill's read: the list row by rp-N, and null (never an error) for a
+  // replay the reader's workspace does not hold.
+  test("a reference reads the list row, and nothing outside the workspace", async () => {
+    const { w } = await seeded();
+    const row = await h(webGetReplay)(w.as("u1"), { ref: "rp-1" });
+    expect(row).toMatchObject({ short_id: "rp-1", source_name: "shop", chunks: 1, dom_chunks: 0 });
+    expect(JSON.stringify(row)).not.toContain("timeline_md");
+    expect(JSON.stringify(row)).not.toContain("replays/");
+    expect(await h(webGetReplay)(w.as("u2"), { ref: "rp-1" })).toBeNull();
+    expect(await h(webGetReplay)(w.as("u1"), { ref: "rp-404" })).toBeNull();
   });
 
   test("the chunk route resolves the key after the access check", async () => {
