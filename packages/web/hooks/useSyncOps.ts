@@ -3,7 +3,7 @@
 // the page paints from. Every collection is registered in
 // store/clientSyncRegistry.ts; nothing under app/ or components/ subscribes to
 // these queries directly.
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GROUP_RULES } from "@codecast/shared/contracts/ingest";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
@@ -13,6 +13,7 @@ import { useWorkspaceArgs, workspaceStamp } from "./useWorkspaceArgs";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import type { OpsApp, OpsAppCall, OpsEvent, OpsGroup, OpsReplay, OpsReplayTimeline, OpsSample, OpsSource, OpsWatch } from "../components/ops/opsTypes";
+import { useWatchEffect } from "./useWatchEffect";
 
 const api = _api as any;
 
@@ -136,7 +137,7 @@ export function useSyncOpsGroup(ref: string | null) {
   const group = useSyncCollection("opsGroups", api.ingest.getGroup, args, { select: groupRow });
   useSyncCollection("opsSamples", api.ingest.getGroup, args, samplesFeed);
   const gone = detailGone(group);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!gone || !ref) return;
     const id = dropGoneRow("opsGroups", ref);
     if (id) useInboxStore.getState().syncTable("opsSamples", [], { isDelta: true, pruneAbsentScope: (s: any) => s.group_id === id });
@@ -155,7 +156,7 @@ export function useSyncOpsReplay(ref: string | null) {
   const replay = useSyncCollection("opsReplays", api.replays.get, args, { select: replayRow });
   useSyncCollection("opsReplayTimelines", api.replays.get, args, { select: replayTimeline });
   const gone = detailGone(replay);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (gone && ref) dropGoneRow("opsReplays", ref);
   }, [gone, ref]);
   return replay;
@@ -213,6 +214,26 @@ export function useOpsWatches(): OpsWatch[] {
 export function byRef<T extends { _id: string; short_id?: string }>(rows: T[], ref: string | null): T | undefined {
   if (!ref) return undefined;
   return rows.find((r) => r.short_id === ref || r._id === ref);
+}
+
+/**
+ * One row a detail page names (short id or _id), from the whole collection.
+ * The lists above show the active workspace; a page opened by a link or a
+ * reference shows the row its detail feeder synced, whichever workspace it
+ * is in, the way a task page does: the feeder's read is the access check,
+ * and a refusal drops the row (dropGoneRow).
+ */
+function useOpsRow<T extends { _id: string; short_id?: string }>(key: "opsGroups" | "opsReplays", ref: string | null, sig: (row: T) => string): T | undefined {
+  const where = useMemo(() => (r: T) => !!ref && (r.short_id === ref || r._id === ref), [ref]);
+  return useCollectionRows<T>(key, { where, sig })[0];
+}
+
+export function useOpsGroup(ref: string | null): OpsGroup | undefined {
+  return useOpsRow<OpsGroup>("opsGroups", ref, groupSig);
+}
+
+export function useOpsReplay(ref: string | null): OpsReplay | undefined {
+  return useOpsRow<OpsReplay>("opsReplays", ref, replaySig);
 }
 
 const sampleSig = (s: OpsSample) => `${s.at}`;
