@@ -23,6 +23,8 @@ import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning"
 import { applyActivate, getArmableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
+import { seatPlace } from "./lib/seatPlace";
+import { trustOf } from "./lib/orgCaps";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
 import { truncateStr } from "@codecast/shared/render";
 
@@ -329,7 +331,7 @@ async function tellRoleOfBind(ctx: Ctx, userId: Id<"users">, before: any, row: a
       instance: row.instance, machine: row.host?.machine, becameReady, newlyBound,
       secrets: (manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key], unlocks: i.unlocks })),
       routines: await routineRows(ctx, row, manifest),
-      readiness: readiness(manifest, state, reached.role.trust ?? "understand"),
+      readiness: readiness(manifest, state, trustOf(reached.role)),
     }),
     client_id: `template-bind:${row._id}:${stamp}`,
     from_user_id: userId,
@@ -383,7 +385,7 @@ export async function performInstanceStatus(ctx: Ctx, userId: Id<"users">, args:
   // The rendered setup text rides inside the setup rows; `setup_marks` is the
   // raw record of who marked what, which the host reads back into its receipt.
   const { setup_text, ...rest } = row;
-  return { ...rest, release: { version: pinned.version, status: pinned.status, class: pinned.class, yanked: pinned.yanked?.reason ?? null }, trust: role?.trust ?? "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state, setup_text), setup_marks: row.setup ?? {}, ask: nextHumanAsk(manifest, state, setup_text), readiness: readiness(manifest, state, role?.trust ?? "understand") };
+  return { ...rest, release: { version: pinned.version, status: pinned.status, class: pinned.class, yanked: pinned.yanked?.reason ?? null }, trust: role ? trustOf(role) : "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state, setup_text), setup_marks: row.setup ?? {}, ask: nextHumanAsk(manifest, state, setup_text), readiness: readiness(manifest, state, role ? trustOf(role) : "understand") };
 }
 export async function performListInstances(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; template_id?: string }) {
   const access = await callerWorkspace(ctx, userId, args.team_id);
@@ -451,9 +453,9 @@ export async function bindHostOf(ctx: Ctx, userId: Id<"users">, row: any): Promi
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
   const standing = role ? await standingConversationOf(ctx, role) : null;
   const project = await ctx.db.get(row.project_id);
-  // The daemon that polls the command belongs to the human who runs the role
-  // (org_roles.host_user_id); a standing session renders as its bot identity.
-  const hostUser: Id<"users"> = role?.host_user_id ?? standing?.owner_user_id ?? userId;
+  // The daemon that polls the command belongs to the human who runs the
+  // role's standing session (seatPlace); it renders as its bot identity.
+  const hostUser: Id<"users"> = role ? seatPlace(role, standing).runner_user_id : userId;
   const dir: string | null = standing?.project_path ?? project?.project_path ?? null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", hostUser)).collect();
   const now = Date.now();
