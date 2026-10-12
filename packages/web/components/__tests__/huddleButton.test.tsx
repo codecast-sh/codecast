@@ -17,18 +17,10 @@ let OCCUPANCY: Record<string, unknown[]> = {};
 
 const realTeamFeatures = { ...(await import("../../lib/teamFeatures")) };
 const realStore = { ...(await import("../../store/inboxStore")) };
-const realGuestLinks = { ...(await import("../../hooks/useGuestLinks")) };
 afterAll(() => {
   mock.module("../../lib/teamFeatures", () => realTeamFeatures);
   mock.module("../../store/inboxStore", () => realStore);
-  mock.module("../../hooks/useGuestLinks", () => realGuestLinks);
 });
-// The guest link chip beside a session's button asks the server whether the
-// viewer may invite; here nobody may, so it draws nothing.
-mock.module("../../hooks/useGuestLinks", () => ({
-  ...realGuestLinks,
-  useGuestLinks: () => ({ links: [], ready: true, canInvite: false }),
-}));
 
 mock.module("../../lib/teamFeatures", () => ({
   ...realTeamFeatures,
