@@ -9,8 +9,7 @@ import type { GroupKind, GroupStatus, SourceProvider, SourceStatus } from "@code
 import { accentSoft, accentVar, type ExternalEventAccent } from "../../lib/externalEvents";
 import { APP_LOOK } from "../../lib/integrations";
 import { formatRelative } from "../../lib/utils";
-import { formatCallTime } from "@codecast/shared/entities";
-import type { OpsReplay, OpsSource } from "./opsTypes";
+import type { OpsSource } from "./opsTypes";
 
 export const KIND_LOOK: Record<GroupKind, { icon: LucideIcon; accent: ExternalEventAccent; label: string }> = {
   error: { icon: Bug, accent: "red", label: "error" },
@@ -72,22 +71,6 @@ export function sourceFacts(source: Pick<OpsSource, "last_event_at" | "events_to
     source.last_event_at ? `last event ${formatRelative(source.last_event_at)}` : "no events yet",
     source.events_today ? `${source.events_today} today` : null,
     source.groups_open ? `${source.groups_open} open ${source.groups_open === 1 ? "issue" : "issues"}` : null,
-  ].filter((f): f is string => !!f);
-}
-
-/** What a replay holds, as one line of facts: where it came from, who, how
- *  long, what broke, and whether the page itself can be played. Pills, cards
- *  and the moment embed share it, so a replay reads alike everywhere. */
-export function replayFacts(r: Partial<Pick<OpsReplay, "source_name" | "provider" | "user" | "duration_ms" | "counts" | "dom_chunks">>): string[] {
-  const errors = r.counts?.errors ?? 0;
-  const failed = r.counts?.failed_requests ?? 0;
-  return [
-    r.source_name ?? (r.provider ? SOURCE_PROVIDER_LABEL[r.provider as SourceProvider] ?? r.provider : null),
-    r.user ? r.user.email ?? r.user.name ?? r.user.id ?? null : null,
-    r.duration_ms ? formatCallTime(r.duration_ms) : null,
-    errors ? `${errors} ${errors === 1 ? "error" : "errors"}` : null,
-    failed ? `${failed} failed ${failed === 1 ? "request" : "requests"}` : null,
-    r.dom_chunks === 0 ? "events only" : r.dom_chunks ? "page capture" : null,
   ].filter((f): f is string => !!f);
 }
 

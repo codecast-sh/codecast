@@ -40,13 +40,20 @@ export type Expectation = {
   citations: ExpectationCitation[];
   /** Why it was retired; set with status "retired". */
   retired_reason?: string;
+  /**
+   * The day the line came into force (YYYY-MM-DD, UTC): what the product did
+   * before it was not graded against it (judges.briefAt). Absent: in force for
+   * everything the judges read.
+   */
+  since?: string;
   /** The version that added it, and the last version that changed it. */
   added_in: number;
   changed_in: number;
 };
 
-export type AddOp = { op: "add"; text: string; part: string; note?: string; citations: ExpectationCitation[]; status?: ExpectationStatus; reason?: string };
-export type EditOp = { op: "edit"; id: string; text?: string; part?: string; note?: string; citations: ExpectationCitation[] };
+export type AddOp = { op: "add"; text: string; part: string; note?: string; since?: string; citations: ExpectationCitation[]; status?: ExpectationStatus; reason?: string };
+/** `since: ""` puts the line in force for everything again. */
+export type EditOp = { op: "edit"; id: string; text?: string; part?: string; note?: string; since?: string; citations: ExpectationCitation[] };
 export type RetireOp = { op: "retire"; id: string; reason: string; citations: ExpectationCitation[] };
 export type ExpectationOp = AddOp | EditOp | RetireOp;
 
@@ -68,14 +75,23 @@ export type ExpectationsVersion = {
   items: Expectation[];
   applied_at: number;
   applied_by?: string;
-  how: "person" | "auto";
+  how: ExpectationsHow;
   summary: string;
   proposal?: string;
 };
 
+/**
+ * How a version landed: a person applied it, it applied on its own (it only
+ * adds lines in a person's quoted words), or, in a trial project, an agent
+ * session applied it as a stand-in for the person (the trial asks nobody).
+ */
+export type ExpectationsHow = "person" | "auto" | "stand_in";
+
 export const LIMITS = { text: 400, part: 80, note: 400, reason: 400, ref: 200, quote: 600, when: 40, summary: 300, citations: 20, ops: 120 } as const;
 
 const clip = (s: unknown, max: number): string => (typeof s === "string" ? s.trim().slice(0, max) : "");
+/** A line's own words are never cut: one over its limit is refused by opErrors, so a stored line is never half a sentence. */
+const whole = (s: unknown): string => (typeof s === "string" ? s.trim() : "");
 
 function normCitation(raw: any): ExpectationCitation {
   const out: ExpectationCitation = { kind: clip(raw?.kind, 20).toLowerCase() as CitationKind, ref: clip(raw?.ref, LIMITS.ref) };
@@ -91,17 +107,18 @@ export function normalizeOp(raw: any): ExpectationOp {
   const citations = Array.isArray(raw?.citations) ? raw.citations.map(normCitation) : [];
   const op = clip(raw?.op, 10).toLowerCase();
   if (op === "add") {
-    const out: AddOp = { op: "add", text: clip(raw.text, LIMITS.text), part: clip(raw.part, LIMITS.part), citations };
-    if (clip(raw.note, LIMITS.note)) out.note = clip(raw.note, LIMITS.note);
-    if (raw.status === "retired") { out.status = "retired"; out.reason = clip(raw.reason, LIMITS.reason); }
+    const out: AddOp = { op: "add", text: whole(raw.text), part: clip(raw.part, LIMITS.part), citations };
+    if (whole(raw.note)) out.note = whole(raw.note);
+    if (clip(raw.since, 10)) out.since = clip(raw.since, 10);
+    if (raw.status === "retired") { out.status = "retired"; out.reason = whole(raw.reason); }
     return out;
   }
   if (op === "edit") {
     const out: EditOp = { op: "edit", id: clip(raw.id, 80), citations };
-    for (const key of ["text", "part", "note"] as const) if (typeof raw[key] === "string") out[key] = clip(raw[key], LIMITS[key]);
+    for (const key of ["text", "part", "note", "since"] as const) if (typeof raw[key] === "string") out[key] = key === "part" ? clip(raw[key], LIMITS.part) : key === "since" ? clip(raw[key], 10) : whole(raw[key]);
     return out;
   }
-  return { op: op as "retire", id: clip(raw?.id, 80), reason: clip(raw?.reason, LIMITS.reason), citations };
+  return { op: op as "retire", id: clip(raw?.id, 80), reason: whole(raw?.reason), citations };
 }
 
 /** What is wrong with one op, as short sentences; empty when it can apply. */
@@ -109,6 +126,11 @@ export function opErrors(op: ExpectationOp): string[] {
   const errors: string[] = [];
   if (!["add", "edit", "retire"].includes(op.op)) return [`unknown op "${op.op}" (add, edit or retire)`];
   if (op.citations.length === 0) errors.push("needs at least one source");
+  for (const key of ["text", "note", "reason"] as const) {
+    const words = (op as Record<string, unknown>)[key];
+    if (typeof words === "string" && words.length > LIMITS[key]) errors.push(`${key} is ${words.length} characters; a line holds at most ${LIMITS[key]}, so say it shorter`);
+  }
+  if (op.op !== "retire" && op.since && !IN_FORCE_DAY.test(op.since)) errors.push(`since "${op.since}" is not a day (YYYY-MM-DD)`);
   op.citations.forEach((c, i) => {
     if (!CITATION_KINDS.includes(c.kind)) errors.push(`source ${i + 1}: kind "${c.kind}" is not one of ${CITATION_KINDS.join(", ")}`);
     if (!c.ref) errors.push(`source ${i + 1}: needs a ref`);
@@ -119,11 +141,18 @@ export function opErrors(op: ExpectationOp): string[] {
     if (op.status === "retired" && !op.reason) errors.push("a retired line needs the reason");
   } else {
     if (!isExpectationId(op.id)) errors.push(`"${op.id}" is not an expectation id (ex-<project>-<n>)`);
-    if (op.op === "edit" && op.text === undefined && op.part === undefined && op.note === undefined) errors.push("changes nothing (text, part or note)");
+    if (op.op === "edit" && op.text === undefined && op.part === undefined && op.note === undefined && op.since === undefined) errors.push("changes nothing (text, part, note or since)");
     if (op.op === "edit" && op.text === "") errors.push("an edit cannot empty the text; retire the line instead");
     if (op.op === "retire" && !op.reason) errors.push("needs the reason");
   }
   return errors;
+}
+
+const IN_FORCE_DAY = /^\d{4}-\d\d-\d\d$/;
+
+/** The lines that came into force on a day, by id (Expectation.since): what a brief carries so a judge grades a moment only against the lines in force when it happened. */
+export function linesSince(items: Expectation[]): Record<string, string> {
+  return Object.fromEntries(items.filter((e) => e.status === "active" && e.since).map((e) => [e.id, e.since!]));
 }
 
 /** A source a reader can trace to the words: a quote, and when it was said. */
@@ -190,16 +219,68 @@ export function autoApplies(ops: ExpectationOp[], personSaid: (c: ExpectationCit
 
 /**
  * What a signed-in person changes by hand where the expectations are read
- * (line-map.md LX3, LX5): a line in their own words, or a retirement with the
- * reason. Either becomes a proposal like any other.
+ * (line-map.md LX3, LX5): a line in their own words (with the source it came
+ * from, when they have one), a change to a line's words, area or open
+ * question, or a retirement with the reason. Each becomes a proposal like any
+ * other. `why` on an edit is what they say about the change (how an open
+ * question was settled); it is their words on the record.
  */
-export type PersonEdit = { op: "add"; text: string; part: string } | { op: "retire"; id: string; reason: string };
+export type PersonEdit =
+  | { op: "add"; text: string; part: string; note?: string; source?: ExpectationCitation }
+  | { op: "edit"; id: string; text?: string; part?: string; note?: string; why?: string }
+  | { op: "retire"; id: string; reason: string };
 
-/** The op a person's edit becomes: their own words are its source, cited as them on the day they typed them. */
+/** The words a person's edit puts on the record as theirs. */
+function personWords(edit: PersonEdit): string {
+  if (edit.op === "add") return edit.text;
+  if (edit.op === "retire") return edit.reason;
+  return edit.why?.trim() || edit.text?.trim() || edit.note?.trim() || "Changed by hand";
+}
+
+/** The op a person's edit becomes: their own words are its source, cited as them on the day they typed them, beside the source they named. */
 export function personOp(edit: PersonEdit, userId: string, now: number): ExpectationOp {
   const when = new Date(now).toISOString().slice(0, 10);
-  const words = edit.op === "add" ? edit.text : edit.reason;
-  return normalizeOp({ ...edit, citations: [{ kind: "person", ref: userId, quote: words, when }] });
+  const own = { kind: "person", ref: userId, quote: personWords(edit), when };
+  if (edit.op === "add") {
+    const { source, ...rest } = edit;
+    return normalizeOp({ ...rest, citations: source?.ref ? [own, source] : [own] });
+  }
+  if (edit.op === "edit") {
+    const { why: _why, ...rest } = edit;
+    return normalizeOp({ ...rest, citations: [own] });
+  }
+  return normalizeOp({ ...edit, citations: [own] });
+}
+
+/** A proposal summary for a person's edit, in the words a history reads. */
+export function personEditSummary(edit: PersonEdit, who: string): string {
+  if (edit.op === "add") return `${who} added: ${edit.text}`;
+  if (edit.op === "retire") return `${who} retired ${edit.id}: ${edit.reason}`;
+  if (edit.note === "") return `${who} settled the open question on ${edit.id}${edit.why ? `: ${edit.why}` : ""}`;
+  if (edit.note && edit.text === undefined && edit.part === undefined) return `${who} raised a question on ${edit.id}: ${edit.note}`;
+  return `${who} changed ${edit.id}${edit.text ? `: ${edit.text}` : ""}`;
+}
+
+/**
+ * Where a source a person names lives, from what they paste: a codecast short
+ * id (ct-, cl-, sd-, a session's seven characters, doc:), a codecast link to
+ * one, a chat message link, a commit (repo@sha), or anything else as "other".
+ */
+export function citationFromInput(input: string): { kind: CitationKind; ref: string } | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  const chat = /\/chat\/([^/?#\s]+)(?:\/|\?(?:[^#]*&)?(?:m|message|msg)=)([a-z0-9]{20,})/i.exec(raw);
+  if (chat) return { kind: "chat", ref: `#${chat[1]}/${chat[2]}` };
+  const path = /^https?:\/\//i.test(raw) ? (() => { try { return new URL(raw).pathname.split("/").filter(Boolean).pop() ?? raw; } catch { return raw; } })() : raw;
+  const id = path.replace(/^@/, "");
+  if (/^ct-\d+$/i.test(id)) return { kind: "task", ref: id.toLowerCase() };
+  if (/^cl-\d+(:\d+)?$/i.test(id)) return { kind: "call", ref: id.toLowerCase() };
+  if (/^sd-\d+$/i.test(id)) return { kind: "decision", ref: id.toLowerCase() };
+  if (/^doc:\S+$/i.test(id)) return { kind: "doc", ref: id };
+  if (/^sg-\d+$/i.test(id)) return { kind: "signal", ref: id.toLowerCase() };
+  if (/^[^@\s]+@[0-9a-f]{7,40}$/i.test(id)) return { kind: "commit", ref: id };
+  if (/^jx[a-z0-9]{5}$/.test(id)) return { kind: "session", ref: id };
+  return { kind: "other", ref: raw.slice(0, LIMITS.ref) };
 }
 
 /**
@@ -254,6 +335,7 @@ export function applyOps(
       if (twin) { errors.push(`${at}: already expected as ${twin.id}`); return; }
       const line: Expectation = { id: `ex-${state.prefix}-${next++}`, text: op.text, part: op.part, status: op.status ?? "active", citations: keep(op.citations), added_in: version, changed_in: version };
       if (op.note) line.note = op.note;
+      if (op.since) line.since = op.since;
       if (op.status === "retired") line.retired_reason = op.reason;
       items.push(line);
       byId.set(line.id, line);
@@ -267,12 +349,15 @@ export function applyOps(
       if (op.text !== undefined) line.text = op.text;
       if (op.part !== undefined && op.part) line.part = op.part;
       if (op.note !== undefined) { if (op.note) line.note = op.note; else delete line.note; }
+      if (op.since !== undefined) { if (op.since) line.since = op.since; else delete line.since; }
     } else {
       line.status = "retired";
       line.retired_reason = op.reason;
     }
     line.citations = keep([...line.citations, ...op.citations]);
-    line.changed_in = version;
+    // A day in force alone leaves the words a judge graded and a ruling judged as they were (judgeRetire.rulings reads changed_in as when the words last changed).
+    const daysOnly = op.op === "edit" && op.text === undefined && op.part === undefined && op.note === undefined;
+    if (!daysOnly) line.changed_in = version;
   });
   return errors.length ? { ok: false, errors } : { ok: true, items, next_n: next };
 }
@@ -379,6 +464,7 @@ export function renderExpectations(doc: ExpectationsVersion, opts: { brief?: boo
     for (const e of lines) {
       out.push(`${e.id}: ${e.text}`);
       if (e.note) out.push(`  note: ${e.note}`);
+      if (!opts.brief && e.since) out.push(`  in force since ${e.since}`);
       if (!opts.brief) for (const c of e.citations) out.push(`  - ${citationLine(c)}`);
     }
   }
@@ -401,12 +487,14 @@ export function renderProposal(p: { summary: string; ops: ExpectationOp[] }, cur
     if (op.op === "add") {
       out.push(`**Add${op.status === "retired" ? " as retired" : ""}** (${op.part}): ${op.text}`);
       if (op.note) out.push(`Note: ${op.note}`);
+      if (op.since) out.push(`In force since ${op.since}`);
       if (op.status === "retired") out.push(`Retired because: ${op.reason}`);
     } else if (op.op === "edit") {
       const was = byId.get(op.id);
       out.push(`**Change ${op.id}**${op.part ? ` (part: ${op.part})` : ""}`);
       if (op.text !== undefined) out.push(`Was: ${was?.text ?? "(unknown line)"}`, `Now: ${op.text}`);
       if (op.note !== undefined) out.push(op.note ? `Note: ${op.note}` : "Note removed");
+      if (op.since !== undefined) out.push(op.since ? `In force since ${op.since}` : "In force for everything");
     } else {
       out.push(`**Retire ${op.id}**: ${byId.get(op.id)?.text ?? "(unknown line)"}`, `Because: ${op.reason}`);
     }
