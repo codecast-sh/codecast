@@ -226,7 +226,8 @@ export const sweep = internalMutation({
           for (const n of recentNotifs) {
             if (!n.read && EMAIL_WORTHY.has(n.type)) ids.push(n.recipient_user_id.toString());
           }
-          for (const d of recentDecisions) ids.push(d.user_id.toString());
+          // A trial's decisions wait in the trial's own stack, never in an email.
+          for (const d of recentDecisions) if (!d.trial) ids.push(d.user_id.toString());
           return ids;
         },
 

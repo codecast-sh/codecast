@@ -27,7 +27,7 @@ export function useSyncSavedViews() {
   // short-lived pruning build gets its views back on this boot rather than
   // staying mysteriously short one view forever. A no-op for everyone else.
   useWatchEffect(() => {
-    useInboxStore.getState().clearSavedViewTombstones();
+    useInboxStore.getState().clearTombstones("savedViews");
   }, []);
   // useQueryNoThrow, not useQuery: this hook mounts inside Sidebar, and saved
   // views only enrich the rail. A terminal server error — the classic one being
