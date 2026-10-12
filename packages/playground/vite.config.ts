@@ -24,11 +24,21 @@ function unfurls(runOrigin: string): Plugin {
   };
 }
 
+/** The page opens two connections before its script could ask for them:
+ *  the deployment's socket, and the run origin the app's frame loads from. */
+function preconnects(origins: string[]): Plugin {
+  return {
+    name: "clayground-preconnects",
+    transformIndexHtml: () =>
+      origins.filter(Boolean).map((href) => ({ tag: "link", attrs: { rel: "preconnect", href }, injectTo: "head-prepend" as const })),
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), ["VITE_", "CONVEX_URL"]);
   const runOrigin = env.VITE_RUN_ORIGIN ?? env.CONVEX_URL?.replace(/\.convex\.cloud$/, ".convex.site") ?? "";
   return {
-    plugins: [react(), unfurls(runOrigin)],
+    plugins: [react(), unfurls(runOrigin), preconnects([env.CONVEX_URL, runOrigin])],
     // CONVEX_URL comes from .env.local, written by the Convex CLI.
     envPrefix: ["VITE_", "CONVEX_URL"],
     server: {
