@@ -34,6 +34,23 @@ describe("graphForDaemonRun", () => {
     expect(graphForDaemonRun({ workflow_name: "x" }, { name: "x", nodes, edges, source: "not dot at all {{" })!.stack).toBeUndefined();
   });
 
+  test("a server-queued trial run reads the graph file it was pushed from on this machine, not the stale row", () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-"));
+    fs.mkdirSync(path.join(root, "line"));
+    fs.writeFileSync(path.join(root, "line/look.md"), "Edited since the push.");
+    fs.writeFileSync(path.join(root, "line/g.cast"), `digraph g { start [shape=Mdiamond]; look [prompt="@look.md"]; exit [shape=Msquare]; start -> look -> exit }`);
+    const wf = { name: "g", nodes: [{ id: "start", type: "start" }, { id: "look", prompt: "As pushed." }, { id: "exit", type: "exit" }], edges: [], origin: { device_id: "dev-a", root, file: "line/g.cast" } };
+    const run = { workflow_name: "g", project_path: root, fresh_branch: true };
+    expect(graphForDaemonRun(run, wf, root, "dev-a")!.nodes.get("look")!.prompt).toBe("Edited since the push.");
+    // Another machine, or a run that is not a server-queued trial run, keeps the row.
+    expect(graphForDaemonRun(run, wf, root, "dev-b")!.nodes.get("look")!.prompt).toBe("As pushed.");
+    expect(graphForDaemonRun({ ...run, fresh_branch: false }, wf, root, "dev-a")!.nodes.get("look")!.prompt).toBe("As pushed.");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   test("null when the run has no nodes and its name is not a shipped template", () => {
     expect(graphForDaemonRun({ workflow_name: "not-a-template", project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: undefined, project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
