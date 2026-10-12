@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Sparkles, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { Button } from "./ui/button";
 import { launchSharingAgent } from "../lib/sharingAgent";
 import { shouldShowSharingSetup } from "../lib/sharingSetup";
 
@@ -32,12 +33,13 @@ export function SharingSetupBanner() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
+          <Button
+            variant="cyan"
+            size="xs"
             onClick={() => { take(); launchSharingAgent(); }}
-            className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-cyan text-sol-base03"
           >
             Set up with an agent
-          </button>
+          </Button>
           <Link
             href="/settings/sync"
             onClick={take}
