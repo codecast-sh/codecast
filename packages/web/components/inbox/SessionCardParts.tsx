@@ -8,7 +8,7 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useModeWords, useSurface } from "../../lib/surfaces";
+import type { ModeWords } from "../../lib/surfaceRules";
 
 // The pieces of the full inbox card (SessionCardView) that stand on their own:
 // each draws from the row and the few facts handed to it, and every gesture
@@ -324,6 +324,8 @@ export function CardPinBadge({ session, fadeGround, onPin }: { session: InboxSes
 /** The hover toolbar on a live card: pin, kill, label, stash. */
 export function CardHoverToolbar({
   session,
+  words,
+  labels,
   fadeGround,
   onPin,
   onDismiss,
@@ -331,14 +333,16 @@ export function CardHoverToolbar({
   onStash,
 }: {
   session: InboxSession;
+  /** The mode's words and whether the Labels action shows: the card reads
+   *  both on its one store subscription, so the toolbar holds none. */
+  words: ModeWords;
+  labels: boolean;
   fadeGround: string | null;
   onPin?: (id: string, e: React.MouseEvent) => void;
   onDismiss?: (id: string) => void;
   onOpenLabels?: (session: InboxSession) => void;
   onStash?: (id: string, e: React.MouseEvent) => void;
 }) {
-  const words = useModeWords();
-  const labels = useSurface("inbox.labelStrip");
   return (
         <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
