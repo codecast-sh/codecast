@@ -245,6 +245,27 @@ describe("fromRrweb", () => {
     ]);
   });
 
+  test("a PostHog fetch whose entry carries no status field but got a response is no failure", () => {
+    // Browsers without PerformanceResourceTiming.responseStatus (Safari) report
+    // every fetch with no status at all; the response timings and sizes still
+    // show it was answered. A cross-origin entry zeroes its timings and cannot
+    // be judged. A same-origin fetch that never got a response stays failed.
+    const answered = { entryType: "resource", initiatorType: "fetch", startTime: 1322, requestStart: 1326, responseStart: 1994, responseEnd: 1994, duration: 672, transferSize: 902, encodedBodySize: 602, decodedBodySize: 826 };
+    const unanswered = { entryType: "resource", initiatorType: "fetch", startTime: 1322, requestStart: 1326, responseStart: 0, responseEnd: 1400, duration: 78, transferSize: 0, encodedBodySize: 0, decodedBodySize: 0 };
+    const ph = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/" } },
+      { type: 6, timestamp: T + 10, data: { plugin: "rrweb/network@1", payload: { requests: [
+        { ...answered, name: "https://a.test/api/session" },
+        { ...answered, name: "https://a.test/api/slow", duration: 2500 },
+        { ...unanswered, name: "https://a.test/api/down" },
+        { ...unanswered, name: "https://ingest.other.test/envelope", requestStart: 0, duration: 397 },
+      ] } } },
+    ]);
+    expect(ph.filter((e) => e.type === "network")).toEqual([
+      { type: "network", t: 10, method: "GET", url: "https://a.test/api/down", status: 0, ms: 78 },
+    ]);
+  });
+
   test("PostHog's Server-Timing entries beside a request are not requests", () => {
     const ph = fromRrweb([
       { type: 4, timestamp: T, data: { href: "https://a.test/p/1" } },

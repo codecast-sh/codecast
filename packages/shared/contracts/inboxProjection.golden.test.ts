@@ -93,6 +93,11 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // hosted row, so none moved.
   19: "842058368e90ebf4",
   20: "842058368e90ebf4",
+  // v21 (a child's ask decays with child_asking_until) moved no fixture.
+  // v22: a workflow run's own log is never a member (isRunLog). The new
+  // `run-logs` fixture: its three logs are out, the hosting session is in.
+  // No older fixture moved.
+  22: "47f15077eeeeec75",
 };
 
 type Expected = {

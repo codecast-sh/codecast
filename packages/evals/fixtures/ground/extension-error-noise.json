@@ -1,0 +1,33 @@
+{
+  "asOf": "2026-09-20T12:00:00.000Z",
+  "notes": "a single browser error thrown by a wallet extension on a static page, already explained in a comment: noise. Ground should say not_actionable, serving no goal",
+  "label": { "goal_ref": "none", "readiness": "not_actionable" },
+  "snapshot": {
+    "now": 1789905600000,
+    "cause": {
+      "short_id": "ct-9133",
+      "title": "Cannot redefine property: ethereum",
+      "description": "Opened by a bug signal from sdk:shop-web.\nSubject: eg-97\n\nnew in sdk:shop-web, group eg-97 (error).\nCulprit: chrome-extension://wallet-ext/inpage.js\nSeen 1 times.",
+      "priority": "medium",
+      "created_at": 1789891200000,
+      "signal_count": 1,
+      "first_seen": 1789891100000,
+      "last_seen": 1789891100000,
+      "signals": [
+        { "source": "sdk:shop-web", "kind": "bug", "title": "Cannot redefine property: ethereum", "subject": "eg-97", "detail_md": "new in sdk:shop-web, group eg-97 (error).\nCulprit: chrome-extension://wallet-ext/inpage.js\nPage: /about\nSeen 1 times, 1 user.", "observed_at": 1789891100000 }
+      ],
+      "comments": [
+        { "author": "Dana", "text": "The stack is entirely inside a crypto wallet extension's injected script, on the about page. Same error as eg-61 last month, which we closed as not ours.", "created_at": 1789894800000 }
+      ]
+    },
+    "brief": {
+      "workspace": "team:fixture",
+      "workspace_name": "Fernway",
+      "initiatives": [],
+      "projects": [
+        { "short_id": "pj-12", "title": "Shop: checkout", "status": "active", "priority": "p0", "owner_role": "@checkout", "goal": "Every shopper who reaches the cart can pay in under a minute and is charged exactly the total the cart shows.", "success_metrics": ["Checkout completion above 70%"] },
+        { "short_id": "pj-19", "title": "Marketing site", "status": "active", "priority": "p2", "goal": "The marketing pages load fast and turn visitors into shoppers.", "success_metrics": ["Largest paint under 2s"] }
+      ]
+    }
+  }
+}
