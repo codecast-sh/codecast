@@ -10,6 +10,8 @@ import { SessionPrewarm } from "./SessionPrewarm";
 import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
 import { useStageShortcuts } from "../hooks/useStageShortcuts";
+import { startVisitRecorder } from "../lib/visitRecorder";
+import { borrowsTabShell } from "../lib/desktop";
 import { StageDropLayer } from "./stage/StageDropLayer";
 import { StagePickLayer } from "./stage/StagePickLayer";
 
@@ -91,6 +93,9 @@ export function TabContent() {
   ]);
   // The pane chords live with the stage they act on.
   useStageShortcuts();
+  // What this shell shows feeds recents. A window borrowing the tab shell
+  // (a detached tab, an embedded pane) shows no tab of its own.
+  useMountEffect(() => (borrowsTabShell() ? undefined : startVisitRecorder()));
 
   if (s.tabs.length === 0) return null;
   return <TabStage tabs={s.tabs} storeActiveTabId={s.activeTabId} />;

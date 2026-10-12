@@ -1,16 +1,15 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import type { FaceRow } from "../../lib/faces/faceRow";
 import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import { roomHeldAsBurst } from "../../lib/faces/faceRow";
 import { Headphones, Link2 } from "lucide-react";
-import { GuestInvite } from "./GuestDoor";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { joinCall, startHuddle } from "../../lib/calls/actions";
-import { CHANNEL_HUDDLE_WARNING_SIZE, guestDisplayName, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
+import { joinCall } from "../../lib/calls/actions";
+import { requestHuddleStart } from "../../lib/calls/huddleStart";
+import { guestDisplayName, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { useGuestsWaiting } from "../../hooks/useLiveRooms";
 import { AvatarImg } from "../../lib/avatarCache";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle, DialogTrigger } from "../ui/dialog";
 
 // The faces in a room, in one idiom: every live-room surface (this chip, the
 // sidebar's Live now cluster, /calls' Happening now) shows the same overlapped
@@ -151,7 +150,6 @@ export function HuddleButton({
 }) {
   const enabled = useCallsAvailable();
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
-  const [warningRoom, setWarningRoom] = useState<string | null>(null);
   const isChannel = parseRoomKey(roomKey)?.kind === "channel";
   if (!enabled) return null;
   if (occupied) return <OccupancyChip roomKey={roomKey} className={className} compact={compact} />;
@@ -162,126 +160,73 @@ export function HuddleButton({
       : ring?.length
         ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
         : "Start a huddle here — teammates see it and can join");
-  const start = () =>
-    isChannel || ring?.length
-      ? void startHuddle({ roomKey, toUserIds: ring ?? [], anchorTitle, ringChannel: isChannel })
-      : void joinCall(roomKey, { intent: "deliberate" });
   return (
-    <Dialog open={warningRoom === roomKey} onOpenChange={(open) => setWarningRoom(open ? roomKey : null)}>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          data-huddle-idle
-          disabled={isChannel && channelMemberCount === undefined}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!isChannel || (channelMemberCount ?? 0) <= CHANNEL_HUDDLE_WARNING_SIZE) {
-              e.preventDefault();
-              start();
-            }
-          }}
-          className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
-          title={label}
-          aria-label={label}
-        >
-          <Headphones className="h-3 w-3" />
-          {!compact && <span>{ring?.length ? "Ring" : "Huddle"}</span>}
-        </button>
-      </DialogTrigger>
-      <DialogContent className="w-[calc(100%-2rem)] max-w-sm rounded-lg border-sol-border bg-sol-bg text-sol-text" onClick={(e) => e.stopPropagation()}>
-        <DialogTitle className="pr-6 text-base">Buzz everyone in {anchorTitle || "this channel"}?</DialogTitle>
-        <DialogDescription className="text-sm text-sol-text-muted">
-          This channel has {channelMemberCount} members. Starting a huddle will buzz all {Math.max(0, (channelMemberCount ?? 1) - 1)} other members.
-        </DialogDescription>
-        <DialogFooter className="gap-2 sm:space-x-0">
-          <DialogClose asChild>
-            <button type="button" className="rounded-md border border-sol-border px-3 py-2 text-sm hover:bg-sol-bg-highlight">Cancel</button>
-          </DialogClose>
-          <button type="button" className="sol-btn-solid rounded-md bg-sol-violet px-3 py-2 text-sm text-sol-base3" onClick={() => { setWarningRoom(null); start(); }}>Start and buzz everyone</button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <button
+      type="button"
+      data-huddle-idle
+      disabled={isChannel && channelMemberCount === undefined}
+      onClick={(e) => {
+        e.stopPropagation();
+        requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: isChannel, channelMemberCount, hint });
+      }}
+      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      title={label}
+      aria-label={label}
+    >
+      <Headphones className="h-3 w-3" />
+      {!compact && <span>{ring?.length ? "Ring" : "Huddle"}</span>}
+    </button>
   );
 }
 
 const NO_NAMES: string[] = [];
 
-// The huddle button with a guest link tucked behind it. A guest is usually
-// sent the link ahead of the meeting, and the stage (which has its own
-// invite) only exists once a huddle runs, so the header offers one; but it is
-// a rare gesture, so it stays folded behind the huddle button and slides out
-// on hover or keyboard focus. It stays out while its panel is open, and when
-// a guest is already at this room's door on the viewer's link with nobody in
-// the room (useGuestsWaiting): the huddle button beside it is how they get
-// let in. Shown only to somebody who may make a link (GuestInvite asks).
+// The huddle button, and beside it a chip that appears only while a guest
+// is at this room's door on the viewer's link with nobody in the room
+// (useGuestsWaiting): starting the huddle is how they get let in, so the chip
+// opens the same start dialog. Making a guest link lives in that dialog too;
+// the header at rest shows the huddle button alone, and nothing moves under
+// the pointer.
 export function HuddleWithGuest({ className = "", ...huddle }: Parameters<typeof HuddleButton>[0]) {
   const enabled = useCallsAvailable();
   if (!enabled) return null;
   return (
-    <span className={`group/huddle inline-flex items-center ${className}`}>
+    <span className={`inline-flex items-center gap-1 ${className}`}>
       <HuddleButton {...huddle} />
-      <GuestInvite
-        roomKey={huddle.roomKey}
-        align="end"
-        trigger={(p) => <GuestChipButton {...p} roomKey={huddle.roomKey} compact={!!huddle.compact} />}
-      />
+      <GuestsWaitingChip {...huddle} />
     </span>
   );
 }
 
-/** The chip itself, mounted only for somebody who may invite here (the
- *  trigger is drawn only then), so only they subscribe to who is waiting. */
-function GuestChipButton({
-  roomKey,
-  open,
-  toggle,
-  compact,
-}: {
-  roomKey: string;
-  open: boolean;
-  toggle: () => void;
-  compact: boolean;
-}) {
+// Mounted only while somebody is at some door (a scalar read), so a header
+// button at rest never subscribes to the face row.
+function GuestsWaitingChip(props: Parameters<typeof HuddleButton>[0]) {
+  const anyWaiting = useInboxStore((st: any) => (st.guestsWaiting?.length ?? 0) > 0);
+  return anyWaiting ? <GuestsWaitingAtDoor {...props} /> : null;
+}
+
+function GuestsWaitingAtDoor({ roomKey, ring, anchorTitle, channelMemberCount, hint, compact }: Parameters<typeof HuddleButton>[0]) {
   const waiting = useGuestsWaiting().find((r) => r.roomKey === roomKey)?.names ?? NO_NAMES;
-  const waitingLine =
-    waiting.length > 0
-      ? `${guestDisplayName(waiting[0])}${waiting.length > 1 ? ` and ${waiting.length - 1} more` : ""} ${waiting.length > 1 ? "are" : "is"} waiting to join. Start the huddle to let them in`
-      : null;
-  const out = open || !!waitingLine;
+  if (waiting.length === 0) return null;
+  const line = `${guestDisplayName(waiting[0])}${waiting.length > 1 ? ` and ${waiting.length - 1} more` : ""} ${waiting.length > 1 ? "are" : "is"} waiting to join. Start the huddle to let them in`;
   return (
-    // Folded to nothing until its group is hovered or focused
-    // (HuddleWithGuest), so a header at rest shows only the huddle icon. The
-    // grid column eases the width.
-    <span
-      className={`grid transition-[grid-template-columns,opacity] duration-150 ease-out motion-reduce:transition-none ${
-        out
-          ? "grid-cols-[1fr] opacity-100"
-          : "grid-cols-[0fr] opacity-0 group-hover/huddle:grid-cols-[1fr] group-hover/huddle:opacity-100 group-focus-within/huddle:grid-cols-[1fr] group-focus-within/huddle:opacity-100"
-      }`}
-    >
-    <span className="flex min-w-0 overflow-hidden py-0.5">
-    <span aria-hidden className="w-1 shrink-0" />
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        toggle();
+        requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: parseRoomKey(roomKey)?.kind === "channel", channelMemberCount, hint });
       }}
-      aria-expanded={open}
-      className={`relative flex items-center gap-1 rounded-full border transition-colors hover:border-sol-yellow/40 hover:text-sol-yellow ${
-        open || waitingLine ? "!border-sol-yellow/40 text-sol-yellow" : "text-sol-text-dim"
-      } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"}`}
-      title={waitingLine ?? "Invite someone outside the team: a link they join from in a browser"}
-      aria-label={waitingLine ? `${waitingLine}. Guest link` : "Invite someone outside the team"}
+      className={`relative flex items-center gap-1 rounded-full border border-sol-yellow/40 text-sol-yellow transition-colors hover:bg-sol-yellow/10 ${compact ? "px-1.5 py-1 text-[10px] font-medium" : "px-2 py-0.5 text-xs"}`}
+      title={line}
+      aria-label={line}
     >
       <Link2 className="h-3 w-3" />
-      {!compact && <span>{waitingLine ? `${waiting.length} waiting` : "Guest"}</span>}
-      {waitingLine && compact && (
+      {compact ? (
         <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-sol-yellow motion-reduce:animate-none" aria-hidden />
+      ) : (
+        <span>{waiting.length} waiting</span>
       )}
     </button>
-    </span>
-    </span>
   );
 }
 
