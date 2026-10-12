@@ -17,6 +17,14 @@ describe("signalAddBody", () => {
     expect(signalAddBody({ source: "person", kind: "bug", title: "Checkout  Throws!" }).fingerprint).toBe("person:checkout-throws");
   });
 
+  test("a product's finding files under its issue key, with its judge, version and severity (learning-loop.md LL3)", () => {
+    expect(signalAddBody({ source: "agentwatch", kind: "bug", title: "Narrates effort", issue: " union:cluster:a ", judge: "comms", judgeVersion: "v7", severity: "8" })).toEqual({
+      source: "agentwatch", kind: "bug", title: "Narrates effort", fingerprint: "union:cluster:a", issue: true, judge: "comms", judge_version: "v7", severity: 8,
+    });
+    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", issue: "union:cluster:a", fingerprint: "x" })).toThrow("not both");
+    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", severity: "high" })).toThrow("--severity takes a number");
+  });
+
   test("an unknown kind is refused with the list", () => {
     expect(() => signalAddBody({ source: "s", kind: "feeling", fingerprint: "f", title: "t" })).toThrow("Kinds: bug, regression, prompt_miss, ux, cohesion, request");
   });
@@ -40,7 +48,7 @@ describe("formatSignalList", () => {
     observed_at: 0, created_at: 0, attach: "fingerprint", reopened: true, task_short_id: "ct-9",
   };
   test("one line per signal names the cause and how it attached", () => {
-    expect(formatSignalList([row], 120_000)).toBe("sg-4  sentry/bug  Checkout throws  → ct-9 (same fingerprint, reopened it; 2m ago)");
+    expect(formatSignalList([row], 120_000)).toBe("sg-4  sentry/bug  Checkout throws  → ct-9 (same key, reopened it; 2m ago)");
     expect(formatSignalList([])).toContain("cast signal add");
   });
 });
@@ -97,13 +105,19 @@ describe("cast signal on the wire", () => {
       source: "person", kind: "ux", fingerprint: "nav:back", title: "Back loses scroll", subject: "web/inbox", goal_hint: "retention",
       project_path: "/repo", conversation_id: "s1",
     } }]);
-    expect(logs.join("\n")).toContain("sg-1 → ct-7 (new cause; 1 signal)");
+    expect(logs.join("\n")).toContain("sg-1 → ct-7 (new problem; 1 finding)");
   });
 
   test("add without the required flags posts nothing", async () => {
     await expect(run("add", "--source", "person")).rejects.toThrow(/exit 1/);
     expect(calls).toHaveLength(0);
     expect(logs.join("\n")).toContain("--kind, --title");
+  });
+
+  test("move sends the key, the cause it leaves, and where it goes", async () => {
+    answer = () => ({ from: "ct-7", to: "ct-9", moved: 2, created: true });
+    await run("move", "--fingerprint", "union:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "union:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
   });
 
   test("ls --fingerprint asks the server for that one key in the workspace", async () => {
@@ -179,5 +193,32 @@ describe("cast signal on the wire", () => {
     await run("show", "sg-2");
     expect(calls).toEqual([{ path: "/cli/signal/show", body: { signal: "sg-2" } }]);
     expect(logs.join("\n")).toContain("judged the same problem");
+  });
+
+  // Improving a judge (learning-loop.md LL11).
+  test("judge-defects posts the run's file with the run; diagnosis takes the graph's JSON result", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-defects-"));
+    const file = path.join(dir, "judge-defects.json");
+    fs.writeFileSync(file, JSON.stringify([{ judge: "comms", finding: "sg-4", sentence: " The reply reports no problem. ", name: "C97 voicemail" }]));
+    answer = (p) => (p === "/cli/signal/judge-defects"
+      ? [{ finding: "sg-4", short_id: "sg-4", state: "waiting", waiting_on: "@quality's line is off; the diagnosis starts when it is on." }]
+      : { review: { trigger: "dissolve", state: "diagnosed", answer: "misread", against: "judge", fact: "No meeting was booked." }, case_short_id: "sg-12", task_short_id: "ct-30" });
+    await run("judge-defects", file, "--run", "run_1");
+    await run("diagnosis", "sg-4", "--result", JSON.stringify({ answer: "Misread", fact: "No meeting was booked.", why: "" }));
+    expect(calls).toEqual([
+      { path: "/cli/signal/judge-defects", body: { defects: [{ finding: "sg-4", judge: "comms", sentence: "The reply reports no problem.", name: "C97 voicemail" }], run_id: "run_1" } },
+      { path: "/cli/signal/diagnosis", body: { signal: "sg-4", answer: "misread", fact: "No meeting was booked." } },
+    ]);
+    expect(logs.join("\n")).toContain("sg-4 marked wrong; waiting: @quality's line is off");
+    expect(logs.join("\n")).toContain("the judge misread what it saw; filed against the judge's prompt. Fact: No meeting was booked. → sg-12 on ct-30");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("diagnosis refuses an answer outside the three, and a result that is not JSON, before posting", async () => {
+    await expect(run("diagnosis", "sg-4", "--answer", "maybe")).rejects.toThrow(/exit 1/);
+    await expect(run("diagnosis", "sg-4", "--result", "$diagnose.json")).rejects.toThrow(/exit 1/);
+    expect(calls).toHaveLength(0);
+    expect(logs.join("\n")).toContain("The answer is one of missing, misread, upheld");
+    expect(logs.join("\n")).toContain("--result is a JSON object");
   });
 });
