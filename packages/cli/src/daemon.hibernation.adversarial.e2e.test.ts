@@ -15,6 +15,7 @@ import {
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
 import { hasTmux, tmuxRun, tmuxRunAsync } from "./tmux.js";
+import { routeTmuxArgs, withTmuxSession } from "./tmuxRoute.js";
 import type { SyncService } from "./syncService.js";
 
 const prefix = `cc-e1-safe-${process.pid}-${crypto.randomUUID().slice(0, 6)}`;
@@ -88,7 +89,9 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
       // process.env to a child that inherits, so without this the attach client
       // looks for the session on the machine's shared tmux server and never
       // finds it (ct-49770).
-      const client = Bun.spawn(["tmux", "-C", "attach-session", "-t", `=${f.h.tmuxSession}`], { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: { ...process.env } });
+      // Routed like every other tmux call: the pane lives on its own server
+      // (tmuxRoute.ts), and a bare client would ask the shared one.
+      const client = Bun.spawn(["tmux", ...routeTmuxArgs(["-C", "attach-session", "-t", `=${f.h.tmuxSession}`])[0]], { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: { ...process.env } });
       attachers.push(client);
       await waitFor(() => tmuxRun(["display-message", "-p", "-t", `=${f.h.tmuxSession}:`, "#{session_attached}"]).stdout.trim() === "1", { timeoutMs: 3000 });
     };
@@ -199,7 +202,8 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     };
     const park = mode === "pass" ? runHibernationPass(f.io) : hibernateSessionNow(f.h.sessionId, undefined, f.io);
     await reached;
-    const injection = injectViaTmux(paneId, "e1-lock-message", "claude");
+    // A pane id names a pane on one server only: run it scoped to the session's.
+    const injection = withTmuxSession(f.h.tmuxSession, () => injectViaTmux(paneId, "e1-lock-message", "claude"));
     release();
     const outcome = await park;
     expect(mode === "pass" ? outcome === 0 : (outcome as { result: string }).result.startsWith("skipped_")).toBe(true);
