@@ -4,6 +4,8 @@
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { useCopy } from "../lib/clipboard";
+import { useOffline } from "../lib/connection";
+import { Dots } from "../ui/Dots";
 import { errorData } from "../lib/errors";
 import { useIdentity, useVisitorMutation, useVisitorQuery } from "../lib/identity";
 import { absolute, appUrl, makeUrl, roomUrl, versionUrl } from "../lib/router";
@@ -17,24 +19,28 @@ import { Spinner } from "../ui/Spinner";
 import { Popover } from "../ui/Popover";
 import { Link } from "../ui/Link";
 import { useToast } from "../ui/Toast";
+import { useTyping } from "../data/presence";
 import { useAppState, useHereState } from "./appState";
 import s from "./RoomHeader.module.css";
 
 export function RoomHeader({ compact = false }: { compact?: boolean }) {
   const { app, setRoomOpen, openCharacterPicker, cheer } = useAppState();
   const here = useHereState();
+  const typing = useTyping(app.id);
   const { me } = useIdentity();
   const [menu, setMenu] = useState<null | { kind: "people" | "links"; anchor: HTMLElement }>(null);
   // You already have the you chip beside it; the stack is everyone else.
   const others = here.people.filter((p) => p.id !== me.id);
   const toggle = (kind: "people" | "links", anchor: HTMLElement) => setMenu((m) => (m?.kind === kind ? null : { kind, anchor }));
   const mine = useIsMine();
+  // Offline, who is here and what is live are unknown: the line says so.
+  const offline = useOffline();
 
   return (
     <header className={`${s.head} ${compact ? s.compact : ""}`}>
       <div className={s.top}>
         <h2 className={s.name} title={app.name}>{app.name}</h2>
-        {compact && <span className={s.compactLive}><LiveVersion /></span>}
+        {compact && <span className={s.compactLive}>{offline ? <span className={s.reconnecting} role="status">Reconnecting <Dots /></span> : <LiveVersion />}</span>}
         {others.length > 0 && (
           <button
             className={s.stack}
@@ -43,7 +49,7 @@ export function RoomHeader({ compact = false }: { compact?: boolean }) {
             aria-haspopup="dialog"
             aria-expanded={menu?.kind === "people"}
           >
-            <FaceStack people={others} max={compact ? 2 : 3} size={24} typing={here.typing} hop={cheer} />
+            <FaceStack people={others} max={compact ? 2 : 3} size={24} typing={typing} hop={cheer} />
             {!compact && <span className={s.names}>{others.length <= 2 ? others.map((p) => p.name).join(", ") : `${others.length} others`}</span>}
           </button>
         )}
@@ -60,9 +66,15 @@ export function RoomHeader({ compact = false }: { compact?: boolean }) {
       </div>
       {!compact && (
         <p className={s.sub}>
-          <LiveVersion long />
-          <i className={s.sep} />
-          <span className={s.tnum}>{here.people.length} here</span>
+          {offline ? (
+            <span className={s.reconnecting} role="status">Reconnecting <Dots /></span>
+          ) : (
+            <>
+              <LiveVersion long />
+              <i className={s.sep} />
+              <span className={s.tnum}>{here.people.length} here</span>
+            </>
+          )}
           {app.forked_from && (
             <>
               <i className={s.sep} />
@@ -93,13 +105,14 @@ export function RoomHeader({ compact = false }: { compact?: boolean }) {
 function PeopleList({ onDone }: { onDone: () => void }) {
   const here = useHereState();
   const { me } = useIdentity();
-  const { viewing, view } = useAppState();
+  const { app, viewing, view } = useAppState();
+  const typing = useTyping(app.id);
   return (
     <ul className={s.people}>
       {here.people.map((p) => {
         const row = here.byId.get(p.id);
         const theirs = p.id === me.id ? null : (row?.viewing_version ?? null);
-        const status = here.typing.has(p.id) ? "typing" : row?.viewing_version ? `viewing v${row.viewing_version}` : null;
+        const status = typing.has(p.id) ? "typing" : row?.viewing_version ? `viewing v${row.viewing_version}` : null;
         return (
           <li key={p.id}>
             <Face person={p} size={24} />

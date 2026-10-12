@@ -87,7 +87,7 @@ function Swap({ t, before, after }: { t: number; before: ReactNode; after: React
   );
 }
 
-function SessionsPanel() {
+export function SessionsPanel() {
   return (
     <div className="dq-in rounded-xl border overflow-hidden" style={at(0.5, { borderColor: LINE, backgroundColor: "rgba(253,246,227,.7)" })}>
       <div className="px-4 h-9 flex items-center border-b text-[11px] font-mono" style={{ borderColor: LINE, color: DIM }}>
@@ -131,14 +131,13 @@ function Count() {
   );
 }
 
-function QueueStage() {
+export function QueueStage() {
   return (
     <div className="dq-in relative" style={at(0.2)}>
       <div className="flex items-center gap-3 mb-3 px-1 text-[12px]" style={{ color: DIM }}>
         <span className="text-[15px]" style={{ color: TEXT }}>Questions</span>
         <span className="flex items-center gap-1"><Count /> waiting on you</span>
-        <span className="ml-auto hidden sm:inline font-mono text-[11px]">/questions</span>
-      </div>
+              </div>
       <div className="grid pb-8">
         {/* back to front: the third ask, the second, the first */}
         <div className="dq-sheet3 [grid-area:1/1]" style={at(T1, { ["--d2" as string]: `${T2}s` } as CSSProperties)}>
@@ -169,20 +168,15 @@ export function Hero() {
         <div className="grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-10 lg:gap-14 items-start">
           <div className="min-w-0 lg:pt-6">
             <Link href="/features" className="dq-in inline-flex items-center gap-2 text-[13px] font-mono hover:underline" style={at(0, { color: SOL.base00 })}>
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: Y }} />cast decide
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: Y }} />Decisions
             </Link>
             <h1 className="dq-in mt-5 font-mono font-bold text-[34px] sm:text-[46px] leading-[1.06] tracking-[-0.04em] [text-wrap:balance]" style={at(0.08, { color: SOL.base03 })}>
               The calls only you can make, in one queue.
             </h1>
             <p className="dq-in mt-6 text-[17px] sm:text-[18px] leading-8 max-w-xl" style={at(0.16, { color: SOL.base01 })}>
-              When an agent hits a fork it cannot settle alone, it writes the question, the options and its reasoning into a card. The card waits in your queue. You clear the queue when you choose to, and each answer goes back to the session that asked.
+              When an agent hits a fork it cannot settle alone, it writes the question, the options and its reasoning into a card. The card waits in Questions, in the app's sidebar and on your phone. You clear the queue when you choose to, a key per answer, and each answer goes back to the session that asked.
             </p>
-            <div className="dq-in mt-7 flex flex-wrap items-center gap-3" style={at(0.24)}>
-              <code className="font-mono text-[13px] px-3.5 py-2.5 rounded-lg border max-w-full whitespace-normal sm:whitespace-nowrap leading-6" style={{ backgroundColor: SOL.base03, borderColor: "#094959", color: SOL.base1 }}>
-                <span style={{ color: SOL.green }}>$ </span>cast decide <span style={{ color: SOL.cyan }}>&quot;Backoff?&quot;</span> <span style={{ color: SOL.yellow }}>-o</span> <span style={{ color: SOL.cyan }}>&quot;Exponential&quot;</span> <span style={{ color: SOL.yellow }}>-o</span> <span style={{ color: SOL.cyan }}>&quot;Fixed&quot;</span>
-              </code>
-            </div>
-            <div className="dq-in mt-5 flex flex-wrap gap-x-6 gap-y-2 text-[14px]" style={at(0.3)}>
+            <div className="dq-in mt-7 flex flex-wrap gap-x-6 gap-y-2 text-[14px]" style={at(0.24)}>
               <a href="#install" className="font-semibold underline underline-offset-4" style={{ color: SOL.base02, textDecorationColor: Y }}>Install codecast</a>
               <Link href="/documentation/decisions" className="underline underline-offset-4" style={{ color: SOL.base01, textDecorationColor: LINE }}>Read the guide</Link>
               <Link href={featureHref("triggers")} className="underline underline-offset-4" style={{ color: SOL.base01, textDecorationColor: LINE }}>Triggers</Link>
