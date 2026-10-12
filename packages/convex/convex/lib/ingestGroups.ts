@@ -542,6 +542,8 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
       return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at };
     case "event":
     case "replay":
+    // A moment event is kept as a moment (moments.ts recordMomentEvents, learning-loop.md LL7), not grouped.
+    case "moment":
       return { type: "count" };
   }
 }
