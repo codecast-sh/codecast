@@ -22,8 +22,58 @@ import type { WorkflowEdge, WorkflowGraph, WorkflowNode } from "./types.js";
 /** `updateProgress` stores the head of each step's output on the node. */
 export const RESULT_PREVIEW_CHARS = 800;
 
+/** A step's output as its node shows it: a station script that ends on one
+ *  JSON result saying `why` (the line's checks) is that result, which the run
+ *  report reads as its sentence; output that is one JSON object stays JSON,
+ *  its long strings shortened to fit, so a later step's `$<id>.json.<field>`
+ *  still reads from the record; any other output is its head. */
 export function resultPreview(output: string): string | undefined {
   const text = output.trim();
+  const last = text.slice(text.lastIndexOf("\n") + 1).trim();
+  if (last.startsWith("{") && last.length <= RESULT_PREVIEW_CHARS) {
+    try {
+      if (typeof JSON.parse(last)?.why === "string") return last;
+    } catch {}
+  }
+  if (text.length > RESULT_PREVIEW_CHARS && text.startsWith("{")) {
+    const fit = jsonThatFits(text, RESULT_PREVIEW_CHARS);
+    if (fit) return fit;
+  }
+  return text ? text.slice(0, RESULT_PREVIEW_CHARS) : undefined;
+}
+
+/** A JSON object's text within `cap` characters: string values shortened (an ellipsis marks each cut), then
+ *  trailing fields dropped, so it still parses. Null when the text is not one object. */
+export function jsonThatFits(text: string, cap: number): string | null {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const shorten = (v: unknown, n: number): unknown =>
+    typeof v === "string" ? (v.length > n ? `${v.slice(0, n)}…` : v)
+      : Array.isArray(v) ? v.map((x) => shorten(x, n))
+      : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shorten(x, n)]))
+      : v;
+  for (const n of [240, 120, 60, 24]) {
+    const out = JSON.stringify(shorten(value, n));
+    if (out.length <= cap) return out;
+  }
+  const kept: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(shorten(value, 24) as Record<string, unknown>)) {
+    if (JSON.stringify({ ...kept, [k]: v }).length > cap) continue;
+    kept[k] = v;
+  }
+  return JSON.stringify(kept);
+}
+
+/** An agent step's output as its node shows it: what it concluded, in its
+ *  own words. The session runner's `work_state:` line and any fenced json
+ *  report are dropped (the edges route on the json; the run reads the prose),
+ *  and the rest is capped like a script's head. */
+export function agentResultPreview(output: string): string | undefined {
+  const text = output
+    .replace(/^work_state:[^\n]*\n?/, "")
+    .replace(/```json[ \t]*\n[\s\S]*?\n[ \t]*```/g, "")
+    .trim();
   return text ? text.slice(0, RESULT_PREVIEW_CHARS) : undefined;
 }
 
