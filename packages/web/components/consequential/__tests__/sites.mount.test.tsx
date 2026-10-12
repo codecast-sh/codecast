@@ -1,0 +1,75 @@
+// The swapped sites: each control that used to turn something consequential on
+// in one press now opens the review, and only the review's own button writes.
+import assert from "node:assert/strict";
+import { mock, test } from "bun:test";
+import { replaceGlobals } from "../../../test-helpers/globals";
+
+async function dom() {
+  const { JSDOM } = await import("jsdom");
+  const d = new JSDOM('<div id="root"></div>', { url: "https://local.codecast.sh/", pretendToBeVisual: true });
+  const w = d.window as any;
+  const restore = replaceGlobals({
+    window: w, document: w.document, navigator: w.navigator, IS_REACT_ACT_ENVIRONMENT: true,
+    HTMLElement: w.HTMLElement, Element: w.Element, Node: w.Node, MutationObserver: w.MutationObserver, getComputedStyle: w.getComputedStyle.bind(w),
+    DocumentFragment: w.DocumentFragment, KeyboardEvent: w.KeyboardEvent, Event: w.Event, CustomEvent: w.CustomEvent, NodeFilter: w.NodeFilter,
+    localStorage: w.localStorage, requestAnimationFrame: (f: any) => setTimeout(f, 0), cancelAnimationFrame: clearTimeout,
+  });
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(w.document.getElementById("root"));
+  const q = <T extends Element = HTMLElement>(sel: string) => w.document.querySelector(sel) as T | null;
+  const click = (sel: string) => React.act(async () => (q(sel) as HTMLElement).click());
+  const render = (el: any) => React.act(async () => root.render(el));
+  const done = async () => { await React.act(async () => root.unmount()); await React.act(async () => { await new Promise((r) => setTimeout(r, 10)); }); restore(); };
+  return { React, q, click, render, done };
+}
+
+test("Allow all: the button opens the review of switching a session's prompts off; the review's button does it", async () => {
+  const { React, q, click, render, done } = await dom();
+  try {
+    const { PermissionStackView } = await import("../../PermissionCard");
+    const calls: string[] = [];
+    const pending = [{ _id: "p1", tool_name: "Bash", arguments_preview: "ls", status: "pending" as const }, { _id: "p2", tool_name: "Bash", arguments_preview: "pwd", status: "pending" as const }];
+    await render(React.createElement(PermissionStackView, { pending, inflight: new Set<string>(), onApprove: () => {}, onDeny: () => {}, onApproveAll: () => calls.push("approveAll"), onDenyAll: () => {}, onAllowAll: () => calls.push("allowAll") }));
+    await click("[data-allow-all]");
+    assert.deepEqual(calls, [], "the button alone bypasses nothing");
+    assert.equal(q('[data-switch-figure="calls approved now"]')!.textContent, "2");
+    assert.match(q('[data-switch-row="Runs"]')!.textContent!, /without asking/);
+    await click("[data-switch-cancel]");
+    assert.deepEqual(calls, []);
+    await click("[data-allow-all]");
+    await click("[data-switch-confirm]");
+    assert.deepEqual(calls, ["allowAll"]);
+  } finally { await done(); }
+}, 120_000);
+
+test("the line's start switch: off, a press opens the review with the line's own numbers; on, a press turns it off", async () => {
+  const { React, q, click, render, done } = await dom();
+  try {
+    const realQuery = await import("../../../hooks/useQueryNoThrow");
+    mock.module("../../../hooks/useQueryNoThrow", () => ({ ...realQuery, useQueryNoThrow: () => ({ data: undefined }) }));
+    const realTree = await import("../../../hooks/useSyncOrgTree");
+    mock.module("../../../hooks/useSyncOrgTree", () => ({ ...realTree, useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
+    mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
+    const { LineStartSwitch } = await import("../../line/map/LineStartSwitch");
+    const calls: string[] = [];
+    const admit = (on: boolean): any => ({
+      admission: { role: { id: "r1", handle: "quality", paused: false }, on, queued: 60, slots: 5, busy: 0, hands: 0, handsCap: 6 },
+      role: { _id: "r1", handle: "quality", trust: "direct", scope: { project_ids: ["p1"] } },
+      setOn: (v: boolean) => calls.push(`setOn:${v}`), setSlots: () => {},
+    });
+    await render(React.createElement(LineStartSwitch, { admit: admit(false), waiting: 77, ready: 60, notReady: [{ count: 17, words: "a fix to decide" }], projectId: "p1" }));
+    await click("[data-line-start-switch]");
+    assert.deepEqual(calls, [], "the switch alone starts nothing");
+    assert.equal(q('[data-switch-figure="sessions start now"]')!.textContent, "5");
+    assert.equal(q('[data-switch-figure="problems waiting"]')!.textContent, "77");
+    assert.match(q("[data-switch-confirm]")!.textContent!, /Turn on, start 5 now/);
+    await click("[data-switch-confirm]");
+    assert.deepEqual(calls, ["setOn:true"]);
+
+    await render(React.createElement(LineStartSwitch, { admit: admit(true), projectId: "p1" }));
+    await click("[data-line-start-switch]");
+    assert.deepEqual(calls, ["setOn:true", "setOn:false"], "turning off is one press");
+    assert.equal(q("[data-switch-review]"), null);
+  } finally { await done(); }
+}, 120_000);
