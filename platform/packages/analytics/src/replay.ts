@@ -91,8 +91,28 @@ export interface DomEvent {
 }
 /** rrweb's meta event, which names the page URL and the viewport. */
 const DOM_META = 4;
+const perfNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+/** Give the page a turn: scheduler.yield where the browser has it, else a task. */
+const yieldToPage = () =>
+  new Promise<void>((resolve) => {
+    const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    if (sched?.yield) sched.yield().then(resolve, resolve);
+    else globalThis.setTimeout(resolve, 0);
+  });
 /** A shipping recording uploads early once this many DOM events wait, rather than at the next tick. */
 const DOM_UPLOAD_EVENTS = 20_000;
+
+/**
+ * How often the recorder takes a checkout (a fresh full snapshot). Unshipped,
+ * every half ring: the checkouts are what bound the ring (two segments) and
+ * what let the oldest held event start a playback. Shipping, a checkout only
+ * lets a player start partway, and each is a heavy page's whole DOM (about
+ * 2 MB of JSON and a ~50 ms task), so they come rarely. rrweb also checks out
+ * after DOM_CHECKOUT_EVERY_NTH events (replayDom.ts) in both states.
+ */
+export const DOM_CHECKOUT_MS = { ring: REPLAY_LIMITS.ring_buffer_ms / 2, shipping: 3 * 60_000 } as const;
+/** Serialization work the first DOM upload does before it yields to the page. */
+const DOM_SERIALIZE_SLICE_MS = 4;
 
 export interface DomRecording {
   /** Start a new segment with a full snapshot. */
@@ -494,6 +514,17 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   // ships it when the sample kept the recording from the start.
   const domShips = () => kept && domRecording !== null && (domMode === "sampled" || domSawError);
 
+  // Timed checkouts, at the ring's pace until the DOM ships and rarely after.
+  let domCheckoutTimer: unknown = null;
+  const scheduleDomCheckout = () => {
+    if (stopped || !domRecording) return;
+    domCheckoutTimer = setTimer(() => {
+      domCheckoutTimer = null;
+      domRecording?.checkout();
+      scheduleDomCheckout();
+    }, domShips() ? DOM_CHECKOUT_MS.shipping : DOM_CHECKOUT_MS.ring);
+  };
+
   const onDomEvent = (event: DomEvent, isCheckout: boolean) => {
     if (stopped) return;
     if (event.type === DOM_META) {
@@ -521,6 +552,8 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   }
 
   const stopDom = () => {
+    if (domCheckoutTimer !== null) clearTimer(domCheckoutTimer);
+    domCheckoutTimer = null;
     domRecording?.stop();
     domRecording = null;
     domSegments = [[]];
@@ -532,6 +565,11 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
   // as they go, so a secret path in an href or a text node is named by its
   // shape like everywhere else the recorder sends a URL. Per string, never
   // over the JSON text: a rewrite written for URLs need not stop at a quote.
+  //
+  // The first upload of a kept recording serializes two whole segments, a few
+  // MB with the rewrite called on every string, at the moment the page is in
+  // error. It yields to the page every DOM_SERIALIZE_SLICE_MS of that work, so
+  // no single task holds the main thread for the whole of it.
   const scrubString = (_key: string, value: unknown) => (typeof value === "string" && value.includes("/") ? sink.scrubUrl(value) : value);
   async function uploadDom(): Promise<void> {
     if (!domShips()) return;
@@ -539,6 +577,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     domSegments = [[]];
     domHeld = 0;
     let i = 0;
+    let sliceStart = perfNow();
     while (i < held.length && domRecording) {
       if (domChunks >= REPLAY_DOM_LIMITS.max_chunks_per_replay) return stopDom();
       const parts: string[] = [];
@@ -547,6 +586,11 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
         const part = JSON.stringify(held[i++], scrubString);
         parts.push(part);
         size += part.length + 1;
+        if (perfNow() - sliceStart >= DOM_SERIALIZE_SLICE_MS) {
+          await yieldToPage();
+          sliceStart = perfNow();
+          if (!domRecording) return;
+        }
       }
       const result = await putChunk(`[${parts.join(",")}]`, domChunks, "dom");
       if (result === "too_big") continue;
@@ -567,6 +611,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
       .then((startDom) => {
         if (stopped) return;
         domRecording = startDom(onDomEvent);
+        scheduleDomCheckout();
         if (domRecording && domShips()) scheduleChunks();
       })
       .catch(() => {
