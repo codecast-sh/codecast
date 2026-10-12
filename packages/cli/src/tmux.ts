@@ -228,7 +228,7 @@ export function startSessionServerSync(session: string, args: string[], env: Tmu
     }
   }
   fs.rmSync(plan.logPath, { force: true });
-  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env })) {
+  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env, exportLabel: false })) {
     exec([...L, ...withoutGlobals(args)]);
     carrySessionIdsSync(L, exec);
     return;
@@ -265,7 +265,7 @@ export async function startSessionServer(session: string, args: string[], env: T
     }
   }
   fs.rmSync(plan.logPath, { force: true });
-  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env })) {
+  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env, exportLabel: false })) {
     await exec([...L, ...withoutGlobals(args)]);
     await carrySessionIds(L, exec);
     return;
