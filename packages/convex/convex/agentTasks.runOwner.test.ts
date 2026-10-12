@@ -417,3 +417,29 @@ describe("a limit park waits on the account the run used", () => {
     expect(off.tables.agent_tasks[0].run_at).toBe(NOW + H + 120_000);
   });
 });
+
+// A run's notification is a banner, a bell row and a phone push; each opens
+// the conversation the row names. Without one the click opened nothing
+// (tr-1267's flagged drift verdict, 2026-10-11).
+describe("a run's notification opens the run", () => {
+  const user = { _id: USER, push_token: "push-token", notifications_enabled: true };
+
+  test("a flagged completion names the run conversation", async () => {
+    const { ctx, tables } = await world({}, { users: [user], notifications: [] });
+    await complete(ctx, { summary: "separated: worse", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications).toHaveLength(1);
+    expect(tables.notifications[0]).toMatchObject({ type: "task_completed", conversation_id: RUN });
+  });
+
+  test("an inject run's notice opens the schedule's home", async () => {
+    const { ctx, tables } = await world({ originating_conversation_id: OWNER }, { users: [user], notifications: [] });
+    await complete(ctx, { summary: "separated: worse", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications[0]).toMatchObject({ conversation_id: OWNER });
+  });
+
+  test("a terminal failure names the run conversation", async () => {
+    const { ctx, tables } = await world({ retry_count: 3 }, { users: [user], notifications: [] });
+    await fail(ctx, { error: "Exceeded max runtime (10min)" });
+    expect(tables.notifications[0]).toMatchObject({ type: "task_failed", conversation_id: RUN });
+  });
+});
