@@ -3,6 +3,7 @@ import { useInboxStore } from "../store/inboxStore";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import { isConvexId } from "./entityLinks";
 import { prefetchStorageImageUrls } from "../hooks/useStorageImageUrl";
+import { attachmentKind } from "../components/chat/chatTypes";
 
 /** One page of a channel, at the server's own default. The live page and the
  *  background prefetch ask with the same args, so the client can answer one
@@ -11,8 +12,9 @@ export const CHAT_PAGE_SIZE = 50;
 
 /** A chat read's answer (listMessages, getThread, getMessage) into the store,
  *  and its image attachments warmed (id to URL mapping and bytes) so the rows
- *  paint their images from local cache. Audio stays out: a recording resolves
- *  its URL when its play button mounts. Returns the message rows. */
+ *  paint their images from local cache. Audio and video stay out: a recording
+ *  or a video resolves its URL when its player mounts, and the player streams
+ *  it. Returns the message rows. */
 export function ingestChatPage(data: any, convex: ConvexReactClient): ChatMessageRow[] {
   if (!data || data.unavailable) return [];
   const messages: ChatMessageRow[] = data.messages ?? [
@@ -27,7 +29,7 @@ export function ingestChatPage(data: any, convex: ConvexReactClient): ChatMessag
   // The server's per-root reply rollups. Without them a thread this client
   // never opened shows no affordance at all.
   if (data.threads) syncTable("chatThreadSummaries", data.threads.map((thread: any) => ({ ...thread, _id: String(thread.root_id) })));
-  const images = messages.flatMap(m => (m.attachments ?? []).filter(a => a.storage_id && !a.mime?.startsWith("audio/")).map(a => a.storage_id));
+  const images = messages.flatMap(m => (m.attachments ?? []).filter(a => a.storage_id && attachmentKind(a) === "image").map(a => a.storage_id));
   if (images.length) prefetchStorageImageUrls(convex, images);
   return messages;
 }

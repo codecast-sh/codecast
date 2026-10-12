@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -132,6 +132,28 @@ describe("TaskScheduler across a daemon restart", () => {
     second.start();
     try {
       expect(second.running.size).toBe(0);
+    } finally {
+      second.stop();
+    }
+  });
+});
+
+describe("a run whose transcript syncs late", () => {
+  // tr-1423 (2026-10-09): the lease lapsed under a frozen daemon, the run was
+  // cleaned up, and its conversation was created 18 minutes later with no stamp.
+  it("keeps the birth stamp through cleanup and a restart until the row exists", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t9", tmuxSession: "ct-claude-late", startedAt: 1000, maxRuntimeMs: 600_000, runSessionUuid: "late-uuid" });
+    first.cleanupTask("t9");
+    expect(triggerRunTaskId("late-uuid")).toBe("t9");
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    second.start();
+    try {
+      expect(triggerRunTaskId("late-uuid")).toBe("t9");
+      forgetTriggerRun("late-uuid");
+      expect(triggerRunTaskId("late-uuid")).toBeUndefined();
     } finally {
       second.stop();
     }
