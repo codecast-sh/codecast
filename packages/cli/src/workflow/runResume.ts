@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { codecastPath } from "../codecastDir.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import type { NodeOutcome, WorkflowGraph, WorkflowRunState } from "./types";
@@ -15,6 +16,27 @@ import type { NodeOutcome, WorkflowGraph, WorkflowRunState } from "./types";
 
 export function runnerPidFile(runId: string): string {
   return codecastPath("workflow-runs", `${runId.replace(/[^\w-]/g, "")}.pid`);
+}
+
+/** The tmux session a run's runner lives in on this machine. */
+export const runPaneName = (runId: string): string => `wf-${runId.slice(-6)}`;
+
+const SHELLS = new Set(["bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
+/** A fresh pane's runner has this long to claim the run before the pane counts as dead. */
+export const PANE_CLAIM_GRACE_S = 120;
+
+/**
+ * Whether a run's existing pane may be replaced by a new launch. One run, one
+ * pane: a run_workflow command can arrive twice (a daemon restart between
+ * launching and reporting hands it to the next daemon), and killing the first
+ * pane before its runner claimed the run left the run pending forever. So a
+ * pane still running something other than its shell, or created moments ago,
+ * stays; a pane back at its shell (the runner exited) is replaced.
+ */
+export function paneReplaceable(pane: { command: string; createdS: number } | null, nowS: number): boolean {
+  if (!pane) return true;
+  if (!SHELLS.has(pane.command.replace(/^-/, ""))) return false;
+  return nowS - pane.createdS >= PANE_CLAIM_GRACE_S;
 }
 
 /** The pid driving `runId` on this machine, or null when no live process does. */
@@ -47,6 +69,57 @@ export function claimRun(runId: string): { release: () => void } | { heldBy: num
   };
   process.once("exit", release);
   return { release };
+}
+
+// ─── A waiting runner continues on current code ───────────
+//
+// A run waits at a gate for hours in one process, and that process holds the
+// stations it parsed at start (the parser inlines every @file prompt) and the
+// runner code it loaded. When a gate is answered and either has changed on
+// disk since, the runner hands the run to a fresh runner (`cast workflow
+// run-daemon`), which resumes it at the answered gate from the checkpoint and
+// reads the graph file again (daemonGraph.ts), so the stations after the
+// answer are the ones on disk.
+
+/** What a runner loaded, by file: its graph's files and its own code. Two stamps differ when any changed. */
+export function runnerStamp(graph: { sources?: string[] }, codeFiles: string[] = runnerCodeFiles()): string {
+  return [...(graph.sources ?? []), ...codeFiles].map((f) => {
+    try {
+      const s = fs.statSync(f);
+      return `${f}:${s.mtimeMs}:${s.size}`;
+    } catch {
+      return `${f}:-`;
+    }
+  }).join("\n");
+}
+
+/** The runner's own code: the workflow modules beside this one (a source checkout), and the executable running them. */
+export function runnerCodeFiles(): string[] {
+  const files = [process.execPath];
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    for (const f of fs.readdirSync(dir)) if (/\.(ts|js)$/.test(f) && !/\.test\./.test(f)) files.push(path.join(dir, f));
+  } catch {}
+  return files;
+}
+
+/**
+ * Hand `runId` to a fresh runner and exit with its outcome. The claim is let
+ * go first, so the new runner takes the run; the row is left as the answer
+ * left it, so the new runner finds the gate answered.
+ */
+export async function handOffRun(runId: string, argv: string[]): Promise<never> {
+  const file = runnerPidFile(runId);
+  try {
+    if (Number(JSON.parse(fs.readFileSync(file, "utf-8")).pid) === process.pid) fs.unlinkSync(file);
+  } catch {}
+  const { spawn } = await import("child_process");
+  const child = spawn(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
+  const code = await new Promise<number>((resolve) => {
+    child.on("exit", (c) => resolve(c ?? 1));
+    child.on("error", () => resolve(1));
+  });
+  process.exit(code);
 }
 
 // ─── The checkpoint ───────────────────────────────────────
@@ -90,12 +163,25 @@ export function writeCheckpoint(runDir: string, runId: string, state: WorkflowRu
 }
 
 export function readCheckpoint(runDir: string, runId: string): RunCheckpoint | null {
+  const read = (dir: string): RunCheckpoint | null => {
+    try {
+      const cp = JSON.parse(fs.readFileSync(checkpointPath(dir, runId), "utf-8"));
+      return cp?.run_id === runId && typeof cp.node_id === "string" && cp.context ? cp : null;
+    } catch {
+      return null;
+    }
+  };
+  const here = read(runDir);
+  if (here) return here;
+  // A run moved onto a renamed graph (a trial card sent back to rebuild on the current line) has a new run directory;
+  // its checkpoint, named by the run's id, still sits in the directory the old graph gave it.
   try {
-    const cp = JSON.parse(fs.readFileSync(checkpointPath(runDir, runId), "utf-8"));
-    return cp?.run_id === runId && typeof cp.node_id === "string" && cp.context ? cp : null;
-  } catch {
-    return null;
-  }
+    for (const sibling of fs.readdirSync(path.dirname(runDir))) {
+      const cp = read(path.join(path.dirname(runDir), sibling));
+      if (cp) return cp;
+    }
+  } catch {}
+  return null;
 }
 
 // ─── Where a run continues ────────────────────────────────
@@ -107,6 +193,9 @@ export interface ResumeRow {
   node_statuses?: Array<{ node_id: string; status: string; outcome?: string | null; session_id?: string | null; completed_at?: number | null }>;
   gate_node_id?: string | null;
   gate_response?: string | null;
+  gate_decision_id?: string | null;
+  /** A trial run's card waiting at its gate (lineTrial.ts): asked of nobody, so no decision id, but asked all the same. */
+  gate_card?: string | null;
 }
 
 /** A row is mid-run when it is live and a runner reported past its start. */
@@ -122,7 +211,7 @@ export interface ResumePoint {
   completed: string[];
   node_outcomes: Record<string, NodeOutcome>;
   context: Record<string, string>;
-  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on one. */
+  /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on a decision that was asked (a gate whose ask failed is asked again). */
   gate: { node_id: string; response: string | null; open: boolean } | null;
   /** The hand a session node had running when its runner died, to wait on again rather than start anew. */
   hand: string | null;
@@ -159,7 +248,9 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
     visit_counts = {};
     completed = [];
     node_outcomes = {};
-    context = {};
+    // A row moved to another node than the checkpoint stands at (a trial card's run sent back to rebuild on main)
+    // keeps the values the run had made: its worktree, its proof's files. The row's outcomes below still decide history.
+    context = checkpoint ? structuredClone(checkpoint.context) : {};
     const done = (row.node_statuses ?? [])
       .filter((n) => n.node_id !== nodeId && (n.status === "completed" || n.status === "failed"))
       .sort((a, b) => (a.completed_at ?? 0) - (b.completed_at ?? 0));
@@ -176,9 +267,42 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   }
 
   const asked = !routedOn && row.gate_node_id === nodeId;
+  // A gate asked again on a graph that has grown stations before it since the
+  // run passed there (a lost card picked up on the graph file as it is now):
+  // the run first makes what the gate now reads, from the earliest such station.
+  const unmade = node.type === "human" && !asked ? unmadeBefore(graph, nodeId, completed) : null;
+  if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hand: null, from: atCheckpoint ? "checkpoint" : "row" };
   const gate = node.type === "human"
-    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" }
+    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" && (!!row.gate_decision_id || !!row.gate_card) }
     : null;
   const hand = node.backend === "session" && atCheckpoint ? atCheckpoint.context[`${nodeId}.conversation_id`] ?? null : null;
   return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hand, from: atCheckpoint ? "checkpoint" : "row" };
+}
+
+/**
+ * The station a run must make before `target` on this graph when the run never
+ * passed through it: walking back from the target over stations the run has
+ * not completed, the first one entered from a station it has (the latest such
+ * entry wins). Null when any way straight into the target is from a completed one.
+ */
+export function unmadeBefore(graph: WorkflowGraph, target: string, completed: string[]): string | null {
+  const done = new Map(completed.map((id, i) => [id, i]));
+  // Entered the target straight from a station it made: nothing is missing.
+  if (graph.edges.some((e) => e.to === target && done.has(e.from))) return null;
+  const seen = new Set<string>([target]);
+  let best: { id: string; at: number } | null = null;
+  const walk = (id: string) => {
+    for (const e of graph.edges) {
+      if (e.to !== id) continue;
+      const at = done.get(e.from);
+      if (at !== undefined) {
+        if (id !== target && (!best || at > best.at)) best = { id, at };
+      } else if (!seen.has(e.from)) {
+        seen.add(e.from);
+        walk(e.from);
+      }
+    }
+  };
+  walk(target);
+  return (best as { id: string; at: number } | null)?.id ?? null;
 }
