@@ -78,7 +78,11 @@ export function isRefusedDispatchError(error: unknown): boolean {
 
 export type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }
-  | { version: 1; kind: "assignBucket"; conversationIds: string[] };
+  | { version: 1; kind: "assignBucket"; conversationIds: string[] }
+  // A project created from a goal's sheet: the server attaches it to the goal
+  // in the create's own transaction, and the acknowledgement moves the goal's
+  // list from the stub id to the real one.
+  | { version: 1; kind: "attachToInitiative"; initiativeId: string };
 
 const SINGLETON_KEY = "_";
 
@@ -188,6 +192,9 @@ export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null
   // so Record, Stop, Record pressed while offline is one queued row (the
   // last), not three presses replayed in turn into a room being filmed.
   setRoomRecording: (args) => (typeof args[0] === "string" ? `setRoomRecording:${args[0]}` : null),
+  // A label's args are its whole wanted state (verdict and note), so a burst
+  // of presses on one decision queued offline lands as the last one.
+  labelDecision: (args) => (typeof args[0] === "string" && typeof args[1] === "string" ? `labelDecision:${args[0]}:${args[1]}` : null),
 };
 
 export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {
@@ -230,6 +237,15 @@ function durableCreateContinuation(
     if (conversationIds.length > 0) {
       return { version: 1, kind: "assignBucket", conversationIds };
     }
+  }
+
+  if (
+    candidate.kind === "attachToInitiative" &&
+    actionName === "createProject" &&
+    typeof candidate.initiativeId === "string" &&
+    candidate.initiativeId
+  ) {
+    return { version: 1, kind: "attachToInitiative", initiativeId: candidate.initiativeId };
   }
   return null;
 }
@@ -279,6 +295,19 @@ const RECEIPT_CONTINUATIONS: ReceiptContinuations = {
       }
       if (typeof handler !== "function") {
         throw new Error("Create-label continuation runtime is unavailable");
+      }
+      handler(actionName, resolved, serverResult, commandId);
+      return true;
+    }
+
+    if (resolved.kind === "attachToInitiative") {
+      const handler = getState()?._handleReceiptAcknowledgement;
+      const id = (serverResult as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || !id) {
+        throw new Error("Acknowledged createProject receipt is missing its project id");
+      }
+      if (typeof handler !== "function") {
+        throw new Error("Create-project continuation runtime is unavailable");
       }
       handler(actionName, resolved, serverResult, commandId);
       return true;

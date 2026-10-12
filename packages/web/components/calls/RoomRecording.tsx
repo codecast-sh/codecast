@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Button } from "../ui/button";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { isRecordingFilming } from "@codecast/shared/contracts";
@@ -388,13 +389,9 @@ function RecordConfirm({
         >
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
-        <button
-          type="button"
-          onClick={onRecord}
-          className="sol-btn-solid flex items-center gap-1.5 rounded-md bg-sol-red px-3 py-1.5 font-mono text-[11.5px] font-medium text-white"
-        >
+        <Button type="button" variant="red" size="xs" onClick={onRecord} className="font-mono">
           Record <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
-        </button>
+        </Button>
       </div>
     </RecordingQuestionBox>
   );
