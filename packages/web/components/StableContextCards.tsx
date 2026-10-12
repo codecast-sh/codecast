@@ -192,7 +192,7 @@ export function StableContextCards({ stableContext }: { stableContext?: string |
 }
 
 const MODE_ITEMS = [
-  { key: "auto", label: "Auto", title: "Use this machine's default (cast stable)" },
+  { key: "auto", label: "Auto", title: "Use this machine's default" },
   { key: "team", label: "Team", title: "Team's recent sessions (14d)" },
   { key: "solo", label: "Solo", title: "Your recent sessions (7d)" },
   { key: "off", label: "Off", title: "Don't inject session history" },

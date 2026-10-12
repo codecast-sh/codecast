@@ -90,6 +90,11 @@ export async function patchPullRequest(
   if (after.state === "merged" || after.state === "closed") {
     await closeOutShepherd(ctx, after, after.state);
   }
+  // Tasks waiting on this PR settle in a transaction of their own, from every
+  // path that moves it (webhook, refresh, reconcile): task-graph.md TG2.
+  if (after.waiting_task_ids?.length && (after.state !== before.state || after.checks_state !== before.checks_state)) {
+    await ctx.scheduler?.runAfter(0, internal.taskWaits.settlePr, { pr_id: prId });
+  }
 
   return { pr: after, previousState, stateChanged: state !== previousState };
 }
