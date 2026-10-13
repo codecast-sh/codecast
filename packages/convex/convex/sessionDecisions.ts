@@ -28,7 +28,8 @@ import { internal } from "./_generated/api";
 import { enqueuePendingMessage, reachableRole, tellRole, wakeHostedConversation } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
-import { projectLeadRole, roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
@@ -88,19 +89,8 @@ const HISTORY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 // ── Id resolution ─────────────────────────────────────────────────────────────
 
-// `sd-N` (the short id the CLI prints) or a raw Convex id.
-export async function findDecision(ctx: Ctx, ref: string): Promise<DecisionRow | null> {
-  if (/^sd-\d+$/.test(ref)) {
-    return (
-      (await ctx.db
-        .query("session_decisions")
-        .withIndex("by_short_id", (q: any) => q.eq("short_id", ref))
-        .first()) ?? null
-    );
-  }
-  const id = ctx.db.normalizeId("session_decisions", ref);
-  return id ? await ctx.db.get(id) : null;
-}
+// `sd-N` (the short id the CLI prints) or a raw Convex id; who may read one (lib/decisionAccess).
+export { findDecision, userMayRead };
 
 async function findTask(ctx: Ctx, ref: string): Promise<any | null> {
   if (/^ct-\d+$/.test(ref)) {
@@ -1921,23 +1911,6 @@ export const revoke = mutation({
 });
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
-
-// Who may read a decision: its people, anyone who can read the asking
-// conversation, and the HOST (or personal owner) of a role on its ladder,
-// reading what their seat was asked. Not the role's whole team: a private
-// conversation reporting to a team role must not open its decisions to every
-// member; team visible conversations are covered by the conversation clause.
-export async function userMayRead(ctx: Ctx, userId: Id<"users">, row: DecisionRow): Promise<boolean> {
-  const people = (row.asked_user_ids ?? [row.user_id]).map(String);
-  if (people.includes(String(userId))) return true;
-  const conversation = await ctx.db.get(row.conversation_id);
-  if (conversation && (await canAccessConversation(ctx, userId, conversation))) return true;
-  for (const hop of row.hops ?? []) {
-    const role = await ctx.db.get(hop.role_id);
-    if (role && (await roleGrants(ctx, userId, role, () => false))) return true;
-  }
-  return false;
-}
 
 // A decision row the signed-in viewer may read.
 async function readableDecision(ctx: any, decisionId: any): Promise<DecisionRow | null> {

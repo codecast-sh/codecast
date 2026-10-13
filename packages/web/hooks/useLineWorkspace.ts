@@ -282,7 +282,20 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const allTrialCards = useTrialCards();
   // A card a role owns (a judge fix, asked of the person its line ends at) waits only on the people it is asked of.
   const trialCards = useMemo(() => allTrialCards.filter((c) => trialCardIsFor(c, viewerId)), [allTrialCards, viewerId]);
-  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, now]);
+  // A run's decision about a task that is not a line problem (a task filed by hand, a judge fix) names that task, read from the store.
+  const otherIds = useMemo(() => {
+    const causes = new Set(everyRow.tasks.filter(isCause).map((t) => t._id));
+    return [...new Set((everyRow.decisions as Array<{ task_id?: string | null }>).map((d) => d.task_id).filter((id): id is string => !!id && !causes.has(id)))].sort();
+  }, [everyRow]);
+  const otherSig = useInboxStore((s) => otherIds.map((id) => {
+    const t = (s.tasks as Record<string, { title?: string; short_id?: string; project_id?: string } | undefined> | undefined)?.[id];
+    return t?.title ? [id, t.short_id ?? "", t.project_id ?? "", t.title].join("\u0001") : "";
+  }).filter(Boolean).join("\u0002"));
+  const otherTasks = useMemo(() => new Map(otherSig ? otherSig.split("\u0002").map((x) => {
+    const [id, ref, project, title] = x.split("\u0001");
+    return [id, { title, short_id: ref || null, project_id: project || null }] as const;
+  }) : []), [otherSig]);
+  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, otherTasks, now]);
   const projectInbox = useMemo(() => (projectId ? allInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => r.projectId === projectId) })).filter((g) => g.rows.length > 0) : allInbox), [allInbox, projectId]);
   const forYouByCase = useMemo(() => inboxKindByCase(projectInbox), [projectInbox]);
 

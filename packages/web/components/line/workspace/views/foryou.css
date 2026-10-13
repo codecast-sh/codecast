@@ -26,6 +26,8 @@
 .fy-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
 .fy-ask {
   font-size: var(--lw-fs-base); line-height: 1.4; font-weight: 550; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere;
+  /* A row names what is asked; the reader beside it holds the question whole. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 .fy-meta { display: flex; flex-wrap: wrap; column-gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .fy-meta > span + span::before { content: "·"; margin-right: 6px; color: var(--lw-ink-3); opacity: .7; }
@@ -33,7 +35,6 @@
 .fy-due[data-late] { color: var(--lw-bad); }
 
 /* Where the rest went: one quiet line per Problems chip, outside the list's count and its J/K walk. */
-.fy-elsewhere { display: flex; flex-direction: column; margin-top: var(--lw-s4); padding-top: 8px; border-top: 1px solid var(--lw-rule); }
 .fy-none { margin: 6px 12px; font-size: var(--lw-fs-base); font-weight: 550; color: var(--lw-ink); }
 .fy-keys { display: flex; gap: 4px; margin: var(--lw-s4) 12px 0; opacity: .55; }
 
@@ -48,6 +49,10 @@ a.fy-head:hover .fy-title { text-decoration-color: color-mix(in srgb, currentCol
 a.fy-head:hover .fy-ref { color: var(--lw-person-deep); }
 a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
 .fy-age { flex: none; }
+.fy-proj { flex: none; font-weight: 600; color: var(--lw-ink-2); }
+.fy-problem { flex: none; color: var(--lw-ink-3); text-decoration: none; transition: color var(--lw-fast); }
+.fy-problem:hover { color: var(--lw-person-deep); }
+.fy-problem:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
 .fy-trial { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
 .fy-trial:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
 .fy-pos { flex: none; margin-left: auto; }

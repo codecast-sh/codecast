@@ -619,7 +619,37 @@
     [].forEach.call(document.querySelectorAll("dk-diff"), drawDiff);
     [].forEach.call(document.querySelectorAll("dk-view"), drawView);
     [].forEach.call(document.querySelectorAll("dk-tally"), drawTally);
+    [].forEach.call(document.querySelectorAll("dk-cells"), drawCells);
     [].forEach.call(document.querySelectorAll("table"), drawTable);
+  }
+
+  // A grid of results as a screen draws it: each row's letters become cells
+  // (P pass, F fail, anything else not run), its name whole beside them, and
+  // its note (a count) at the end of the line, never wrapped under the cells.
+  var CELL = { P: "pass", F: "fail" };
+  function drawCells(g) {
+    if (g.hasAttribute("data-dk")) return;
+    [].forEach.call(g.querySelectorAll(":scope > dk-row"), function (r) {
+      var letters = r.textContent.replace(/\s+/g, "");
+      r.textContent = "";
+      r.appendChild(el("span", "dk-cells-name", r.getAttribute("name") || ""));
+      var cells = el("span", "dk-cells-run");
+      for (var i = 0; i < letters.length; i++) {
+        var c = el("i");
+        c.setAttribute("data-v", CELL[letters[i].toUpperCase()] || "none");
+        cells.appendChild(c);
+      }
+      r.appendChild(cells);
+      r.appendChild(el("span", "dk-cells-note", r.getAttribute("note") || ""));
+    });
+    var legend = el("p", "dk-cells-legend");
+    [["pass", "pass"], ["fail", "fail"], ["none", "not run"]].forEach(function (k) {
+      var i = el("i"); i.setAttribute("data-v", k[0]);
+      var s = el("span"); s.appendChild(i); s.appendChild(document.createTextNode(k[1]));
+      legend.appendChild(s);
+    });
+    g.appendChild(legend);
+    g.setAttribute("data-dk", "");
   }
 
   // A tally's numbers are counted from the people it lists, so a count can
