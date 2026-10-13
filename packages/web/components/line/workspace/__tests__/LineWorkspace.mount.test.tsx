@@ -105,7 +105,7 @@ test("the app: three pages, For you the home and the only count; G then a letter
   expect(moves.filter((m) => m.includes("view="))).toEqual([]);
   await key("g"); await key("p");
   expect(pushed.at(-1)).toBe("/line?view=problems");
-  await key("g"); await key("l");
+  await key("g"); await key("s");
   expect(pushed.at(-1)).toBe("/line?view=line");
   await act(async () => { root.unmount(); });
 }, 30_000);

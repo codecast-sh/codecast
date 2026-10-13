@@ -601,7 +601,7 @@ async function spawnHand(
     prompt,
     project_path: cwd,
     git_root: gitRoot,
-    title: stationTitle(node, context),
+    title: stationTitle(node, context, presentsDecision(node, graph)),
     // A station is the run's worker: nested under the run's own session, so
     // it reads, answers cast send and shows on the run, and stays out of the
     // inbox's top level. The task's blocker comment is what reaches a person.
@@ -1275,8 +1275,13 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
 
 // A station's name, fixed at spawn: the node and what it works on, so the row
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
-// unattended preamble every station's prompt opens with.
-export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>): string {
+// unattended preamble every station's prompt opens with. A station that
+// presents a decision is the session a person talks the fix over with, and its
+// title shows wherever they meet it (the decision's chat, its page's bar): it
+// is named by the problem, in the problem's own words.
+export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>, presents = false): string {
+  const problem = context["task_title"]?.replace(/\s+/g, " ").trim();
+  if (presents && problem) return problem.length > 100 ? `${problem.slice(0, 99).trimEnd()}…` : problem;
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
   const label = node.label || node.id;
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;

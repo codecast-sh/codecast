@@ -31,6 +31,7 @@
 // deps contract as the publish command, so it reuses cliFetch auth and the
 // artifact publish payload builder rather than growing its own plumbing.
 import * as fs from "fs";
+import * as http from "http";
 import * as path from "path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
@@ -482,7 +483,9 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
 // `cast decide kit` prints the guide to the decision page kit; `cast decide kit
 // page.html [out.html]` writes that page with the kit and codecast's colour
 // tokens inline, the way the published page is served, to open before posting.
-function runDecisionKit(args: string[]): void {
+// With --serve it serves that preview over http instead, rebuilt from the file
+// on every load, since the browser refuses file:// pages.
+function runDecisionKit(args: string[], serve = false): void {
   const [file, out] = args;
   if (!file) {
     console.log(DECISION_KIT_GUIDE.trimEnd());
@@ -492,6 +495,18 @@ function runDecisionKit(args: string[]): void {
   if (!fs.existsSync(absPath)) fail(`No such page: ${file}`);
   const html = fs.readFileSync(absPath, "utf-8");
   if (!usesDecisionKit(html)) fail(`${file} does not ask for the kit. Put this line in its <head>:\n  ${DECISION_KIT_LINE}`);
+  if (serve) {
+    const server = http.createServer((req, res) => {
+      if ((req.url ?? "/").split("?")[0] !== "/") { res.writeHead(404).end(); return; }
+      const page = previewDecisionPage(fs.readFileSync(absPath, "utf-8"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(page);
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as { port: number };
+      console.log(`http://127.0.0.1:${port}/`);
+    });
+    return;
+  }
   const target = path.resolve(out ?? absPath.replace(/\.html?$/i, "") + ".preview.html");
   if (target === absPath) fail("The preview would overwrite the page. Name another output file.");
   fs.writeFileSync(target, previewDecisionPage(html));
@@ -545,13 +560,14 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")
+    .option("--serve", "kit: serve the page as it will be published on a local http address, until stopped")
     .action(async (question: string | undefined, rest: string[], options: any) => {
       // `answer` is the one verb a person runs from a plain shell: without a
       // session the server treats the caller as the person; with one, only
       // the holder role under a grant may answer, or the session's human at
       // their explicit word (--for-human).
       // The decision page kit needs no session: it prints its guide, or writes a page as it will be served.
-      if (question === "kit") return runDecisionKit(rest);
+      if (question === "kit") return runDecisionKit(rest, !!options.serve);
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       if (!sessionId && question !== "answer") fail("No session detected. Run inside a codecast session or pass --session <id>.");
 
