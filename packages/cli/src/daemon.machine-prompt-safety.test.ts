@@ -9,7 +9,7 @@ import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialog } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
-import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
+import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
@@ -129,6 +129,7 @@ function fixture(transport = "tmux", cached = true) {
   let journal: TmuxDeliveryJournal | undefined;
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
+  const holds: Array<{ id: string; holdReason?: string; holdScreen?: string }> = [];
   const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
   const launchPromptCarries = new Map<string, { conversationId: string; tmuxSession: string; projectPath: string; sessionId: string; transcript: string; startedAt: number }>();
   const syncService = {
@@ -136,7 +137,10 @@ function fixture(transport = "tmux", cached = true) {
     claimPendingMessageForDelivery: async (id: string) => messages.get(id) ?? { _id: id, conversation_id: "conv" },
     updateMessageStatus: async (args: any) => { statuses.push(args); },
     updateSessionAgentStatus: async () => {},
-    retryMessage: async (id: string, opts?: { holdReason?: string }) => { events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`); },
+    retryMessage: async (id: string, opts?: { holdReason?: string; holdScreen?: string }) => {
+      events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`);
+      if (opts?.holdReason) holds.push({ id, ...opts });
+    },
     setSessionError: async () => {},
     cancelPendingMessage: fail("cancel pending"),
     addMessage: fail("system row"),
@@ -145,7 +149,7 @@ function fixture(transport = "tmux", cached = true) {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
-    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, isForcedPastDialog, setForcedPastDialog,
     clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
@@ -226,7 +230,7 @@ function fixture(transport = "tmux", cached = true) {
       "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-      "tmuxWatchablePrefix", "promptIsOwnText", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
+      "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
@@ -238,7 +242,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
     ].map(name => {
@@ -286,9 +290,9 @@ function fixture(transport = "tmux", cached = true) {
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
-    ...api, state, events, bodies, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
+    ...api, state, events, bodies, holds, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
     deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
-    scan: async (rows: Array<{ _id: string; content: string }>) => {
+    scan: async (rows: Array<{ _id: string; content: string; delivery_force?: boolean }>) => {
       for (const row of rows) messages.set(row._id, { ...row, conversation_id: "conv" });
       await api.handlePendingMessagesUpdate([...messages.values()].filter(row => rows.some(r => r._id === row._id)));
     },
@@ -575,6 +579,25 @@ describe("machine prompt delivery safety", () => {
     expect(redriven).toBe(1);
     await f.scan([{ _id: "held", content }]);
     expect(f.bodies).toEqual([content]);
+  });
+
+  // jx78gaw (2026-10-10): a message held for a dialog nobody was shown sat
+  // for days with no way to move it. The hold now carries the screen it was
+  // decided on, and the person's Send anyway delivers it past the check.
+  test("a hold carries the screen it was decided on, and Send anyway delivers past it", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = menu;
+    await f.scan([{ _id: "held", content: "please continue" }]);
+    expect(f.events).toEqual(["hold:held"]);
+    expect(f.holds[0]?.holdScreen).toContain("❯ 1. Deploy");
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    // Past the check, the paste path clears the pane as it does any overlay:
+    // Escape dismisses the dialog, then the message goes in.
+    f.hooks.input = (event: string) => { if (event === "Escape") f.state.menu = null; };
+    await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
+    expect(f.bodies).toEqual(["please continue"]);
+    expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual(["hold:held"]);
   });
 
   // Claude Code clears the screen as it boots, so a capture can land on a blank

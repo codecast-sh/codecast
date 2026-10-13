@@ -11,7 +11,7 @@ import { SessionCardView, type SessionCardViewProps } from "./SessionCardView";
 import { SectionHeader } from "./SectionHeader";
 import { InboxNavRow, NavCount, NavSection, NeedsInputCount, RailHeading, SectionRow } from "../sidebar/navPrimitives";
 import { SearchField } from "../search/SearchField";
-import { SearchResultRow } from "../search/SearchResultRow";
+import { SessionHit } from "../search/SessionHit";
 
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
 const noop = () => {};
@@ -88,10 +88,11 @@ test("the views render from props alone and leave the store untouched", () => {
   const search = render(
     <>
       <SearchField value="webhook retry" expanded onChange={noop} />
-      <SearchResultRow
-        query="retry"
+      <SessionHit
+        highlight="retry"
         selected
-        session={{ conversationId: "c-hero-1", title: "Webhook API half", isOwn: true, authorName: "Me", messageCount: 24, updatedAt: NOW, matchCount: 1, matches: [{ messageId: "m1", role: "user", content: "make the retry idempotent", timestamp: NOW }] }}
+        hrefFor={(r) => `/conversation/${r.conversationId}`}
+        row={{ conversationId: "c-hero-1", title: "Webhook API half", isOwn: true, authorName: "Me", messageCount: 24, updatedAt: NOW, matchCount: 1, matches: [{ messageId: "m1", role: "user", content: "make the retry idempotent", timestamp: NOW }] }}
       />
     </>,
   );

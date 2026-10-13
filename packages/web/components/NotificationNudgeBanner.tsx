@@ -14,6 +14,7 @@ import {
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useHostedMode, useModeWords } from "../lib/surfaces";
+import { Button } from "./ui/button";
 // The pushy "turn on desktop notifications" strip. Sits with the other
 // dashboard banners; policy (when to show, when a dismiss holds, when a missed
 // message overrides it) lives in lib/notificationNudge so it's unit-testable.
@@ -86,12 +87,9 @@ export function NotificationNudgeBanner() {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {action && !awaitingPrompt && (
-            <button
-              onClick={handleEnable}
-              className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-blue text-sol-bg"
-            >
+            <Button variant="blue" size="xs" onClick={handleEnable}>
               {readiness === "off" ? action : "Turn on notifications"}
-            </button>
+            </Button>
           )}
           <button
             onClick={() => updateDismissed("notif_nudge", Date.now())}

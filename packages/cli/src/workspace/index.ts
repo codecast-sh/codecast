@@ -79,6 +79,7 @@ export {
   recordTrust,
   clearRepoTrust,
   reviewTrust,
+  reviewRepoTrust,
   untrustedTargetIds,
   commandTargetId,
   TEARDOWN_TARGET_ID,
