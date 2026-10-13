@@ -147,6 +147,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
     const act = r.stand.act;
     if (!act) return null;
     // Grounding found nothing to change: the person closes it, here as on its page.
+    if (act === "fixed") return <CloseProblem taskRef={r.issue.ref ?? r.id} title="Close it: main already carries its fix" label="Close as fixed" primary={false} />;
     if (act === "close") return <CloseProblem taskRef={r.issue.ref ?? r.id} title="Close it: the line found nothing to change" label="Close: nothing to change" primary={false} />;
     // A twin folded under its older problem: the line would run the same defect twice, so it merges in.
     if (act === "mergeinto" && r.dupOf && r.issue.ref) {
