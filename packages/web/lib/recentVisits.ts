@@ -11,6 +11,8 @@ import { cleanTitle } from "./conversationProcessor";
 import { sessionCardTitle } from "./sessionCard";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { convBucketMap, filterInboxScopeFromState, getProjectName, type RecentVisit } from "../store/inboxStore";
+import { isForeignSession } from "./liveEntities";
+import { activeTeamIdOf } from "./activeTeam";
 import { formatShortDate } from "./utils";
 import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
 import { pageSurface, surfaceShown } from "./surfaces";
@@ -89,19 +91,18 @@ function countViewSessions(state: any) {
   return { byBucket, byProject };
 }
 
-// What resolving several visits shares: the inbox scope and the per-view
-// session counts, each built once and only when a visit needs it.
+// What resolving several visits shares: the per-view session counts, built
+// once and only when a visit needs it.
 export type VisitResolveMemo = {
-  scoped?: Record<string, any>;
   counts?: ReturnType<typeof countViewSessions>;
 };
 
 /**
  * One visit as a display row, resolved live from the store, or null when it
- * is not a place this workspace can go: a session the inbox scope hides, an
- * untitled blank, a deleted label. The recents surfaces and the undo timeline
+ * is not a place this workspace can go: another team's session, an untitled
+ * blank, a deleted label. The recents surfaces and the undo timeline
  * (lib/undoHistory) resolve through it, so a title and a scope rule are the
- * same everywhere. Pass one `memo` across a loop to build the scope once.
+ * same everywhere. Pass one `memo` across a loop to count views once.
  */
 export function resolveVisit(
   state: any,
@@ -110,11 +111,15 @@ export function resolveVisit(
   memo: VisitResolveMemo = {},
 ): ResolvedVisit | null {
   if (v.kind === "session") {
-    // The cache holds rows from other scopes and previously viewed teams; a
-    // session the inbox scope hides is not a place this workspace can go.
-    memo.scoped ??= state.sessions ? filterInboxScopeFromState(state) : {};
-    if (state.sessions?.[v.key] && !memo.scoped[v.key]) return null;
     const sess = state.sessions?.[v.key] ?? state.conversations?.[v.key];
+    // A visit is somewhere you went, so the inbox scope does not apply: a
+    // teammate's session opened from search stays in your history. What
+    // drops is another team's work left in the cache from a workspace you
+    // have since switched away from (routing: the row's team vs the one on
+    // screen).
+    const row = state.sessions?.[v.key];
+    if (row && isForeignSession(row, state.conversations?.[v.key], state.currentUser?._id?.toString?.())
+      && String(row.team_id ?? "") !== String(activeTeamIdOf(state) ?? "")) return null;
     // Hosted mode's Assistant scope (lib/assistantScope) holds for recents
     // too: a developer session it hides never comes back through history.
     if (sess && assistantScopeOnly(state.clientState?.ui) && !inAssistantScope(sess.agent_type)) return null;
@@ -184,10 +189,11 @@ export const VISIT_OBJECT_LABEL: Record<VisitObjectType, string> = {
   page: "Page",
 };
 
-/** The kind's name in the viewer's words: a session is a conversation in
- *  hosted mode (MODE_WORDS). */
-export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string }): string {
-  return type === "session" && words ? words.conversation : VISIT_OBJECT_LABEL[type];
+/** The kind's name in the viewer's words: a session is a conversation, a
+ *  task a to-do and a doc a note in hosted mode (MODE_WORDS). */
+export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string; task: string; doc: string }): string {
+  if (!words) return VISIT_OBJECT_LABEL[type];
+  return type === "session" ? words.conversation : type === "task" ? words.task : type === "doc" ? words.doc : VISIT_OBJECT_LABEL[type];
 }
 
 export function visitTimeAgo(ts: number): string {

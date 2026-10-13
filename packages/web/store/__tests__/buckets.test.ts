@@ -45,6 +45,12 @@ const bucket = (id: string, name: string, extra: Partial<BucketItem> = {}): Buck
 });
 
 describe("convBucketMap", () => {
+  it("reuses the assignment snapshot and invalidates after a move", () => {
+    const assignments = { a: { _id: "a", conversation_id: "c", bucket_id: "old", updated_at: 1 } };
+    expect(convBucketMap(assignments)).toBe(convBucketMap(assignments));
+    expect(convBucketMap({ a: { ...assignments.a, bucket_id: "new" } }).c).toBe("new");
+    expect(convBucketMap(assignments).c).toBe("old");
+  });
   it("maps conversation ids to bucket ids, dropping null tombstones to undefined", () => {
     const assignments: Record<string, BucketAssignmentItem> = {
       a1: { _id: "a1", conversation_id: "c1", bucket_id: "b1", updated_at: 1 },
