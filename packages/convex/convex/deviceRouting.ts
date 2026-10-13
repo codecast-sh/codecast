@@ -23,8 +23,8 @@ export const DEVICE_ONLINE_MS = 2 * 60 * 1000;
 // (@codecast/shared/contracts/cloudPlacement) so the web composer and this
 // ladder answer "can this machine open that folder" identically. Re-exported
 // so every existing importer keeps its path.
-export { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
-import { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
+export { pathUnderRoot, platformCanOpenPath, pathHome } from "@codecast/shared/contracts";
+import { pathUnderRoot, platformCanOpenPath, deviceServesPath, machineGoneQuiet, cloudHostBootable } from "@codecast/shared/contracts";
 
 /** Minimal device shape the routing decision needs (a subset of the `devices` row). */
 export type RoutableDevice = {
@@ -34,6 +34,8 @@ export type RoutableDevice = {
   local_project_roots?: string[];
   /** `process.platform` as reported by the heartbeat: "darwin" | "linux" | "win32". */
   platform?: string;
+  /** A cloud host's last report from the laptop that manages it (cloudHostRetired). */
+  cloud_host?: { managed_by: string; state: string; at: number } | null;
 };
 
 /**
@@ -41,18 +43,6 @@ export type RoutableDevice = {
  * outranks every device that couldn't. Falls back to the whole pool when nothing
  * qualifies — leaving a session unowned is worse than routing it imperfectly.
  */
-/**
- * `/Users/<name>` or `/home/<name>` for a posix path. A session filed under
- * one home belongs to the machine that keeps that home, even when the folder
- * is a worktree outside the directories that machine advertises as projects.
- */
-export function pathHome(p: string): string | null {
-  const parts = p.split("/").filter(Boolean);
-  if (parts.length < 2) return null;
-  if (parts[0] !== "Users" && parts[0] !== "home") return null;
-  return `/${parts[0]}/${parts[1]}`;
-}
-
 function mostRecentPreferringOpenable(pool: RoutableDevice[], paths: string[]): string {
   const byRecency = [...pool].sort((a, b) => b.last_seen - a.last_seen);
   if (paths.length === 0) return byRecency[0].device_id;
@@ -83,9 +73,12 @@ function mostRecentPreferringOpenable(pool: RoutableDevice[], paths: string[]): 
  *   5. No local online, but an online REMOTE holds the checkout: it serves now
  *      rather than the work waiting on a sleeping Mac. The invariant only bars a
  *      remote that would be a dead end; a matching root proves it isn't one.
- *   6. No local online: the sticky owner if it's local, else the most-recently-SEEN
- *      local device. The command/message queues until that Mac wakes — never leave
- *      the session unowned for the always-awake remote to adopt.
+ *   5b. A sleeping cloud host that holds the checkout: queued work wakes it.
+ *   6. No local online: a local that has the files, else a local still in
+ *      service, else any local (sticky owner first within each, then the
+ *      most-recently-SEEN). The command/message queues until that machine
+ *      wakes — never leave the session unowned for the always-awake remote to
+ *      adopt, and never queue for a long-dead VM while a real machine exists.
  *   7. The user has no local device at all (cloud-only): an online remote.
  *   8. null — nothing eligible. The caller leaves the command untargeted
  *      (broadcast) and the daemon-side guards arbitrate.
@@ -103,19 +96,11 @@ export function pickOwnerDevice(
   const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
   const hasCheckout = (d: RoutableDevice) =>
     (d.local_project_roots ?? []).some((r) => paths.some((p) => pathUnderRoot(p, r)));
-  // Same home as a reported project, even when the session folder itself is
-  // not one of those projects (an intern worktree under ~/.intern-data while
-  // the machine advertises ~/src/<repo>).
-  const servesPath = (d: RoutableDevice) => {
-    if (hasCheckout(d)) return true;
-    const homes = new Set(
-      (d.local_project_roots ?? []).map(pathHome).filter((h): h is string => !!h),
-    );
-    return paths.some((p) => {
-      const home = pathHome(p);
-      return !!home && homes.has(home);
-    });
-  };
+  const servesPath = (d: RoutableDevice) => deviceServesPath(d, paths);
+  // cloudHostBootable reads `online` and compares rows by identity, so judge
+  // it over one set of probes built from the whole roster.
+  const probes = new Map(devices.map((d) => [d, { ...d, online: now - d.last_seen < DEVICE_ONLINE_MS }]));
+  const bootable = (d: RoutableDevice) => cloudHostBootable(probes.get(d)!, [...probes.values()]);
   let online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
   // 1. Explicit pick, if online.
@@ -137,8 +122,11 @@ export function pickOwnerDevice(
     return opts.ownerDeviceId;
   }
 
+  // Narrow to the machines that can open the path, but only on the word of
+  // one that holds it or is still in service: a long-dead Linux VM must not
+  // narrow a /home session down to itself and push every real machine out.
   const openable = devices.filter((d) => hasCheckout(d) || paths.every((p) => platformCanOpenPath(d.platform, p)));
-  if (openable.length > 0) devices = openable;
+  if (openable.some((d) => hasCheckout(d) || !machineGoneQuiet(d, now))) devices = openable;
   online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
   // From here a LOCAL device always outranks a remote; a remote only auto-owns
@@ -189,15 +177,34 @@ export function pickOwnerDevice(
     if (remoteMatches.length > 0) return remoteMatches[0].device_id;
   }
 
-  // 6. No local online — queue for one anyway. Prefer the sticky owner (don't
-  //    ping-pong ownership of an existing conversation between sleeping Macs),
-  //    else the local seen most recently. Same openability preference as rung 4:
-  //    queueing for a machine that can't open the path just delays the failure.
+  // 5b. A sleeping cloud host that has the checkout. Work queued for it wakes
+  //     it (requestRemoteWake), so it serves within a boot, where an offline
+  //     laptop holds the work until a person opens it.
+  if (paths.length > 0) {
+    const asleep = devices
+      .filter((d) => hasCheckout(d) && bootable(d))
+      .sort((a, b) => b.last_seen - a.last_seen);
+    if (asleep.length > 0) return asleep[0].device_id;
+  }
+
+  // 6. No local online — queue for one anyway, but for one that will serve
+  //    the work when it wakes: the machine that has the files first, else any
+  //    local still in service. A machine quiet for a day (a VM or container
+  //    long gone) is a destination nobody opens, so it is queued for only when
+  //    no other local exists. The sticky owner is preferred within each pool
+  //    (don't ping-pong ownership between sleeping Macs), and the same
+  //    openability preference as rung 4 applies: queueing for a machine that
+  //    can't open the path just delays the failure.
   if (locals.length > 0) {
-    if (opts.ownerDeviceId && locals.some((d) => d.device_id === opts.ownerDeviceId)) {
-      return opts.ownerDeviceId;
+    const holders = paths.length > 0 ? locals.filter(servesPath) : [];
+    const live = locals.filter((d) => !machineGoneQuiet(d, now));
+    for (const pool of [holders, live, locals]) {
+      if (pool.length === 0) continue;
+      if (opts.ownerDeviceId && pool.some((d) => d.device_id === opts.ownerDeviceId)) {
+        return opts.ownerDeviceId;
+      }
+      return mostRecentPreferringOpenable(pool, paths);
     }
-    return mostRecentPreferringOpenable(locals, paths);
   }
 
   // 7. Cloud-only user: an online remote is the only machine that can serve.

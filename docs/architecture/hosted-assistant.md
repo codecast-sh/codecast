@@ -1,4 +1,4 @@
-# The hosted assistant and the simple lane
+# The hosted assistant and hosted mode
 
 Plan pl-840. The product story is `docs/proposals/codecast-for-everyone.md`;
 this is the build spec every implementer works from. Where this file and the
@@ -20,8 +20,8 @@ shell): the personal computer, a separate phase.
 
 ## Revised 2026-10-05: hosted mode inside codecast, and a platform core
 
-The founder's direction, which supersedes the separate lane described under
-"The simple lane" below:
+The founder's direction, which supersedes the separate lane built first
+("History: the simple lane" below):
 
 1. **A platform core.** Everything Averil and codecast can reasonably share
    lives in `@platform`: the harness (`agent`), billing, design tokens
@@ -218,14 +218,16 @@ needs. A person connects mail from
 codecast through `whisk.email/connect`; Whisk mints a revocable app token,
 codecast stores it encrypted and calls the same Whisk functions the `whisk`
 CLI calls. Codecast keeps Google sign-in with basic scopes only. Whisk's
-design tokens live in `@platform/design`, and the simple lane is built on
-them so the lane and Whisk read as one product; Whisk remains a complete app
-on its own.
+design tokens live in `@platform/design`, and hosted mode and `/welcome` are
+built on them so codecast and Whisk read as one family; Whisk remains a
+complete app on its own.
 
 How it is wired:
 
 - **Connect** (`convex/whisk.ts`). `getConnectUrl` signs a state (the person
-  and the lane page to return to, `WHISK_RETURN_PATHS`) with
+  and the page to return to, one of `WHISK_RETURN_PATHS`: Settings >
+  Integrations, `/welcome`, `/inbox`, or the retired `/simple/connections`
+  for links already out there) with
   `WHISK_APP_SECRET_CODECAST` and sends the browser to
   `whisk.email/connect?app=codecast&return=<codecast>/connect/whisk&state=`.
   Whisk returns to `/connect/whisk` (`app/connect/whisk/page.tsx`, the one
@@ -240,7 +242,7 @@ How it is wired:
   in to codecast (the desktop app opens Connect in the system browser) is
   held in that tab (`lib/returnStash.ts`, as Slack's return is), sends the
   person to `/login?reason=whisk&return_to=/connect/whisk`, and finishes when
-  sign-in comes back. It lands on the lane page with `?whisk=connected` or
+  sign-in comes back. It lands on that page with `?whisk=connected` or
   `?whisk=error&reason=<code>`, the `?<provider>=` shape every connector
   uses: `ConnectNotice` reads it through `useConnectorReturn` with `whisk` as
   an extra provider, so the reason goes through the connectors' reason
@@ -270,8 +272,8 @@ How it is wired:
   return list (`WHISK_APP_RETURN_URLS_CODECAST`) must allow it too.
 - **One product.** Every thread a tool shows carries its Whisk link (the
   `whisk link` format, `whiskThreadLink`), drafts the assistant saves are
-  Whisk drafts, and Connections says "Mail and calendar, through Whisk" with
-  an Open Whisk button.
+  Whisk drafts, and the Integrations row "Mail and calendar (Whisk)" carries an
+  Open Whisk button.
 
 ## Pieces and who owns which files
 
@@ -288,8 +290,8 @@ routes) are edited only by the stage named here.
 | Billing | `~/src/platform/packages/billing/**`, `convex/billing.ts`, its route in `convex/http.ts` | Stripe over fetch (no SDK), checkout, portal, signed webhook. Prices and limits come from the `PLANS` catalog (see Plans); `@platform/billing` takes them as input and holds none of its own. Env-gated: no keys means plans are granted by hand and the upgrade button says so. |
 | Google identity and connectors | `convex/auth.ts`, `platform/packages/auth` web provider list, `components/AuthProviderButtons.tsx`, `convex/googleOAuth.ts` | Google sign-in (env-gated on `AUTH_GOOGLE_ID`), Calendar scope, an internal token getter the tools call. |
 | pi cost | `packages/cli/src/parser.ts` | Read pi's per-message `usage.cost` into `usage_totals`. |
-| Simple lane (web) | `packages/web/src/layouts/SimpleShell.tsx`, `packages/web/app/simple/**`, `packages/web/components/simple/**`, route manifest entries | Its own layout, not DashboardLayout. Reads the store. |
-| Onboarding | `packages/web/app/welcome/**` | Three screens: sign in, connect, first useful thing. |
+| Hosted mode (web) | `packages/web/lib/surfaceRules.ts` and `lib/surfaces.ts` (the registry and `MODE_WORDS`), `packages/web/components/simple/**` (hosted wording, plan rules, connect, billing), `app/settings/plan/page.tsx` | Inside the main app's DashboardLayout; gated through the registry, never a separate shell. |
+| Onboarding | `packages/web/app/welcome/**` | Two steps, sign in and start, with connect as a side screen (`?step=connect`). |
 | Hosted mode (mobile) | `packages/mobile/components/hosted/**`, the tabs, `app/session/[id].tsx` | The same mode in the phone's tabs. |
 
 ## Data model
@@ -644,9 +646,38 @@ the frame's "What fired this run" block as untrusted input first.
 | --- | --- | --- | --- |
 | Price | $0 | $20/mo | $60/mo |
 | Usage included | $2/mo | $12/mo | $40/mo |
-| Default model | Haiku 4.5 | Sonnet 5.5 | Sonnet 5.5, Opus 5.5 for hard work |
+| Default model | Haiku 5.5 | Sonnet 5.5 | Sonnet 5.5, Opus 5.5 for hard work |
 | Routines | 3, at most daily | 25 | unlimited |
 | Concurrent turns | 1 | 2 | 3 |
+
+### Who the Free plan serves
+
+Every new wallet starts on Free with a month of our tokens, so the turn
+engine gates Free turns (`convex/assistant/freeGate.ts`, read in
+`leaseTurn` before a turn reserves anything). A turn a paid plan or bought
+credit pays for is never gated.
+
+- **A proven address.** Apple, Google and GitHub sign-ins prove the email
+  (`emailProven`, lib/workDomain). A password account does not, so its first
+  Free turn stops on a `verify` notice, the stop mails a six digit code
+  (`lib/emailProof.ts`, shared with team discovery), and the notice carries a
+  code field. Entering it (`assistant.entry.confirmEmailProof`) proves the
+  address and picks the stopped ask up by itself (`resumeAfterNotice`, the
+  same path the engine's own outage retry takes).
+- **One Free month per mailbox.** `assistant_free_mailboxes` records which
+  account a mailbox's Free month serves, claimed by its first Free turn.
+  On consumer mail providers a +tag (and on Gmail, dots) names the same
+  mailbox (`freeMailbox`); a company address stays whole. A second account
+  on an alias stops on a `limit` notice.
+- **A daily ceiling.** `assistant_free_days` sums what Free turns spent per
+  UTC day. Past `FREE_DAILY_CEILING_USD` ($25, overridden by the deployment's
+  `HOSTED_FREE_DAILY_USD`) new Free turns stop on a `limit` notice until the
+  next UTC day, and the operator is alerted once that day
+  (`incidents.alertFreeCeiling`: the error log, and Sentry when `SENTRY_DSN`
+  is set).
+
+No per-IP cap: a self-hosted Convex function sees a rotating internal proxy
+address, so an IP key bounds nothing; the mailbox is the unit of abuse.
 
 A top-up buys usage at the same margin a plan keeps: each dollar paid
 before tax credits `TOPUP.usage_usd_per_usd` ($0.60) to the top-up balance,
@@ -700,109 +731,70 @@ checkout.session.completed and async_payment_succeeded,
 customer.subscription.created, updated and deleted, invoice.paid,
 charge.refunded and charge.dispute.created.
 
-## The simple lane
+## How hosted mode is wired
 
-Superseded on 2026-10-05 by "Revised 2026-10-05" above: the lane folds into codecast's own shell as hosted mode. Kept for the history of what was built.
+Hosted mode is the main app with `client_state.ui.lane === "simple"`
+("Revised 2026-10-05" above). The separate lane that came first is retired
+("History: the simple lane" below). What it built and still runs, now in
+the main app:
 
-A person in the simple lane never sees a repo, a terminal, a device, a model
-picker or the word "session". Same store, same data, different shell.
-
-- **Home**: what needs you (approvals), what's happening (running turns,
-  today's routines), what's done (recent conversations). One composer:
-  "What can I take off your plate?"
-- **Conversation**: the transcript, with tool steps folded into plain lines
-  ("Read 12 emails from this week", "Drafted a reply to Dana"), approvals as
-  cards with the actual draft, and the composer.
-- **Approvals**: every open approval, oldest first.
-- **Routines**: plain sentences with a schedule, pause and delete.
-- **Connections**: mail and calendar through Whisk, with what each lets the
-  assistant do, the mailboxes it reaches, Open Whisk, and disconnect.
-- **Plan**: usage this period as a meter, plan, upgrade, top-up.
-
-The lane is a per-user preference (`client_state.ui.lane`). New accounts
-that sign up without the CLI land in it; anyone can switch from settings.
-
-How the web lane is wired (`packages/web/components/simple/`):
-
-- **Shell.** `src/layouts/SimpleShell.tsx` mounts `DashboardSyncEffects`
-  with `windowEffects={false}`: the same feeders and dispatch as the full
-  app, without call rings, chat toasts or mods. `/simple` and `/welcome` are
-  NON_TAB prefixes. `DashboardShell` sends `/inbox` to `/simple` when the
-  lane is set. `lanePref.ts` holds `laneOf`, `writeLane` and
-  the settings switch's words, with no router in it, so the full app and
-  the phone use them without loading the lane; `useSetLane.ts` is the web
-  gesture that writes the preference and moves the view.
-- **Look.** The lane is Whisk's sibling. `@platform/design`
-  (`~/src/platform/packages/design`) is the one home of the family's
-  palette (light and dark), faces (Instrument Sans for the interface,
-  Newsreader for reading and titles, Fragment Mono for counts), shape and
-  motion: `src/tokens.ts`, rendered by its build into `tokens.css` as
-  `--pd-*` properties (dark under `:root[data-theme="dark"], :root.dark`,
-  so both apps' theme switches reach it). Whisk's `--m-*` and the lane's
+- **Reads.** A hosted conversation is a `sessions` row with a hosted
+  `agent_type` (`isHostedAgentType`; `HOSTED_AGENT_TYPE` is `"codecast"`);
+  its approvals are pending `sessionDecisions` on it; its routines are
+  `agentTasks` anchored to a hosted conversation (`hosted_home`,
+  `originating_conversation_id`).
+- **The preference.** `components/simple/lanePref.ts` holds `laneOf`,
+  `writeLane`, `isHostedUi` and the switch's words (`LANE_SWITCH`), with no
+  router in it, so the web and the phone share it. Writing goes through the
+  store's `setLane`, which also moves the person to Personal.
+- **Look.** Hosted mode and `/welcome` are Whisk's siblings.
+  `@platform/design` (`~/src/platform/packages/design`) is the one home of
+  the family's palette (light and dark), faces (Instrument Sans for the
+  interface, Newsreader for reading and titles, Fragment Mono for counts),
+  shape and motion: `src/tokens.ts`, rendered by its build into `tokens.css`
+  as `--pd-*` properties (dark under `:root[data-theme="dark"], :root.dark`,
+  so both apps' theme switches reach it). Whisk's `--m-*` and codecast's
   `--sl-*` are names for those tokens, never their own values.
-  `laneLook.ts` imports the sheet and `@platform/design/fonts` (the three
-  faces, bundled from fontsource as Whisk bundles them, so they come from
-  this origin with the lane's chunk), so every lane surface (the shell and
-  /welcome) carries the family. Shape is the family's two radii:
-  `--sl-radius-sm` is `--pd-radius` (buttons, tabs, menu rows, drafts) and
-  `--sl-radius` is `--pd-radius-lg` (cards, lists, sheets, the composer,
-  bubbles). Fully round is kept for what is round by nature or a chip
-  in Whisk too: the ring mark, dots, the send and icon buttons, idea chips,
-  pills, badges, notes and the meter. Vermilion is spent
-  on what needs the person and on the yes; the assistant at work moves in
-  quiet ink; what the assistant writes and every draft are set in
-  Newsreader, like a letter in Whisk.
-  Motion is the family's one curve: `--sl-ease` is `--pd-t-ease`, and the
-  phone's hosted parts draw on `HOSTED_EASE` (`Easing.bezier(...MOTION_CURVE)`,
-  the same control points as numbers). /welcome names its three deliberate
-  departures once at its top (`--wl-leave`, `--wl-spring`, `--wl-glide`),
-  on `:root` because view transition pseudo-elements read only what html
-  carries.
-  The lane's `--sl-*` names say what a colour means, one name per meaning:
-  `--sl-accent` (with `-wash`, `-line`, and `--sl-on-solid` for text on a
-  fill) for what needs the person and the yes, `--sl-working` for the
-  assistant at work, `--sl-mark` for quiet ornament (checks, the current
-  tab, link text), `--sl-wash` for neutral fills, `--sl-ok` for done.
-  Lane CSS uses only these; `--pd-*` appears only in the alias block.
-- **Boot.** A cold load of a lane page opens on the family's paper with the
-  lane's ring mark, never the full app's splash. `plugins/laneBoot.ts`
-  injects the `--pd-*` sheet (`tokensStyleTag()` from `@platform/design/vite`,
-  the same head tag Whisk's vite config adds with `designTokens()`, so both
-  apps paint the family's paper before a bundle loads) and an inline copy of
-  `components/simple/laneBoot.ts` into index.html's head, which flags
-  `<html data-lane>` on `/simple` and `/welcome` and swaps index.html's
-  marketing title for `LANE_BOOT_TITLE` ("Codecast") until the page's own
-  title (`useLaneDocumentTitle`) replaces it; index.html's boot rules
-  and `AppLoader` (and `BootFallback`) take the lane form from that flag.
-- **Reads.** Conversations are `sessions` rows with a hosted `agent_type`;
-  approvals are pending `sessionDecisions` on them; routines are
-  `agentTasks` whose `originating_conversation_id` is one of them.
-- **Steps.** `lane.ts stepText` folds each tool call into one line. A tool
-  result (or call) carrying `summary`, a plain past-tense sentence, is shown
-  as written; otherwise the name is matched against a small vocabulary
-  (mail, calendar, web, to-dos, notes, routines) and then spelled out.
-- **Approvals.** The card shows `question`, then `context_md` as the draft,
-  then every option as a button (first is the yes, a label starting with
-  Decline/No/Don't is quiet). Answers go through `answerDecision`.
+  `components/simple/laneLook.ts` imports the sheet and
+  `@platform/design/fonts` (bundled from fontsource as Whisk bundles them);
+  `ThemeProvider`, `/welcome` and `/connect/whisk` load it. The `--sl-*`
+  names say what a colour means, one name per meaning: `--sl-accent` (with
+  `-wash`, `-line`, and `--sl-on-solid` for text on a fill) for what needs
+  the person and the yes, `--sl-working` for the assistant at work,
+  `--sl-mark` for quiet ornament, `--sl-wash` for neutral fills, `--sl-ok`
+  for done; `--pd-*` appears only in their alias block
+  (`components/simple/simple.css`). Shape is the family's two radii
+  (`--sl-radius-sm` = `--pd-radius`, `--sl-radius` = `--pd-radius-lg`), and
+  motion its one curve (`--sl-ease` = `--pd-t-ease`; the phone's
+  `HOSTED_EASE` uses the same control points). Vermilion is spent on what
+  needs the person and on the yes; what the assistant writes is set in
+  Newsreader. In the main app, `html.hosted-mode.minimal-style` maps the
+  `sol` accents onto the family ("Polish round 2").
+- **Boot.** A cold load of `/welcome` opens on the family's paper with the
+  ring mark, never the developer splash. `plugins/laneBoot.ts` injects the
+  `--pd-*` sheet (`tokensStyleTag()` from `@platform/design/vite`) and an
+  inline copy of `components/simple/laneBoot.ts` into index.html's head,
+  which flags `<html data-lane>` on the pages in `LANE_PAGES` (`/welcome`
+  alone) and swaps the marketing title for `LANE_BOOT_TITLE` until
+  `useLaneDocumentTitle` replaces it.
 - **Billing.** `billing.ts useBilling` reads `billing.billingAvailable`
   (a `BillingStatus`: `available`, the priced `plans`, and whether a
   `topup` can be bought) and calls `billing.startCheckout` with `{ plan }`
   or `{ topup_usd }`. It gets back a `BillingRedirect` (`{ ok: true, url,
   via }` or `{ ok: false, code, error }`) and opens `url`; Stripe returns
-  the person to `/simple/plan?billing=done|topup|canceled` (`BILLING_RETURN`
+  the person to `/settings/plan?billing=done|topup|canceled` (`BILLING_RETURN`
   in `@codecast/shared/contracts/assistant`, which the server's return URLs,
-  the lane's plan path and the return note all read). `useBillingReturn`
-  (web only, its own file: it uses the web's router, and `billing.ts` is
-  shared with the phone, whose bundle cannot load the router) reads the
-  parameter once, takes it off the URL, and says the payment is on its way
-  until the wallet shows it.
-  `useBilling().manage()` opens the billing portal (`billing.openPortal`)
-  through the same redirect; the plan screen shows "Manage billing" when
-  billing is available and `WalletSummary.billing_account` is true. A
-  negative `topup_usd` is shown as money owed. With billing unavailable the
-  plan screen says card payments are not open yet. `useBilling(open)` takes
-  the opener (the web leaves for the page; the phone opens it in the
-  browser), and `usePlanFigures` is the screen's figures for both.
+  the plan page and the return note all read). `useBillingReturn` (web
+  only: it uses the web's router, and `billing.ts` is shared with the phone)
+  reads the parameter once, takes it off the URL, and says the payment is on
+  its way until the wallet shows it. `useBilling().manage()` opens the
+  billing portal (`billing.openPortal`) through the same redirect; the plan
+  page shows "Manage billing" when billing is available and
+  `WalletSummary.billing_account` is true. A negative `topup_usd` is shown
+  as money owed. With billing unavailable the plan page says card payments
+  are not open yet. `useBilling(open)` takes the opener (the web leaves for
+  the page; the phone opens it in the browser), and `usePlanFigures` is the
+  page's figures for both.
 
 How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
 
@@ -839,11 +831,12 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   transcript with the actual draft (`components/hosted/ApprovalCard.tsx`,
   the one hosted part of the screen; a long draft folds through the shared
   `CollapsibleBody`; the decision screen's `AnswerControls` for a
-  pick-several, ranking or form), and the reply box says "Reply", or
-  "Or tell me what to change" while one is open. "On it" shows in the
-  composer while the turn runs (`useLane.ts useConversationWorking`, over
-  `lane.ts conversationState`: a turn's own "done" ends it at once, without
-  the idle grace a daemon's status needs).
+  pick-several, ranking or form), and the reply box says what the web's
+  says after the same exchange (`lib/hostedComposer.ts`). "Getting
+  started…", then "Thinking…", shows in the composer while the turn runs
+  (`useLane.ts useConversationWorking`, over `lane.ts conversationState`: a
+  turn's own "done" ends it at once, without the idle grace a daemon's
+  status needs).
   A push tapped on a closed app lands before the cache is read back, so the
   route holds a bare header until the row is known or the cache is read
   (`SessionDetailScreen`): the screen never opens as a developer session and
@@ -858,7 +851,8 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   the stamp it was sent at, so the inbox row stops reading as working. The
   minute coverage pass (`usePendingMessageCoverage`, mounted in
   `StoreSyncBridge` as on the web) is the backstop. The phone draws it as a
-  quiet "You said: Approve" note.
+  quiet note only when it says more than the step does (`lane.ts
+  answerNote`, the web's `approvalAnswerAddsToReceipt`).
 - **Inbox rows and words.** In hosted mode a row is its title, its time and
   one quiet line (`inbox.rowInternals` hides the status word, the summary
   bullets, the caret line and the agent, model and message count): where it
@@ -899,9 +893,9 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   (`components/hosted/MailPage.tsx`, `useLaneMail`; Connect opens the web's
   `/settings/integrations`, where the signed-in session finishes it). The
   Accounts and Devices rows follow `settings.machines`.
-- **Look.** Hosted parts are drawn in codecast's own palette and face:
-  `components/hosted/hostedTheme.ts` names each colour by meaning over
-  `constants/Theme` (action blue for the yes, orange for what waits on the
+- **Look.** Hosted mode wears the family look, as the web's does ("Mobile
+  polish round 1" below); `components/hosted/hostedTheme.ts` names each
+  colour by meaning over `constants/Theme` (the yes, what waits on the
   person). The assistant wears the codecast mark (`AgentLogoSvg`,
   `@codecast/shared/render/codecastMark`, shared with the web's `Logo`).
 - **Old addresses.** `/simple/...` links go where the web sends them
@@ -958,14 +952,17 @@ How onboarding is wired (`packages/web/app/welcome/`):
   for the connection (one read, `whisk.connection`, with its grant) and, for
   someone not connected, whether the deployment can connect mail; a failed
   read counts as answered, so no screen waits on it for good.
-- **First ask** is `lane.ts firstAsks(can)` from what the grant allows, and
-  starts through `startConversationWith`, then lands in `/simple/c/<id>`.
-  Every first ask works as tapped: none names a person the asker may not
-  know. Home's ideas (`homeIdeas(can)`, through `useLaneMailAbilities`)
-  are the first three of the same asks, so home never suggests what is not
-  connected. Signed in, the page mounts `LaneSync` (the lane's store wiring) so
-  these writes go out. Acting on any screen (connect, Not now, an ask)
-  writes `ui.lane = "simple"` (`lanePref.writeLane`).
+- **First ask** is `lane.ts firstAsks(can)` from what the grant allows. It
+  starts through `lib/startHostedConversation.ts startHostedConversation`
+  and lands in the conversation (`lanePaths.ts hostedConversationPath`,
+  `/conversation/<id>`). Every first ask works as tapped: none names a
+  person the asker may not know. Signed in, the page mounts `LaneSync` (the
+  store wiring) so these writes go out. Acting on any screen (connect, Not
+  now, an ask) writes `ui.lane = "simple"` (`lanePref.writeLane`). A signed
+  in person who already has a hosted conversation and opens a bare
+  `/welcome` goes to the inbox; a conversation the page itself just started
+  does not count, so the first ask lands in its conversation (`SignedIn`'s
+  `asked` ref, `welcome.mount.test.tsx`).
 - **Ways in.** The marketing home page carries one link to /welcome twice:
   as a quiet line in its first screen, under the install command
   (`compact`, location `landing_top`), and as a pill under its developer
@@ -1188,6 +1185,196 @@ How onboarding is wired (`packages/web/app/welcome/`):
   group labels are tracked mono, and send is one ink disc in the app and on
   /welcome.
 
+- **One route guard.** A page the mode hides redirects from the shell
+  (`DashboardLayout`, `surfaceRules.ts hiddenPageRedirect`, read through the
+  same `showsPage` as the rail and palette): `/routines` and `/workflows` go
+  to Routines, `/plans` and goals to To-dos, a Machines settings page to
+  Settings, anything else to the inbox.
+- **The assistant's door is a page of its own.** `/?for=assistant` ends after
+  For everyone with `EveryoneFooter` (Pricing, Privacy, a link for
+  developers); no install strip follows it.
+- **Sources.** search_web's source list has one owner both ways,
+  `@platform/assistant/sources` (`formatSources`, `parseSources`,
+  dependency free for the browser); the receipt reads it
+  (`hostedReceipt searchedSources`, one per site, up to four) and
+  `HostedSources` draws the line under the search step, open or closed.
+- **Rail.** Rows carry no rule of their own; the accent is on unread rows'
+  times only; on hover the time yields its slot to the actions and the star
+  shows only when set; a row is named by its title and time. A followed row
+  clears its sticky heading (`lib/rowScroll.ts`, `scroll-mt-8`), the hosted
+  rail has no scroll anchoring, an opened New row stays in New until you leave
+  it, and a list with rows drops "More in Everything" (the header tab says it).
+- **Words and waits.** One connection sentence (`HostedConnection.tsx`) for the
+  status line, a bubble not yet sent (keeping Cancel) and the sidebar foot.
+  While a turn runs with an empty box the send disc is a Stop square
+  (`ComposerSendButton stop`). The meter counts requests left
+  (`planWords requestsLeftWords`), the share used is its tooltip.
+- **Transcript.** Reply headings are body size; narration before a step is
+  in the interface face at the receipt's size; a hosted reply has no icon
+  foot; a note card's table keeps figures tight and shows two columns on a
+  narrow card (`numericColumns`).
+- **Lists and search.** `x` checks a hosted to-do off with Undo
+  (`GenericListView onToggleItem`); high and urgent show as an accent mark
+  and `p` is no longer gated; the keyboard cursor takes the selected fill.
+  Notes rows show the time the list is sorted by. A kind word matches from
+  three letters. /search counts each group under its own heading and shows a
+  conversation hit as one snippet until selected.
+- **Funnel and home.** /welcome's Start offers "Use Whisk for mail now"
+  beside the mail promise; the phone home lists New under Your move
+  (`useNewResults`), keeps a run time on one line and lets starters wrap to
+  three lines. Hosted pages load on idle (`lib/hostedPreload.ts`) and an
+  in-shell load shows the page's own header skeleton (`RouteFallback path`).
+- The flagship starter's two failures on 2026-10-06 were Anthropic's "credit
+  balance is too low" (turns g98dee87..., g98f1ysx...), which the incident
+  probe already covers.
+
+### Mobile polish round 1 (2026-10-07)
+
+The phone's hosted mode, brought to the polished web's parity in its own
+tabs. Checked on an iOS simulator signed in as the App Review account, in
+both themes, and in developer mode, which is unchanged.
+
+- **One look switch.** `constants/Theme.ts` carries a look beside the
+  scheme (`Look`: `classic` or `family`, `setActiveLook`, `useActiveLook`,
+  `paletteFor`). The family palette is `@platform/design` PALETTE under the
+  app's names, mapped as the web's `html.hosted-mode.minimal-style` block
+  maps `--sol-*`. `Theme`, `themedStyles` (whose builder now also gets the
+  look) and `useActiveScheme` follow it, so every screen repaints on a mode
+  switch. The root (`app/_layout.tsx useLookFromMode`) sets it from
+  `useHostedMode`.
+- **Faces.** `constants/fonts.ts` adds `Sans` (Instrument Sans) and `Serif`
+  (Newsreader), bundled in `assets/fonts` and loaded the first time the
+  family look turns on. Unnamed text takes the look's interface face; a
+  style naming a face keeps its group (code stays mono); nested text
+  inherits its parent's group (`components/Themed.tsx InheritedFace`), so a
+  bold run in a reply stays in the reading face. Nav-level faces go through
+  `uiFace` / `useMonoFace`; page titles through `pageTitleFace` (the
+  reading face, as the web's `PageHeading`).
+- **Inbox.** The Assistant scope (`hostedOnlyInbox`) folds the list into
+  the web rail's sections (`hostedStatusSections` with `splitHostedStops`:
+  Your move with its accent dot, Couldn't finish, Working on it, New,
+  Earlier or Done, Drafts), headings in sentence case. A row is named by
+  `lib/hostedRowTitle.ts` (moved out of the web card so both read it), its
+  time is `hostedRowTime`, same-name rows get `sameNameSuffixes`, unread is
+  an ink dot and a 600 title with the accent on its time, working is an ink
+  pulse. The + is an ink disc.
+- **Conversation.** In the family look the person's words are a quiet note
+  and the reply a 17px letter in Newsreader, narration before a step is in
+  the interface face; no name and time headers; the title is in the reading
+  face and the metadata strip folds away. The sticky prompt and the reply
+  suggestion follow their surfaces. Send is the web's ring, then ink disc
+  (`hostedTheme.ts sendDisc`). A step that made one thing is the web's made
+  line, and a note it wrote is the web's note card (`components/hosted/
+  Steps.tsx`, over `lib/madeLine.ts`, moved out of `HostedMadeLine`).
+- **Approvals** are the web's card (`lib/hostedApproval.ts`: `planForCard`,
+  `yesWords`, `isHostedApproval`, now shared): Yes in the accent, Not now,
+  Always allow as a quiet third, what Yes does above the buttons.
+- **Compose sheet.** "What's next?" over up to three starters from the
+  web's one pool (`components/simple/starterPool.ts`, moved out of
+  `AssistantIntro`), in the web's starter rows; no label strip.
+- **Lists and chrome.** The Tasks tab says To-dos and Notes
+  (`modePageLabel`), follows the Assistant scope (`isAssistantTask`,
+  `isOnNotesShelf` with `isAssistantDoc`), shows its filter from six items,
+  and says "Nothing open right now" over finished to-dos. Alerts keep
+  unread neutral; settings group labels are sentence case and switches use
+  the family's ok green.
+
+### Mobile polish round 2 (2026-10-07)
+
+Checked on the simulator as the App Review account, in both themes, and in
+developer mode, which is unchanged.
+
+- **Stop notices.** A hosted turn's stop is the web's notice on the phone
+  (`components/hosted/Notice.tsx`): the live one an outlined card with its
+  move (Try again, Keep going, Open Plan), a stop later turns moved past one
+  quiet line without "You can ask me to try again", and a retried turn
+  folds as on the web (`foldHostedRetries`). The move and the words are one
+  rule in `lib/hostedNotice.ts` (`noticeMove`, `noticeWords`, `NOTICE_TONE`,
+  from which the web's `NOTICE_DOT` derives); the web's `actionFor` reads
+  `noticeMove`.
+- **Transcript top.** A 24pt fade under the title while anything sits above
+  the visible window; never at the top, so the first line is never dimmed.
+- **Tabs.** Chat steps out of the tab bar in hosted mode while the personal
+  workspace is active (it has no rooms). Alerts carries a quiet accent dot
+  instead of a count, as the web bell does. Alerts and Settings title their
+  pages on the left in the reading face, like Inbox and To-dos.
+- **To-dos and Notes.** A hosted to-do row is the web's TaskRow: ink circle
+  or check, the accent mark for high and urgent with every row keeping its
+  slot, a capitalised title, no ids, labels or plans, and "Done Sep 16" on a
+  closed one. Headings are the inbox's (sentence case, quiet count). A note
+  row is the web's DocRow (`lib/hostedNoteRow.ts hostedNoteLines`, shared),
+  with no type heading or tag. The switcher hides for a hosted person with no
+  team, and the header holds its height on Routines so the frame never jumps.
+- **Alerts rows.** The assistant wears the web's AssistantMark (an ink disc,
+  `AgentLogoSvg` in the family look), no coloured type badge, the event word
+  in muted ink, the rail's times, and the inbox's title rule
+  (`sessionCardTitle`) for a hosted conversation.
+- **Smaller.** The Plan row says `meterWords` ("About 300 requests left this
+  month"), the web meter's rule now shared in `lane.ts`; the inbox's search
+  is the rail's bordered field and its header magnifier goes in hosted mode;
+  the compose sheet closes with a thin stroke. `sentenceCase` leaves a first
+  word already cased inside ("iMessage") as written, on both platforms.
+
+### Mobile polish round 3 (2026-10-07)
+
+The conversation pieces web rounds 9 and 10 added, now on the phone, checked
+live on the simulator as the App Review account (a real turn: a web search,
+its routine offer, the approval card answered Not now, and a Stop), in both
+themes, and in developer mode, which is unchanged.
+
+- **Stop.** While a hosted turn runs and the box is empty, send is a Stop
+  disc that calls the store's `stopHostedTurn`, as the web's visible Stop.
+- **A used-up month.** The session composer's placeholder is the held
+  sentence and send waits (`useAllowanceOut`). The new conversation sheet
+  reads the web's `useHostedAskGate`: starters greyed, one centred sentence
+  with "See your plan" (the sheet closes first; the phone sells no credit),
+  send held. The composer's expand control now needs typed text, since a
+  long placeholder wraps too.
+- **A dropped link.** `hooks/useLinkDown.ts` reads the socket
+  (`useWsConnected`) past the web's grace and says `hostedConnectionWords`
+  in the composer's status slot and on a waiting bubble.
+- **Sources** under a hosted message's steps (`Steps.tsx HostedSources`,
+  over `hostedReceipt searchedSources`).
+- **Chips under the last reply** (`components/hosted/ReplyChips.tsx`): the
+  mail chip (Use Whisk for mail now, Connect, or Reconnect) and the routine
+  offer. Their rules moved to `web/lib/hostedOffers.ts` (`offersMailConnect`,
+  `routineOffer`), re-exported from `HostedNotice.tsx`.
+- **Approval card.** One answer per card (`web/hooks/useOneAnswer.ts`, moved
+  out of `HostedApprovalCard`, with `APPROVAL_REFUSED`), the routine notify
+  line from push permission (`ROUTINE_NOTIFY_OFF`, now shared with the web's
+  `RoutineNotifyLine`), and the settled and pending lines in the card's place
+  from `hostedApprovalState`. The open step reads the same state, so it no
+  longer says "Waiting for your go-ahead" over "You said not now".
+- **"5-in-1" read as initiative in-1** in the phone's markdown, which bounded
+  ids with `\b`. The shared bounds are `BARE_ID_BEFORE` / `BARE_ID_AFTER`
+  (`shared/entities`), used by `bareEntityIdRegex` and the phone's tokenizer;
+  `shared/entities/bareIds.test.ts` holds it.
+- **Lists and settings.** The hosted to-do circle checks a to-do off or
+  reopens it (`updateTask`); To-dos' + is the inbox's ink disc and opens "New
+  to-do" (what to do and notes, the compose sheet's header, Add); both lists
+  leave room under the last row for the +. Note and to-do times use the
+  rail's style. Settings rows draw Feather strokes in the family look
+  (`SettingsUI RowIcon`), "Sign out" is sentence case, and the Mail row says
+  "Coming soon" while connecting is closed. The Mail page matches the web's
+  Whisk card (future-tense note, Use Whisk for mail now, Reconnect, "Coming
+  soon" said once). The Notifications tab is named as its page in hosted
+  mode. The transcript's jump arrows are solid sheet discs in the family look.
+
+## History: the simple lane
+
+Phase one (2026-10-04 to 05) shipped hosted mode as a separate shell: a
+`/simple` route tree under its own `src/layouts/SimpleShell.tsx`, its own
+home, conversation, approvals, routines, connections and plan screens in
+`components/simple`, and a `(simple)` route group on the phone. The
+founder's direction of 2026-10-05 retired it, and "The fold" (2026-10-06)
+removed it: the shell, its routes and its duplicate transcript and rows are
+gone. What survives is listed above (plan rules and wording, step wording,
+connections copy, onboarding, the family look, billing). `/simple/...`
+addresses still resolve through `lib/laneRedirect.ts`, and many shared
+modules keep `lane` in their names (`components/simple/`, `useLaneMail`,
+`ui.lane`). Do not rebuild a separate shell: a hosted surface is a main-app
+surface gated through `lib/surfaces.ts`.
+
 ## Working in this tree
 
 - The main checkout carries other sessions' uncommitted work. Never revert,
@@ -1209,5 +1396,88 @@ How onboarding is wired (`packages/web/app/welcome/`):
 - Turn engine, wallet, billing: `convex-test` with the faux provider; a
   concurrency test that four reservations against a nearly full wallet let
   exactly the ones that fit through; webhook signature tests.
-- End to end: a real turn on prod with the deployment's key, driven from the
-  simple lane in the browser, with screenshots.
+- End to end: real turns on prod with the deployment's key, driven in the
+  browser from a fresh signup through the main app in hosted mode, with
+  screenshots. Use a throwaway account on an origin the founder is not
+  signed in on (`http://127.0.0.1:3200` against the local dev server; sign
+  out from the user menu's Sign out), with no machine and no mail.
+
+### Fresh-signup pass (2026-10-07)
+
+Two throwaway email accounts (prefix `claude8+fresh` at almostcandid.com),
+no machine, no mail, Free plan, 1440 wide.
+
+| Step | What happened | Evidence |
+| --- | --- | --- |
+| Marketing page, signed out | "Don't write code?" card on the first screen, "For everyone" in the nav. The card goes to `/welcome`. | [marketing](https://convex.codecast.sh/api/storage/34b87081-cb42-4615-acbb-e928314ee818) |
+| `/welcome` sign in | Apple, then "Continue with email", then GitHub quietly. No Google on this deployment. | [welcome](https://convex.codecast.sh/api/storage/3eebdae2-f386-46e3-905d-13586b0be1d7) |
+| Email sign-up | The form stays in /welcome's look (`?email=signup`). No mailed code was asked for. | [sign-up](https://convex.codecast.sh/api/storage/cf30553d-731c-4e8d-b035-b6945f88ff6f) |
+| Start | "What can I take off your plate?", three asks, a composer, "Mail and calendar are coming soon. Use Whisk for mail now." | [start](https://convex.codecast.sh/api/storage/c3b468dd-2152-4f44-8b54-026a8f17f5af) |
+| First ask (account A, typed) | "Check current prices for the three best rated robot vacuums for a small apartment". The answer came in 11 s from one web search, with sources, titled "Robot vacuums compared", and a "Do this every week?" offer underneath. The shell was in hosted mode (Inbox, Approvals, To-dos, Notes, Routines, usage meter). Turn `g988yh1gq6rvm4de8qs0mash4d8fvh8t`, $0.035, Haiku. | [answer](https://convex.codecast.sh/api/storage/d5ab42b0-f8c6-4e30-987b-03eb7b89c838) |
+| Routine offer, then approval | Tapping the offer sent "Do this for me every week." The assistant asked: Set up the routine "Weekly robot vacuum price check"? It showed the plan and the When line, with Yes and Not now. Approvals showed 1 and the inbox row read "OK?". Turn `g981h2h01wfnqw01x84p4sk53s8fv6dq` (waiting on the call). | [approval](https://convex.codecast.sh/api/storage/50f4a11c-eed9-43f5-b402-71c90116922c) |
+| Not now | The receipt reads "Didn't set up the routine ... (you said not now)", then a one-line acknowledgement. The Approvals count cleared and Routines stayed empty (it shows its examples). Turn `g9852a0rn0mfht39wr9c489gqs8fv4kk`. | [not now](https://convex.codecast.sh/api/storage/825ea3a9-1596-419a-9555-f12ec1a1e490), [routines](https://convex.codecast.sh/api/storage/bef73385-41e0-41d8-b15d-bd105b8a9417) |
+| First ask (account B, a starter tapped on a bare `/welcome`) | Landed straight in `/conversation/<id>` about 2 s after the tap, with no stop at `/inbox` (the fix below). It drafted the note in the reading face, with Copy. Conversation `jx74j39q11sp1rpz2df455d8f98fvh82`, turn `g98bv7zethm0ep4qh99kyb03bd8ftgfe`. | [answer](https://convex.codecast.sh/api/storage/0fec3feb-e00d-4454-b90e-02a2a3ee8038) |
+| Stop | A follow-up research ask, stopped after its first search. The transcript reads "Stopped. I won't do anything more on this." and the composer returns to "Reply, or ask a follow-up". Turn `g9860mr1s94fyv28sh1rtfjehn8ftkfb`, stored as `done` (the schema has no separate stopped reason). | [stop](https://convex.codecast.sh/api/storage/6c850d63-f53d-4a11-b3b9-d6e568910560) |
+
+Found and fixed in this pass:
+
+- **The first ask from a bare `/welcome` landed on the inbox.** `SignedIn`
+  sent anyone with a hosted conversation to `/inbox`. The conversation the
+  page had just started counted, and it synced inside the 260 ms send-off,
+  so a brand-new person saw an empty home. A conversation started by the
+  page no longer counts as a return. The regression test is in
+  `welcome.mount.test.tsx`.
+
+Seen and left open:
+
+- The user menu opens clipped by the sidebar's right edge in hosted mode
+  ([menu](https://convex.codecast.sh/api/storage/33bdcf25-0e33-42e8-9f2f-b95a76c4d9b9)).
+- After the Not now, the inbox row still read "Working on it" 30 seconds
+  later; it had settled when I next looked, a few minutes on.
+- One web-search answer cost about 11 times `TYPICAL_REQUEST_USD`, so the
+  meter's "requests left" is an everyday-request figure, not a count of
+  research asks.
+- Not driven here: Google sign-in (not offered on this deployment), the
+  mailed-code step, Whisk connect (closed: `WHISK_CONNECT_OPEN` is unset),
+  a Yes on an approval, and the phone. The pass below drives the code step,
+  a Yes, and a routine firing.
+
+### Free gate and routine pass (2026-10-07)
+
+A throwaway password account (`claude8+gate1791400546` at almostcandid.com),
+no machine, no mail, Free plan, 1440 wide, on `http://127.0.0.1:3200`
+against prod. Conversation `jx7d3ckk45qjrrqpd1te7gnwbd8fvn7s`.
+
+| Step | What happened | Evidence |
+| --- | --- | --- |
+| Sign-up and first ask | No code at sign-up (`AUTH_EMAIL_VERIFICATION` is unset). The first ask stopped on the `verify` notice with a code field, and the code arrived by mail within seconds. Turn `g981ctq1w7yhxdnmhxyaj25qh18fvrb6`, reason `budget`, $0, nothing reserved. | [verify](https://convex.codecast.sh/api/storage/e3e3b5ab-d8a5-4555-91df-b70684c64cb8) |
+| Wrong code, then the right one | "That code is not right" under the field. The mailed code proved the address and the ask ran by itself: a note drafted and saved, no retyping. Turn `g98cjtarxp9ykyg9xf5hxda7sn8fvcj2`. The mailbox claim and the day's Free spend rows were written. | [answer](https://convex.codecast.sh/api/storage/123fef62-63eb-44b5-9ba7-7bddf6f1f88c) |
+| A once routine, Yes | "In 3 minutes, remind me once to drink a glass of water": the approval card, Yes, "Set up the routine Drink water · Done" (turn `g980sch7sj79d8h2q5rhj87f498ftb4m` asked, the next ran it). It fired on its own as "Routine · Drink water", and the conversation came back to the top of Inbox as New with the count on the rail. | [fired](https://convex.codecast.sh/api/storage/e37395d3-4362-486e-99f6-04445a252019) |
+| A daily routine, Yes, then cancel | "Every day at 9am, send me one short gardening tip": card, Yes, Routines listed it ("Every day at 9:00 AM, Next: tomorrow"). "Please cancel the daily gardening tip routine" stopped it without asking ("Stopped a routine", "Cancelled."), and the card's receipt now reads Stopped. | turns `g980ekqg6aesv5t6ay8q9g0xy58fvnx2`, `g98aj7mam5sc07cpsw57bpc88d8fvt5y` |
+
+Found in this pass and still open:
+
+- **"In 3 minutes" is guessed from the hour.** The system prompt names only
+  the person's date and hour (it changes at most hourly, for the prompt
+  cache), so the model wrote `first_run` as 3:03 PM at 3:19 PM. The card
+  showed a past time, the reply promised 3:03, and the routine fired at once.
+  A relative time needs the server to count it (an `in_minutes` field on
+  `schedule_routine` that the card and `approvalContext` also read), or the
+  prompt to carry the minute.
+- The bell's Notifications popover opens clipped by the sidebar's right
+  edge, like the user menu, and held nothing for the routine run while the
+  conversation was open.
+- The sidebar's usage line ("About 300 requests left this month") runs under
+  the bell and settings icons at 1440 wide.
+- Not driven: the phone from a fresh signup (the phone's `verify` notice
+  ships in the JS bundle; an older binary shows the line without the field),
+  Google sign-in, and Whisk.
+
+### Before opening Whisk connect (`WHISK_CONNECT_OPEN`)
+
+Only fake-Whisk tests cover the mail path. On a throwaway non-founder
+account, before the gate opens: connect Whisk from Settings > Integrations;
+ask for a catch-up and check it reads real threads; ask for a reply and check
+it lands as a Whisk draft; ask to send it and check the approval card names
+the recipient, that Not now sends nothing, and that Yes sends exactly that
+draft. Record the turn ids here. Keep the fail-closed gates as they are.

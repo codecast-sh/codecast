@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView, Image, Linking, useWindowDimensions } from 'react-native';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
-import type { ChatMessageView } from '@codecast/web/components/chat/chatTypes';
+import { attachmentKind, type ChatAttachmentKind, type ChatMessageView } from '@codecast/web/components/chat/chatTypes';
 import type { ChatMessageRow } from '@codecast/web/store/inboxStore';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -46,6 +46,26 @@ function AttachmentImage({ storageId, previewUrl, onOpen }: {
   );
 }
 
+/** One attached video. The app ships no native video player, so the tile
+ *  hands the stored file to the system player. */
+function AttachmentVideo({ storageId }: { storageId: string }) {
+  const { width } = useWindowDimensions();
+  const url = useStorageImageUrl(storageId || undefined);
+  const side = Math.min(width - 96, 280);
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      disabled={!url}
+      onPress={() => url && Linking.openURL(url)}
+      style={[styles.attachment, styles.attachmentVideo, { width: side, height: side * 0.5625 }]}
+      accessibilityRole="button"
+      accessibilityLabel="Play video"
+    >
+      <FontAwesome name="play-circle" size={44} color="#ffffffd9" />
+    </TouchableOpacity>
+  );
+}
+
 export type ChatAuthorLite = {
   id: string;
   name: string;
@@ -83,7 +103,7 @@ export type MobileChatMessage = {
   failed?: boolean;
   reactions?: { emoji: string; count: number; mine: boolean }[];
   /** Uploaded images, shown as tappable tiles under the text. */
-  attachments?: { storage_id: string; name?: string; preview_url?: string }[];
+  attachments?: { storage_id: string; name?: string; preview_url?: string; kind: ChatAttachmentKind }[];
   thread?: {
     replyCount: number;
     replyCapped: boolean;
@@ -105,7 +125,7 @@ export function fromChatView(
   const status = view.agentStatus === 'listening' || view.agentStatus === 'passed' ? undefined : view.agentStatus;
   const attachments = view.attachments
     ?.filter((x) => x.storage_id || x.preview_url)
-    .map((x) => ({ storage_id: x.storage_id, name: x.name, preview_url: x.preview_url }));
+    .map((x) => ({ storage_id: x.storage_id, name: x.name, preview_url: x.preview_url, kind: attachmentKind(x) }));
   return {
     id: view.id,
     slack: view.slack,
@@ -326,9 +346,10 @@ export const MessageRow = memo(function MessageRow({
 
         {!!message.attachments?.length && (
           <RNView style={styles.attachments}>
-            {message.attachments.map((att) => (
-              <AttachmentImage key={att.storage_id || att.preview_url} storageId={att.storage_id} previewUrl={att.preview_url} onOpen={onOpenImage} />
-            ))}
+            {message.attachments.map((att) => att.kind === 'video'
+              ? <AttachmentVideo key={att.storage_id} storageId={att.storage_id} />
+              : <AttachmentImage key={att.storage_id || att.preview_url} storageId={att.storage_id} previewUrl={att.preview_url} onOpen={onOpenImage} />
+            )}
           </RNView>
         )}
 
@@ -465,6 +486,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     overflow: 'hidden',
     // Scheme-agnostic translucent well behind a loading image.
     backgroundColor: '#00000014',
+  },
+  attachmentVideo: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
   },
   attachmentImg: {
     width: '100%',

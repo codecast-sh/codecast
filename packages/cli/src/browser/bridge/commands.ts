@@ -12,6 +12,7 @@
  */
 
 import type { Command } from "commander";
+import { agentSetupLines } from "@codecast/shared/contracts";
 import { fmt, icons } from "../../colors.js";
 import { realChromePid } from "../localChrome.js";
 import type { StartOptions } from "../managedBrowser.js";
@@ -64,6 +65,17 @@ export async function prepareRealBrowserStart(
   return true;
 }
 
+/** The agent's next step and the marker that puts the setup card under this command. */
+function printSetupCard(): void {
+  for (const line of agentSetupLines("browser")) console.log(line);
+}
+
+/** A remote host's browser is its own Chrome, which every verb starts on demand: nothing to pair. */
+function printHostBrowser(): void {
+  console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
+  console.log(fmt.muted("  no extension needed: `cast browser open <url>` starts it; `cast browser sync <site>` carries a login in from the owner's laptop"));
+}
+
 /** One line for a connected extension, the same wherever it is reported. */
 function connectedLine(s: BridgeHostStatus): string {
   const skew = s.protocol !== undefined && s.extensionProtocol !== undefined && s.protocol !== s.extensionProtocol
@@ -87,8 +99,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     .action(async (mode?: string) => {
       if (hostOwnsBrowser()) {
         if (mode) die("This machine is a remote host with no human's Chrome: every session here uses the host's own Chrome.");
-        console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
-        console.log(fmt.muted("  `cast browser sync <site>` carries a login in from the owner's laptop"));
+        printHostBrowser();
         return;
       }
       if (!mode) {
@@ -197,11 +208,33 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   ext
     .command("status")
     .description("Is the host up, and is the extension connected")
-    .action(async () => {
+    .option("--json", "Machine-readable: { paired, connected, chrome_running }")
+    .action(async (o: { json?: boolean }) => {
       const state = readBridgeState();
+      if (o.json) {
+        // Read by the setup card's check (agentToolSetup.ts) on every poll, so
+        // it repairs nothing: no Chrome launch, no wake tab.
+        let connected = false;
+        let detail: string | undefined;
+        if (state?.token) {
+          try {
+            connected = (await connectRealBridge(undefined, { repair: false })).status.extensionConnected;
+          } catch (err) {
+            detail = (err as Error).message;
+          }
+        }
+        const paired = !!state?.extensionSeenAt || connected;
+        console.log(JSON.stringify({ paired, connected, chrome_running: !!realChromePid(), ...(detail ? { detail } : {}) }));
+        return;
+      }
+      if (hostOwnsBrowser()) {
+        printHostBrowser();
+        return;
+      }
       if (!state?.token) {
         console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
         console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} first.`);
+        printSetupCard();
         return;
       }
       // The extension can only prove itself to a running host, so a host that
@@ -230,6 +263,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       }
       if (!s.extensionConnected) {
         console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} if it is not installed yet.`);
+        printSetupCard();
       }
       console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(bridge).replace(bridge.token, "<token>")} (token in ${bridgeStatePath()})`));
     });
