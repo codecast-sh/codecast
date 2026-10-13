@@ -3,7 +3,7 @@ import { describe, expect, test, setDefaultTimeout } from 'bun:test';
 const partial = (fields: object) => expect.objectContaining(fields);
 
 import { leafWindow } from '../src/compress';
-import { LEAF_PROMPT, MERGE_PROMPT, promptSummarizer, type SummaryResult } from '../src/summarize';
+import { LEAF_PROMPT, MERGE_PROMPT, promptSummarizer, SUMMARY_LIMIT_CHARS, type SummaryResult } from '../src/summarize';
 import { blockKey, blockSpan, completeMerges, cover, pendingMerges } from '../src/tree';
 import type { Scope } from '../src/scope';
 import { DAY, HOUR, P, T0, ada, bram, club, viewerOf, world, type World } from './helpers';
@@ -406,27 +406,91 @@ describe('compressOnce: merges keep their share', () => {
   });
 });
 
+describe('summary context', () => {
+  /** The last day a `[days] summary` context line covers. */
+  const lastDay = (line: string) => line.slice(1, line.indexOf(']')).split(' to ').pop()!;
+
+  test('each call reads only built history from before its own stretch, bounded in lines and characters', async () => {
+    const w = world({ compress: { maxActivities: 3, contextLines: 6, contextChars: 400 } }, 400);
+    await w.seedDays(ada, 60, 3); // one leaf a day
+    await w.compress();
+    expect(w.summarizer.leafCalls).toBe(60);
+    expect(w.summarizer.mergeCalls).toBeGreaterThan(0);
+    for (const c of w.summarizer.contexts) {
+      expect(c.context.length).toBeLessThanOrEqual(6);
+      expect(c.context.join('').length).toBeLessThanOrEqual(400);
+      for (const line of c.context) expect(lastDay(line) < c.firstDay).toBe(true);
+    }
+    // The first leaf has no history; later ones do, ending the day before.
+    const leaves = w.summarizer.contexts.filter((c) => c.what === 'leaf');
+    expect(leaves[0].context).toEqual([]);
+    const tenth = leaves[9];
+    expect(lastDay(tenth.context[tenth.context.length - 1])).toBe('2026-01-09');
+    expect(tenth.context[tenth.context.length - 1]).toContain('ada day 8');
+  });
+
+  test('context never reads another scope or partition', async () => {
+    const w = world({ compress: { maxActivities: 3 } }, 400);
+    await w.seedDays(ada, 20, 3);
+    await w.seedDays(bram, 20, 3);
+    await w.seedDays(ada, 20, 3, 'note', 'other');
+    await w.compress();
+    const seen: string[] = [];
+    w.summarizer.leaf = async ({ scope, lines, context }) => (seen.push(...context.map((c) => `${scope.id}|${c}`)), `${scope.id} ${lines.length} entries from "${lines[0].slice(19)}"`);
+    await w.seedDays(ada, 25, 3);
+    await w.seedDays(bram, 25, 3);
+    w.clock.set(T0 + 500 * DAY);
+    await w.compress();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const line of seen) {
+      const [reader, text] = line.split('|');
+      // Each summary names the scope it was written for; a merged one names neither.
+      if (text.includes('ada ') || text.includes('bram ')) expect(text).toContain(`${reader} `);
+    }
+  });
+
+  test('with no merge built, the context opens into the newest leaves before the block, up to the line bound', async () => {
+    const w = world({ compress: { maxActivities: 3, contextLines: 4, rawWindowMs: 10_000 * DAY } }, 400);
+    await w.seedDays(ada, 12, 3);
+    await w.compress();
+    expect(w.summarizer.mergeCalls).toBe(0);
+    const last = w.summarizer.contexts.filter((c) => c.what === 'leaf').pop()!;
+    expect(last.firstDay).toBe('2026-01-12');
+    expect(last.context.map((l) => l.slice(1, 11))).toEqual(['2026-01-08', '2026-01-09', '2026-01-10', '2026-01-11']);
+  });
+
+  test('a context of 0 lines sends none', async () => {
+    const w = world({ compress: { maxActivities: 3, contextLines: 0 } }, 400);
+    await w.seedDays(ada, 10, 3);
+    await w.compress();
+    expect(w.summarizer.contexts.every((c) => c.context.length === 0)).toBe(true);
+  });
+});
+
 describe('promptSummarizer', () => {
-  test('passes the default prompts and the stamped lines to the model call', async () => {
+  test('passes the default prompts, the history and the input to the model call', async () => {
     const calls: Array<[string, string]> = [];
     const s = promptSummarizer(async (system, user) => (calls.push([system, user]), 'ok'));
-    await s.leaf({ scope: ada, lines: ['[2026-01-01 09:00] note: a', '[2026-01-01 10:00] note: b'] });
-    await s.merge({ scope: ada, earlier: { range: '2026-01-01', content: 'first' }, later: { range: '2026-01-02 to 2026-01-03', content: 'second' } });
-    expect(calls[0]).toEqual([LEAF_PROMPT, '[2026-01-01 09:00] note: a\n[2026-01-01 10:00] note: b']);
-    expect(calls[1]).toEqual([MERGE_PROMPT, '[Earlier: 2026-01-01]\nfirst\n\n[Later: 2026-01-02 to 2026-01-03]\nsecond']);
-    for (const p of [LEAF_PROMPT, MERGE_PROMPT]) expect(p).toContain('Never add a name, number, commitment, or outcome');
+    await s.leaf({ scope: ada, lines: ['[2026-01-01 09:00] note: a', '[2026-01-01 10:00] note: b'], activities: [], context: [] });
+    await s.merge({ scope: ada, earlier: { range: '2026-01-01', content: 'first' }, later: { range: '2026-01-02 to 2026-01-03', content: 'second' }, context: ['[2025-12-30] before'] });
+    expect(calls[0]).toEqual([LEAF_PROMPT, '<activities>\n[2026-01-01 09:00] note: a\n[2026-01-01 10:00] note: b\n</activities>']);
+    expect(calls[1]).toEqual([MERGE_PROMPT, '<history>\n[2025-12-30] before\n</history>\n\n<earlier days="2026-01-01">\nfirst\n</earlier>\n\n<later days="2026-01-02 to 2026-01-03">\nsecond\n</later>']);
+    for (const p of [LEAF_PROMPT, MERGE_PROMPT]) {
+      expect(p).toContain('Never add a name, number, commitment or outcome');
+      expect(p).toContain(`at most ${SUMMARY_LIMIT_CHARS} characters`);
+    }
   });
 
   test('a call that knows its stop reason passes it through', async () => {
     const s = promptSummarizer(async () => ({ text: 'cut', truncated: true }));
-    expect(await s.leaf({ scope: ada, lines: ['x'] })).toEqual({ text: 'cut', truncated: true });
+    expect(await s.leaf({ scope: ada, lines: ['x'], activities: [], context: [] })).toEqual({ text: 'cut', truncated: true });
   });
 
   test('a host passes its own prompts', async () => {
     const seen: string[] = [];
     const s = promptSummarizer(async (system) => (seen.push(system), 'ok'), { leaf: 'MY LEAF', merge: 'MY MERGE' });
-    await s.leaf({ scope: ada, lines: ['x'] });
-    await s.merge({ scope: ada, earlier: { range: 'a', content: 'b' }, later: { range: 'c', content: 'd' } });
+    await s.leaf({ scope: ada, lines: ['x'], activities: [], context: [] });
+    await s.merge({ scope: ada, earlier: { range: 'a', content: 'b' }, later: { range: 'c', content: 'd' }, context: [] });
     expect(seen).toEqual(['MY LEAF', 'MY MERGE']);
   });
 });
