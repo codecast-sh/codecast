@@ -33,7 +33,6 @@
 .fy-due[data-late] { color: var(--lw-bad); }
 
 /* Where the rest went: one quiet line per Problems chip, outside the list's count and its J/K walk. */
-.fy-elsewhere { display: flex; flex-direction: column; margin-top: var(--lw-s4); padding-top: 8px; border-top: 1px solid var(--lw-rule); }
 .fy-none { margin: 6px 12px; font-size: var(--lw-fs-base); font-weight: 550; color: var(--lw-ink); }
 .fy-keys { display: flex; gap: 4px; margin: var(--lw-s4) 12px 0; opacity: .55; }
 
