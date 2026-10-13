@@ -22,7 +22,7 @@ Every user action renders from the local store synchronously: the optimistic wri
 
 Why: losing or scrambling what a person did destroys trust faster than any other bug, and a second optimism layer beside the store's is where the losses came from.
 
-Evidence: 7 corrections across 6 sessions: codecast/2907ac83, codecast/3d59bf6c, codecast/6d17a0fa, codecast/638ee419, codecast/jx7c3x7, codecast/be5f2068. Recorded in CLAUDE.md (Store).
+Evidence: 8 corrections across 7 sessions: codecast/2907ac83, codecast/3d59bf6c, codecast/6d17a0fa, codecast/638ee419, codecast/jx7c3x7, codecast/be5f2068, codecast/d9511a43. Recorded in CLAUDE.md (Store).
 
 ### CC-store-3 Workspace is access, team_id is routing
 
@@ -68,6 +68,14 @@ Why: mandatory overhead on every task and inherited gates slowed the owner's mai
 
 Evidence: 10 corrections across 7 sessions: codecast/b8189b1a, codecast/e277f266, codecast/30f7f14e, codecast/af185144, codecast/26a56b6e, codecast/jx7b0e1, codecast/jx780bb. Recorded in CLAUDE.md (Working directory; Git history).
 
+### CC-ship-3 Finish the work instead of filing it
+
+Work ends with what was asked done, not with a list of tasks for later. Do the follow-up that fits within the work you were given, and name the rest as suggested next steps in the reply, so the person decides what is worth pursuing. Bugs and follow-ups found along the way become tasks only when someone asks for them, and no prompt or snippet an agent writes tells other agents to end by filing what remains.
+
+Why: a board filled with self-filed leftovers buries the work people actually chose, and an agent that files instead of finishing has handed its work back to the person it was meant to relieve.
+
+Evidence [PR-process-2]: 2 corrections across 2 sessions: codecast/b3223646, codecast/23132c02. Recorded in the global agent instructions (Tasks & Plans: Finishing files nothing).
+
 ## Verification
 
 ### CC-verify-1 Carry over what already worked
@@ -76,7 +84,7 @@ Before changing or rebuilding something, list everything the current version doe
 
 Why: redesigns silently dropped features the owner relied on, and a broken tool that used to work is a release blocker.
 
-Evidence: 7 corrections across 5 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211.
+Evidence: 10 corrections across 8 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211, codecast/0f83ee96, codecast/1ee27c51, codecast/378a9c20.
 
 ### CC-verify-2 A prompt change is proven on frozen moments
 
@@ -138,7 +146,7 @@ Keep the human's attention for what only they can do. Work an agent delegates or
 
 Why: every row in the needs-input queue costs attention, and inbox noise and needless wakes buried the few asks that mattered and wasted tokens.
 
-Evidence: 28 corrections across 21 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c.
+Evidence: 30 corrections across 23 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c, codecast/10c015f6, codecast/378a9c20.
 
 ### CC-agents-2 A decision card carries its own context
 
