@@ -1,0 +1,20 @@
+code-simplifier 1.0.0
+  Agent that simplifies and refines code for clarity, consistency, and maintainability while preserving functionality
+  Source: code-simplifier@claude-plugins-official
+
+Component inventory
+  Skills (0)
+  Agents (1)  code-simplifier
+  Hooks (0)
+  MCP servers (0)
+  LSP servers (0)
+
+Projected token cost
+  Always-on:   ~64 tok   added to every session
+
+Per-component (rounded)
+  component        always-on  on-invoke
+  code-simplifier        ~60       ~910
+
+  On-invoke cost is paid each time a skill or agent fires.
+  Token counts are estimates and may differ from actual usage.

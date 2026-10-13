@@ -1,0 +1,183 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { HARNESS_HOOKS } from "@codecast/shared/contracts";
+import { CODECAST_HOOK_SCRIPTS, STATUSLINE_HOOK_SCRIPT } from "./codecastOwned.js";
+import { installHarnessHooks, removeHarnessHooks, syncHarnessHooks } from "./harnessHooksInstall.js";
+import { readHarnessChanges, withHarnessCause } from "./harness.js";
+
+let home: string;
+let prevHome: string | undefined;
+let prevDir: string | undefined;
+let prevLedger: string | undefined;
+
+const settingsFile = () => path.join(home, ".claude", "settings.json");
+const readSettings = () => JSON.parse(fs.readFileSync(settingsFile(), "utf-8"));
+const commandsFor = (s: any, event: string): string[] =>
+  (s.hooks?.[event] ?? []).flatMap((m: any) => (m.hooks ?? []).map((h: any) => h.command));
+
+beforeEach(() => {
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-hooks-"));
+  prevHome = process.env.HOME;
+  prevDir = process.env.CODECAST_DIR;
+  process.env.HOME = home;
+  process.env.CODECAST_DIR = path.join(home, ".codecast");
+  prevLedger = process.env.CODECAST_HARNESS_LEDGER;
+  process.env.CODECAST_HARNESS_LEDGER = path.join(home, ".codecast", "harness-changes.jsonl");
+});
+
+afterEach(() => {
+  process.env.HOME = prevHome;
+  if (prevDir === undefined) delete process.env.CODECAST_DIR;
+  else process.env.CODECAST_DIR = prevDir;
+  process.env.CODECAST_HARNESS_LEDGER = prevLedger;
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+describe("HARNESS_HOOKS", () => {
+  test("names only files codecast owns", () => {
+    const owned = new Set<string>([...CODECAST_HOOK_SCRIPTS, STATUSLINE_HOOK_SCRIPT]);
+    for (const h of HARNESS_HOOKS) expect(owned.has(h.file)).toBe(true);
+  });
+});
+
+describe("installHarnessHooks", () => {
+  const ALL_ON = { state_enabled: true, work_enabled: true };
+
+  test("registers every hook, and a second run writes nothing", () => {
+    installHarnessHooks(ALL_ON);
+    const s = readSettings();
+    for (const h of HARNESS_HOOKS.filter((x) => !x.installedElsewhere)) {
+      for (const e of h.events) expect(commandsFor(s, e)).toContain(path.join(home, ".claude", "hooks", h.file));
+    }
+    expect(s.statusLine?.command).toBe(path.join(home, ".claude", "hooks", STATUSLINE_HOOK_SCRIPT));
+
+    const before = readHarnessChanges(1000).length;
+    const bytes = fs.readFileSync(settingsFile(), "utf-8");
+    installHarnessHooks(ALL_ON);
+    expect(readHarnessChanges(1000).length).toBe(before);
+    expect(fs.readFileSync(settingsFile(), "utf-8")).toBe(bytes);
+  });
+
+  test("records why each write happened", () => {
+    withHarnessCause({ why: "automatic update to v9.9.9", automatic: true }, () => installHarnessHooks(ALL_ON));
+    const changes = readHarnessChanges(1000);
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.every((c) => c.why === "automatic update to v9.9.9" && c.automatic)).toBe(true);
+    expect(changes.some((c) => c.file === "~/.claude/settings.json" && c.what === "hooks")).toBe(true);
+  });
+});
+
+describe("a hook that belongs to an Agent Features entry", () => {
+  test("moves with its feature, and the functional hooks stay", () => {
+    const threadState = path.join(home, ".claude", "hooks", "thread-state.sh");
+    const status = path.join(home, ".claude", "hooks", "codecast-status.sh");
+    syncHarnessHooks({ state_enabled: true });
+    expect(commandsFor(readSettings(), "Stop")).toContain(threadState);
+
+    syncHarnessHooks({ state_enabled: false });
+    const off = readSettings();
+    expect(commandsFor(off, "Stop")).not.toContain(threadState);
+    expect(commandsFor(off, "Stop")).toContain(status);
+    expect(fs.existsSync(threadState)).toBe(false);
+
+    syncHarnessHooks({ state_enabled: true });
+    expect(commandsFor(readSettings(), "Stop")).toContain(threadState);
+  });
+
+  test("turning it off removes an entry an older installer spelled with $HOME, with the script", () => {
+    // jb-m5-max, cast 1.1.162: the old `$HOME/...` entry survived removal while
+    // the script was deleted, so every Stop failed with exit 127.
+    const dir = path.join(home, ".claude", "hooks");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "thread-state.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { Stop: [{ matcher: "", hooks: [
+      { type: "command", command: "$HOME/.claude/hooks/codecast-status.sh", timeout: 10 },
+      { type: "command", command: "$HOME/.claude/hooks/thread-state.sh", timeout: 10 },
+    ] }] } }, null, 2));
+
+    syncHarnessHooks({});
+
+    const stop = commandsFor(readSettings(), "Stop");
+    expect(stop.filter((c) => c.includes("thread-state.sh"))).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "thread-state.sh"))).toBe(false);
+    // The functional hook is refreshed in place, not registered a second time.
+    expect(stop.filter((c) => c.includes("codecast-status.sh"))).toEqual([path.join(dir, "codecast-status.sh")]);
+  });
+
+  test("the hooks switch still removes it with the rest", () => {
+    syncHarnessHooks({ state_enabled: true });
+    syncHarnessHooks({ state_enabled: true, hooks_enabled: false });
+    expect(readSettings().hooks).toBeUndefined();
+  });
+
+  test("the task context hook brings its Codex twin along, only where Codex hooks are already on", () => {
+    const claudeHook = path.join(home, ".claude", "hooks", "task-context.sh");
+    const codexHook = path.join(home, ".codecast", "hooks", "task-context-codex.sh");
+    const codexHooks = path.join(home, ".codex", "hooks.json");
+    const codexConfig = path.join(home, ".codex", "config.toml");
+    syncHarnessHooks({ work_enabled: true });
+    expect(commandsFor(readSettings(), "SessionStart")).toContain(claudeHook);
+    expect(fs.existsSync(codexHooks)).toBe(false);
+
+    // Codex with its hooks flag off: the flag is global, so Tasks never turns it on.
+    fs.mkdirSync(path.join(home, ".codex"));
+    syncHarnessHooks({ work_enabled: true });
+    expect(fs.existsSync(codexHooks)).toBe(false);
+    expect(fs.existsSync(codexConfig)).toBe(false);
+
+    fs.writeFileSync(codexConfig, "[features]\nhooks = true\n");
+    syncHarnessHooks({ work_enabled: true });
+    expect(commandsFor(JSON.parse(fs.readFileSync(codexHooks, "utf-8")), "SessionStart")).toEqual([codexHook]);
+    expect(fs.readFileSync(codexHook, "utf-8")).toContain("_task-context --client codex");
+
+    syncHarnessHooks({ work_enabled: false });
+    expect(commandsFor(readSettings(), "SessionStart")).not.toContain(claudeHook);
+    expect(commandsFor(JSON.parse(fs.readFileSync(codexHooks, "utf-8")), "SessionStart")).toEqual([]);
+    expect(fs.existsSync(codexHook)).toBe(false);
+  });
+});
+
+describe("removeHarnessHooks", () => {
+  test("removes hooks an older installer wrote, and keeps the user's own", () => {
+    // What the pre-ledger installer left: our entries in the blanket matcher,
+    // no ownership ledger, indent 4, next to a hook the user wrote.
+    const dir = path.join(home, ".claude", "hooks");
+    fs.mkdirSync(dir, { recursive: true });
+    const status = path.join(dir, "codecast-status.sh");
+    const register = path.join(dir, "session-register.sh");
+    fs.writeFileSync(status, "#!/bin/sh\n", { mode: 0o755 });
+    fs.writeFileSync(register, "#!/bin/sh\n", { mode: 0o755 });
+    const legacy = {
+      model: "opus",
+      hooks: {
+        SessionStart: [{ matcher: "", hooks: [
+          { type: "command", command: register, timeout: 10 },
+          { type: "command", command: "/usr/local/bin/my-own-hook", timeout: 5 },
+          { type: "command", command: status, timeout: 10 },
+        ] }],
+        Stop: [{ matcher: "", hooks: [{ type: "command", command: status, timeout: 10 }] }],
+      },
+    };
+    fs.writeFileSync(settingsFile(), JSON.stringify(legacy, null, 4));
+
+    removeHarnessHooks();
+
+    const s = readSettings();
+    expect(commandsFor(s, "SessionStart")).toEqual(["/usr/local/bin/my-own-hook"]);
+    expect(s.hooks?.Stop).toBeUndefined();
+    expect(s.model).toBe("opus");
+    expect(fs.existsSync(status)).toBe(false);
+    expect(fs.existsSync(register)).toBe(false);
+  });
+
+  test("syncHarnessHooks follows the switch", () => {
+    syncHarnessHooks({});
+    expect(commandsFor(readSettings(), "Stop").length).toBeGreaterThan(0);
+    syncHarnessHooks({ hooks_enabled: false });
+    const s = readSettings();
+    expect(s.hooks).toBeUndefined();
+    expect(s.statusLine).toBeUndefined();
+  });
+});

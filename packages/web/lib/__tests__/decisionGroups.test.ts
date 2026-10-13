@@ -42,9 +42,25 @@ describe("groupDecisions", () => {
     expect((groups[0] as any).scopeKey).toBe("session:c1");
   });
 
-  test("blocking outranks advisory inside a scope", () => {
-    const groups = groupDecisions([row("a", { blocking: false, created_at: 1 }), row("b", { created_at: 5 })] as any, []);
-    expect(groups[0].items.map((i) => i._id)).toEqual(["b", "a"]);
+  test("a stack holding one of the viewer's open asks is that one card, filed by scope", () => {
+    const rows = [row("d1", { stack_id: "st1", scope_keys: ["project:p1"] }), row("d2", { stack_id: "st2" }), row("d3", { stack_id: "st2" })];
+    // st1 has a second member the viewer does not hold; st3 is empty.
+    const groups = groupDecisions(rows as any, [stack("st1", ["d1", "other"]), stack("st2", ["d2", "d3"]), stack("st3", [])]);
+    expect(groups.map((g) => g.key)).toEqual(["stack:st2", "scope:project:p1"]);
+  });
+
+  test("advisory asks gather in one group after what is parked, before a lead's; a real stack keeps its own", () => {
+    const rows = [
+      row("a", { blocking: false, created_at: 9 }),
+      row("b", { blocking: false, created_at: 1, scope_keys: ["project:p1"] }),
+      row("c", { created_at: 5 }),
+      row("d", { holder: { kind: "role", id: "r1" }, blocking: false }),
+      row("e", { blocking: false, stack_id: "st1" }),
+      row("f", { blocking: false, stack_id: "st1" }),
+    ];
+    const groups = groupDecisions(rows as any, [stack("st1", ["e", "f"])]);
+    expect(groups.map((g) => g.kind)).toEqual(["stack", "scope", "default", "role"]);
+    expect(groups[2].items.map((i) => i._id)).toEqual(["b", "a"]);
   });
 });
 
@@ -116,12 +132,15 @@ describe("overdue stacks sort first", () => {
   test("groupDecisions lists an overdue stack's group before an earlier listed stack", () => {
     const rows = [
       row("d1", { stack_id: "st1", created_at: 10 }),
+      row("d1b", { stack_id: "st1", created_at: 11 }),
       row("d2", { stack_id: "st2", created_at: 20 }),
+      row("d2b", { stack_id: "st2", created_at: 21 }),
     ];
-    const groups = groupDecisions(rows as any, [stack("st1", ["d1"]), stack("st2", ["d2"], { due_at: now - 60_000 })], now);
+    const stacks = [stack("st1", ["d1", "d1b"]), stack("st2", ["d2", "d2b"], { due_at: now - 60_000 })];
+    const groups = groupDecisions(rows as any, stacks, now);
     expect(groups.map((g) => g.key)).toEqual(["stack:st2", "stack:st1"]);
     // The clock decides: before the due passes, the server's order stands.
-    const before = groupDecisions(rows as any, [stack("st1", ["d1"]), stack("st2", ["d2"], { due_at: now - 60_000 })], now - 120_000);
+    const before = groupDecisions(rows as any, stacks, now - 120_000);
     expect(before.map((g) => g.key)).toEqual(["stack:st1", "stack:st2"]);
   });
 });

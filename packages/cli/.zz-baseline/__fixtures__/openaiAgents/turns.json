@@ -1,0 +1,54 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "object": "agent.session.turn",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "agent_id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+   "subagent_id": null,
+   "status": "completed",
+   "created_at": 1790831463,
+   "started_at": 1790831463,
+   "completed_at": 1790831485,
+   "error": null,
+   "usage": {
+    "input_tokens": 22192,
+    "input_tokens_details": {
+     "cached_tokens": 7741
+    },
+    "output_tokens": 165,
+    "output_tokens_details": {
+     "reasoning_tokens": 18
+    },
+    "total_tokens": 22357
+   }
+  },
+  {
+   "id": "turn_0db7b5af8adc9da3006abdeb8213e08193b35661e5a1650ebd",
+   "object": "agent.session.turn",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "agent_id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+   "subagent_id": null,
+   "status": "cancelled",
+   "created_at": 1790831489,
+   "started_at": 1790831489,
+   "completed_at": 1790831496,
+   "error": null,
+   "usage": {
+    "input_tokens": 7852,
+    "input_tokens_details": {
+     "cached_tokens": 7818
+    },
+    "output_tokens": 80,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 7932
+   }
+  }
+ ],
+ "first_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+ "last_id": "turn_0db7b5af8adc9da3006abdeb8213e08193b35661e5a1650ebd",
+ "has_more": false
+}

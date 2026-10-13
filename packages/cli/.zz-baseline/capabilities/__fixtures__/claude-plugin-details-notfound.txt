@@ -1,0 +1,1 @@
+Plugin "nope@nowhere" not found. Run `claude plugin list` to see installed plugins, or pass --plugin-dir <path> to load one from disk.

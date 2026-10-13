@@ -1,0 +1,358 @@
+/**
+ * The single source of truth for the on-disk `~/.codecast/config.json` shape.
+ *
+ * Two processes write this file through what used to be three separately-declared
+ * `Config` interfaces — daemon.ts, index.ts, and claudeWrapper.ts. They had
+ * drifted (daemon carried `project_mappings`/`warm_pool_size`, index carried the
+ * feature `*_enabled`/`*_version` flags and `created_at`/`updated_at`, the wrapper
+ * only knew the three auth fields). Because all three read and write the SAME
+ * file, the real shape is the UNION of every field any writer can produce. This
+ * module declares that union once so every reader sees a faithful superset and no
+ * writer can quietly strip a field another process depends on.
+ *
+ * Every field is optional: the file is built incrementally across `cast auth`,
+ * onboarding, feature toggles, and server round-trips, so any subset may be
+ * present on disk at a given moment.
+ */
+
+import type { AgentClientId, CloudSessionSyncField, VaultInfo } from "@codecast/shared/contracts";
+
+/** How aggressively a client skips approval prompts. Codex is the only client
+ *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
+ *  is shared so the map can be keyed openly by client id. */
+export type AgentPermissionMode = "default" | "full_auto" | "bypass";
+
+/** Per-client permission mode overrides, keyed by client id so an Nth client is a
+ *  map entry rather than a new named field. */
+export type AgentPermissionModes = Partial<Record<AgentClientId, AgentPermissionMode>>;
+
+/** Per-client extra default CLI params (flag name → value), keyed by client id. */
+export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, string>>>;
+
+/**
+ * Mirrored from the server: the account's cloud session sync settings, one
+ * per CLOUD_SESSION_SOURCES entry (unset = the source's default there).
+ */
+type CloudSessionSyncSettings = Partial<Record<CloudSessionSyncField, boolean>>;
+
+export interface Config extends CloudSessionSyncSettings {
+  daemon_workers?: boolean;
+  // --- Identity / auth (all three writers) ---
+  // On disk: the secret, encrypted for this machine. In memory: the wire
+  // credential, which for a device bound token carries this machine's device
+  // id (bearerToken.ts). Send it as api_token; never write it anywhere else.
+  auth_token?: string;
+  user_id?: string;
+  team_id?: string;
+  convex_url?: string;
+  web_url?: string;
+
+  // --- Working-tree snapshots (daemon.ts sweepWipSnapshots) ---
+  // Publish each session's working tree to a hidden ref on its own git remote so
+  // a session reparented onto another machine arrives with its uncommitted work
+  // (see wipSnapshot.ts). Default ON. Set false to stop this machine pushing
+  // snapshots entirely — for a machine whose repos shouldn't receive them, or to
+  // silence the loop without unwinding the code.
+  wip_snapshots_enabled?: boolean;
+
+  // --- Level sweep (daemon.ts sweepLevelCheckouts, land/levelSweep.ts) ---
+  // Shared checkouts whose repo sets `[ship] level = true` follow their
+  // upstream in place every minute. Set false to stop this machine doing it
+  // for every repo, whatever the repo says.
+  level_checkouts_enabled?: boolean;
+
+  // --- Device identity ---
+  // Explicit name for THIS machine, replacing the derived "macOS - <hostname>".
+  // Set it on a provisioned box whose hostname is a UUID (a Scaleway Mac reads as
+  // "macOS - 36563bd2-..." otherwise). Read by deviceLabel() in remote/device.ts;
+  // CODECAST_DEVICE_LABEL overrides it for one-off runs.
+  device_label?: string;
+
+  // --- Sync scope ---
+  // Cursor chat sync (`cast cursor on|off`). Unset = auto: on where the OS
+  // doesn't gate app data, and on macOS only once a prior run recorded the
+  // TCC grant — the daemon never triggers the "access data from other apps"
+  // prompt at login on its own (see cursorWatcherDecision).
+  cursor_sync?: "on" | "off";
+  excluded_paths?: string;
+  sync_mode?: "all" | "selected";
+  sync_projects?: string[];
+  /** Mirrored from the server: with sync_mode "all", folders that never upload. */
+  sync_excluded?: string[];
+
+  // --- Stable-context mode ---
+  stable_mode?: "solo" | "team";
+  stable_global?: boolean;
+  team_share_mode?: "full" | "summary";
+
+  // --- Agent invocation ---
+  // Per-client launch args. `agent_args` is the open map keyed by client id, so a
+  // fifth client can pass launch args without a schema change. The named
+  // `claude_args`/`codex_args` below are the pre-map fields, kept only so configs
+  // written before the map still parse and launch. ALWAYS read through
+  // `getAgentArgs()`, which prefers the map and falls back to the named fields.
+  agent_args?: Partial<Record<AgentClientId, string>>;
+  /** @deprecated pre-map field; read via `getAgentArgs(config, "claude")`. */
+  claude_args?: string;
+  /** @deprecated pre-map field; read via `getAgentArgs(config, "codex")`. */
+  codex_args?: string;
+  agent_permission_modes?: AgentPermissionModes;
+  agent_default_params?: AgentDefaultParams;
+
+  // Managed provider API keys (pl-207) live in their OWN 0600 file
+  // (~/.codecast/provider-keys.json, see providerKeyStore.ts) — NOT here — because
+  // config.json carries device-specific fields that must not travel between
+  // machines, whereas the key store is a per-user secret that syncs device→device.
+
+  // --- Codex reset credits (ct-49529) ---
+  // May the unattended auto-switch loop spend one of the active Codex account's
+  // rate-limit reset credits instead of moving the machine to another account?
+  // Default OFF: a credit is a finite thing the human earned, and redeeming one
+  // is not reversible, so nothing spends it on their behalf until they opt in.
+  // `cast accounts codex reset-credit` (a person typing a command) is unaffected.
+  codex_reset_credit_auto?: boolean;
+
+  // --- Update behavior ---
+  // index.ts wrote `auto_update`; daemon.ts wrote `desktop_auto_update` (opt out of
+  // the daemon updating the desktop app out-of-band, default: on). Both are real
+  // writers of this same file, so both fields live here.
+  // Off stops every update nobody asked for at that moment: the check any
+  // cast command runs, the daemon's minimum version floor, and the watchdog's
+  // upgrade. `cast update` and the web's Update button still work.
+  auto_update?: boolean;
+  desktop_auto_update?: boolean;
+
+  // --- Harness ---
+  // Codecast's Claude Code hooks (HARNESS_HOOKS in @codecast/shared/contracts).
+  // Unset means on. False removes them and keeps every refresh from putting
+  // them back (harnessHooksInstall.ts).
+  hooks_enabled?: boolean;
+
+  // --- Feature toggles + installed versions (written by index.ts onboarding) ---
+  memory_enabled?: boolean;
+  memory_version?: string;
+  task_enabled?: boolean;
+  task_version?: string;
+  work_enabled?: boolean;
+  work_version?: string;
+  plan_enabled?: boolean;
+  plan_version?: string;
+  workflow_enabled?: boolean;
+  workflow_version?: string;
+  messaging_enabled?: boolean;
+  messaging_version?: string;
+  visual_enabled?: boolean;
+  visual_version?: string;
+  orch_enabled?: boolean;
+  orch_version?: string;
+  /** The cast-* skills snippet (`cast install skills`). */
+  skills_enabled?: boolean;
+  skills_version?: string;
+  publish_enabled?: boolean;
+  publish_version?: string;
+  state_enabled?: boolean;
+  state_version?: string;
+  // Forks was the one snippet whose flags never made it into this type, so
+  // every write to them went through `(config as any)` and a typo would have
+  // silently minted a new key instead of failing to compile.
+  forks_enabled?: boolean;
+  forks_version?: string;
+  decide_enabled?: boolean;
+  decide_version?: string;
+  browser_enabled?: boolean;
+  browser_version?: string;
+  computer_enabled?: boolean;
+  computer_version?: string;
+  check_enabled?: boolean;
+  check_version?: string;
+  // Machine-wide site allowlist for `cast browser` — origins agents may
+  // navigate to, unioned with any project list in .codecast/workspace.toml
+  // [browser].allow. Undefined = no policy. See browser/policy.ts.
+  browser_allow?: string[];
+  // Automatic failure context for `cast browser` steps (console errors, failed
+  // requests, screenshot printed when a step fails). "off" disables it
+  // machine-wide; anything else (or unset) leaves it on. Set via
+  // `cast config browser_capture off`; `--no-capture` overrides per command.
+  browser_capture?: string;
+  chat_enabled?: boolean;
+  chat_version?: string;
+  calls_enabled?: boolean;
+  calls_version?: string;
+  limits_enabled?: boolean;
+  limits_version?: string;
+  pr_enabled?: boolean;
+  pr_version?: string;
+  mods_enabled?: boolean;
+  mods_version?: string;
+  sim_enabled?: boolean;
+  sim_version?: string;
+  // Last heartbeat-reported availability of team-gated snippets (chat, calls),
+  // keyed by slug: whether any of this user's teams has the feature on. The
+  // daemon installs/disables the snippet when this CHANGES (never on every
+  // beat, so a hand `--disable` sticks until the team flips again); the
+  // install wizard skips a snippet known to be off for every team.
+  snippet_availability?: Record<string, boolean>;
+  // How much of each capability the installed sections carry: "full" (the
+  // default) writes the whole guide into CLAUDE.md, "stub" writes what the
+  // capability is and when to reach for it and leaves the flags to
+  // `cast guide <topic>`. Set by `cast install --stubs` / `--full`; every
+  // section writer reads it (snippets.ts) so a refresh keeps the mode.
+  guidance_mode?: "full" | "stub";
+
+  // --- Cross-machine project-path resolution (daemon.ts) ---
+  // Explicit project-path overrides for resuming sessions/forks recorded on another
+  // machine. Keys are the recorded (remote) project path OR its basename; values are
+  // the local directory to resume in. Authoritative — checked before the learned map
+  // and the convention search in resolveLocalRepo, and never auto-clobbered.
+  project_mappings?: Record<string, string>;
+
+  // --- Warm pool (daemon.ts) ---
+  // Tier 3 "warm pool": proactively re-resume up to N most-recently-active sessions
+  // whose agent died unexpectedly while the conversation was still hot. 0 (default)
+  // disables it — re-warming is speculative, so it's opt-in.
+  warm_pool_size?: number;
+
+  // --- One tmux server per agent session (tmuxRoute.ts) ---
+  // Each new agent session gets its own tmux server, started as its own launchd
+  // job, so macOS schedules it as its own group and a busy session cannot starve
+  // the rest. Sessions already running stay where they are and move on their
+  // next restart. macOS only, on by default; false keeps every session on the
+  // shared server.
+  tmux_server_per_session?: boolean;
+
+  // --- Fleet cap (daemon.ts, hibernation.ts) ---
+  // How many sessions may hold a live pane on this machine. Past the cap the
+  // heartbeat maintenance pass parks the longest-idle ones: the reaper's
+  // teardown, the transcript kept, the agent status set to "hibernated", and
+  // the next message resumes it. 0 or absent = no cap.
+  max_live_sessions?: number;
+  // A session awake and idle for this long is parked whatever the fleet size.
+  // The clock is awake idle time (machine sleep excluded), which the resource
+  // monitor only measures on macOS, so on other platforms only the cap above
+  // does anything. Only a working agent status restarts the clock; a CPU blip
+  // on a resting session pauses it for that tick (nextAwakeIdleMs). The clock
+  // survives daemon restarts and machine sleep through ~/.codecast/awake-idle.json:
+  // a session keeps its banked idle when its transcript has not changed since
+  // the snapshot, and starts from zero when it has. 0 or absent = no idle bar.
+  //
+  // The daemon reads both knobs from the config it loaded at boot, so editing
+  // them here changes nothing until the daemon restarts (`cast restart`).
+  hibernate_idle_ms?: number;
+  // Report what the two knobs above WOULD park, and park nothing. The safe way
+  // to turn hibernation on: set the real values with this true, read the
+  // "hibernation DRY RUN" line in reaper.log for a day, then clear it. The
+  // preview runs every gate the real pass runs except the locks and the final
+  // re-validation at the kill, so it can only over-report: a session it names
+  // may still refuse for real. Absent = off (the pass parks).
+  hibernate_dry_run?: boolean;
+
+  // --- OpenCode rich transport (daemon.ts, opencodeServer.ts) ---
+  // The optional `opencode serve` sidecar the daemon attaches to for opencode's
+  // fork-by-id API and live SSE state (opencodeServer.ts). Absent → default ON
+  // wherever the opencode binary is present (the transport self-disables when the
+  // binary is missing, mirroring codex's app-server). Set `enabled: false` to force
+  // the plain DB-polling path; set `port` to pin the sidecar (0/omitted =
+  // OS-chosen, self-discovered from the server's announce line).
+  opencode_server?: { enabled?: boolean; port?: number };
+
+  // --- Browser (`cast browser`, browser/autoShot.ts) ---
+  // Automatic screenshots after page-changing browser commands, so a browsing
+  // thread self-documents. Absent → ON; `cast browser shots off` sets false.
+  browser?: { auto_shots?: boolean };
+
+  // --- Vaults (index.ts `cast vault`, daemon /vault/* routes) ---
+  // Directories of markdown the user registered for browsing over the loopback
+  // bridge. Managed through vault/vaultRegistry.ts — never hand-edited elsewhere,
+  // since the id is derived from the root path.
+  vaults?: VaultInfo[];
+  /** Project roots the user removed from the vault picker. Discovery would
+   *  otherwise re-offer them on the next listing — `cast vault rm` has to mean
+   *  something for a vault nobody added by hand. */
+  vaults_hidden?: string[];
+
+  // --- Cloud home mirror (cloud/mirror) ---
+  // Ship this laptop's instruction files and agent config (~/.claude, ~/.codex,
+  // ~/.grok, ~/.gemini, ~/.agents, ~/.config/opencode, an allowlisted
+  // ~/.gitconfig) to every reachable cloud host. Default ON; `cast config
+  // cloud_mirror_enabled false` stops the daemon ticks and the spawn-time push.
+  // `cast config` stores strings, so readers tolerate "false" as well.
+  cloud_mirror_enabled?: boolean;
+  // Comma-separated $HOME-relative globs to leave out (same convention as
+  // excluded_paths): `.claude/skills/private-*,.codex/prompts/**`.
+  cloud_mirror_exclude?: string;
+  // Comma-separated extra $HOME-relative files/dirs to ship verbatim. The
+  // denylist (credentials, sessions, caches, ~/.ssh, …) still wins.
+  cloud_mirror_include?: string;
+  // Comma-separated repo-relative paths or globs for syncing a working folder
+  // with a cloud host (cloud/syncSide.ts), on top of each repo's [sync] table:
+  // `sync_always` travels even where a default would leave it (a large
+  // fixture), `sync_never` stays home (a local database).
+  sync_always?: string;
+  sync_never?: string;
+
+  // --- Codecast-Session trailer (sessionTrailer.ts) ---
+  // Default ON: the PreToolUse hook adds a Codecast-Session trailer to each
+  // git commit an agent runs. `cast config session_trailer false` turns it
+  // off on this machine; `git config codecast.sessionTrailer false` in one
+  // repository, CODECAST_SESSION_TRAILER=0 in one environment.
+  session_trailer?: boolean;
+
+  // --- Queue limits (cast queue lists every queue) ---
+  // How many `cast spawn --subagent` workers one session (default 10) and this
+  // machine (default 24) run at once; a spawn past either waits in a queue
+  // (shared/contracts/subagentFleet.ts). Also the default `--max` of
+  // `cast plan orchestrate` and `autopilot`.
+  subagents?: { per_session?: number; per_machine?: number };
+  // How many typecheck watchers this machine keeps (default 6) and how many
+  // commands run as Interactive jobs at once (default 8); past either, a
+  // caller waits its turn (machineCaps.ts). `cast config check.per_machine 8`.
+  check?: { per_machine?: number };
+  interactive_jobs?: { per_machine?: number };
+
+  // --- Server-stamped bookkeeping (index.ts) ---
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** The mirror is on unless the config says otherwise (the setter stores strings). */
+export function isCloudMirrorEnabled(config: Config | null | undefined): boolean {
+  const v = config?.cloud_mirror_enabled as boolean | string | undefined;
+  return v !== false && v !== "false" && v !== "0";
+}
+
+/**
+ * The launch args a user configured for one client, honoring back-compat. Reads
+ * the open `agent_args` map first, then falls back to the deprecated named fields
+ * (`claude_args`/`codex_args`) so configs predating the map keep launching. An
+ * explicit map entry wins even when empty ("" means "no extra args", NOT "fall back
+ * to the legacy field"). Returns undefined when nothing is configured.
+ *
+ * This is the ONE place the legacy fields are read; every launch/resume path routes
+ * through here, so onboarding an Nth client is a map entry, not another named field.
+ */
+export function getAgentArgs(
+  config: Config | null | undefined,
+  clientId: AgentClientId,
+): string | undefined {
+  const fromMap = config?.agent_args?.[clientId];
+  if (fromMap !== undefined) return fromMap;
+  if (clientId === "claude") return config?.claude_args;
+  if (clientId === "codex") return config?.codex_args;
+  return undefined;
+}
+
+/**
+ * Whether the daemon should stand up the opencode rich-transport sidecar. Default
+ * ON (mirrors the codex app-server, which is unconditionally instantiated) — the
+ * transport disables itself at runtime when the opencode binary is missing, so the
+ * only reason to set `enabled: false` is to force the plain DB-polling path.
+ */
+export function isOpencodeServerEnabled(config: Config | null | undefined): boolean {
+  return config?.opencode_server?.enabled !== false;
+}
+
+/** The pinned sidecar port, or 0 to let the OS choose (self-discovered at boot). */
+export function opencodeServerPort(config: Config | null | undefined): number {
+  const p = config?.opencode_server?.port;
+  return typeof p === "number" && Number.isInteger(p) && p > 0 ? p : 0;
+}

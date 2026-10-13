@@ -1,0 +1,89 @@
+// A message the daemon refused to paste because the terminal was waiting for
+// a human (a menu, a confirmation) is HELD, not failed. It keeps its retry
+// budget, the conversation is skipped by the delivery scans for a short while
+// (a re-pended row re-fires the subscription at once, and every attempt costs
+// a claim and a pane capture), and the moment the prompt closes the hold is
+// released and the pending scan runs again. Before this, each refusal counted
+// as a failed attempt: ten of them in seven minutes marked a cast send
+// undeliverable, and it sat for 49 minutes (2026-09-08).
+// Wide enough that a dialog left open costs one refused attempt (a claim, a
+// capture and a pre-paste mark) per window; a closed prompt releases at once.
+//
+// One hold for every author. A person's typed message and a session's cast
+// send take the same path to the pane, so a dialog that refuses one refuses
+// the other; only a card answer (a poll) goes through, because it is what
+// closes the prompt. Keying the hold on the author let a typed message paste
+// into a dialog a session message had just been refused (2026-09-15).
+export const PROMPT_HOLD_MS = 45_000;
+
+const holds = new Map<string, number>();
+const expiries = new Map<string, ReturnType<typeof setTimeout>>();
+let redrive: (() => void) | null = null;
+
+// The delivery scan to run when a hold is released; the daemon installs its
+// pending poll here.
+export function setPendingRedrive(fn: (() => void) | null): void {
+  redrive = fn;
+}
+
+// The hold re-drives delivery when it lapses. Nothing else marks that moment:
+// a prompt dismissed in the terminal never reports itself closed, so the
+// message waited for the next unrelated scan, up to a minute past the window
+// (2026-09-24).
+export function holdConversationForPrompt(conversationId: string, now: number = Date.now()): void {
+  holds.set(conversationId, now);
+  clearTimeout(expiries.get(conversationId));
+  const expiry = setTimeout(() => {
+    expiries.delete(conversationId);
+    if (holds.get(conversationId) !== now) return;
+    holds.delete(conversationId);
+    redrive?.();
+  }, PROMPT_HOLD_MS);
+  expiry.unref?.();
+  expiries.set(conversationId, expiry);
+}
+
+// Milliseconds a scan should still skip this conversation; 0 when it may try
+// again (an expired hold is forgotten here, so a real prompt that stays open
+// costs one refused attempt per hold window, never a spent budget).
+export function promptHoldRemainingMs(conversationId: string, now: number = Date.now()): number {
+  const at = holds.get(conversationId);
+  if (at === undefined) return 0;
+  const remaining = PROMPT_HOLD_MS - (now - at);
+  if (remaining <= 0) {
+    holds.delete(conversationId);
+    return 0;
+  }
+  return remaining;
+}
+
+// The prompt closed (answered from the app, dismissed in the terminal): drop
+// the hold and re-drive delivery now instead of waiting for the next poll.
+export function releasePromptHold(conversationId: string): boolean {
+  clearTimeout(expiries.get(conversationId));
+  expiries.delete(conversationId);
+  if (!holds.delete(conversationId)) return false;
+  redrive?.();
+  return true;
+}
+
+export function clearPromptHolds(): void {
+  for (const expiry of expiries.values()) clearTimeout(expiry);
+  expiries.clear();
+  holds.clear();
+}
+
+// "Send anyway": the person read the screen a message was held on and chose
+// to deliver it past the dialog check. The pending row carries the choice
+// (delivery_force); each scan copies it here by message id, where the paste
+// path reads it without a new parameter on every delivery route.
+const forcedPastDialog = new Set<string>();
+
+export function setForcedPastDialog(messageId: string, forced: boolean): void {
+  if (forced) forcedPastDialog.add(messageId);
+  else forcedPastDialog.delete(messageId);
+}
+
+export function isForcedPastDialog(messageId: string | undefined): boolean {
+  return !!messageId && forcedPastDialog.has(messageId);
+}

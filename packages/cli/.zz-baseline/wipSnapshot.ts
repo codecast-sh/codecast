@@ -1,0 +1,544 @@
+/**
+ * Carrying a session's REAL working tree between machines.
+ *
+ * A session reparented onto another machine used to arrive as a plain `git clone`
+ * of its remote: the default branch, and only work that had been pushed. Anything
+ * uncommitted, committed-but-unpushed, or untracked stayed behind, and the agent
+ * woke up on the wrong branch with its recent work missing (ct-38955, ct-38956).
+ *
+ * The fix is a snapshot built with git plumbing rather than porcelain:
+ *
+ *   GIT_INDEX_FILE=<temp> git read-tree HEAD && git add -A     # stage into a TEMP index
+ *   git commit-tree <tree> -p HEAD -m "..."                    # dangling commit
+ *   git push <remote> <snap>:refs/codecast/wip/<session>       # hidden ref
+ *
+ * Four properties make this the right mechanism, and each is load-bearing:
+ *
+ * 1. NON-DESTRUCTIVE. A temp index means the real index, branch, and working tree
+ *    are never touched — the source machine cannot tell this ran. (Contrast
+ *    session-move.ts's wipSnapshot(), which commits onto your real branch and
+ *    leaves the junk commit there forever.)
+ * 2. COMPLETE. One commit object carries uncommitted edits, untracked files, and
+ *    binaries; unpushed commits ride along as ancestors of its parent. Nothing is
+ *    reconstructed from tool calls, so bash-mediated and hand edits are included —
+ *    the tree is ground truth, an edit log is a story about it.
+ * 3. SECRETS CANNOT TRAVEL. `git add -A` respects .gitignore, so a gitignored
+ *    .env is excluded by git itself. This is stronger than a deny list: there is
+ *    no list to keep current and no bug that could add one.
+ * 4. NEVER TOUCHES A REAL BRANCH. The snapshot goes to a hidden ref, never to
+ *    refs/heads/*, so pushing a session's unpushed commits can't rewrite a shared
+ *    branch or trigger CI. `git ls-remote --heads` does not list it.
+ *
+ * The branch name is the one fact a commit cannot carry, so it rides in the
+ * snapshot's message as a trailer: the ref is then self-describing, and restoring
+ * needs nothing from the database.
+ */
+
+import { execFile } from "./proc.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+/** Hidden ref namespace. Verified against real GitHub: the push is accepted and
+ * `ls-remote --heads` does not list it. Not refs/heads/* — see property 4. */
+export const WIP_REF_PREFIX = "refs/codecast/wip";
+
+export const BRANCH_TRAILER = "codecast-branch";
+
+export interface WipSnapshot {
+  /** The snapshot commit. Its parent is the source's real HEAD. */
+  sha: string;
+  /** The source's real HEAD — where the destination should land. */
+  base: string;
+  /** Branch checked out on the source. */
+  branch: string;
+  /** Whether the source had uncommitted/untracked work at snapshot time. */
+  dirty: boolean;
+  /** Tree hash — cheap identity for "has anything changed since last time". */
+  tree: string;
+}
+
+/** Where a session's snapshot lives on the remote. */
+export function wipRef(conversationId: string): string {
+  return `${WIP_REF_PREFIX}/${conversationId}`;
+}
+
+/**
+ * Every git call here is async on purpose. This module runs inside the daemon's
+ * flush loop, and both of its heavy operations block for real time: `add -A`
+ * walks the entire worktree, and `push` is network-bound. A sync exec in that
+ * loop is how the daemon once froze past the watchdog's 180s stale-heartbeat
+ * threshold and got force-restarted mid-move.
+ */
+export async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, stdin?: string): Promise<string> {
+  if (stdin === undefined) {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+      ...(env ? { env } : {}),
+    });
+    return stdout.trim();
+  }
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, ...(env ? { env } : {}) }, (err, stdout) => {
+      // check-ignore exits 1 when nothing matched: an answer, not a failure.
+      if (err && (err as { code?: number }).code !== 1) reject(err);
+      else resolve(String(stdout).trim());
+    });
+    child.stdin?.end(stdin);
+  });
+}
+
+export async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv, stdin?: string): Promise<string | null> {
+  try {
+    return await git(cwd, args, env, stdin);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the snapshot commit message. The branch is the only fact the commit graph
+ * can't express, so it travels here — that keeps the ref self-describing, so a
+ * restore never needs a database lookup to know where to land.
+ */
+export function buildSnapshotMessage(opts: { branch: string }): string {
+  // Deliberately carries NO session id. Sessions sharing a checkout must produce
+  // the IDENTICAL commit object, so git uploads it once and the siblings are
+  // free ref updates. A per-session trailer made every sibling's commit unique
+  // and forced one full push per session.
+  return [WIP_SNAPSHOT_SUBJECT, ``, `${BRANCH_TRAILER}: ${opts.branch}`].join("\n");
+}
+
+/** The subject line of every snapshot commit: how a seeded worktree tells a snapshot start point from a plain commit. */
+export const WIP_SNAPSHOT_SUBJECT = "codecast wip snapshot";
+
+/** Read a trailer back out of a snapshot message. Returns undefined when absent
+ * (an unrecognized/foreign ref must degrade, never throw). */
+export function parseSnapshotTrailer(message: string, key: string): string | undefined {
+  const m = message.match(new RegExp(`^${key}:[ \\t]*(.+)$`, "m"));
+  return m ? m[1].trim() : undefined;
+}
+
+/**
+ * What a cloud seed leaves out of the laptop tree on top of .gitignore: the
+ * workspace state dirs hold per-workspace Chrome profiles (cookies),
+ * worktrees hold other sessions' trees, and the setup logs are what the
+ * workspace's own install wrote — nothing laptop-side writes them into
+ * .git/info/exclude (only the host's reserveInputs does). Pathspec excludes
+ * keep tracked content under .codecast as HEAD has it and keep the untracked
+ * state out. The worktree GC snapshots with the same list, so a setup log on
+ * the host never counts as host-made work, and so does every snapshot a move
+ * takes on either side: a checkout's own worktrees sit inside it on both
+ * machines and travel on their own.
+ */
+export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
+
+/** The author a snapshot object carries, so it never needs the machine's. */
+export const SNAPSHOT_IDENTITY = {
+  GIT_AUTHOR_NAME: "codecast",
+  GIT_AUTHOR_EMAIL: "codecast@localhost",
+  GIT_COMMITTER_NAME: "codecast",
+  GIT_COMMITTER_EMAIL: "codecast@localhost",
+} as const;
+
+/**
+ * Capture the working tree as a dangling commit — the strict variant. Returns
+ * null ONLY when `cwd` has no HEAD to parent onto (not a repo, or no commits);
+ * every other git failure (an unreadable file, a broken GIT_DIR, a missing
+ * identity) propagates with git's stderr, so a caller that promised "my
+ * checkout" can fail loudly instead of quietly degrading. `opts.exclude` are
+ * pathspec excludes applied to the `add -A` (the cloud seed passes
+ * CLOUD_SEED_EXCLUDES).
+ *
+ * Always creates a commit, even on a clean tree: the destination needs the
+ * branch name and any unpushed commits regardless of dirtiness, and a uniform
+ * "snapshot always has HEAD as its parent" shape removes a whole class of
+ * conditional at the restore end. A clean snapshot is cheap — it reuses HEAD's
+ * existing tree object.
+ */
+export async function createWipSnapshotStrict(cwd: string, opts: { exclude?: string[] } = {}): Promise<WipSnapshot | null> {
+  const head = await gitTry(cwd, ["rev-parse", "--verify", "HEAD"]);
+  if (!head) return null; // not a repo, or no commits yet
+
+  const branch = (await gitTry(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])) ?? "HEAD";
+  const tree = await snapshotTree(cwd, opts.exclude);
+  // Dirty is what the SNAPSHOT carries beyond HEAD, not what `git status`
+  // lists: untracked content under an excluded dir never reaches the
+  // destination, so it must not claim uncommitted work either.
+  const dirty = tree !== (await git(cwd, ["rev-parse", `${head}^{tree}`]));
+
+  // Sibling sessions in one checkout must produce the IDENTICAL commit object so
+  // git uploads it once (see buildSnapshotMessage). Commit dates default to the
+  // current second, which broke that whenever two snapshots straddled a second
+  // boundary — the shas diverged and every sibling pushed its own copy. Pinning
+  // both dates to HEAD's makes the snapshot a pure function of tree + parent.
+  const snapshotDate = (await gitTry(cwd, ["log", "-1", "--format=%cI", head])) || "1970-01-01T00:00:00Z";
+
+  // commit-tree writes a dangling object: no ref moves, no branch advances.
+  const sha = await git(cwd, [
+    "commit-tree",
+    tree,
+    "-p",
+    head,
+    "-m",
+    buildSnapshotMessage({ branch }),
+  ], {
+    ...process.env,
+    GIT_AUTHOR_DATE: snapshotDate,
+    GIT_COMMITTER_DATE: snapshotDate,
+    // A dangling snapshot is machinery, not authorship, so it carries a fixed
+    // identity: git refuses to write a commit on a machine that configured
+    // none ("Author identity unknown"), and a constant also keeps the sha the
+    // same for the same tree wherever it is taken.
+    ...SNAPSHOT_IDENTITY,
+  });
+  return { sha, base: head, branch, dirty, tree };
+}
+
+/**
+ * The working tree as a tree object: `git add -A` under .gitignore (secrets
+ * excluded by git itself) plus pathspec excludes for the named dirs, staged
+ * into a temp index so the real .git/index — and any staged-but-uncommitted
+ * change in it — is untouched. Writes only the tree (and its blobs), never a
+ * commit: the worktree GC compares trees and needs nothing more.
+ */
+export async function snapshotTree(cwd: string, exclude: string[] = []): Promise<string> {
+  const indexDir = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-wip-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: path.join(indexDir, "index") };
+    await git(cwd, ["read-tree", "HEAD"], env);
+    const pathspecs = [".", ...exclude.map((p) => `:(exclude)${p}`)];
+    await git(cwd, ["add", "-u", "--", ...pathspecs], env);
+    const { stdout: paths } = await execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (paths) {
+      const pathspec = path.join(indexDir, "paths");
+      fs.writeFileSync(pathspec, paths, { mode: 0o600 });
+      await git(cwd, ["--literal-pathspecs", "add", "-A", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"], env);
+    }
+    return await git(cwd, ["write-tree"], env);
+  } finally {
+    try {
+      fs.rmSync(indexDir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+/**
+ * The lenient snapshot the move path and the WIP sweep use: any failure is
+ * null (the caller keeps the plain clone). See createWipSnapshotStrict for
+ * the recipe and its properties.
+ */
+export async function createWipSnapshot(cwd: string, opts: { exclude?: string[] } = {}): Promise<WipSnapshot | null> {
+  try {
+    return await createWipSnapshotStrict(cwd, opts);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Push a snapshot to its hidden ref. Force, because the ref is a mailbox holding
+ * only the latest state — its history is worthless and old snapshots should fall
+ * out of the remote's GC.
+ */
+export async function pushWipSnapshot(
+  cwd: string,
+  opts: {
+    remote: string;
+    conversationIds: string[];
+    sha: string;
+    /** Identity override — the device fallback key when it is the credential
+     * that works for this repo (gitIdentity.gitEnvFor). */
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<{ ok: boolean; error?: string; permanent?: boolean }> {
+  if (!opts.conversationIds.length) return { ok: true };
+  try {
+    // One invocation carrying every session's refspec. Sessions sharing a
+    // checkout share the snapshot commit (the message has no per-session
+    // trailer), so this is a single object upload plus N cheap ref updates —
+    // one network round trip instead of N. On this machine that is ~50 sessions
+    // collapsing to 6 repos.
+    await git(cwd, [
+      "push",
+      "--force",
+      opts.remote,
+      ...opts.conversationIds.map((id) => `${opts.sha}:${wipRef(id)}`),
+    ], opts.env);
+    return { ok: true };
+  } catch (e) {
+    const err = e as { stderr?: string | Buffer; message?: string };
+    const error = (err.stderr?.toString() || err.message || String(e)).slice(0, 300);
+    return { ok: false, error, permanent: isPermanentPushFailure(error) };
+  }
+}
+
+/**
+ * Is this push failure worth retrying?
+ *
+ * A session's repo is whatever the agent happened to be working in, which is
+ * often one the user can READ but not WRITE (a public repo they cloned, a repo
+ * whose access was revoked). That never becomes pushable by waiting, so retrying
+ * it every pass buys nothing and costs a failed network call per session forever.
+ * Network/transient errors are the opposite — those must keep retrying, since the
+ * whole point is that a snapshot exists when the laptop closes.
+ */
+export function isPermanentPushFailure(stderr: string): boolean {
+  const s = stderr.toLowerCase();
+  return (
+    s.includes("permission to") ||
+    s.includes("permission denied") ||
+    s.includes("repository not found") ||
+    s.includes("does not appear to be a git repository") ||
+    s.includes("access denied") ||
+    s.includes("authentication failed") ||
+    s.includes("forbidden") ||
+    s.includes("read-only") ||
+    // GitHub's refusal of a push over a deploy key added without write
+    // access: "The key you are authenticating with has been marked as read only."
+    s.includes("read only")
+  );
+}
+
+export interface RestoreResult {
+  branch: string;
+  base: string;
+  /** True when the source had uncommitted work and it was reproduced here. */
+  appliedWork: boolean;
+  /** Set when the tree couldn't be materialized; the checkout still landed on base. */
+  applyError?: string;
+}
+
+/**
+ * Reproduce the source's working tree in `cwd` from its pushed snapshot.
+ *
+ * Lands on the source's branch at its real HEAD (fixing "a clone gives you the
+ * default branch"), then reproduces the uncommitted delta as UNCOMMITTED work, so
+ * the agent finds its changes as it left them rather than silently committed.
+ *
+ * Done with plumbing rather than a patch:
+ *
+ *   git checkout -B <branch> <base>   # land on the source's branch @ its real HEAD
+ *   git read-tree -u --reset <snap>   # worktree + index := snapshot tree
+ *   git reset --mixed <base>          # index := base; worktree KEEPS the work
+ *
+ * The index rewind is what leaves the tree dirty in exactly the source's shape.
+ * No patch is ever serialized, which matters more than it sounds: `git diff`/`git
+ * apply` round-tripping mangles binary files (base85) and is sensitive to a
+ * trailing newline, and it silently mishandles deletions. read-tree moves trees
+ * natively — git already does this better than a patch can.
+ *
+ * Returns null when no snapshot exists for the session (the normal case for a
+ * source on an older CLI): the caller keeps the plain clone.
+ */
+export async function restoreWipSnapshot(
+  cwd: string,
+  opts: { remote: string; conversationId: string },
+): Promise<RestoreResult | null> {
+  const ref = wipRef(opts.conversationId);
+  // Fetch into the same ref name locally so the object is reachable and named.
+  if ((await gitTry(cwd, ["fetch", "--force", opts.remote, `${ref}:${ref}`])) === null) return null;
+
+  const sha = await gitTry(cwd, ["rev-parse", ref]);
+  if (!sha) return null;
+
+  const message = (await gitTry(cwd, ["show", "-s", "--format=%B", sha])) ?? "";
+  const branch = parseSnapshotTrailer(message, BRANCH_TRAILER);
+  const base = await gitTry(cwd, ["rev-parse", `${sha}^`]);
+  if (!branch || !base) return null; // foreign/non-snapshot ref — leave the clone alone
+
+  // -B: create or reset the branch to the source's HEAD. Safe because this is a
+  // fresh reparent checkout, not a tree anyone is working in.
+  if ((await gitTry(cwd, ["checkout", "-B", branch, base])) === null) return null;
+
+  // Same tree as base = the source was clean. Nothing to reproduce, and skipping
+  // the rewrite keeps a clean checkout untouched.
+  const snapTree = await gitTry(cwd, ["rev-parse", `${sha}^{tree}`]);
+  const baseTree = await gitTry(cwd, ["rev-parse", `${base}^{tree}`]);
+  if (!snapTree || snapTree === baseTree) return { branch, base, appliedWork: false };
+
+  try {
+    await git(cwd, ["read-tree", "-u", "--reset", sha]); // adds, edits AND deletes
+    await git(cwd, ["reset", "-q", "--mixed", base]); // index back to base; worktree keeps work
+    return { branch, base, appliedWork: true };
+  } catch (e) {
+    // The checkout still landed on the right branch/commit, so the session is
+    // usable; the caller reports that the uncommitted delta didn't make it.
+    const err = e as { stderr?: string | Buffer; message?: string };
+    try {
+      await git(cwd, ["reset", "-q", "--hard", base]); // don't leave a half-written tree
+    } catch {}
+    return {
+      branch,
+      base,
+      appliedWork: false,
+      applyError: (err.stderr?.toString() || err.message || String(e)).slice(0, 300),
+    };
+  }
+}
+
+/** The name of the repo's default remote, or null when it has none. */
+export async function defaultRemote(cwd: string): Promise<string | null> {
+  const out = await gitTry(cwd, ["remote"]);
+  return out?.split("\n")[0]?.trim() || null;
+}
+
+
+/**
+ * createWipSnapshot as a POSIX shell one-liner, for a machine reachable only over
+ * SSH — it runs whatever codecast version it happens to have (often older, or a
+ * compiled binary), so we cannot call our own code there. Writes the snapshot to
+ * `ref` and echoes its sha.
+ *
+ * This duplicates createWipSnapshot's recipe in another language, which is worth
+ * naming: keep the two in step. The `-m` pair reproduces buildSnapshotMessage
+ * exactly (commit-tree joins paragraphs with a blank line). The identity is passed
+ * inline because a bundle-cloned remote may have no user.* config.
+ */
+/**
+ * snapshotTree in shell: the working tree as a tree id, staged into the index
+ * file `index` (a shell word), printed on stdout. The whole checkout whatever
+ * folder of it the shell is in, under .gitignore, minus the `exclude` dirs.
+ * Tracked files and untracked ones are staged apart for the same reason as
+ * there: `git add -A` with an exclude pathspec that names an ignored folder
+ * refuses with "paths are ignored" (git 2.43).
+ */
+export function snapshotTreeShell(index: string, exclude: readonly string[] = []): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const spec = [":/", ...exclude.map((p) => q(`:(top,exclude)${p}`))].join(" ");
+  const env = `GIT_INDEX_FILE="${index}"`;
+  // An empty list must add nothing: `git add --pathspec-from-file` given no paths adds everything.
+  return `${env} git read-tree HEAD && ${env} git add -u -- ${spec} && L=$(mktemp) && ${env} git ls-files -z --others --exclude-standard -- ${spec} > "$L"` +
+    ` && { [ ! -s "$L" ] || ${env} git --literal-pathspecs add --pathspec-from-file="$L" --pathspec-file-nul; } && rm -f "$L" && ${env} git write-tree`;
+}
+
+export function remoteSnapshotScript(opts: { cwd: string; ref: string; exclude?: string[] }): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  return [
+    `cd ${q(opts.cwd)}`,
+    `IDX=$(mktemp)`,
+    `TREE=$(${snapshotTreeShell("$IDX", opts.exclude)})`,
+    `BR=$(git rev-parse --abbrev-ref HEAD)`,
+    // Same date pinning as createWipSnapshot, for the same reason: the commit
+    // must be a pure function of tree + parent, not of the second it ran in.
+    `DT=$(git log -1 --format=%cI HEAD)`,
+    `SNAP=$(GIT_AUTHOR_DATE="$DT" GIT_COMMITTER_DATE="$DT" ` +
+      `git -c user.email=codecast@local -c user.name=codecast commit-tree "$TREE" -p HEAD ` +
+      `-m ${q("codecast wip snapshot")} -m "${BRANCH_TRAILER}: $BR")`,
+    `rm -f "$IDX"`,
+    `git update-ref ${q(opts.ref)} "$SNAP"`,
+    `echo "$SNAP"`,
+  ].join(" && ");
+}
+
+export type ApplyResult =
+  | { ok: true; base: string; branch?: string; appliedWork: boolean; conflicts: string[] }
+  | { ok: false; reason: string };
+
+export const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
+
+/**
+ * Bring a session's work home from an already-fetched snapshot of the host
+ * (`snapRef`: the host's tree, parented on the host's HEAD).
+ *
+ * The folder it lands in is often shared: other sessions keep editing it while
+ * this one was away, and its branch may have moved on. So the host's work comes
+ * back as a CHANGE, never as a replacement tree:
+ *
+ *  - The change is everything the host did since it was handed this session:
+ *    `start` (the commit the move pushed) to the snapshot. Without `start`, it is
+ *    the newest wip snapshot or locally known commit on the host's first-parent
+ *    history.
+ *  - Host commits on top of a real local commit fast-forward the branch, but only
+ *    when git can do it without touching anyone's uncommitted edits; otherwise
+ *    they arrive as uncommitted changes like the rest.
+ *  - The change is applied with a three-way merge onto the working tree as it is
+ *    now. Overlapping edits are left as conflict markers and named in
+ *    `conflicts`; nothing is reset, and the branch never lands on a wip snapshot.
+ */
+export async function applySnapshotFastForward(
+  cwd: string,
+  snapRef: string,
+  opts: { start?: string; skip?: readonly string[] } = {},
+): Promise<ApplyResult> {
+  const snap = await gitTry(cwd, ["rev-parse", snapRef]);
+  const hostHead = await gitTry(cwd, ["rev-parse", `${snapRef}^`]);
+  if (!snap || !hostHead) return { ok: false, reason: `no usable snapshot at ${snapRef}` };
+  const head = await gitTry(cwd, ["rev-parse", "HEAD"]);
+  if (!head) return { ok: false, reason: "local worktree has no HEAD" };
+  const branch = parseSnapshotTrailer((await gitTry(cwd, ["show", "-s", "--format=%B", snap])) ?? "", BRANCH_TRAILER);
+
+  let start = opts.start && (await gitTry(cwd, ["cat-file", "-e", `${opts.start}^{commit}`])) !== null ? opts.start : undefined;
+  if (!start) {
+    for (const c of ((await gitTry(cwd, ["rev-list", "--first-parent", "--max-count=200", hostHead])) ?? "").split("\n").filter(Boolean)) {
+      const message = (await gitTry(cwd, ["show", "-s", "--format=%B", c])) ?? "";
+      if (isWipSnapshotMessage(message) || (await gitTry(cwd, ["merge-base", "--is-ancestor", c, head])) !== null) { start = c; break; }
+    }
+  }
+  if (!start) return { ok: false, reason: "cannot tell where the host's work began; nothing was changed here" };
+
+  // Real host commits on a real local tip: keep them as commits when that is a clean fast-forward.
+  let from = start;
+  const startIsWip = isWipSnapshotMessage((await gitTry(cwd, ["show", "-s", "--format=%B", start])) ?? "");
+  if (!startIsWip && hostHead !== start && head === start
+    && (await gitTry(cwd, ["merge", "--ff-only", "-q", hostHead])) !== null) {
+    from = hostHead;
+  }
+
+  // A file the host created that this folder already has (ignored or untracked
+  // here) is not a change git can apply: the same bytes are already done, and
+  // different bytes are merged by hand into conflict markers.
+  // `skip`: paths that are this folder's own on the host too (the config
+  // mirror's copies of its instruction files); they never come back.
+  const settled: string[] = [...(opts.skip ?? [])];
+  const differing: string[] = [];
+  for (const rel of ((await gitTry(cwd, ["diff", "--name-only", "--diff-filter=A", from, snap])) ?? "").split("\n").filter(Boolean)) {
+    if (settled.includes(rel)) continue;
+    if (!fs.existsSync(path.join(cwd, rel))) continue;
+    settled.push(rel);
+    if ((await gitTry(cwd, ["hash-object", "--", rel])) !== (await gitTry(cwd, ["rev-parse", `${snap}:${rel}`]))) differing.push(rel);
+  }
+  // Run only once the rest has landed, so a refusal still changes nothing.
+  const mergeDiffering = async (): Promise<string[]> => {
+    for (const rel of differing) {
+      const theirs = path.join(os.tmpdir(), `codecast-back-${process.pid}-${Date.now()}-theirs`);
+      const empty = `${theirs}-base`;
+      fs.writeFileSync(theirs, (await execFileAsync("git", ["-C", cwd, "show", `${snap}:${rel}`], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 })).stdout as Buffer);
+      fs.writeFileSync(empty, "");
+      try { await execFileAsync("git", ["merge-file", "-L", "here", "-L", "empty", "-L", "host", path.join(cwd, rel), empty, theirs]); } catch { /* exit >0: conflicts written */ }
+      fs.rmSync(theirs, { force: true });
+      fs.rmSync(empty, { force: true });
+    }
+    return differing;
+  };
+  const patch = await gitTry(cwd, ["diff", "--binary", "--full-index", from, snap, "--", ".", ...settled.map((rel) => `:(exclude,top,literal)${rel}`)]);
+  if (!patch) return { ok: true, base: from, branch, appliedWork: differing.length > 0, conflicts: await mergeDiffering() };
+  const file = path.join(os.tmpdir(), `codecast-back-${process.pid}-${Date.now()}.patch`);
+  fs.writeFileSync(file, patch + "\n");
+  try {
+    if ((await gitTry(cwd, ["apply", "--whitespace=nowarn", file])) !== null) {
+      return { ok: true, base: from, branch, appliedWork: true, conflicts: await mergeDiffering() };
+    }
+    // Overlaps with what changed here meanwhile: merge them. --3way works through
+    // the index, so the touched paths are unstaged again afterwards.
+    const touched = ((await gitTry(cwd, ["diff", "--name-only", from, snap])) ?? "").split("\n").filter((rel) => rel && !settled.includes(rel));
+    // The index must hold what is on disk now for those paths, or --3way refuses them.
+    const tracked = new Set(((await gitTry(cwd, ["ls-files", "--", ...touched])) ?? "").split("\n").filter(Boolean));
+    const present = touched.filter((p) => tracked.has(p) || fs.existsSync(path.join(cwd, p)));
+    if (present.length) await gitTry(cwd, ["add", "-A", "--", ...present]);
+    let threeWay = true;
+    try { await git(cwd, ["apply", "--3way", "--whitespace=nowarn", file]); } catch { threeWay = false; }
+    const conflicts = ((await gitTry(cwd, ["diff", "--name-only", "--diff-filter=U"])) ?? "").split("\n").filter(Boolean);
+    if (touched.length) await gitTry(cwd, ["reset", "-q", "--", ...touched]);
+    if (!threeWay && conflicts.length === 0) {
+      return { ok: false, reason: "the host's changes do not apply to this folder as it is now; nothing was changed here" };
+    }
+    return { ok: true, base: from, branch, appliedWork: true, conflicts: [...(await mergeDiffering()), ...conflicts] };
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}

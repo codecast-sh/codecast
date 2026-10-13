@@ -1,0 +1,961 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
+import { AGENT_CLIENTS, localAgentClient } from "../../shared/contracts/agentClients";
+import { authorizesTeardown } from "../../shared/contracts/liveness";
+import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialog } from "../../shared/contracts/apiErrorBanner";
+import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
+import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
+import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold";
+import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
+import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { typedPollAnswer } from "./typedPollAnswer";
+import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
+import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
+
+const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+const scratch: string[] = [];
+afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
+const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });
+const session = (body: string) => `<session-message from="jxsrc01">\n${body}\n</session-message>`;
+const menu = "Ship the change?\n❯ 1. Deploy\n  2. Deny\nEnter to select · Esc to cancel";
+const cursorMenu = "Ship the change?\n❯ 1. Deploy\n  2. Deny";
+const confirmation = "Confirm deployment\nPress Enter to continue · Esc to cancel";
+const box = (text = "", busy = false) => `────────────────────────────────────────\n❯ ${text}\n────────────────────────────────────────\n${busy ? "esc to interrupt" : "? for shortcuts"}`;
+const fail = (name: string) => () => { throw new Error(`Unexpected effect: ${name}`); };
+
+let fixtureFactory: ((...args: any[]) => any) | undefined;
+
+function fixture(transport = "tmux", cached = true) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-prompt-guard-"));
+  scratch.push(directory);
+  const state = { menu: menu as string | null, composer: "", history: "", busy: false, captureFailure: false, captures: 0 };
+  const events: string[] = [];
+  const bodies: string[] = [];
+  const commands: string[] = [];
+  const captureSizes: number[] = [];
+  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null };
+  const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
+  const clock = { now: 1_000_000, steps: 0 };
+  const step = (ms = 0) => {
+    if (++clock.steps > 2000) throw new Error("fixture step cap exceeded");
+    clock.now += ms;
+  };
+  const recordTimer = (fn: () => unknown, ms: number) => {
+    step();
+    const timer = { fn, ms, cancelled: false };
+    timers.push(timer);
+    return timer;
+  };
+  const capture = () => {
+    step();
+    hooks.capture();
+    state.captures++;
+    if (state.captureFailure) throw new Error("fixture capture unavailable");
+    return state.menu ?? `${state.history}\n${box(state.composer, state.busy)}`;
+  };
+  const input = (event: string, text?: string) => {
+    events.push(event);
+    if (event === "paste") state.composer += text ?? "";
+    if (event === "Enter") {
+      if (state.menu) state.menu = null;
+      else if (state.composer) {
+        bodies.push(state.composer);
+        state.history += `\n${state.composer}`;
+        state.composer = "";
+        state.busy = true;
+      }
+    }
+    // A number key on a numbered menu submits that row, as Claude Code's does.
+    if (/^\d$/.test(event) && state.menu) state.menu = null;
+    if (["C-k", "C-u"].includes(event)) state.composer = "";
+    hooks.input(event);
+  };
+  const buffers = new Map<string, string>();
+  const tmuxExec = async (args: string[]) => {
+    await hooks.exec(args);
+    if (args[0] === "capture-pane") {
+      const size = Math.abs(Number(args[args.indexOf("-S") + 1]));
+      captureSizes.push(size);
+      return { stdout: capture().split("\n").slice(-size).join("\n"), stderr: "" };
+    }
+    if (args[0] === "load-buffer") { buffers.set(args[2], fs.readFileSync(args[3], "utf8")); hooks.loaded(); }
+    else if (args[0] === "paste-buffer") input("paste", buffers.get(args[args.indexOf("-b") + 1]));
+    else if (args[0] === "delete-buffer") buffers.delete(args[2]);
+    else if (args[0] === "send-keys") input(args.includes("-l") ? "paste" : args.at(-1)!, args.includes("-l") ? args.at(-1) : undefined);
+    else if (args[0] !== "has-session") throw new Error(`Unexpected tmux command ${args.join(" ")}`);
+    return { stdout: "", stderr: "" };
+  };
+  const unquote = (value: string) => value.replace(/'\\''/g, "'");
+  const execAsync = async (command: string) => {
+    commands.push(command);
+    if (command.startsWith("kitty @ get-text") || command.startsWith("wezterm cli get-text")) return { stdout: capture() };
+    if (command === "kitty @ ls") return { stdout: JSON.stringify([{ tabs: [{ windows: [{ id: 7, pid: 42 }] }] }]) };
+    if (command.startsWith("ps -o tty=")) return { stdout: "ttys-test" };
+    if (command === "wezterm cli list --format json") return { stdout: JSON.stringify([{ tty_name: "/dev/ttys-test", pane_id: 7 }]) };
+    if (command.startsWith("kitty @ send-key")) input(command.endsWith(" enter") ? "Enter" : command.split(" ").at(-1)!);
+    else if (command.startsWith("kitty @ send-text") && command.includes("--from-file")) {
+      input("paste", fs.readFileSync(command.match(/--from-file '([^']+)'/)![1], "utf8"));
+    } else if (command.startsWith("printf '%s' '")) {
+      const value = unquote(command.slice("printf '%s' '".length, command.lastIndexOf("' | wezterm")));
+      if (value === "\r") input("Enter");
+      else input("paste", value);
+    } else if (command.startsWith("osascript ")) {
+      const invocation = command.match(/^osascript "([^"]+)" (.*)$/s)!;
+      const script = fs.readFileSync(invocation[1], "utf8");
+      if (!script.includes("set msgText to")) {
+        expect(script).toMatch(/(?:write text|do script) "Enter"/);
+        input("poll-script");
+        return { stdout: "ok" };
+      }
+      const match = invocation[2].match(/^'(.*)' '([^']+)'$/s)!;
+      const value = unquote(match[1]);
+      if (value === "\r") input("Enter");
+      else {
+        input("paste", value.replace(PASTE_START, "").replace(PASTE_END, ""));
+        if (script.includes('tell s to write text ""') || script.includes("do script msgText in t")) input("Enter");
+      }
+    } else throw new Error(`Unexpected terminal command: ${command}`);
+    return { stdout: "ok" };
+  };
+  const prompt = { timestamp: 1, options: [{ label: "Deploy" }, { label: "Deny" }], isConfirmation: false };
+  const pendingInteractivePrompts = new Map<string, typeof prompt>([["sid", prompt]]);
+  const lastEmittedSyntheticPrompt = new Map([["sid", "card-1"]]);
+  const closed: unknown[][] = [];
+  let journal: TmuxDeliveryJournal | undefined;
+  const messages = new Map<string, any>();
+  const statuses: Array<{ messageId: string; status: string }> = [];
+  const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
+  const launchPromptCarries = new Map<string, { conversationId: string; tmuxSession: string; projectPath: string; sessionId: string; transcript: string; startedAt: number }>();
+  const syncService = {
+    getConversationOwnerInfo: async () => null,
+    claimPendingMessageForDelivery: async (id: string) => messages.get(id) ?? { _id: id, conversation_id: "conv" },
+    updateMessageStatus: async (args: any) => { statuses.push(args); },
+    updateSessionAgentStatus: async () => {},
+    retryMessage: async (id: string, opts?: { holdReason?: string }) => { events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`); },
+    setSessionError: async () => {},
+    cancelPendingMessage: fail("cancel pending"),
+    addMessage: fail("system row"),
+  };
+  const deps = {
+    fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
+    isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
+    LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, isForcedPastDialog, setForcedPastDialog,
+    clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
+    tmuxExec, execAsync,
+    // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
+    // No cloud agent owns this fixture's conversation, so every one goes to the pane.
+    CloudAgentHoldError, CloudAgentUnsentError, pollPendingNow: () => {},
+    cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
+    // A recovery continue restarts a pane that holds its own credential first;
+    // this fixture's machine has no fleet store, so no pane is restarted.
+    isRecoveryContinueClientId, fleetStoreReady: () => false,
+    // Nor is any of its sessions a claude.ai cloud session: the watcher is off.
+    claudeCloudRef: null, isClaudeAutoContinueLine, isUsageLimitDialog,
+    _execFileAsync: async (binary: string, args: string[]) => {
+      expect(binary).toBe("osascript");
+      expect(args[0]).toBe("-e");
+      expect(args[1]).toContain("return contents of");
+      expect(args[1]).not.toContain("write text");
+      expect(args[2]).toBe("/dev/ttys-test");
+      return { stdout: capture() };
+    },
+    ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
+    classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
+    acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_TURN_STATUS_LINE,
+    log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
+    // Free variables of the lifted delivery path. The real helper where it is
+    // importable; for the two that live in daemon.ts, the answer this fixture's
+    // world gives: no transcript is on disk, and these panes are not Grok.
+    deliveryStep: async <T>(_messageId: string, _step: string, run: () => Promise<T>): Promise<T> => run(),
+    awaitRecentSessionFile: async () => null,
+    isGrokTrustDialog: () => false,
+    tmuxTargetLocks: new Map(), TMUX_LOCK_WAIT_MS: 60000, hibernationInFlight: new Map(),
+    Date: class extends Date {
+      static now() { step(); return clock.now; }
+    },
+    recordTimer,
+    setTimeout: (fn: () => unknown, ms: number) => {
+      if (ms > 1000) return recordTimer(fn, ms);
+      step(ms);
+      const timer = { fn, ms, cancelled: false };
+      queueMicrotask(() => { if (!timer.cancelled) fn(); });
+      return timer;
+    },
+    clearTimeout: (timer: { cancelled: boolean }) => { timer.cancelled = true; },
+    pendingInteractivePrompts, lastEmittedSyntheticPrompt,
+    closeSyntheticPrompt: async (...args: unknown[]) => { closed.push(args); lastEmittedSyntheticPrompt.delete("sid"); },
+    touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(),
+    ownedByAnotherDevice: () => false, isRemoteDevice: () => false, codexAppServerInstance: undefined, readyCodexAppServer: async () => null,
+    buildReverseConversationCache: () => cached ? { conv: "sid" } : {}, findSessionFile: () => ({ agentType: "claude" }),
+    startedSessionTmux: new Map([["conv", { tmuxSession: "target", agentType: "claude", startedAt: clock.now }]]),
+    deleteStartedSession: fail("delete started session"), readConversationCache: fail("recreation fallback"),
+    hasTmux: () => true, resumeFatalReasons: new Map(), resumeSessionCache: new Map(),
+    resumeShortId: (id: string) => id, resumeTmuxName: () => "target", syncServiceRef: undefined,
+    readConfig: fail("full resume fallback"), isTmuxAgentAlive: async () => true,
+    classifyClaudeResumeFatalReason: fail("fatal classification"),
+    resolveLiveTmuxTarget: async () => transport === "tmux"
+      ? { tmuxTarget: "target:0.0", source: "started" }
+      : { tmuxTarget: null, proc: { tty: "ttys-test", termProgram: transport } },
+    markInjectedBestEffort: (_sync: unknown, id: string) => {
+      statuses.push({ messageId: id, status: "injected" });
+      injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
+    },
+    clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
+    autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
+    prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
+    // The receipt journal the inject path opens when a delivery identity rides
+    // along: a private one per fixture, so no test reads the machine's.
+    tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
+    selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
+    messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
+    IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
+    messageRetryTimers: new Set(), syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
+    sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
+    checkForInteractivePrompt: async () => {},
+  };
+  if (!fixtureFactory) {
+    const names = [
+      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
+      "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
+      "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
+      "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
+      "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
+      "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
+      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
+      "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
+      "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
+      "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "herdrKey", "injectViaHerdr", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
+      "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt",
+      "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
+    ];
+    const constants = [
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
+      "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
+    ].map(name => {
+      const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
+      if (!line) throw new Error(`Missing constant ${name}`);
+      return line.replace("export ", "");
+    });
+    const parserStart = source.indexOf("type InteractivePrompt =");
+    const parserEnd = source.indexOf("\n// Claude Code's spend-limit interstitial", parserStart);
+    const resume = functionBlock(source, "autoResumeSessionInner").text;
+    const readiness = blockAt(resume, resume.indexOf("    while (Date.now() - startTime < maxPollMs)")).text;
+    const warnings = blockAt(resume, resume.indexOf("    if (ready || !content)")).text;
+    const fastProbe = blockAt(resume, resume.indexOf("  if (agentTypeHint)")).text;
+    const resumeFatalStart = resume.indexOf("const fatalErrors = [");
+    const resumeFatalErrors = resume.slice(resumeFatalStart, resume.indexOf("];", resumeFatalStart) + 2);
+    const resumeScope = 'const sessionId = "sid", shortId = "sid", agentType = "claude", tmuxSession = "target", promptPattern = /[❯›]/;';
+    const catches = [fastProbe, readiness, warnings, resume].map((region, i) => {
+      const handler = region.slice(region.lastIndexOf("catch (err) {"), region.lastIndexOf("\n"));
+      return `async function propagation${i}(error) { ${resumeScope} try { throw error; } ${handler} return "fallback"; }`;
+    });
+    const fatalStart = source.indexOf("const STARTED_PANE_FATAL_ERRORS =");
+    // Multi-line array constants: the one-line reader above cannot take these.
+    const arrayConst = (name: string): string => {
+      const start = source.indexOf(`const ${name} =`);
+      if (start < 0) throw new Error(`Missing constant ${name}`);
+      return source.slice(start, source.indexOf("];", start) + 2);
+    };
+    const code = [
+      source.slice(parserStart, parserEnd),
+      blockAt(source, source.indexOf("class InputBlockedError")).text,
+      blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
+      "class UndeliverableMessageError extends Error {}",
+      source.slice(fatalStart, source.indexOf("];", fatalStart) + 2),
+      arrayConst("CODEX_PERMISSION_PATTERNS"),
+      ...constants,
+      ...names.map(name => functionBlock(source, name).text),
+      `const scheduleMessageRetry = ((setTimeout) => { ${functionBlock(source, "scheduleMessageRetry").text}; return scheduleMessageRetry; })(recordTimer);`,
+      ...catches,
+      `async function resumeReadiness(content) { ${resumeScope} ${resumeFatalErrors} const startTime = Date.now(), maxPollMs = 100; let ready = false; ${readiness} return ready; }`,
+      `async function resumeWarnings(content) { ${resumeScope} const ready = true; ${warnings} }`,
+      blockAt(source, source.indexOf("  const handlePendingMessagesUpdate = async")).text,
+    ].join("\n").replace(/^export /gm, "");
+    fixtureFactory = new Function(...Object.keys(deps), new Bun.Transpiler({ loader: "ts" }).transformSync(code) +
+      "; return { deliverMessage, injectViaTmux, injectViaTerminal, handlePendingMessagesUpdate, scheduleMessageRetry, parsePollMessage, parseInteractivePrompt, buildAppleScript, inputGuard, assertPromptAbsent, InputBlockedError, autoResumeSessionInner, probeStartedPane, resumeReadiness, resumeWarnings, propagation: [propagation0, propagation1, propagation2, propagation3] };") as (...args: any[]) => any;
+  }
+  const api = fixtureFactory(...Object.values(deps));
+  return {
+    ...api, state, events, bodies, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
+    deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
+    scan: async (rows: Array<{ _id: string; content: string }>) => {
+      for (const row of rows) messages.set(row._id, { ...row, conversation_id: "conv" });
+      await api.handlePendingMessagesUpdate([...messages.values()].filter(row => rows.some(r => r._id === row._id)));
+    },
+  };
+}
+
+describe("machine prompt delivery safety", () => {
+  test("skips the optional Codex update before delivering the original message", async () => {
+    const f = fixture();
+    f.state.menu = "Update available! 0.154.0 -> 0.155.1\n› 1. Update now (runs `bun install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\nPress enter to continue";
+    f.hooks.input = (event: string) => {
+      if (f.state.menu) {
+        expect(event).toBe("Escape");
+        f.state.menu = null;
+      }
+    };
+    await expect(f.deliver("preserve the queued question")).resolves.toBe(true);
+    expect(f.events[0]).toBe("Escape");
+    expect(f.bodies).toEqual(["preserve the queued question"]);
+  });
+
+  // The seven panes of 2026-10-04: an armed automatic continue under a live
+  // composer. A recovery "continue" must cancel the wait with one Escape and
+  // then land, never press a second Escape (that opens Rewind).
+  test("cancels Claude Code's armed limit wait with one Escape, then delivers", async () => {
+    const f = fixture();
+    f.state.menu = `${box()}\n  ⚠ Usage limit reached · limit resets Oct 5 at 3pm\n    Continuing automatically at Oct 5 at 3pm · esc to cancel · /usage-credits to continue now`;
+    f.hooks.input = (event: string) => {
+      if (event === "Escape") {
+        expect(f.state.menu).not.toBeNull();
+        f.state.menu = null;
+      }
+    };
+    await expect(f.deliver("continue")).resolves.toBe(true);
+    expect(f.events.filter((e: string) => e === "Escape")).toEqual(["Escape"]);
+    expect(f.bodies).toEqual(["continue"]);
+  });
+
+  test("a timed-out waiter does not steal the active terminal writer's lock", async () => {
+    const f = fixture();
+    const active = new Promise<void>(() => {});
+    f.deps.tmuxTargetLocks.set("target", active);
+    await expect(f.injectViaTmux("target:0.0", "continue", "claude")).rejects.toThrow("earlier delivery still owns");
+    expect(f.deps.tmuxTargetLocks.get("target")).toBe(active);
+    expect(f.events).toEqual([]);
+  });
+
+  test("waiting for input confirmation does not exhaust the retry budget", async () => {
+    const f = fixture();
+    const calls: unknown[][] = [];
+    f.deps.syncService.retryMessage = async (...args: unknown[]) => { calls.push(args); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue", "waiting for terminal input confirmation");
+    expect(f.statuses).toEqual([]);
+    expect(f.timers[0].ms).toBe(5000);
+    await f.timers[0].fn();
+    expect(calls).toEqual([["update", { holdReason: "waiting for terminal input confirmation" }]]);
+  });
+
+  test.each([10, 12, 100])("retry %s keeps the original message eligible for delivery", async retryCount => {
+    const f = fixture();
+    f.state.menu = null;
+    f.scheduleMessageRetry("update", retryCount, "conv", "continue");
+    expect(f.statuses).toEqual([]);
+    expect(f.timers[0].ms).toBe(300000);
+    await f.scan([{ _id: "update", content: "continue", retry_count: retryCount } as any]);
+    expect(f.bodies).toEqual([]);
+    await f.timers[0].fn();
+    expect(f.events).toEqual(["retry:update"]);
+    await f.scan([{ _id: "update", content: "continue", retry_count: retryCount + 1 } as any]);
+    expect(f.bodies).toEqual(["continue"]);
+    expect(f.statuses.some((row: any) => row.status === "undeliverable")).toBe(false);
+  });
+
+  test("a failed retry write schedules another attempt", async () => {
+    const f = fixture();
+    f.deps.syncService.retryMessage = async () => { throw new Error("connection lost"); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue");
+    await f.timers[0].fn();
+    expect(f.timers).toHaveLength(2);
+    expect(f.timers[1].ms).toBe(300000);
+    expect(f.deps.messageRetryTimers.has("update")).toBe(true);
+    expect(f.statuses).toEqual([]);
+  });
+
+  test("a deleted message retires its retry timer", async () => {
+    const f = fixture();
+    f.deps.syncService.retryMessage = async () => { throw new Error("Message not found"); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue");
+    await f.timers[0].fn();
+    expect(f.timers).toHaveLength(1);
+    expect(f.deps.messageRetryTimers.has("update")).toBe(false);
+  });
+
+  test.each([true, false])("a held delivery preserves observed agent status (cached=%s)", async cached => {
+    const f = fixture("tmux", cached);
+    const statuses: string[] = [];
+    f.deps.syncService.updateSessionAgentStatus = async (_id: string, status: string) => { statuses.push(status); };
+    await f.scan([{ _id: "update", content: session("continue") }]);
+    expect(statuses).toEqual([]);
+    expect(f.bodies).toEqual([]);
+  });
+
+  test("fixture resolves a one-second delivery sleep while retry timers stay controlled", async () => {
+    const f = fixture();
+    const start = f.clock.now;
+    f.scheduleMessageRetry("update", 0, "conv", session("context"));
+    await new Promise<void>(resolve => f.deps.setTimeout(resolve, 1000));
+    expect(f.clock.now).toBe(start + 1000);
+    expect(f.events).toEqual([]);
+    expect(f.timers).toHaveLength(1);
+    expect(f.timers[0].ms).toBe(1000);
+    await f.timers[0].fn();
+    expect(f.events).toEqual(["retry:update"]);
+  });
+
+  test("fixture bounds a zero-delay microtask spin", async () => {
+    const f = fixture();
+    const spin = async () => {
+      while (true) await new Promise<void>(resolve => f.deps.setTimeout(resolve, 0));
+    };
+    await expect(spin()).rejects.toThrow("fixture step cap exceeded");
+  });
+
+  for (const format of [session]) {
+    for (const body of ["Do not Deploy yet", "yes", "deny", poll]) {
+      test(`${format.name}: ${body} preserves content and both prompt caches`, async () => {
+        const f = fixture();
+        const content = format(body);
+        await expect(f.deliver(content)).rejects.toThrow("terminal is waiting for a human answer");
+        expect(f.events).toEqual([]);
+        expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
+        expect(f.lastEmittedSyntheticPrompt.get("sid")).toBe("card-1");
+        expect(f.closed).toEqual([]);
+        f.state.menu = null;
+        await expect(f.deliver(content)).resolves.toBe(true);
+        expect(f.bodies).toEqual([content]);
+        expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
+      });
+    }
+  }
+
+  test.each([menu, cursorMenu, confirmation])("tmux blocks a real menu before Escape, drain, paste or Enter: %s", async pane => {
+    const f = fixture();
+    f.state.menu = pane;
+    await expect(f.injectViaTmux("target:0.0", session("yes"))).rejects.toThrow("human answer");
+    expect(f.events).toEqual([]);
+  });
+
+  for (const format of [session]) {
+    test.each([menu, confirmation])(`${format.name}: full literal dialog inside the composer submits once`, async literal => {
+      const f = fixture();
+      f.state.menu = null;
+      const content = format(`Observed output:\n${literal}\nThis is quoted evidence, not an answer.`);
+      await expect(f.deliver(content)).resolves.toBe(true);
+      expect(f.bodies).toEqual([content]);
+      expect(f.events.filter((event: string) => event === "Enter")).toHaveLength(1);
+      expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
+    });
+  }
+
+  test.each([
+    '    Explanation: the help text says "? for shortcuts".',
+    '    Example input looks like ❯ ready, but this option has not been answered.',
+    '    The running view says "esc to interrupt"; this is still a choice.',
+  ])("a real menu still blocks when its explanation quotes composer text: %s", async explanation => {
+    const f = fixture();
+    f.state.menu = menu.replace("Enter to select", `${explanation}\nEnter to select`);
+    await expect(f.deliver(session("context only"))).rejects.toThrow("human answer");
+    expect(f.events).toEqual([]);
+  });
+
+  test.each([menu, confirmation])("long session message retains composer opening when quoting a dialog near its tail: %s", async literal => {
+    const f = fixture();
+    f.state.menu = null;
+    const body = `${Array.from({ length: 160 }, (_, i) => `Evidence line ${i}`).join("\n")}\n${literal}`;
+    const content = session(body);
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThan(8192);
+    await expect(f.deliver(content)).resolves.toBe(true);
+    expect(f.bodies).toEqual([content]);
+    expect(f.events.filter((event: string) => event === "Enter")).toHaveLength(1);
+    expect(f.captureSizes.some((size: number) => size > 160)).toBe(true);
+  });
+
+  test("machine structural option does not change default parser behavior", () => {
+    const f = fixture();
+    const quoted = menu.replace("Enter to select", '    Explanation: "? for shortcuts" is quoted.\nEnter to select');
+    expect(f.parseInteractivePrompt(quoted)).toBeNull();
+    expect(f.parseInteractivePrompt(quoted, true)?.options.map((option: { label: string }) => option.label)).toEqual(["Deploy", "Deny"]);
+    expect(f.parseInteractivePrompt(`${menu}\n${box()}`, true)).toBeNull();
+  });
+
+  test("human typed option and a card click press the same key", async () => {
+    const cardClick = JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Deploy" });
+    for (const answer of ["Deploy", "1", cardClick]) {
+      const f = fixture();
+      await expect(f.deliver(answer, "answer")).resolves.toBe(true);
+      expect(f.events).toEqual(["1"]);
+      expect(f.state.menu).toBeNull();
+      expect(f.pendingInteractivePrompts.has("sid")).toBe(false);
+      expect(f.closed).toHaveLength(1);
+    }
+  });
+
+  test.each(["yes", "no"])("human confirmation is preserved: %s", async answer => {
+    const f = fixture();
+    f.prompt.isConfirmation = true;
+    f.state.menu = confirmation;
+    await expect(f.deliver(answer)).resolves.toBe(true);
+    expect(f.events).toEqual([answer === "yes" ? "Enter" : "Escape"]);
+    expect(f.closed).toHaveLength(1);
+  });
+
+  test("unrelated web decisions and historical menu prose do not hold a fresh composer", async () => {
+    const f = fixture();
+    f.state.menu = null;
+    f.state.history = menu;
+    await expect(f.deliver(session("new evidence"))).resolves.toBe(true);
+    expect(f.bodies).toEqual([session("new evidence")]);
+    expect(f.closed).toHaveLength(0);
+  });
+
+  test("ordinary human prose and slash input retain their exact body", async () => {
+    for (const body of ["Please continue the investigation", "/compact"]) {
+      const f = fixture();
+      f.state.menu = null;
+      f.pendingInteractivePrompts.clear();
+      await expect(f.deliver(body)).resolves.toBe(true);
+      expect(f.bodies).toEqual([body]);
+    }
+  });
+
+  test("a busy ready composer still receives normal machine delivery without interrupting", async () => {
+    const f = fixture();
+    f.state.menu = null;
+    f.state.busy = true;
+    await expect(f.deliver(session("new context"))).resolves.toBe(true);
+    expect(f.bodies).toEqual([session("new context")]);
+    expect(f.events).not.toContain("Escape");
+  });
+
+  for (const cached of [true, false]) test.each([
+    menu,
+    menu.replace("Enter to select", '    Explanation: "? for shortcuts" is quoted.\nEnter to select'),
+    menu.replace("Enter to select", '    Explanation: "esc to interrupt" is quoted.\nEnter to select'),
+  ])(`held update releases the legacy slot for a human answer and one retry (cached=${cached}): %s`, async pane => {
+    const f = fixture("tmux", cached);
+    f.state.menu = pane;
+    const content = session("Do not Deploy yet");
+    await f.scan([{ _id: "update", content }, { _id: "answer", content: poll }]);
+    expect(f.state.menu).toBeNull();
+    expect(f.bodies).toEqual([]);
+    // The refused update is HELD (re-pended without spending a retry), the
+    // human's answer is never held, and delivering it releases the hold.
+    expect(f.events).toEqual(["hold:update", "Enter"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBe(0);
+    expect(f.deps.messagesInFlight.size).toBe(0);
+    expect(f.deps.conversationDeliveryActive.size).toBe(0);
+    expect(f.deps.tmuxTargetLocks.size).toBe(0);
+    expect(f.deps.injectedMessageTs.has("update")).toBe(false);
+    expect(f.statuses.filter((s: { status: string }) => s.status === "delivered" || s.status === "undeliverable")).toEqual([]);
+    await f.scan([{ _id: "update", content }]);
+    expect(f.bodies).toEqual([content]);
+    await f.scan([{ _id: "update", content }]);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  test("a held conversation is skipped without touching the pane until the prompt closes", async () => {
+    const f = fixture();
+    const content = session("status update");
+    await f.scan([{ _id: "held", content }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:held"]);
+    expect(f.timers.filter((t: { ms: number; cancelled: boolean }) => t.ms === 1000 && !t.cancelled)).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    const captures = f.state.captures;
+    await f.scan([{ _id: "held", content }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:held"]);
+    let redriven = 0;
+    setPendingRedrive(() => { redriven++; });
+    f.state.menu = null;
+    expect(releasePromptHold("conv")).toBe(true);
+    expect(redriven).toBe(1);
+    await f.scan([{ _id: "held", content }]);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  // Claude Code clears the screen as it boots, so a capture can land on a blank
+  // pane. That is a redraw, not a dialog: it held 29 of 39 launches for 45s
+  // behind "waiting for a human answer" (2026-09-24).
+  test("a blank capture is a short retry, never a hold for a human answer", async () => {
+    const f = fixture();
+    f.state.menu = "";
+    f.hooks.capture = () => { if (f.state.captures >= 1) f.state.menu = null; };
+    await f.scan([{ _id: "blank", content: "please continue" }]);
+    expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBe(0);
+  }, 30_000);
+
+  // Claude Code 2.1.270's effort recommendation: an unnumbered select list
+  // with no key hint footer (real capture, 2026-09-14). Its ❯ read as an idle
+  // composer, so every delivery pasted into it and wrote the message again.
+  const selectDialog = (onSecond = false) => [
+    "─".repeat(80),
+    " We recommend Opus 5 at medium effort",
+    "",
+    "   Opus 5 at medium effort is faster and uses fewer tokens. Run /effort to toggle.",
+    "",
+    `${onSecond ? "     " : "   ❯ "}Keep high`,
+    `${onSecond ? "   ❯ " : "     "}Switch Opus 5 to medium effort`,
+    "",
+  ].join("\n");
+
+  test("a human message waits behind an unnumbered select dialog instead of being pasted into it", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = selectDialog();
+    await f.scan([{ _id: "typed", content: "please continue" }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:typed"]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    // The re-pended row re-fires the scan at once; the hold keeps it off the pane.
+    const captures = f.state.captures;
+    await f.scan([{ _id: "typed", content: "please continue" }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:typed"]);
+  });
+
+  // The safeguards "Session paused" interstitial (2026-09-15). A typed
+  // message and a cast send are the same paste to the pane, so the dialog
+  // refuses and holds both; only a card answer moves its cursor.
+  const sessionPaused = [
+    " Session paused",
+    "",
+    "  Fable 5.1's safeguards flagged this message.",
+    "",
+    "  Details: `[cyber]`",
+    "",
+    "  ❯ 1. Switch to Opus 4.8",
+    "    2. Edit prompt and retry with Fable 5.1",
+    "",
+    "✻ Waiting for API response · will retry in 2m 40s · check your network",
+  ].join("\n");
+
+  test.each([["typed", "please continue"], ["sent", session("please continue")]])("a %s message is held behind the safeguards interstitial, and a card answer goes through", async (_kind, content) => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = sessionPaused;
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.events).toEqual(["hold:msg"]);
+    expect(promptHoldRemainingMs("conv")).toBeGreaterThan(0);
+    const captures = f.state.captures;
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.state.captures).toBe(captures);
+    expect(f.events).toEqual(["hold:msg"]);
+    // The card answer is never held; it closes the dialog and releases the hold.
+    f.pendingInteractivePrompts.set("sid", { ...f.prompt, options: [{ label: "Switch to Opus 4.8" }, { label: "Edit prompt and retry with Fable 5.1" }] });
+    await f.scan([{ _id: "answer", content: poll }]);
+    expect(f.state.menu).toBeNull();
+    expect(promptHoldRemainingMs("conv")).toBe(0);
+    await f.scan([{ _id: "msg", content }]);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  test("a card answer walks the highlight of an unnumbered select dialog, then confirms", async () => {
+    const f = fixture();
+    f.prompt.options = [{ label: "Keep high" }, { label: "Switch Opus 5 to medium effort" }];
+    f.state.menu = selectDialog();
+    // Digits do nothing in this widget; only the arrows move its highlight.
+    f.hooks.input = (event: string) => { if (event === "Down" && f.state.menu) f.state.menu = selectDialog(true); };
+    const answer = JSON.stringify({ __cc_poll: true, keys: ["2"], display: "Switch Opus 5 to medium effort" });
+    await expect(f.deliver(answer, "answer")).resolves.toBe(true);
+    expect(f.events).toEqual(["Down", "Enter"]);
+    expect(f.state.menu).toBeNull();
+    expect(f.closed).toHaveLength(1);
+  });
+
+  test("historical menu above ready composer still rejects stale human poll keys", async () => {
+    const f = fixture();
+    f.state.menu = null;
+    f.state.history = menu;
+    await expect(f.deliver(poll, "stale-answer")).resolves.toBe(true);
+    expect(f.events).toEqual([]);
+    expect(f.bodies).toEqual([]);
+  });
+
+  test.each(["before Escape", "before paste", "before Enter"])("fresh tmux recheck blocks a newly opened menu %s", async stage => {
+    const f = fixture();
+    f.state.menu = null;
+    if (stage === "before Escape") f.hooks.capture = () => { if (f.state.captures === 1) f.state.menu = menu; };
+    if (stage === "before paste") f.hooks.loaded = () => { f.state.menu = menu; };
+    if (stage === "before Enter") f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
+    await expect(f.deliver(session("preserve this"))).rejects.toThrow("human answer");
+    expect(f.events).not.toContain("Enter");
+    if (stage !== "before Enter") expect(f.events).not.toContain("paste");
+    if (stage === "before Escape") expect(f.events).toEqual([]);
+  });
+
+  test("failed capture keeps the body retryable and a later fresh capture recovers", async () => {
+    const f = fixture();
+    f.state.captureFailure = true;
+    await expect(f.deliver(session("yes"))).rejects.toThrow("terminal capture failed");
+    expect(f.events).toEqual([]);
+    f.state.captureFailure = false;
+    f.state.menu = null;
+    await expect(f.deliver(session("yes"))).resolves.toBe(true);
+    expect(f.bodies).toEqual([session("yes")]);
+  });
+
+  test("a hold cannot fall through a paste fallback, but a new attempt captures afresh", async () => {
+    const f = fixture();
+    let captures = 0;
+    const capture = async () => captures++ === 0 ? menu : box();
+    const guard = f.inputGuard(capture);
+    await expect(guard()).rejects.toThrow("human answer");
+    await expect(guard()).rejects.toThrow("human answer");
+    expect(captures).toBe(1);
+    await expect(f.inputGuard(capture)()).resolves.toBeUndefined();
+    expect(captures).toBe(2);
+  });
+
+  test("fast resume propagates a menu hold, then reuses the same pane after a human answer", async () => {
+    const f = fixture();
+    const content = session("Do not Deploy yet");
+    await expect(f.autoResumeSessionInner("sid", content, {}, undefined, "conv", "claude")).rejects.toThrow("human answer");
+    expect(f.events).toEqual([]);
+    expect(f.deps.tmuxTargetLocks.size).toBe(0);
+    await f.deliver(poll, "answer");
+    await expect(f.autoResumeSessionInner("sid", content, {}, undefined, "conv", "claude")).resolves.toBe(true);
+    expect(f.bodies).toEqual([content]);
+  });
+
+  test.each([0, 1, 2, 3])("resume propagation catch %s rethrows the exact hold and preserves ordinary fallback", async index => {
+    const f = fixture();
+    const error = new f.InputBlockedError("fixture menu");
+    await expect(f.propagation[index](error)).rejects.toBe(error);
+    await expect(f.propagation[index](new Error("ordinary failure"))).resolves.toBe(index === 3 ? false : "fallback");
+    expect(f.events).toEqual([]);
+  });
+
+  test.each([
+    menu,
+    confirmation,
+    menu.replace("Enter to select", '    Explanation: "? for shortcuts" is quoted.\nEnter to select'),
+    menu.replace("Enter to select", '    Error text: command not found\nEnter to select'),
+    menu.replace("Enter to select", '    Exit text: Resume this session with:\nEnter to select'),
+  ])("startup capture releases a real menu hold immediately: %s", async pane => {
+    const f = fixture();
+    f.state.menu = pane;
+    await expect(f.resumeReadiness(session("context"))).rejects.toThrow("human answer");
+    expect(f.state.captures).toBe(1);
+    expect(f.events).toEqual([]);
+    f.state.menu = null;
+    f.state.history = menu;
+    await expect(f.resumeReadiness(session("context"))).resolves.toBe(true);
+    await expect(f.resumeReadiness("human prose")).resolves.toBe(true);
+  });
+
+  test("startup warning Escape checks fresh menu evidence and propagates a hold", async () => {
+    const f = fixture();
+    f.state.menu = `Update available\n${box()}`;
+    f.hooks.capture = () => { if (f.state.captures === 1) f.state.menu = confirmation; };
+    await expect(f.resumeWarnings(session("context"))).rejects.toThrow("human answer");
+    expect(f.state.captures).toBe(2);
+    expect(f.events).toEqual([]);
+  });
+
+  test("ordinary startup warnings retain their existing Escape behavior", async () => {
+    const f = fixture();
+    f.state.menu = `Update available\n${box()}`;
+    f.hooks.input = (event: string) => { if (event === "Escape") f.state.menu = null; };
+    await f.resumeWarnings("human prose");
+    expect(f.events).toEqual(["Escape"]);
+  });
+
+  test("started-pane machine callback precedes the trust path without altering default probes", async () => {
+    const f = fixture("tmux", false);
+    // A held prompt, not a folder-trust dialog: assertPromptAbsent returns
+    // early for trust (the launch path answers it with acceptTrustPrompt), so
+    // trust is the one dialog that never parks a delivery.
+    f.state.menu = menu;
+    await expect(f.deliver(session("context"))).rejects.toThrow("human answer");
+    expect(f.events).toEqual([]);
+    expect(f.statuses).toEqual([]);
+    const entry = f.deps.startedSessionTmux.get("conv");
+    f.state.menu = menu;
+    await expect(f.probeStartedPane(entry)).resolves.toMatchObject({ state: "ready" });
+    await expect(f.probeStartedPane(entry, f.assertPromptAbsent)).rejects.toThrow("human answer");
+  });
+
+  for (const transport of ["kitty", "WezTerm", "iTerm.app", "Apple_Terminal"]) {
+    for (const format of [session]) test.each([menu, confirmation])(`${transport}: ${format.name} literal dialog stays composer text: %s`, async literal => {
+      const f = fixture(transport);
+      f.state.menu = null;
+      const content = format(`Captured output:\n${literal}\nEnd of quoted evidence.`);
+      await expect(f.deliver(content)).resolves.toBe(true);
+      expect(f.bodies).toEqual([content]);
+      expect(f.events).toEqual(["paste", "Enter"]);
+      expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
+    });
+
+    test(`${transport}: live menu holds without input or resume; ready composer recovers`, async () => {
+      const f = fixture(transport);
+      const content = session("Do not Deploy yet");
+      await expect(f.deliver(content)).rejects.toThrow("human answer");
+      expect(f.events).toEqual([]);
+      expect(f.pendingInteractivePrompts.get("sid")).toBe(f.prompt);
+      expect(f.closed).toEqual([]);
+      f.state.menu = null;
+      f.state.history = menu;
+      await expect(f.deliver(content)).resolves.toBe(true);
+      expect(f.bodies).toEqual([content]);
+      expect(f.events).toEqual(["paste", "Enter"]);
+    });
+
+    test(`${transport}: explicit human poll keeps its existing input path without capture`, async () => {
+      const f = fixture(transport);
+      f.state.captureFailure = true;
+      await expect(f.deliver(poll, "answer")).resolves.toBe(true);
+      expect(f.state.captures).toBe(0);
+      expect(f.closed).toHaveLength(1);
+      expect(f.events).toEqual(transport === "iTerm.app" || transport === "Apple_Terminal" ? ["poll-script"] : ["Enter"]);
+    });
+
+    test(`${transport}: a capture failure preserves pending input`, async () => {
+      const f = fixture(transport);
+      f.state.captureFailure = true;
+      await expect(f.deliver(session("yes"))).rejects.toThrow("terminal capture failed");
+      expect(f.events).toEqual([]);
+    });
+  }
+
+  test.each(["kitty", "WezTerm", "iTerm.app"])("%s rechecks after paste before submitting", async transport => {
+    const f = fixture(transport);
+    f.state.menu = null;
+    f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
+    await expect(f.deliver(session("preserve"))).rejects.toThrow("human answer");
+    expect(f.events).toEqual(["paste"]);
+  });
+
+  test("AppleScript defaults preserve human submit and explicit poll scripts", () => {
+    const f = fixture();
+    const human = f.buildAppleScript("iTerm2", "/dev/ttys-test", "hello", null);
+    expect(human.script).toContain('tell s to write text ""');
+    const answer = f.buildAppleScript("iTerm2", "/dev/ttys-test", poll, f.parsePollMessage(poll));
+    expect(answer.script).toContain('tell s to write text "Enter" without newline');
+    const machinePaste = f.buildAppleScript("iTerm2", "/dev/ttys-test", session("hello"), null, false, true, false);
+    expect(machinePaste.script).not.toContain('tell s to write text ""');
+  });
+
+  // A session launched with its first message as the prompt argument: delivery
+  // confirms that message from the transcript and never puts it in the composer.
+  describe("a message the launch command carried", () => {
+    const userRow = JSON.stringify({ type: "user", message: { role: "user", content: "the brief" } });
+    const carry = (f: ReturnType<typeof fixture>, opts: { taken?: boolean; age?: number } = {}) => {
+      const transcript = path.join(f.directory, "sid.jsonl");
+      if (opts.taken) fs.writeFileSync(transcript, `${JSON.stringify({ type: "mode", mode: "normal" })}\n${userRow}\n`);
+      f.launchPromptCarries.set("update", { conversationId: "conv", tmuxSession: "target", projectPath: f.directory, sessionId: "sid", transcript, startedAt: f.clock.now - (opts.age ?? 0) });
+    };
+
+    test.each([true, false])("is delivered by its transcript row, not a paste (session linked: %s)", async cached => {
+      const f = fixture("tmux", cached);
+      f.state.menu = null;
+      carry(f, { taken: true });
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.events).toEqual([]);
+      expect(f.launchPromptCarries.size).toBe(0);
+    });
+
+    test("is not pasted by a delivery that was already waiting for the session to start", async () => {
+      const f = fixture("tmux", false);
+      f.state.menu = null;
+      // The start registers the carry after delivery's first admission, while
+      // delivery is still reading the pane for readiness.
+      f.hooks.capture = () => { if (!f.launchPromptCarries.size) carry(f, { taken: true }); };
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.events).toEqual([]);
+      expect(f.bodies).toEqual([]);
+    });
+
+    test("is held while the agent is still booting, and pasted by nobody", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      carry(f);
+      await expect(f.deliver("the brief")).rejects.toThrow("AGENT_STDIN_NOT_READY");
+      expect(f.events).toEqual([]);
+      expect(f.launchPromptCarries.size).toBe(1);
+    }, 60_000);
+
+    test("goes back to the composer when the launch died", async () => {
+      const f = fixture();
+      f.state.menu = "zsh: command not found: claude";
+      carry(f);
+      await expect(f.deliver("the brief")).resolves.toBe(false);
+      expect(f.events).toEqual([]);
+      f.state.menu = null;
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.bodies).toEqual(["the brief"]);
+    });
+
+    test("goes back to the composer once the carry has lapsed", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      carry(f, { age: 11 * 60_000 });
+      await expect(f.deliver("the brief")).resolves.toBe(true);
+      expect(f.bodies).toEqual(["the brief"]);
+    });
+  });
+
+  describe("delivery budget and write cap", () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    test("a timed-out attempt keeps its slot until it settles, so a retry never writes over it", async () => {
+      // A 157 KB prompt typed for 7 minutes was timed out at 3 and retried
+      // over itself; the pane got a second copy (jx7b88a, 2026-10-05).
+      const f = fixture();
+      f.state.menu = null;
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>(resolve => { releaseHang = resolve; });
+      let writes = 0;
+      f.hooks.exec = async (args: string[]) => {
+        if (args[0] === "send-keys" && args.includes("-l")) { writes++; await hang; }
+      };
+      const first = f.scan([{ _id: "update", content: "continue" }]);
+      for (let i = 0; i < 20 && writes === 0; i++) await tick();
+      expect(writes).toBe(1);
+      const budget = f.timers.find((t: any) => t.ms === deliveryTimeoutMsFor("continue", undefined, 180_000));
+      expect(budget).toBeDefined();
+      await budget!.fn();
+      await first;
+      // The retry is scheduled, not yet fired: the slot is still held.
+      const retry = f.timers.find((t: any) => t.ms === 1000 && !t.cancelled);
+      expect(retry).toBeDefined();
+      expect(f.deps.messagesInFlight.has("update")).toBe(true);
+      await retry!.fn();
+      expect(f.events).toEqual(["retry:update"]);
+      expect(f.bodies).toEqual([]);
+      // The retry re-pends the row; the scan finds the attempt still in flight.
+      await f.scan([{ _id: "update", content: "continue", retry_count: 1 }]);
+      expect(writes).toBe(1);
+      expect(f.deps.messagesInFlight.has("update")).toBe(true);
+      releaseHang();
+      for (let i = 0; i < 50 && f.deps.messagesInFlight.has("update"); i++) await tick();
+      expect(f.bodies).toEqual(["continue"]);
+      expect(f.deps.messagesInFlight.has("update")).toBe(false);
+      expect(f.deps.conversationDeliveryActive.has("conv")).toBe(false);
+    });
+
+    test("a message the pane took the capped number of times is cancelled and said in the session", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3); };
+      const cancelled: string[] = [];
+      const rows: any[] = [];
+      f.deps.syncService.cancelPendingMessage = async (id: string) => { cancelled.push(id); };
+      f.deps.syncService.addMessage = async (row: any) => { rows.push(row); return "row-1"; };
+      await f.scan([{ _id: "update", content: "continue" }]);
+      expect(f.bodies).toEqual([]);
+      expect(cancelled).toEqual(["update"]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ conversationId: "conv", role: "system", subtype: "delivery_failed" });
+      expect(rows[0].content).toContain("written into its terminal 3 times");
+      expect(rows[0].content).toContain("continue");
+      expect(f.events.filter((e: string) => /^(retry|hold):/.test(e))).toEqual([]);
+      expect(f.deps.messagesInFlight.size).toBe(0);
+    });
+  });
+});

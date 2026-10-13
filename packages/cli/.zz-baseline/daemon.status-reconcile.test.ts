@@ -1,0 +1,795 @@
+import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, awaitRecentSessionFile, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked, trackSessionPaneForTests } from "./daemon.js";
+import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import type { TranscriptTurnState } from "./daemon.js";
+import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
+
+// Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
+// re-surfaced via session jx770k5 (2026-05-24). The status hook is a last-write-wins
+// latch; when a terminal transition is lost end-to-end the daemon's local
+// lastSentAgentStatus freezes and the heartbeat re-broadcasts the wrong value
+// forever. We reconcile it against the JSONL transcript -- the universal ground
+// truth that exists for every session (tmux-managed or bare-terminal alike).
+//
+// The contract is "can never be wrong in either direction": correct ONLY on a
+// positive structural signal, defer (null / "unknown") on anything ambiguous.
+
+// Fixtures mirror the real Claude JSONL shape observed on disk.
+const asst = (stop_reason: string | null) =>
+  JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "hi" }] } });
+const userMsg = (kind: "prompt" | "tool_result") =>
+  JSON.stringify({ type: "user", message: { role: "user", content: [{ type: kind === "tool_result" ? "tool_result" : "text" }] } });
+const sysMeta = () => JSON.stringify({ type: "system", subtype: "hook", content: [] });
+// The synthetic control message Claude Code appends when the user interrupts a
+// turn. Both on-disk shapes occur: a text content-block array, and a raw string.
+const interruptMsg = (shape: "block" | "string" = "block", text = "[Request interrupted by user]") =>
+  JSON.stringify({ type: "user", message: { role: "user", content: shape === "string" ? text : [{ type: "text", text }] } });
+
+describe("classifyTranscriptTail", () => {
+  test("last assistant turn ended -> idle", () => {
+    expect(classifyTranscriptTail(asst("end_turn"))).toBe("idle");
+    expect(classifyTranscriptTail(asst("stop_sequence"))).toBe("idle");
+    expect(classifyTranscriptTail(asst("max_tokens"))).toBe("idle");
+  });
+
+  test("mid-turn (pending tool_use) -> active", () => {
+    expect(classifyTranscriptTail(asst("tool_use"))).toBe("active");
+  });
+
+  test("ball in the agent's court (user prompt or tool_result) -> active", () => {
+    expect(classifyTranscriptTail(userMsg("prompt"))).toBe("active");
+    expect(classifyTranscriptTail(userMsg("tool_result"))).toBe("active");
+  });
+
+  test("trailing interrupt control message -> idle, not active (the bare-terminal bug)", () => {
+    // The user pressed ESC mid-turn; the agent is parked at the prompt. Reading
+    // this as "active" is what latched interrupted bare-terminal sessions in
+    // "working" forever (the reconcile heartbeat re-derived active every cycle).
+    expect(classifyTranscriptTail(interruptMsg("block"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string", "[Request cancelled]"))).toBe("idle");
+    // Trailing system/meta after the interrupt (mode / permission-mode lines that
+    // Claude Code writes last) must not hide it.
+    expect(classifyTranscriptTail([interruptMsg("block"), sysMeta()].join("\n"))).toBe("idle");
+  });
+
+  test("interrupt detection does not misfire on a real prompt that merely mentions one", () => {
+    // A genuine user prompt is still the agent's move, even if its text discusses
+    // interrupts — only a leading control marker counts.
+    expect(classifyTranscriptTail(interruptMsg("string", "fix the [Request interrupted] handling"))).toBe("active");
+  });
+
+  test("skips trailing system/meta lines to find the last real turn", () => {
+    // The exact b09ad864 shape: an end_turn assistant turn followed by a system line.
+    expect(classifyTranscriptTail([asst("end_turn"), sysMeta()].join("\n"))).toBe("idle");
+    expect(classifyTranscriptTail([asst("tool_use"), sysMeta(), sysMeta()].join("\n"))).toBe("active");
+  });
+
+  test("skips a partial/corrupt final line (mid-write tail)", () => {
+    expect(classifyTranscriptTail([asst("end_turn"), '{"type":"assist'].join("\n"))).toBe("idle");
+  });
+
+  test("streaming / unrecognized stop_reason -> unknown (defer)", () => {
+    expect(classifyTranscriptTail(asst(null))).toBe("unknown");
+    expect(classifyTranscriptTail(asst("pause_turn"))).toBe("unknown");
+  });
+
+  test("no parseable real message -> unknown (defer)", () => {
+    expect(classifyTranscriptTail("")).toBe("unknown");
+    expect(classifyTranscriptTail([sysMeta(), sysMeta()].join("\n"))).toBe("unknown");
+    expect(classifyTranscriptTail("not json at all")).toBe("unknown");
+  });
+});
+
+describe("isInterruptControlMessage", () => {
+  test("matches the interrupt/cancel control markers (leading, after trim)", () => {
+    expect(isInterruptControlMessage("[Request interrupted by user]")).toBe(true);
+    expect(isInterruptControlMessage("[Request interrupted by user for tool use]")).toBe(true);
+    expect(isInterruptControlMessage("[Request cancelled]")).toBe(true);
+    expect(isInterruptControlMessage("  \n[Request interrupted by user]")).toBe(true);
+  });
+  test("does not match ordinary prompts or empty/nullish input", () => {
+    expect(isInterruptControlMessage("please continue")).toBe(false);
+    expect(isInterruptControlMessage("see [Request interrupted] note")).toBe(false);
+    expect(isInterruptControlMessage("")).toBe(false);
+    expect(isInterruptControlMessage(null)).toBe(false);
+    expect(isInterruptControlMessage(undefined)).toBe(false);
+  });
+});
+
+// End-to-end: the exact bug. A bare-terminal session latched at "working" whose
+// transcript ends in a user interrupt must reconcile to "idle" — which is what
+// lets the server/web route it into NEEDS INPUT. Before the fix the interrupt
+// read as "active" and reconciledStatus left it (or flipped it back to) working.
+describe("interrupted bare-terminal session reconciles to idle (the full chain)", () => {
+  test("working + interrupt tail -> idle", () => {
+    const turn = classifyTranscriptTail([asst("tool_use"), interruptMsg("block")].join("\n"));
+    expect(turn).toBe("idle");
+    expect(reconciledStatus("working", turn)).toBe("idle");
+  });
+  test("once idle, the interrupt tail no longer flips it back to working", () => {
+    const turn = classifyTranscriptTail(interruptMsg("string"));
+    expect(reconciledStatus("idle", turn)).toBeNull();
+  });
+});
+
+// Codex has no Stop-hook equivalent and its watcher-driven idle transition rides a
+// setTimeout that dies across macOS sleep, so the heartbeat-driven transcript
+// reconcile is its only durable latch recovery. These fixtures mirror the real
+// ~/.codex rollout JSONL shape (event_msg turn-boundary records).
+const codexEvt = (type: string) => JSON.stringify({ type: "event_msg", payload: { type } });
+const codexResp = (ptype: string) => JSON.stringify({ type: "response_item", payload: { type: ptype } });
+
+describe("classifyCodexTranscriptTail", () => {
+  test("turn completed -> idle (the latched-working case)", () => {
+    expect(classifyCodexTranscriptTail(codexEvt("task_complete"))).toBe("idle");
+    expect(classifyCodexTranscriptTail(codexEvt("turn_aborted"))).toBe("idle");
+  });
+
+  test("turn in flight (task_started / fresh user_message) -> active", () => {
+    expect(classifyCodexTranscriptTail(codexEvt("task_started"))).toBe("active");
+    expect(classifyCodexTranscriptTail(codexEvt("user_message"))).toBe("active");
+  });
+
+  test("scans past intra-turn noise to the last boundary event", () => {
+    // Real tail shape: a completed turn trailed by token_count / agent_message /
+    // response_item deltas — must still read as idle.
+    expect(classifyCodexTranscriptTail([
+      codexEvt("task_started"),
+      codexResp("function_call"),
+      codexEvt("agent_message"),
+      codexEvt("task_complete"),
+      codexEvt("token_count"),
+      codexResp("message"),
+    ].join("\n"))).toBe("idle");
+  });
+
+  test("a new turn after a completed one reads as active", () => {
+    expect(classifyCodexTranscriptTail([
+      codexEvt("task_complete"),
+      codexEvt("user_message"),
+      codexEvt("task_started"),
+    ].join("\n"))).toBe("active");
+  });
+
+  test("no boundary event / unparseable -> unknown (defer)", () => {
+    expect(classifyCodexTranscriptTail("")).toBe("unknown");
+    expect(classifyCodexTranscriptTail([codexResp("reasoning"), codexEvt("token_count")].join("\n"))).toBe("unknown");
+    expect(classifyCodexTranscriptTail("not json")).toBe("unknown");
+  });
+});
+
+describe("reconciledStatus", () => {
+  test("active + ended turn -> idle (the lost-Stop-hook case)", () => {
+    expect(reconciledStatus("working", "idle")).toBe("idle");
+    expect(reconciledStatus("thinking", "idle")).toBe("idle");
+  });
+
+  test("NEVER flips a genuinely mid-turn session to idle", () => {
+    // A long tool run reads as active. Flipping it to idle would make it eligible
+    // for the auto-kill -> wrongful kill. AskUserQuestion-blocked is also active.
+    expect(reconciledStatus("working", "active")).toBeNull();
+    expect(reconciledStatus("thinking", "active")).toBeNull();
+  });
+
+  test("quiet + mid-turn -> working (inverse: a lost activity hook)", () => {
+    expect(reconciledStatus("idle", "active")).toBe("working");
+    expect(reconciledStatus("connected", "active")).toBe("working");
+  });
+
+  test("no correction when the transcript already agrees", () => {
+    expect(reconciledStatus("idle", "idle")).toBeNull();
+    expect(reconciledStatus("working", "active")).toBeNull();
+    expect(reconciledStatus("connected", "idle")).toBeNull();
+  });
+
+  test("defers on unknown turn state in both directions", () => {
+    expect(reconciledStatus("working", "unknown")).toBeNull();
+    expect(reconciledStatus("idle", "unknown")).toBeNull();
+  });
+
+  test("never touches statuses owned by other code paths", () => {
+    const turns: TranscriptTurnState[] = ["idle", "active", "unknown"];
+    for (const stored of ["permission_blocked", "resuming", "compacting", "stopped"] as const) {
+      for (const turn of turns) expect(reconciledStatus(stored, turn)).toBeNull();
+    }
+    for (const turn of turns) expect(reconciledStatus(undefined, turn)).toBeNull();
+  });
+});
+
+// Pane-state reconcile: the tmux counterpart that fixes the jx770k5 holdout — a
+// finished agent sitting at an idle prompt whose status was latched at "working"
+// (lost Stop hook + a daemon restart that wiped lastSentAgentStatus, after which
+// the heartbeat re-asserted the server's stale "working" forever). The transcript
+// can't catch this (the killed-mid-tool turn reads "active"); the live pane can.
+describe("paneReconcileTarget", () => {
+  test("idle pane + stale-active status -> idle (the latch fix)", () => {
+    expect(paneReconcileTarget("idle", "working")).toBe("idle");
+    expect(paneReconcileTarget("idle", "thinking")).toBe("idle");
+    expect(paneReconcileTarget("idle", "connected")).toBe("idle");
+  });
+
+  test("idle pane + post-restart unknown status -> idle (the b09ad864 case)", () => {
+    // After a daemon restart the in-memory latch is empty; the pane is the only
+    // signal left, and it says idle.
+    expect(paneReconcileTarget("idle", undefined)).toBe("idle");
+  });
+
+  test("busy pane + quiet/unknown status -> working (inverse: lost activity hook)", () => {
+    expect(paneReconcileTarget("busy", "idle")).toBe("working");
+    expect(paneReconcileTarget("busy", "connected")).toBe("working");
+    expect(paneReconcileTarget("busy", undefined)).toBe("working");
+  });
+
+  test("stored idle re-derives on an idle pane (the waiting climb-back)", () => {
+    // A false task-death verdict (a stale cached agent pid condemning live
+    // watchers) collapses waiting -> idle; the caller maps this "idle" through
+    // resolveTurnEndStatus, which re-checks open tasks and can climb back to
+    // "waiting". A no-change answer publishes nothing, so agreeing stays cheap.
+    expect(paneReconcileTarget("idle", "idle")).toBe("idle");
+  });
+
+  test("no correction when a busy pane already agrees", () => {
+    expect(paneReconcileTarget("busy", "working")).toBeNull();
+    expect(paneReconcileTarget("busy", "thinking")).toBeNull();
+  });
+
+  // ct-56131: a spawned worker two hours into ONE turn, inside a long Bash
+  // call. Claude Code 2.1.287 prints no "esc to interrupt", so the status line
+  // is the pane's only sign of the turn, and past an hour its elapsed time
+  // gains an hour part. The pane read idle, the reconcile settled the session,
+  // and the worker's parent was told it had ended its turn eleven times. The
+  // pane below is that worker's capture with its text replaced.
+  describe("a turn that has run for more than an hour", () => {
+    const paneAt = (statusLine: string) => `⏺ Probing the page state and taking a screenshot · 16s
+  ⎿  $ cast browser eval --stdin <<'EOF' 2>&1 | tail -2
+     (() => { const st = window.__inboxStore && window.__inboxStore.getState(); return { hasStore: !!st }; })()… (7s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+${statusLine}
+
+────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────
+  session 18%, resets in 3h 41m · week 9%, resets in 3d 16h
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+    const stateOf = (statusLine: string) => classifyTmuxLiveState(extractTmuxLiveRegion(paneAt(statusLine)));
+
+    test("stays working mid-turn, whatever units the elapsed time carries", () => {
+      for (const elapsed of ["50s", "59m 59s", "1h 0m 0s", "2h 2m 38s", "1d 3h 12m"]) {
+        const state = stateOf(`✶ Clauding… (${elapsed} · ↓ 109.4k tokens)`);
+        expect(state).toBe("busy");
+        expect(paneReconcileTarget(state, "working")).toBeNull();
+      }
+    });
+
+    test("a session already settled by the false idle climbs back to working", () => {
+      expect(paneReconcileTarget(stateOf("✶ Clauding… (2h 2m 38s · ↓ 109.4k tokens)"), "idle")).toBe("working");
+    });
+
+    test("the real end of that turn still settles", () => {
+      const state = stateOf("✻ Churned for 2h 2m 51s · done 9:59 PM");
+      expect(state).toBe("idle");
+      expect(paneReconcileTarget(state, "working")).toBe("idle");
+    });
+  });
+
+  // The "stuck working" inbox bug: a tmux session parked on a buffered
+  // AskUserQuestion. Claude Code hides the question's tool_use from the JSONL until
+  // answered, so the transcript can't see it — only the pane can. The pane reconcile
+  // is the authority and recovers a permission_blocked latch ONCE THE MENU IS GONE.
+  // (Its sole caller runs it only after parseInteractivePrompt confirmed no menu, and
+  // a live menu classifies as rewind/unknown anyway — never idle/busy — so this can
+  // never clear a still-open prompt.)
+  test("idle pane + permission_blocked -> idle (question answered, agent finished, resume hook lost)", () => {
+    expect(paneReconcileTarget("idle", "permission_blocked")).toBe("idle");
+  });
+  test("busy pane + permission_blocked -> working (question answered, agent resumed)", () => {
+    expect(paneReconcileTarget("busy", "permission_blocked")).toBe("working");
+  });
+  test("a live menu (rewind/unknown pane) never clears permission_blocked", () => {
+    // While the AskUserQuestion menu is up the pane never reads idle/busy, so the
+    // block stays put — the agent is genuinely waiting on the user.
+    for (const state of ["rewind", "interrupted", "warning", "unknown"] as const) {
+      expect(paneReconcileTarget(state, "permission_blocked")).toBeNull();
+    }
+  });
+
+  test("never overrides statuses owned by other code paths", () => {
+    // resuming / a terminal "stopped" must never be stomped by the pane reconcile.
+    for (const stored of ["resuming", "stopped"] as const) {
+      expect(paneReconcileTarget("idle", stored)).toBeNull();
+      expect(paneReconcileTarget("busy", stored)).toBeNull();
+    }
+  });
+
+  test("defers on modal / exited / unknown panes", () => {
+    for (const state of ["interrupted", "rewind", "warning", "exited", "unknown"] as const) {
+      expect(paneReconcileTarget(state, "working")).toBeNull();
+      expect(paneReconcileTarget(state, undefined)).toBeNull();
+    }
+  });
+});
+
+// grok's ❯ composer stays visible for the whole turn, and its busy chrome
+// (header spinner, "Waiting for response… [stop]", footer "Esc:cancel") sits
+// OUTSIDE extractTmuxLiveRegion's tail — so the claude-chrome classifier reads a
+// BUSY grok pane as "idle". reconcileStatusFromPane therefore skips
+// GLYPHLESS_PROMPT_CLIENTS entirely (their settle is transcript-driven), and
+// every pane site that knows its client (the reaper's idle gates) classifies
+// through classifyLivePaneFor, whose busy-first whole-pane order can't be lied
+// to. Pane layout from the live v1.0.5 capture (2026-08-26).
+describe("classifyLivePaneFor — grok's lying ❯ glyph", () => {
+  const W = 118;
+  const busyGrokPane = [
+    "/private/tmp/grok-live   ⠼ MCP (0/1) │ 7.4K / 500K",
+    "",
+    "● I'll look at that file now.",
+    "",
+    "⠧ Waiting for response… 4s                                              12s ⇣1k [stop]",
+    "╭" + "─".repeat(W) + "╮",
+    "│ ❯ " + " ".repeat(W - 3) + "│",
+    "╰─ Grok 4.6 (high) " + "─".repeat(W - 19) + "╯",
+    "Shift+Tab:mode  │  Esc:cancel  │  Ctrl+x:shortcuts",
+  ].join("\n");
+  const idleGrokPane = [
+    "/private/tmp/grok-live   MCP (0/1) │ 7.4K / 500K",
+    "",
+    "● Done — the file is created.",
+    "",
+    "╭" + "─".repeat(W) + "╮",
+    "│ ❯ " + " ".repeat(W - 3) + "│",
+    "╰─ Grok 4.6 (high) " + "─".repeat(W - 19) + "╯",
+    "Shift+Tab:mode  │  Ctrl+x:shortcuts",
+  ].join("\n");
+
+  test("the claude-chrome path misreads the busy pane as idle (why grok must never route there)", () => {
+    // The live region crops the spinner/[stop] row away and keeps the ❯ line.
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(busyGrokPane))).toBe("idle");
+  });
+
+  test("classifyLivePaneFor('grok') reads busy-first and can't be lied to", () => {
+    expect(classifyLivePaneFor("grok", busyGrokPane)).toBe("busy");
+    expect(classifyLivePaneFor("grok", idleGrokPane)).toBe("idle");
+  });
+
+  test("non-glyphless clients keep the claude-chrome whitelist unchanged", () => {
+    expect(classifyLivePaneFor("claude", "❯ ")).toBe(classifyTmuxLiveState("❯ "));
+    expect(classifyLivePaneFor("claude", "⠧ thinking… (esc to interrupt)")).toBe("busy");
+  });
+
+  test("glyphlessPromptPattern: registry pattern for the whole-pane clients, null otherwise", () => {
+    for (const c of ["opencode", "pi", "grok"] as const) {
+      expect(glyphlessPromptPattern(c)).toBe(AGENT_CLIENTS[c].promptReadyPattern);
+    }
+    expect(glyphlessPromptPattern("claude")).toBeNull();
+    expect(glyphlessPromptPattern("codex")).toBeNull();
+    expect(glyphlessPromptPattern(undefined)).toBeNull();
+  });
+});
+
+describe("warm-restart session id recovery", () => {
+  test("recovers the real transcript session id from a conversation-tagged tmux", () => {
+    const cache = {
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039": "jx75mtdncevqqf6esgrmja255587w9pn",
+      "b66907ab-bf95-445f-ba0b-df9c4933d41b": "jx7dtgcj63bmrg09g8dvzx974587x61d",
+    };
+
+    expect(findCachedSessionIdForConversation(cache, "jx75mtdncevqqf6esgrmja255587w9pn")).toBe(
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039",
+    );
+    expect(findCachedSessionIdForConversation(cache, "missing")).toBeUndefined();
+  });
+
+  // A resume of a workflow subagent copies its JSONL to a UUID and remaps the
+  // conversation, keeping the agent-* id as an alias so leftover transcript
+  // copies re-bind instead of minting an unparented duplicate (the 2026-07-16
+  // "Atomic tools" inbox flood). Reverse resolution must return the live UUID,
+  // never the dead alias, or delivery re-resumes the stale file forever.
+  test("prefers the live UUID binding over a non-UUID alias of the same conversation", () => {
+    const conv = "jx75k736p0wjt2zws52xe3km2x8anne3";
+    const cache = {
+      "agent-a920233e1ad3a0d16": conv,
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec": conv,
+    };
+    expect(findCachedSessionIdForConversation(cache, conv)).toBe(
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec",
+    );
+    // Order-independent: the alias may sit after the UUID in insertion order.
+    const reversed = {
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec": conv,
+      "agent-a920233e1ad3a0d16": conv,
+    };
+    expect(findCachedSessionIdForConversation(reversed, conv)).toBe(
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec",
+    );
+  });
+
+  test("preferLiveSessionId: UUID beats alias, later wins among same shape", () => {
+    const uuid1 = "7a6530fe-dce6-4274-bf99-8a8250b919ec";
+    const uuid2 = "66054120-7d6d-4cf9-ae93-755b549625bf";
+    expect(preferLiveSessionId(undefined, "agent-a920233e1ad3a0d16")).toBe("agent-a920233e1ad3a0d16");
+    expect(preferLiveSessionId(uuid1, "agent-a920233e1ad3a0d16")).toBe(uuid1);
+    expect(preferLiveSessionId("agent-a920233e1ad3a0d16", uuid1)).toBe(uuid1);
+    // Repeated remaps (repair materialization) bind newer UUIDs later.
+    expect(preferLiveSessionId(uuid1, uuid2)).toBe(uuid2);
+  });
+});
+
+// Distinct workflow agents share their first 8 chars ("agent-a9..."), so the old
+// 8-char resume tmux naming collapsed them onto one cc-resume-* session and each
+// resume killed the other's pane. UUIDs keep the conventional 8-char prefix.
+describe("resumeShortId", () => {
+  test("does not collide prefixed session ids", () => {
+    expect(resumeShortId("agent-a920233e1ad3a0d16")).not.toBe(resumeShortId("agent-a9b62ebc367b5ffa6"));
+    expect(resumeShortId("66054120-7d6d-4cf9-ae93-755b549625bf")).toBe("66054120");
+  });
+});
+
+// The auto-resume path used findSessionFile to locate a transcript before falling
+// back to Convex reconstitution; it never probed the subagents/ layouts, so every
+// workflow-agent resume reconstituted a synthetic top-level JSONL (the raw
+// material of the duplicate-conversation bug above).
+describe("findSessionFile subagent layouts", () => {
+  test("finds Agent-tool and Workflow-tool transcripts under a parent session dir", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-find-session-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const parentDir = path.join(
+        tmpHome, ".claude", "projects", "-Users-x-proj",
+        "0c25e223-db89-44dd-b7c2-a14b21298e4d",
+      );
+      const subagentsDir = path.join(parentDir, "subagents");
+      const wfDir = path.join(subagentsDir, "workflows", "wf_adebb5af-f7d");
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(subagentsDir, "agent-abc123.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"), "{}\n");
+
+      expect(findSessionFile("agent-abc123")?.path).toBe(path.join(subagentsDir, "agent-abc123.jsonl"));
+      expect(findSessionFile("agent-a920233e1ad3a0d16")?.path).toBe(
+        path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"),
+      );
+      expect(findSessionFile("agent-missing")).toBeNull();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // findSessionFile answers from a shared index of every transcript store (one
+  // walk, map hits) instead of walking per call — the per-call walk was the
+  // main event-loop pin behind the "daemon under load" badge on large fleets.
+  // The index must not go stale in the ways that matter: a deleted transcript
+  // stops resolving immediately, and a transcript created after the walk is
+  // found once the miss-rebuild window passes.
+  test("session-file index revalidates deletions and picks up new files on rebuild", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-find-index-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(projectDir, { recursive: true });
+      const a = path.join(projectDir, "aaaaaaaa-0000-0000-0000-000000000001.jsonl");
+      fs.writeFileSync(a, "{}\n");
+
+      expect(findSessionFile("aaaaaaaa-0000-0000-0000-000000000001")?.path).toBe(a);
+
+      // Deletion: the cached hit is stat-validated, so it must vanish at once.
+      fs.rmSync(a);
+      expect(findSessionFile("aaaaaaaa-0000-0000-0000-000000000001")).toBeNull();
+
+      // Creation after the walk: invisible while the index is fresh, found
+      // after a reset (standing in for the miss-rebuild window elapsing).
+      const b = path.join(projectDir, "bbbbbbbb-0000-0000-0000-000000000002.jsonl");
+      fs.writeFileSync(b, "{}\n");
+      resetSessionFileIndexForTests();
+      expect(findSessionFile("bbbbbbbb-0000-0000-0000-000000000002")?.path).toBe(b);
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // The periodic index refresh walks off the event loop (the cold sync build
+  // froze the loop 6s at boot under load, 2026-09-02). Both builders read the
+  // same store table, so the async one must resolve every client's layout and
+  // keep the same precedence: a top-level transcript beats its nested twin.
+  test("async index refresh resolves every store layout with the sync build's precedence", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-async-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      const sid = "cccccccc-0000-0000-0000-000000000003";
+      const wf = path.join(proj, sid, "subagents", "workflows", "wf_1");
+      fs.mkdirSync(wf, { recursive: true });
+      fs.mkdirSync(path.join(proj, sid, "tool-results"), { recursive: true });
+      fs.writeFileSync(path.join(proj, `${sid}.jsonl`), "{}\n");
+      fs.writeFileSync(path.join(proj, sid, `${sid}.jsonl`), "{}\n"); // nested twin loses
+      fs.writeFileSync(path.join(proj, sid, "subagents", "agent-sub1.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wf, "agent-wf1.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(proj, sid, "tool-results", "not-a-session.jsonl"), "{}\n");
+      const codexDay = path.join(tmpHome, ".codex", "sessions", "2026", "09", "02");
+      fs.mkdirSync(codexDay, { recursive: true });
+      const codexId = "dddddddd-0000-0000-0000-000000000004";
+      fs.writeFileSync(path.join(codexDay, `rollout-2026-09-02T00-00-00-${codexId}.jsonl`), "{}\n");
+      const gem = path.join(tmpHome, ".gemini", "tmp", "hash1", "chats");
+      fs.mkdirSync(gem, { recursive: true });
+      fs.writeFileSync(path.join(gem, "gem-session.json"), "{}\n");
+      const pi = path.join(tmpHome, ".pi", "agent", "sessions", "--Users-x-proj--");
+      fs.mkdirSync(pi, { recursive: true });
+      const piId = "eeeeeeee-0000-0000-0000-000000000005";
+      fs.writeFileSync(path.join(pi, `2026-09-02T00-00-00_${piId}.jsonl`), "{}\n");
+      const grokId = "ffffffff-0000-0000-0000-000000000006";
+      const grok = path.join(tmpHome, ".grok", "sessions", "%2FUsers%2Fx", grokId);
+      fs.mkdirSync(grok, { recursive: true });
+      fs.writeFileSync(path.join(grok, "updates.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(grok, "chat_history.jsonl"), "{}\n");
+
+      resetSessionFileIndexForTests();
+      await refreshSessionFileIndex();
+      const expectAll = () => {
+        expect(findSessionFile(sid)?.path).toBe(path.join(proj, `${sid}.jsonl`));
+        expect(findSessionFile("agent-sub1")?.path).toBe(path.join(proj, sid, "subagents", "agent-sub1.jsonl"));
+        expect(findSessionFile("agent-wf1")?.path).toBe(path.join(wf, "agent-wf1.jsonl"));
+        expect(findSessionFile("not-a-session")).toBeNull();
+        expect(findSessionFile(codexId)?.agentType).toBe("codex");
+        expect(findSessionFile("gem-session")?.agentType).toBe("gemini");
+        expect(findSessionFile(piId)?.agentType).toBe("pi");
+        expect(findSessionFile(grokId)?.path).toBe(path.join(grok, "updates.jsonl"));
+      };
+      expectAll();
+      // The sync cold build must agree with it.
+      resetSessionFileIndexForTests();
+      expectAll();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // A miss on a stale index used to rebuild it synchronously, and every rebuild
+  // forgot the confirmed misses, so a fleet with one transcript-less session
+  // walked the whole tree on the loop every 2s (up to 47s a walk on a busy
+  // disk, 2026-09-02). Now a miss asks for an async build and answers null
+  // until it lands; only a build that landed after the first miss confirms it.
+  test("a miss on a stale index refreshes off the loop and is confirmed by the next build", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-miss-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(projectDir, { recursive: true });
+      resetSessionFileIndexForTests();
+      await refreshSessionFileIndex();
+      ageSessionFileIndexForTests(10_000);
+
+      // A transcript written after the walk, in a nested layout the per-call
+      // fresh-directory probe does not cover: the first lookup misses (no sync
+      // walk), the refresh it triggered finds it.
+      const nested = path.join(projectDir, "00000000-0000-0000-0000-000000000000", "subagents");
+      fs.mkdirSync(nested, { recursive: true });
+      const late = path.join(nested, "abababab-0000-0000-0000-000000000007.jsonl");
+      fs.writeFileSync(late, "{}\n");
+      expect(findSessionFile("abababab-0000-0000-0000-000000000007")).toBeNull();
+      await refreshSessionFileIndex();
+      expect(findSessionFile("abababab-0000-0000-0000-000000000007")?.path).toBe(late);
+
+      // An id with no file anywhere: null before and after the build; once a
+      // build has landed after its first miss it is remembered, so writing the
+      // file now stays invisible until the next build (the documented window).
+      ageSessionFileIndexForTests(10_000);
+      expect(findSessionFile("cdcdcdcd-0000-0000-0000-000000000008")).toBeNull();
+      await refreshSessionFileIndex();
+      expect(findSessionFile("cdcdcdcd-0000-0000-0000-000000000008")).toBeNull();
+      const later = path.join(nested, "cdcdcdcd-0000-0000-0000-000000000008.jsonl");
+      fs.writeFileSync(later, "{}\n");
+      expect(findSessionFile("cdcdcdcd-0000-0000-0000-000000000008")).toBeNull();
+      await refreshSessionFileIndex();
+      expect(findSessionFile("cdcdcdcd-0000-0000-0000-000000000008")?.path).toBe(later);
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // The resume repair ladder copies a workflow agent's transcript to the project
+  // dir's top level and to a UUID twin beside the original. findSessionFile then
+  // answers with the top-level copy — which is exactly why a path check on its
+  // result let the 2026-08-20 doppelgänger fleet through. The workflow probe
+  // must see past that copy for both the agent id and the UUID twin.
+  test("workflowAgentTranscriptPathFor sees the workflow layout past a relocated top-level copy", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-wf-agent-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      const wfDir = path.join(projectDir, "0c25e223-db89-44dd-b7c2-a14b21298e4d", "subagents", "workflows", "wf_adebb5af-f7d");
+      fs.mkdirSync(wfDir, { recursive: true });
+      const uuid = "89b2bd61-7fdc-4491-89fc-7e64dbe39844";
+      fs.writeFileSync(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wfDir, `${uuid}.jsonl`), "{}\n");
+      fs.writeFileSync(path.join(projectDir, `${uuid}.jsonl`), "{}\n");
+
+      expect(findSessionFile(uuid)?.path).toBe(path.join(projectDir, `${uuid}.jsonl`));
+      expect(await workflowAgentTranscriptPathFor(uuid)).toBe(path.join(wfDir, `${uuid}.jsonl`));
+      expect(await workflowAgentTranscriptPathFor("agent-a920233e1ad3a0d16")).toBe(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"));
+
+      // An Agent-tool subagent and a plain session are not workflow agents.
+      const subagentsDir = path.dirname(path.dirname(wfDir));
+      fs.writeFileSync(path.join(subagentsDir, "agent-abc123.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(projectDir, "0c25e223-db89-44dd-b7c2-a14b21298e4d.jsonl"), "{}\n");
+      expect(await workflowAgentTranscriptPathFor("agent-abc123")).toBeNull();
+      expect(await workflowAgentTranscriptPathFor("0c25e223-db89-44dd-b7c2-a14b21298e4d")).toBeNull();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+});
+
+// A freshly-started session (never resumed, no daemon restart since it started) must still be
+// pane-tracked, or the periodic health sweep skips it and a buffered AskUserQuestion on it
+// stays invisible on the web until answered. Regression for jx7e0c1 (session 54c97147): its
+// poll only synced after an unrelated daemon restart warm-recovered it into the cache.
+describe("started session is pane-tracked for the interactive-prompt sweep", () => {
+  test("registerManagedStartedSession tracks a fresh started session immediately", () => {
+    const sid = "11111111-2222-4333-8444-555555555555";
+    expect(isSessionPaneTracked(sid)).toBe(false);
+    // No syncServiceRef in tests: the function records the pane (local bookkeeping) then
+    // returns at the guard — exercising exactly the line that closes the gap.
+    try {
+      registerManagedStartedSession("jx7e0c1b0crwpsfyj5y017mgmd87ybtc", sid, "cc-claude-testpane");
+      expect(isSessionPaneTracked(sid)).toBe(true);
+    } finally {
+      trackSessionPaneForTests(sid, null);
+    }
+  });
+});
+
+// E2E: validate the classifier against a real on-disk transcript tail. Guarded so
+// it skips cleanly on machines/CI without the fixture. Proves the structural parse
+// works on actual Claude JSONL bytes, not just synthesized fixtures.
+describe("classifyTranscriptTail on real transcripts", () => {
+  const dir = `${process.env.HOME}/.claude/projects/-Users-ashot-src-codecast`;
+  const present = (() => { try { return fs.existsSync(dir); } catch { return false; } })();
+  test.if(present)("every local transcript classifies to a known turn-state", () => {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".jsonl")).slice(0, 12);
+    for (const f of files) {
+      const p = `${dir}/${f}`;
+      const fd = fs.openSync(p, "r");
+      const size = fs.fstatSync(fd).size;
+      const start = Math.max(0, size - 65536);
+      const buf = Buffer.allocUnsafe(size - start);
+      fs.readSync(fd, buf, 0, size - start, start);
+      fs.closeSync(fd);
+      const turn = classifyTranscriptTail(buf.toString("utf8"));
+      expect(["idle", "active", "unknown"]).toContain(turn);
+    }
+  });
+});
+
+// Daemon-side recovery for a permission_blocked latch (the one status reconciledStatus
+// and the pane reconcile both refuse to touch). When the resume "working" hook after a
+// user answers an AskUserQuestion is lost, the session freezes in "Needs Input". The
+// transcript distinguishes answered (tail ends in a user turn) from still-pending (tail
+// ends in the assistant tool_use).
+describe("transcriptTailLastRealRole", () => {
+  test("answered prompt: tail ends in a user turn (tool_result)", () => {
+    expect(transcriptTailLastRealRole([asst("tool_use"), userMsg("tool_result")].join("\n"))).toBe("user");
+  });
+  test("pending prompt: tail ends in the assistant tool_use", () => {
+    expect(transcriptTailLastRealRole(asst("tool_use"))).toBe("assistant");
+  });
+  test("skips system/meta lines to the last real message", () => {
+    expect(transcriptTailLastRealRole([userMsg("tool_result"), sysMeta()].join("\n"))).toBe("user");
+    expect(transcriptTailLastRealRole([asst("tool_use"), sysMeta()].join("\n"))).toBe("assistant");
+  });
+  test("partial/corrupt final line is skipped", () => {
+    expect(transcriptTailLastRealRole([userMsg("tool_result"), '{"type":"assi'].join("\n"))).toBe("user");
+  });
+  test("nothing real -> null", () => {
+    expect(transcriptTailLastRealRole([sysMeta(), ""].join("\n"))).toBeNull();
+  });
+});
+
+describe("permissionBlockedRecoveryTarget", () => {
+  test("permission_blocked + answered (user tail) -> working", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", "user")).toBe("working");
+  });
+  test("permission_blocked + still pending (assistant tail) -> defer", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", "assistant")).toBeNull();
+  });
+  test("permission_blocked + unparseable tail -> defer", () => {
+    expect(permissionBlockedRecoveryTarget("permission_blocked", null)).toBeNull();
+  });
+  test("only acts on permission_blocked; leaves every other status alone", () => {
+    for (const s of ["working", "idle", "thinking", "connected", "stopped", "resuming", undefined] as const) {
+      expect(permissionBlockedRecoveryTarget(s, "user")).toBeNull();
+    }
+  });
+});
+
+// The boot warmup walks the five transcript stores off the loop. The status
+// file replay and the first hook pushes look sessions up before it lands;
+// a lookup against no map used to build the index cold on the loop (1s at
+// load 60, 6s under the fleet, 2026-09-02). Now the boot path installs an
+// empty map first, and any lookup with a refresh in flight answers null.
+describe("session file index: no cold sync walk on the loop while a refresh is in flight", () => {
+  test("a lookup during the warmup answers null with no walk, then hits from the landed map", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-boot-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    const seen: string[] = [];
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(proj, { recursive: true });
+      const sid = "dddddddd-0000-0000-0000-000000000004";
+      const file = path.join(proj, `${sid}.jsonl`);
+      fs.writeFileSync(file, "{}\n");
+      resetSessionFileIndexForTests();
+      setSlowSyncSink((m) => seen.push(m));
+      setSlowSyncFsThresholdForTests(0);
+
+      const warm = primeSessionFileIndexAtBoot();
+      expect(findSessionFile(sid, { staleOk: true })).toBeNull();
+      // No map at all with the same refresh in flight (a reset, a HOME swap):
+      // still no walk on the loop.
+      resetSessionFileIndexForTests();
+      expect(findSessionFile(sid, { staleOk: true })).toBeNull();
+      expect(seen.filter((m) => m.includes("walkDirsSync"))).toEqual([]);
+
+      await warm;
+      expect(findSessionFile(sid, { staleOk: true })?.path).toBe(file);
+      expect(seen.filter((m) => m.includes("walkDirsSync"))).toEqual([]);
+    } finally {
+      setSlowSyncSink(null);
+      setSlowSyncFsThresholdForTests(null);
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // 2026-09-19: a session pulled to this machine seconds after a daemon restart
+  // logged "not found locally" for a transcript that was 20 minutes old. The
+  // boot index was still empty, and the recent scan only reads directories
+  // changed since that empty install. The resume path then rebuilt the
+  // transcript from the server over the real file.
+  test("the awaited lookup finds an old transcript while the boot walk is still in flight", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-await-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(proj, { recursive: true });
+      const sid = "dddddddd-0000-0000-0000-000000000005";
+      const file = path.join(proj, `${sid}.jsonl`);
+      fs.writeFileSync(file, "{}\n");
+      const old = new Date(Date.now() - 20 * 60_000);
+      fs.utimesSync(file, old, old);
+      fs.utimesSync(proj, old, old);
+      resetSessionFileIndexForTests();
+
+      void primeSessionFileIndexAtBoot();
+      expect((await awaitRecentSessionFile(sid))?.path).toBe(file);
+      // On a tree this small the walk always lands before the recent scan, so
+      // the race itself is pinned by order: the wait for a real index comes
+      // before the first read of it.
+      const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf-8");
+      const body = source.slice(source.indexOf("export async function awaitRecentSessionFile"));
+      const wait = body.indexOf("await ensureSessionFileIndex();");
+      expect(wait).toBeGreaterThan(-1);
+      expect(wait).toBeLessThan(body.indexOf("findSessionFile(sessionId, { staleOk: true })"));
+    } finally {
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+});

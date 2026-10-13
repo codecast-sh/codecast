@@ -1,0 +1,232 @@
+{
+  "servers": [
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "ai.agentplaybooks/agentplaybooks",
+        "description": "Manage portable AI agent playbooks, Agent Skills, MCP configurations, personas, and memory.",
+        "title": "AgentPlaybooks",
+        "repository": {
+          "url": "https://github.com/matebenyovszky/agentplaybooks",
+          "source": "github"
+        },
+        "version": "1.0.0",
+        "websiteUrl": "https://agentplaybooks.ai",
+        "icons": [
+          {
+            "src": "https://agentplaybooks.ai/icon.svg",
+            "mimeType": "image/svg+xml",
+            "sizes": [
+              "any"
+            ]
+          }
+        ],
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://agentplaybooks.ai/api/mcp/manage",
+            "headers": [
+              {
+                "description": "Bearer AgentPlaybooks user API key (for example: Bearer apb_live_...)",
+                "isRequired": true,
+                "isSecret": true,
+                "name": "Authorization"
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "deprecated",
+          "statusChangedAt": "2026-08-01T20:44:36.793656Z",
+          "statusMessage": "Published accidentally as 1.0.0; use 0.2.0 as the early release.",
+          "publishedAt": "2026-08-01T20:24:13.359787Z",
+          "updatedAt": "2026-08-01T20:44:36.793656Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "ai.agenttrust/mcp-server",
+        "description": "Identity, trust, and A2A orchestration for autonomous AI agents. Official A2A partner.",
+        "title": "AgentTrust \u2014 Identity & Trust for A2A Agents",
+        "repository": {
+          "url": "https://github.com/agenttrust/mcp-server",
+          "source": "github"
+        },
+        "version": "1.1.1",
+        "websiteUrl": "https://agenttrust.ai",
+        "icons": [
+          {
+            "src": "https://agenttrust.ai/icon.png",
+            "sizes": [
+              "96x96"
+            ]
+          }
+        ],
+        "packages": [
+          {
+            "registryType": "npm",
+            "identifier": "@agenttrust/mcp-server",
+            "version": "1.1.1",
+            "transport": {
+              "type": "stdio"
+            },
+            "environmentVariables": [
+              {
+                "description": "Your AgentTrust API key from https://agenttrust.ai",
+                "isRequired": true,
+                "isSecret": true,
+                "name": "AGENTTRUST_API_KEY"
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-03-06T11:23:10.721165Z",
+          "publishedAt": "2026-03-06T11:23:10.721165Z",
+          "updatedAt": "2026-03-06T11:23:10.721165Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "com.mcparmory/github",
+        "description": "Manage repositories, users, releases, and automate GitHub workflows",
+        "repository": {
+          "url": "https://github.com/mcparmory/registry",
+          "source": "github"
+        },
+        "version": "1.0.6",
+        "packages": [
+          {
+            "registryType": "pypi",
+            "identifier": "mcparmory-github",
+            "version": "1.0.6",
+            "runtimeHint": "uvx",
+            "transport": {
+              "type": "stdio"
+            }
+          },
+          {
+            "registryType": "oci",
+            "identifier": "ghcr.io/mcparmory/github:1.0.6",
+            "runtimeHint": "docker",
+            "transport": {
+              "type": "stdio"
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-05-11T21:37:47.993849Z",
+          "publishedAt": "2026-05-11T21:37:47.993849Z",
+          "updatedAt": "2026-05-11T21:37:47.993849Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+        "name": "ai.smithery/Hint-Services-obsidian-github-mcp",
+        "description": "Connect AI assistants to your GitHub-hosted Obsidian vault to seamlessly access, search, and analy\u2026",
+        "repository": {
+          "url": "https://github.com/Hint-Services/obsidian-github-mcp",
+          "source": "github"
+        },
+        "version": "0.4.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://server.smithery.ai/@Hint-Services/obsidian-github-mcp/mcp",
+            "headers": [
+              {
+                "description": "Bearer token for Smithery authentication",
+                "isRequired": true,
+                "value": "Bearer {smithery_api_key}",
+                "isSecret": true,
+                "name": "Authorization"
+              }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2025-09-14T15:20:36.371442Z",
+          "publishedAt": "2025-09-14T15:20:36.371442Z",
+          "updatedAt": "2025-09-14T15:20:36.371442Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "ac.inference.sh/mcp",
+        "description": "run any ai model. compose agents, stack knowledge, connect tools. one api, pay per run.",
+        "title": "inference.sh",
+        "version": "2.0.1",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://api.inference.sh/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-07-27T10:44:51.359634Z",
+          "publishedAt": "2026-07-27T10:44:51.359634Z",
+          "updatedAt": "2026-07-27T10:44:51.359634Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "ac.tandem/docs-mcp",
+        "description": "Remote MCP server for Tandem docs, install guides, SDKs, workflows, and agent setup help.",
+        "repository": {
+          "url": "https://github.com/frumu-ai/tandem",
+          "source": "github"
+        },
+        "version": "0.3.2",
+        "websiteUrl": "https://tandem.ac/docs-mcp",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://tandem.ac/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "statusChangedAt": "2026-04-22T21:06:34.500049Z",
+          "publishedAt": "2026-04-22T21:06:34.500049Z",
+          "updatedAt": "2026-04-22T21:06:34.500049Z",
+          "isLatest": true
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "nextCursor": "ai.basethread/basethread:1.0.0",
+    "count": 6
+  }
+}

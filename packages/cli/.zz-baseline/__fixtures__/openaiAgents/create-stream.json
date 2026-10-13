@@ -1,0 +1,713 @@
+[
+ {
+  "event": "agent.session.created",
+  "data": {
+   "type": "agent.session.created",
+   "event_id": "evt_937b53aa2ba7430da3d2eaf9682bbe16a208601729254c7588",
+   "session": {
+    "metadata": {
+     "repo": "octocat/Hello-World",
+     "source": "codecast-probe"
+    },
+    "id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+    "object": "agent.session",
+    "created_at": 1790831458,
+    "last_active_at": 1790831458,
+    "status": "idle",
+    "required_actions": [],
+    "error": null,
+    "agent": {
+     "id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+     "name": null,
+     "model": "gpt-5.6-terra",
+     "reasoning": {
+      "effort": "medium",
+      "summary": null
+     },
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "service_tier": "auto",
+     "tools": [],
+     "multi_agent": {
+      "enabled": false,
+      "max_concurrent_subagents": null
+     }
+    },
+    "environment": {
+     "type": "openai_hosted",
+     "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+     "container_size": "small",
+     "packages": {
+      "python": [],
+      "system": [],
+      "npm": []
+     },
+     "network": {
+      "access": "enabled",
+      "allowed_domains": []
+     },
+     "desktop": {
+      "enabled": false
+     },
+     "capability_directories": [],
+     "skills": [],
+     "plugins": [],
+     "files": []
+    },
+    "vault_ids": [],
+    "usage": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.created",
+  "data": {
+   "type": "agent.session.turn.created",
+   "event_id": "evt_552051d37e0f4c4eb6e85a15ffea43436772add5309c4e6db1",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "turn": {
+    "id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "object": "agent.session.turn",
+    "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+    "agent_id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+    "subagent_id": null,
+    "status": "queued",
+    "created_at": 1790831463,
+    "started_at": null,
+    "completed_at": null,
+    "error": null,
+    "usage": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.added",
+  "data": {
+   "type": "agent.session.turn.item.added",
+   "event_id": "evt_571c841d46c243e38bc1a33f1404ece556dd996d9e66496091",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": null,
+   "item": {
+    "type": "message",
+    "id": "msg_80de70be6b3012be0b8b1ddeaad4f8b75ea6ad2878ddbe9eb5",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "codecast test: run `cat Hello-World/README` and tell me its contents."
+     }
+    ],
+    "status": "completed",
+    "phase": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.in_progress",
+  "data": {
+   "type": "agent.session.in_progress",
+   "event_id": "evt_8c75c499c87e44018a3ac07107c50f74426649e075e540e493",
+   "session": {
+    "metadata": {
+     "repo": "octocat/Hello-World",
+     "source": "codecast-probe"
+    },
+    "id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+    "object": "agent.session",
+    "created_at": 1790831458,
+    "last_active_at": 1790831458,
+    "status": "in_progress",
+    "required_actions": [],
+    "error": null,
+    "agent": {
+     "id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+     "name": null,
+     "model": "gpt-5.6-terra",
+     "reasoning": {
+      "effort": "medium",
+      "summary": null
+     },
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "service_tier": "auto",
+     "tools": [],
+     "multi_agent": {
+      "enabled": false,
+      "max_concurrent_subagents": null
+     }
+    },
+    "environment": {
+     "type": "openai_hosted",
+     "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+     "container_size": "small",
+     "packages": {
+      "python": [],
+      "system": [],
+      "npm": []
+     },
+     "network": {
+      "access": "enabled",
+      "allowed_domains": []
+     },
+     "desktop": {
+      "enabled": false
+     },
+     "capability_directories": [],
+     "skills": [],
+     "plugins": [],
+     "files": []
+    },
+    "vault_ids": [],
+    "usage": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.in_progress",
+  "data": {
+   "type": "agent.session.turn.in_progress",
+   "event_id": "evt_701872dbf6c545629e86ab2cb6ff9c1f8f25e32c65dc4cee81",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "turn": {
+    "id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "object": "agent.session.turn",
+    "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+    "agent_id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+    "subagent_id": null,
+    "status": "in_progress",
+    "created_at": 1790831463,
+    "started_at": 1790831463,
+    "completed_at": null,
+    "error": null,
+    "usage": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.added",
+  "data": {
+   "type": "agent.session.turn.item.added",
+   "event_id": "evt_1a3d161e6d6846d4b60ea2365b1eea47d50548ce7273498d96",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 0,
+   "item": {
+    "type": "reasoning",
+    "id": "rs_03f6683c1b47287f016abdeb668c7887d1a4c4131d2da94f9a",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "summary": [],
+    "status": "in_progress"
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.done",
+  "data": {
+   "type": "agent.session.turn.item.done",
+   "event_id": "evt_3d9b4d4a03554e4f97f1da67c7da1bedc83820b182f948f795",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 0,
+   "item": {
+    "type": "reasoning",
+    "id": "rs_03f6683c1b47287f016abdeb668c7887d1a4c4131d2da94f9a",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "summary": [],
+    "status": "completed"
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.added",
+  "data": {
+   "type": "agent.session.turn.item.added",
+   "event_id": "evt_48317b2e943844d9abcdbf6779313f7fa6fc221be8af437aa5",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 1,
+   "item": {
+    "type": "message",
+    "id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "role": "assistant",
+    "content": [],
+    "status": "in_progress",
+    "phase": "commentary"
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.content_part.added",
+  "data": {
+   "type": "agent.session.turn.content_part.added",
+   "event_id": "evt_66edcab7aa044b57a6b76be0a92085056c4a90a7a34a4fcf93",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "part": {
+    "type": "output_text",
+    "text": ""
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_ce2e3e9bfc524f2d90c66156213cf12a74c29fe575dd477193",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": "I"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_da7757e41bea4a85aee02f0d46ab661224f2329b0d6244b3bf",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": "\u2019ll"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_e7a014ab5f844a1d8c717b6aa0bced2f07580912a50646d09e",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " wait"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_a14096eeaf2c4af79a24835955ff06e8f2a28a113ba743558a",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " for"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_637be49ee9f042ac9a59843abfb7c8b41aed319d817d4440ba",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " the"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_344453ec66914513b4af8c3939c1ef8e896e0c3c2cd5420885",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " workspace"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_ebc670ed2a284aff8989e13ac39d3b2fd21aa549fa3740bf8c",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": ","
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_01eae69c847e4d3796853ccd4b9ff0403ee6d323db8245338c",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " then"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_599c3d27f90d449fbeb78dbc9ec47be0af5f5f362d944b60ad",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " read"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_6b73b898f0484e049dbdefe338cf4809c999f2950e514e7eb6",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " that"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_f068d315e8a64e08a7f1e747637dd7c134b10f6c63b244b0a2",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": " file"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_79bd7590bab342c99bba40a06907ff35b5df6cf432d24d6686",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "delta": "."
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.done",
+  "data": {
+   "type": "agent.session.turn.output_text.done",
+   "event_id": "evt_9e23a2aa8a9d45288b6bd6700676c434fbbb610d6aca42d583",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "text": "I\u2019ll wait for the workspace, then read that file."
+  }
+ },
+ {
+  "event": "agent.session.turn.content_part.done",
+  "data": {
+   "type": "agent.session.turn.content_part.done",
+   "event_id": "evt_4f461432ad234b7597160f3548209334060b9e3ffaca4503a8",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+   "output_index": 1,
+   "content_index": 0,
+   "part": {
+    "type": "output_text",
+    "text": "I\u2019ll wait for the workspace, then read that file."
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.done",
+  "data": {
+   "type": "agent.session.turn.item.done",
+   "event_id": "evt_67e041d4b5594b02a83439c326bbd3360c82ff1362014daf98",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 1,
+   "item": {
+    "type": "message",
+    "id": "msg_03f6683c1b47287f016abdeb66b27887d1897d798de9ef55fb",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "role": "assistant",
+    "status": "completed",
+    "content": [
+     {
+      "type": "output_text",
+      "text": "I\u2019ll wait for the workspace, then read that file."
+     }
+    ],
+    "phase": "commentary"
+   }
+  }
+ },
+ {
+  "event": "agent.session.environment.ready",
+  "data": {
+   "type": "agent.session.environment.ready",
+   "event_id": "evt_35d23cb78c7640f4aa43d31c282ad5176d4dec0cceb1445399",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": null,
+   "environment": {
+    "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+    "type": "openai_hosted",
+    "status": "ready",
+    "error": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.added",
+  "data": {
+   "type": "agent.session.turn.item.added",
+   "event_id": "evt_8e0aa7178a39449aae7aa846a02671a22210965c75bd41d4be",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 2,
+   "item": {
+    "type": "command_execution",
+    "id": "exec_383bbc47a6f1ffc0e14f6fa159f451996fb0c525491cdf6fcb",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "command": "/bin/bash -lc 'cat Hello-World/README'",
+    "cwd": "/workspace",
+    "status": "in_progress",
+    "output": null,
+    "exit_code": null,
+    "duration_ms": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.done",
+  "data": {
+   "type": "agent.session.turn.item.done",
+   "event_id": "evt_643b12e1f93542e0bbe5ced2883c43dec4c3066799e24357bc",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 2,
+   "item": {
+    "type": "command_execution",
+    "id": "exec_383bbc47a6f1ffc0e14f6fa159f451996fb0c525491cdf6fcb",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "command": "/bin/bash -lc 'cat Hello-World/README'",
+    "cwd": "/workspace",
+    "status": "completed",
+    "output": "Hello World!\n",
+    "exit_code": 0,
+    "duration_ms": 0
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.added",
+  "data": {
+   "type": "agent.session.turn.item.added",
+   "event_id": "evt_5de14d400fe34df48c972a25953a525383786d2e8375409d8f",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 3,
+   "item": {
+    "type": "message",
+    "id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "role": "assistant",
+    "content": [],
+    "status": "in_progress",
+    "phase": "final_answer"
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.content_part.added",
+  "data": {
+   "type": "agent.session.turn.content_part.added",
+   "event_id": "evt_0b81455c6ad346348c63accd4fa290ce21e82f0a2adc47ea89",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "part": {
+    "type": "output_text",
+    "text": ""
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_73ed1d735d244e889279e96985d45552b80e7b7cf87340ec85",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "delta": "Hello"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_24016b462d8442a786ddedc83af605e39e8a704c7333405ea5",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "delta": " World"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.delta",
+  "data": {
+   "type": "agent.session.turn.output_text.delta",
+   "event_id": "evt_efccfa70f8044625b28ed1cd43461998c7d7bf90185f4ead8f",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "delta": "!"
+  }
+ },
+ {
+  "event": "agent.session.turn.output_text.done",
+  "data": {
+   "type": "agent.session.turn.output_text.done",
+   "event_id": "evt_6892a0a0853e46edbae0d494dbc4be17bf49f4c85574411ba9",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "text": "Hello World!"
+  }
+ },
+ {
+  "event": "agent.session.turn.content_part.done",
+  "data": {
+   "type": "agent.session.turn.content_part.done",
+   "event_id": "evt_17800ca03ebf418f938e355810e56a22eb2157abab1c425bbe",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "item_id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+   "output_index": 3,
+   "content_index": 0,
+   "part": {
+    "type": "output_text",
+    "text": "Hello World!"
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.item.done",
+  "data": {
+   "type": "agent.session.turn.item.done",
+   "event_id": "evt_a18d2e68ba054a4d93623acfc226bb0c3faa87d6baca49adbe",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "output_index": 3,
+   "item": {
+    "type": "message",
+    "id": "msg_03f6683c1b47287f016abdeb724c2487d18bd8c1e47d396041",
+    "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "role": "assistant",
+    "status": "completed",
+    "content": [
+     {
+      "type": "output_text",
+      "text": "Hello World!"
+     }
+    ],
+    "phase": "final_answer"
+   }
+  }
+ },
+ {
+  "event": "agent.session.environment.connected",
+  "data": {
+   "type": "agent.session.environment.connected",
+   "event_id": "evt_9342473abcd14b5f8077f689604e616abdf3610fcbd1418ba0",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": null,
+   "environment": {
+    "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+    "type": "openai_hosted",
+    "status": "connected",
+    "error": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.environment.connected",
+  "data": {
+   "type": "agent.session.environment.connected",
+   "event_id": "evt_ec8f0ccde0c54c3aa787d53958ee769a433149706c9c4f738f",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": null,
+   "environment": {
+    "id": "ccarenv_b64_Y2NhcmVudl82YWJkZWI2MjZiYTg4MTkxOWQwODk2MWE3ZDE0YmFlMQ",
+    "type": "openai_hosted",
+    "status": "connected",
+    "error": null
+   }
+  }
+ },
+ {
+  "event": "agent.session.turn.completed",
+  "data": {
+   "type": "agent.session.turn.completed",
+   "event_id": "evt_79cd11180f204a81bce1226966cc4fe2a5ab4f62f6c34dfdbe",
+   "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+   "turn_id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+   "turn": {
+    "id": "turn_0db7b5af8adc9da3006abdeb688adc81939036d44813f322de",
+    "object": "agent.session.turn",
+    "session_id": "sess_0db7b5af8adc9da3006abdeb61add48193a15b37aff2d5b6e5",
+    "agent_id": "agent_127eed62f9a54e4bb1e7a745f8b4f21a630fd679c2f2464da8",
+    "subagent_id": null,
+    "status": "completed",
+    "created_at": 1790831463,
+    "started_at": 1790831463,
+    "completed_at": 1790831485,
+    "error": null,
+    "usage": null
+   },
+   "usage": null
+  }
+ }
+]

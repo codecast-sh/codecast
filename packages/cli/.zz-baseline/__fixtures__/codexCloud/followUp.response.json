@@ -1,0 +1,200 @@
+{
+ "task": {
+  "id": "task_e_6abc46426170832eb0c0c0295e10bfe3",
+  "created_at": 1790723650.380744,
+  "title": "Identify project description from README",
+  "has_generated_title": true,
+  "current_turn_id": "task_e_6abc46426170832eb0c0c0295e10bfe3~assttrn_e_6abc469446ac832e82447903b3bb05d1",
+  "has_unread_turn": false,
+  "denormalized_metadata": {
+   "num_follow_ups": 0,
+   "repo_name_map": {},
+   "last_user_turn_created_at": null,
+   "last_turn_status": null,
+   "diff_stats": {
+    "files_modified": null,
+    "lines_added": null,
+    "lines_removed": null
+   },
+   "last_pushed_turn_id": null,
+   "start_branch_name": null,
+   "pushed_branch_name": null,
+   "cached_pull_request_data": null
+  },
+  "archived": false,
+  "task_status_display": {
+   "latest_turn_status_display": {
+    "turn_id": "task_e_6abc46426170832eb0c0c0295e10bfe3~assttrn_e_6abc469446ac832e82447903b3bb05d1",
+    "turn_status": "pending",
+    "diff_stats": null,
+    "sibling_turn_ids": [],
+    "image_asset_pointer_citations": null,
+    "issue_counts": null,
+    "intent": "qa",
+    "cancellation_requested_at": null
+   },
+   "environment_label": "acme/example",
+   "branch_name": "main",
+   "fix_task_id": null,
+   "initial_intent": "qa"
+  },
+  "creator_workspace": null,
+  "external_pull_requests": []
+ },
+ "user_turn": {
+  "type": "user",
+  "id": "task_e_6abc46426170832eb0c0c0295e10bfe3~usertrn_e_6abc469445b4832ebb7a4c06d0cb34f4",
+  "role": "user",
+  "input_items": [
+   {
+    "type": "message",
+    "role": "user",
+    "content": [
+     {
+      "content_type": "text",
+      "text": "codecast spike follow-up: which language is the server written in? One word."
+     }
+    ]
+   }
+  ],
+  "external_post_config": null,
+  "user_model_slug": "slug",
+  "previous_turn_id": "task_e_6abc46426170832eb0c0c0295e10bfe3~assttrn_e_6abc46449c80832eb40fb7211743f337",
+  "created_at": 1790723732.272375
+ },
+ "turn": {
+  "type": "assistant",
+  "id": "task_e_6abc46426170832eb0c0c0295e10bfe3~assttrn_e_6abc469446ac832e82447903b3bb05d1",
+  "sibling_turn_ids": null,
+  "attempt_placement": null,
+  "role": "assistant",
+  "output_items": [],
+  "child_turns": [],
+  "conversation_id": "None",
+  "error": null,
+  "latest_event": null,
+  "worklog": {
+   "messages": []
+  },
+  "app_server_events": {
+   "events": []
+  },
+  "thread_events": {
+   "events": []
+  },
+  "turn_status": "pending",
+  "cancellation_requested_at": null,
+  "pull_request_status": "not_created",
+  "pull_request_data": null,
+  "created_at": 1790723732.276144,
+  "internal_only_rollouts": null,
+  "environment_id": "e0000000000000000000000000000001",
+  "environment": {
+   "id": "e0000000000000000000000000000001",
+   "devcontainer": null,
+   "machine_id": "wham-public/wham-universal",
+   "label": "acme/example",
+   "is_pinned": false,
+   "description": "acme workspace",
+   "workspace_dir": "/workspace",
+   "agent_network_access": {
+    "mode": "on"
+   },
+   "codex_github_direct": null,
+   "github_connector_id": null,
+   "enable_gitlab_webhooks": false,
+   "repos": [
+    "github-100000001"
+   ],
+   "setup": [
+    ""
+   ],
+   "maintenance_setup": [
+    ""
+   ],
+   "repo_map": {
+    "github-100000001": {
+     "id": "100000001",
+     "name": "example",
+     "owner": {
+      "login": "acme",
+      "id": 10001,
+      "type": "User",
+      "avatar_url": "",
+      "url": "https://api.github.com/users/acme"
+     },
+     "repository_full_name": "acme/example",
+     "clone_url": "https://github.com/acme/example.git",
+     "default_branch": "main",
+     "git_commits_url": "https://api.github.com/repos/acme/example/git/commits{/sha}",
+     "git_refs_url": "https://api.github.com/repos/acme/example/git/refs{/sha}",
+     "git_url": "git://github.com/acme/example.git",
+     "visibility": "private",
+     "archived": false,
+     "allow_auto_merge": false,
+     "allow_merge_commit": false,
+     "allow_rebase_merge": true,
+     "allow_squash_merge": true,
+     "allow_update_branch": false,
+     "language": null,
+     "size": 85706,
+     "master_branch": null,
+     "permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "pull": true
+     }
+    }
+   },
+   "env_vars": {},
+   "secrets": {},
+   "secrets_with_domains": {},
+   "task_count": 10,
+   "creator_id": "user-FIXTURE",
+   "share_settings": "workspace",
+   "share_targets": [],
+   "permissions": null,
+   "created_at": 1749091247.067704,
+   "auto_setup_settings": {
+    "use_auto_setup": true
+   },
+   "cache_settings": {
+    "post_setup_cache_enabled": true,
+    "cache_invalidation_key": ""
+   },
+   "etag": "\"0a023c7c-0000-0200-0000-6abc46450000\"",
+   "enable_authtranslator": false,
+   "enable_docker_in_docker": false
+  },
+  "branch": "main",
+  "base_commit_sha": null,
+  "branch_name": null,
+  "direct_push_pushed_commit_sha": null,
+  "previous_turn_id": "task_e_6abc46426170832eb0c0c0295e10bfe3~usertrn_e_6abc469445b4832ebb7a4c06d0cb34f4",
+  "logs": null,
+  "proxy_events": null,
+  "debug_metadata": null,
+  "discarded": false,
+  "model_version": null,
+  "languages": null
+ },
+ "rate_limit": {
+  "allowed": true,
+  "limit_reached": false,
+  "limit": 1283.0,
+  "remaining": 1282.412799508,
+  "resets_after": 591519.0,
+  "user_plan_type": "pro",
+  "windows": [
+   {
+    "limit": 1283.0,
+    "limit_window_mins": 10080,
+    "remaining": 1282.412799508,
+    "resets_after_secs": 591519.556
+   }
+  ],
+  "resets_after_text": "in 7 days"
+ },
+ "paragen_forced_compare": false
+}

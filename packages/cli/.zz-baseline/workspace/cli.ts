@@ -1,0 +1,607 @@
+/**
+ * `cast workspace` CLI subcommand wiring.
+ *
+ * Subcommands: init, acquire, root, path, status, heal, destroy, ls, and the
+ * `pool` group (status, warm, drain) for the warm worktree pool.
+ * Registered via registerWorkspaceCommand(program) called from index.ts.
+ */
+
+import { execSync } from "../proc.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { Command } from "commander";
+import {
+  acquireRootCheckout,
+  acquireWorkspace,
+  healWorkspace,
+  listWorkspaces,
+  readWorkspaceState,
+  releaseWorkspace,
+  validateWorkspace,
+  type AcquireResult,
+} from "./lifecycle.js";
+import { detectProject } from "./detect.js";
+import { MANIFEST_REL_PATH } from "./resolver.js";
+import { readVerifyCommand, runVerifyCommand } from "./verify.js";
+import { readState, recordWorkspaceSession } from "./contract.js";
+import { publishWorktrees } from "../worktreeMirror.js";
+import { sessionIdFromEnv } from "../sessionIdentity.js";
+import {
+  clearRepoTrust,
+  collectTrustTargets,
+  readRepoTrust,
+  recordTrust,
+  reviewTrust,
+} from "./trust.js";
+import { defaultRegistry } from "./backends/registry.js";
+import type { WorkspaceManifest } from "./types.js";
+import { commandGroup } from "../commandGroups.js";
+import { defaultConfigDir, readAuthConfig } from "../config/readAuthConfig.js";
+import { formatRelativeTime } from "../formatter.js";
+import { resolveRewind, type ResolvedRewind } from "./rewind.js";
+import { snapshotMoment } from "../turns.js";
+import {
+  fetchPickupConversation,
+  PickupError,
+  pickupBranches,
+  preparePickup,
+  type PickupConversation,
+  type PickupSnapshot,
+} from "./pickup.js";
+
+/**
+ * Resolve the repo root for the current working directory.
+ * Falls back to cwd if not in a git repo.
+ */
+function findRepoRoot(): string {
+  try {
+    return execSync("git rev-parse --show-toplevel", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return process.cwd();
+  }
+}
+
+export function registerWorkspaceCommand(program: Command): void {
+  const ws = program
+    .command("workspace")
+    .alias("ws")
+    .description(commandGroup("workspace").description);
+
+  // -----------------------------------------------------------------------
+  // cast workspace init
+  // -----------------------------------------------------------------------
+  ws.command("init")
+    .description("Generate .codecast/workspace.toml from project auto-detection")
+    .option("--force", "Overwrite existing manifest")
+    .action(async (opts: { force?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      const manifestPath = path.join(repoRoot, MANIFEST_REL_PATH);
+      if (fs.existsSync(manifestPath) && !opts.force) {
+        console.error(`Manifest already exists at ${manifestPath}. Use --force to overwrite.`);
+        process.exit(1);
+      }
+      const m = detectProject(repoRoot);
+      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+      fs.writeFileSync(manifestPath, renderManifestToml(m));
+      console.log(`Wrote ${manifestPath} (detected: ${m.detected ?? "none"})`);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace acquire <name>
+  // -----------------------------------------------------------------------
+  ws.command("acquire <name>")
+    .description("Create or attach to a workspace by name")
+    .option("--branch <branch>", "Override branch name")
+    .option("--start-point <ref>", "Create the branch at this commit-ish instead of the checkout's HEAD (requires --branch); a codecast WIP snapshot commit starts at its parent with the snapshot as uncommitted work")
+    .option("--alt-branch <branch>", "Branch name to use instead when --branch already exists (requires --start-point)")
+    .option("--from <session>", "Pick up a session's working tree: its branch at its base commit, with its uncommitted and untracked files as uncommitted work (from the snapshot its daemon pushed to the remote)")
+    .option("--rewind <session[@line]>", "The files as they stood at a point in a session: its turn snapshot at message <line> (cast read numbering; default: the newest), on a new branch at that snapshot's base commit with the snapshot's edits left uncommitted. Pair with `cast fork --at <line>` to continue the conversation from that tree")
+    .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot")
+    .option("--backend <name>", "Sandbox backend to use (default: local)")
+    .option("--skip-setup", "Skip install/generate/migrate commands")
+    .option("--skip-hooks", "Skip before-create/after-create hooks")
+    .option("--no-ports", "Allocate no ports for a worker that runs no dev server")
+    .option("--skip-pool", "Bypass warm pool — force fresh setup")
+    .option("--trust", "Approve this repo's hook scripts and setup commands as they are now")
+    .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
+    .action(
+      async (
+        name: string,
+        opts: {
+          branch?: string;
+          startPoint?: string;
+          altBranch?: string;
+          from?: string;
+          rewind?: string;
+          inputRoot?: string;
+          backend?: string;
+          skipSetup?: boolean;
+          skipHooks?: boolean;
+          skipPool?: boolean;
+          ports?: boolean;
+          trust?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        const repoRoot = findRepoRoot();
+        if (opts.startPoint && !opts.branch) {
+          console.error("--start-point needs --branch: the branch to create at that commit");
+          process.exit(1);
+        }
+        if (opts.altBranch && !opts.startPoint) {
+          console.error("--alt-branch only applies with --start-point");
+          process.exit(1);
+        }
+        if (opts.from && opts.startPoint) {
+          console.error("--from picks its own start point (the session's snapshot); drop --start-point");
+          process.exit(1);
+        }
+        if (opts.rewind && (opts.startPoint || opts.from)) {
+          console.error("--rewind picks its own start point (the turn snapshot); drop --start-point and --from");
+          process.exit(1);
+        }
+        // Backend validation: if user passed --backend, ensure it exists.
+        if (opts.backend && !defaultRegistry.has(opts.backend)) {
+          console.error(
+            `unknown backend '${opts.backend}'. Available: [${defaultRegistry.list().join(", ")}]`,
+          );
+          process.exit(1);
+        }
+        try {
+          const pickup = opts.from ? await resolvePickup(repoRoot, opts.from, opts.branch) : undefined;
+          const rewind = opts.rewind ? await resolveRewindFromConfig(repoRoot, opts.rewind, opts.branch) : undefined;
+          const r = await acquireWorkspace(repoRoot, name, {
+            branch: rewind?.branch ?? pickup?.branch ?? opts.branch,
+            startPoint: rewind?.startPoint ?? pickup?.snapshot.ref ?? opts.startPoint,
+            altBranch: rewind?.altBranch ?? pickup?.altBranch ?? opts.altBranch,
+            inputRoot: opts.inputRoot,
+            skipSetup: opts.skipSetup,
+            skipHooks: opts.skipHooks,
+            skipPool: opts.skipPool,
+            noPorts: opts.ports === false,
+            trust: opts.trust,
+          });
+          const ws = r.workspace;
+          const tag = r.created ? "created" : "attached";
+          recordWorkspaceSession(repoRoot, ws.name, sessionIdFromEnv());
+          await publishWorktrees(repoRoot);
+          if (opts.json) {
+            printAcquireJson(r);
+            return;
+          }
+          console.log(`${tag}: ${ws.name}`);
+          console.log(`  path:    ${ws.path}`);
+          console.log(`  branch:  ${ws.branch}`);
+          console.log(`  state:   ${ws.state}`);
+          console.log(`  ports:   ${describePorts(ws)}`);
+          if (pickup) printPickup(pickup);
+          if (rewind) printRewind(rewind);
+          for (const notice of r.notices ?? []) console.error(`  ${notice}`);
+          if (ws.contract && !ws.contract.ok) {
+            console.error("\nContract failures:");
+            for (const c of ws.contract.checks) {
+              if (!c.ok) console.error(`  ✗ ${c.name}: ${c.reason}`);
+            }
+            process.exit(2);
+          }
+        } catch (err) {
+          console.error(`acquire failed: ${(err as Error).message}`);
+          process.exit(1);
+        }
+      },
+    );
+
+  // -----------------------------------------------------------------------
+  // cast workspace root
+  // -----------------------------------------------------------------------
+  ws.command("root")
+    .description("Prepare the main checkout as a workspace (ports, secret files, install); what a cloud session in shared mode runs in")
+    .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot (they overwrite the root's copies)")
+    .option("--skip-setup", "Skip install/generate/migrate commands")
+    .option("--skip-browser", "Do not launch the per-workspace Chrome even when the manifest enables it")
+    .option("--json", "Print the workspace as one JSON line (the same shape as `acquire --json`)")
+    .action(async (opts: { inputRoot?: string; skipSetup?: boolean; skipBrowser?: boolean; json?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      try {
+        const r = await acquireRootCheckout(repoRoot, { inputRoot: opts.inputRoot, skipSetup: opts.skipSetup, skipBrowser: opts.skipBrowser });
+        const ws = r.workspace;
+        if (opts.json) {
+          printAcquireJson(r);
+          return;
+        }
+        console.log(`${r.created ? "created" : "refreshed"}: ${ws.name}`);
+        console.log(`  path:    ${ws.path}`);
+        console.log(`  branch:  ${ws.branch}`);
+        console.log(`  state:   ${ws.state}`);
+        if (Object.keys(ws.ports).length > 0) {
+          console.log(`  ports:   ${Object.entries(ws.ports).map(([n, p]) => `${n}=${p}`).join(" ")}`);
+        }
+        for (const notice of r.notices ?? []) console.error(`  ${notice}`);
+        if (ws.contract && !ws.contract.ok) {
+          console.error("\nContract failures:");
+          for (const c of ws.contract.checks) if (!c.ok) console.error(`  ✗ ${c.name}: ${c.reason}`);
+          process.exit(2);
+        }
+      } catch (err) {
+        console.error(`root failed: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace status <name>
+  // -----------------------------------------------------------------------
+  ws.command("status <name>")
+    .description("Show workspace state and contract validation")
+    .action(async (name: string) => {
+      const repoRoot = findRepoRoot();
+      if (!readState(repoRoot, name)) {
+        console.error(`Workspace '${name}' not found`);
+        process.exit(1);
+      }
+      const r = await validateWorkspace(repoRoot, name);
+      // The shared-checkout record's branch is read from the live HEAD, so
+      // the header prints the branch the root is on now.
+      const state = readWorkspaceState(repoRoot, name)!;
+      console.log(`${state.name}`);
+      console.log(`  state:   ${state.state}`);
+      console.log(`  path:    ${state.path}`);
+      console.log(`  branch:  ${state.branch}`);
+      console.log(`  ports:   ${describePorts(state)}`);
+      console.log(`  updated: ${state.updatedAt}`);
+      console.log(`  contract: ${r.ok ? "ok" : "FAIL"}`);
+      for (const c of r.checks) {
+        const mark = c.ok ? "✓" : "✗";
+        const reason = c.reason ? ` (${c.reason})` : "";
+        console.log(`    ${mark} ${c.name}${reason}`);
+      }
+      if (!r.ok) process.exit(2);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace path <name>
+  // -----------------------------------------------------------------------
+  // -----------------------------------------------------------------------
+  // cast workspace check — run the repo's verify command from the manifest
+  // -----------------------------------------------------------------------
+  ws.command("check")
+    .description("Run the repo's check command ([verify] command in .codecast/workspace.toml) in the current directory; passes with a note when none is configured")
+    .action(() => {
+      const repoRoot = findRepoRoot();
+      const command = readVerifyCommand(repoRoot);
+      if (!command) {
+        console.log(`no verify command configured in ${MANIFEST_REL_PATH} ([verify] command = "..."); nothing to run`);
+        return;
+      }
+      console.log(`$ ${command}`);
+      process.exitCode = runVerifyCommand(command, process.cwd());
+    });
+
+  ws.command("path <name>")
+    .description("Print a workspace's absolute worktree path (for `cd \"$(cast ws path <name>)\"`)")
+    .action((name: string) => {
+      const repoRoot = findRepoRoot();
+      // Prefer the tracked path (handles pool-claimed slots whose layout may
+      // differ from the default), then fall back to the deterministic location.
+      const tracked = readState(repoRoot, name)?.path;
+      const fallback = path.join(repoRoot, ".codecast/worktrees", name);
+      const resolved = tracked ?? fallback;
+      if (!fs.existsSync(resolved)) {
+        console.error(`Workspace '${name}' not found (run: cast workspace acquire ${name})`);
+        process.exit(1);
+      }
+      console.log(resolved);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace heal <name>
+  // -----------------------------------------------------------------------
+  ws.command("heal <name>")
+    .description("Re-run setup to recover a broken workspace")
+    .action(async (name: string) => {
+      const repoRoot = findRepoRoot();
+      try {
+        const ws = await healWorkspace(repoRoot, name);
+        await publishWorktrees(repoRoot);
+        console.log(`healed: ${ws.name} → ${ws.state}`);
+        if (ws.state !== "ready") process.exit(2);
+      } catch (err) {
+        console.error(`heal failed: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace destroy <name>
+  // -----------------------------------------------------------------------
+  ws.command("destroy <name>")
+    .description("Tear down a workspace: run teardown, remove worktree, drop state")
+    .action(async (name: string) => {
+      const repoRoot = findRepoRoot();
+      await releaseWorkspace(repoRoot, name);
+      await publishWorktrees(repoRoot);
+      console.log(`destroyed: ${name}`);
+    });
+
+  registerPoolCommands(ws);
+
+  // -----------------------------------------------------------------------
+  // cast workspace trust [target...]
+  // -----------------------------------------------------------------------
+  ws.command("trust [target...]")
+    .description("Approve the hook scripts and setup commands acquire runs (no target = all)")
+    .option("--list", "Show what is approved and what changed, approving nothing")
+    .option("--revoke", "Forget every approval for this repo")
+    .action((targets: string[], opts: { list?: boolean; revoke?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      const all = collectTrustTargets({ hooksRoot: repoRoot });
+      if (opts.revoke) {
+        clearRepoTrust(repoRoot);
+        console.log(`revoked every approval for ${repoRoot}`);
+        return;
+      }
+      if (all.length === 0) {
+        console.log("Nothing to approve: this repo has no hook scripts and no manifest commands.");
+        return;
+      }
+      const findings = reviewTrust(readRepoTrust(repoRoot), all);
+      if (opts.list) {
+        for (const target of all) {
+          const finding = findings.find((f) => f.target.id === target.id);
+          const mark = !finding ? "✓ approved" : finding.verdict === "new" ? "· not approved" : "✗ changed";
+          console.log(`${mark}  ${target.id}`);
+        }
+        if (findings.length > 0) process.exit(2);
+        return;
+      }
+      const picked = targets.length === 0 ? all : all.filter((t) => targets.some((q) => t.id.includes(q)));
+      if (picked.length === 0) {
+        console.error(`no hook or manifest command matches [${targets.join(", ")}]. Try: cast ws trust --list`);
+        process.exit(1);
+      }
+      recordTrust(repoRoot, picked, all);
+      for (const target of picked) console.log(`approved: ${target.id}`);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace ls
+  // -----------------------------------------------------------------------
+  ws.command("ls")
+    .description("List all tracked workspaces")
+    .action(() => {
+      const repoRoot = findRepoRoot();
+      const list = listWorkspaces(repoRoot);
+      if (list.length === 0) {
+        console.log("(no workspaces)");
+        return;
+      }
+      const nameLen = Math.max(...list.map((w) => w.name.length), 4);
+      console.log(
+        `${"NAME".padEnd(nameLen)}  ${"STATE".padEnd(10)}  ${"BRANCH".padEnd(20)}  PATH`,
+      );
+      for (const w of list) {
+        console.log(
+          `${w.name.padEnd(nameLen)}  ${w.state.padEnd(10)}  ${w.branch.padEnd(20)}  ${w.path}`,
+        );
+      }
+    });
+}
+
+/**
+ * The one JSON line `acquire --json` and `root --json` print: what the laptop's
+ * parseAcquireOutput (cloud/prepare.ts) reads over SSH. Exit 2 on a failed contract.
+ */
+function printAcquireJson(r: AcquireResult): void {
+  const ws = r.workspace;
+  console.log(JSON.stringify({
+    name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
+    ports: ws.ports, created: r.created,
+    ...(ws.noPorts ? { noPorts: true } : {}),
+    ...(r.notices?.length ? { notices: r.notices } : {}),
+    contract: ws.contract ? {
+      ok: ws.contract.ok,
+      failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
+      warnings: ws.contract.checks.filter((c) => !c.ok && c.name.startsWith("port-free:")),
+    } : null,
+  }));
+  if (ws.contract && !ws.contract.ok) process.exit(2);
+}
+
+/**
+ * `cast ws pool status | warm | drain` — the warm worktree pool.
+ *
+ * The daemon maintains this pool on its own, sized by how often the repo has
+ * been creating workspaces. These verbs exist to see what it holds, to force a
+ * warm before a burst you already know is coming, and to give the disk back.
+ */
+function registerPoolCommands(ws: Command): void {
+  const pool = ws
+    .command("pool")
+    .description("Inspect and drive the warm worktree pool for this repo");
+
+  pool
+    .command("status")
+    .description("Show pool slots, their staleness fingerprint, and the size recent creates justify")
+    .option("--json", "Print the pool state as one JSON line")
+    .action(async (opts: { json?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      const { readPoolState } = await import("./pool/state.js");
+      const { readDemand, desiredPoolSize, POOL_MAX_SLOTS } = await import("./pool/demand.js");
+      const state = readPoolState(repoRoot);
+      const creates = readDemand(repoRoot);
+      const desired = desiredPoolSize(creates);
+      if (opts.json) {
+        console.log(JSON.stringify({ repoRoot, desired, cap: POOL_MAX_SLOTS, creates, state }));
+        return;
+      }
+      const ready = state?.slots.filter((s) => s.state === "ready").length ?? 0;
+      console.log(`pool: ${ready} ready / ${state?.slots.length ?? 0} slots (target ${desired}, cap ${POOL_MAX_SLOTS})`);
+      console.log(`creates in the burst window: ${creates.length}`);
+      if (!state || state.slots.length === 0) {
+        console.log("(no slots)");
+        return;
+      }
+      console.log(`${"SLOT".padEnd(8)}  ${"STATE".padEnd(8)}  ${"HEAD".padEnd(9)}  UPDATED`);
+      for (const s of state.slots) {
+        const head = (s.headSha ?? "-").slice(0, 8);
+        console.log(`${s.slotId.padEnd(8)}  ${s.state.padEnd(8)}  ${head.padEnd(9)}  ${s.updatedAt}${s.lastError ? `  (${s.lastError})` : ""}`);
+      }
+    });
+
+  pool
+    .command("warm")
+    .description("Run one maintenance pass now: recycle stale slots and start warming empty ones")
+    .option("--size <n>", "Slots to hold, up to the cap (default: what recent creates justify)")
+    .option("--wait", "Block until a slot is ready")
+    .option("--timeout <ms>", "How long --wait waits", "600000")
+    .action(async (opts: { size?: string; wait?: boolean; timeout: string }) => {
+      const repoRoot = findRepoRoot();
+      const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+      const { desiredPoolSizeForRepo, POOL_MAX_SLOTS } = await import("./pool/demand.js");
+      const requested = opts.size === undefined ? desiredPoolSizeForRepo(repoRoot) : Number(opts.size);
+      if (!Number.isInteger(requested) || requested < 0) {
+        console.error(`--size must be a non-negative integer, got '${opts.size}'`);
+        process.exit(1);
+      }
+      const size = Math.min(requested, POOL_MAX_SLOTS);
+      const state = await maintainPool(repoRoot, size);
+      console.log(`pool: ${size} slot(s) targeted; ${state.slots.filter((s) => s.state === "warming").length} warming, ${state.slots.filter((s) => s.state === "ready").length} ready`);
+      if (!opts.wait) return;
+      if (size === 0) return;
+      const ready = await waitForReadySlot(repoRoot, { timeoutMs: Number(opts.timeout) });
+      if (!ready) {
+        console.error("timed out waiting for a ready slot");
+        process.exit(2);
+      }
+      console.log(`ready: ${ready.slotId}`);
+    });
+
+  pool
+    .command("drain")
+    .description("Tear down every pool slot and forget the pool (gives the disk back)")
+    .action(async () => {
+      const repoRoot = findRepoRoot();
+      const { drainPool } = await import("./pool/manager.js");
+      const removed = await drainPool(repoRoot);
+      console.log(`drained: ${removed} slot(s) removed`);
+    });
+}
+
+/** Render a manifest back to TOML for `init` output. Hand-rolled (no dep). */
+function renderManifestToml(m: WorkspaceManifest): string {
+  const lines: string[] = [
+    `# .codecast/workspace.toml — generated by 'cast workspace init'`,
+    `# Detected project type: ${m.detected ?? "none"}`,
+    `# Full schema: packages/cli/docs/workspace-toml.md`,
+    ``,
+  ];
+
+  const setupKeys = (["copy", "share", "install", "generate", "migrate"] as const).filter(
+    (k) => m.setup[k].length > 0,
+  );
+  if (setupKeys.length > 0) {
+    lines.push(`[setup]`);
+    for (const k of setupKeys) {
+      lines.push(`${k} = ${JSON.stringify(m.setup[k])}`);
+    }
+    lines.push(``);
+  }
+
+  for (const [name, spec] of Object.entries(m.ports)) {
+    lines.push(`[ports.${name}]`);
+    lines.push(`base = ${spec.base}`);
+    lines.push(`range = ${spec.range}`);
+    lines.push(``);
+  }
+
+  for (const [name, spec] of Object.entries(m.services)) {
+    lines.push(`[services.${name}]`);
+    lines.push(`mode = ${JSON.stringify(spec.mode)}`);
+    for (const k of ["start", "stop", "url", "port"] as const) {
+      if (spec[k]) lines.push(`${k} = ${JSON.stringify(spec[k])}`);
+    }
+    if (spec.readyCheck) lines.push(`ready_check = ${JSON.stringify(spec.readyCheck)}`);
+    if (spec.readyTimeoutSec !== undefined) lines.push(`ready_timeout_sec = ${spec.readyTimeoutSec}`);
+    lines.push(``);
+  }
+
+  const envKeys = Object.keys(m.env);
+  if (envKeys.length > 0) {
+    lines.push(`[env]`);
+    for (const k of envKeys) lines.push(`${k} = ${JSON.stringify(m.env[k])}`);
+    lines.push(``);
+  }
+
+  if (m.teardown.run.length > 0) {
+    lines.push(`[teardown]`);
+    lines.push(`run = ${JSON.stringify(m.teardown.run)}`);
+    lines.push(``);
+  }
+
+  if (m.host) {
+    lines.push(`[host]`);
+    for (const k of ["packages", "services", "run"] as const) if (m.host[k].length) lines.push(`${k} = ${JSON.stringify(m.host[k])}`);
+    lines.push(``);
+  } else {
+    lines.push(
+      `# What a cloud host needs for this repo beyond its tools, applied once per change on every wake:`,
+      `# [host]`,
+      `# packages = ["postgresql", "redis-server"]   # apt`,
+      `# services = ["redis-server"]                 # systemd units, enabled and started`,
+      `# run = ["./scripts/seed-db.sh"]              # from the checkout; each must be safe to run again`,
+      ``,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function describePorts(ws: { ports: Record<string, number>; noPorts?: boolean }): string {
+  const ports = Object.entries(ws.ports).map(([name, port]) => `${name}=${port}`).join(" ");
+  return ports || (ws.noPorts ? "none (--no-ports)" : "none");
+}
+
+interface ResolvedPickup {
+  conversation: PickupConversation;
+  snapshot: PickupSnapshot;
+  branch: string;
+  altBranch?: string;
+}
+
+/** `--from <session>`: the session's snapshot, fetched and checked, plus the branch names to create. */
+async function resolvePickup(repoRoot: string, ref: string, branchOverride?: string): Promise<ResolvedPickup> {
+  const config = readAuthConfig(defaultConfigDir());
+  if (!config?.auth_token || !config.convex_url) throw new PickupError("not signed in; run: cast auth");
+  const conversation = await fetchPickupConversation(ref, { convexUrl: config.convex_url, authToken: config.auth_token });
+  const snapshot = await preparePickup(repoRoot, conversation);
+  return { conversation, snapshot, ...pickupBranches(snapshot, conversation.id, branchOverride) };
+}
+
+async function resolveRewindFromConfig(repoRoot: string, ref: string, branchOverride?: string): Promise<ResolvedRewind> {
+  const config = readAuthConfig(defaultConfigDir());
+  if (!config?.auth_token || !config.convex_url) throw new PickupError("not signed in; run: cast auth");
+  return resolveRewind(repoRoot, ref, { convexUrl: config.convex_url, authToken: config.auth_token }, branchOverride);
+}
+
+function printRewind(r: ResolvedRewind): void {
+  const s = r.snapshot;
+  const at = r.line !== undefined ? `message ${r.line}` : "its newest turn";
+  console.log(`  rewind:  ${r.conversation.id.slice(0, 7)}${r.conversation.title ? ` (${r.conversation.title})` : ""} at ${at}`);
+  console.log(`  tree:    snapshot ${s.sha.slice(0, 10)}, taken ${formatRelativeTime(new Date(snapshotMoment(s)).toISOString())}, base ${s.base_sha.slice(0, 10)}${s.branch ? ` on ${s.branch}` : ""}`);
+  console.log(`  changes: ${s.dirty ? "the snapshot's edits are left uncommitted" : "the tree equals its base commit"}`);
+  if (r.line !== undefined) console.log(`  next:    cast fork --at ${r.line} ... then run the fork in this worktree to continue the conversation from this tree`);
+  for (const w of r.warnings) console.error(`  warning: ${w}`);
+}
+
+function printPickup(p: ResolvedPickup): void {
+  const { snapshot: s, conversation: c } = p;
+  console.log(`  from:    ${c.id.slice(0, 7)}${c.title ? ` (${c.title})` : ""}, on ${s.branch}`);
+  console.log(`  base:    ${s.base.slice(0, 10)} (committed ${formatRelativeTime(s.baseDate)})`);
+  console.log(`  changes: ${s.files} file${s.files === 1 ? "" : "s"} differ from base, left uncommitted`);
+  console.log(`  taken:   ${s.takenAt ? formatRelativeTime(s.takenAt) : "not recorded by this snapshot"}`);
+  if (c.updatedAt) console.log(`  session: last active ${formatRelativeTime(c.updatedAt)}`);
+  for (const w of s.warnings) console.error(`  warning: ${w}`);
+}

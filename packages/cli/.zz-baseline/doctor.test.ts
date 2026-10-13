@@ -1,0 +1,291 @@
+// Unit tests for the pure pieces of `cast doctor`, plus a real-process test of
+// the stand-in agent: the stub's JSONL output is parsed with the SAME parser
+// the daemon's sync loop uses, so a drift between the stub's transcript shape
+// and what production accepts fails here instead of as a false doctor alarm.
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { pickDoctorProjectDir, exportHasToken, resolveStubRuntime, STUB_SOURCE, loopHangCheck, daemonDownDetail } from "./doctor.js";
+import { writeDaemonExitStamp, writeHangMarker, type HangMarker } from "./daemonMarkers.js";
+import { parseSessionFile } from "./parser.js";
+import { TEST_SCRATCH_DIRNAME } from "./syncScope.js";
+import type { Config } from "./config/types.js";
+import type { ProcRow } from "./processTable.js";
+import type { killProcessTree } from "./processTable.js";
+
+const baseConfig = { auth_token: "t", convex_url: "https://x.example" } as unknown as Config;
+
+describe("pickDoctorProjectDir", () => {
+  test("sync all: defaults to a dir under ~/.codecast/doctor", () => {
+    const dir = pickDoctorProjectDir({ ...baseConfig, sync_mode: "all" } as Config, "abc123");
+    expect(dir).toBe(path.join(os.homedir(), ".codecast", "doctor", "e2e-abc123"));
+  });
+
+  test("selected mode: falls through to a dir under an allowed root", () => {
+    const root = path.join(os.tmpdir(), "doctor-root");
+    const dir = pickDoctorProjectDir(
+      { ...baseConfig, sync_mode: "selected", sync_projects: [root] } as Config,
+      "abc123",
+    );
+    expect(dir).toBe(path.join(root, ".codecast-doctor", "e2e-abc123"));
+  });
+
+  test("selected mode with no roots: null (nowhere syncable)", () => {
+    const dir = pickDoctorProjectDir({ ...baseConfig, sync_mode: "selected", sync_projects: [] } as Config, "x");
+    expect(dir).toBeNull();
+  });
+
+  test("excluded_paths knocks out a candidate the allowlist would accept", () => {
+    const dir = pickDoctorProjectDir(
+      { ...baseConfig, sync_mode: "all", excluded_paths: path.join(os.homedir(), ".codecast") } as unknown as Config,
+      "x",
+    );
+    expect(dir).toBeNull();
+  });
+
+  test("override is validated against the same rules, not trusted", () => {
+    const bad = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME, "sub");
+    expect(pickDoctorProjectDir({ ...baseConfig, sync_mode: "all" } as Config, "x", bad)).toBeNull();
+    const good = path.join(os.tmpdir(), "fine");
+    expect(pickDoctorProjectDir({ ...baseConfig, sync_mode: "all" } as Config, "x", good)).toBe(good);
+  });
+});
+
+describe("exportHasToken", () => {
+  const messages = [
+    { role: "user", content: "reply with pong-99" },
+    { role: "assistant", content: "pong-11" },
+  ];
+  test("any role", () => {
+    expect(exportHasToken(messages, "pong-99")).toBe(true);
+  });
+  test("role narrows the match", () => {
+    // The delivered request contains the token as a USER message; only the
+    // agent's own echo proves the round trip, so the assistant filter must
+    // not match the request.
+    expect(exportHasToken(messages, "pong-99", "assistant")).toBe(false);
+    expect(exportHasToken(messages, "pong-11", "assistant")).toBe(true);
+  });
+});
+
+// What `cast doctor` says about a stall nobody was awake to see, and about a
+// daemon that is down because it told its supervisor not to restart it. Both
+// read files under an isolated config dir — the real ~/.codecast is untouched.
+describe("doctor rendering of the daemon's breadcrumbs", () => {
+  let configDir: string;
+  const at = 1_800_000_000_000;
+
+  beforeEach(() => {
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-markers-"));
+  });
+  afterEach(() => {
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  const hang = (over: Partial<HangMarker> = {}): HangMarker => ({
+    detected_at: at,
+    pid: 900,
+    unresponsive_ms: 62_000,
+    hot_stacks: "primeSessionFileIndex@daemon.ts:91 70%",
+    self_recovered: true,
+    ...over,
+  });
+
+  test("no marker anywhere: a clean pass, not silence", () => {
+    expect(loopHangCheck(undefined, configDir, at)).toEqual({ ok: true, detail: "no stall in the last 24h" });
+  });
+
+  test("a stall the daemon consumed at boot warns and names the stack that pinned the loop", () => {
+    const check = loopHangCheck(hang(), configDir, at + 120_000);
+    expect(check.ok).toBe(false);
+    expect(check.warn).toBe(true);
+    expect(check.detail).toBe(
+      "62s of loop silence 2m ago (pid 900), loop resumed on its own; hot stacks: primeSessionFileIndex@daemon.ts:91 70%",
+    );
+  });
+
+  test("a marker still on disk is reported even though no daemon ever consumed it", () => {
+    // The daemon that hung was killed and never booted again: the file is the
+    // only witness, and doctor must not need a live daemon to read it.
+    writeHangMarker(hang({ self_recovered: false, hot_stacks: "" }), configDir);
+    const check = loopHangCheck(undefined, configDir, at + 60_000);
+    expect(check.detail).toBe("62s of loop silence 1m ago (pid 900), loop never resumed — the daemon died in it");
+  });
+
+  test("a stall from last week is history, not a finding", () => {
+    expect(loopHangCheck(hang(), configDir, at + 8 * 24 * 3600_000).ok).toBe(true);
+  });
+
+  test("a dead daemon reads as fixable until it declared its exit terminal", () => {
+    expect(daemonDownDetail(configDir, { configured: true, state: "not running" }))
+      .toBe("not running (launchd state: not running) — run `cast start`");
+    writeDaemonExitStamp("HOME is not set", configDir);
+    expect(daemonDownDetail(configDir, { configured: true, state: "not running" }))
+      .toBe("not running and supervision is disarmed — HOME is not set; fix that, then run `cast start`");
+  });
+});
+
+// The stub is launched as a real child process (pipes instead of a tmux pane)
+// and driven the way the daemon's inject drives it: a line on stdin. Skipped
+// when no node/bun runtime is available.
+const runtime = resolveStubRuntime();
+
+describe.skipIf(!runtime)("doctor stub agent", () => {
+  test("bootstraps, echoes an injected token, and writes parser-valid JSONL", async () => {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-stub-test-"));
+    const jsonlPath = path.join(scratch, "transcript.jsonl");
+    const registryPath = path.join(scratch, "registry.json");
+    const stubPath = path.join(scratch, "stub.cjs");
+
+    fs.writeFileSync(stubPath, STUB_SOURCE);
+
+    const child = spawn(runtime!, [stubPath, "11111111-2222-3333-4444-555555555555", jsonlPath, registryPath], {
+      cwd: scratch,
+      env: { ...process.env, DOCTOR_BOOT_TOKEN: "boot-feed" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.on("data", (d) => { stdout += d; });
+    let stderr = "";
+    child.stderr.on("data", (d) => { stderr += d; });
+
+    try {
+      // Wait for bootstrap (registry + 2 JSONL lines).
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (stdout.includes("❯ ") && fs.existsSync(registryPath) && fs.existsSync(jsonlPath)) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(fs.existsSync(registryPath)).toBe(true);
+      const registry = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+      expect(registry.pid).toBe(child.pid);
+
+      // Inject like the daemon does — text then Enter — including the kind of
+      // bracketed-paste garnish a tmux paste can carry.
+      child.stdin.write("\x1b[200~codecast doctor r1: reply with pong-cafe1234\x1b[201~\r");
+
+      let lines: string[] = [];
+      while (Date.now() < deadline + 5000) {
+        lines = fs.existsSync(jsonlPath) ? fs.readFileSync(jsonlPath, "utf-8").trim().split("\n") : [];
+        if (lines.length >= 4) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect({ lines: lines.length, stdout, stderr, runtime, exit: child.exitCode }).toMatchObject({ lines: 4 });
+
+      // The production parser must accept every line and see the round trip.
+      const messages = parseSessionFile(lines.join("\n") + "\n");
+      expect(messages.length).toBe(4);
+      expect(messages[0].role).toBe("user");
+      expect(messages[0].content).toContain("boot-feed");
+      expect(messages[1].role).toBe("assistant");
+      expect(messages[1].content).toBe("boot-feed");
+      expect(messages[2].role).toBe("user");
+      expect(messages[2].content).toBe("codecast doctor r1: reply with pong-cafe1234");
+      expect(messages[3].role).toBe("assistant");
+      expect(messages[3].content).toBe("pong-cafe1234");
+
+      // Every entry carries the fields the sync loop keys on.
+      for (const raw of lines) {
+        const entry = JSON.parse(raw);
+        expect(entry.sessionId).toBe("11111111-2222-3333-4444-555555555555");
+        expect(entry.cwd).toBeTruthy();
+        expect(entry.uuid).toBeTruthy();
+        expect(entry.timestamp).toBeTruthy();
+      }
+    } finally {
+      child.kill("SIGTERM");
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+    expect(stderr).toBe("");
+  }, 20_000);
+});
+
+describe("doctor tmux reap safety", () => {
+  test.each([null, 0, NaN])("refuses an unknown live server PID %s", async livePid => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const killed: ProcRow[][] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
+      snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
+      liveTmuxServerPid: async () => livePid,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed).toEqual([]);
+    expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: tmux-unreachable" });
+  });
+
+  test("refuses an unknown user", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const killed: ProcRow[][] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, [], {
+      snapshotProcessTable: () => [{ pid: 100, ppid: 1, uid: 501, command: "tmux new-session" }],
+      liveTmuxServerPid: async () => 100,
+      uid: () => undefined,
+      selfPid: 999,
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed).toEqual([]);
+    expect(result).toMatchObject({ skip: true, detail: "tmux reap skipped: owner-unknown" });
+  });
+
+  test("preserves the hosting server, live server, foreign users and ownerless processes", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: ProcRow[][] = [];
+    const cleanup: string[] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 bun doctor\n300 1 502 tmux new-session\n400 1 tmux new-session"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 201,
+      killProcessTree: (async targets => { killed.push(targets); return { terminated: 0, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed).toEqual([]);
+    expect(cleanup).toEqual([]);
+    expect(result.detail).toContain("skipped self-hosting server(s) 200");
+    expect(result).toMatchObject({ skip: true });
+  });
+
+  test("only reaps a positively identified stale generation", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: ProcRow[][] = [];
+    const cleanup: string[] = [];
+    await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n101 100 501 claude\n200 1 501 tmux new-session\n201 200 501 claude"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: (async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed.map(rows => rows.map(r => r.pid))).toEqual([[201, 200]]);
+    expect(cleanup).toEqual(["reaped stale tmux server(s) 200"]);
+  });
+
+  test("never reaps the generation holding more agents than the live server", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: ProcRow[][] = [];
+    const cleanup: string[] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 claude"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: (async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed).toEqual([]);
+    expect(cleanup).toEqual([]);
+    expect(result.detail).toContain("pid 200 holds 1 agent(s) but lost the default socket");
+  });
+});
+
+test("doctor runtime can capture a real child's stdout before using it as a measurement", () => {
+  const result = spawnSync(process.execPath, ["-e", "process.stdout.write('doctor-runtime-ready')"], { encoding: "utf-8" });
+  expect(result.stdout, "Subprocess capture failed; invoke this file with an explicit ./ path, not a Bun discovery filter").toBe("doctor-runtime-ready");
+  expect(result.status).toBe(0);
+});

@@ -1,0 +1,73 @@
+// The loopback server must listen at the very front of boot.
+//
+// It used to listen last, after the forced update network check, the warm
+// restart tmux scan and the skills sweep. Everything before the listen is boot
+// blackout: the terminal panel, the vault, the browser watch and the health
+// probe are unreachable, and every hook status falls back to a polled file.
+// Measured blackouts ran 5 to 30 seconds on a loaded laptop, and 1168 seconds
+// once (2026-08-31).
+//
+// So the order is an invariant, not a preference, and a source guard is the
+// cheapest way to hold it. Put a network call, a tmux scan or a tree walk back
+// in front of the listen and this fails by name. The loop budget guard
+// (daemon.loopBudget.guard.test.ts) covers what may run inside that window;
+// this one covers where the window ends.
+
+import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { codeLines, sliceBetween } from "./test-helpers/sourceRegion.js";
+
+const SRC = path.dirname(fileURLToPath(import.meta.url));
+const src = fs.readFileSync(path.join(SRC, "daemon.ts"), "utf8");
+const MAIN = "async function main(";
+const mainAt = src.indexOf(MAIN);
+
+// In boot order. Each must appear inside main() after the one before it.
+const SEQUENCE: Array<{ anchor: string; why: string }> = [
+  { anchor: 'logLifecycle("daemon_start"', why: "boot starts here" },
+  { anchor: "hookServer = startHookServer(", why: "the loopback server listens" },
+  { anchor: "bindConvexConnectionState(syncService.getSubscriptionClient()", why: "Convex WebSocket tracking starts before the warm restart" },
+  { anchor: "void checkForForcedUpdate(", why: "the update check runs in the background" },
+  { anchor: "readAvailableSkills()", why: "the boot skills sweep" },
+  { anchor: "setHookStatusSink(", why: "the hook status handler registers" },
+];
+
+describe("daemon boot order", () => {
+  test("the listener comes up before the network check, the skills sweep and the status handler", () => {
+    expect(mainAt).toBeGreaterThan(0);
+    let at = mainAt;
+    const found: Array<{ anchor: string; index: number }> = [];
+    for (const { anchor, why } of SEQUENCE) {
+      const i = src.indexOf(anchor, at);
+      expect(i, `${anchor} (${why}) not found in main() after the previous step`).toBeGreaterThan(-1);
+      found.push({ anchor, index: i });
+      at = i + anchor.length;
+    }
+    // Redundant with the walk above, and it is the assertion that reads.
+    expect(found.map((f) => f.anchor)).toEqual(SEQUENCE.map((s) => s.anchor));
+  });
+
+  test("the window before the listen stays short", () => {
+    const slice = sliceBetween(src, 'logLifecycle("daemon_start"', "hookServer = startHookServer(", mainAt);
+    const lines = codeLines(slice.text).length;
+    expect(lines, `${lines} code lines run before the loopback server listens`).toBeLessThan(80);
+  });
+
+  test("Convex WebSocket tracking is not held behind the tmux warm restart", () => {
+    const bindAt = src.indexOf("bindConvexConnectionState(syncService.getSubscriptionClient()", mainAt);
+    const warmAt = src.indexOf("await runBounded(ccSessions", mainAt);
+    expect(bindAt, "bindConvexConnectionState not found in main()").toBeGreaterThan(-1);
+    expect(warmAt, "warm restart runBounded not found in main()").toBeGreaterThan(-1);
+    expect(bindAt, "Convex WebSocket tracking must start before the warm restart await").toBeLessThan(warmAt);
+  });
+
+  test("updates and skill discovery cannot hold sync startup behind an unresolved promise", () => {
+    const main = src.slice(mainAt);
+    expect(main).not.toContain("await checkForForcedUpdate(");
+    const skills = sliceBetween(main, "const syncStartupSkills = async () => {", "const retryQueue = new RetryQueue(");
+    expect(skills.text).toContain("setImmediate(() => {");
+    expect(skills.text).toContain("void syncStartupSkills().catch(");
+  });
+});

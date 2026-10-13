@@ -1,0 +1,23 @@
+myplug 0.1.0
+  A probe plugin with several components
+  Source: myplug@inline
+
+Component inventory
+  Skills (3)  alpha, beta-two, gamma
+  Agents (1)  helper
+  Hooks (2)  PreToolUse, Stop  (harness-only — no model context cost)
+  MCP servers (2)  srv-alpha, srv-beta  (tool schemas resolved at runtime; not counted)
+  LSP servers (0)
+
+Projected token cost
+  Always-on:   ~63 tok   added to every session
+
+Per-component (rounded)
+  component  always-on  on-invoke
+  gamma           < 20       ~220
+  alpha           < 20       ~220
+  beta-two         ~20       ~220
+  helper          < 20       < 20
+
+  On-invoke cost is paid each time a skill or agent fires.
+  Token counts are estimates and may differ from actual usage.

@@ -1,0 +1,309 @@
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import {
+  decodeCodexAuth,
+  saveCodexProfile,
+  autoSaveActiveCodexProfile,
+  migrateLegacyCodexProfileNames,
+  resnapshotIfActiveCodexFresher,
+  refreshCodexUsageSnapshots,
+  getCodexAccountsHeartbeatPayload,
+  invalidateCodexAccountsCache,
+  readProfileIndex,
+  readUsageCache,
+  profileDir,
+  resolveCodexAccount,
+  CodexAccountError,
+} from "./codexAccounts";
+
+const NOW = Date.parse("2026-07-31T12:00:00Z");
+
+function fakeIdToken(claims: Record<string, unknown>): string {
+  const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${enc({ alg: "RS256" })}.${enc(claims)}.sig`;
+}
+
+function authJson(opts: { email?: string; accountId?: string; plan?: string; lastRefresh?: string; tokens?: boolean } = {}): string {
+  const { email = "ashot@almostcandid.com", accountId = "acct-1", plan = "pro", lastRefresh = "2026-07-30T00:00:00Z", tokens = true } = opts;
+  return JSON.stringify({
+    auth_mode: tokens ? "chatgpt" : "apikey",
+    OPENAI_API_KEY: tokens ? null : "sk-test",
+    tokens: tokens
+      ? {
+          id_token: fakeIdToken({ email, "https://api.openai.com/auth": { chatgpt_plan_type: plan } }),
+          access_token: "at-1",
+          refresh_token: "rt-1",
+          account_id: accountId,
+        }
+      : undefined,
+    last_refresh: lastRefresh,
+  });
+}
+
+// camelCase account/rateLimits/read result (the app-server wire shape).
+function rpcResult(weeklyPercent: number, plan = "pro"): any {
+  return {
+    rateLimits: {
+      limitId: "codex",
+      planType: plan,
+      primary: { usedPercent: weeklyPercent, windowDurationMins: 10080, resetsAt: 1786011679 },
+    },
+    rateLimitResetCredits: { availableCount: 1 },
+  };
+}
+
+describe("codexAccounts", () => {
+  let tmp: string;
+  const origEnv: Record<string, string | undefined> = {};
+
+  function writeActiveAuth(content: string) {
+    const dir = path.join(tmp, "codex");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "auth.json"), content);
+  }
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-test-"));
+    for (const k of ["CODECAST_CODEX_HOME", "CODECAST_DIR"]) origEnv[k] = process.env[k];
+    process.env.CODECAST_CODEX_HOME = path.join(tmp, "codex");
+    process.env.CODECAST_DIR = path.join(tmp, "codecast");
+    invalidateCodexAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(origEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe("decodeCodexAuth", () => {
+    it("extracts email, plan, account id, and last_refresh", () => {
+      const s = decodeCodexAuth(authJson());
+      expect(s.email).toBe("ashot@almostcandid.com");
+      expect(s.plan).toBe("pro");
+      expect(s.account_id).toBe("acct-1");
+      expect(s.last_refresh).toBe(Date.parse("2026-07-30T00:00:00Z"));
+      expect(s.usable).toBe(true);
+    });
+
+    it("marks API-key-only and malformed blobs unusable", () => {
+      expect(decodeCodexAuth(authJson({ tokens: false })).usable).toBe(false);
+      expect(decodeCodexAuth("not json").usable).toBe(false);
+      expect(decodeCodexAuth(null).usable).toBe(false);
+    });
+  });
+
+  describe("profiles", () => {
+    it("saveCodexProfile snapshots auth.json + index metadata", () => {
+      writeActiveAuth(authJson());
+      const saved = saveCodexProfile("almostcandid");
+      expect(saved.email).toBe("ashot@almostcandid.com");
+      expect(saved.plan).toBe("pro");
+      const stored = fs.readFileSync(path.join(profileDir("almostcandid"), "auth.json"), "utf-8");
+      expect(JSON.parse(stored).tokens.account_id).toBe("acct-1");
+      expect(readProfileIndex().profiles.almostcandid.account_id).toBe("acct-1");
+    });
+
+    it("refuses to save without a usable login", () => {
+      writeActiveAuth(authJson({ tokens: false }));
+      expect(() => saveCodexProfile("nope")).toThrow(CodexAccountError);
+    });
+
+    it("auto-save enrolls once, derives the local-part name, then no-ops", () => {
+      writeActiveAuth(authJson());
+      expect(autoSaveActiveCodexProfile()?.name).toBe("ashot");
+      expect(autoSaveActiveCodexProfile()).toBeNull();
+    });
+
+    it("migrates legacy domain-derived names, moving the snapshot dir", () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("almostcandid"); // old auto-derived name for ashot@almostcandid.com
+      expect(migrateLegacyCodexProfileNames()).toEqual([{ from: "almostcandid", to: "ashot" }]);
+      expect(Object.keys(readProfileIndex().profiles)).toEqual(["ashot"]);
+      expect(fs.existsSync(path.join(profileDir("ashot"), "auth.json"))).toBe(true);
+      expect(fs.existsSync(profileDir("almostcandid"))).toBe(false);
+      // Idempotent, and hand-picked names stay.
+      expect(migrateLegacyCodexProfileNames()).toEqual([]);
+    });
+
+    it("resnapshot copies the live auth only when it rotated past the stored one", () => {
+      writeActiveAuth(authJson({ lastRefresh: "2026-07-30T00:00:00Z" }));
+      saveCodexProfile("almostcandid");
+      expect(resnapshotIfActiveCodexFresher()).toBeNull(); // in step
+      writeActiveAuth(authJson({ lastRefresh: "2026-07-31T00:00:00Z" }));
+      expect(resnapshotIfActiveCodexFresher()).toBe("almostcandid");
+      const stored = decodeCodexAuth(fs.readFileSync(path.join(profileDir("almostcandid"), "auth.json"), "utf-8"));
+      expect(stored.last_refresh).toBe(Date.parse("2026-07-31T00:00:00Z"));
+    });
+  });
+
+  describe("refreshCodexUsageSnapshots", () => {
+    it("probes the active account via the real home, dormant via snapshot dirs, and skips the covered profile", async () => {
+      // Dormant profile for a second account.
+      writeActiveAuth(authJson({ email: "ashot@footage.com", accountId: "acct-2", plan: "plus" }));
+      saveCodexProfile("footage");
+      // Active login is a different account (auto-enrolled by the refresh).
+      writeActiveAuth(authJson());
+      const homes: (string | undefined)[] = [];
+      const res = await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async (home) => {
+          homes.push(home);
+          return rpcResult(home === profileDir("footage") ? 40 : 15);
+        },
+      });
+      expect(res.probed.sort()).toEqual(["active", "footage"]);
+      // Active probed via the REAL codex home (never a snapshot copy).
+      expect(homes).toContain(process.env.CODECAST_CODEX_HOME);
+      expect(homes).toContain(profileDir("footage"));
+      expect(homes).toHaveLength(2);
+      const cache = readUsageCache();
+      expect(cache.accounts["acct-1"].weekly?.percent).toBe(15);
+      expect(cache.accounts["acct-2"].weekly?.percent).toBe(40);
+      // The refresh auto-enrolled the active login as a profile.
+      expect(readProfileIndex().profiles.ashot.account_id).toBe("acct-1");
+    });
+
+    it("throttles per-account probes within minIntervalMs", async () => {
+      writeActiveAuth(authJson());
+      let calls = 0;
+      const probeOnce = () =>
+        refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => (calls++, rpcResult(10)) });
+      await probeOnce();
+      const second = await refreshCodexUsageSnapshots({
+        now: NOW + 60_000,
+        rpcFetch: async () => (calls++, rpcResult(10)),
+      });
+      expect(calls).toBe(1);
+      expect(second.skipped).toContain("active");
+    });
+
+    it("reports a failure (and keeps the old snapshot) when a probe returns nothing", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(10),
+        backendFetch: async () => null,
+      });
+      const res = await refreshCodexUsageSnapshots({
+        now: NOW + 10 * 60_000,
+        rpcFetch: async () => null,
+        backendFetch: async () => null,
+      });
+      expect(res.failed.map((f) => f.name)).toContain("active");
+      expect(readUsageCache().accounts["acct-1"].weekly?.percent).toBe(10);
+    });
+
+    it("still asks the backend for weekly when a session-window cooloff is in effect", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(80),
+        backendFetch: async () => ({ fetched_at: NOW, plan_type: "pro", weekly: { percent: 80, resets_at: 1786011679 * 1000 } }),
+      });
+      expect(readUsageCache().backend_retries?.["acct-1"]?.reason).toBe("no session window on this plan");
+      const homes: string[] = [];
+      await refreshCodexUsageSnapshots({
+        now: NOW + 10 * 60_000,
+        rpcFetch: async () => null,
+        backendFetch: async (home) => {
+          homes.push(home);
+          return { fetched_at: NOW + 10 * 60_000, plan_type: "pro", weekly: { percent: 100, resets_at: 1789829744 * 1000 } };
+        },
+      });
+      expect(homes).toHaveLength(1);
+      expect(readUsageCache().accounts["acct-1"].weekly).toEqual({ percent: 100, resets_at: 1789829744 * 1000 });
+    });
+
+    it("keeps a previous weekly when RPC misses and logs only have placeholders", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({
+        now: NOW,
+        rpcFetch: async () => rpcResult(80),
+        backendFetch: async () => null,
+      });
+      const dir = path.join(tmp, "codex", "sessions", "2026", "07", "31");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "rollout-dummy.jsonl"),
+        JSON.stringify({
+          timestamp: "2026-07-31T12:01:00Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: { total_token_usage: { total_tokens: 1000 } },
+            rate_limits: {
+              primary: { used_percent: 0, window_minutes: 300, resets_at: 0 },
+              secondary: { used_percent: 0, window_minutes: 10080, resets_at: 0 },
+            },
+          },
+        }) + "\n",
+      );
+      await refreshCodexUsageSnapshots({
+        now: NOW + 10 * 60_000,
+        rpcFetch: async () => null,
+        backendFetch: async () => {
+          throw new Error("backend down");
+        },
+      });
+      expect(readUsageCache().accounts["acct-1"].weekly?.percent).toBe(80);
+    });
+  });
+
+  describe("getCodexAccountsHeartbeatPayload", () => {
+    it("returns the Claude-inventory shape with plan as subscription and no plan_type inside usage", async () => {
+      writeActiveAuth(authJson());
+      await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(15, "pro") });
+      const payload = getCodexAccountsHeartbeatPayload()!;
+      expect(payload.active_email).toBe("ashot@almostcandid.com");
+      expect(payload.active_uuid).toBe("acct-1");
+      expect(payload.profiles).toHaveLength(1);
+      const p = payload.profiles[0];
+      expect(p.name).toBe("ashot");
+      expect(p.subscription).toBe("pro"); // RPC's live plan reading
+      expect(p.usage?.weekly?.percent).toBe(15);
+      expect(p.usage?.reset_credits).toEqual({ available: 1 });
+      expect((p.usage as any)?.plan_type).toBeUndefined();
+    });
+
+    it("returns null when the machine has no codex state", () => {
+      expect(getCodexAccountsHeartbeatPayload()).toBeNull();
+    });
+  });
+
+  describe("resolveCodexAccount", () => {
+    it("reads the ACTIVE account through the real codex home, never a snapshot", async () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("ashot");
+      await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(80, "pro") });
+      for (const target of [resolveCodexAccount(), resolveCodexAccount("ashot")]) {
+        expect(target.name).toBe("ashot");
+        expect(target.account).toBe("acct-1");
+        expect(target.active).toBe(true);
+        // The live grant rotates; a copy of it goes stale. Both spellings of
+        // "the account I am signed into" must read ~/.codex.
+        expect(target.home).toBe(process.env.CODECAST_CODEX_HOME!);
+        expect(target.usage?.reset_credits).toEqual({ available: 1 });
+      }
+    });
+
+    it("reads a DORMANT profile through its own snapshot dir", () => {
+      writeActiveAuth(authJson());
+      saveCodexProfile("ashot");
+      writeActiveAuth(authJson({ email: "other@x.com", accountId: "acct-2" }));
+      saveCodexProfile("other");
+      const target = resolveCodexAccount("ashot");
+      expect(target.active).toBe(false);
+      expect(target.home).toBe(profileDir("ashot"));
+    });
+
+    it("names what is missing rather than guessing", () => {
+      expect(() => resolveCodexAccount("nope")).toThrow(CodexAccountError);
+      expect(() => resolveCodexAccount()).toThrow(/No Codex account is signed in/);
+    });
+  });
+});

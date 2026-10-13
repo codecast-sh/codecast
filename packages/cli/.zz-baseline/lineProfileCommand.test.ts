@@ -1,0 +1,230 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runEvalResult } from "./lineProfileCommand";
+
+// `cast line eval-result` on reps.json in the shape Union's eval writes
+// (outreach/backend/src/lib/eval/lineEval.ts RepsFile): the station's exit
+// code is the result's verdict, and an unreadable file is never a pass.
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-result-"));
+afterEach(() => { for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f)); });
+
+const rep = (passed: boolean) => ({ passed, score: passed ? 0.9 : 0.1, reply: passed ? "Thursday at 7, Barn Hall." : "I am not sure.", judge_note: passed ? "names the venue" : "no venue", cost_usd: 0.02 });
+const unionReps = (branchPasses: boolean, gates: string[] = []) => ({
+  version: 1,
+  base: { ref: "main", sha: "aaa" },
+  head: { sha: "bbb", dirty: false },
+  created_at: "2026-10-03T10:00:00Z",
+  dry: false,
+  reps: 5,
+  surfaces: [{
+    surface: "outreach.reply",
+    title: "Reply drafter",
+    route: "api_call",
+    freezes: [{
+      freeze: "fz_miss_1", name: "venue question", kind: "miss", proven: true, input: "where is it?",
+      base: { batch: "run_base", sha: "aaa", reps: Array.from({ length: 5 }, () => rep(false)), input: "where is it?" },
+      branch: { batch: "run_branch", sha: "bbb", reps: Array.from({ length: 5 }, () => rep(branchPasses)) },
+    }],
+  }, { surface: "outreach.digest", title: "Digest", route: null, freezes: [], skipped: "no freeze exercises this prompt yet; prove makes them from its moments" }],
+  gates_failed: gates,
+  gate: gates.length ? { select: "core,venue", run_id: "er_1", exit: 1, failed: gates, note: "1 of 40 failed" } : null,
+  cost_usd: 0.2,
+});
+
+function write(name: string, body: unknown): string {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body));
+  return p;
+}
+
+describe("cast line eval-result", () => {
+  test("a proven miss fixed on the branch passes: exit 0, and the card's file is written", () => {
+    const out = path.join(dir, "eval-result.json");
+    const run = runEvalResult(write("reps.json", unionReps(true)), out);
+    expect(run.code).toBe(0);
+    const written = JSON.parse(fs.readFileSync(out, "utf8"));
+    expect(written).toMatchObject({ version: 1, ok: true, costUsd: 0.2, base: { sha: "aaa" } });
+    expect(written.surfaces[0]).toMatchObject({ separation: "better", proven: [{ freeze: "fz_miss_1", basePasses: false, passes: true }] });
+    expect(written.surfaces[0].flips[0]).toMatchObject({ direction: "fixed", after: "Thursday at 7, Barn Hall.", note: "names the venue" });
+    expect(written.surfaces[1].skipped).toContain("no freeze");
+  });
+
+  test("the miss still failing, or a suite gate failing, exits 1", () => {
+    expect(runEvalResult(write("reps.json", unionReps(false)), path.join(dir, "r.json")).code).toBe(1);
+    const gated = runEvalResult(write("reps.json", unionReps(true, ["core/venue"])), path.join(dir, "r.json"));
+    expect(gated.code).toBe(1);
+    expect(gated.lines.at(-1)).toBe("FAIL suite gates failed: core/venue");
+  });
+
+  test("a side with no scored rep exits 2: the eval could not judge the change", () => {
+    const reps = unionReps(true);
+    reps.surfaces[0].freezes[0].branch.reps = reps.surfaces[0].freezes[0].branch.reps.map((r: any) => ({ ...r, passed: false, error: "API error 429" }));
+    const run = runEvalResult(write("reps.json", reps), path.join(dir, "r.json"));
+    expect(run.code).toBe(2);
+    expect(run.lines.join("\n")).toContain("proven freeze fz_miss_ was not scored on the branch");
+  });
+
+  test("an unreadable or malformed reps file is an error, never a result", () => {
+    expect(() => runEvalResult(path.join(dir, "missing.json"), path.join(dir, "r.json"))).toThrow(/cannot read/);
+    expect(() => runEvalResult(write("bad.json", "{not json"), path.join(dir, "r.json"))).toThrow(/cannot read/);
+    expect(() => runEvalResult(write("old.json", { ...unionReps(true), version: 0 }), path.join(dir, "r.json"))).toThrow(/version must be 1/);
+    expect(fs.existsSync(path.join(dir, "r.json"))).toBe(false);
+  });
+});
+
+// `cast line profile --publish` on Union's profile: one group per project the
+// finders file into, the profile's default project marked, and a finder
+// without a project goes to the default.
+describe("publishGroups", () => {
+  test("groups Union's finders by project", async () => {
+    const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
+    const { publishGroups } = await import("./lineProfileCommand");
+    const toml = `
+[line]
+project = "Agent Quality"
+[[line.finders]]
+id = "clusters"
+source = "agentwatch"
+kind = "prompt_miss or bug"
+fingerprint = "union:cluster:<id>"
+project = "Agent Quality"
+[[line.finders]]
+id = "invariants"
+source = "union.invariant"
+kind = "regression"
+fingerprint = "union:invariant:<id>"
+[[line.finders]]
+id = "errors"
+source = "union.error"
+kind = "bug or regression"
+fingerprint = "union:error:<fingerprint>"
+runs = "daily"
+project = "Infrastructure"
+`;
+    const { values, warnings } = parseLineProfileText(toml);
+    const { groups, unprojected } = publishGroups(resolveLineProfile(values, { warnings }));
+    expect(unprojected).toEqual([]);
+    expect(groups.map((g) => [g.project, g.default, g.finders.map((f) => f.id)])).toEqual([
+      ["Agent Quality", true, ["clusters", "invariants"]],
+      ["Infrastructure", false, ["errors"]],
+    ]);
+    expect(groups[1].finders[0]).toEqual({ id: "errors", source: "union.error", kind: ["bug", "regression"], fingerprint: "union:error:<fingerprint>", runs: "daily" });
+  });
+
+  test("a finder with no project anywhere is held back", async () => {
+    const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
+    const { publishGroups } = await import("./lineProfileCommand");
+    const { values } = parseLineProfileText(`[[line.finders]]\nid = "p"\nsource = "person"\nkind = "any"\nfingerprint = "x"\n`.replace(/^/, "[line]\n"));
+    expect(publishGroups(resolveLineProfile(values))).toEqual({ groups: [], unprojected: ["p"] });
+  });
+});
+
+// Every publish carries the rest of the resolved profile: values, where each
+// came from, the loader's notes and warnings, and the file relative to its root.
+describe("publishFacts", () => {
+  test("Union's profile without its finders, the file repo relative", async () => {
+    const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
+    const { publishFacts } = await import("./lineProfileCommand");
+    const { values, warnings } = parseLineProfileText(`[line]\nproject = "Agent Quality"\nwatch_days = 14\n[line.commands]\ncheck = "bun test"\n[[line.finders]]\nid = "c"\nsource = "s"\nkind = "bug or regression"\nfingerprint = "x"\n`);
+    const facts = publishFacts(resolveLineProfile(values, { root: "/src/union", file: "/src/union/.codecast/line.toml", warnings }));
+    expect(facts).not.toHaveProperty("finders");
+    expect(facts).toMatchObject({ project: "Agent Quality", watch_days: 14, size_budget: 400, file: ".codecast/line.toml", commands: { check: "bun test", prove: null } });
+    expect(facts.sources).toMatchObject({ project: "file", watch_days: "file", size_budget: "default", "commands.check": "file", finders: "file" });
+    expect(facts.notes).toContain("no prove command: the prove station passes with a note");
+    expect(facts.warnings[0]).toContain("is a sentence");
+  });
+
+  test("a repo with no profile publishes the defaults and a null file", async () => {
+    const { resolveLineProfile } = await import("./lineProfile");
+    const { publishFacts } = await import("./lineProfileCommand");
+    expect(publishFacts(resolveLineProfile({}, { root: "/src/x" })).file).toBeNull();
+  });
+});
+
+describe("cast line set, unset and finder (editThisLineProfile)", () => {
+  // A repo of its own, so the edits and the loader run on real files; the
+  // publish is never reached (publish: false), so no server is needed.
+  const repo = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "line-edit-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    fs.mkdirSync(path.join(root, ".codecast"));
+    fs.writeFileSync(path.join(root, ".codecast/line.toml"), [
+      "[line]",
+      'project = "Codecast"        # where signals go',
+      "size_budget = 400           # changed lines before a run returns to plan",
+      "",
+      "[[line.finders]]",
+      'id = "eval-drift"',
+      'source = "evals"',
+      'kind = ["regression"]',
+      'fingerprint = "evals:<surface>"',
+      "",
+    ].join("\n"));
+    return root;
+  };
+  const deps = {} as any;
+  const text = (root: string) => fs.readFileSync(path.join(root, ".codecast/line.toml"), "utf8");
+
+  test("set changes one value in place, comment kept; unset brings the default back", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const { parseLineValue } = await import("@codecast/shared/contracts/lineProfile");
+    const root = repo();
+    const v = parseLineValue("size_budget", "250");
+    const reply = await editThisLineProfile(deps, [{ op: "set", key: "size_budget", value: (v as any).value }], { publish: false, cwd: root });
+    expect(reply.changed).toBe(true);
+    expect(reply.published).toBeNull();
+    expect(text(root)).toContain("size_budget = 250           # changed lines before a run returns to plan");
+    expect(reply.profile.size_budget).toBe(250);
+    const back = await editThisLineProfile(deps, [{ op: "remove", key: "size_budget" }], { publish: false, cwd: root });
+    expect(back.sources.size_budget).toBe("default");
+    expect(text(root)).not.toContain("size_budget");
+  });
+
+  test("a value the loader refuses writes nothing", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const root = repo();
+    const before = text(root);
+    await expect(editThisLineProfile(deps, [{ op: "set", key: "commands.check", value: 7 as any }], { publish: false, cwd: root })).rejects.toThrow();
+    expect(text(root)).toBe(before);
+  });
+
+  test("finder set changes only the parts given, adds a new one whole, and rm drops it", async () => {
+    const { editThisLineProfile, finderEdit } = await import("./lineProfileCommand");
+    const { loadLineProfile } = await import("./lineProfile");
+    const root = repo();
+    const current = loadLineProfile(root).profile.finders[0];
+    const changed = finderEdit(current, "eval-drift", { runs: "./evals check --signal" });
+    expect(changed).toMatchObject({ id: "eval-drift", source: "evals", kind: ["regression"], fingerprint: "evals:<surface>", runs: "./evals check --signal" });
+    await editThisLineProfile(deps, [{ op: "set_finder", finder: changed }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders[0].runs).toBe("./evals check --signal");
+    expect(() => finderEdit(undefined, "sentry", { source: "sentry" })).toThrow(/--kind, --fingerprint/);
+    const added = finderEdit(undefined, "sentry", { source: "sentry", kind: "bug, regression", fingerprint: "sentry:<group>" });
+    await editThisLineProfile(deps, [{ op: "set_finder", finder: added }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders.map((f) => f.id)).toEqual(["eval-drift", "sentry"]);
+    await editThisLineProfile(deps, [{ op: "remove_finder", id: "sentry" }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders.map((f) => f.id)).toEqual(["eval-drift"]);
+  });
+
+  test("a failed publish keeps the write and says why", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const root = repo();
+    fs.writeFileSync(path.join(root, ".codecast/line.toml"), "[line]\nsize_budget = 400\n");
+    const reply = await editThisLineProfile(deps, [{ op: "set", key: "watch_days", value: 3 }], { publish: true, cwd: root });
+    expect(text(root)).toContain("watch_days = 3");
+    expect(reply.published).toMatchObject({ ok: false, detail: expect.stringMatching(/names no project/) });
+  });
+});
+
+describe("parseLineValue", () => {
+  test("reads each key by its kind, and refuses unknown keys and bad values", async () => {
+    const { parseLineValue } = await import("@codecast/shared/contracts/lineProfile");
+    expect(parseLineValue("watch_days", " 3 ")).toEqual({ value: 3 });
+    expect(parseLineValue("watch_days", "0")).toEqual({ error: "A whole number, 1 or more" });
+    expect(parseLineValue("principles", "docs/a.md,\n docs/b.md")).toEqual({ value: ["docs/a.md", "docs/b.md"] });
+    expect(parseLineValue("commands.ship", "bun ship")).toEqual({ value: "bun ship" });
+    expect(parseLineValue("finders", "x")).toMatchObject({ error: expect.stringMatching(/unknown key/) });
+  });
+});

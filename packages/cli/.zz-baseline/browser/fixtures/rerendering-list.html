@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>Re-rendering list</title></head>
+  <body>
+    <h1>Rows</h1>
+    <ul id="rows"></ul>
+    <p id="log"></p>
+    <script>
+      // A list whose rows all carry the same button label, re-rendered the way
+      // a React list is: every row node thrown away and built again, so a ref
+      // minted against the old node is detached even though the row is still
+      // on screen.
+      var labels = ["Alpha", "Beta", "Gamma"];
+      function render() {
+        var rows = document.getElementById("rows");
+        rows.textContent = "";
+        labels.forEach(function (label) {
+          var li = document.createElement("li");
+          li.textContent = label + " ";
+          var button = document.createElement("button");
+          button.textContent = "Delete";
+          button.onclick = function () {
+            document.getElementById("log").textContent = "deleted " + label;
+          };
+          li.appendChild(button);
+          rows.appendChild(li);
+        });
+      }
+      render();
+      window.rerender = render;
+    </script>
+  </body>
+</html>

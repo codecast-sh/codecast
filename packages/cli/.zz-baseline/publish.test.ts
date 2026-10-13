@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { buildPublishPayload, describeEvidence, findChrome, publishRequestBody, thumbArgs, walkBundleDir } from "./publish";
+
+let dir: string;
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-publish-test-"));
+});
+
+afterEach(() => {
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const write = (rel: string, content: string | Buffer) => {
+  const abs = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content);
+};
+
+describe("walkBundleDir", () => {
+  it("walks recursively and applies the skip rules", () => {
+    write("index.html", "<title>Hi</title>");
+    write("assets/app.js", "js");
+    write("assets/app.js.map", "map");
+    write("assets/deep/style.css", "css");
+    write(".env", "secret");
+    write(".git/config", "git");
+    write("node_modules/pkg/index.js", "dep");
+    expect(walkBundleDir(dir)).toEqual(["assets/app.js", "assets/deep/style.css", "index.html"]);
+  });
+});
+
+describe("buildPublishPayload", () => {
+  it("html file: content + title from <title>", () => {
+    write("page.html", "<title>My Page</title><h1>hi</h1>");
+    const p = buildPublishPayload(path.join(dir, "page.html"));
+    expect(p.kind).toBeUndefined();
+    expect(p.title).toBe("My Page");
+    expect(p.content).toContain("<h1>hi</h1>");
+    expect(p.source_path).toBe(path.join(dir, "page.html"));
+    expect(p.entryHtmlPath).toBe(path.join(dir, "page.html"));
+  });
+
+  it("markdown file: kind=markdown, raw md as content, heading title, no thumb entry", () => {
+    write("notes.md", "# Launch Notes\n\nbody");
+    const p = buildPublishPayload(path.join(dir, "notes.md"));
+    expect(p.kind).toBe("markdown");
+    expect(p.content).toBe("# Launch Notes\n\nbody");
+    expect(p.title).toBe("Launch Notes");
+    expect(p.entryHtmlPath).toBeUndefined();
+  });
+
+  it("directory: kind=bundle with b64 files and the entry html for the thumbnail", () => {
+    write("index.html", "<title>Bundle</title>");
+    write("app.js", "console.log(1)");
+    write(".DS_Store", "junk");
+    const p = buildPublishPayload(dir);
+    expect(p.kind).toBe("bundle");
+    expect(p.title).toBe("Bundle");
+    expect(p.entryHtmlPath).toBe(path.join(dir, "index.html"));
+    const paths = p.files!.map((f) => f.path).sort();
+    expect(paths).toEqual(["app.js", "index.html"]);
+    const appJs = p.files!.find((f) => f.path === "app.js")!;
+    expect(Buffer.from(appJs.content_b64!, "base64").toString("utf-8")).toBe("console.log(1)");
+  });
+
+  it("directory without an entry page throws the entry error", () => {
+    write("style.css", "body{}");
+    expect(() => buildPublishPayload(dir)).toThrow(/index\.html/);
+  });
+
+  it("directory over the size cap throws naming the biggest files", () => {
+    write("index.html", "<title>Big</title>");
+    write("huge.bin", Buffer.alloc(9 * 1024 * 1024));
+    expect(() => buildPublishPayload(dir)).toThrow(/huge\.bin/);
+  });
+
+  it("sends video and audio to media hosting instead of the bundle, outside the size cap", () => {
+    write("index.html", "<title>Film</title><cast-player><cast-chapter src='c00.mp4'></cast-chapter></cast-player>");
+    write("c00.mp4", Buffer.alloc(20 * 1024 * 1024));
+    write("theme.m4a", Buffer.alloc(1024));
+    const p = buildPublishPayload(dir);
+    expect(p.files!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(p.media!.map((m) => [m.path, m.size])).toEqual([["c00.mp4", 20 * 1024 * 1024], ["theme.m4a", 1024]]);
+  });
+
+  it("rejects unsupported file types", () => {
+    write("data.csv", "a,b");
+    expect(() => buildPublishPayload(path.join(dir, "data.csv"))).toThrow(/\.html or \.md/);
+  });
+
+  it("a bundle's cast-data.json travels as data, never as a served file", () => {
+    write("index.html", "<title>Dash</title><cast-stat query='spend'></cast-stat>");
+    const decl = { queries: { spend: { reader: "usage", args: { days: 7 }, refresh: "15m" } } };
+    write("cast-data.json", JSON.stringify(decl));
+    const p = buildPublishPayload(dir);
+    expect(p.files!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(p.data).toEqual(decl);
+    expect(publishRequestBody(p, {}).data).toEqual(decl);
+  });
+
+  it("a malformed cast-data.json stops the publish with what to fix", () => {
+    write("index.html", "<title>Dash</title>");
+    write("cast-data.json", "{ nope");
+    expect(() => buildPublishPayload(dir)).toThrow(/cast-data\.json is not valid JSON/);
+    write("cast-data.json", JSON.stringify({ queries: { spend: { reader: "nope" } } }));
+    expect(() => buildPublishPayload(dir)).toThrow(/unknown reader "nope"/);
+    write("cast-data.json", JSON.stringify({ queries: { spend: { reader: "usage", refresh: "10s" } } }));
+    expect(() => buildPublishPayload(dir)).toThrow(/at least 1m/);
+  });
+
+  it("honors the --title override everywhere", () => {
+    write("index.html", "<title>Ignored</title>");
+    expect(buildPublishPayload(dir, "Override").title).toBe("Override");
+  });
+});
+
+describe("findChrome", () => {
+  it("prefers an existing CHROME_PATH", () => {
+    const fake = path.join(dir, "fake-chrome");
+    fs.writeFileSync(fake, "#!/bin/sh\n");
+    const prev = process.env.CHROME_PATH;
+    process.env.CHROME_PATH = fake;
+    try {
+      expect(findChrome()).toBe(fake);
+    } finally {
+      if (prev === undefined) delete process.env.CHROME_PATH;
+      else process.env.CHROME_PATH = prev;
+    }
+  });
+
+  it("never throws when CHROME_PATH is missing", () => {
+    const prev = process.env.CHROME_PATH;
+    process.env.CHROME_PATH = path.join(dir, "does-not-exist");
+    try {
+      expect(() => findChrome()).not.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.CHROME_PATH;
+      else process.env.CHROME_PATH = prev;
+    }
+  });
+});
+
+describe("thumbArgs", () => {
+  it("captures into a throwaway profile, never the default one", () => {
+    const args = thumbArgs("/x/index.html", "/x/out.png", "/x/profile");
+    expect(args).toContain("--user-data-dir=/x/profile");
+    expect(args).toContain("--headless=new");
+    expect(args[args.length - 1]).toBe("file:///x/index.html");
+  });
+
+  it("uses the mock keychain when the home has no login keychain", () => {
+    const saved = process.env.HOME;
+    process.env.HOME = dir;
+    try {
+      expect(thumbArgs("/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+    } finally {
+      process.env.HOME = saved;
+    }
+  });
+});
+
+// Evidence (docs/architecture/the-line.md L6): --task and --plan ride the
+// publish body, and the result names where the page attached.
+describe("publishRequestBody", () => {
+  const payload = { title: "Report", source_path: "/tmp/report.html", content: "<h1>x</h1>", kind: undefined, files: undefined, entryHtmlPath: "/tmp/report.html" } as any;
+
+  it("carries --task and --plan only when given", () => {
+    expect(publishRequestBody(payload, { task: "ct-12", plan: "pl-3", sessionRef: "jx1" })).toMatchObject({
+      title: "Report", source_path: "/tmp/report.html", content: "<h1>x</h1>", task: "ct-12", plan: "pl-3", session_ref: "jx1",
+    });
+    const bare = publishRequestBody(payload, {});
+    expect(bare).not.toHaveProperty("task");
+    expect(bare).not.toHaveProperty("plan");
+    expect(bare).not.toHaveProperty("session_ref");
+    expect(bare).not.toHaveProperty("force_new");
+  });
+
+  it("keeps the older flags in the same body", () => {
+    expect(publishRequestBody(payload, { forceNew: true, access: { password: "p" }, thumbB64: "AAAA" })).toMatchObject({ force_new: true, access: { password: "p" }, thumb_b64: "AAAA" });
+  });
+});
+
+describe("describeEvidence", () => {
+  it("names the task and station, the plan alone, or nothing", () => {
+    expect(describeEvidence({ task: "ct-12", station: "in_progress" })).toBe("attached to ct-12 at in_progress");
+    expect(describeEvidence({ task: null, plan: "pl-3", station: null })).toBe("attached to pl-3");
+    expect(describeEvidence({ task: null, plan: null })).toBeNull();
+    expect(describeEvidence(undefined)).toBeNull();
+  });
+});

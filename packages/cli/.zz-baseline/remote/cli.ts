@@ -1,0 +1,400 @@
+/**
+ * `cast remote` CLI subcommand wiring.
+ *
+ * Move a Claude Code session between this machine and a remote Mac:
+ *   cast remote hosts                 list configured remote hosts
+ *   cast remote push <session>        push a session to the remote Mac
+ *   cast remote pull <session>        pull the latest remote state back
+ *   cast remote run  <session> <msg>  drive the moved session on the remote
+ *
+ * Registered via registerRemoteCommand(program) from index.ts.
+ */
+
+import { execFileSync } from "../proc.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Command } from "commander";
+import {
+  pushSession,
+  pullSession,
+  remotePrompt,
+  resolveLocalSession,
+  loadRemoteHost,
+  performMoveToRemote,
+  type MoveResult,
+  type RemoteHost,
+  type SyncVerification,
+} from "./session-move.js";
+import { reorientationNotice } from "../sessionMoveNotice.js";
+import { deviceInfo, deviceId } from "./device.js";
+import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
+import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
+import { learnHostDeviceId } from "../cloud/prepare.js";
+import { commandGroup } from "../commandGroups.js";
+import { defaultConfigDir } from "../config/configDir.js";
+
+/**
+ * Find the machine a session should move to, whichever registry it lives in.
+ *
+ * Two registries exist for historical reasons: the Scaleway Macs
+ * (~/.codecast/scaleway) came first, then the AWS Linux boxes
+ * (~/.codecast/browser/hosts.json). The Linux box is the default — it wakes on
+ * demand and sleeps when idle, so "move this session to the cloud" should not
+ * require naming anything. An explicit --host id is honored from either
+ * registry; waking a stopped instance is part of resolving it.
+ */
+async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string; deviceId?: string }> {
+  const cloud = readCloudHosts();
+  const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => h.provider === "aws");
+  if (pick) {
+    const up = await ensureUp(pick, (m) => console.log(`  ${m}`));
+    const host = toRemoteHost(up);
+    // Ask the box for ITS codecast device id, so a move targets exactly the
+    // machine we just transferred files to. Deriving the device from "first
+    // online remote" broke the moment a second remote existed: the registry
+    // still listed a retired Mac whose daemon kept heartbeating, and the
+    // ownership flip would have sent the session there while the worktree
+    // landed here. Remembered in the registry so wake requests can find it.
+    const deviceId = await learnHostDeviceId(up, host);
+    return { host, cloudId: up.id, deviceId };
+  }
+  return { host: loadRemoteHost(hostId) };
+}
+
+/** A Convex client + api_token + generated api, from the local config (move flow).
+ *  Defined in remote/convexClient.ts, a leaf the credential helper's fast path
+ *  can load without this module's graph; re-exported here for every caller
+ *  that already imports it from remote/cli.js. */
+import { convexClient } from "./convexClient.js";
+export { convexClient };
+
+const SCALEWAY_DIR = path.join(defaultConfigDir(), "scaleway");
+const HOSTS_FILE = path.join(SCALEWAY_DIR, "hosts.json");
+// Where the active move's placement is remembered so `pull` can find it
+// without re-deriving (kept tiny + local).
+const MOVES_FILE = path.join(defaultConfigDir(), "remote-moves.json");
+
+interface ScalewayHostMeta {
+  id: string;
+  address: string;
+  sshUsername: string;
+  zone: string;
+  commercialType: string;
+  stopped?: boolean;
+}
+
+export function readMoves(): Record<string, MoveResult> {
+  if (!fs.existsSync(MOVES_FILE)) return {};
+  try { return JSON.parse(fs.readFileSync(MOVES_FILE, "utf-8")); } catch { return {}; }
+}
+export function writeMoves(m: Record<string, MoveResult>): void {
+  fs.mkdirSync(path.dirname(MOVES_FILE), { recursive: true });
+  fs.writeFileSync(MOVES_FILE, JSON.stringify(m, null, 2));
+}
+
+function parseJson(out: string): { result?: string; session_id?: string } {
+  try { return JSON.parse(out); } catch { return { result: out.slice(0, 200) }; }
+}
+
+/** One line stating what the transfer verification proved (or couldn't). */
+export function describeVerification(v: SyncVerification | undefined): string {
+  if (!v) return "no git verification available (non-git directory, synced via rsync)";
+  if (!v.headsMatch) {
+    return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
+  }
+  const tree = v.remoteDirty === 0 ? "working tree identical to the source's"
+    : v.remoteDirty == null ? "working-tree state unknown"
+    : `WARNING: ${v.remoteDirty} file(s) in the destination tree differ from the source's`;
+  return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, destination HEAD matches, ${tree}`;
+}
+
+/**
+ * Tell the moved agent its world changed. The move is invisible from inside
+ * the session (same transcript, same conversation), but the machine under it
+ * is different — this lands as the first turn after the resume so the agent
+ * re-grounds instead of acting on stale machine-local assumptions.
+ *
+ * The facts are built here rather than in the composer because only this side
+ * knows what the transfer proved; see sessionMoveNotice.ts for why a notice
+ * only ever states what the composing machine checked itself.
+ */
+export function moveNotice(opts: {
+  destination: string;   // "m1@51.159.120.28" or the local hostname
+  newCwd: string;
+  oldCwd: string;
+  /** Pre-rendered: each direction proves a different thing (see describeBackSync). */
+  verification: string | undefined;
+  stoppedOnSource?: Array<{ name: string; via?: string }>;
+}): string | null {
+  return reorientationNotice({
+    stoppedOnSource: opts.stoppedOnSource,
+    destination: opts.destination,
+    newCwd: opts.newCwd,
+    oldCwd: opts.oldCwd,
+    machineChanged: true,
+    // The SSH move pushes the tree itself (wip snapshot + push, then verified),
+    // so the destination is a faithful copy — no checkout/transcript surprises
+    // to report, unlike the reparent path which clones from the remote.
+    verification: opts.verification,
+  });
+}
+
+/**
+ * The `back` direction's verification line. Coming home, the host's work is
+ * applied as a change onto this folder as it is now (other sessions may have
+ * edited it, or committed, meanwhile), so the branches are not expected to
+ * match; what the line proves is what came back and whether it overlapped.
+ */
+export function describeBackSync(r: { appliedWork?: boolean; conflicts?: string[]; hostCleared?: boolean; hostKept?: string }): string {
+  if (r.conflicts?.length) return `WARNING: the host's changes overlap edits made here meanwhile in ${r.conflicts.join(", ")}; conflict markers are left in place`;
+  const work = r.appliedWork ? "the host's changes are applied here as uncommitted work, on top of this folder's current state" : "the host made no changes to bring back";
+  if (r.hostCleared) return `${work}; the host checkout is clean again`;
+  return r.hostKept ? `${work}; the host checkout keeps its copy (${r.hostKept})` : work;
+}
+
+/** Queue the notice onto the conversation's normal delivery rail (it arrives
+ * after the resume lands, since delivery waits for a live session). */
+export async function sendMoveNotice(
+  client: any, api: any, token: string,
+  conversationId: string, notice: string | null,
+): Promise<void> {
+  if (!notice) return;
+  try {
+    await client.mutation(api.pendingMessages.sendMessageToSession, {
+      api_token: token,
+      conversation_id: conversationId,
+      content: notice,
+      client_id: `move-notice-${conversationId}-${Date.now()}`,
+    });
+  } catch (err) {
+    console.error(`  (move notice not sent: ${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
+export function registerRemoteCommand(program: Command): void {
+  const remote = program
+    .command("remote")
+    .description(commandGroup("remote").description);
+
+  remote
+    .command("hosts")
+    .description("List configured remote hosts and this device's id")
+    .action(() => {
+      const d = deviceInfo();
+      console.log(`this device: ${d.label}  (${d.deviceId})`);
+      const cloud = readCloudHosts();
+      for (const h of cloud) {
+        try {
+          const s = hostState(h);
+          console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  [default]`);
+        } catch (err) {
+          console.log(`  ${h.id}  ${h.user}@?  ${h.provider} state unknown — ${(err as Error).message}`);
+        }
+      }
+      if (fs.existsSync(HOSTS_FILE)) {
+        const { hosts } = JSON.parse(fs.readFileSync(HOSTS_FILE, "utf-8")) as { hosts: ScalewayHostMeta[] };
+        for (const h of hosts) {
+          console.log(`  ${h.id}  ${h.sshUsername}@${h.address}  ${h.commercialType} ${h.stopped ? "(stopped)" : ""}`);
+        }
+      }
+      if (!cloud.length && !fs.existsSync(HOSTS_FILE)) console.log("no remote hosts registered");
+    });
+
+  remote
+    .command("push <sessionId>")
+    .description("Push a session (worktree + transcript + credential) to the remote Mac")
+    .option("--host <id>", "Target a specific host id")
+    .action(async (sessionId: string, opts: { host?: string }) => {
+      const { host } = await resolveTransferHost(opts.host);
+      const s = resolveLocalSession(sessionId);
+      console.log(`pushing ${sessionId}\n  ${s.cwd}\n  -> ${host.user}@${host.address}`);
+      const move = await pushSession(sessionId, host);
+      const moves = readMoves();
+      moves[sessionId] = move;
+      writeMoves(moves);
+      console.log(`  ${describeVerification(move.verification)}`);
+      console.log(`ready on remote: ${move.remoteCwd}`);
+      console.log(`  resume there: ssh ${host.user}@${host.address} 'cd ${move.remoteCwd} && claude --resume ${sessionId}'`);
+      console.log(`  or drive it:  cast remote run ${sessionId} "<message>"`);
+    });
+
+  remote
+    .command("pull <sessionId>")
+    .description("Pull the latest remote state (transcript + working tree) back to local")
+    .option("--host <id>", "Target a specific host id")
+    .action(async (sessionId: string, opts: { host?: string }) => {
+      const { host } = await resolveTransferHost(opts.host);
+      const moves = readMoves();
+      const move = moves[sessionId];
+      if (!move) {
+        console.error(`No recorded push for ${sessionId}. Was it pushed from this machine?`);
+        process.exit(1);
+      }
+      console.log(`pulling ${sessionId} back from ${host.user}@${host.address}`);
+      const r = await pullSession(sessionId, host, move);
+      if (!r.ff) {
+        console.error(`CONFLICT: ${r.reason}`);
+        process.exit(2);
+      }
+      console.log(`pulled to ${move.localCwd}: ${describeBackSync(r)}`);
+    });
+
+  remote
+    .command("run <sessionId> <prompt>")
+    .description("Drive the moved session on the remote (one-shot, print mode)")
+    .option("--host <id>", "Target a specific host id")
+    .option("--mode <mode>", "permission mode: acceptEdits|bypassPermissions|default", "acceptEdits")
+    .action(async (sessionId: string, prompt: string, opts: { host?: string; mode?: string }) => {
+      const { host } = await resolveTransferHost(opts.host);
+      const moves = readMoves();
+      const move = moves[sessionId];
+      if (!move) { console.error(`No recorded push for ${sessionId}.`); process.exit(1); }
+      const out = remotePrompt(host, move.remoteCwd, sessionId, prompt, {
+        permissionMode: (opts.mode as "acceptEdits" | "bypassPermissions" | "default") ?? "acceptEdits",
+      });
+      console.log(parseJson(out).result ?? out);
+    });
+
+  // cast remote teardown — wipe credentials + stop daemon on a Mac
+  remote
+    .command("teardown")
+    .description("Wipe credentials and stop the daemon on the remote Mac")
+    .option("--host <id>", "Target a specific host id")
+    .option("--destroy", "Also request Scaleway host deletion (if past 24h commitment)")
+    .action(async (_opts: { host?: string; destroy?: boolean }) => {
+      const { host } = await resolveTransferHost(_opts.host);
+      const SSH = `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new ${host.user}@${host.address}`;
+      console.log(`tearing down ${host.user}@${host.address}`);
+      const { execSync } = await import("../proc.js");
+      execSync(`${SSH} 'rm -f ~/.claude/.credentials.json ~/.codecast/config.json; pkill -f "index.ts _daemon" 2>/dev/null; echo "credentials wiped, daemon stopped"'`, { stdio: "inherit" });
+      if (_opts.destroy) {
+        console.log("host destroy: not yet implemented (use Scaleway console or API)");
+      }
+    });
+
+  // cast remote move <session> — atomic live handoff local -> Mac
+  remote
+    .command("move <sessionId>")
+    .description("Move a live session to the remote Mac (handoff: transfer + flip owner + resume there)")
+    .option("--host <id>", "Target a specific host id")
+    .option("--to-device <id>", "Target a specific codecast device id (default: first online remote)")
+    .action(async (sessionId: string, opts: { host?: string; toDevice?: string }) => {
+      const { host, deviceId: hostDeviceId } = await resolveTransferHost(opts.host);
+      const targetDevice = opts.toDevice ?? hostDeviceId;
+      const { client, token, api } = await convexClient();
+      const conv = await client.query(api.devices.resolveConversationBySession, { api_token: token, session_id: sessionId });
+      if (!conv?._id) { console.error(`No conversation for session ${sessionId} (is it synced?)`); process.exit(1); }
+
+      // identify the target's codecast device id. When the web initiates the
+      // move it names an explicit destination (--to-device); otherwise fall back
+      // to the first online remote (single-remote convenience for the CLI).
+      // A cloud host that was just woken needs a moment for its daemon to
+      // heartbeat back online — the systemd service starts with the boot, but
+      // "the instance is running" and "the daemon has said hello" are two
+      // different clocks. Poll briefly rather than failing the move.
+      let macDevice: any;
+      const pickDeadline = Date.now() + 90_000;
+      for (;;) {
+        const devices = await client.query(api.devices.listDevices, { api_token: token });
+        macDevice = targetDevice
+          ? devices.find((d: any) => d.device_id === targetDevice)
+          : devices.find((d: any) => d.is_remote && d.online);
+        if (macDevice || Date.now() > pickDeadline) break;
+        console.log("  waiting for the remote daemon to come online…");
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (!macDevice && !targetDevice) {
+        const devices = await client.query(api.devices.listDevices, { api_token: token });
+        macDevice = devices.find((d: any) => d.is_remote);
+      }
+      if (!macDevice) {
+        console.error(targetDevice ? `Device ${targetDevice} not found` : "No online remote device found (is the remote daemon provisioned? `cast browser hosts provision`)");
+        process.exit(1);
+      }
+
+      // The move merges into the host's main checkout of this repo. A shared
+      // cloud session holds that checkout on a branch of its own, so ask first
+      // (the server's ownership flip re-checks).
+      {
+        const { gitRootOf, remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
+        const { fetchRootOccupant } = await import("../cloud/prepare.js");
+        const { checkoutInUseMessage } = await import("@codecast/shared/contracts");
+        const remoteCwd = remoteRepoPath(host, gitRootOf(resolveLocalSession(sessionId).cwd));
+        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id, { merging: true });
+        if (occupant) {
+          console.error(checkoutInUseMessage(remoteCwd, occupant));
+          process.exit(1);
+        }
+      }
+      console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
+      console.log("  [1/4] transfer worktree + transcript + credential");
+      console.log("  [2/4] prepare remote claude/codex (onboarding + folder trust) + host home");
+      // The same local half the daemon's move runs: one path, so the host
+      // home steps (logins, tools, mirror) never diverge between the two.
+      const move = await performMoveToRemote(host, sessionId);
+      console.log(`        ${describeVerification(move.verification)}`);
+      console.log("  [3/4] flip ownership + resume on the Mac");
+      const r = await client.mutation(api.devices.moveSessionToDevice, {
+        api_token: token, conversation_id: conv._id, owner_device_id: macDevice.device_id,
+        project_path: move.remoteCwd, resume: true,
+      });
+      const moves = readMoves(); moves[sessionId] = move; writeMoves(moves);
+      // Land after the resume: tell the agent its machine changed and what the
+      // transfer verification proved, so it re-grounds before continuing.
+      await sendMoveNotice(client, api, token, conv._id, moveNotice({
+        destination: `${host.user}@${host.address}`,
+        newCwd: move.remoteCwd,
+        oldCwd: `${move.localCwd} on ${os.hostname()}`,
+        verification: describeVerification(move.verification),
+      }));
+      console.log("  [4/4] done — session now runs on the Mac");
+      console.log(`  watch: ${sshTmuxAttachCommand(`${host.user}@${host.address}`, `cc-resume-${sessionId.slice(0, 8)}`)}`);
+      console.log(`  command_id=${r.command_id}`);
+    });
+
+  // cast remote back <session> — migrate Mac -> local
+  remote
+    .command("back <sessionId>")
+    .description("Bring a session back from the Mac to this machine")
+    .option("--host <id>", "Target a specific host id")
+    .action(async (sessionId: string, opts: { host?: string }) => {
+      const { host, deviceId: hostDeviceId } = await resolveTransferHost(opts.host);
+      const moves = readMoves();
+      const move = moves[sessionId];
+      if (!move) { console.error(`No recorded move for ${sessionId}.`); process.exit(1); }
+      const { client, token, api } = await convexClient();
+      const conv = await client.query(api.devices.resolveConversationBySession, { api_token: token, session_id: sessionId });
+      if (!conv?._id) { console.error(`No conversation for ${sessionId}`); process.exit(1); }
+
+      console.log(`bringing ${sessionId} back to local (${move.localCwd})`);
+      console.log("  [1/2] pull transcript + the host's changes");
+      const { checkoutAloneProbe } = await import("../cloud/prepare.js");
+      const pr = await pullSession(sessionId, host, move, hostDeviceId ? { aloneInCheckout: checkoutAloneProbe(client, api, token, hostDeviceId, conv._id) } : {});
+      if (!pr.ff) { console.error(`CONFLICT: ${pr.reason}`); process.exit(2); }
+      const backLine = describeBackSync(pr);
+      console.log(`        ${backLine}`);
+      console.log("  [2/2] flip ownership back to this device + resume locally");
+      await client.mutation(api.devices.moveSessionToDevice, {
+        api_token: token, conversation_id: conv._id, owner_device_id: deviceId(),
+        project_path: move.localCwd, resume: true,
+      });
+      await sendMoveNotice(client, api, token, conv._id, moveNotice({
+        destination: `${os.hostname()} (back on the original machine)`,
+        newCwd: move.localCwd,
+        oldCwd: `${move.remoteCwd} on ${host.user}@${host.address}`,
+        verification: backLine,
+      }));
+      console.log("  done — session is local again");
+    });
+
+  // cast remote sync <session>: the same as cast sync start (cloud/syncCli.ts)
+  remote
+    .command("sync <session>")
+    .description("Keep a cloud session's folder in step with a copy on this laptop, both ways (same as cast sync start)")
+    .option("--watch-only", "Changes go from the cloud to the laptop only")
+    .action(async (ref: string, o: { watchOnly?: boolean }) => {
+      const { runSyncVerb } = await import("../cloud/syncCli.js");
+      process.exit(await runSyncVerb("start", ref, { mode: o.watchOnly ? "from_cloud" : "two_way" }));
+    });
+}

@@ -1,0 +1,962 @@
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  acquireRootCheckout,
+  acquireWorkspace,
+  healWorkspace,
+  listWorkspaces,
+  readWorkspaceState,
+  releaseWorkspace,
+  ROOT_WORKSPACE_NAME,
+  validateWorkspace,
+} from "./lifecycle.js";
+import { readState, setState, writeState } from "./contract.js";
+import { AGENT_CONTEXT_ENV_VARS } from "./trust.js";
+
+let repoRoot: string;
+let codecastDir: string | undefined;
+const agentEnv: Record<string, string | undefined> = {};
+const extraRepos: string[] = [];
+
+beforeEach(() => {
+  repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-lifecycle-"));
+  codecastDir = process.env.CODECAST_DIR;
+  process.env.CODECAST_DIR = path.join(repoRoot, "host-state");
+  // The trust gate reads these to tell an agent from a person (trust.ts). Left
+  // alone, these acquires would run as an agent locally and as a human on CI;
+  // clearing them pins every one to the human path.
+  for (const v of AGENT_CONTEXT_ENV_VARS) {
+    agentEnv[v] = process.env[v];
+    delete process.env[v];
+  }
+  // Init a git repo with one commit so worktrees work.
+  execSync("git init -q -b main", { cwd: repoRoot });
+  execSync("git config user.email t@t.t && git config user.name t", { cwd: repoRoot });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "test\n");
+  execSync("git add . && git commit -q -m init", { cwd: repoRoot });
+});
+
+afterEach(() => {
+  // git worktree references can survive in main repo; force-prune.
+  try {
+    execSync("git worktree prune", { cwd: repoRoot, stdio: "ignore" });
+  } catch {
+    /* ignore */
+  }
+  fs.rmSync(repoRoot, { recursive: true, force: true });
+  for (const repo of extraRepos.splice(0)) fs.rmSync(repo, { recursive: true, force: true });
+  if (codecastDir === undefined) delete process.env.CODECAST_DIR;
+  else process.env.CODECAST_DIR = codecastDir;
+  for (const [k, v] of Object.entries(agentEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+describe("workspace port reservations", () => {
+  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+
+  test("operation ownership survives process boundaries and fails closed after a crashed holder", async () => {
+    const marker = path.join(repoRoot, "lease-held");
+    const orphanFinished = path.join(repoRoot, "orphan-finished");
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { withWorkspaceOperation } from ${JSON.stringify(path.join(import.meta.dir, "portReservations.ts"))};
+      await withWorkspaceOperation(${JSON.stringify(repoRoot)}, "crash", async () => {
+        const orphan = Bun.spawn(["sh", "-c", ${JSON.stringify(`sleep 0.5; touch ${JSON.stringify(orphanFinished)}`)}], { stdout: "ignore", stderr: "ignore" });
+        await Bun.write(${JSON.stringify(marker)}, "held");
+        await orphan.exited;
+      });
+    `], { stdout: "ignore", stderr: "pipe", env: process.env });
+    const { withWorkspaceOperation } = await import("./portReservations.js");
+    try {
+      for (let i = 0; i < 200 && !fs.existsSync(marker); i++) await Bun.sleep(10);
+      expect(fs.existsSync(marker)).toBe(true);
+      await expect(withWorkspaceOperation(repoRoot, "crash", async () => "collision")).rejects.toThrow("operation in progress");
+      expect(await withWorkspaceOperation(repoRoot, "independent", async () => "separate")).toBe("separate");
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+    await expect(withWorkspaceOperation(repoRoot, "crash", async () => "unsafe recovery")).rejects.toThrow("interrupted operation");
+    for (let i = 0; i < 200 && !fs.existsSync(orphanFinished); i++) await Bun.sleep(10);
+    expect(fs.existsSync(orphanFinished)).toBe(true);
+  });
+
+  test("same-name retry cannot run setup while creation is in progress", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), '[setup]\ninstall = ["echo run >> setup.log; sleep 0.3"]\n');
+    const first = acquireWorkspace(repoRoot, "same", { ...opts, skipSetup: false });
+    for (let i = 0; i < 100 && readState(repoRoot, "same")?.state !== "creating"; i++) {
+      await Bun.sleep(5);
+    }
+    expect(readState(repoRoot, "same")?.state).toBe("creating");
+    await expect(acquireWorkspace(repoRoot, "same", opts)).rejects.toThrow("operation in progress");
+    await expect(releaseWorkspace(repoRoot, "same")).rejects.toThrow("operation in progress");
+    await expect(healWorkspace(repoRoot, "same")).rejects.toThrow("operation in progress");
+    const result = await first;
+    expect(fs.readFileSync(path.join(result.workspace.path, "setup.log"), "utf8")).toBe("run\n");
+    setState(repoRoot, "same", "destroying");
+    expect((await acquireWorkspace(repoRoot, "same", opts)).workspace.state).toBe("ready");
+  });
+
+  test("destroy trashes the worktree, retires private cache, and leaves git consistent", async () => {
+    const { workspace } = await acquireWorkspace(repoRoot, "slow-remove", opts);
+    const cache = path.join(repoRoot, ".codecast/workspaces/slow-remove/bun-cache");
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(path.join(cache, "package"), "private");
+    fs.writeFileSync(path.join(workspace.path, "keepme.txt"), "recoverable");
+
+    let removing!: () => void;
+    let resumeRemoval!: () => void;
+    const removalStarted = new Promise<void>((resolve) => { removing = resolve; });
+    const removalAllowed = new Promise<void>((resolve) => { resumeRemoval = resolve; });
+    const remove = fs.promises.rm.bind(fs.promises);
+    const heldRemoval = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (String(target).startsWith(path.join(repoRoot, ".codecast/workspaces/_released-"))) {
+        removing();
+        await removalAllowed;
+      }
+      return remove(target, options);
+    });
+    const releasing = releaseWorkspace(repoRoot, workspace.name);
+    try {
+      await Promise.race([removalStarted, releasing.then(() => { throw new Error("release finished before the removal barrier"); })]);
+      await expect(releaseWorkspace(repoRoot, workspace.name)).rejects.toThrow("operation in progress");
+    } finally {
+      resumeRemoval();
+      await releasing;
+      heldRemoval.mockRestore();
+    }
+
+    expect(fs.existsSync(workspace.path)).toBe(false);
+    const worktreesDir = path.join(repoRoot, ".codecast/worktrees");
+    const trash = fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"));
+    expect(trash).toHaveLength(1);
+    expect(fs.readFileSync(path.join(worktreesDir, trash[0]!, "keepme.txt"), "utf8")).toBe("recoverable");
+    expect(fs.existsSync(cache)).toBe(false);
+    expect(readState(repoRoot, workspace.name)).toBeNull();
+    expect(fs.readdirSync(path.join(repoRoot, ".codecast/workspaces")).filter((n) => n.startsWith("_released-"))).toEqual([]);
+    expect(execSync("git worktree list", { cwd: repoRoot, encoding: "utf8" })).not.toContain("slow-remove");
+
+    const replacement = await acquireWorkspace(repoRoot, workspace.name, opts);
+    expect(replacement.workspace.state).toBe("ready");
+    expect(fs.existsSync(replacement.workspace.path)).toBe(true);
+    expect(fs.existsSync(path.join(replacement.workspace.path, "keepme.txt"))).toBe(false);
+  });
+
+  test("acquire sweeps trash past its grace period and keeps fresh trash", async () => {
+    const { workspace } = await acquireWorkspace(repoRoot, "sweepable", opts);
+    await releaseWorkspace(repoRoot, workspace.name);
+    const worktreesDir = path.join(repoRoot, ".codecast/worktrees");
+    const [fresh] = fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"));
+    expect(fresh).toBeDefined();
+
+    await acquireWorkspace(repoRoot, "next-one", opts);
+    expect(fs.existsSync(path.join(worktreesDir, fresh!))).toBe(true);
+
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(worktreesDir, fresh!), longAgo, longAgo);
+    await acquireWorkspace(repoRoot, "later-one", opts);
+    expect(fs.readdirSync(worktreesDir).filter((n) => n.startsWith("_trash-"))).toEqual([]);
+  });
+
+  test("a failed trash rename preserves the tree and reservation for retry", async () => {
+    manifest();
+    const { workspace } = await acquireWorkspace(repoRoot, "retained", opts);
+    fs.writeFileSync(path.join(workspace.path, "recover.txt"), "keep");
+    const rename = fs.renameSync;
+    const fault = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (from === workspace.path) throw new Error("rename denied");
+      return rename(from, to);
+    });
+    try {
+      await expect(releaseWorkspace(repoRoot, "retained")).rejects.toThrow("rename denied");
+      expect(fs.readFileSync(path.join(workspace.path, "recover.txt"), "utf8")).toBe("keep");
+      expect(readState(repoRoot, "retained")?.state).toBe("destroying");
+      const next = await acquireWorkspace(repoRoot, "next", opts);
+      expect(next.workspace.ports.web).not.toBe(workspace.ports.web);
+    } finally {
+      fault.mockRestore();
+    }
+    await releaseWorkspace(repoRoot, "retained");
+    expect(readState(repoRoot, "retained")).toBeNull();
+    expect(fs.existsSync(workspace.path)).toBe(false);
+  });
+
+  test("CLI reacquires a ready workspace with a listening service and separates warnings", async () => {
+    manifest();
+    const { workspace } = await acquireWorkspace(repoRoot, "serving", opts);
+    const server = Bun.serve({ hostname: "127.0.0.1", port: workspace.ports.web, fetch: () => new Response("ready") });
+    try {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { Command } from "commander";
+        import { registerWorkspaceCommand } from ${JSON.stringify(path.join(import.meta.dir, "cli.ts"))};
+        process.chdir(${JSON.stringify(repoRoot)});
+        const program = new Command();
+        registerWorkspaceCommand(program);
+        await program.parseAsync(["bun", "cast", "workspace", "acquire", "serving", "--json"]);
+      `], { stdout: "pipe", stderr: "pipe", env: process.env });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(result.created).toBe(false);
+      expect(result.contract).toMatchObject({ ok: true, failures: [] });
+      expect(result.contract.warnings[0].name).toBe("port-free:web");
+      const { parseAcquireOutput } = await import("../cloud/prepare.js");
+      expect(parseAcquireOutput("serving", stdout).ports).toEqual(workspace.ports);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  function manifest(root = repoRoot, portName = "web") {
+    fs.mkdirSync(path.join(root, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".codecast/workspace.toml"), `
+[ports.${portName}]
+base = 41000
+range = 100
+
+[ports.api]
+base = 41001
+range = 100
+`);
+  }
+
+  async function acquireInProcess(root: string, name: string) {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { acquireWorkspace } from ${JSON.stringify(path.join(import.meta.dir, "lifecycle.ts"))};
+      const result = await acquireWorkspace(${JSON.stringify(root)}, ${JSON.stringify(name)}, ${JSON.stringify(opts)});
+      console.log(JSON.stringify(result));
+    `], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(stdout.length).toBeGreaterThan(0);
+    return JSON.parse(stdout) as Awaited<ReturnType<typeof acquireWorkspace>>;
+  }
+
+  test("three concurrent acquires reserve distinct ports before any listener, then release and reuse", async () => {
+    manifest();
+    const results = await Promise.all(["one", "two", "three"].map((name) => acquireWorkspace(repoRoot, name, opts)));
+    expect(results.flatMap(({ workspace }) => workspace.contract?.checks.filter((check) => !check.ok) ?? [])).toEqual([]);
+    const ports = results.flatMap(({ workspace }) => Object.values(workspace.ports));
+    expect(new Set(ports).size).toBe(6);
+    expect(results.map(({ workspace }) => workspace.resourceIndex).sort()).toEqual([0, 1, 2]);
+    const first = results.find(({ workspace }) => workspace.resourceIndex === 0)!.workspace;
+    const attached = await acquireWorkspace(repoRoot, first.name, { ...opts, resourceIndex: 8 });
+    expect(attached.created).toBe(false);
+    expect(attached.workspace.ports).toEqual(first.ports);
+    expect(attached.workspace.resourceIndex).toBe(first.resourceIndex);
+    const fourth = await acquireWorkspace(repoRoot, "four", opts);
+    expect(fourth.workspace.resourceIndex).toBe(3);
+    await releaseWorkspace(repoRoot, first.name);
+    const replacement = await acquireWorkspace(repoRoot, "replacement", opts);
+    expect(replacement.workspace.ports).toEqual(first.ports);
+    expect(replacement.workspace.resourceIndex).toBe(0);
+  }, 15000);
+
+  test("three separate processes reserve ports durably across repositories and port names", async () => {
+    manifest();
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "ws-ports-other-"));
+    extraRepos.push(other);
+    execSync(`git clone -q ${JSON.stringify(repoRoot)} ${JSON.stringify(other)}`);
+    manifest(other, "frontend");
+    const results = await Promise.all([
+      acquireInProcess(repoRoot, "one"),
+      acquireInProcess(repoRoot, "two"),
+      acquireInProcess(other, "three"),
+    ]);
+    expect(new Set(results.flatMap(({ workspace }) => Object.values(workspace.ports))).size).toBe(6);
+    const fourth = await acquireInProcess(other, "four");
+    expect(fourth.workspace.resourceIndex).toBe(3);
+    const attached = await acquireInProcess(repoRoot, "one");
+    expect(attached.created).toBe(false);
+    expect(attached.workspace.ports).toEqual(results[0]!.workspace.ports);
+    await releaseWorkspace(repoRoot, "one");
+    const reused = await acquireInProcess(other, "reused");
+    expect(reused.workspace.resourceIndex).toBe(results[0]!.workspace.resourceIndex);
+  }, 15000);
+
+  test("respects pre-existing and broken workspace states and retains their resource index", async () => {
+    manifest();
+    const original = (await acquireWorkspace(repoRoot, "original", { ...opts, resourceIndex: 4 })).workspace;
+    fs.rmSync(path.join(process.env.CODECAST_DIR!, "workspace-ports"), { recursive: true, force: true });
+    setState(repoRoot, "original", "broken");
+    const next = await acquireWorkspace(repoRoot, "next", { ...opts, resourceIndex: 4 });
+    expect(next.workspace.resourceIndex).toBe(5);
+    const repaired = await acquireWorkspace(repoRoot, "original", opts);
+    expect(repaired.workspace.resourceIndex).toBe(4);
+    expect(repaired.workspace.ports).toEqual(original.ports);
+  });
+
+  test("release removes the final reservation and reacquiring the same name reuses its ports", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "one", opts);
+    await releaseWorkspace(repoRoot, "one");
+    const index = path.join(process.env.CODECAST_DIR!, "workspace-ports", "repositories.json");
+    expect(JSON.parse(fs.readFileSync(index, "utf8"))).toEqual([]);
+    const reused = await acquireWorkspace(repoRoot, "one", opts);
+    expect(reused.created).toBe(true);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+  });
+
+  test("pool claim transfers the reservation and release makes the ports reusable", async () => {
+    manifest();
+    const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+    await maintainPool(repoRoot, 1);
+    expect(await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 50 })).not.toBeNull();
+    const pooled = readState(repoRoot, "pool-0")!;
+    const claimed = await acquireWorkspace(repoRoot, "claimed", { ...opts, skipPool: false });
+    expect(claimed.workspace.ports).toEqual(pooled.ports);
+    expect(readState(repoRoot, "pool-0")).toBeNull();
+    const next = await acquireWorkspace(repoRoot, "next", opts);
+    expect(next.workspace.resourceIndex).toBe(1);
+    await releaseWorkspace(repoRoot, "claimed");
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(pooled.ports);
+  }, 20000);
+
+  test("ignores nonlocal workspace states when reserving local ports", async () => {
+    manifest();
+    await acquireWorkspace(repoRoot, "remote-record", opts);
+    const state = readState(repoRoot, "remote-record")!;
+    writeState(repoRoot, { ...state, manifest: { ...state.manifest, backend: "e2b" } });
+    const local = await acquireWorkspace(repoRoot, "local", opts);
+    expect(local.workspace.resourceIndex).toBe(0);
+  });
+
+  test("prunes reservations when a registered repository disappears", async () => {
+    manifest();
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "ws-ports-stale-"));
+    extraRepos.push(other);
+    execSync(`git clone -q ${JSON.stringify(repoRoot)} ${JSON.stringify(other)}`);
+    manifest(other);
+    const first = await acquireWorkspace(other, "gone", opts);
+    fs.rmSync(other, { recursive: true, force: true });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+  });
+  function holdIndex(root: string, name: string, index: number) {
+    writeState(root, {
+      name,
+      path: path.join(root, ".codecast/worktrees", name),
+      branch: `codecast/${name}`,
+      resourceIndex: index,
+      state: "creating",
+      manifest: {
+        setup: { copy: [], install: [], generate: [], migrate: [], share: [] },
+        ports: { web: { base: 41000, range: 100 }, api: { base: 41001, range: 100 } },
+        services: {},
+        env: {},
+        teardown: { run: [] },
+        browser: { enabled: false, headless: true, cdpPort: { base: 9222, range: 100 } },
+        backend: "local",
+      },
+      ports: { web: 41000 + index * 100, api: 41001 + index * 100 },
+      env: {},
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  test("reclaims the ports of a workspace whose worktree directory is gone", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "gone", opts);
+    fs.rmSync(first.workspace.path, { recursive: true, force: true });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+    expect(reused.notices?.join("\n")).toContain("gone (worktree missing)");
+  });
+
+  test("keeps root checkout ports when its recorded branch was deleted", async () => {
+    manifest();
+    const first = await acquireRootCheckout(repoRoot, opts);
+    execSync("git checkout -q -b replacement && git branch -D main", { cwd: repoRoot });
+    const next = await acquireWorkspace(repoRoot, "next", opts);
+    expect(next.workspace.ports.web).not.toBe(first.workspace.ports.web);
+    expect(next.notices ?? []).toEqual([]);
+  });
+
+  test("keeps missing worktree ports while an operation still owns them", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "owned", opts);
+    const { withWorkspaceOperation } = await import("./portReservations.js");
+    await withWorkspaceOperation(repoRoot, "owned", async () => {
+      fs.rmSync(first.workspace.path, { recursive: true, force: true });
+      setState(repoRoot, "owned", "broken");
+      const next = await acquireWorkspace(repoRoot, "next", opts);
+      expect(next.workspace.ports.web).not.toBe(first.workspace.ports.web);
+      expect(next.notices ?? []).toEqual([]);
+    });
+  });
+
+  test("no-port acquire skips a ready pool slot and leaves its reservation intact", async () => {
+    manifest();
+    const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+    await maintainPool(repoRoot, 1);
+    expect(await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 50 })).not.toBeNull();
+    const pooled = readState(repoRoot, "pool-0")!;
+    const worker = await acquireWorkspace(repoRoot, "worker", { ...opts, noPorts: true, skipPool: false });
+    expect(worker.workspace.ports).toEqual({});
+    expect(worker.workspace.noPorts).toBe(true);
+    expect(readState(repoRoot, "pool-0")?.ports).toEqual(pooled.ports);
+    const server = await acquireWorkspace(repoRoot, "server", opts);
+    expect(server.workspace.ports.web).not.toBe(pooled.ports.web);
+  }, 20000);
+
+  test("no-port reacquire releases a ready workspace's old reservation", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "worker", opts);
+    const worker = await acquireWorkspace(repoRoot, "worker", { ...opts, noPorts: true });
+    expect(worker.workspace.ports).toEqual({});
+    expect(worker.workspace.env.PORT_WEB).toBeUndefined();
+    const server = await acquireWorkspace(repoRoot, "server", opts);
+    expect(server.workspace.ports).toEqual(first.workspace.ports);
+  });
+
+  test("reclaims the ports of a workspace whose branch was deleted", async () => {
+    manifest();
+    const first = await acquireWorkspace(repoRoot, "unbranched", opts);
+    execSync("git update-ref -d refs/heads/codecast/unbranched", { cwd: repoRoot });
+    const reused = await acquireWorkspace(repoRoot, "reuse", opts);
+    expect(reused.workspace.ports).toEqual(first.workspace.ports);
+    expect(reused.notices?.join("\n")).toContain("unbranched (branch gone)");
+  });
+
+  test("keeps the reservation of a workspace that is still being created", async () => {
+    manifest();
+    holdIndex(repoRoot, "in-flight", 0);
+    const next = await acquireWorkspace(repoRoot, "next", opts);
+    expect(next.workspace.resourceIndex).toBe(1);
+    expect(next.notices ?? []).toEqual([]);
+  });
+
+  test("extends the range by the pool's own size when every pooled index is taken", async () => {
+    manifest();
+    for (let index = 0; index < 10; index++) holdIndex(repoRoot, `held-${index}`, index);
+    const eleventh = await acquireWorkspace(repoRoot, "eleventh", opts);
+    expect(eleventh.workspace.resourceIndex).toBe(10);
+    expect(eleventh.workspace.ports).toEqual({ web: 42000, api: 42001 });
+    expect(eleventh.notices?.join("\n")).toContain(
+      "port pool of 10 indices exhausted; extended the range to indices 10-19 and took index 10",
+    );
+  });
+
+  test("names the workspaces holding the ports when even the extended range is full", async () => {
+    manifest();
+    for (let index = 0; index < 40; index++) holdIndex(repoRoot, `held-${index}`, index);
+    const failure = await acquireWorkspace(repoRoot, "late", opts).catch((error: Error) => error.message);
+    expect(failure).toContain("no free port for workspace 'late': every port for indices 0-39 is taken");
+    expect(failure).toContain("held by: held-0 (web=41000 api=41001)");
+    expect(failure).toContain("and 30 more");
+    expect(failure).toContain("cast ws acquire late --no-ports");
+  }, 15000);
+
+  test("--no-ports allocates nothing, records the choice, and leaves the pool alone", async () => {
+    manifest();
+    const worker = await acquireWorkspace(repoRoot, "worker", { ...opts, noPorts: true });
+    expect(worker.workspace.ports).toEqual({});
+    expect(worker.workspace.contract?.checks.some((check) => check.name.startsWith("port"))).toBe(false);
+    expect(readState(repoRoot, "worker")).toMatchObject({ noPorts: true, ports: {} });
+
+    const neighbour = await acquireWorkspace(repoRoot, "neighbour", opts);
+    expect(neighbour.workspace.ports).toEqual({ web: 41000, api: 41001 });
+
+    setState(repoRoot, "worker", "broken");
+    const reacquired = await acquireWorkspace(repoRoot, "worker", opts);
+    expect(reacquired.workspace.ports).toEqual({});
+    expect(reacquired.workspace.noPorts).toBe(true);
+  });
+});
+
+describe("cast ws acquire --no-ports (CLI)", () => {
+  test("takes no port and status says so", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      "[ports.web]\nbase = 41500\nrange = 100\n",
+    );
+    const cast = async (...args: string[]) => {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { Command } from "commander";
+        import { registerWorkspaceCommand } from ${JSON.stringify(path.join(import.meta.dir, "cli.ts"))};
+        process.chdir(${JSON.stringify(repoRoot)});
+        const program = new Command();
+        registerWorkspaceCommand(program);
+        await program.parseAsync(["bun", "cast", "workspace", ...${JSON.stringify(args)}]);
+      `], { stdout: "pipe", stderr: "pipe", env: process.env });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      return stdout;
+    };
+    expect(await cast("acquire", "worker", "--no-ports", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   none (--no-ports)");
+    expect(await cast("status", "worker")).toContain("ports:   none (--no-ports)");
+    expect(await cast("acquire", "server", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   web=41500");
+  }, 20000);
+});
+
+describe("acquireWorkspace — minimal repo (no manifest, no package.json)", () => {
+  test("cloud setup and heal keep a private dependency cache", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), `
+[setup]
+install = ["printf '%s|%s' \\\"$BUN_INSTALL_GLOBAL_STORE\\\" \\\"$BUN_INSTALL_CACHE_DIR\\\" > dependency-env"]
+`);
+    const previous = process.env.CODECAST_CLOUD_WORKSPACE;
+    try {
+      process.env.CODECAST_CLOUD_WORKSPACE = "1";
+      const { workspace } = await acquireWorkspace(repoRoot, "cloud-private", { skipPool: true });
+      delete process.env.CODECAST_CLOUD_WORKSPACE;
+      const expected = `0|${path.join(repoRoot, ".codecast/workspaces/cloud-private/bun-cache")}`;
+      expect(fs.readFileSync(path.join(workspace.path, "dependency-env"), "utf8")).toBe(expected);
+      fs.unlinkSync(path.join(workspace.path, "dependency-env"));
+      await healWorkspace(repoRoot, "cloud-private");
+      expect(fs.readFileSync(path.join(workspace.path, "dependency-env"), "utf8")).toBe(expected);
+      await releaseWorkspace(repoRoot, "cloud-private");
+      expect(fs.existsSync(path.dirname(workspace.env.BUN_INSTALL_CACHE_DIR!))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CODECAST_CLOUD_WORKSPACE;
+      else process.env.CODECAST_CLOUD_WORKSPACE = previous;
+    }
+  });
+
+  test("creates worktree, no install needed, persists ready state", async () => {
+    const r = await acquireWorkspace(repoRoot, "feat-1");
+    expect(r.created).toBe(true);
+    expect(r.workspace.contract?.checks.filter((check) => !check.ok)).toEqual([]);
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.branch).toBe("codecast/feat-1");
+    expect(fs.existsSync(r.workspace.path)).toBe(true);
+    // No install commands → deps-installed check is auto-pass.
+    expect(r.workspace.contract?.ok).toBe(true);
+
+    const persisted = readState(repoRoot, "feat-1");
+    expect(persisted?.state).toBe("ready");
+  });
+
+  test("acquire again with same name attaches to existing (created=false)", async () => {
+    await acquireWorkspace(repoRoot, "feat-1");
+    const r2 = await acquireWorkspace(repoRoot, "feat-1");
+    expect(r2.created).toBe(false);
+    expect(r2.workspace.state).toBe("ready");
+  });
+});
+
+describe("acquireWorkspace — with manifest, ports, and after-create hook", () => {
+  test("runs full pipeline: copy + setup + hook + contract", async () => {
+    // Set up a manifest + a thing to copy + a hook.
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, ".codecast/hooks"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      `
+[setup]
+copy = [".env"]
+install = ["echo INSTALL > install-ran.txt"]
+
+[ports.web]
+base = 39500
+range = 100
+
+[env]
+NODE_ENV = "test"
+`,
+    );
+    fs.writeFileSync(path.join(repoRoot, ".env"), "FROM_MAIN=1\n");
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/hooks/after-create.sh"),
+      `#!/usr/bin/env bash\necho "$CODECAST_WORKTREE_NAME $PORT_WEB" > hook-out.txt\n`,
+    );
+
+    const r = await acquireWorkspace(repoRoot, "feat-full");
+    expect(r.created).toBe(true);
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.ports.web).toBe(39500);
+
+    // Copy happened
+    expect(fs.readFileSync(path.join(r.workspace.path, ".env"), "utf-8")).toContain(
+      "FROM_MAIN=1",
+    );
+    // Install happened (in worktree CWD)
+    expect(
+      fs.readFileSync(path.join(r.workspace.path, "install-ran.txt"), "utf-8").trim(),
+    ).toBe("INSTALL");
+    // Hook happened with env injection
+    expect(
+      fs.readFileSync(path.join(r.workspace.path, "hook-out.txt"), "utf-8").trim(),
+    ).toBe("feat-full 39500");
+  });
+
+  test("setup failure marks workspace broken and rethrows", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      `[setup]\ninstall = ["exit 9"]\n`,
+    );
+
+    let err: unknown;
+    try {
+      await acquireWorkspace(repoRoot, "feat-fail");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(readState(repoRoot, "feat-fail")?.state).toBe("broken");
+  });
+});
+
+describe("healWorkspace", () => {
+  test("re-runs setup on a broken workspace", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      `[setup]\ninstall = ["touch healed.txt"]\n`,
+    );
+    await acquireWorkspace(repoRoot, "feat-heal");
+    const wsPath = readState(repoRoot, "feat-heal")!.path;
+    // Simulate breakage: delete the install marker file.
+    fs.rmSync(path.join(wsPath, "healed.txt"));
+
+    const healed = await healWorkspace(repoRoot, "feat-heal");
+    expect(healed.state).toBe("ready");
+    expect(fs.existsSync(path.join(wsPath, "healed.txt"))).toBe(true);
+  });
+
+  test("healing a non-existent workspace throws", async () => {
+    await expect(healWorkspace(repoRoot, "missing")).rejects.toThrow(/not found/);
+  });
+});
+
+describe("validateWorkspace", () => {
+  test("happy path returns ok=true contract result", async () => {
+    await acquireWorkspace(repoRoot, "feat-v");
+    const r = await validateWorkspace(repoRoot, "feat-v");
+    expect(r.ok).toBe(true);
+  });
+
+  test("unknown workspace throws", async () => {
+    await expect(validateWorkspace(repoRoot, "missing")).rejects.toThrow(/not found/);
+  });
+});
+
+describe("listWorkspaces", () => {
+  test("returns all tracked workspaces", async () => {
+    await acquireWorkspace(repoRoot, "a");
+    await acquireWorkspace(repoRoot, "b");
+    const all = listWorkspaces(repoRoot).map((w) => w.name).sort();
+    expect(all).toEqual(["a", "b"]);
+  });
+
+  test("empty repo → empty list", () => {
+    expect(listWorkspaces(repoRoot)).toEqual([]);
+  });
+});
+
+describe("acquireWorkspace — with browser enabled", () => {
+  test("a Chrome that will not start leaves a ready workspace without a browser", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "[browser]\nenabled = true\n\n[browser.cdp_port]\nbase = 39800\nrange = 100\n");
+    const broken = path.join(repoRoot, "not-chrome");
+    fs.writeFileSync(broken, "not a program", { mode: 0o644 });
+    const saved = process.env.CODECAST_CHROMIUM;
+    process.env.CODECAST_CHROMIUM = broken;
+    try {
+      const r = await acquireWorkspace(repoRoot, "feat-no-browser");
+      expect(r.workspace.state).toBe("ready");
+      expect(r.workspace.chrome).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.CODECAST_CHROMIUM; else process.env.CODECAST_CHROMIUM = saved;
+    }
+  });
+
+  test("launches Chrome and exposes CDP port; releaseWorkspace stops it", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      `
+[browser]
+enabled = true
+headless = true
+
+[browser.cdp_port]
+base = 39700
+range = 100
+`,
+    );
+
+    const r = await acquireWorkspace(repoRoot, "feat-browser");
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.chrome).toBeDefined();
+    const chrome = r.workspace.chrome!;
+    expect(chrome.pid).toBeGreaterThan(0);
+    expect(chrome.cdpPort).toBe(39700);
+
+    // CDP /json/version is reachable.
+    const ver = (await fetch(`http://127.0.0.1:${chrome.cdpPort}/json/version`).then((res) =>
+      res.json(),
+    )) as { Browser?: string };
+    expect(typeof ver.Browser).toBe("string");
+
+    // PID is alive prior to release.
+    let alive = false;
+    try {
+      process.kill(chrome.pid, 0);
+      alive = true;
+    } catch {
+      alive = false;
+    }
+    expect(alive).toBe(true);
+
+    // Release stops Chrome.
+    await releaseWorkspace(repoRoot, "feat-browser");
+    // Give the OS a moment to reap.
+    await new Promise((res) => setTimeout(res, 300));
+    let stillAlive = false;
+    try {
+      process.kill(chrome.pid, 0);
+      stillAlive = true;
+    } catch {
+      stillAlive = false;
+    }
+    expect(stillAlive).toBe(false);
+  }, 25000);
+});
+
+describe("acquireWorkspace + warm pool integration", () => {
+  test("pre-warmed slot is consumed by acquireWorkspace fast path", async () => {
+    const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+
+    // Pre-warm one slot
+    await maintainPool(repoRoot, 1);
+    const ready = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    expect(ready).not.toBeNull();
+
+    // Acquire — should claim from pool, returning fast
+    const start = Date.now();
+    const r = await acquireWorkspace(repoRoot, "feat-from-pool");
+    const elapsed = Date.now() - start;
+
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.name).toBe("feat-from-pool");
+    expect(r.workspace.branch).toBe("codecast/feat-from-pool");
+
+    // Pool-fed acquires should be fast — usually under 500ms since no
+    // git worktree add + setup run. (Real codecast bun install takes ~3s.)
+    // We assert generously to avoid CI flakiness.
+    expect(elapsed).toBeLessThan(3000);
+
+    // The renamed workspace exists in state.
+    const list = listWorkspaces(repoRoot);
+    expect(list.map((w) => w.name)).toContain("feat-from-pool");
+  }, 30000);
+
+  test("acquire with skipPool=true bypasses pool even when slot is ready", async () => {
+    const { maintainPool, waitForReadySlot } = await import("./pool/manager.js");
+    await maintainPool(repoRoot, 1);
+    await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+
+    const r = await acquireWorkspace(repoRoot, "fresh-feat", { skipPool: true });
+    expect(r.workspace.name).toBe("fresh-feat");
+    // Pool slot still ready since we didn't claim it.
+    const { readPoolState } = await import("./pool/state.js");
+    const ps = readPoolState(repoRoot)!;
+    expect(ps.slots.some((s) => s.state === "ready")).toBe(true);
+  }, 30000);
+});
+
+describe("releaseWorkspace", () => {
+  test("removes worktree + state, runs teardown commands", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      `
+[setup]
+install = ["true"]
+
+[teardown]
+run = ["touch ${repoRoot}/tornDown.txt"]
+`,
+    );
+    const r = await acquireWorkspace(repoRoot, "feat-rel");
+    const wsPath = r.workspace.path;
+    expect(fs.existsSync(wsPath)).toBe(true);
+
+    await releaseWorkspace(repoRoot, "feat-rel");
+    expect(fs.existsSync(wsPath)).toBe(false);
+    expect(readState(repoRoot, "feat-rel")).toBeNull();
+    expect(fs.existsSync(path.join(repoRoot, "tornDown.txt"))).toBe(true);
+  });
+
+  test("releasing an unknown workspace is a no-op (doesn't throw)", async () => {
+    await releaseWorkspace(repoRoot, "never-existed");
+    // no throw
+  });
+});
+
+describe("acquireRootCheckout — the main checkout as the shared-checkout workspace (ct-49428)", () => {
+  const manifest = `
+[setup]
+copy = [".env"]
+install = ["printf '%s|%s|%s' \\"$PORT_WEB\\" \\"$BUN_INSTALL_GLOBAL_STORE\\" \\"$CODECAST_CLOUD_WORKSPACE\\" > setup-env"]
+[ports.web]
+base = 45100
+range = 100
+`;
+  const withManifest = () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), manifest);
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), ".env\nsetup-env\nhost-state/\n.codecast/workspaces/\n.codecast/worktrees/\n");
+    execSync("git add . && git commit -q -m manifest", { cwd: repoRoot });
+  };
+
+  test("state.path is the repo root, ports skip a worktree's reservation, the tracked manifest is untouched, a rerun keeps the index", async () => {
+    withManifest();
+    const tracked = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
+    const wt = await acquireWorkspace(repoRoot, "iso", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
+    const r = await acquireRootCheckout(repoRoot, { skipBrowser: true });
+    expect(r.created).toBe(true);
+    expect(r.workspace.name).toBe(ROOT_WORKSPACE_NAME);
+    expect(r.workspace.path).toBe(fs.realpathSync(repoRoot));
+    expect(r.workspace.state).toBe("ready");
+    expect(r.workspace.ports.web).not.toBe(wt.workspace.ports.web);
+    expect(r.workspace.env.CODECAST_CLOUD_WORKSPACE).toBeUndefined();
+    expect(r.workspace.env.BUN_INSTALL_GLOBAL_STORE).toBeUndefined();
+    expect(r.workspace.env.BUN_INSTALL_CACHE_DIR).toBeUndefined();
+    // Setup saw the root's port and no CODECAST_CLOUD_WORKSPACE (the middle
+    // field is whatever the test runner's own environment carries).
+    expect(fs.readFileSync(path.join(repoRoot, "setup-env"), "utf8")).toMatch(new RegExp(`^${r.workspace.ports.web}\\|[^|]*\\|$`));
+    expect(fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8")).toBe(tracked);
+    const state = readState(repoRoot, ROOT_WORKSPACE_NAME)!;
+    expect(state.path).toBe(fs.realpathSync(repoRoot));
+    expect(state.branch).toBe("main");
+    expect(state.manifest.backend).toBe("local");
+    const again = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(again.created).toBe(false);
+    expect(again.workspace.resourceIndex).toBe(r.workspace.resourceIndex);
+    expect(again.workspace.ports).toEqual(r.workspace.ports);
+    expect(listWorkspaces(repoRoot).map((w) => w.name).sort()).toEqual(["iso", ROOT_WORKSPACE_NAME]);
+  });
+
+  test("an input snapshot's secret overwrites the root's copy; the manifest is read from it but never written into the root", async () => {
+    withManifest();
+    fs.writeFileSync(path.join(repoRoot, ".env"), "host copy\n");
+    const inputs = fs.mkdtempSync(path.join(os.tmpdir(), "ws-root-inputs-"));
+    extraRepos.push(inputs);
+    fs.mkdirSync(path.join(inputs, ".codecast"));
+    fs.writeFileSync(path.join(inputs, ".codecast/workspace.toml"), manifest.replace("[ports.web]", "[env]\nSNAP = \"one\"\n[ports.web]"));
+    fs.writeFileSync(path.join(inputs, ".env"), "laptop copy\n");
+    const before = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
+    const r = await acquireRootCheckout(repoRoot, { inputRoot: inputs, skipSetup: true, skipBrowser: true });
+    expect(fs.readFileSync(path.join(repoRoot, ".env"), "utf8")).toBe("laptop copy\n");
+    expect(fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8")).toBe(before);
+    expect(r.workspace.env.SNAP).toBe("one");
+    expect(r.workspace.env.CODECAST_WORKSPACE_INPUT_ROOT).toBe(fs.realpathSync(inputs));
+    expect(execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf8" })).toBe("");
+  });
+
+  test("branch follows HEAD across runs; validateWorkspace and heal pass after a branch switch", async () => {
+    withManifest();
+    await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    execSync("git checkout -q -b codecast/cloud-abc123", { cwd: repoRoot });
+    expect((await validateWorkspace(repoRoot, ROOT_WORKSPACE_NAME)).ok).toBe(true);
+    // validate holds no lock, so it reads the live HEAD without rewriting the record.
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    // The read paths (`cast ws status`, `cast ws ls`) report the live HEAD, not the file.
+    expect(readWorkspaceState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("codecast/cloud-abc123");
+    expect(listWorkspaces(repoRoot).find((w) => w.name === ROOT_WORKSPACE_NAME)!.branch).toBe("codecast/cloud-abc123");
+    expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
+    execSync("git checkout -q -b codecast/cloud-def456", { cwd: repoRoot });
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(r.workspace.branch).toBe("codecast/cloud-def456");
+    expect(r.created).toBe(false);
+    execSync("git checkout -q main", { cwd: repoRoot });
+    const healed = await healWorkspace(repoRoot, ROOT_WORKSPACE_NAME);
+    expect(healed.state).toBe("ready");
+    expect(healed.branch).toBe("main");
+  });
+
+  test("acquireWorkspace refuses the reserved name; releaseWorkspace drops only the state dir and never the repo", async () => {
+    withManifest();
+    await expect(acquireWorkspace(repoRoot, ROOT_WORKSPACE_NAME, { skipPool: true })).rejects.toThrow(/reserved for the main checkout/);
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME, "state.json"))).toBe(true);
+    await releaseWorkspace(repoRoot, ROOT_WORKSPACE_NAME);
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME))).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, ".git"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "README.md"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, ".codecast/workspace.toml"))).toBe(true);
+    // The freed ports are reusable by a worktree.
+    const wt = await acquireWorkspace(repoRoot, "after", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
+    expect(wt.workspace.ports.web).toBe(r.workspace.ports.web);
+  });
+});
+
+describe("shared directories", () => {
+  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+
+  /** Commit a gitignore and install a dependency directory in the main checkout. */
+  function installShared(): string {
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), "node_modules/\n");
+    execSync("git add . && git commit -q -m ignore", { cwd: repoRoot });
+    const dep = path.join(repoRoot, "node_modules", "dep");
+    fs.mkdirSync(dep, { recursive: true });
+    fs.writeFileSync(path.join(dep, "index.js"), "module.exports = 1;\n");
+    return dep;
+  }
+
+  test("acquire links the detected directory, release unlinks it and spares the original", async () => {
+    const dep = installShared();
+
+    const r = await acquireWorkspace(repoRoot, "shared", opts);
+    expect(r.workspace.manifest.setup.share).toEqual(["node_modules"]);
+    const link = path.join(r.workspace.path, "node_modules");
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(link)).toBe(fs.realpathSync(path.join(repoRoot, "node_modules")));
+
+    await releaseWorkspace(repoRoot, "shared");
+    expect(fs.existsSync(r.workspace.path)).toBe(false);
+    // The unlink ran before the removal: the install the link pointed at is
+    // still there, and nothing followed the link out of the worktree.
+    expect(fs.existsSync(dep)).toBe(true);
+  });
+
+  test("the manifest's list wins over detection", async () => {
+    installShared();
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      '[setup]\nshare = ["missing_dir"]\n',
+    );
+
+    const r = await acquireWorkspace(repoRoot, "declared", opts);
+    expect(r.workspace.manifest.setup.share).toEqual(["missing_dir"]);
+    expect(fs.existsSync(path.join(r.workspace.path, "node_modules"))).toBe(false);
+  });
+
+  test("a directory that is not gitignored is never linked", async () => {
+    fs.mkdirSync(path.join(repoRoot, "vendor"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "vendor/lib.txt"), "tracked\n");
+    execSync("git add . && git commit -q -m vendor", { cwd: repoRoot });
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".codecast/workspace.toml"),
+      '[setup]\nshare = ["vendor"]\n',
+    );
+
+    const r = await acquireWorkspace(repoRoot, "tracked", opts);
+    // The checkout materialized its own copy; a link there would read as a diff.
+    expect(fs.lstatSync(path.join(r.workspace.path, "vendor")).isSymbolicLink()).toBe(false);
+  });
+});

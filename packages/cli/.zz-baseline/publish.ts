@@ -1,0 +1,867 @@
+// `cast publish` — shareable HTML/markdown/bundle artifacts (codecast.sh/a/<slug>).
+//
+// Registered from index.ts via registerPublishCommand(program, deps). Deps are
+// handed in (doctor.ts pattern) because index.ts owns config decryption and
+// session detection, and this module must stay importable by tests — index.ts
+// runs program.parse() on import, so nothing here may import from it.
+//
+// Pure, testable logic (flag mapping, bundle selection, table formatting) lives
+// in publishCommand.ts; this file owns IO: fs walks, HTTP, Chrome screenshots,
+// the fs.watch loop, and output.
+
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn } from "./proc.js";
+import { findChromeBinary, keychainArgs } from "./workspace/chrome.js";
+import { stdinText } from "./sendBody.js";
+import { inlineDecisionKit, usesDecisionKit } from "./decisionKit.js";
+import type { Command } from "commander";
+import open from "open";
+import { c, fmt, icons } from "./colors.js";
+import {
+  buildAccessPayload,
+  bundleSizeError,
+  describeAccess,
+  filterBundlePaths,
+  formatAgeShort,
+  formatArtifactTable,
+  formatBytes,
+  isHtmlPath,
+  isMediaPath,
+  isMarkdownPath,
+  parseExpires,
+  pickBundleEntry,
+  resolveArtifactTitle,
+  resolveMarkdownTitle,
+  type AccessFlagValues,
+  type ArtifactLsRow,
+} from "./publishCommand.js";
+import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
+import { CAST_PLAYER_GUIDE, describePageAnchor, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
+import { commandGroup } from "./commandGroups.js";
+import { readPageData, runPublishData } from "./publishData.js";
+import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
+import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
+
+const WATCH_DEBOUNCE_MS = 400;
+const THUMB_TIMEOUT_MS = 10_000;
+
+// ── bundle walk ──────────────────────────────────────────────────────────────
+
+/** Every file under dir as sorted relative posix paths, skip rules applied. */
+export function walkBundleDir(dir: string): string[] {
+  const out: string[] = [];
+  const visit = (rel: string) => {
+    for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  visit("");
+  return filterBundlePaths(out);
+}
+
+// ── thumbnail capture ────────────────────────────────────────────────────────
+
+/** The same Chrome discovery every launcher uses (CHROME_PATH, app bundles, PATH). */
+export const findChrome = findChromeBinary;
+
+/** The headless command line for one thumbnail. Pure, so the flag set is
+ * testable without spawning a browser. The throwaway profile dir keeps the
+ * capture off the human's real profile (which a running Chrome holds locked)
+ * and, with the keychain flag, off the macOS keychain when the home has none. */
+export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
+  return [
+    "--headless=new",
+    `--screenshot=${outPng}`,
+    `--user-data-dir=${profileDir}`,
+    "--window-size=1200,630",
+    "--hide-scrollbars",
+    "--disable-gpu",
+    "--no-first-run",
+    ...keychainArgs(),
+    ...extraArgs,
+    `file://${entryHtmlAbsPath}`,
+  ];
+}
+
+/** A whole PNG: the signature up front and the IEND chunk closing it, so a
+ * screenshot still being written never passes for a finished one. */
+export function isCompletePng(bytes: Buffer): boolean {
+  return bytes.length > 20 && bytes.readUInt32BE(0) === 0x89504e47 && bytes.subarray(-8, -4).toString("latin1") === "IEND";
+}
+
+/** Headless-Chrome 1200x630 screenshot of a local html file → base64 png.
+ * ANY failure (no Chrome, timeout, bad exit) returns null silently — a
+ * thumbnail must never block or delay a publish beyond its timeout.
+ *
+ * The shot is taken the moment the file is whole, not when Chrome exits:
+ * Chrome 154 writes the screenshot and then never quits, in every headless
+ * mode, so waiting on its exit turned every capture into a timeout. Chrome is
+ * killed with SIGKILL either way (SIGTERM is ignored while it starts under load). */
+export async function captureThumb(entryHtmlAbsPath: string, opts: { extraArgs?: string[]; timeoutMs?: number } = {}): Promise<string | null> {
+  try {
+    const chrome = findChrome();
+    if (!chrome) return null;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
+    const outPng = path.join(tmpDir, "thumb.png");
+    const child = spawn(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile"), opts.extraArgs), { stdio: "ignore" });
+    try {
+      const deadline = Date.now() + (opts.timeoutMs ?? THUMB_TIMEOUT_MS);
+      let exited = false;
+      child.once("exit", () => { exited = true; });
+      child.once("error", () => { exited = true; });
+      while (Date.now() < deadline) {
+        const bytes = fs.existsSync(outPng) ? fs.readFileSync(outPng) : null;
+        if (bytes && isCompletePng(bytes)) return bytes.toString("base64");
+        if (exited) return null;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return null;
+    } finally {
+      child.kill("SIGKILL");
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch {
+    return null;
+  }
+}
+
+// ── publish payload assembly ─────────────────────────────────────────────────
+
+interface PublishPayload {
+  title: string;
+  source_path: string;
+  kind?: "markdown" | "bundle";
+  content?: string;
+  files?: Array<{ path: string; content_b64?: string; media_url?: string; size?: number }>;
+  /** Video and audio files, uploaded to media hosting before the publish. */
+  media?: Array<{ path: string; abs: string; size: number }>;
+  /** Local path of the html document a thumbnail should render. */
+  entryHtmlPath?: string;
+  /** The bundle's cast-data.json: the live queries the page reads. */
+  data?: unknown;
+  /** The entry is a HyperFrames composition (a motion page). */
+  motion?: boolean;
+  /** Tool output directories a composition's bundle left out (renders/, snapshots/). */
+  skipped?: Array<{ dir: string; files: number; bytes: number }>;
+}
+
+/** Read the file/dir into the /cli/artifacts/publish payload. Throws with a
+ * legible message on anything the user must fix (missing entry, size cap). */
+export function buildPublishPayload(absPath: string, titleOverride?: string): PublishPayload {
+  const stat = fs.statSync(absPath);
+  if (stat.isDirectory()) {
+    // cast-data.json declares the page's live queries; it travels as data, not as a served file.
+    const data = readPageData(absPath);
+    const walked = walkBundleDir(absPath).filter((p) => p !== PAGE_DATA_FILE);
+    const entry = pickBundleEntry(walked);
+    if (!entry.entry) throw new Error(entry.error);
+    const entryHtml = fs.readFileSync(path.join(absPath, entry.entry), "utf-8");
+    // A composition directory holds the render and snapshot output of its own
+    // tools; none of it belongs on the page.
+    const motion = pageIsMotion(entryHtml);
+    const { keep: relPaths, skipped } = motion ? splitMotionOutputs(absPath, walked) : { keep: walked, skipped: [] };
+    const files: NonNullable<PublishPayload["files"]> = [];
+    const media: NonNullable<PublishPayload["media"]> = [];
+    const sizes: Array<{ path: string; size: number }> = [];
+    for (const rel of relPaths) {
+      if (isMediaPath(rel)) {
+        const abs = path.join(absPath, rel);
+        media.push({ path: rel, abs, size: fs.statSync(abs).size });
+        continue;
+      }
+      let bytes = fs.readFileSync(path.join(absPath, rel));
+      if (rel === entry.entry && usesDecisionKit(entryHtml)) bytes = Buffer.from(inlineDecisionKit(entryHtml), "utf-8");
+      files.push({ path: rel, content_b64: bytes.toString("base64") });
+      sizes.push({ path: rel, size: bytes.byteLength });
+    }
+    const sizeError = bundleSizeError(sizes);
+    if (sizeError) throw new Error(sizeError);
+    return {
+      title: resolveArtifactTitle(entryHtml, absPath, titleOverride),
+      source_path: absPath,
+      kind: "bundle",
+      files,
+      ...(media.length ? { media } : {}),
+      ...(data ? { data } : {}),
+      ...(motion ? { motion } : {}),
+      ...(skipped.length ? { skipped } : {}),
+      entryHtmlPath: path.join(absPath, entry.entry),
+    };
+  }
+  const content = fs.readFileSync(absPath, "utf-8");
+  if (isMarkdownPath(absPath)) {
+    return {
+      title: resolveMarkdownTitle(content, absPath, titleOverride),
+      source_path: absPath,
+      kind: "markdown",
+      content,
+    };
+  }
+  if (!isHtmlPath(absPath)) {
+    const hint = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(absPath)
+      ? ` (for an inline-shareable image link, use \`cast image ${path.basename(absPath)}\`)`
+      : "";
+    throw new Error(`Can't publish ${path.basename(absPath)} — publish an .html or .md file, or a directory bundle${hint}`);
+  }
+  return {
+    title: resolveArtifactTitle(content, absPath, titleOverride),
+    source_path: absPath,
+    // A page built from the decision kit carries the kit inline (decisionKit.ts).
+    content: inlineDecisionKit(content),
+    entryHtmlPath: absPath,
+  };
+}
+
+// ── output ───────────────────────────────────────────────────────────────────
+
+function versionLine(result: { version: number; updated?: boolean; unchanged?: boolean }): string {
+  if (result.unchanged) return fmt.muted(`unchanged (v${result.version})`);
+  return `${fmt.number(`v${result.version}`)} ${icons.arrow} ${result.updated ? "updated" : "published"}`;
+}
+
+/** "attached to ct-12 at in_progress" (the-line.md L6), or null when unattached. */
+export function describeEvidence(evidence?: { task?: string | null; plan?: string | null; station?: string | null } | null): string | null {
+  if (!evidence) return null;
+  const target = evidence.task ?? evidence.plan;
+  if (!target) return null;
+  return `attached to ${target}${evidence.task && evidence.station ? ` at ${evidence.station}` : ""}`;
+}
+
+export function printPublishResult(
+  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null }; data?: { workspace: string; queries: number } },
+  title: string,
+  access?: Record<string, unknown>,
+  showsVideo?: boolean,
+): void {
+  console.log(`${fmt.success(icons.check)} ${fmt.highlight(title)}  ${versionLine(result)}`);
+  console.log(`  ${fmt.accent(result.url)}`);
+  const attached = describeEvidence(result.evidence);
+  if (attached) console.log(`  ${fmt.label("evidence:")} ${attached}`);
+  if (result.manage_url && result.manage_url !== result.url) {
+    console.log(`  ${fmt.label("manage (owner link — keep private):")} ${result.manage_url}`);
+  }
+  if (result.edit_url) {
+    console.log(`  ${fmt.label("edit:")} ${result.edit_url}`);
+  }
+  if (access) {
+    console.log(`  ${fmt.label("gates:")} ${describeAccess(access)}`);
+  }
+  if (result.data) {
+    console.log(`  ${fmt.label("data:")} ${result.data.queries} live quer${result.data.queries === 1 ? "y" : "ies"} in ${result.data.workspace}; check them with \`cast publish data ${result.url.split("/").pop()}\``);
+  }
+  if (showsVideo) {
+    console.log(`  ${fmt.label("video:")} plays in the cast player; \`cast publish video\` covers chapters and styling it to the page`);
+  }
+}
+
+// ── option → flag mapping ────────────────────────────────────────────────────
+
+function accessFromOptions(options: {
+  password?: string | boolean;
+  passwordValue?: string;
+  passwordStdin?: boolean;
+  emailGate?: boolean;
+  expires?: string;
+  editMode?: string;
+  session?: boolean;
+  comments?: boolean;
+}): Record<string, unknown> | undefined {
+  const flags: AccessFlagValues = {};
+  // commander: undefined = untouched, string = --password P, false = --no-password.
+  // passwordValue (from --password-stdin) wins: it never touches argv.
+  if (options.passwordValue !== undefined) flags.password = options.passwordValue;
+  else if (options.password !== undefined) flags.password = options.password as string | false;
+  if (options.emailGate !== undefined) flags.emailGate = options.emailGate;
+  if (options.expires !== undefined) {
+    const parsed = parseExpires(options.expires);
+    if ("error" in parsed) {
+      console.error(fmt.error(parsed.error));
+      process.exit(1);
+    }
+    flags.expiresMs = parsed.ms;
+  }
+  if (options.editMode !== undefined) flags.editMode = options.editMode;
+  if (options.session !== undefined) flags.session = options.session;
+  if (options.comments !== undefined) flags.comments = options.comments;
+  const built = buildAccessPayload(flags);
+  if (built.error) {
+    console.error(fmt.error(built.error));
+    process.exit(1);
+  }
+  return built.payload;
+}
+
+// ── subcommand actions ───────────────────────────────────────────────────────
+
+async function runLs(deps: PublishDeps, json: boolean): Promise<void> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  for (const line of formatArtifactTable(rows)) console.log(line);
+}
+
+async function runRm(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const abs = fs.existsSync(target) ? path.resolve(target) : target;
+  const result = await apiPost(deps, "/cli/artifacts/delete", { target: abs });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const deleted = result.deleted;
+  console.log(`${fmt.success(icons.check)} Unpublished ${fmt.highlight(deleted?.title ?? target)} ${fmt.muted(`(${deleted?.slug ?? target})`)}`);
+}
+
+async function runRollback(deps: PublishDeps, target: string, versionArg: string, json: boolean): Promise<void> {
+  const version = parseInt(versionArg, 10);
+  if (!Number.isFinite(version) || version < 1) {
+    console.error(fmt.error(`Invalid version "${versionArg}" — pass the version number to restore, e.g. 3`));
+    process.exit(1);
+  }
+  const abs = fs.existsSync(target) ? path.resolve(target) : target;
+  const result = await apiPost(deps, "/cli/artifacts/rollback", { target: abs, version });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${fmt.success(icons.check)} Rolled back to v${version} — now ${fmt.number(`v${result.version}`)}`);
+  console.log(`  ${fmt.accent(result.url)}`);
+}
+
+async function runOpen(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  const abs = fs.existsSync(target) ? path.resolve(target) : null;
+  const suffix = target.startsWith("/") ? target : `/${target}`;
+  const row = rows.find(
+    (r: any) => r.slug === target || r.source_path === abs || r.source_path === target || r.source_path?.endsWith(suffix),
+  );
+  if (!row) {
+    console.error(fmt.error(`No published page matches "${target}" — see cast publish ls`));
+    process.exit(1);
+  }
+  if (json) {
+    console.log(JSON.stringify(row, null, 2));
+    return;
+  }
+  console.log(row.url);
+  await open(row.url).catch(() => {});
+}
+
+// ── owner management (no republish needed) ───────────────────────────────────
+//
+// The manage endpoint authenticates with the artifact's owner_key rather than
+// an api_token, because it is also called from the published page itself. The
+// CLI holds an api_token, so it resolves the row through the authed list
+// endpoint first and reads the owner_key out of the manage_url fragment — the
+// same secret, obtained the authorized way. Nothing here needs an extra
+// backend surface.
+
+/** Find one of the caller's artifacts by slug, absolute path, or path suffix. */
+async function resolveRow(deps: PublishDeps, target: string): Promise<ArtifactLsRow> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  const abs = fs.existsSync(target) ? path.resolve(target) : null;
+  const suffix = target.startsWith("/") ? target : `/${target}`;
+  const matches = rows.filter(
+    (r: any) => r.slug === target || r.source_path === abs || r.source_path === target || r.source_path?.endsWith(suffix),
+  );
+  if (matches.length > 1) {
+    console.error(fmt.error(`"${target}" matches ${matches.length} published pages — use a slug:`));
+    for (const m of matches) console.error(`  ${m.slug}  ${m.title}`);
+    process.exit(1);
+  }
+  if (!matches.length) {
+    console.error(fmt.error(`No published page matches "${target}" — see cast publish ls`));
+    process.exit(1);
+  }
+  return matches[0];
+}
+
+function ownerKeyOf(row: ArtifactLsRow): string {
+  const key = (row as any).manage_url?.split("#o=")[1];
+  if (!key) {
+    console.error(fmt.error(`No owner key for ${row.slug} — it may predate managed pages. Republish to mint one.`));
+    process.exit(1);
+  }
+  return key;
+}
+
+async function callManage(deps: PublishDeps, row: ArtifactLsRow, payload: Record<string, unknown>): Promise<any> {
+  return await apiPost(deps, "/cli/artifacts/manage", { slug: row.slug, owner_key: ownerKeyOf(row), ...payload });
+}
+
+/** formatAgeShort takes a duration, not a timestamp — this is the "how long
+ * ago was this" wrapper the management views want. */
+function ago(timestamp: number | null | undefined): string {
+  if (!timestamp) return "—";
+  return formatAgeShort(Math.max(0, Date.now() - timestamp));
+}
+
+function describeGates(access: any): string {
+  const bits: string[] = [];
+  bits.push(access.has_password ? "password on" : "no password");
+  if (access.email_gate) bits.push("email gate on");
+  if (access.expires_at) {
+    const when = access.expires_at < Date.now() ? "EXPIRED" : `expires ${new Date(access.expires_at).toLocaleString()}`;
+    bits.push(when);
+  }
+  bits.push(`edit: ${access.edit_mode ?? "owner"}`);
+  if (access.show_session === false) bits.push("session link hidden");
+  if (access.comments_enabled === false) bits.push("comments off");
+  return bits.join(" · ");
+}
+
+/** Change access/title on an EXISTING artifact without republishing content —
+ * the agent-facing counterpart of the in-page manage sheet. */
+async function runSet(deps: PublishDeps, target: string, options: PublishOptions & { editMode?: string }, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const set: Record<string, unknown> = {};
+  if (options.passwordValue !== undefined) set.password = options.passwordValue;
+  else if (options.password !== undefined) set.password = options.password === false ? null : options.password;
+  if (options.emailGate !== undefined) set.email_gate = options.emailGate;
+  if (options.editMode !== undefined) set.edit_mode = options.editMode;
+  if (options.session !== undefined) set.show_session = options.session;
+  if (options.comments !== undefined) set.comments = options.comments;
+  if (options.title !== undefined) set.title = options.title;
+  if (options.expires !== undefined) {
+    const parsed = parseExpires(options.expires);
+    if ("error" in parsed) {
+      console.error(fmt.error(parsed.error));
+      process.exit(1);
+    }
+    set.expires_in_ms = parsed.ms;
+  }
+  if (!Object.keys(set).length) {
+    console.error(fmt.error("Nothing to set — pass e.g. --password X, --no-password, --email-gate, --expires 7d, --edit-mode team, --no-session, --title T"));
+    process.exit(1);
+  }
+  const result = await callManage(deps, row, { set });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${fmt.success(icons.check)} Updated ${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  console.log(`  ${fmt.label("access:")} ${describeGates(result.access ?? {})}`);
+  if (result.edit_url) console.log(`  ${fmt.label("edit link (shareable):")} ${result.edit_url}`);
+}
+
+async function runVersions(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const result = await callManage(deps, row, {});
+  if (json) {
+    console.log(JSON.stringify(result.versions ?? [], null, 2));
+    return;
+  }
+  const versions: any[] = result.versions ?? [];
+  if (!versions.length) {
+    console.log(fmt.muted("No version history yet."));
+    return;
+  }
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  for (const v of versions) {
+    const mark = v.current ? fmt.success(" ← current") : "";
+    const who = v.edited_by ? fmt.muted(` by ${v.edited_by}`) : "";
+    console.log(`  ${fmt.number(`v${v.version}`)}  ${ago(v.published_at).padStart(4)}  ${formatBytes(v.size).padStart(7)}${who}${mark}`);
+  }
+  console.log(fmt.muted(`  restore: cast publish rollback ${row.slug} <n>`));
+  console.log(fmt.muted(`  compare: ${row.url}?diff=<a>..<b>`));
+}
+
+async function runComments(
+  deps: PublishDeps,
+  target: string,
+  opts: { resolveId?: string; resolveAll?: boolean; json: boolean },
+): Promise<void> {
+  const row = await resolveRow(deps, target);
+  if (opts.resolveAll) {
+    let panel = await callManage(deps, row, {});
+    const open_ = (panel.comments ?? []).filter((c: any) => c.status === "open");
+    for (const c of open_) panel = await callManage(deps, row, { resolve_comment_id: c.id });
+    if (!opts.json) console.log(`${fmt.success(icons.check)} Resolved ${open_.length} comment${open_.length === 1 ? "" : "s"}`);
+    if (opts.json) console.log(JSON.stringify(panel.comments ?? [], null, 2));
+    return;
+  }
+  const result = opts.resolveId
+    ? await callManage(deps, row, { resolve_comment_id: opts.resolveId })
+    : await callManage(deps, row, {});
+  const comments: any[] = result.comments ?? [];
+  if (opts.json) {
+    console.log(JSON.stringify(comments, null, 2));
+    return;
+  }
+  if (opts.resolveId) console.log(`${fmt.success(icons.check)} Resolved ${opts.resolveId}`);
+  const open_ = comments.filter((c) => c.status === "open");
+  if (!open_.length) {
+    console.log(fmt.muted("No open comments."));
+    return;
+  }
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)} — ${open_.length} open`);
+  for (const c of open_) {
+    const who = c.author_email ? `${c.author_name} <${c.author_email}>` : c.author_name;
+    // role: "owner" | "teammate" may steer the agent; anyone else is a viewer.
+    const meta = [who, c.role ?? "viewer", `v${c.version}`, ago(c.created_at)];
+    if (c.delivered) meta.push("sent to agent");
+    else if (c.role) meta.push("not sent to agent");
+    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(meta.join(" · "))}`);
+    for (const line of String(c.text).split("\n")) console.log(`    ${line}`);
+    const where = describePageAnchor(parsePageAnchor(c.anchor));
+    if (where.length) console.log(fmt.muted(`    ↳ ${where.join(", ")}`));
+  }
+  console.log(fmt.muted(`  resolve: cast publish comments ${row.slug} --resolve <id>  |  --resolve-all`));
+}
+
+async function runViewers(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  const result = await callManage(deps, row, {});
+  const viewers: any[] = result.viewers ?? [];
+  if (json) {
+    console.log(JSON.stringify({ stats: result.stats, viewers }, null, 2));
+    return;
+  }
+  const stats = result.stats ?? {};
+  console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)}`);
+  console.log(`  ${fmt.label("views:")} ${stats.views ?? 0}${stats.last_viewed_at ? fmt.muted(` · last ${ago(stats.last_viewed_at)}`) : ""}`);
+  if (!viewers.length) {
+    console.log(fmt.muted("  No identified viewers (email gate off, or nobody has entered an address)."));
+    return;
+  }
+  for (const v of viewers) {
+    console.log(`  ${v.email.padEnd(32)} ${fmt.muted(`${v.view_count}x · first ${ago(v.first_seen)} · last ${ago(v.last_seen)}`)}`);
+  }
+}
+
+async function runLinks(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const row = await resolveRow(deps, target);
+  if (json) {
+    console.log(JSON.stringify(row, null, 2));
+    return;
+  }
+  console.log(`${fmt.label("share:")}  ${row.url}`);
+  console.log(`${fmt.label("manage:")} ${(row as any).manage_url} ${fmt.muted("(owner link — keep private)")}`);
+  if ((row as any).edit_url) console.log(`${fmt.label("edit:")}   ${(row as any).edit_url} ${fmt.muted("(anyone with this can publish versions)")}`);
+  console.log(`${fmt.label("source:")} ${row.url}?src=1`);
+  console.log(`${fmt.label("live:")}   ${row.url}?live=1 ${fmt.muted("(auto-reloads on new versions)")}`);
+}
+
+// ── publish + watch ──────────────────────────────────────────────────────────
+
+interface PublishOptions {
+  title?: string;
+  new?: boolean;
+  json?: boolean;
+  watch?: boolean;
+  password?: string | boolean;
+  passwordValue?: string;
+  emailGate?: boolean;
+  expires?: string;
+  editMode?: string;
+  session?: boolean;
+  comments?: boolean;
+  thumb?: boolean;
+  open?: boolean;
+  /** Evidence (the-line.md L6): the task (ct-N) or plan (pl-N) this page is for. */
+  task?: string;
+  plan?: string;
+  /** Render a HyperFrames composition directory to MP4 before publishing. */
+  render?: boolean;
+}
+
+/** The /cli/artifacts/publish body: the payload plus the flags of this publish. */
+export function publishRequestBody(
+  payload: PublishPayload,
+  extra: { access?: Record<string, unknown>; sessionRef?: string; forceNew?: boolean; thumbB64?: string; task?: string; plan?: string },
+): Record<string, unknown> {
+  return {
+    title: payload.title,
+    source_path: payload.source_path,
+    ...(payload.kind ? { kind: payload.kind } : {}),
+    ...(payload.content !== undefined ? { content: payload.content } : {}),
+    ...(payload.files ? { files: payload.files } : {}),
+    ...(payload.data ? { data: payload.data } : {}),
+    ...(extra.forceNew ? { force_new: true } : {}),
+    ...(extra.access ? { access: extra.access } : {}),
+    ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
+    ...(extra.thumbB64 ? { thumb_b64: extra.thumbB64 } : {}),
+    ...(extra.task ? { task: extra.task } : {}),
+    ...(extra.plan ? { plan: extra.plan } : {}),
+  };
+}
+
+// Media already uploaded this run, so --watch republishes don't rehash big files.
+const uploadedMedia = new Map<string, string>();
+
+/** Upload each media file to R2 (skipped when the same bytes are already there)
+ * and add it to the bundle as a path that the server redirects to the upload. */
+export async function uploadMedia(deps: PublishDeps, payload: PublishPayload): Promise<void> {
+  for (const m of payload.media ?? []) {
+    const stat = fs.statSync(m.abs);
+    const cacheKey = `${m.abs}:${stat.size}:${stat.mtimeMs}`;
+    let url = uploadedMedia.get(cacheKey);
+    if (!url) {
+      const hash = crypto.createHash("sha256");
+      for await (const chunk of fs.createReadStream(m.abs)) hash.update(chunk as Buffer);
+      const ext = path.extname(m.path).slice(1).toLowerCase();
+      const signed = await apiPost(deps, "/cli/media/sign", { sha256: hash.digest("hex"), size: stat.size, ext }, { exitOnError: false });
+      if (!signed.exists) {
+        process.stderr.write(fmt.muted(`uploading ${m.path} (${formatBytes(stat.size)})\n`));
+        const put = await fetch(signed.upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": signed.content_type ?? "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable" },
+          body: await fs.openAsBlob(m.abs),
+        });
+        if (!put.ok) throw new Error(`Upload of ${m.path} failed (${put.status}): ${(await put.text()).slice(0, 200)}`);
+      }
+      url = signed.url as string;
+      uploadedMedia.set(cacheKey, url);
+    }
+    payload.files!.push({ path: m.path, media_url: url, size: stat.size });
+  }
+}
+
+export async function publishOnce(
+  deps: PublishDeps,
+  absPath: string,
+  options: PublishOptions,
+  extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
+): Promise<{ result: any; title: string; showsVideo: boolean; skipped: NonNullable<PublishPayload["skipped"]> }> {
+  const payload = buildPublishPayload(absPath, options.title);
+  await uploadMedia(deps, payload);
+  let thumbB64: string | undefined;
+  if (extra.withThumb && options.thumb !== false && payload.entryHtmlPath) {
+    thumbB64 = (payload.motion ? await captureMotionThumb(payload.entryHtmlPath) : await captureThumb(payload.entryHtmlPath)) ?? undefined;
+  }
+  const result = await apiPost(
+    deps,
+    "/cli/artifacts/publish",
+    publishRequestBody(payload, { access: extra.access, sessionRef: extra.sessionRef, forceNew: extra.forceNew, thumbB64, task: options.task, plan: options.plan }),
+    { exitOnError: extra.exitOnError },
+  );
+  const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
+  return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [] };
+}
+
+async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
+  const absPath = path.resolve(target);
+  if (!fs.existsSync(absPath)) {
+    console.error(fmt.error(`No such file or directory: ${target}`));
+    process.exit(1);
+  }
+  const access = accessFromOptions(options);
+  const sessionRef = deps.detectCurrentSessionId() ?? undefined;
+  const isDir = fs.statSync(absPath).isDirectory();
+
+  if (options.render) {
+    if (!isDir) {
+      console.error(fmt.error("--render publishes a directory: put the composition in its own folder as index.html"));
+      process.exit(1);
+    }
+    try {
+      process.stderr.write(fmt.muted("rendering MP4 (hyperframes render)…\n"));
+      const manifest = renderMotion(absPath, walkBundleDir(absPath));
+      process.stderr.write(fmt.muted(`rendered ${manifest.mp4} (${formatBytes(manifest.bytes)})\n`));
+    } catch (err) {
+      console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  } else if (isDir) {
+    const note = staleRenderNote(absPath, walkBundleDir(absPath));
+    if (note) process.stderr.write(fmt.muted(`note: ${note}\n`));
+  }
+
+  let result: any;
+  let title: string;
+  let showsVideo = false;
+  try {
+    let skipped: NonNullable<PublishPayload["skipped"]>;
+    ({ result, title, showsVideo, skipped } = await publishOnce(deps, absPath, options, {
+      access,
+      sessionRef,
+      withThumb: true,
+      forceNew: !!options.new,
+      exitOnError: false,
+    }));
+    for (const s of skipped) {
+      process.stderr.write(fmt.muted(`left out ${s.dir} (${s.files} file${s.files === 1 ? "" : "s"}, ${formatBytes(s.bytes)}): HyperFrames output, not part of the page\n`));
+    }
+  } catch (err) {
+    console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    printPublishResult(result, title, access, showsVideo);
+  }
+  if (options.open && result?.url) await open(result.url).catch(() => {});
+  if (!options.watch) return;
+
+  // ── watch loop: debounce fs events, republish, print version bumps ────────
+  console.log(fmt.muted(`\nwatching ${target} — Ctrl+C to stop`));
+  console.log(fmt.muted(`live view: ${result.url}?live=1`));
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let publishing = false;
+  let dirty = false;
+
+  const republish = async () => {
+    if (publishing) {
+      dirty = true;
+      return;
+    }
+    publishing = true;
+    try {
+      // Access flags applied on the first publish; watch republishes content only.
+      // Thumbnails are also first-publish-only so the loop stays fast.
+      const { result: r } = await publishOnce(deps, absPath, options, {
+        sessionRef,
+        withThumb: false,
+        forceNew: false,
+        exitOnError: false,
+      });
+      console.log(`  ${new Date().toLocaleTimeString()}  ${versionLine(r)}`);
+    } catch (err) {
+      console.error(`  ${fmt.error(err instanceof Error ? err.message : String(err))}`);
+    } finally {
+      publishing = false;
+      if (dirty) {
+        dirty = false;
+        void republish();
+      }
+    }
+  };
+
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void republish(), WATCH_DEBOUNCE_MS);
+  };
+
+  // Watch the parent dir for single files (editors rename-replace on save,
+  // which kills a direct file watch); recursive watch for bundles.
+  const watcher = isDir
+    ? fs.watch(absPath, { recursive: true }, () => schedule())
+    : fs.watch(path.dirname(absPath), (_event, filename) => {
+        if (!filename || filename === path.basename(absPath)) schedule();
+      });
+
+  await new Promise<void>((resolve) => {
+    process.on("SIGINT", () => {
+      watcher.close();
+      console.log(fmt.muted("\nstopped"));
+      resolve();
+    });
+  });
+}
+
+// ── registration ─────────────────────────────────────────────────────────────
+
+export function registerPublishCommand(program: Command, deps: PublishDeps): void {
+  program
+    .command("publish")
+    .description(commandGroup("publish").description)
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
+    .argument("[args...]", "subcommand arguments")
+    .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
+    .option("--new", "Publish under a fresh URL even if this path was published before")
+    .option("--json", "Emit the raw JSON response")
+    .option("--watch", "Keep watching the file/directory and republish on change")
+    .option("--password <password>", "Require a password to view (visible in ps — prefer --password-stdin)")
+    .option("--password-stdin", "Read the view password from stdin (keeps it out of the process list)")
+    .option("--no-password", "Clear the password gate")
+    .option("--email-gate", "Require an email address to view")
+    .option("--no-email-gate", "Clear the email gate")
+    .option("--expires <duration>", "Expire the link after e.g. 30m, 24h, 7d — or never")
+    .option("--edit-mode <mode>", "Who can edit in the browser: owner | link | team")
+    .option("--session", "Show the link to the publishing session on the page (default)")
+    .option("--no-session", "Hide the publishing-session link from the page")
+    .option("--comments", "Let viewers discuss the page (default)")
+    .option("--no-comments", "Turn off the viewer discussion")
+    .option("--no-thumb", "Skip the headless-Chrome thumbnail screenshot")
+    .option("--task <ct-N>", "Attach the page to a task as evidence at its current station (default: the session's active task)")
+    .option("--plan <pl-N>", "Attach the page to a plan")
+    .option("--open", "Open the published URL in the browser")
+    .option("--render", "Render a HyperFrames composition directory to MP4 and offer it on the page (slow; only when an MP4 is wanted)")
+    .option("--resolve <id>", "comments: mark one comment resolved")
+    .option("--resolve-all", "comments: mark every open comment resolved")
+    .option("--refresh", "data: run the page's queries now and wait for the rows")
+    .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
+      const json = !!options.json;
+      if (!target) {
+        console.error(fmt.error("Usage: cast publish <file.html|file.md|dir> — or: ls | rm <target> | rollback <target> <version> | open <target>"));
+        process.exit(1);
+      }
+      if (target === "ls") return runLs(deps, json);
+      if (target === "video" && !fs.existsSync(target)) return void console.log(CAST_PLAYER_GUIDE);
+      if (target === "rm") {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish rm <slug|path>"));
+          process.exit(1);
+        }
+        return runRm(deps, args[0], json);
+      }
+      if (target === "rollback") {
+        if (!args[0] || !args[1]) {
+          console.error(fmt.error("Usage: cast publish rollback <slug|path> <version>"));
+          process.exit(1);
+        }
+        return runRollback(deps, args[0], args[1], json);
+      }
+      // Management subcommands. Each is shadowed by a real file/dir of the
+      // same name, so `cast publish set` still publishes ./set if it exists.
+      const MANAGEMENT = ["versions", "comments", "viewers", "links", "set"];
+      if (MANAGEMENT.includes(target) && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error(`Usage: cast publish ${target} <slug|path>`));
+          process.exit(1);
+        }
+        const sub = args[0];
+        if (target === "versions") return runVersions(deps, sub, json);
+        if (target === "viewers") return runViewers(deps, sub, json);
+        if (target === "links") return runLinks(deps, sub, json);
+        if (target === "comments") {
+          const o = options as PublishOptions & { resolve?: string; resolveAll?: boolean };
+          return runComments(deps, sub, { resolveId: o.resolve, resolveAll: !!o.resolveAll, json });
+        }
+        return runSet(deps, sub, options, json);
+      }
+      if (target === "data" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish data <slug|path> [query-id] [--refresh] [--json]"));
+          process.exit(1);
+        }
+        return runPublishData(deps, args[0], args[1], { refresh: !!(options as { refresh?: boolean }).refresh, json });
+      }
+      if (target === "open" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish open <slug|path>"));
+          process.exit(1);
+        }
+        return runOpen(deps, args[0], json);
+      }
+      // --password-stdin keeps the secret out of argv (and out of `ps`).
+      if ((options as { passwordStdin?: boolean }).passwordStdin) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+        const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+        if (!value) {
+          console.error(fmt.error("--password-stdin was set but stdin was empty"));
+          process.exit(1);
+        }
+        options.passwordValue = value;
+      }
+      return runPublish(deps, target, options);
+    });
+}
+
+// The publish surface still owns these for callers that reach for them here;
+// the implementations moved to castApi.ts when the CLI's command groups were
+// split so the fast path stops loading the publish graph (ct-49546).
+export type { PublishDeps } from "./castApi.js";

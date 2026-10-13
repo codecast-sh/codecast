@@ -1,6 +1,7 @@
 "use client";
-// The health mode's small charts, shared by the role card on the map
-// (OrgNodeCards.HealthRoleCard) and the role drawer (HealthBoard). One colour
+// The week's small charts, shared by the role card on the map's This week
+// (OrgNodeCards.HealthRoleCard), the role sheet's This week and its levers
+// (healthParts.RoleLevers). One colour
 // per measure everywhere: work in, work closed, and a daily limit.
 import { RoleFace } from "./RoleFace";
 import type { RoleFlow } from "./orgFlow";
@@ -63,7 +64,6 @@ export function InOutBars({ inn, out, days, width, height, limit }: { inn: numbe
  *  something is off, and only that: a role that is fine says nothing here. */
 function weekSignals(f: RoleFlow): { key: string; text: string; tone: string }[] {
   const out: { key: string; text: string; tone: string }[] = [];
-  if (f.status === "waiting_on_you") out.push({ key: "you", text: "waiting on you", tone: "var(--sol-orange)" });
   if (f.daysAtCap > 0) out.push({ key: "limit", text: `at its limit ${f.daysAtCap} of 7 days`, tone: FLOW_TONE.limit });
   if (f.stalls > 0) out.push({ key: "stuck", text: `${f.stalls} stuck`, tone: "var(--sol-yellow)" });
   if (f.wakesTotal >= 20 && f.doneTotal * 20 < f.wakesTotal) out.push({ key: "closing", text: "little getting closed", tone: "var(--sol-magenta)" });
@@ -76,15 +76,15 @@ function weekSignals(f: RoleFlow): { key: string; text: string; tone: string }[]
  * days as paired bars, and the few signals that need a person. The map's
  * health card and the phone's list both paint this.
  */
-export function RoleWeekBody({ f, days }: { f: RoleFlow; days: string[] }) {
+export function RoleWeekBody({ f, days, headless }: { f: RoleFlow; days: string[]; /** Leave out the face and name where the role is already named (its sheet). */ headless?: boolean }) {
   const signals = weekSignals(f);
   return (
     <div className="flex flex-col gap-2" data-role-week={f.role.handle}>
-      <div className="flex items-center gap-2 min-w-0">
+      {!headless && <div className="flex items-center gap-2 min-w-0">
         <RoleFace role={f.role} size={26} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate text-[14px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{f.role.name}</span>
         <span className="shrink-0 text-[10.5px] font-semibold" style={{ color: f.color }}>{f.statusWord}</span>
-      </div>
+      </div>}
       <div className="flex items-end gap-3">
         <span className="flex items-baseline gap-1.5 tabular-nums">
           <span className="text-[26px] leading-none font-semibold" style={{ color: FLOW_TONE.reached }}>{f.wakesTotal}</span>

@@ -1,0 +1,947 @@
+// `cast doctor` — the product's built-in health check and end-to-end sync
+// self-test. This replaces the manual morning ritual (spawn a real Claude in
+// tmux, open Chrome, screenshot the web UI) with a single command that proves
+// the same things using the daemon's REAL production paths:
+//
+//   up path    stub transcript append → JSONL watcher → sync → Convex
+//   down path  pending message (same mutation the web UI uses) → daemon
+//              subscription → deliverMessage → session-registry resolution →
+//              tmux inject → stub echoes into its transcript → watcher →
+//              Convex, where the doctor observes the echo via /cli/export
+//
+// The stand-in agent is a tiny node script in a tmux pane. It is discovered by
+// the daemon exactly like a real agent: it writes the same session-registry
+// file the SessionStart hook writes, its pane shows the ❯ prompt the pane
+// classifier keys on, and node is already an accepted agent process (codex and
+// gemini run under node). No Claude tokens, no browser, no backend changes.
+//
+// Every leg has a timeout, cleanup always runs (tmux session, scratch dir,
+// transcript, registry file, and the server-side conversation via
+// delete-by-path), and failures print the daemon.log lines for this run's
+// session so the evidence ships with the report.
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { randomUUID, randomBytes } from "node:crypto";
+import {
+  runDoctor as runChecks,
+  formatCheckLine,
+  type DoctorCheck as CheckSpec,
+  type FormatOptions,
+} from "@platform/cli-kit/doctor";
+import { spawnSync } from "./proc.js";
+import { cliFetch } from "./cliHttp.js";
+import { fetchExport } from "./jsonlGenerator.js";
+import { claudeProjectDirName } from "./projectPathResolver.js";
+import { ensureClaudeSettingsPersistence, leakedTmuxGlobalMarkers } from "./agentEnv.js";
+import { formatHarnessChange, harnessLedgerPath, readHarnessChanges } from "./harness.js";
+import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
+import { getSnippetTargets, guidanceMode, guidanceSectionStatus } from "./snippets.js";
+import { c, fmt } from "./colors.js";
+import type { Config } from "./config/types.js";
+import { getMachineKey, hardwareId } from "./machineKey.js";
+import { deviceId } from "./remote/device.js";
+import { probeAllClients, hasBin } from "./doctorClients.js";
+import { defaultCursorPath } from "./cursorWatcher.js";
+import { staleTmuxServerKillPlan, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
+import { defaultConfigDir } from "./config/configDir.js";
+
+// ── deps handed in by index.ts ───────────────────────────────────────────────
+// The CLI entrypoint owns config decryption and the daemon state-file helpers;
+// doctor takes them as values so it stays a leaf module (no daemon import — the
+// daemon is a separate bundle entrypoint).
+
+export interface DoctorDeps {
+  config: Config;
+  siteUrl: string;
+  apiToken: string;
+  version: string;
+  configDir: string;
+  getDaemonPid: () => number | null;
+  getLaunchdStatus: () => { configured: boolean; state: string | null; pid: number | null } | null;
+  readDaemonState: () => {
+    connected?: boolean;
+    lastSyncTime?: number;
+    lastHeartbeatTick?: number;
+    lastWatchdogCheck?: number;
+    authExpired?: boolean;
+    cursorAccess?: "granted" | "denied";
+    /** Hang marker the daemon consumed at boot (see daemonMarkers.ts). */
+    lastHang?: HangMarker;
+    /** How hard the last boot was allowed to push (see bootPacing.ts). */
+    bootPacingTier?: string;
+    bootPacingReason?: string;
+  } | null;
+  getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }> | Promise<Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>>;
+}
+
+export interface DoctorOptions {
+  e2e: boolean;
+  json: boolean;
+  /** Keep the scratch dir, transcript, and server conversation for debugging. */
+  keep: boolean;
+  /** Override the scratch project dir (must be syncable under the current config). */
+  projectDir?: string;
+  /** Kill stale tmux server generations (the server and its whole process tree). */
+  reapTmux?: boolean;
+}
+
+export interface DoctorCheck {
+  name: string;
+  status: "pass" | "warn" | "fail" | "skip";
+  detail: string;
+  /** Milliseconds, for e2e legs. */
+  elapsedMs?: number;
+}
+
+// One line per check, printed by @platform/cli-kit/doctor in the product's own
+// colors. The passive checks below are `CheckSpec`s the package's runner
+// executes; the e2e legs and the per-client probe record their lines directly,
+// because each of those produces several checks from one flow.
+const CHECK_FORMAT: FormatOptions = {
+  color: { success: fmt.success, warning: fmt.warning, error: fmt.error, muted: fmt.muted },
+  nameWidth: 22,
+};
+
+export interface DoctorReport {
+  ok: boolean;
+  runId: string;
+  checks: DoctorCheck[];
+  conversationId?: string;
+  cleanup: string[];
+  /** daemon.log lines matched to a failed run — the debugging evidence. */
+  evidence?: string[];
+}
+
+const HEARTBEAT_FRESH_MS = 2 * 60 * 1000; // event-loop monitor ticks every 30s
+const MAPPING_TIMEOUT_MS = 45_000;
+const BOOTSTRAP_TIMEOUT_MS = 30_000;
+const ROUNDTRIP_TIMEOUT_MS = 90_000;
+const POLL_MS = 750;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ── the stand-in agent ────────────────────────────────────────────────────────
+// Constant source, parameterized entirely via argv, written into the scratch
+// dir at run time. CommonJS + zero dependencies so any node/bun on PATH runs it.
+//
+// Pane contract with the daemon (see classifyTmuxLiveState / verifyTmuxSubmitAfterPaste):
+//   - a visible ❯ marks the pane "idle" so injection proceeds
+//   - a ● line after a reply marks the submit "processing" so the paste verifier
+//     concludes cleanly instead of re-pasting
+//   - readline in terminal mode gives the pre-paste clear sequence (Escape,
+//     C-a, C-k) the same semantics it has against a real agent's input box
+export const STUB_SOURCE = `// codecast doctor stub agent - minimal stand-in for a coding agent.
+// argv: sessionId jsonlPath registryPath
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+const { randomUUID } = require("crypto");
+
+const [sessionId, jsonlPath, registryPath] = process.argv.slice(2);
+if (!sessionId || !jsonlPath || !registryPath) {
+  console.error("usage: stub.cjs <sessionId> <jsonlPath> <registryPath>");
+  process.exit(2);
+}
+
+const cwd = process.cwd();
+const line = (o) => JSON.stringify(o) + "\\n";
+const now = () => new Date().toISOString();
+const entry = (extra) => ({ uuid: randomUUID(), sessionId, cwd, timestamp: now(), ...extra });
+const appendUser = (text) =>
+  fs.appendFileSync(jsonlPath, line(entry({ type: "user", message: { role: "user", content: text } })));
+const appendAssistant = (text) =>
+  fs.appendFileSync(jsonlPath, line(entry({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } })));
+
+// Register like the SessionStart hook does, so the daemon's findSessionProcess
+// resolves this process (and its tmux pane) for message delivery.
+let tty = "";
+try { tty = execSync("ps -o tty= -p " + process.pid).toString().trim(); } catch {}
+fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+fs.writeFileSync(registryPath, JSON.stringify({ pid: process.pid, tty, ts: Math.floor(Date.now() / 1000), term: "tmux" }));
+
+// Bootstrap the conversation: one user + one assistant turn.
+fs.mkdirSync(path.dirname(jsonlPath), { recursive: true });
+const bootToken = process.env.DOCTOR_BOOT_TOKEN || "boot";
+appendUser("codecast doctor self-test: say " + bootToken + " back");
+appendAssistant(bootToken);
+
+process.stdout.write("codecast doctor stub agent (session " + sessionId.slice(0, 8) + ")\\n\\u276F ");
+
+const rl = require("readline").createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+rl.on("line", (raw) => {
+  // Strip escape sequences (bracketed-paste markers) and control bytes the
+  // paste can carry; what remains is the message as the daemon sent it.
+  const text = String(raw)
+    .replace(/\\x1b\\[[0-9;]*[A-Za-z~]/g, "")
+    .replace(/[\\x00-\\x08\\x0b-\\x1f]/g, "")
+    .trim();
+  if (!text) { process.stdout.write("\\u276F "); return; }
+  appendUser(text);
+  const m = text.match(/pong-[a-z0-9]+/i);
+  const reply = m ? m[0] : "echo: " + text;
+  appendAssistant(reply);
+  process.stdout.write("\\u25CF " + reply + "\\n\\u276F ");
+});
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGHUP", () => process.exit(0));
+`;
+
+// ── small helpers ─────────────────────────────────────────────────────────────
+
+/** node preferred (matches how the npm-installed CLI runs); bun as fallback. */
+export function resolveStubRuntime(): string | null {
+  if (hasBin("node")) return "node";
+  if (hasBin("bun")) return "bun";
+  const base = path.basename(process.execPath).toLowerCase();
+  if (base.includes("node") || base.includes("bun")) return process.execPath;
+  return null;
+}
+
+/**
+ * Where the self-test transcript's project dir lives. Must pass the SAME
+ * scope rules the daemon's sync loop applies, or the transcript sits unsynced
+ * forever and the doctor reports a false failure.
+ */
+export function pickDoctorProjectDir(config: Config, runId: string, override?: string): string | null {
+  const candidates = override
+    ? [override]
+    : [
+        path.join(defaultConfigDir(), "doctor", `e2e-${runId}`),
+        ...(config.sync_projects ?? []).map((root) => path.join(root, ".codecast-doctor", `e2e-${runId}`)),
+      ];
+  for (const candidate of candidates) {
+    if (isProjectAllowedToSync(candidate, config) && !isPathExcluded(candidate, config.excluded_paths)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/** Scan exported messages for a token; role narrows which side must carry it. */
+export function exportHasToken(
+  messages: Array<{ role: string; content: string }>,
+  token: string,
+  role?: "user" | "assistant",
+): boolean {
+  return messages.some((m) => (!role || m.role === role) && typeof m.content === "string" && m.content.includes(token));
+}
+
+export async function checkDoctorTmuxServers(
+  opts: { reapTmux?: boolean },
+  cleanup: string[],
+  io = { snapshotProcessTable, liveTmuxServerPid, killProcessTree, uid: () => process.getuid?.(), selfPid: process.pid },
+) {
+  const procs = io.snapshotProcessTable();
+  // This check kills process trees under --reap-tmux, so it looks at the
+  // servers this user owns and nothing else — the same list the daemon's
+  // hourly sweep acts on.
+  const plan = staleTmuxServerKillPlan(procs, await io.liveTmuxServerPid(), io.uid(), io.selfPid);
+  if (plan.refused) return { ok: false, warn: true, skip: true, detail: `tmux reap skipped: ${plan.refused}` };
+  const stale = plan.kill;
+  if (plan.restore.length) {
+    const fleet = plan.restore[0];
+    return { ok: false, warn: true, detail: `tmux server pid ${fleet.pid} holds ${fleet.agents} agent(s) but lost the default socket — the daemon hands it back within the hour, or run \`kill -USR1 ${fleet.pid}\`` };
+  }
+  const spared = plan.selfHosted.length ? `; skipped self-hosting server(s) ${plan.selfHosted.map(s => s.pid).join(", ")}` : "";
+  if (stale.length === 0) return { ok: !spared, warn: !!spared, skip: !!spared, detail: `no safely reapable stale servers${spared}` };
+  const trees = stale.reduce((n, s) => n + s.tree.length, 0);
+  const agents = stale.reduce((n, s) => n + s.agents, 0);
+  const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux${spared}`;
+  if (!opts.reapTmux) {
+    return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
+  }
+  let killed = 0;
+  for (const s of stale) {
+    const r = await io.killProcessTree([...s.tree, s.row]);
+    killed += r.terminated + r.killed;
+  }
+  cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
+  return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)` };
+}
+
+export async function doctorPost(siteUrl: string, apiToken: string, urlPath: string, body: Record<string, unknown>): Promise<any> {
+  const response = await cliFetch(`${siteUrl}${urlPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: apiToken, ...body }),
+  });
+  const text = await response.text();
+  let result: any;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+  }
+  if (result?.error) throw new Error(String(result.error));
+  return result;
+}
+
+export function readConversationMapping(configDir: string, sessionId: string): string | null {
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(configDir, "conversations.json"), "utf-8"));
+    return typeof cache[sessionId] === "string" ? cache[sessionId] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** daemon.log lines relevant to this run — the evidence block for failures. */
+function daemonLogEvidence(configDir: string, sessionId: string, conversationId: string | undefined, sinceMs: number): string[] {
+  try {
+    const raw = fs.readFileSync(path.join(configDir, "daemon.log"), "utf-8");
+    const lines = raw.split("\n").slice(-2000);
+    const sessionKey = sessionId.slice(0, 8);
+    const convKey = conversationId?.slice(0, 12);
+    const generic = /deliverMessage|Injected|pending message|Subscription|Force-resuming/i;
+    const matched = lines.filter((l) => l.includes(sessionKey) || (convKey && l.includes(convKey)) || generic.test(l));
+    // Timestamps in daemon.log lead each line as an ISO string; keep it simple
+    // and take the tail — sinceMs guards against a totally silent daemon where
+    // generic matches would otherwise surface hours-old noise.
+    const cutoff = new Date(sinceMs - 5_000).toISOString().slice(0, 16);
+    const recent = matched.filter((l) => l.slice(0, 16) >= cutoff);
+    return (recent.length > 0 ? recent : matched).slice(-15);
+  } catch {
+    return [];
+  }
+}
+
+function tmuxRunQuiet(args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  const r = spawnSync("tmux", args, { encoding: "utf-8", timeout: 10_000 });
+  return { ok: r.status === 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+function formatAgo(ts: number | undefined): string {
+  if (!ts || ts <= 0) return "never";
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  return `${Math.round(sec / 3600)}h ago`;
+}
+
+// ── the doctor ────────────────────────────────────────────────────────────────
+
+// A wedged event loop delivers nothing and logs nothing, so the only witness of
+// a stall is the marker the freeze probe leaves on disk — and it survives the
+// daemon that hung, including one the watchdog killed (daemonMarkers.ts). A
+// stall is history, not a broken machine, so it warns and never fails the run.
+export function loopHangCheck(
+  lastHang: HangMarker | undefined,
+  configDir: string,
+  now: number = Date.now(),
+): { ok: boolean; warn?: boolean; detail: string } {
+  const hang = latestHang(lastHang, configDir, { now });
+  if (!hang) return { ok: true, detail: "no stall in the last 24h" };
+  return { ok: false, warn: true, detail: describeHangMarker(hang, now) };
+}
+
+// Why the daemon is not running. A daemon that declared its own exit terminal
+// is down on purpose and no watchdog will revive it, so "run `cast start`" on
+// its own would send the reader into the same exit (supervision.ts
+// EXIT_DO_NOT_RESTART).
+export function daemonDownDetail(
+  configDir: string,
+  launchd?: { configured: boolean; state: string | null } | null,
+): string {
+  const blocked = noRestartReason(configDir);
+  if (blocked) {
+    return `not running and supervision is disarmed — ${blocked}; fix that, then run \`cast start\``;
+  }
+  return `not running${launchd?.configured ? ` (launchd state: ${launchd.state ?? "unknown"})` : ""} — run \`cast start\``;
+}
+
+export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<DoctorReport> {
+  const runId = randomBytes(3).toString("hex");
+  const checks: DoctorCheck[] = [];
+  const cleanup: string[] = [];
+  const say = (line: string) => {
+    if (!opts.json) console.log(line);
+  };
+  const record = (check: DoctorCheck) => {
+    checks.push(check);
+    say(formatCheckLine(
+      { name: check.name, status: check.status, detail: check.detail, elapsedMs: check.elapsedMs ?? 0 },
+      // Passive checks carry no timing; an e2e leg always shows the one it measured.
+      { ...CHECK_FORMAT, timingThresholdMs: check.elapsedMs === undefined ? Infinity : 0 },
+    ));
+  };
+
+  say("");
+  say(fmt.muted(`  Codecast Doctor  (run ${runId}, v${deps.version})`));
+  say("");
+
+  // ── passive health ──
+  // Registered with the package's runner: it runs them in order, turns a thrown
+  // error into a failure, and streams each result back through `record` so the
+  // output appears as the check finishes rather than at the end.
+  const state = deps.readDaemonState();
+  const pid = deps.getDaemonPid();
+  const launchd = deps.getLaunchdStatus();
+  const passive: CheckSpec[] = [];
+
+  passive.push({
+    name: "auth",
+    run: () => state?.authExpired
+      ? { ok: false, detail: "expired — run `cast auth`" }
+      : { ok: true, detail: "authenticated" },
+  });
+
+  passive.push({
+    name: "device",
+    run: () => {
+      try {
+        const mk = getMachineKey();
+        const binding = hardwareId()
+          ? "hardware-bound"
+          : "no hardware id, clone detection disabled";
+        return {
+          ok: true,
+          detail: `${deviceId()} (${binding})${mk.previousSecret ? " — key was rotated after a hardware clone" : ""}`,
+        };
+      } catch (e: any) {
+        return { ok: false, warn: true, detail: `machine key unreadable: ${e?.message ?? e}` };
+      }
+    },
+  });
+
+  passive.push({
+    name: "daemon",
+    run: () => {
+      if (!pid) {
+        return { ok: false, detail: daemonDownDetail(deps.configDir, launchd) };
+      }
+      const tick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
+      const stale = tick > 0 && Date.now() - tick > HEARTBEAT_FRESH_MS;
+      return {
+        ok: !stale,
+        detail: `running (pid ${pid}${launchd?.pid === pid ? ", launchd-managed" : ""}), heartbeat ${formatAgo(tick)}${stale ? " — event loop looks wedged, run `cast restart`" : ""}`,
+      };
+    },
+  });
+
+  passive.push({
+    name: "loop hang",
+    run: () => loopHangCheck(state?.lastHang, deps.configDir),
+  });
+
+  // A cautious boot is the daemon protecting a loaded machine, not a fault.
+  if (state?.bootPacingTier) {
+    passive.push({ name: "boot pacing", run: () => ({ ok: true, detail: `${state.bootPacingTier}${state.bootPacingReason ? ` (${state.bootPacingReason})` : ""}` }) });
+  }
+
+  passive.push({
+    name: "convex",
+    run: () => {
+      const connected = !!pid && (state?.connected ?? false);
+      return {
+        ok: connected,
+        detail: connected
+          ? `connected (last sync ${formatAgo(state?.lastSyncTime)})`
+          : `disconnected${pid ? " — check network / `cast restart`" : ""}`,
+      };
+    },
+  });
+
+  passive.push({
+    name: "sync backlog",
+    run: async () => {
+      const stuck = await deps.getStuckSyncs();
+      let retryDepth = 0;
+      try {
+        const retry = JSON.parse(fs.readFileSync(path.join(deps.configDir, "retry-queue.json"), "utf-8"));
+        retryDepth = Array.isArray(retry) ? retry.length : 0;
+      } catch {}
+      const backlogBad = stuck.length > 0;
+      return {
+        ok: !backlogBad,
+        warn: true,
+        detail: backlogBad
+          ? `${stuck.length} stuck session(s), ${retryDepth} retry item(s) — see \`cast health\``
+          : retryDepth > 0
+            ? `${retryDepth} retry item(s) draining`
+            : "clear",
+      };
+    },
+  });
+
+  // ── leaked Claude session markers ──
+  // A tmux server (or the daemon) bootstrapped from inside a Claude Code
+  // session carries CLAUDE_CODE_CHILD_SESSION into every pane it opens; a
+  // claude launched there saves no transcript and never syncs (agentEnv.ts).
+  // The tmux global env is the persistent carrier, so clear it here.
+  if (hasBin("tmux")) {
+    passive.push({
+      name: "agent env",
+      run: () => {
+        const shown = spawnSync("tmux", ["show-environment", "-g"], { encoding: "utf-8" });
+        const leaked = shown.status === 0 ? leakedTmuxGlobalMarkers(shown.stdout ?? "") : [];
+        if (leaked.length === 0) {
+          return { ok: true, detail: "no Claude session markers in the tmux global env" };
+        }
+        for (const v of leaked) spawnSync("tmux", ["set-environment", "-gu", v], { stdio: "ignore" });
+        return {
+          ok: false,
+          warn: true,
+          detail: `tmux global env carried ${leaked.join(", ")} (cleared) — panes opened before this ran may be saving no transcript; restart them`,
+        };
+      },
+    });
+  }
+
+  // ── the guidance an agent actually reads ──
+  // Every install stamps the cast version above the section's end marker, so a
+  // CLAUDE.md says which binary wrote it. A section whose text no longer
+  // matches what this cast renders is guidance for another release — the agent
+  // reads flags from one version and runs another.
+  passive.push({
+    name: "guidance",
+    run: () => {
+      const files: Array<{ label: string; text: string }> = [];
+      for (const target of getSnippetTargets()) {
+        try {
+          files.push({
+            label: target.label ?? target.filePath,
+            text: fs.readFileSync(target.filePath, "utf-8"),
+          });
+        } catch {
+          // A target that does not exist yet is reported by the missing rows
+          // its enabled snippets produce, not as a file-level failure.
+          files.push({ label: target.label ?? target.filePath, text: "" });
+        }
+      }
+      const rows = guidanceSectionStatus({
+        files,
+        config: deps.config,
+        version: deps.version,
+        mode: guidanceMode(),
+      });
+      if (rows.length === 0) return { ok: true, detail: "no snippets enabled" };
+      const slugsOf = (subset: typeof rows) => [...new Set(subset.map((r) => r.slug))].join(", ");
+      const stale = rows.filter((r) => r.state === "stale");
+      const missing = rows.filter((r) => r.state === "missing");
+      if (stale.length === 0 && missing.length === 0) {
+        return {
+          ok: true,
+          detail: `${rows.length} section(s) in ${files.length} file(s) match cast v${deps.version} (${guidanceMode()})`,
+        };
+      }
+      // Which release wrote the drifted copy is the part the stamp adds; a
+      // section installed before stamps shipped can only say it has none.
+      const stamps = [...new Set(stale.map((r) => r.stamp ?? "an unstamped cast"))].join(", ");
+      const parts = [
+        stale.length ? `${slugsOf(stale)} written by ${stamps}, not v${deps.version}` : "",
+        missing.length ? `${slugsOf(missing)} enabled but absent` : "",
+      ].filter(Boolean);
+      return { ok: false, warn: true, detail: `${parts.join("; ")} — run \`cast install --all\`` };
+    },
+  });
+
+  // Settings-level backstop for the same class: ~/.claude/settings.json pins
+  // CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 for every claude on the machine,
+  // so an inherited CLAUDE_CODE_CHILD_SESSION can never silence a transcript
+  // (agentEnv.ts). The daemon asserts this on boot; re-assert and report here.
+  passive.push({
+    name: "transcript pin",
+    run: () => {
+      try {
+        const pin = ensureClaudeSettingsPersistence();
+        return {
+          ok: pin === "wrote" || pin === "already-pinned",
+          warn: true,
+          detail:
+            pin === "wrote"
+              ? "pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json"
+              : pin === "already-pinned"
+                ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 pinned in ~/.claude/settings.json"
+                : pin === "unparseable"
+                  ? "~/.claude/settings.json is not valid JSON — cannot pin transcript persistence; fix the file"
+                  : "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE set to a non-\"1\" value in ~/.claude/settings.json — a leaked CLAUDE_CODE_CHILD_SESSION would silence transcripts",
+        };
+      } catch (err) {
+        return { ok: false, warn: true, detail: `check failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  // What codecast has done to this machine's agent harness, so a user who
+  // finds CLAUDE.md or settings.json changed can see whether we did it and why
+  // (harness.ts records every write).
+  passive.push({
+    name: "harness",
+    run: () => {
+      const on = deps.config?.hooks_enabled !== false;
+      const hooks = on ? "hooks on (cast install hooks --disable removes them)" : "hooks off (cast install hooks restores them)";
+      const changes = readHarnessChanges(500);
+      if (changes.length === 0) return { ok: true, detail: `${hooks}; no changes recorded` };
+      const week = changes.filter((ch) => Date.now() - ch.at < 7 * 24 * 60 * 60 * 1000).length;
+      const last = changes[0];
+      return {
+        ok: true,
+        detail: `${hooks}; ${week} change(s) in 7 days, newest ${new Date(last.at).toISOString().slice(0, 16).replace("T", " ")}: ${formatHarnessChange(last)}; full list in ${harnessLedgerPath()}`,
+      };
+    },
+  });
+
+  // ── tmux server generations ──
+  // A replaced default socket leaves the old server running unreachable with
+  // every pane and agent of its generation (see processTable.ts). Invisible to
+  // `tmux list-sessions`, visible only in the process table.
+  if (hasBin("tmux")) {
+    passive.push({
+      name: "tmux servers",
+      run: () => checkDoctorTmuxServers(opts, cleanup),
+    });
+  }
+
+  // ── macOS app-data access (TCC) ──
+  // Reading another app's data (Cursor's chat db) needs a per-app macOS grant;
+  // the daemon records the outcome in its state file (see cursorWatcherDecision).
+  if (process.platform === "darwin") {
+    passive.push({
+      name: "cursor sync",
+      run: () => {
+        const cursorPref = deps.config.cursor_sync;
+        const cursorAccess = state?.cursorAccess;
+        if (cursorPref === "off") return { ok: true, skip: true, detail: "disabled (`cast cursor on` to enable)" };
+        if (cursorAccess === "granted") return { ok: true, detail: "app data access granted" };
+        if (cursorAccess === "denied") {
+          return {
+            ok: false,
+            warn: true,
+            detail: "macOS denied access to Cursor's data — System Settings → Privacy & Security → allow codecast (or grant Full Disk Access), then `cast cursor on`",
+          };
+        }
+        if (fs.existsSync(defaultCursorPath())) {
+          return { ok: false, warn: true, detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" };
+        }
+        return { ok: true, skip: true, detail: "Cursor not installed" };
+      },
+    });
+
+    // The computer helper's whole scheme is one signed app at one path that
+    // never moves, because macOS keys a TCC grant to the resolved path AND the
+    // signing identity together. Every branch below names a way that scheme can
+    // break, and the fixed-path assertion is what stops a hashed or versioned
+    // directory creeping back in and costing every user a regrant.
+    passive.push({
+      name: "computer helper",
+      run: async () => {
+        // Imported here, not at the top: doctor.ts is on `index.ts`'s static
+        // graph, so a top-level import would put the computer client, the
+        // permission probe and the embedded helper bundle on the startup cost
+        // of `cast --help` and of every unrelated verb.
+        const [{ helperAvailability, HELPER_BUNDLE_ID }, { getPermissionStatus }] = await Promise.all([
+          import("./computer/helperApp.js"),
+          import("./computer/permissions.js"),
+        ]);
+        const helper = helperAvailability();
+        if (!helper.embedded) return { ok: true, skip: true, detail: "not built into this CLI" };
+        if (helper.pendingSwap) {
+          return { ok: false, warn: true, detail: "an interrupted bundle swap is pending repair — run `cast computer capabilities`" };
+        }
+        if (!helper.materialized) {
+          return { ok: true, skip: true, detail: "not set up yet (`cast computer setup` installs it and grants it)" };
+        }
+        if (!helper.atFixedPath) {
+          return { ok: false, detail: `helper is not at its fixed path (${helper.appPath}); TCC grants will not survive updates` };
+        }
+        if (helper.signature === "invalid") {
+          return { ok: false, detail: `helper failed signature verification (${helper.signatureDetail}); reinstall codecast` };
+        }
+        if (helper.signature === "adhoc") {
+          return { ok: false, warn: true, detail: "ad-hoc signed (from-source build); TCC grants reset on every rebuild" };
+        }
+        const status = await getPermissionStatus().catch(() => null);
+        const missing = status?.permissions.filter((p) => p.status !== "granted") ?? [];
+        if (!status) return { ok: false, warn: true, detail: "Developer ID signed; could not read its permissions — run `cast computer setup`" };
+        if (missing.length) {
+          const names = missing.map((p) => (p.id === "accessibility" ? "Accessibility" : "Screen Recording")).join(" and ");
+          // Bare `permissions` reads and shows nothing (ct-49667), so naming it
+          // here sent a human to a command that could not fix the line they
+          // came to fix. `setup` is the one that can: it says what each grant
+          // allows, opens the pane for each missing one, and waits for it
+          // (ct-49790). A doctor line is read by a human at a terminal, which
+          // is exactly the caller `setup` is written for.
+          return { ok: false, warn: true, detail: `${names} not granted; run \`cast computer setup\` to grant` };
+        }
+        return { ok: true, detail: `${HELPER_BUNDLE_ID}, Developer ID signed, Accessibility and Screen Recording granted` };
+      },
+    });
+
+    // Permission grants attach to the daemon's code-signing identity. Release
+    // binaries are Developer ID-signed with a stable identifier, so grants
+    // survive updates; a from-source daemon runs under the ad-hoc-signed bun
+    // binary, so prompts say "bun" and grants can reset when bun updates.
+    // Registered only when it has something to say: a healthy identity was
+    // never worth a line of its own.
+    let launcher = "";
+    try {
+      launcher = fs.readFileSync(path.join(deps.configDir, "daemon-launcher.sh"), "utf-8");
+    } catch {}
+    if (/\/\.bun\/bin\/bun|[\s']bun[\s']/.test(launcher)) {
+      passive.push({
+        name: "tcc identity",
+        run: () => ({
+          ok: false,
+          warn: true,
+          detail: "daemon runs from source under bun — permission prompts show \"bun\" and grants reset on bun updates; use the installed binary for a stable identity",
+        }),
+      });
+    }
+  }
+
+  await runChecks(passive, {
+    product: "Codecast",
+    version: deps.version,
+    onCheck: (r) => record({ name: r.name, status: r.status, detail: r.detail }),
+  });
+
+  const tmuxAvailable = hasBin("tmux");
+  const runtime = resolveStubRuntime();
+
+  // ── active end-to-end round-trip ──
+  const evidence: string[] = [];
+  let e2eConversationId: string | undefined;
+  const hardFail = checks.some((ch) => ch.status === "fail");
+  if (!opts.e2e) {
+    record({ name: "end-to-end", status: "skip", detail: "skipped (--no-e2e)" });
+  } else if (hardFail) {
+    record({ name: "end-to-end", status: "skip", detail: "skipped — fix the failures above first" });
+  } else if (!tmuxAvailable || !runtime) {
+    record({ name: "end-to-end", status: "skip", detail: !tmuxAvailable ? "tmux not installed" : "no node/bun on PATH" });
+  } else {
+    e2eConversationId = await runE2E(deps, opts, runId, record, cleanup, say, evidence);
+  }
+
+  // ── per-client offline self-test ──
+  // Cheap, model-free, daemon-free probe of each installed client's descriptor,
+  // parser, watcher, readiness pattern, and resume command. Runs regardless of
+  // daemon/e2e health — it needs only the binaries on PATH and the filesystem.
+  await runClientSelftest(record, say);
+
+  const ok = !checks.some((ch) => ch.status === "fail");
+  say("");
+  say(ok
+    ? `  ${fmt.success("✓ codecast is healthy")}${opts.e2e && checks.some(ch => ch.name.startsWith("echo")) ? fmt.muted(" — full sync loop verified") : ""}`
+    : `  ${fmt.error("✗ problems found")} ${fmt.muted("— details above")}`);
+  say("");
+
+  return { ok, runId, checks, conversationId: e2eConversationId, cleanup, evidence: evidence.length > 0 ? evidence : undefined };
+}
+
+/** Probe every installed client's offline machinery and record one line per client:
+ *  installed clients pass/fail on their sub-checks, uninstalled ones skip. A failed
+ *  sub-check names itself so the line points straight at the drift. */
+async function runClientSelftest(
+  record: (check: DoctorCheck) => void,
+  say: (line: string) => void,
+): Promise<void> {
+  say("");
+  say(fmt.muted("  Per-client self-test"));
+  const results = await probeAllClients();
+  for (const cr of results) {
+    if (!cr.installed) {
+      record({ name: `client ${cr.id}`, status: "skip", detail: `${cr.binary} not on PATH` });
+      continue;
+    }
+    const summary = cr.subChecks
+      .map((c) => `${c.label} ${c.ok ? fmt.success("✓") : fmt.error("✗")}`)
+      .join(fmt.muted(" · "));
+    const failed = cr.subChecks.filter((c) => !c.ok);
+    record({
+      name: `client ${cr.id}`,
+      status: cr.ok ? "pass" : "fail",
+      detail: cr.ok
+        ? summary
+        : `${summary}  — ${failed.map((f) => `${f.label}: ${f.detail ?? "failed"}`).join("; ")}`,
+    });
+  }
+}
+
+/** Returns the test conversation's id once one was created (even on failure). */
+async function runE2E(
+  deps: DoctorDeps,
+  opts: DoctorOptions,
+  runId: string,
+  record: (check: DoctorCheck) => void,
+  cleanup: string[],
+  say: (line: string) => void,
+  evidence: string[],
+): Promise<string | undefined> {
+  const sessionId = randomUUID();
+  const tokenA = `boot-${randomBytes(4).toString("hex")}`;
+  const tokenB = `pong-${randomBytes(4).toString("hex")}`;
+  const tmuxName = `codecast-doctor-${runId}`;
+  const runtime = resolveStubRuntime()!;
+
+  const scratchDir = pickDoctorProjectDir(deps.config, runId, opts.projectDir);
+  if (!scratchDir) {
+    record({
+      name: "end-to-end",
+      status: "fail",
+      detail: "no syncable scratch dir — sync_mode is 'selected' and no allowed root accepts a test dir (`cast sync-settings`)",
+    });
+    return;
+  }
+
+  say("");
+  say(fmt.muted("  End-to-end sync round-trip"));
+
+  fs.mkdirSync(scratchDir, { recursive: true });
+  const realScratch = fs.realpathSync(scratchDir);
+  const jsonlPath = path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(realScratch), `${sessionId}.jsonl`);
+  const registryPath = path.join(deps.configDir, "session-registry", `${sessionId}.json`);
+  const stubPath = path.join(realScratch, "stub.cjs");
+  fs.writeFileSync(stubPath, STUB_SOURCE);
+
+  let conversationId: string | undefined;
+  const startedAt = Date.now();
+
+  try {
+    // Launch the stand-in agent. -x/-y match the daemon's own window sizing so
+    // the pane classifier sees a realistic layout.
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+    const shellCmd = `DOCTOR_BOOT_TOKEN=${q(tokenA)} exec ${q(runtime)} ${q(stubPath)} ${q(sessionId)} ${q(jsonlPath)} ${q(registryPath)}`;
+    const launched = tmuxRunQuiet(["new-session", "-d", "-s", tmuxName, "-x", "220", "-y", "50", "-c", realScratch, shellCmd]);
+    if (!launched.ok) {
+      record({ name: "stub agent", status: "fail", detail: `tmux launch failed: ${(launched.stderr || launched.stdout).trim().slice(0, 120)}` });
+      return;
+    }
+
+    // Leg 1: watcher picks up the new transcript and creates the conversation.
+    let legStart = Date.now();
+    while (!conversationId && Date.now() - legStart < MAPPING_TIMEOUT_MS) {
+      await sleep(POLL_MS);
+      conversationId = readConversationMapping(deps.configDir, sessionId) ?? undefined;
+    }
+    if (!conversationId) {
+      if (!fs.existsSync(jsonlPath)) {
+        record({ name: "conversation", status: "fail", detail: `stub never wrote its transcript (${jsonlPath}) — check the pane: tmux attach -t ${tmuxName}` });
+      } else {
+        record({
+          name: "conversation",
+          status: "fail",
+          detail: `transcript written but no conversation after ${MAPPING_TIMEOUT_MS / 1000}s — JSONL watcher or Convex write path is down (CLI → server sync broken)`,
+        });
+        printEvidence(deps, sessionId, conversationId, startedAt, say, evidence);
+      }
+      return;
+    }
+    record({ name: "conversation", status: "pass", detail: `created ${fmt.id(conversationId.slice(0, 12))}… (watcher → Convex)`, elapsedMs: Date.now() - legStart });
+
+    // Leg 2: bootstrap content is readable back from the server.
+    legStart = Date.now();
+    let bootstrapSeen = false;
+    while (!bootstrapSeen && Date.now() - legStart < BOOTSTRAP_TIMEOUT_MS) {
+      try {
+        const exported = await fetchExport(deps.siteUrl, deps.apiToken, conversationId);
+        bootstrapSeen = exportHasToken(exported.messages, tokenA);
+      } catch {
+        // conversation may not be queryable for a beat right after creation
+      }
+      if (!bootstrapSeen) await sleep(POLL_MS);
+    }
+    if (!bootstrapSeen) {
+      record({ name: "bootstrap synced", status: "fail", detail: `conversation exists but bootstrap token never appeared in export (message sync broken)` });
+      printEvidence(deps, sessionId, conversationId, startedAt, say, evidence);
+      return conversationId;
+    }
+    record({ name: "bootstrap synced", status: "pass", detail: "transcript content readable from server", elapsedMs: Date.now() - legStart });
+
+    // Leg 3+4: send through the SAME pending-message path the web UI uses,
+    // then watch for the stub's echo to come back through the sync loop.
+    legStart = Date.now();
+    await doctorPost(deps.siteUrl, deps.apiToken, "/cli/messages/send", {
+      to: conversationId,
+      body: `codecast doctor ${runId}: reply with ${tokenB}`,
+    });
+
+    let echoed = false;
+    let injected = false;
+    while (!echoed && Date.now() - legStart < ROUNDTRIP_TIMEOUT_MS) {
+      await sleep(POLL_MS);
+      if (!injected && fs.existsSync(jsonlPath)) {
+        injected = fs.readFileSync(jsonlPath, "utf-8").includes(tokenB);
+        if (injected) {
+          record({ name: "message delivered", status: "pass", detail: "server → daemon → tmux inject landed in the pane", elapsedMs: Date.now() - legStart });
+        }
+      }
+      if (injected) {
+        try {
+          const exported = await fetchExport(deps.siteUrl, deps.apiToken, conversationId);
+          echoed = exportHasToken(exported.messages, tokenB, "assistant");
+        } catch {}
+      }
+    }
+
+    if (!injected) {
+      record({
+        name: "message delivered",
+        status: "fail",
+        detail: `pending message never reached the stub's pane after ${ROUNDTRIP_TIMEOUT_MS / 1000}s (server → daemon → tmux inject broken)`,
+      });
+      printEvidence(deps, sessionId, conversationId, startedAt, say, evidence);
+      return conversationId;
+    }
+    if (!echoed) {
+      record({ name: "echo round-tripped", status: "fail", detail: "reply reached the transcript but never synced back to the server" });
+      printEvidence(deps, sessionId, conversationId, startedAt, say, evidence);
+      return conversationId;
+    }
+    record({ name: "echo round-tripped", status: "pass", detail: "agent reply visible from the server (full loop)", elapsedMs: Date.now() - legStart });
+    return conversationId;
+  } finally {
+    if (opts.keep) {
+      cleanup.push(`kept: tmux ${tmuxName}, ${realScratch}, ${jsonlPath}`);
+      say(fmt.muted(`  (kept artifacts: tmux ${tmuxName}, ${realScratch})`));
+    } else {
+      tmuxRunQuiet(["kill-session", "-t", tmuxName]);
+      for (const target of [registryPath, jsonlPath, stubPath]) {
+        try { fs.rmSync(target, { force: true }); } catch {}
+      }
+      try { fs.rmSync(realScratch, { recursive: true, force: true }); } catch {}
+      try {
+        const projDir = path.dirname(jsonlPath);
+        if (fs.existsSync(projDir) && fs.readdirSync(projDir).length === 0) fs.rmdirSync(projDir);
+      } catch {}
+      // The scratch path is unique to this run, so a prefix delete can only hit
+      // the self-test conversation. Verify the delete actually matched — a
+      // zero-count "success" means the test conversation was left behind, which
+      // is exactly the silent-cleanup-failure mode this check exists to catch.
+      try {
+        const result = await doctorPost(deps.siteUrl, deps.apiToken, "/cli/conversations/delete-by-path", { path_prefix: realScratch });
+        if (conversationId && !(result?.conversationsDeleted > 0)) {
+          record({ name: "cleanup", status: "warn", detail: `server delete matched nothing — test conversation ${conversationId.slice(0, 12)}… left behind` });
+        }
+        cleanup.push(`server conversation deleted (${result?.conversationsDeleted ?? 0})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        record({ name: "cleanup", status: "warn", detail: `server delete failed: ${msg.slice(0, 100)}` });
+        cleanup.push(`server cleanup failed: ${msg}`);
+      }
+      cleanup.push("local artifacts removed");
+    }
+  }
+}
+
+function printEvidence(
+  deps: DoctorDeps,
+  sessionId: string,
+  conversationId: string | undefined,
+  sinceMs: number,
+  say: (line: string) => void,
+  sink: string[],
+): void {
+  const lines = daemonLogEvidence(deps.configDir, sessionId, conversationId, sinceMs);
+  sink.push(...lines);
+  if (lines.length === 0) {
+    say(fmt.muted(`      no matching daemon.log lines — is the daemon logging? (${path.join(deps.configDir, "daemon.log")})`));
+    return;
+  }
+  say(fmt.muted("      daemon.log evidence:"));
+  for (const line of lines) {
+    say(`      ${c.dim}${line.slice(0, 160)}${c.reset}`);
+  }
+}

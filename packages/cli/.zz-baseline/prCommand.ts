@@ -1,0 +1,1185 @@
+// `cast pr`: pull requests from the shell.
+//
+// A pull request is a codecast object like a session or a task: it carries a
+// state, checks, reviews, the tasks it closes and the session that shepherds it
+// until it merges. This command reads and steers that from a terminal, so an
+// agent can answer "where does my PR stand" without a browser.
+//
+// Every subcommand takes the same reference: a number, an owner and name with a
+// number, a GitHub or codecast URL, or nothing at all. Nothing means "the PR
+// this session is bound to", and failing that "the PR for the branch I am
+// standing on". The parsing is shared with the server (@codecast/shared
+// prRefs); the resolution is the server's, so one rule decides what a bare 123
+// means no matter who asks.
+//
+// Same deps pattern as stateCommand.ts / publish.ts: index.ts hands in config
+// access, this module stays importable by tests.
+
+import { execFileSync } from "node:child_process";
+import type { Command } from "commander";
+import open from "open";
+import { apiPost, type PublishDeps } from "./castApi.js";
+import { readStdinBody, stdinText } from "./sendBody.js";
+import { readTaskPulseFor } from "./taskPulse.js";
+import { changeGuideMarkdown, type ChangeGuide } from "@codecast/shared/contracts/changeGuide";
+import { fmt, c, icons } from "./colors.js";
+import {
+  parsePrRef,
+  extractRepoFromRemoteUrl,
+  codecastPrUrl,
+  checkLabel,
+} from "@codecast/shared/contracts";
+import { commandGroup } from "./commandGroups.js";
+import { placementLabel, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
+import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
+
+// ── locating a pull request ──────────────────────────────────────────────────
+
+/**
+ * Everything the server needs to decide which pull request the caller meant.
+ *
+ * A type and not an interface on purpose: apiPost takes a Record<string,
+ * unknown> body, and only a type alias is assignable to one.
+ */
+export type PrLocator = {
+  repository?: string;
+  number?: number;
+  /** The session whose bound PR to use when no number was given. */
+  session?: string;
+  /** The branch to match against head_ref when no number was given. */
+  branch?: string;
+};
+
+/** The repository and branch of the checkout the command runs in. */
+export interface LocalGitContext {
+  repository: string | null;
+  branch: string | null;
+}
+
+function gitSucceeds(args: string[], cwd: string): boolean {
+  try {
+    execFileSync("git", args, { cwd, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Repository names compare without case, the way GitHub resolves them. */
+const sameRepository = (a: string | null | undefined, b: string | null | undefined) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+function gitLine(args: string[], cwd: string): string | null {
+  try {
+    const out = execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function readLocalGitContext(cwd: string = process.cwd()): LocalGitContext {
+  const branch = gitLine(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  const remote = gitLine(["remote", "get-url", "origin"], cwd);
+  return {
+    // A detached head answers "HEAD", which matches no branch on GitHub.
+    branch: branch && branch !== "HEAD" ? branch : null,
+    repository: extractRepoFromRemoteUrl(remote),
+  };
+}
+
+/**
+ * Turn what the caller typed into the locator the server resolves. A reference
+ * that names a number wins outright; without one the session and the branch go
+ * along as the two fallbacks, and the local repository narrows both.
+ *
+ * Throws on text that names no pull request at all, so a typo fails at the
+ * shell instead of quietly listing somebody else's PR.
+ */
+export function buildPrLocator(
+  ref: string | undefined,
+  local: { session?: string | null; repository?: string | null; branch?: string | null },
+): PrLocator {
+  const parsed = ref ? parsePrRef(ref) : null;
+  if (ref && !parsed) {
+    throw new Error(
+      `"${ref}" does not name a pull request. Use 123, owner/repo#123, or a pull request URL.`,
+    );
+  }
+
+  const locator: PrLocator = {};
+  if (parsed?.repository) locator.repository = parsed.repository;
+  else if (local.repository) locator.repository = local.repository;
+
+  if (parsed?.number != null) {
+    locator.number = parsed.number;
+    return locator;
+  }
+
+  if (local.session) locator.session = local.session;
+  if (local.branch) locator.branch = local.branch;
+  return locator;
+}
+
+// ── watch diffing ────────────────────────────────────────────────────────────
+
+/** The compact row the watch query pushes. */
+export type PrWatchRow = {
+  id: string;
+  repository: string;
+  number: number;
+  title: string | null;
+  state: string;
+  shepherd_state?: string | null;
+  checks_state?: string | null;
+  review_decision?: string | null;
+  mergeable_state?: string | null;
+  unresolved_review_count?: number | null;
+};
+
+export interface PrWatchEvent {
+  event: "new" | "transition" | "gone";
+  id: string;
+  repository: string;
+  number: number;
+  title: string | null;
+  field: string | null;
+  from: string | null;
+  to: string | null;
+}
+
+/** The fields a change of which is worth a line. */
+const WATCHED_FIELDS = [
+  "state",
+  "shepherd_state",
+  "checks_state",
+  "review_decision",
+  "mergeable_state",
+  "unresolved_review_count",
+] as const;
+
+function fieldValue(row: PrWatchRow, field: string): string | null {
+  const value = (row as Record<string, unknown>)[field];
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
+/**
+ * One line per observable change between two pushes. `prev` is null on the
+ * first frame, which is the silent baseline: a watcher that printed the whole
+ * current set on connect would drown the change it was started to see.
+ */
+export function diffPrRows(prev: PrWatchRow[] | null, next: PrWatchRow[]): PrWatchEvent[] {
+  if (prev === null) return [];
+  const before = new Map(prev.map((row) => [row.id, row]));
+  const events: PrWatchEvent[] = [];
+
+  for (const row of next) {
+    const was = before.get(row.id);
+    const head = {
+      id: row.id,
+      repository: row.repository,
+      number: row.number,
+      title: row.title ?? null,
+    };
+    if (!was) {
+      events.push({ ...head, event: "new", field: "state", from: null, to: row.state });
+      continue;
+    }
+    for (const field of WATCHED_FIELDS) {
+      const from = fieldValue(was, field);
+      const to = fieldValue(row, field);
+      if (from === to) continue;
+      events.push({ ...head, event: "transition", field, from, to });
+    }
+  }
+
+  const present = new Set(next.map((row) => row.id));
+  for (const row of prev) {
+    if (present.has(row.id)) continue;
+    events.push({
+      id: row.id,
+      repository: row.repository,
+      number: row.number,
+      title: row.title ?? null,
+      event: "gone",
+      field: "state",
+      from: row.state,
+      to: null,
+    });
+  }
+
+  return events;
+}
+
+// ── rendering ────────────────────────────────────────────────────────────────
+
+/**
+ * The same age as a phrase. formatAge answers "how old" in a table column,
+ * where "now" is the right word; a sentence needs "just now" instead of the
+ * "now ago" that reads as a typo.
+ *
+ * Not the shared contracts formatAgo, which stops at days: a pull request
+ * lives for months, and "213d ago" is not how anyone describes one.
+ */
+export function agePhrase(ms: number): string {
+  const age = formatAge(ms);
+  return age === "now" ? "just now" : `${age} ago`;
+}
+
+export function formatAge(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return "now";
+  if (min < 60) return `${min}m`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  return `${Math.floor(days / 30)}mo`;
+}
+
+/** "3 green", "3 green 1 red", or "" when the PR has no checks. */
+export function formatChecks(row: {
+  checks_green?: number | null;
+  checks_red?: number | null;
+  checks_pending?: number | null;
+}): string {
+  const green = row.checks_green ?? 0;
+  const red = row.checks_red ?? 0;
+  const pending = row.checks_pending ?? 0;
+  if (green + red + pending === 0) return "";
+  const parts: string[] = [];
+  if (green) parts.push(`${green} green`);
+  if (red) parts.push(`${red} red`);
+  if (pending) parts.push(`${pending} running`);
+  return parts.join(" ");
+}
+
+/** The one word a review decision is worth in a table. */
+export function formatReviews(row: {
+  review_decision?: string | null;
+  unresolved_review_count?: number | null;
+}): string {
+  const unresolved = row.unresolved_review_count ?? 0;
+  const decision =
+    row.review_decision === "approved"
+      ? "approved"
+      : row.review_decision === "changes_requested"
+        ? "changes"
+        : row.review_decision === "review_required"
+          ? "wanted"
+          : "";
+  if (unresolved > 0) return decision ? `${decision}, ${unresolved} open` : `${unresolved} open`;
+  return decision;
+}
+
+const STATE_COLOR: Record<string, string> = {
+  open: c.green,
+  merged: c.magenta,
+  closed: c.red,
+};
+
+const SHEPHERD_COLOR: Record<string, string> = {
+  ci_red: c.red,
+  conflicts: c.red,
+  changes_requested: c.yellow,
+  behind: c.yellow,
+  ci_pending: c.blue,
+  review_pending: c.blue,
+  approved: c.green,
+  ready: c.green,
+  merged: c.magenta,
+  closed: c.dim,
+};
+
+function color(text: string, code: string | undefined): string {
+  if (!text) return text;
+  return code ? `${code}${text}${c.reset}` : text;
+}
+
+interface PrRow extends PrWatchRow {
+  head_ref?: string | null;
+  base_ref?: string | null;
+  draft?: boolean | null;
+  checks_green?: number | null;
+  checks_red?: number | null;
+  checks_pending?: number | null;
+  session_short_id?: string | null;
+  shepherd_enabled?: boolean | null;
+  updated_at?: number | null;
+}
+
+/**
+ * The `cast pr ls` table. Column widths come from the rows themselves so a
+ * list of short branch names does not pay for a long one that is not there.
+ */
+export function formatPrTable(rows: PrRow[], now: number = Date.now()): string {
+  if (rows.length === 0) return fmt.muted("No pull requests match.");
+
+  const cells = rows.map((row) => ({
+    number: `#${row.number}`,
+    state: row.draft ? "draft" : row.state,
+    // The server reports a shepherd state only while a session is actually
+    // shepherding, so there is nothing to hide here.
+    shepherd: row.shepherd_state ?? "",
+    title: row.title ?? "",
+    branch: row.head_ref ? `${row.head_ref} ${icons.arrow} ${row.base_ref ?? "?"}` : "",
+    checks: formatChecks(row),
+    reviews: formatReviews(row),
+    session: row.session_short_id ?? "",
+    age: row.updated_at ? formatAge(Math.max(0, now - row.updated_at)) : "",
+    stateColor: STATE_COLOR[row.state],
+    shepherdColor: SHEPHERD_COLOR[row.shepherd_state ?? ""],
+  }));
+
+  const width = (key: keyof (typeof cells)[number]) =>
+    Math.max(...cells.map((cell) => String(cell[key] ?? "").length));
+  const numberWidth = width("number");
+  const stateWidth = width("state");
+  const shepherdWidth = width("shepherd");
+  const titleWidth = Math.min(Math.max(width("title"), 10), 54);
+  const branchWidth = Math.min(width("branch"), 40);
+  const checksWidth = width("checks");
+  const reviewsWidth = width("reviews");
+
+  const clip = (text: string, max: number) =>
+    text.length > max ? `${text.slice(0, max - 1)}${icons.dot}` : text;
+
+  return cells
+    .map((cell) => {
+      const parts = [
+        color(cell.number.padStart(numberWidth), c.cyan),
+        color(cell.state.padEnd(stateWidth), cell.stateColor),
+        color(cell.shepherd.padEnd(shepherdWidth), cell.shepherdColor),
+        clip(cell.title, titleWidth).padEnd(titleWidth),
+        fmt.muted(clip(cell.branch, branchWidth).padEnd(branchWidth)),
+        cell.checks.padEnd(checksWidth),
+        cell.reviews.padEnd(reviewsWidth),
+        cell.session ? color(cell.session, c.magenta) : "",
+        fmt.muted(cell.age),
+      ];
+      return parts.filter((part) => part.trim() !== "").join("  ").trimEnd();
+    })
+    .join("\n");
+}
+
+/** One line per watch event, for a person reading the stream. */
+export function formatPrChangeLine(event: PrWatchEvent): string {
+  const head = `${c.cyan}${event.repository}#${event.number}${c.reset}`;
+  const title = event.title ? ` ${fmt.muted(event.title.slice(0, 60))}` : "";
+  if (event.event === "new") return `${icons.bullet} ${head} appeared as ${event.to}${title}`;
+  if (event.event === "gone") return `${icons.dot} ${head} left the set (was ${event.from})${title}`;
+  return `${icons.arrow} ${head} ${event.field}: ${fmt.muted(event.from ?? "none")} ${icons.arrow} ${fmt.highlight(event.to ?? "none")}${title}`;
+}
+
+function line(label: string, value: string | null | undefined): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return `  ${fmt.label(label.padEnd(10))} ${value}`;
+}
+
+/** The `cast pr show` block. */
+export function formatPrShow(data: any, now: number = Date.now()): string {
+  const pr = data.pull_request ?? data;
+  const out: string[] = [];
+
+  out.push(
+    `${c.cyan}${pr.repository}#${pr.number}${c.reset} ${fmt.highlight(pr.title ?? "")} ` +
+      color(pr.draft ? "draft" : pr.state, STATE_COLOR[pr.state]),
+  );
+  out.push("");
+
+  const rows = [
+    line("url", pr.url),
+    line("page", pr.codecast_url),
+    line("branch", pr.head_ref ? `${pr.head_ref} ${icons.arrow} ${pr.base_ref ?? "?"}` : null),
+    line("sha", pr.head_sha ? String(pr.head_sha).slice(0, 12) : null),
+    line("author", pr.author_github_username),
+    line("merge", [pr.mergeable_state, pr.behind_by ? `${pr.behind_by} behind` : ""].filter(Boolean).join(", ")),
+    line("updated", pr.updated_at ? agePhrase(Math.max(0, now - pr.updated_at)) : null),
+  ].filter(Boolean) as string[];
+  out.push(...rows);
+
+  const shepherd = pr.shepherd;
+  if (shepherd?.session_short_id) {
+    out.push("");
+    out.push(fmt.label("shepherd"));
+    const wake = shepherd.last_wake_at
+      ? `${agePhrase(Math.max(0, now - shepherd.last_wake_at))}${shepherd.last_wake_reason ? ` (${shepherd.last_wake_reason})` : ""}`
+      : null;
+    out.push(
+      ...([
+        line("session", `${c.magenta}${shepherd.session_short_id}${c.reset}${shepherd.session_title ? ` ${fmt.muted(shepherd.session_title)}` : ""}`),
+        line("enabled", shepherd.enabled ? "yes" : "no"),
+        line("state", color(shepherd.state ?? "", SHEPHERD_COLOR[shepherd.state ?? ""])),
+        line("last wake", wake),
+        line("wakes", shepherd.wake_count ? String(shepherd.wake_count) : null),
+        line("trigger", shepherd.trigger_short_id),
+      ].filter(Boolean) as string[]),
+    );
+  }
+
+  const checks: any[] = pr.checks ?? [];
+  if (checks.length) {
+    out.push("");
+    out.push(fmt.label(`checks (${pr.checks_state ?? "unknown"})`));
+    for (const check of checks) {
+      const verdict = check.conclusion ?? check.status ?? "";
+      const mark =
+        verdict === "success" ? `${c.green}${icons.check}${c.reset}` :
+        verdict === "failure" || verdict === "timed_out" ? `${c.red}${icons.cross}${c.reset}` :
+        `${c.yellow}${icons.dot}${c.reset}`;
+      out.push(`  ${mark} ${checkLabel(check)} ${fmt.muted(verdict)}${check.url ? ` ${fmt.muted(check.url)}` : ""}`);
+    }
+  }
+
+  const reviewLine = formatReviews(pr);
+  const reviewers: string[] = pr.requested_reviewers ?? [];
+  if (reviewLine || reviewers.length) {
+    out.push("");
+    out.push(fmt.label("reviews"));
+    if (reviewLine) out.push(`  ${reviewLine}`);
+    if (reviewers.length) out.push(`  ${fmt.muted(`requested: ${reviewers.join(", ")}`)}`);
+  }
+
+  const comments: any[] = data.unresolved_comments ?? [];
+  if (comments.length) {
+    out.push("");
+    out.push(fmt.label(`unresolved comments (${comments.length})`));
+    for (const comment of comments) {
+      const where = comment.file_path
+        ? `${comment.file_path}${comment.line_number ? `:${comment.line_number}` : ""}`
+        : "";
+      const first = String(comment.content ?? "").split("\n")[0].slice(0, 80);
+      out.push(`  ${comment.author ?? "someone"} ${fmt.muted(where)} ${first}`);
+    }
+  }
+
+  const sessions: any[] = data.sessions ?? [];
+  const tasks: any[] = data.tasks ?? [];
+  if (sessions.length || tasks.length) {
+    out.push("");
+    out.push(fmt.label("linked"));
+    for (const session of sessions) {
+      out.push(`  ${c.magenta}${session.short_id}${c.reset} ${fmt.muted(session.title ?? "")}`);
+    }
+    for (const task of tasks) {
+      out.push(`  ${c.yellow}${task.short_id}${c.reset} ${fmt.muted(task.title ?? "")}${task.status ? ` ${fmt.muted(`[${task.status}]`)}` : ""}`);
+    }
+  }
+
+  const events: any[] = data.events ?? [];
+  if (events.length) {
+    out.push("");
+    out.push(fmt.label(`recent events (${events.length})`));
+    out.push(formatPrEvents(events, now));
+  }
+
+  return out.join("\n");
+}
+
+/** A review thread as one scannable row. */
+export interface PrThread {
+  short_id: string;
+  file_path?: string | null;
+  line_number?: number | null;
+  line_end?: number | null;
+  anchor_lines?: CodeAnchorText | null;
+  author?: string | null;
+  resolved?: boolean;
+  first_line?: string;
+}
+
+/**
+ * Where a thread sits in the diff, or nothing when it is on the conversation.
+ * A thread whose code moved names the line it is on now and where it was.
+ */
+export function threadLocation(thread: PrThread, placement?: AnchorPlacement): string {
+  if (!thread.file_path) return "";
+  const line = placement?.state === "moved" ? placement.line : thread.line_number;
+  const where = line ? `${thread.file_path}:${line}` : thread.file_path;
+  const note = placementLabel(placement ?? null);
+  return note ? `${where} (${note})` : where;
+}
+
+/**
+ * The file lines `cast pr threads` relocates against: the pull request's head
+ * when this checkout has that commit, else the working tree when it is on the
+ * head branch, else nothing (a guess against another branch would mislabel
+ * every thread).
+ */
+export function prHeadLines(
+  repoRoot: string,
+  pr: { head_sha?: string | null; head_ref?: string | null },
+  localBranch: string | null,
+): (filePath: string) => string[] | null {
+  if (pr.head_sha && gitSucceeds(["cat-file", "-e", `${pr.head_sha}^{commit}`], repoRoot)) return (file) => readFileLines(repoRoot, file, pr.head_sha);
+  if (pr.head_ref && localBranch === pr.head_ref) return (file) => readFileLines(repoRoot, file);
+  return () => null;
+}
+
+/**
+ * The `cast pr threads` table. The short id leads because it is what the next
+ * command takes, and a resolved thread is dimmed rather than hidden so that
+ * `--all` reads as one list.
+ */
+export function formatPrThreads(threads: PrThread[], placements: ReadonlyMap<PrThread, AnchorPlacement> = new Map()): string {
+  if (threads.length === 0) return fmt.muted("No open review threads on this pull request.");
+
+  const cells = threads.map((thread) => ({
+    id: thread.short_id,
+    mark: thread.resolved ? `${c.green}${icons.check}${c.reset}` : `${c.yellow}${icons.dot}${c.reset}`,
+    where: threadLocation(thread, placements.get(thread)),
+    author: thread.author ?? "someone",
+    text: (thread.first_line ?? "").slice(0, 60),
+  }));
+  const width = (key: "where" | "author") => Math.max(...cells.map((cell) => cell[key].length));
+  // Room for a relocated thread's "(moved from line N)".
+  const whereWidth = Math.min(width("where"), 52);
+  const authorWidth = width("author");
+
+  return cells
+    .map((cell) => {
+      const where = cell.where.length > whereWidth
+        ? `${cell.where.slice(0, whereWidth - 1)}${icons.dot}`
+        : cell.where;
+      return [
+        `${c.cyan}${cell.id}${c.reset}`,
+        cell.mark,
+        fmt.muted(where.padEnd(whereWidth)),
+        cell.author.padEnd(authorWidth),
+        cell.text,
+      ].join("  ").trimEnd();
+    })
+    .join("\n");
+}
+
+/** The event list, newest first. */
+export function formatPrEvents(events: any[], now: number = Date.now()): string {
+  if (events.length === 0) return fmt.muted("No events recorded for this pull request yet.");
+  return events
+    .map((event) => {
+      const age = event.created_at ? formatAge(Math.max(0, now - event.created_at)) : "";
+      const actor = event.actor_login ? `${event.actor_login} ` : "";
+      return `  ${fmt.muted(age.padStart(4))} ${c.blue}${event.kind}${c.reset} ${actor}${event.title ?? ""}`;
+    })
+    .join("\n");
+}
+
+// ── the command ──────────────────────────────────────────────────────────────
+
+/** The convex websocket URL behind the HTTP site URL the CLI already holds. */
+export function convexUrlFromSiteUrl(siteUrl: string): string {
+  return siteUrl.replace(".site", ".cloud");
+}
+
+export async function locate(
+  deps: PublishDeps,
+  ref: string | undefined,
+  opts: { repo?: string } = {},
+): Promise<PrLocator> {
+  const local = readLocalGitContext();
+  // --repo only narrows what the reference left out. buildPrLocator holds the
+  // one rule for that, so a reference naming its own repository still wins.
+  return buildPrLocator(ref, {
+    session: deps.detectCurrentSessionId(),
+    repository: opts.repo ?? local.repository,
+    branch: local.branch,
+  });
+}
+
+/** The description as written, then the task's change guide as a walkthrough. */
+export function prBodyWithGuide(body: string, guide: ChangeGuide | null | undefined): string {
+  const text = body.trim();
+  if (!guide?.steps.length) return text;
+  const walkthrough = changeGuideMarkdown(guide, { heading: "## Walkthrough" });
+  return text ? `${text}\n\n${walkthrough}` : walkthrough;
+}
+
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+export function registerPrCommand(program: Command, deps: PublishDeps): void {
+  const pr = program
+    .command("pr")
+    .description(commandGroup("pr").description);
+
+  // ── ls ──
+  pr.command("ls")
+    .description("List pull requests across your teams, newest change first")
+    .option("--repo <owner/name>", "Only this repository")
+    .option("--state <state>", "open (default) | merged | closed | all", "open")
+    .option("--mine", "Only PRs you opened")
+    .option("--shepherded", "Only PRs a session is shepherding")
+    .option("-n, --limit <n>", "How many to show", "20")
+    .option("--json", "Machine-readable output")
+    .action(async (options) => {
+      const local = readLocalGitContext();
+      const result = await apiPost(deps, "/cli/pr/ls", {
+        repository: options.repo ?? undefined,
+        state: options.state === "all" ? undefined : options.state,
+        mine: options.mine || undefined,
+        shepherded: options.shepherded || undefined,
+        limit: Number(options.limit) || 20,
+      }, { read: true });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const rows: PrRow[] = result.pull_requests ?? [];
+      console.log(formatPrTable(rows));
+      if (rows.length === 0 && local.repository) {
+        console.log(fmt.muted(`\nThis checkout is ${local.repository}. \`cast pr ls --state all\` widens the search.`));
+      }
+    });
+
+  // ── create ──
+  // gh opens the pull request; codecast writes the description's tail. When
+  // the task carries the author's change guide (ct-57527), the body ends with
+  // it as a walkthrough, hunks included while they fit GitHub's limit.
+  pr.command("create")
+    .description("Open a pull request with gh; the task's change guide becomes a walkthrough in the description")
+    .requiredOption("-t, --title <text>", "Pull request title")
+    .option("-b, --body <text>", stdinText("Description: goal, what changed, how it was verified"))
+    .option("--task <id>", "Task whose change guide to include (default: the task this session is bound to)")
+    .option("--base <branch>", "Branch to merge into")
+    .option("--draft", "Open as a draft")
+    .option("--dry-run", "Print the gh command and the description, open nothing")
+    .action(async (options) => {
+      const taskId: string | undefined = options.task ?? readTaskPulseFor(deps.detectCurrentSessionId())?.task;
+      let guide: ChangeGuide | null = null;
+      if (taskId) {
+        const task = await apiPost(deps, "/cli/work/get", { short_id: taskId }, { read: true, exitOnError: false }).catch(() => null);
+        guide = task?.change_guide ?? task?.task?.change_guide ?? null;
+      }
+      const body = prBodyWithGuide(String(options.body ?? ""), guide);
+      const args = ["pr", "create", "--title", options.title, "--body-file", "-", ...(options.base ? ["--base", options.base] : []), ...(options.draft ? ["--draft"] : [])];
+      if (options.dryRun) {
+        console.log(fmt.muted(`gh ${args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`));
+        console.log(fmt.muted(taskId ? (guide ? `${taskId}: change guide, ${guide.steps.length} steps` : `${taskId}: no change guide`) : "no task bound; description as given"));
+        console.log("");
+        console.log(body);
+        return;
+      }
+      try {
+        const url = execFileSync("gh", args, { input: body, encoding: "utf-8", stdio: ["pipe", "pipe", "inherit"] }).trim();
+        console.log(url);
+      } catch {
+        fail("gh pr create failed (output above)");
+      }
+    });
+
+  // ── show ──
+  pr.command("show")
+    .argument("[ref]", "PR reference (default: this session's PR, or your branch's)")
+    .description("Everything on one pull request: state, checks, reviews, links and its last events")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/show", locator, { read: true });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.pull_request) fail(noMatch(locator));
+      console.log(formatPrShow(result));
+    });
+
+  // ── events ──
+  pr.command("events")
+    .argument("[ref]", "PR reference")
+    .description("The pull request's timeline: pushes, reviews, checks, merges")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("-n, --limit <n>", "How many events", "30")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/events", {
+        ...locator,
+        limit: Number(options.limit) || 30,
+      }, { read: true });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.pull_request) fail(noMatch(locator));
+      console.log(formatPrEvents(result.events ?? []));
+    });
+
+  // ── watch ──
+  pr.command("watch")
+    .argument("[ref]", "PR reference (default: every PR you can see)")
+    .description(
+      "Stream state changes as they happen: one line per change, silent until something moves\n\n" +
+      "Watches shepherd state, checks, review decision, merge state and open review\n" +
+      "comments. The first frame is the silent baseline, so what prints is the change.",
+    )
+    .option("--repo <owner/name>", "Watch one repository")
+    .option("--all", "Watch every pull request you can see")
+    .option("--json", "NDJSON: one JSON object per change")
+    .action(async (ref: string | undefined, options) => {
+      const wantsOne = !!ref && !options.all;
+      let prIds: string[] | undefined;
+      if (wantsOne) {
+        const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+        const resolved = await apiPost(deps, "/cli/pr/resolve", locator, { read: true });
+        if (!resolved.pull_request) fail(noMatch(locator));
+        prIds = [resolved.pull_request.id];
+      }
+
+      const { siteUrl, apiToken } = deps.getCliEndpoint();
+      const { ConvexClient } = await import("convex/browser");
+      const client = new ConvexClient(convexUrlFromSiteUrl(siteUrl));
+      process.on("SIGINT", () => { try { client.close(); } catch {} process.exit(0); });
+
+      const scope = prIds ? `${prIds.length} pull request` : options.repo ? options.repo : "every pull request you can see";
+      const header = `cast pr: watching ${scope} for changes${icons.dot} Ctrl-C to stop`;
+      if (options.json) { if (process.stderr.isTTY) process.stderr.write(`${header}\n`); }
+      else console.log(`${header}\n`);
+
+      let previous: PrWatchRow[] | null = null;
+      client.onUpdate(
+        "prCli:watchPRs" as any,
+        { api_token: apiToken, repository: options.repo, pr_ids: prIds },
+        (result: any) => {
+          if (!result || result.error) return;
+          const rows: PrWatchRow[] = result.pull_requests ?? [];
+          for (const event of diffPrRows(previous, rows)) {
+            if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
+            else console.log(formatPrChangeLine(event));
+          }
+          previous = rows;
+        },
+      );
+      await new Promise(() => {});
+    });
+
+  // ── shepherd ──
+  pr.command("shepherd")
+    .argument("<action>", "on | off | status")
+    .argument("[ref]", "PR reference")
+    .description(
+      "Bind a session to a pull request until it merges\n\n" +
+      "A shepherded PR wakes its session when it needs work: a review or comment\n" +
+      "lands, CI turns red, the branch conflicts. `off` releases it.",
+    )
+    .option("--for <session>", "Bind another session of yours (default: this one)")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--json", "Machine-readable output")
+    .action(async (action: string, ref: string | undefined, options) => {
+      if (!["on", "off", "status"].includes(action)) {
+        fail(`Unknown action "${action}". Use on, off, or status.`);
+      }
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const session = options.for ?? deps.detectCurrentSessionId() ?? undefined;
+      if (action === "on" && !session) {
+        fail("No session to bind. Pass one with --for (e.g. cast pr shepherd on 123 --for jx7c6zk)");
+      }
+      const result = await apiPost(deps, "/cli/pr/shepherd", {
+        ...locator,
+        action,
+        bind_session: action === "status" ? undefined : session,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.pull_request) fail(noMatch(locator));
+      const target = `${c.cyan}${result.pull_request.repository}#${result.pull_request.number}${c.reset}`;
+      const shepherd = result.pull_request.shepherd ?? {};
+      if (action === "status") {
+        if (!shepherd.session_short_id) {
+          console.log(fmt.muted(`${result.pull_request.repository}#${result.pull_request.number} has no shepherd`));
+          return;
+        }
+        console.log(
+          `${target} shepherded by ${c.magenta}${shepherd.session_short_id}${c.reset} ` +
+          `${shepherd.enabled ? fmt.success("on") : fmt.warning("off")}` +
+          (shepherd.state ? ` ${color(shepherd.state, SHEPHERD_COLOR[shepherd.state])}` : "") +
+          (shepherd.trigger_short_id ? ` ${fmt.muted(shepherd.trigger_short_id)}` : ""),
+        );
+        return;
+      }
+      console.log(
+        action === "on"
+          ? `${c.green}ok${c.reset} ${target} is shepherded by ${c.magenta}${shepherd.session_short_id}${c.reset}` +
+            (shepherd.trigger_short_id ? ` ${fmt.muted(`via ${shepherd.trigger_short_id}`)}` : "")
+          : `${c.green}ok${c.reset} ${target} is no longer shepherded`,
+      );
+    });
+
+  // ── open ──
+  pr.command("open")
+    .argument("[ref]", "PR reference")
+    .description("Open the pull request's codecast page")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--print", "Print the URL instead of opening it")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/resolve", locator, { read: true });
+      if (!result.pull_request) fail(noMatch(locator));
+      const url = result.pull_request.codecast_url
+        ?? codecastPrUrl(result.pull_request.repository, result.pull_request.number);
+      console.log(url);
+      if (!options.print) {
+        try { await open(url); } catch {}
+      }
+    });
+
+  // ── comment ──
+  pr.command("comment")
+    .argument("[ref]", "PR reference")
+    .argument("[text]", stdinText("The comment body"))
+    .description(
+      "Comment on the pull request through GitHub, recorded against this session\n\n" +
+      "With --file and --line the comment lands on that line of the diff; without\n" +
+      "them it lands on the conversation. Text `-` reads stdin.",
+    )
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--file <path>", "Anchor the comment to a file in the diff")
+    .option("--line <n>", "Anchor the comment to a line of that file")
+    .option("--hold", "Keep it in your review instead of posting it now; `cast pr review` sends the batch")
+    .option("--reply <thread>", "Answer a thread, named by the short id `cast pr threads` prints or by file:line")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, text: string | undefined, options) => {
+      const { ref: refArg, body } = splitCommentArgs(ref, text);
+      if (!body || !body.trim()) fail("Nothing to say. Pass the comment text, or `-` to read stdin.");
+      if (options.line && !options.file) fail("--line needs --file. A line number alone anchors nothing.");
+      if (options.hold && !options.file) fail("--hold keeps a note on a line. Pass --file and --line.");
+      if (options.reply && (options.file || options.hold)) fail("--reply takes its place from the thread it answers; drop --file, --line and --hold.");
+
+      const locator = await locate(deps, refArg, options).catch((error: Error) => fail(error.message));
+      // The commented line's text, read from this checkout when it is the
+      // pull request's repository, so the thread can follow the code later.
+      const repoRoot = gitLine(["rev-parse", "--show-toplevel"], process.cwd());
+      const sameRepo = !locator.repository || sameRepository(locator.repository, readLocalGitContext().repository);
+      const lineNumber = options.line ? Number(options.line) : undefined;
+      const result = await apiPost(deps, "/cli/pr/comment", {
+        ...locator,
+        content: body,
+        file_path: options.file,
+        line_number: lineNumber,
+        anchor_lines: repoRoot && sameRepo && options.file && !options.reply
+          ? captureLocalAnchor(repoRoot, options.file, lineNumber)
+          : undefined,
+        session: deps.detectCurrentSessionId() ?? undefined,
+        hold: !!options.hold,
+        reply_to: options.reply,
+      });
+      if (result.error) fail(result.error);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        result.reply
+          ? `${c.green}ok${c.reset} replied on ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted("(threaded under it on GitHub in a moment)")
+          : result.held
+          ? `${c.green}ok${c.reset} held for your review of ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted("(`cast pr notes` lists it, `cast pr review` sends the batch)")
+          : `${c.green}ok${c.reset} commented on ${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+            fmt.muted(`${result.url ?? ""} (mirrored to GitHub in a moment)`),
+      );
+    });
+
+  // ── notes ──
+  pr.command("notes")
+    .argument("[ref]", "PR reference")
+    .description("The notes held in your review of a pull request, not yet sent")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--discard", "Throw every held note away instead of listing them")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/notes", { ...locator, discard: options.discard || undefined });
+      if (result.error) fail(result.error);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (options.discard) {
+        const n = result.discarded ?? 0;
+        console.log(`${c.green}ok${c.reset} discarded ${n} held ${n === 1 ? "note" : "notes"} on ${c.cyan}${result.repository}#${result.number}${c.reset}`);
+        return;
+      }
+      const notes: any[] = result.notes ?? [];
+      if (notes.length === 0) {
+        console.log(fmt.muted(`No held notes on ${result.repository}#${result.number}. \`cast pr comment --hold --file f --line n "..."\` adds one.`));
+        return;
+      }
+      console.log(`${c.cyan}${result.repository}#${result.number}${c.reset} ${notes.length} held ${notes.length === 1 ? "note" : "notes"}`);
+      for (const note of notes) {
+        const where = note.file_path ? `${note.file_path}:${note.line_number ?? ""}` : "conversation";
+        console.log(`  ${fmt.muted(String(note._id).slice(-8))}  ${where}  ${String(note.content).split("\n")[0]}`);
+      }
+      console.log(fmt.muted("`cast pr review --approve|--request-changes|--comment` sends them as one review."));
+    });
+  // ── threads ──
+  pr.command("threads")
+    .argument("[ref]", "PR reference")
+    .description(
+      "The review threads on a pull request, open ones only unless you ask for all\n\n" +
+      "The short id in the first column is what `cast pr resolve` takes, and so is\n" +
+      "the file:line beside it.",
+    )
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--all", "Include threads that are already resolved")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/threads", { ...locator, all: options.all || undefined }, { read: true });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.pull_request) fail(noMatch(locator));
+      const threads: PrThread[] = result.threads ?? [];
+      const repoRoot = gitLine(["rev-parse", "--show-toplevel"], process.cwd());
+      const local = readLocalGitContext();
+      const placements = repoRoot && sameRepository(local.repository, result.pull_request.repository)
+        ? placeComments(threads, prHeadLines(repoRoot, result.pull_request, local.branch))
+        : new Map();
+      console.log(formatPrThreads(threads, placements));
+      if (!options.all && result.resolved_count) {
+        console.log(fmt.muted(`\n${result.resolved_count} resolved. \`--all\` shows them.`));
+      }
+    });
+
+  // ── resolve / unresolve ──
+  for (const verb of ["resolve", "unresolve"] as const) {
+    pr.command(verb)
+      .argument("<thread>", "Thread short id, or the file:line it sits on")
+      .argument("[ref]", "PR reference")
+      .description(
+        verb === "resolve"
+          ? "Settle a review thread\n\nName it by the short id `cast pr threads` prints, or by file:line."
+          : "Reopen a review thread that was settled",
+      )
+      .option("--repo <owner/name>", "Repository to resolve the reference in")
+      .option("--json", "Machine-readable output")
+      .action(async (thread: string, ref: string | undefined, options) => {
+        const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+        const result = await apiPost(deps, `/cli/pr/threads/${verb}`, { ...locator, selector: thread });
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        const where = result.thread ? threadLocation(result.thread) : "";
+        console.log(
+          `${c.green}ok${c.reset} ${verb === "resolve" ? "resolved" : "reopened"} ` +
+          `${c.cyan}${result.repository}#${result.number}${c.reset} ` +
+          fmt.muted(`${result.thread?.short_id ?? thread}${where ? ` ${where}` : ""}`),
+        );
+      });
+  }
+
+  // ── review ──
+  pr.command("review")
+    .argument("[ref]", "PR reference")
+    .description(
+      "Review a pull request on GitHub under your own account\n\n" +
+      "A review is your judgement, so it goes out as you and needs your GitHub\n" +
+      "account connected. GitHub refuses some reviews by rule, approving your own\n" +
+      "among them, and says so in its own words.\n\n" +
+      "Every note you hold (`cast pr comment --hold --file f --line n`) leaves with\n" +
+      "it as one review. When a session owns the pull request, the whole review\n" +
+      "reaches that session as one message the moment GitHub accepts it.",
+    )
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--approve", "Approve it")
+    .option("--request-changes", "Ask for changes")
+    .option("--comment", "Comment without approving or blocking")
+    .option("-b, --body <text>", stdinText("What the review says"))
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const chosen = [
+        options.approve && "APPROVE",
+        options.requestChanges && "REQUEST_CHANGES",
+        options.comment && "COMMENT",
+      ].filter(Boolean) as string[];
+      if (chosen.length === 0) fail("Say which review this is: --approve, --request-changes, or --comment.");
+      if (chosen.length > 1) fail("A review is one verdict. Pass one of --approve, --request-changes, --comment.");
+      // GitHub requires a body for these two: a verdict against the change has
+      // to say what is wrong, and a comment with no text says nothing.
+      if (chosen[0] !== "APPROVE" && !options.body?.trim()) {
+        fail(`--${options.requestChanges ? "request-changes" : "comment"} needs a body. Pass -b "text", or -b - to read stdin.`);
+      }
+
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/review", { ...locator, event: chosen[0], body: options.body });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const verdict =
+        chosen[0] === "APPROVE" ? fmt.success("approved") :
+        chosen[0] === "REQUEST_CHANGES" ? fmt.warning("requested changes on") : "commented on";
+      if (result.error) fail(result.error);
+      console.log(
+        `${c.green}ok${c.reset} ${verdict} ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.notes ? ` ${fmt.muted(`with ${result.notes} ${result.notes === 1 ? "note" : "notes"}`)}` : "") +
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : "") +
+        (result.url ? ` ${fmt.muted(result.url)}` : ""),
+      );
+      // The owning session, when the pull request has one, reads the review
+      // as a message: say so, or say why it did not.
+      const delivered = result.delivered_to;
+      if (delivered?.short_id || delivered?.conversation_id) {
+        console.log(`   ${fmt.muted(`delivered to session ${delivered.short_id ?? delivered.conversation_id}`)}`);
+      } else if (delivered?.error) {
+        console.log(`   ${fmt.warning(`not delivered to the owning session: ${delivered.error}`)}`);
+      }
+    });
+
+  // ── the other verbs: reopen, draft, reviewers, edit ──
+  const verb = (name: string, route: string, text: string, extra?: (cmd: any) => any, body?: (options: any) => Record<string, unknown>, done?: (result: any, options: any) => string) => {
+    const cmd = pr.command(name)
+      .argument("[ref]", "PR reference")
+      .description(text)
+      .option("--repo <owner/name>", "Repository to resolve the reference in")
+      .option("--json", "Machine-readable output");
+    extra?.(cmd);
+    cmd.action(async (ref: string | undefined, options: any) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, route, { ...locator, ...(body?.(options) ?? {}) });
+      if (result.error) fail(result.error);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `${c.green}ok${c.reset} ${done ? done(result, options) : name} ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : ""),
+      );
+    });
+  };
+  verb("reopen", "/cli/pr/reopen", "Reopen a closed pull request on GitHub", undefined, undefined, () => "reopened");
+  verb(
+    "draft", "/cli/pr/draft",
+    "Send a pull request back to draft, or mark it ready with --ready",
+    (cmd) => cmd.option("--ready", "Mark it ready for review instead"),
+    (options) => ({ draft: !options.ready }),
+    (_result, options) => (options.ready ? "ready for review:" : "back to draft:"),
+  );
+  verb(
+    "reviewers", "/cli/pr/reviewers",
+    "Ask people for a review, or withdraw the ask\n\n  cast pr reviewers 123 --add sam --add ada --remove old",
+    (cmd) => cmd.option("--add <login...>", "GitHub logins to ask").option("--remove <login...>", "Logins to withdraw"),
+    (options) => ({ add: options.add, remove: options.remove }),
+    (result) => `reviewers now ${(result.requested_reviewers ?? []).join(", ") || "nobody"} on`,
+  );
+  verb(
+    "edit", "/cli/pr/edit",
+    "Change the title or the description",
+    (cmd) => cmd.option("-t, --title <text>", "The new title").option("-b, --body <text>", stdinText("The new description")),
+    (options) => ({ title: options.title, body: options.body }),
+    () => "edited",
+  );
+
+  // ── merge ──
+  pr.command("merge")
+    .argument("[ref]", "PR reference")
+    .description(
+      "Merge a pull request on GitHub\n\n" +
+      "Squashes by default. GitHub decides whether it may be merged, so a branch\n" +
+      "that is behind, conflicted or blocked comes back in GitHub's own words.",
+    )
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--squash", "Squash the commits into one (default)")
+    .option("--merge", "Keep the commits and add a merge commit")
+    .option("--rebase", "Replay the commits onto the base branch")
+    .option("--delete-branch", "Delete the head branch after it merges")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const chosen = [options.squash && "squash", options.merge && "merge", options.rebase && "rebase"]
+        .filter(Boolean) as string[];
+      if (chosen.length > 1) fail("Pick one merge method: --squash, --merge, or --rebase.");
+
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/merge", {
+        ...locator,
+        method: chosen[0] ?? "squash",
+        delete_branch: options.deleteBranch || undefined,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `${c.green}ok${c.reset} merged ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.sha ? ` ${fmt.muted(String(result.sha).slice(0, 12))}` : "") +
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : ""),
+      );
+      if (options.deleteBranch && result.head_ref) {
+        console.log(result.branch_deleted
+          ? fmt.muted(`  deleted ${result.head_ref}`)
+          : fmt.warning(`  merged, but ${result.head_ref} is still there`));
+      }
+    });
+
+  // ── close ──
+  pr.command("close")
+    .argument("[ref]", "PR reference")
+    .description("Close a pull request without merging it")
+    .option("--repo <owner/name>", "Repository to resolve the reference in")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string | undefined, options) => {
+      const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
+      const result = await apiPost(deps, "/cli/pr/close", locator);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `${c.green}ok${c.reset} closed ${c.cyan}${result.repository}#${result.number}${c.reset}` +
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : ""),
+      );
+    });
+}
+
+/**
+ * Sort out the two optional arguments of `cast pr comment`. One argument means
+ * the reference was left out and this is the body: a reference always parses,
+ * a comment almost never does.
+ *
+ * A body still reading "-" got there through the reference slot, which the
+ * parser's stdin expansion never looks at, so read the heredoc here.
+ */
+export function splitCommentArgs(
+  ref: string | undefined,
+  text: string | undefined,
+  readBody: () => string = readStdinBody,
+): { ref?: string; body?: string } {
+  let refArg = ref;
+  let body = text;
+  if (refArg !== undefined && body === undefined && !parsePrRef(refArg)) {
+    body = refArg;
+    refArg = undefined;
+  }
+  if (body === "-") body = readBody();
+  return { ref: refArg, body };
+
+}
+
+function noMatch(locator: PrLocator): string {
+  if (locator.number != null) {
+    return locator.repository
+      ? `No pull request ${locator.repository}#${locator.number} in your teams.`
+      : `No pull request #${locator.number} in your teams. Name the repository with owner/repo#${locator.number}.`;
+  }
+  const tried = [
+    locator.session ? "this session's binding" : "",
+    locator.branch ? `branch ${locator.branch}` : "",
+  ].filter(Boolean).join(" or ");
+  return tried
+    ? `No pull request found by ${tried}. Pass one: cast pr show 123`
+    : "No pull request given, and none could be inferred here. Pass one: cast pr show 123";
+}

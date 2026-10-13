@@ -1,0 +1,297 @@
+import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
+
+const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
+const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
+
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean; groupFails?: boolean } = {}) {
+  const grouped: unknown[] = [];
+  const detached: number[] = [];
+  const created: unknown[] = [];
+  const selfSessions: string[] = [];
+  const keeperDocs: object[] = [];
+  let keeperExists = !!opts.keeperAlreadyOpen;
+  let selfHeld = !!opts.selfAlreadyAttached;
+  const event = () => {
+    const listeners: Array<(tab: object) => void> = [];
+    return { addListener(fn: (tab: object) => void) { listeners.push(fn); }, emit(tab: object) { listeners.forEach((fn) => fn(tab)); } };
+  };
+  const tab = { id: 7, windowId: 1, groupId: -1, url: 'https://example.com', active: false };
+  const storage = (data: object) => ({ get: async () => data, set: async () => {} });
+  let ownershipReads = 0;
+  const chrome = {
+    storage: { local: storage({}), session: {
+      ...storage({}),
+      get: async () => ++ownershipReads === 1 && opts.firstOwnershipReadStalls
+        ? new Promise(() => {}) : { ownedTabs: opts.ownedTabs ?? [] },
+    } },
+    action: { setTitle: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+    ...(opts.noOffscreenApi ? {} : { offscreen: {
+      Reason: { WORKERS: 'WORKERS' },
+      hasDocument: async () => keeperExists,
+      createDocument: async (p: object) => { keeperDocs.push(p); keeperExists = true; },
+    } }),
+    runtime: { onStartup: event(), onInstalled: event(), onMessage: event(), getManifest: () => ({ version: '0.1.0' }), getURL: (path: string) => `chrome-extension://ext/${path}` },
+    alarms: { create: async () => {}, onAlarm: event() },
+    tabs: {
+      get: async () => ({ ...tab }),
+      query: async (q: { groupId?: number } = {}) => {
+        if (opts.hungTabQuery) return new Promise(() => {});
+        if (opts.lateTabQueryMs) await new Promise((resolve) => setTimeout(resolve, opts.lateTabQueryMs));
+        if (q.groupId === 42) return (opts.castGroupWithTabs ?? []).map((id) => ({ ...tab, id, groupId: 42 }));
+        return [tab, ...(opts.castGroupWithTabs ?? []).map((id) => ({ ...tab, id, groupId: 42 }))];
+      },
+      create: async (p: object) => {
+        created.push(p);
+        if (opts.humanTabDuringCreate) chrome.tabs.onCreated.emit({ ...tab, id: 8 });
+        chrome.tabs.onCreated.emit(tab);
+        return { ...tab };
+      },
+      group: async (p: object) => {
+        grouped.push(p);
+        if (opts.groupFails) throw new Error('Grouping is not supported by tabs in this window.');
+        return 42;
+      },
+      onCreated: event(), onUpdated: event(), onRemoved: event(),
+    },
+    tabGroups: {
+      query: async (q: { title?: string; color?: string } = {}) => {
+        if (opts.hungGroupQuery) return new Promise(() => {});
+        // Mid animation the title carries a frame; a human's red group is not ours.
+        if (opts.castGroupWithTabs && q.color === 'red') return [{ id: 42, windowId: 1, title: 'Cast ...', color: 'red' }, { id: 43, windowId: 1, title: 'Shopping', color: 'red' }];
+        return [];
+      }, update: async (id: number, p: object) => ({ id, windowId: 1, ...p }),
+      onCreated: event(), onUpdated: event(), onRemoved: event(),
+    },
+    // Window 9 stands for an installed web app's window: Chrome counts it as
+    // last focused, but it is not a normal window and cannot hold a tab group.
+    windows: {
+      getAll: async () => [{ id: 1 }],
+      getLastFocused: async (q: { windowTypes?: string[] } = {}) =>
+        opts.appWindowFocused && !q.windowTypes?.includes('normal') ? { id: 9, type: 'app' } : { id: 1, type: 'normal' },
+    },
+    debugger: {
+      attach: async ({ targetId }: { tabId?: number; targetId?: string }) => {
+        if (!targetId) return;
+        if (selfHeld) throw new Error(`Another debugger is already attached to the target with id: ${targetId}.`);
+        selfHeld = true;
+        selfSessions.push(`attach ${targetId}`);
+      },
+      detach: async ({ tabId, targetId }: { tabId?: number; targetId?: string }) => {
+        if (targetId) { selfHeld = false; selfSessions.push(`detach ${targetId}`); } else detached.push(tabId!);
+      },
+      getTargets: async () => [
+        { id: 'page-7', type: 'page', url: 'https://example.com', attached: true },
+        { id: 'sw-other', type: 'worker', url: 'chrome-extension://other/background.js', attached: false },
+        { id: 'sw-self', type: 'worker', url: 'chrome-extension://ext/background.js', attached: selfHeld },
+      ],
+      sendCommand: async (_: unknown, method: string) => {
+        if (opts.hungCleanup && method === 'Page.removeScriptToEvaluateOnNewDocument') return new Promise(() => {});
+        if (opts.coldRenderer && method.endsWith('.enable')) await new Promise(resolve => setTimeout(resolve, 40));
+        // The overlay's Runtime.evaluate waits on the page's main thread; a page still parsing holds it well past the worker's step bound.
+        if (opts.slowOverlay) {
+          if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'top' } } };
+          if (method === 'Page.createIsolatedWorld') return { executionContextId: 1 };
+          if (method === 'Runtime.evaluate') await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        return {};
+      },
+      onEvent: event(), onDetach: event(),
+    },
+  };
+  const context = vm.createContext({ chrome, crypto: webcrypto, TextEncoder, navigator: { userAgent: 'test' },
+    importScripts() {}, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 250), clearTimeout,
+    setInterval: () => 1, clearInterval() {},
+  });
+  vm.runInContext(statusSource, context);
+  vm.runInContext(source, context);
+  const selfSettled = () => vm.runInContext('selfSync', context);
+  const dropSelf = () => { selfHeld = false; chrome.debugger.onDetach.emit({ targetId: 'sw-self' }); };
+  const keeperSettled = () => vm.runInContext('keeperPending || Promise.resolve()', context);
+  const alarm = (name: string) => chrome.alarms.onAlarm.emit({ name });
+  const message = (msg: object) => chrome.runtime.onMessage.emit(msg);
+  return { context, grouped, detached, created, selfSessions, selfSettled, dropSelf, keeperDocs, keeperSettled, alarm, message, dropKeeper: () => { keeperExists = false; } };
+}
+
+// A guard that fails a test whose call truly never settles. Generous on purpose: the worker's timers are
+// scaled down 250x here, and on a loaded machine a real 100 ms clock fired before an 80 ms scaled one.
+const HANG_GUARD_MS = 5_000;
+
+describe('the keeper page', () => {
+  test('is created at boot, once, with a reason that has no lifetime limit', async () => {
+    const w = worker();
+    await w.keeperSettled();
+    expect(w.keeperDocs).toEqual([expect.objectContaining({ url: 'offscreen.html', reasons: ['WORKERS'] })]);
+  });
+
+  test('an existing page is kept, and one that Chrome dropped comes back on the next alarm', async () => {
+    const w = worker({ keeperAlreadyOpen: true });
+    await w.keeperSettled();
+    expect(w.keeperDocs).toHaveLength(0);
+    w.dropKeeper();
+    w.alarm('cast-bridge-reconnect');
+    await w.keeperSettled();
+    expect(w.keeperDocs).toHaveLength(1);
+  });
+
+  test('a Chrome without the offscreen API boots and answers as before', async () => {
+    const w = worker({ noOffscreenApi: true, ownedTabs: [7] });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs).toHaveLength(1);
+  });
+});
+
+describe('extension tab lifecycle', () => {
+  test('a stalled ownership read times out and the next command can recover safely', async () => {
+    const w = worker({ firstOwnershipReadStalls: true, ownedTabs: [7] });
+    // The 20 s bound is 80 ms here, plus the 3 s grace for a frozen process (12 ms).
+    await expect(Promise.race([
+      w.context.handle({ op: 'tabs.list' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('ownership stayed pending')), HANG_GUARD_MS)),
+    ])).rejects.toThrow('Chrome storage.session.get did not answer');
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
+  });
+
+  test('a stalled group metadata query does not prevent listing live tabs', async () => {
+    const w = worker({ hungGroupQuery: true, ownedTabs: [7] });
+    const result = await Promise.race([
+      w.context.handle({ op: 'tabs.list' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tab listing stalled on group metadata')), HANG_GUARD_MS)),
+    ]);
+    expect(result.tabs).toHaveLength(1);
+    expect(result.tabs[0]).toMatchObject({ tabId: 7, owned: true });
+  });
+
+  test('a tab query that answers just after the bound (a process that was frozen) still succeeds', async () => {
+    // The worker's timers run 250x faster in this harness: the 8 s bound on
+    // tabs.query is 32 ms, the 3 s grace after it is 12 ms. An answer at
+    // 36 ms is what a frozen process delivers a beat after the timer fired.
+    const w = worker({ lateTabQueryMs: 36 });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs).toHaveLength(1);
+  });
+
+  test('with ownership memory empty, tabs in a red Cast group are ours again (an extension reload does not orphan them)', async () => {
+    const w = worker({ castGroupWithTabs: [11, 12] });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    const byId = Object.fromEntries(result.tabs.map((t: { tabId: number; owned: boolean }) => [t.tabId, t.owned]));
+    expect(byId).toEqual({ 7: false, 11: true, 12: true });
+  });
+
+  test('a stalled tab query identifies the Chrome API that did not answer', async () => {
+    const w = worker({ hungTabQuery: true });
+    // The 30 s bound is 120 ms here, plus the 3 s grace for a frozen process (12 ms).
+    await expect(Promise.race([
+      w.context.handle({ op: 'tabs.list' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tab query stayed pending')), HANG_GUARD_MS)),
+    ])).rejects.toThrow('Chrome tabs.query did not answer');
+  });
+
+  test('a client that omits grouping still creates a red Cast tab', async () => {
+    const w = worker();
+    await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
+    expect(w.grouped).toEqual([{ tabIds: [7] }]);
+    expect(vm.runInContext('groups.get(42)', w.context)).toMatchObject({ title: 'Cast', color: 'red' });
+    expect(w.created).toEqual([{ url: 'https://example.com', active: false, windowId: 1 }]);
+  });
+
+  test('a new tab goes to a normal window even while an app window has focus', async () => {
+    // tabs.create with no window lands in the last focused one; in an app window
+    // the grouping step then fails: "Tabs can only be moved to and from normal windows".
+    const w = worker({ appWindowFocused: true });
+    await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
+    expect(w.created).toEqual([{ url: 'https://example.com', active: false, windowId: 1 }]);
+  });
+
+  test('a tab Chrome refuses to group is still returned, owned, and attachable', async () => {
+    // The create used to throw after the tab existed: the caller never learned its id,
+    // and every retry of `cast browser open` left one more tab behind.
+    const w = worker({ groupFails: true });
+    expect(await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true })).toEqual({ tabId: 7 });
+    expect(vm.runInContext('ownedTabs.has(7)', w.context)).toBe(true);
+    await w.context.attachTab(7);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+    expect(w.grouped).toEqual([{ tabIds: [7] }, { tabIds: [7] }]);
+  });
+
+  test('an owned ungrouped tab is repaired when reattached', async () => {
+    const w = worker({ ownedTabs: [7] });
+    vm.runInContext('attached.add(7); borderScripts.set(7, "script-7")', w.context);
+    await w.context.attachTab(7);
+    expect(w.grouped).toEqual([{ tabIds: [7] }]);
+  });
+
+  test('a human tab opened during an agent create is not adopted', async () => {
+    const w = worker({ humanTabDuringCreate: true });
+    await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
+    expect(vm.runInContext('[...ownedTabs]', w.context)).toEqual([7]);
+    expect(w.grouped).toEqual([{ tabIds: [7] }]);
+  });
+
+  test('attaching a human tab does not put it in the Cast group', async () => {
+    const w = worker();
+    vm.runInContext('attached.add(7); borderScripts.set(7, "script-7")', w.context);
+    await w.context.attachTab(7);
+    expect(w.grouped).toEqual([]);
+  });
+
+  test('host ownership restores the group after extension session storage is cleared', async () => {
+    const w = worker();
+    vm.runInContext('attached.add(7); borderScripts.set(7, "script-7")', w.context);
+    await w.context.handle({ op: 'attach', tabId: 7, owned: true });
+    expect(w.grouped).toEqual([{ tabIds: [7] }]);
+    expect(vm.runInContext('ownedTabs.has(7)', w.context)).toBe(true);
+  });
+
+  test('a frozen renderer cannot prevent debugger detach', async () => {
+    const w = worker({ hungCleanup: true });
+    vm.runInContext('attached.add(7); borderScripts.set(7, "script-7")', w.context);
+    await w.context.detachTab(7);
+    expect(w.detached).toEqual([7]);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(false);
+  });
+
+  test('the worker holds a DevTools session on itself while it holds a tab, and releases it with the last tab', async () => {
+    const w = worker({ ownedTabs: [7] });
+    await w.context.attachTab(7);
+    await w.selfSettled();
+    expect(w.selfSessions).toEqual(['attach sw-self']);
+    await w.context.detachTab(7);
+    await w.selfSettled();
+    expect(w.selfSessions).toEqual(['attach sw-self', 'detach sw-self']);
+  });
+
+  test('a self session a previous worker left behind is taken over, not reported as a failure', async () => {
+    const w = worker({ ownedTabs: [7], selfAlreadyAttached: true });
+    await w.context.attachTab(7);
+    await w.selfSettled();
+    expect(w.selfSessions).toEqual(['detach sw-self', 'attach sw-self']);
+    expect(vm.runInContext('selfTarget', w.context)).toBe('sw-self');
+  });
+
+  test('a self session Chrome drops while a tab is still attached is held again', async () => {
+    const w = worker({ ownedTabs: [7] });
+    await w.context.attachTab(7);
+    await w.selfSettled();
+    w.dropSelf();
+    await w.selfSettled();
+    expect(w.selfSessions).toEqual(['attach sw-self', 'attach sw-self']);
+  });
+
+  test('a page that cannot paint the overlay yet still attaches: the frame is a courtesy, not a step', async () => {
+    const w = worker({ slowOverlay: true, ownedTabs: [7] });
+    const started = Date.now();
+    await w.context.attachTab(7);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(150);
+  });
+
+  test('a cold renderer gets time to enable its domains after debugger attach', async () => {
+    const w = worker({ coldRenderer: true, ownedTabs: [7] });
+    await w.context.attachTab(7);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+  });
+});

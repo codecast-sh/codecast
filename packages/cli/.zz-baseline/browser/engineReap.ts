@@ -1,0 +1,510 @@
+/**
+ * Reap engine browsers nobody is driving any more.
+ *
+ * The engine keeps one daemon and one Chrome per session and never closes
+ * either on its own; a session that ends without `cast browser stop` leaves
+ * both running for good. One night of agents and their tests left 217 Chrome
+ * processes and a load average of 400 on the development machine. Nothing in
+ * the engine will ever know that a codecast session has ended, so this has to
+ * be ours: every session start looks for browsers whose owner is gone and
+ * closes them, the way `killStrayChrome` guards the built-in driver.
+ *
+ * Ownership is read back out of the session key the engine was given (see
+ * engineSession()): `env-<id>` names a harness session id that a live agent
+ * process still carries in its environment, `pane-%N` a tmux pane. A key that
+ * names neither (tests, `default`) is judged by idleness instead — the daemon
+ * files carry the time of its last action.
+ *
+ * A session's tab lives in the shared managed browser, so reaping closes that
+ * tab (by the target id the daemon recorded) and then the daemon. Also cleaned:
+ * the daemon files a closed session leaves behind, and the whole-profile copies
+ * in the system tmp dir that older engine runs made (2.4G each) once no Chrome
+ * is using them.
+ */
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "../proc.js";
+import { tmuxRun } from "../tmux.js";
+import { paneOwnerId } from "../tmuxRoute.js";
+import {
+  baseSessionKey, engineHome, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
+  type EngineOptions,
+} from "./engine.js";
+import { CdpConnection, type CdpEndpoint } from "./cdp.js";
+import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
+import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
+import { defaultConfigDir } from "../config/configDir.js";
+
+/** How long a browser whose owner is `unverifiable` may sit untouched. */
+export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
+/**
+ * How long any session's tab may sit undriven before it is closed, its owner
+ * alive or not. A tab is a whole live page in the human's Chrome: a codecast
+ * app tab left in the background holds its sync feeders open and costs a
+ * sixth of a core or more for as long as it stays, and agents leave tabs
+ * behind for hours while they work on other things (2026-10-09). Reopening
+ * costs the agent one `cast browser open`.
+ */
+export const TAB_IDLE_MS = 30 * 60 * 1000;
+/** Startup-path reaps are throttled to this; `stop --all` and tests force. */
+const THROTTLE_MS = 5 * 60 * 1000;
+
+export interface EngineSessionInfo {
+  key: string;
+  pid: number | null;
+  running: boolean;
+  /** Newest mtime across the session's daemon files. */
+  lastSeen: number;
+}
+
+/** Every session the engine has files for, running or not. */
+export function listEngineSessions(stateDir = engineStateDir()): EngineSessionInfo[] {
+  const byKey = new Map<string, EngineSessionInfo>();
+  let names: string[];
+  try {
+    names = fs.readdirSync(stateDir);
+  } catch {
+    return [];
+  }
+  for (const name of names) {
+    const m = /^(.+)\.(pid|config|target|sock|stream|version|engine)$/.exec(name);
+    if (!m) continue;
+    const key = m[1];
+    const info = byKey.get(key) ?? { key, pid: null, running: false, lastSeen: 0 };
+    const full = path.join(stateDir, name);
+    try {
+      info.lastSeen = Math.max(info.lastSeen, fs.statSync(full).mtimeMs);
+    } catch {
+      /* raced with a removal */
+    }
+    if (m[2] === "pid") {
+      const pid = parseInt(fs.readFileSync(full, "utf-8").trim(), 10);
+      if (pid > 0) {
+        info.pid = pid;
+        info.running = isAlive(pid);
+      }
+    }
+    byKey.set(key, info);
+  }
+  return [...byKey.values()];
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * How to tell whether the agent behind a session key is still around.
+ *
+ * Answers in the tree's one liveness vocabulary (contracts/liveness.ts): `live`
+ * is positive contact, `exited` an observed absence, `unverifiable` a question
+ * this machine could not answer.
+ *
+ * Two independent signals, either of which proves life: the daemon's session
+ * registry (`~/.codecast/session-registry/<id>.json`, written by the
+ * SessionStart hook with the agent's pid) names a pid that is alive, or the
+ * agent's transcript (`~/.claude/projects/<slug>/<id>.jsonl`) was written
+ * recently — an agent doing anything at all appends to it. Neither signal is
+ * trusted to prove an EXIT: registry entries go stale when a session is resumed
+ * under a new pid (seen 2026-08-15, and it cost a live agent its tab), so a
+ * session that shows no sign of life is merely `unverifiable` and falls to the
+ * idle rule. Tmux panes are checked against `tmux list-panes`.
+ */
+export interface LiveOwners {
+  session(id: string): LivenessVerdict;
+  panes: Set<string> | null;
+}
+
+export function sessionRegistryDir(): string {
+  return path.join(defaultConfigDir(), "session-registry");
+}
+
+/** Newest mtime of a transcript for this session id under any project, or 0. */
+export function transcriptMtime(id: string, projectsDir = path.join(os.homedir(), ".claude", "projects")): number {
+  let newest = 0;
+  try {
+    for (const dir of fs.readdirSync(projectsDir)) {
+      try {
+        newest = Math.max(newest, fs.statSync(path.join(projectsDir, dir, `${id}.jsonl`)).mtimeMs);
+      } catch {
+        /* not this project */
+      }
+    }
+  } catch {
+    /* no transcripts here */
+  }
+  return newest;
+}
+
+/** A transcript written within this window means the agent is at work. */
+export const TRANSCRIPT_FRESH_MS = 30 * 60 * 1000;
+
+export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: string; now?: number } = {}): LiveOwners {
+  const registryDir = opts.registryDir ?? sessionRegistryDir();
+  const now = opts.now ?? Date.now();
+  let panes: Set<string> | null = null;
+  try {
+    // Every server's panes, each named the way ownerKey names it (paneOwnerId).
+    const t = tmuxRun(["list-panes", "-a", "-F", "#{pane_id}|#{socket_path}"]);
+    if (t.status === 0) {
+      panes = new Set();
+      for (const line of t.stdout.split("\n")) {
+        const [pane, socket] = line.trim().split("|");
+        if (pane) panes.add(paneOwnerId(pane, path.basename(socket ?? "") || "default"));
+      }
+    }
+  } catch {
+    /* no tmux: panes stay unknowable */
+  }
+  return {
+    panes,
+    session(id: string): LivenessVerdict {
+      try {
+        const reg = JSON.parse(fs.readFileSync(path.join(registryDir, `${id}.json`), "utf-8"));
+        const pid = Number(reg?.pid);
+        if (pid > 0 && isAlive(pid)) return "live";
+      } catch {
+        /* no registry entry */
+      }
+      if (now - transcriptMtime(id, opts.projectsDir) < TRANSCRIPT_FRESH_MS) return "live";
+      return "unverifiable";
+    },
+  };
+}
+
+/**
+ * The owners as scanned, except one session the caller just watched end (the
+ * daemon killed it: daemon.ts killConversationBackends). Its exit is observed,
+ * not inferred, so its tabs close now rather than after the idle rule.
+ */
+export function withEndedSession(live: LiveOwners, sessionId: string): LiveOwners {
+  return { ...live, session: (id) => (id === sessionId ? "exited" : live.session(id)) };
+}
+
+/**
+ * Is the agent behind this session key still around? Mirrors engineSession():
+ * the key is ownerKey() with `:` and other punctuation turned into `-`, so
+ * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane-12`.
+ */
+export function ownerState(key: string, live: LiveOwners): LivenessVerdict {
+  // A real-mode session is the same agent under a suffixed key (engine.ts).
+  key = baseSessionKey(key);
+  const env = /^(?:env|session)-(.+)$/.exec(key);
+  if (env) return live.session(env[1]);
+  const pane = /^pane-(.+)$/.exec(key);
+  if (pane) {
+    // A pane list we could not read says nothing; a pane list we DID read and
+    // that lacks this pane is an observed exit.
+    if (!live.panes) return "unverifiable";
+    const flat = (s: string) => s.replace(/[^A-Za-z0-9_-]+/g, "-");
+    for (const p of live.panes) if (engineSessionKey(`pane:${p}`) === key || flat(p) === pane[1]) return "live";
+    return "exited";
+  }
+  return "unverifiable";
+}
+
+/**
+ * May this session lose its tab? The one place in the tree where `unverifiable`
+ * buys a teardown, and it is deliberate.
+ *
+ * Everywhere else an unanswerable probe protects: `authorizesTeardown` alone
+ * decides, so a tmux hiccup never kills a live agent. A tab reaper cannot
+ * afford only that rule. Keys that name no findable owner — `default`, a test
+ * key, a registry entry gone stale under a resume — are permanently
+ * unverifiable, so on the strict rule their tab and daemon would live for ever;
+ * one night of that left 217 Chrome processes and a load average of 400. Two
+ * hours untouched is the evidence standing in for the probe we could not run.
+ *
+ * An owner we CAN see is never softened: `live` keeps its tab however long it
+ * sits, and only idleness is added, never subtracted.
+ *
+ * Why: keeps the softening in one named, explained place instead of a bare
+ * literal beside the reap, and liveness.guard.test.ts pins it to this shape and
+ * to this one site (ct-49683).
+ */
+export function authorizesReap(owner: LivenessVerdict, idle: boolean): boolean {
+  return authorizesTeardown(owner) || (owner === "unverifiable" && idle);
+}
+
+export interface ReapReport {
+  closed: string[];
+  /** Tabs closed for sitting undriven, their sessions kept (TAB_IDLE_MS). */
+  idled: string[];
+  killed: number;
+  cleaned: string[];
+  tmpDirsRemoved: number;
+  skipped: boolean;
+}
+
+export interface ReapOptions {
+  /** Ignore the throttle stamp. */
+  force?: boolean;
+  /** Never touch this session (the caller's own), in either mode: the key
+   *  and its real/clone twin are both kept. */
+  keep?: string | null;
+  now?: number;
+  idleMs?: number;
+  /** Close (not reap) a tab undriven this long; see TAB_IDLE_MS. */
+  tabIdleMs?: number;
+  live?: LiveOwners;
+  stateDir?: string;
+  /** Close a session's tab and daemon; injectable for tests. */
+  closeSession?: (key: string) => boolean | Promise<boolean>;
+}
+
+function stampPath(): string {
+  return path.join(engineHome(), "reap.stamp");
+}
+
+export interface SessionTarget {
+  targetId: string;
+  /** When the daemon last (re)pinned it — the tie-break between a session's
+   *  clone tab and its real-Chrome tab (watchSource.ts). */
+  mtimeMs: number;
+}
+
+/** The tab a session's daemon is pinned to, from the file it keeps. */
+export function sessionTarget(key: string, stateDir = engineStateDir()): SessionTarget | null {
+  try {
+    const file = path.join(stateDir, `${key}.target`);
+    const t = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (typeof t?.targetId !== "string") return null;
+    return { targetId: t.targetId, mtimeMs: fs.statSync(file).mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+export function sessionTargetId(key: string, stateDir = engineStateDir()): string | null {
+  return sessionTarget(key, stateDir)?.targetId ?? null;
+}
+
+/**
+ * Where a session's tab lives, for a raw CDP call: the bridge for a `-real`
+ * key (the human's Chrome), the managed browser for any other. Null when that
+ * browser was never set up or is not reachable, so there is nothing to close.
+ */
+export async function sessionEndpoint(key: string): Promise<CdpEndpoint | null> {
+  // A pane's view is the human's, in the desktop app: nothing here may close
+  // it by target id, so a pane session has no endpoint to close on.
+  if (isPaneSession(key)) return null;
+  return isRealSession(key) ? bridgeEndpointIfConfigured() : managedPort();
+}
+
+/**
+ * Detach one session's engine daemon without touching its tab. `close` on an
+ * attached daemon only disconnects, which is the whole of what a pane session
+ * may do to the view it drove (the human owns the pane), and what a session
+ * whose pane changed needs before it is re-pinned (desktopPane.ts).
+ */
+export function detachSessionDaemon(key: string, binary: string | null = findEngine()): boolean {
+  if (!binary) return false;
+  if (!listEngineSessions().some((session) => session.key === key && session.running)) return false;
+  const env = { ...process.env, AGENT_BROWSER_SESSION: key };
+  const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
+  return res.status === 0;
+}
+
+/** The engine options that reach a session's browser, or null when a real
+ *  session's bridge is not configured or not reachable (its daemon can still
+ *  be closed). */
+async function engineOptionsFor(key: string): Promise<(EngineOptions & { session: string }) | null> {
+  try {
+    return await engineBrowserFor(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Close a tab by target id, over CDP. Best effort, bounded by short timeouts,
+ * and awaited by its callers: a reap that runs right before `process.exit`
+ * (the `open` passthrough) would otherwise drop the close on the floor.
+ */
+export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): Promise<boolean> {
+  if (!endpoint) return false;
+  try {
+    const conn = await CdpConnection.fromPort(endpoint, 3_000);
+    try {
+      await conn.send("Target.closeTarget", { targetId }, undefined, 3_000);
+      return true;
+    } finally {
+      conn.close();
+    }
+  } catch {
+    return false; // the browser or the tab is already gone
+  }
+}
+
+/**
+ * Close a tab nobody is driving, whoever owns it, and let go of its daemon.
+ * The binding stays: the agent's next verb finds its tab gone and is told to
+ * open it again (cliEngine.ts, tab_gone), instead of landing on a blank tab.
+ * True only when a tab was still open to close, so a later pass over the same
+ * binding reports nothing.
+ */
+export async function closeIdleTab(key: string, stateDir = engineStateDir(), binary: string | null = findEngine()): Promise<boolean> {
+  if (isPaneSession(key)) return false;
+  const target = sessionTargetId(key, stateDir);
+  if (!target) return false;
+  if (listEngineSessions(stateDir).some((session) => session.key === key && session.running)) detachSessionDaemon(key, binary);
+  return closeTargetLater(target, await sessionEndpoint(key));
+}
+
+/**
+ * Close one session's tab in the shared browser and detach its daemon. `close`
+ * on an attached daemon only disconnects, so the tab is closed explicitly first
+ * — through the daemon when it is alive (it knows its tab), by target id when
+ * it is not. `binary` is the engine to drive the daemon with; null means no
+ * engine, so the tab is closed by target id alone (tests inject that).
+ */
+export async function closeSessionTab(key: string, binary: string | null = findEngine()): Promise<boolean> {
+  if (isPaneSession(key)) return detachSessionDaemon(key, binary);
+  const target = sessionTargetId(key);
+  if (!target) return false;
+  const browser = await engineOptionsFor(key);
+  let ok = false;
+  if (binary && browser && listEngineSessions().some((session) => session.key === key && session.running)) {
+    const env = { ...process.env, AGENT_BROWSER_SESSION: key };
+    const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
+    if (closedTab.status !== 0 && target) await closeTargetLater(target, await sessionEndpoint(key));
+    const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
+    ok = res.status === 0;
+  } else if (target) {
+    await closeTargetLater(target, await sessionEndpoint(key));
+  }
+  return ok;
+}
+
+/** Chrome browser processes (not helpers) whose user-data-dir matches. */
+function chromePids(userDataDirs: Set<string>): Array<{ pid: number; dir: string }> {
+  const out: Array<{ pid: number; dir: string }> = [];
+  try {
+    const ps = spawnSync("ps", ["ax", "-o", "pid=,command="], { encoding: "utf-8", timeout: 10_000, maxBuffer: 64 * 1024 * 1024 });
+    for (const line of ((ps.stdout as string) ?? "").split("\n")) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (!m || /\s--type=/.test(m[2])) continue;
+      const dir = /--user-data-dir=(\S+)/.exec(m[2])?.[1];
+      if (dir && userDataDirs.has(dir)) out.push({ pid: parseInt(m[1], 10), dir });
+    }
+  } catch {
+    /* ps unavailable */
+  }
+  return out;
+}
+
+/**
+ * Close every engine browser whose owner is gone (or, when the owner cannot be
+ * known, that has been idle past `idleMs`), then sweep the debris. Safe to call
+ * on every start: it is throttled, and it never touches `keep`.
+ */
+export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapReport> {
+  const report: ReapReport = { closed: [], idled: [], killed: 0, cleaned: [], tmpDirsRemoved: 0, skipped: false };
+  const now = opts.now ?? Date.now();
+  if (!opts.force) {
+    try {
+      if (now - fs.statSync(stampPath()).mtimeMs < THROTTLE_MS) {
+        report.skipped = true;
+        return report;
+      }
+    } catch {
+      /* no stamp yet */
+    }
+  }
+  try {
+    fs.mkdirSync(engineHome(), { recursive: true });
+    fs.writeFileSync(stampPath(), String(now));
+  } catch {
+    /* unwritable home: reap anyway */
+  }
+
+  const stateDir = opts.stateDir ?? engineStateDir();
+  const idleMs = opts.idleMs ?? ENGINE_IDLE_MS;
+  const tabIdleMs = opts.tabIdleMs ?? TAB_IDLE_MS;
+  const keep = opts.keep === undefined ? engineSession() : opts.keep;
+  const sessions = listEngineSessions(stateDir);
+  const live = opts.live ?? scanLiveOwners();
+  const close = opts.closeSession ?? closeSessionTab;
+
+  const gone = new Set<string>();
+  for (const s of sessions) {
+    // The caller's own session, in BOTH modes: its real and clone twins are
+    // one agent under two keys (engine.ts), and `stop` in one mode must not
+    // reap the tab the same agent holds in the other.
+    if (keep && baseSessionKey(s.key) === baseSessionKey(keep)) continue;
+    const owner = ownerState(s.key, live);
+    const idle = now - s.lastSeen > idleMs;
+    if (!authorizesReap(owner, idle)) {
+      if (now - s.lastSeen > tabIdleMs && (await closeIdleTab(s.key, stateDir))) report.idled.push(s.key);
+      continue;
+    }
+    if (s.running) {
+      await close(s.key);
+      report.closed.push(s.key);
+      if (s.pid && isAlive(s.pid)) {
+        try {
+          process.kill(s.pid, "SIGKILL");
+          report.killed++;
+        } catch {
+          /* already gone */
+        }
+      }
+    } else {
+      // The daemon died but its tab may still be open in the shared browser.
+      // Counted like any other close: a tab that vanished from the human's
+      // Chrome must show up in the summary the caller prints.
+      const target = sessionTargetId(s.key, stateDir);
+      if (target && (await closeTargetLater(target, await sessionEndpoint(s.key)))) report.closed.push(s.key);
+    }
+    gone.add(s.key);
+  }
+
+  // Daemon files for sessions that are gone.
+  for (const key of gone) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(stateDir).filter((n) => n.startsWith(`${key}.`));
+    } catch {
+      /* raced */
+    }
+    for (const n of names) fs.rmSync(path.join(stateDir, n), { force: true });
+    fs.rmSync(path.join(engineHome(), "sessions", key), { recursive: true, force: true });
+    report.cleaned.push(key);
+  }
+
+  // Whole-profile copies that older engine runs left in the tmp dir (2.4G
+  // each), once no Chrome is using them. Browsers themselves are never killed
+  // here: this reaps tabs and per-session daemons, nothing more.
+  try {
+    const tmp = os.tmpdir();
+    const copies = fs.readdirSync(tmp).filter((n) => n.startsWith("agent-browser-profile-")).map((n) => path.join(tmp, n));
+    if (copies.length) {
+      const inUse = new Set(chromePids(new Set(copies)).map((c) => c.dir));
+      for (const dir of copies) {
+        if (inUse.has(dir)) continue;
+        fs.rmSync(dir, { recursive: true, force: true });
+        report.tmpDirsRemoved++;
+      }
+    }
+  } catch {
+    /* tmp unreadable */
+  }
+  return report;
+}
+
+/** One line for the human, or null when there was nothing to do. */
+export function describeReap(r: ReapReport): string | null {
+  const parts: string[] = [];
+  const n = r.closed.length;
+  if (n) parts.push(`closed ${n} abandoned tab${n === 1 ? "" : "s"}${r.killed ? ` (${r.killed} daemons by force)` : ""}`);
+  if (r.idled.length) parts.push(`closed ${r.idled.length} tab${r.idled.length === 1 ? "" : "s"} idle over ${TAB_IDLE_MS / 60_000} minutes`);
+  if (r.tmpDirsRemoved) parts.push(`removed ${r.tmpDirsRemoved} stale profile cop${r.tmpDirsRemoved === 1 ? "y" : "ies"}`);
+  return parts.length ? parts.join(", ") : null;
+}

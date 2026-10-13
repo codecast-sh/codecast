@@ -72,3 +72,18 @@ export function clearPromptHolds(): void {
   expiries.clear();
   holds.clear();
 }
+
+// "Send anyway": the person read the screen a message was held on and chose
+// to deliver it past the dialog check. The pending row carries the choice
+// (delivery_force); each scan copies it here by message id, where the paste
+// path reads it without a new parameter on every delivery route.
+const forcedPastDialog = new Set<string>();
+
+export function setForcedPastDialog(messageId: string, forced: boolean): void {
+  if (forced) forcedPastDialog.add(messageId);
+  else forcedPastDialog.delete(messageId);
+}
+
+export function isForcedPastDialog(messageId: string | undefined): boolean {
+  return !!messageId && forcedPastDialog.has(messageId);
+}

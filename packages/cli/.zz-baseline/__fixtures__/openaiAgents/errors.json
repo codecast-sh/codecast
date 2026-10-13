@@ -1,0 +1,36 @@
+{
+ "invalid_key": {
+  "status": 401,
+  "body": {
+   "error": {
+    "message": "Incorrect API key provided: sk-proj-******************0000. You can find your API key at https://platform.openai.com/account/api-keys.",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key",
+    "param": null
+   },
+   "status": 401
+  }
+ },
+ "invalid_beta": {
+  "status": 400,
+  "body": {
+   "error": {
+    "type": "invalid_beta",
+    "code": "invalid_beta",
+    "message": "To access the Agents API, set the 'OpenAI-Beta' header to 'agents=v1'.",
+    "param": null
+   }
+  }
+ },
+ "not_found": {
+  "status": 404,
+  "body": {
+   "error": {
+    "type": "not_found_error",
+    "code": "not_found_error",
+    "message": "No managed agent resource found: sess_doesnotexist",
+    "param": null
+   }
+  }
+ }
+}

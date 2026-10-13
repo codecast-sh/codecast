@@ -1,0 +1,293 @@
+{
+ "items": [
+  {
+   "id": "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45",
+   "title": "List top-level directories and read package.json",
+   "has_generated_title": true,
+   "updated_at": 1790724360.440929,
+   "created_at": 1790724338.827056,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_6abc48f2d3b0832e9e4bb4b303d1bc45~assttrn_e_6abc48f3df90832e8e63b8c75f9e2116",
+     "turn_status": "completed",
+     "diff_stats": null,
+     "sibling_turn_ids": [],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "qa",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "qa"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": []
+  },
+  {
+   "id": "task_e_6abc46a0eecc832eaa9d4fd8533529f9",
+   "title": "Add codecast spike comment to README.md",
+   "has_generated_title": true,
+   "updated_at": 1790724309.431975,
+   "created_at": 1790723744.932951,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_6abc46a0eecc832eaa9d4fd8533529f9~assttrn_e_6abc46a1f7c4832eb1e4d2b13b688ead",
+     "turn_status": "completed",
+     "diff_stats": {
+      "files_modified": 1,
+      "lines_added": 1,
+      "lines_removed": 0
+     },
+     "sibling_turn_ids": [
+      "task_e_6abc46a0eecc832eaa9d4fd8533529f9~assttrn_e_6abc46a1f7d4832e893b61a3abf5b95e"
+     ],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "pr",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "pr"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": [
+    {
+     "id": "github-100000001-18",
+     "assistant_turn_id": "task_e_6abc46a0eecc832eaa9d4fd8533529f9~assttrn_e_6abc46a1f7c4832eb1e4d2b13b688ead",
+     "pull_request": {
+      "number": 18,
+      "url": "https://github.com/acme/example/pull/18",
+      "state": "open",
+      "merged": false,
+      "mergeable": false,
+      "draft": true,
+      "title": "docs: add codecast spike marker",
+      "body": "### Motivation\n- Add a simple Codecast spike marker to the repository README so the presence of the spike is recorded in the project documentation.\n\n### Description\n- Appended the HTML comment `<!-- codecast spike -->` to the end of `README\u2026",
+      "base": "main",
+      "head": "codex/add-codecast-spike-comment-to-readme.md",
+      "base_sha": "665c3aa023f2217806d0261adbaa14031c69bf79",
+      "head_sha": "e606c5a0df849aaedb2fca231a1a9a2fa33107af",
+      "head_repo_id": 100000001,
+      "head_repo_full_name": "acme/example",
+      "merge_commit_sha": null,
+      "comments": null,
+      "diff": null,
+      "user": {
+       "login": "acme",
+       "name": "acme",
+       "email": "person@example.com",
+       "avatar_url": "",
+       "id": 10001
+      },
+      "commits": 1,
+      "changed_files": 1,
+      "additions": 1,
+      "deletions": 0
+     },
+     "codex_updated_sha": "e606c5a0df849aaedb2fca231a1a9a2fa33107af"
+    }
+   ]
+  },
+  {
+   "id": "task_e_6abc46426170832eb0c0c0295e10bfe3",
+   "title": "Identify project description from README",
+   "has_generated_title": true,
+   "updated_at": 1790723740.13592,
+   "created_at": 1790723650.380744,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_6abc46426170832eb0c0c0295e10bfe3~assttrn_e_6abc469446ac832e82447903b3bb05d1",
+     "turn_status": "completed",
+     "diff_stats": null,
+     "sibling_turn_ids": [],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "qa",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "qa"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": []
+  },
+  {
+   "id": "task_e_68a9ee23c274832ead7c2cafefe64e56",
+   "title": "Migrate backend to responses API and Agentkit AI",
+   "has_generated_title": true,
+   "updated_at": 1756242296.948639,
+   "created_at": 1755967011.759773,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_68a9ee23c274832ead7c2cafefe64e56~assttrn_e_68ae1b3ef17c832e9366e9f5791b746e",
+     "turn_status": "completed",
+     "diff_stats": {
+      "files_modified": 9,
+      "lines_added": 3424,
+      "lines_removed": 418
+     },
+     "sibling_turn_ids": [],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "pr",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "pr"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": [
+    {
+     "id": "github-100000001-16",
+     "assistant_turn_id": "task_e_68a9ee23c274832ead7c2cafefe64e56~assttrn_e_68ae1b3ef17c832e9366e9f5791b746e",
+     "pull_request": {
+      "number": 16,
+      "url": "https://github.com/acme/example/pull/16",
+      "state": "open",
+      "merged": false,
+      "mergeable": false,
+      "draft": false,
+      "title": "feat: migrate backend to responses API with agentkit",
+      "body": "## Summary\n- add OpenAI Responses API client configured for hosted code interpreter tool\n- implement Agentkit agent converting custom tools into OpenAI functions and handling tool calls\n- migrate AI tests to exercise Responses API client and \u2026",
+      "base": "main",
+      "head": "codex/migrate-backend-to-responses-api-and-agentkit-ai",
+      "base_sha": "fb4a03d22c71eec2b6cee9fd149880643f504ed9",
+      "head_sha": "59132a8c9154b433a81e26c87d271be37586f594",
+      "head_repo_id": null,
+      "head_repo_full_name": null,
+      "merge_commit_sha": null,
+      "comments": null,
+      "diff": null,
+      "user": {
+       "login": "acme",
+       "name": "acme",
+       "email": "person@example.com",
+       "avatar_url": "",
+       "id": null
+      },
+      "commits": null,
+      "changed_files": null,
+      "additions": null,
+      "deletions": null
+     },
+     "codex_updated_sha": "59132a8c9154b433a81e26c87d271be37586f594"
+    }
+   ]
+  },
+  {
+   "id": "task_e_68a2281944ac832ebf254a91186bd800",
+   "title": "Implement web search feature",
+   "has_generated_title": true,
+   "updated_at": 1755975979.330325,
+   "created_at": 1755457561.268341,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_68a2281944ac832ebf254a91186bd800~assttrn_e_68a2281a19ec832e834e17ce8a40d492",
+     "turn_status": "completed",
+     "diff_stats": {
+      "files_modified": 2,
+      "lines_added": 16,
+      "lines_removed": 6
+     },
+     "sibling_turn_ids": [
+      "task_e_68a2281944ac832ebf254a91186bd800~assttrn_e_68a2281a19f0832e927e21df707ad6d1",
+      "task_e_68a2281944ac832ebf254a91186bd800~assttrn_e_68a2281a19f4832e9533b1a4d92f2f4a"
+     ],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "pr",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "pr"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": [
+    {
+     "id": "github-100000001-15",
+     "assistant_turn_id": "task_e_68a2281944ac832ebf254a91186bd800~assttrn_e_68a2281a19f4832e9533b1a4d92f2f4a",
+     "pull_request": {
+      "number": 15,
+      "url": "https://github.com/acme/example/pull/15",
+      "state": "open",
+      "merged": false,
+      "mergeable": false,
+      "draft": false,
+      "title": "feat: add web search toggle and support",
+      "body": "## Summary\n- add user-level web search toggle in settings\n- wire web search tool to Anthropic API and assistant configuration\n- expose store methods for enabling web search\n\n## Testing\n- `npm test` *(fails: Missing script \"test\")*\n\n\n------\n\u2026",
+      "base": "main",
+      "head": "codex/implement-web-search-feature",
+      "base_sha": "fb4a03d22c71eec2b6cee9fd149880643f504ed9",
+      "head_sha": "773a596336132f95798243876fb198785ec009e3",
+      "head_repo_id": null,
+      "head_repo_full_name": null,
+      "merge_commit_sha": null,
+      "comments": null,
+      "diff": null,
+      "user": {
+       "login": "acme",
+       "name": "acme",
+       "email": "person@example.com",
+       "avatar_url": "",
+       "id": null
+      },
+      "commits": null,
+      "changed_files": null,
+      "additions": null,
+      "deletions": null
+     },
+     "codex_updated_sha": "773a596336132f95798243876fb198785ec009e3"
+    }
+   ]
+  },
+  {
+   "id": "task_e_686f4dec06b0832e851b4559d242534c",
+   "title": "Create tree-like view in chat UI",
+   "has_generated_title": true,
+   "updated_at": 1752125461.199925,
+   "created_at": 1752124908.026274,
+   "task_status_display": {
+    "latest_turn_status_display": {
+     "turn_id": "task_e_686f4dec06b0832e851b4559d242534c~assttrn_e_686f4dedf5b4832e8cce6df5e34543ed",
+     "turn_status": "completed",
+     "diff_stats": {
+      "files_modified": 3,
+      "lines_added": 87,
+      "lines_removed": 18
+     },
+     "sibling_turn_ids": [
+      "task_e_686f4dec06b0832e851b4559d242534c~assttrn_e_686f4dedf5c0832ea2b97e766e5a2b79",
+      "task_e_686f4dec06b0832e851b4559d242534c~assttrn_e_686f4dedf5c4832e9cfd69799b30f67b"
+     ],
+     "image_asset_pointer_citations": null,
+     "issue_counts": null,
+     "intent": "pr",
+     "cancellation_requested_at": null
+    },
+    "environment_label": "acme/example",
+    "branch_name": "main",
+    "fix_task_id": null,
+    "initial_intent": "pr"
+   },
+   "archived": false,
+   "has_unread_turn": false,
+   "pull_requests": []
+  }
+ ],
+ "cursor": "+RID:~G4U-AJOIzhkjDVMDAFAgBQ==#RT:1#TRC:6#RTD:FFMNeBmc06hP2994zep3KwV2dGZzLnBYWFJCSGhCU3hvQ2VmY0dKbHpIVmt1SwAFdnRmcy5wWFhSQkhoQlN4b0NlZmNHSmx6SFZrdUsABUJkZHB2b3VWdGZzVXBEdnNzZm91RHBlZlVidGxGeXVmc29ibQAD+szOzMnRzsfRzc6qzsnEzM3EysbQzszIx8jG08\u2026"
+}

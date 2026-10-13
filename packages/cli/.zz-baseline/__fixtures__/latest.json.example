@@ -1,0 +1,27 @@
+{
+  "version": "1.1.153",
+  "released": "2026-09-23T02:12:37Z",
+  "sourceCommit": "76d3f5c4330569b8cee14542764b92eb677f445e",
+  "binaries": {
+    "darwin-arm64": {
+      "url": "https://dl.codecast.sh/cli/releases/v1.1.153/76d3f5c4330569b8cee14542764b92eb677f445e/codecast-darwin-arm64",
+      "sha256": "ebc0e49ccb976064c09135a99f9aa2e5e699e0a28b0ad5c37dba1a757bb85447"
+    },
+    "darwin-x64": {
+      "url": "https://dl.codecast.sh/cli/releases/v1.1.153/76d3f5c4330569b8cee14542764b92eb677f445e/codecast-darwin-x64",
+      "sha256": "b789aa1bfe9a00150755ff2357aa616398d4b506b3d9e9d21a83913a1ac2b471"
+    },
+    "linux-arm64": {
+      "url": "https://dl.codecast.sh/cli/releases/v1.1.153/76d3f5c4330569b8cee14542764b92eb677f445e/codecast-linux-arm64",
+      "sha256": "2dd36e7165fc4f6289a99a99dc40098f74bf468dc019b250e6b702390c41dcd8"
+    },
+    "linux-x64": {
+      "url": "https://dl.codecast.sh/cli/releases/v1.1.153/76d3f5c4330569b8cee14542764b92eb677f445e/codecast-linux-x64",
+      "sha256": "c63eeb2456918c7c8dd38a5afd7c8fb50118c7ef63795dd98b5b6af074895a66"
+    },
+    "windows-x64": {
+      "url": "https://dl.codecast.sh/cli/releases/v1.1.153/76d3f5c4330569b8cee14542764b92eb677f445e/codecast-windows-x64.exe",
+      "sha256": "b363dfd7bbad9ec5d89f9a2233da50e30744cd92e75da1ceb2e3337d3499dbb6"
+    }
+  }
+}

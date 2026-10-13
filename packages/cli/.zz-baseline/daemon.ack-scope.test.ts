@@ -1,0 +1,93 @@
+import { describe, expect, test } from "bun:test";
+import {
+  clearMessageDeliveryStateForConversation,
+  collectPastedInjectedIds,
+  markInjectedBestEffort,
+} from "./daemon.js";
+
+// DEC-01 (docs/architecture/local-first-sync-test-matrix.md, DAEMON section):
+// the injected-ack the daemon fires after syncing a user turn is scoped to the
+// rows THIS process actually pasted. collectPastedInjectedIds is that scope —
+// it must report exactly the resolved injections of the one conversation, so a
+// historical user-turn echo (auto-resume resyncing a fresh JSONL from position
+// 0) can never terminalize a row this daemon cannot vouch for.
+
+const okSync = () => ({
+  updateMessageStatus: async (_: { messageId: string; status: string }) => {},
+});
+
+describe("collectPastedInjectedIds", () => {
+  test("reports a pasted message for its conversation and no other", async () => {
+    await markInjectedBestEffort(okSync(), "m_scope_1", 5000, { conversationId: "conv_scope_a", retryDelaysMs: [], pasteVerified: true });
+    await markInjectedBestEffort(okSync(), "m_scope_2", 5000, { conversationId: "conv_scope_b", retryDelaysMs: [], pasteVerified: true });
+
+    expect(collectPastedInjectedIds("conv_scope_a")).toEqual(["m_scope_1"]);
+    expect(collectPastedInjectedIds("conv_scope_b")).toEqual(["m_scope_2"]);
+    expect(collectPastedInjectedIds("conv_scope_other")).toEqual([]);
+
+    clearMessageDeliveryStateForConversation("conv_scope_a");
+    clearMessageDeliveryStateForConversation("conv_scope_b");
+  });
+
+  test("a fresh process (no pastes recorded) vouches for nothing", () => {
+    expect(collectPastedInjectedIds("conv_scope_fresh")).toEqual([]);
+  });
+
+  test("a pre-paste mark vouches nothing until the paste is verified", async () => {
+    // The mark lands BEFORE the guard and the paste; an ack on it would
+    // terminalize a row whose paste was refused (a lost cast send, 2026-09-08).
+    await markInjectedBestEffort(okSync(), "m_scope_pre", 5000, { conversationId: "conv_scope_pre", retryDelaysMs: [] });
+    expect(collectPastedInjectedIds("conv_scope_pre")).toEqual([]);
+    await markInjectedBestEffort(okSync(), "m_scope_pre", 5000, { conversationId: "conv_scope_pre", retryDelaysMs: [], pasteVerified: true });
+    expect(collectPastedInjectedIds("conv_scope_pre")).toEqual(["m_scope_pre"]);
+  });
+
+  test("the verified mark carries the paste_verified stamp to the server", async () => {
+    const writes: any[] = [];
+    const sync = { updateMessageStatus: async (args: any) => { writes.push(args); } };
+    await markInjectedBestEffort(sync as any, "m_scope_stamp", 5000, { conversationId: "conv_scope_stamp", retryDelaysMs: [] });
+    await markInjectedBestEffort(sync as any, "m_scope_stamp", 5000, { conversationId: "conv_scope_stamp", retryDelaysMs: [], pasteVerified: true });
+    expect(writes.map(w => !!w.pasteVerified)).toEqual([false, true]);
+  });
+
+  test("a pane-death clear withdraws the vouching for confirmed pastes", async () => {
+    await markInjectedBestEffort(okSync(), "m_scope_3", 5000, { conversationId: "conv_scope_c", retryDelaysMs: [], pasteVerified: true });
+    expect(collectPastedInjectedIds("conv_scope_c")).toEqual(["m_scope_3"]);
+    clearMessageDeliveryStateForConversation("conv_scope_c");
+    // Confirmed entry cleared → the row was reset to pending server-side; the
+    // daemon must no longer vouch it as pasted.
+    expect(collectPastedInjectedIds("conv_scope_c")).toEqual([]);
+  });
+
+  test("an UNCONFIRMED paste keeps its vouching through a clear (storm guard parity)", async () => {
+    const jammed = { updateMessageStatus: (_: unknown) => new Promise<void>(() => {}) };
+    await markInjectedBestEffort(jammed as any, "m_scope_4", 10, { conversationId: "conv_scope_d", retryDelaysMs: [], pasteVerified: true });
+    clearMessageDeliveryStateForConversation("conv_scope_d");
+    // The unconfirmed entry survives the clear (its row is still `pending`
+    // server-side), so it remains in the vouch list — harmless: the scoped ack
+    // only touches rows that are `injected` server-side.
+    expect(collectPastedInjectedIds("conv_scope_d")).toEqual(["m_scope_4"]);
+  });
+});
+
+// A resume/switch/fork handler clears a conversation's delivery state after the
+// new pane is up. That clear must never drop a delivery that is still running:
+// the delivery joined the same in-flight resume, will paste into the new pane,
+// and removes its own in-flight entry in `finally`. Dropping it let the poller
+// start a second delivery of the same row mid-paste (a fork's seed landed twice,
+// 2026-09-05). Source-level guard: the clear reads messagesInFlight but never
+// deletes from it, and never releases the per-conversation delivery lock.
+describe("clearMessageDeliveryStateForConversation leaves running deliveries alone", () => {
+  test("never deletes in-flight entries or the conversation delivery lock", async () => {
+    const fs = await import("fs");
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf("export function clearMessageDeliveryStateForConversation(");
+    const end = source.indexOf("\n}\n", start);
+    const body = source.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(body).toContain("messagesInFlight");
+    expect(body).not.toContain("messagesInFlight.delete");
+    expect(body).not.toContain("conversationDeliveryActive.delete");
+    expect(body).toContain("injectedMessageTs.delete");
+  });
+});

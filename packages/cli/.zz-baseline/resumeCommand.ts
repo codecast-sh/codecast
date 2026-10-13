@@ -1,0 +1,440 @@
+import * as crypto from "crypto";
+import * as fs from "fs";
+import * as path from "path";
+import {
+  estimateClaudeImportTokens,
+  chooseClaudeTailMessagesForTokenBudget,
+  type ExportResult,
+} from "./jsonlGenerator.js";
+import { AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, findModelOption, type AgentClientId, localAgentClient } from "@codecast/shared/contracts";
+import { appendModelEffortFlags } from "./launchCommand.js";
+
+import { CLAUDE_UUID_RE } from "./syncScope.js";
+export { CLAUDE_UUID_RE };
+
+// opencode session ids are `ses_` followed by base62 — the ONLY shape a real id
+// takes (verified against a live ~/.local/share/opencode/opencode.db: all 37 rows
+// match, every one length 30). The `id` column is externally writable (any process
+// can insert a row), so the DB watcher enforces this exact shape at ingest and the
+// resume path enforces it again before building a command around the id.
+export const OPENCODE_SESSION_ID_RE = /^ses_[a-zA-Z0-9]+$/;
+
+// A session id with no shell metacharacters and no whitespace — the shape every
+// real client id already has (UUIDs, claude `agent-`/`forked-` ids, codex/cursor
+// ids). A resume command interpolates the id verbatim into a line the daemon TYPES
+// INTO A LIVE SHELL, so an id outside this set could inject arbitrary shell syntax
+// (`;`, `|`, backticks, `$(…)`, spaces). Deliberately tight: a session id never
+// legitimately carries any of those.
+const SHELL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * True when `sessionId` is a shape safe to build `agentType`'s resume command
+ * around. The resume path types `<binary> … <id>` into a shell, so a poisoned id
+ * (from a crafted transcript filename or a spoofed store row that reached convex
+ * as the authoritative session_id) must be refused BEFORE construction — this is
+ * the backstop that covers rows already poisoned before the ingest-boundary
+ * validation existed. Valid ids pass byte-identically, so nothing real changes.
+ *
+ *  - opencode: exact `ses_<base62>` — its DB row is externally writable, so
+ *    shell-safety alone is too loose; require the one real shape.
+ *  - grok: exact UUID. Shell-safety alone is too loose here for a REASON beyond
+ *    injection: `grok --resume <non-UUID>` matches session TITLES for the cwd
+ *    case-insensitively, so a title-shaped id (a poisoned or foreign store row —
+ *    the watcher and spawn both mint UUIDs) would silently resume a DIFFERENT
+ *    session on a unique title match. Only the one real shape may reach the
+ *    command.
+ *  - muse: exact UUID, same reason as grok — `muse resume <session-ref>`
+ *    accepts a Session Name as well as a UUID, so a name-shaped id could
+ *    silently resume a different session.
+ *  - gemini: always true — its resume ignores the id (`gemini --resume latest`),
+ *    so the id is never interpolated and there is nothing to inject through.
+ *  - claude / codex / cursor / pi: the id IS interpolated, so require the
+ *    shell-safe shape (covers UUIDs and claude's `agent-`/`forked-` ids,
+ *    refuses every injection payload).
+ */
+export function isValidResumeSessionId(agentType: AgentClientId, sessionId: string): boolean {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return false;
+  if (agentType === "opencode") return OPENCODE_SESSION_ID_RE.test(sessionId);
+  if (agentType === "grok") return CLAUDE_UUID_RE.test(sessionId);
+  if (agentType === "muse") return CLAUDE_UUID_RE.test(sessionId);
+  if (agentType === "gemini") return true;
+  return SHELL_SAFE_SESSION_ID_RE.test(sessionId);
+}
+
+// Single knob for how much of a long conversation survives reconstitution into a
+// local Claude session. THRESHOLD = "trim if the import is estimated above this";
+// TARGET = "trim down to roughly this". Sized to leave ~40k of headroom under a
+// 200k window (system prompt + tools + the first response), and far more on the
+// 1M-context models, while still keeping the session small enough that /compact
+// works. Every reconstitution/import/fork site imports these — don't redeclare.
+export const CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS = 180_000;
+export const CLAUDE_AUTO_TRIM_TARGET_TOKENS = 160_000;
+export const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
+
+export interface RewriteSubagentJsonlResult {
+  resumeId: string;
+  newJsonlPath?: string;
+  rewrote: boolean;
+}
+
+/**
+ * Copy a session JSONL next to itself under a new session id, rewriting the
+ * per-line `sessionId` fields to match. Message content bytes are untouched,
+ * so the resumed session's prompt prefix — and Claude's server-side prompt
+ * cache — stay identical to the source. Trims any partially-flushed trailing
+ * line (the source may be a LIVE session mid-append). Idempotent: an existing
+ * target is returned as-is. Returns the new path, or null when the source is
+ * missing.
+ */
+export function copyJsonlAsSession(
+  sourceJsonlPath: string,
+  sourceSessionId: string,
+  targetSessionId: string,
+): string | null {
+  if (!fs.existsSync(sourceJsonlPath)) return null;
+  const newPath = path.join(path.dirname(sourceJsonlPath), `${targetSessionId}.jsonl`);
+  if (fs.existsSync(newPath)) return newPath;
+  let raw = fs.readFileSync(sourceJsonlPath, "utf-8");
+  // A live writer may have flushed a partial tail line. Drop it only if it
+  // isn't complete JSON — a final line that merely lacks its newline is kept.
+  const lastNewline = raw.lastIndexOf("\n");
+  if (lastNewline !== raw.length - 1) {
+    const tail = raw.slice(lastNewline + 1);
+    try {
+      JSON.parse(tail);
+    } catch {
+      raw = raw.slice(0, lastNewline + 1);
+    }
+  }
+  const rewritten = raw.replace(
+    new RegExp(`"sessionId"\\s*:\\s*"${sourceSessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
+    `"sessionId":"${targetSessionId}"`,
+  );
+  fs.writeFileSync(newPath, rewritten);
+  return newPath;
+}
+
+/**
+ * Subagent sessions use non-UUID IDs that `claude --resume` rejects. Copy the
+ * JSONL to a new UUID-named file with all `sessionId` fields rewritten so it
+ * becomes resumable. Returns the original ID unchanged when it's already a UUID
+ * or when the source JSONL is missing.
+ */
+export function rewriteSubagentJsonlToUuid(
+  sessionId: string,
+  sourceJsonlPath: string,
+): RewriteSubagentJsonlResult {
+  if (CLAUDE_UUID_RE.test(sessionId)) return { resumeId: sessionId, rewrote: false };
+  const newUuid = crypto.randomUUID();
+  const newPath = copyJsonlAsSession(sourceJsonlPath, sessionId, newUuid);
+  if (!newPath) return { resumeId: sessionId, rewrote: false };
+  return { resumeId: newUuid, newJsonlPath: newPath, rewrote: true };
+}
+
+/**
+ * True for session ids minted by the server-side fork/handoff flow
+ * (`forked-<originalSessionId>-<uuid>`, see convex conversations.ts). A JSONL
+ * under such an id only ever exists locally as a daemon-written reconstitution
+ * artifact — the live transcript is the UUID copy made for `claude --resume`.
+ */
+export function isForkArtifactSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("forked-");
+}
+
+/**
+ * Delete the source JSONL left behind after copying a fork artifact to its
+ * resumable UUID. Left on disk, the sync watcher rediscovers it as an unknown
+ * session (its conversation mapping just moved to the UUID copy) and mints a
+ * frozen doppelgänger conversation that receives input but never output.
+ * Subagent (`agent-*`) sources are real transcripts and are left alone.
+ */
+export function removeForkArtifactJsonl(sessionId: string, sourceJsonlPath: string): boolean {
+  if (!isForkArtifactSessionId(sessionId)) return false;
+  try {
+    fs.unlinkSync(sourceJsonlPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True for a transcript written by a Workflow-tool agent:
+ * `<projectDir>/<hostSession>/subagents/workflows/<wf_run>/<file>.jsonl`.
+ * Such an agent runs inside its host claude process and hands its result to
+ * the orchestrator script, which replays it from cache on resume. The
+ * transcript is never a session of its own: `claude --resume` on it spawns a
+ * standalone copy that runs the brief again for nobody (the 2026-08-20
+ * doppelgänger fleet: 53 copies executing stale briefs in the shared checkout).
+ * Callers use this to refuse the standalone resume.
+ */
+export function isWorkflowAgentTranscriptPath(filePath: string): boolean {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  return idx >= 0 && parts[idx + 1] === "workflows" && idx + 3 < parts.length;
+}
+
+/**
+ * True when `flags` already specifies a Claude permission mode flag. Used to
+ * avoid stacking conflicting permission settings.
+ */
+export function hasClaudePermissionFlag(flags: string): boolean {
+  return flags.includes("--dangerously-skip-permissions")
+    || flags.includes("--permission-mode")
+    || flags.includes("--allow-dangerously-skip-permissions");
+}
+
+/**
+ * Combine user-configured `claude_args` with permission flags into a single
+ * flag string, skipping additions that would duplicate or conflict with what's
+ * already present.
+ *
+ * @param baseArgs    User-configured base flags (e.g. config.claude_args).
+ * @param permFlags   Permission flags to apply if none are already set.
+ * @param jsonlBypass When true (e.g. the resumed JSONL was recorded under
+ *                    bypassPermissions), force `--dangerously-skip-permissions`
+ *                    before applying `permFlags`.
+ */
+export function combineClaudeResumeFlags(
+  baseArgs: string | undefined | null,
+  permFlags: string | null | undefined,
+  jsonlBypass: boolean = false,
+): string {
+  let flags = baseArgs || "";
+  if (jsonlBypass && !flags.includes("--dangerously-skip-permissions")) {
+    flags = flags ? flags + " --dangerously-skip-permissions" : "--dangerously-skip-permissions";
+  }
+  if (permFlags && !hasClaudePermissionFlag(flags)) {
+    flags = flags ? flags + " " + permFlags : permFlags;
+  }
+  return flags;
+}
+
+/**
+ * Resume command for the agents whose resume is a single self-contained CLI
+ * invocation with no transcript surgery: every client but claude. Returns null
+ * for claude, whose resume needs the UUID-rewrite / JSONL-relocation / model+effort
+ * recovery machinery the daemon runs inline. Cursor lives here (not the claude
+ * fall-through) so a cursor session resumes with its own binary — cursor-agent
+ * resumes a chat by id — instead of building a `claude --resume` and running
+ * Claude's repair machinery against a cursor transcript.
+ *
+ * codexArgs/codexPermFlags and grokArgs/grokPermFlags are the raw config values;
+ * those two clients' resumes append them. Grok's permission mode is a LAUNCH
+ * flag, not per-session state (nothing in the session dir records it), so a
+ * resume that drops the flags restarts the session in grok's default Ask mode —
+ * and a managed grok cannot answer TUI permission prompts (panePromptMonitoring:
+ * false), so the first tool call would park it forever. gemini and cursor take
+ * no configured flags today; cursor carries --force like its launch.
+ *
+ * The base command per client is the single source of truth in the registry
+ * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the
+ * codex/grok/muse config flags on top and gates claude out.
+ */
+const RESUME_CARRIES_LAUNCH_FLAGS: ReadonlySet<AgentClientId> = new Set(["codex", "grok", "muse", "cursor"]);
+
+export function buildNonClaudeResumeCommand(
+  agentType: AgentClientId,
+  sessionId: string,
+  opts: {
+    /** The client's configured launch args (agent_args) and permission
+     *  flags; applied only for clients whose mode rides the command line. */
+    args?: string | null;
+    permFlags?: string | null;
+    model?: string;
+    effort?: string;
+    /** Launch the client's NATIVE fork of this parent instead of a plain resume:
+     *  the registry `forkCmd` copies the parent's session state under
+     *  `sessionId`. Only clients declaring `forkCmd` can take it. */
+    forkFromSessionId?: string;
+    /** grok: a file holding the stable-context feed, appended to the system
+     *  prompt through `--rules "$(cat <file>)"` (see grokStableRulesFragment). */
+    stableRulesFile?: string;
+  } = {},
+): string | null {
+  if (agentType === "claude") return null;
+  const client = localAgentClient(agentType);
+  let base: string;
+  if (opts.forkFromSessionId) {
+    if (!client.forkCmd) throw new Error(`${agentType} has no native fork command`);
+    base = client.forkCmd(opts.forkFromSessionId, sessionId);
+  } else {
+    base = client.resumeCmd(sessionId);
+  }
+  const modelFlags: string[] = [];
+  appendModelEffortFlags(modelFlags, {
+    agentType,
+    modelAlias: opts.model ? findModelOption(agentType, opts.model)?.cliAlias : undefined,
+    requestedEffort: opts.effort,
+  });
+  const withFlags = (args?: string | null, permFlags?: string | null): string => {
+    let extra = args || "";
+    if (permFlags) extra = extra ? extra + " " + permFlags : permFlags;
+    return `${base}${extra ? " " + extra : ""}${modelFlags.length ? " " + modelFlags.join(" ") : ""}`;
+  };
+  // These clients keep their approval mode on the command line, never in the
+  // session store, so a resume carries the same flags as launch.
+  if (agentType === "grok") return withFlags(opts.args, opts.permFlags) + grokStableRulesFragment(opts.stableRulesFile);
+  if (RESUME_CARRIES_LAUNCH_FLAGS.has(agentType)) return withFlags(opts.args, opts.permFlags);
+  return withFlags();
+}
+
+// A path the shell fragment below can carry unquoted: daemon-generated, under
+// ~/.codecast, no whitespace or shell metacharacters.
+const STABLE_RULES_PATH_RE = /^[A-Za-z0-9_./-]+$/;
+
+/**
+ * grok's launch-time context channel. Its hooks cannot inject context (SessionStart
+ * stdout is ignored), but `--rules <TEXT>` appends to the system prompt — the same
+ * slot codex fills through `developerInstructions`. The feed can run to many KB,
+ * so the command line carries a `$(cat <file>)` substitution the pane's shell
+ * expands, never the text itself (the daemon's argv allowlist would reject it,
+ * and a multi-KB typed argument is fragile). Empty when no feed applies.
+ */
+export function grokStableRulesFragment(file: string | undefined): string {
+  if (!file) return "";
+  if (!STABLE_RULES_PATH_RE.test(file)) throw new Error(`stable rules path is not shell-safe: ${file}`);
+  return ` --rules "$(cat ${file})"`;
+}
+
+/**
+ * Which agent a resume dispatches on, from the explicit hint plus whatever
+ * findSessionFile returned for the local transcript. An explicit cursor, opencode,
+ * pi, grok, or muse hint is trusted OVER the local file: cursor and opencode own their
+ * session stores (SQLite) so there is no local JSONL to detect, and a pi, grok, or
+ * muse transcript may be absent on a fresh device (cross-device resume) — in all cases
+ * the file is either missing or, after a bogus reconstitution, claude-labeled, and
+ * without trusting the hint the resume falls through to `claude --resume` and runs
+ * Claude's repair machinery against a session that never had a Claude transcript.
+ * (codex/gemini hints and everything else keep the old behavior.)
+ */
+export function resolveResumeAgentType(
+  agentTypeHint: AgentClientId | undefined,
+  sessionFileAgentType: AgentClientId | undefined,
+): AgentClientId {
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok" || agentTypeHint === "muse") return agentTypeHint;
+  return sessionFileAgentType ?? "claude";
+}
+
+/**
+ * The agents `cast resume --as` and `cast fork --resume --as` can target. Both
+ * reconstitute a conversation into a fresh LOCAL session, and only Claude and Codex
+ * have transcript generators (generateClaudeCodeJsonl / generateCodexJsonl) for
+ * that. Any other value would silently fall through to a fabricated Claude JSONL +
+ * `claude --resume` — so both commands validate `--as` against this list upfront.
+ */
+export const RECONSTITUTION_TARGET_AGENTS = ["claude", "codex"] as const;
+
+/** True when an `--as <agent>` value names an agent local reconstitution supports. */
+export function isReconstitutionTarget(agent: string | undefined | null): boolean {
+  return !!agent && (RECONSTITUTION_TARGET_AGENTS as readonly string[]).includes(agent.toLowerCase());
+}
+
+/**
+ * tmux session-name prefix per agent for resume-named sessions. Each client gets
+ * its own so panes stay greppable by client and never collide with claude's cc-.
+ * Cursor gets cu- rather than defaulting into claude's cc-. Sourced from the
+ * registry (AGENT_CLIENTS[agentType].tmuxPrefix) so the prefixes live in one place.
+ */
+export function resumeTmuxPrefix(agentType: AgentClientId): string {
+  return localAgentClient(agentType).tmuxPrefix;
+}
+
+/**
+ * Short id used in resume tmux names (`cc-resume-<shortId>`) and log lines.
+ * UUIDs keep the conventional 8-char prefix. Prefixed ids (agent-*, forked-*,
+ * session-*) need more: their first 8 chars are almost all prefix, so distinct
+ * sessions collapse onto one tmux name and each resume kills the other's pane
+ * (two workflow agents both mapped to "agent-a9" on 2026-07-16). The reaper's
+ * name fallback matches transcripts by startsWith, so a longer prefix stays
+ * compatible.
+ */
+export function resumeShortId(sessionId: string): string {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return `${sessionId.slice(0, 8)}-${sessionId.replaceAll("-", "").slice(-16)}`;
+  }
+  return CLAUDE_UUID_RE.test(sessionId) ? sessionId.slice(0, 8) : sessionId.slice(0, 16);
+}
+
+export function upgradedLegacyResumeTmuxName(tmuxName: string, sessionId: string): string | null {
+  if (!tmuxName.includes("-resume-")) return null;
+  const legacyShortId = sessionId.slice(0, 8);
+  const upgradedShortId = resumeShortId(sessionId);
+  if (legacyShortId === upgradedShortId || !tmuxName.endsWith(`-${legacyShortId}`)) return null;
+  return `${tmuxName.slice(0, -legacyShortId.length)}${upgradedShortId}`;
+}
+
+/**
+ * The tmux session name the daemon resumes an agent into. Lives here, beside
+ * the prefix table, because two sides now depend on the rule: the daemon BUILDS
+ * the name, and `cast restart --tmux` MATCHES it to attach the caller to the
+ * pane the resume created.
+ *
+ * The title slug is decoration for a human reading `tmux ls` — it comes from
+ * the transcript, so a caller without one still names the same pane family.
+ * That is why the id suffix, not the whole name, is the matchable part.
+ */
+export function resumeTmuxName(agentType: AgentClientId, sessionId: string, titleSlug?: string): string {
+  const prefix = resumeTmuxPrefix(agentType);
+  const shortId = resumeShortId(sessionId);
+  return titleSlug ? `${prefix}-resume-${titleSlug}-${shortId}` : `${prefix}-resume-${shortId}`;
+}
+
+/**
+ * Every tmux-name prefix a codecast-managed pane can carry, as `startsWith`
+ * fragments: one per client from the registry (`cc-`, `cx-`, `cu-`, `gm-`,
+ * `oc-`, `pi-`) plus `ct-`, the task-scheduler's pane prefix (taskScheduler.ts),
+ * which belongs to no client. The daemon's tmux-name filters — warm-restart
+ * recovery and live-session reuse — select codecast panes with these. Deriving
+ * the list from the registry (instead of a literal `cc-/cx-/gm-/ct-`) is what
+ * keeps a newly added client's resume panes from being silently dropped: before
+ * this, cursor/opencode/pi panes fell outside the hardcoded list and were never
+ * recovered or reused.
+ */
+export const MANAGED_TMUX_PREFIXES: string[] = [
+  ...Object.values(LOCAL_AGENT_CLIENTS).map((d) => `${d.tmuxPrefix}-`),
+  "ct-",
+];
+
+/** True when a tmux session name is a codecast-managed pane (any known prefix). */
+export function isManagedTmuxName(name: string): boolean {
+  return MANAGED_TMUX_PREFIXES.some((p) => name.startsWith(p));
+}
+
+/**
+ * True when codecast created this tmux session and may destroy it whole: the
+ * managed agent panes, workflow panes (`wf-`), and the wrapper's `codecast-`
+ * session. Anything else is a terminal the user made, which can still host an
+ * agent codecast tracks (a `claude` started by hand inside the user's own
+ * tmux) — that agent's process tree is ours to stop, the session is not.
+ */
+export function isCodecastCreatedTmuxName(name: string): boolean {
+  return isManagedTmuxName(name) || name.startsWith("wf-") || name.startsWith("codecast-");
+}
+
+/**
+ * Pick the auto-trim message count for reconstituting a Claude session from an
+ * export. Returns undefined when the export already fits comfortably in
+ * Claude's context window.
+ */
+export function chooseClaudeAutoTrim(data: ExportResult): number | undefined {
+  const estimatedTokens = estimateClaudeImportTokens(data);
+  if (estimatedTokens <= CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) return undefined;
+  return chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
+}
+
+/**
+ * Extract the first user message's `permissionMode` from a JSONL transcript
+ * head. Used by the daemon's auto-resume to preserve bypass when the original
+ * session was launched in bypass mode.
+ */
+export function extractJsonlPermissionMode(jsonlContent: string): string | undefined {
+  const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
+  if (!firstUserLine) return undefined;
+  try {
+    const parsed = JSON.parse(firstUserLine);
+    return typeof parsed.permissionMode === "string" ? parsed.permissionMode : undefined;
+  } catch {
+    return undefined;
+  }
+}

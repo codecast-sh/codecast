@@ -1,0 +1,345 @@
+/**
+ * Device identity for codecast.
+ *
+ * Every machine running codecast has a stable device_id. We derive it from
+ * the existing ~/.codecast/.machine_key (already created for token
+ * encryption) rather than introducing a new identity file — same lifetime,
+ * same 0600 secrecy, survives hostname renames.
+ *
+ * One failure mode of a file-derived identity: Migration Assistant (or any
+ * disk copy of ~/.codecast) duplicates the key, so two machines compute the
+ * SAME device_id and every conversation-ownership guard passes on both —
+ * duplicate replies and split-brain transcripts. Two independent guards catch
+ * this: machineKey.ts rotates the key itself when its hardware sidecar
+ * mismatches (splitting identity at the root, token decryption kept via the
+ * prev-key chain), and .device_binding.json records the hardware UUID the
+ * device id belongs to — on a mismatch the clone mints its own id; the
+ * original machine keeps the identity, so nothing in Convex moves.
+ *
+ * The remote Mac is "just another device": once it has a device_id and a
+ * daemon, a session owned by that device is indistinguishable from a local
+ * session except for which machine runs it.
+ */
+
+import { execFileAsync, execFileSync } from "../proc.js";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { getMachineKey, hardwareId } from "../machineKey.js";
+import { defaultConfigDir } from "../config/configDir.js";
+
+const DEVICE_BINDING_FILE = path.join(defaultConfigDir(), ".device_binding.json");
+const CONFIG_FILE = path.join(defaultConfigDir(), "config.json");
+
+let cachedDeviceId: string | null = null;
+let cachedHostname: string | null = null;
+let cachedLabel: string | null = null;
+
+export function resetHostnameForTests(): void {
+  cachedHostname = null;
+}
+
+/** Which hardware a device identity belongs to. Persisted as .device_binding.json. */
+export interface DeviceBinding {
+  hw: string;
+  id: string;
+}
+
+/**
+ * Pure identity policy (no I/O), so every branch is testable.
+ *
+ * - No hardware UUID available → trust whatever identity exists (binding or
+ *   legacy derivation); don't write a binding we can't verify later.
+ * - No binding yet → first run on this code: adopt the legacy id as-is and
+ *   record the hardware it lives on. Nothing changes for existing machines.
+ * - Binding matches this hardware → normal restart, keep the id.
+ * - Binding names OTHER hardware → ~/.codecast was disk-copied here
+ *   (Migration Assistant). Mint a fresh id for this machine; the source
+ *   machine keeps the original identity and its conversation ownership.
+ *
+ * Known gap, accepted: the binding file is the only record that a machine is
+ * a clone. Delete it (while .machine_key survives) and the next start
+ * re-adopts the shared legacy id — the pre-fix behavior. There is no other
+ * durable local place to keep that record, and grandfathering existing ids
+ * requires adopting when no binding exists.
+ */
+export function resolveDeviceIdentity(deps: {
+  hardwareUUID: string;
+  legacyId: string;
+  binding: DeviceBinding | null;
+  deriveCloneId: (hw: string) => string;
+}): { id: string; persist: DeviceBinding | null } {
+  const { hardwareUUID: hw, legacyId, binding, deriveCloneId } = deps;
+  if (!hw) return { id: binding?.id ?? legacyId, persist: null };
+  if (!binding) return { id: legacyId, persist: { hw, id: legacyId } };
+  if (binding.hw === hw) return { id: binding.id, persist: null };
+  const id = deriveCloneId(hw);
+  return { id, persist: { hw, id } };
+}
+
+/**
+ * Stable, opaque device id (16 hex chars) derived from the machine key
+ * (machineKey.ts — hardware-bound, rotates when the key file was cloned onto
+ * different hardware, e.g. by Migration Assistant) and additionally bound to
+ * this hardware via .device_binding.json (see resolveDeviceIdentity). Falls
+ * back to a hostname/platform/home hash if the key can't be read or created
+ * (mirrors tokenEncryption's legacyMachineId so we never throw here).
+ */
+export function deviceId(): string {
+  if (cachedDeviceId) return cachedDeviceId;
+  let seed: Buffer | string;
+  try {
+    seed = getMachineKey().secret;
+  } catch {
+    seed = `${os.hostname()}:${os.platform()}:${os.homedir()}`;
+  }
+  const { id, persist } = resolveDeviceIdentity({
+    hardwareUUID: hardwareId(),
+    legacyId: deriveDeviceId(seed, "codecast-device-id-v1"),
+    binding: readDeviceBinding(),
+    deriveCloneId: (hw) => deriveDeviceId(seed, "codecast-device-id-v2", hw),
+  });
+  if (persist) writeDeviceBinding(persist);
+  cachedDeviceId = id;
+  return id;
+}
+
+function deriveDeviceId(seed: Buffer | string, domain: string, extra = ""): string {
+  return crypto
+    .createHash("sha256")
+    .update(seed)
+    .update(extra)
+    .update(domain) // domain-separate from token encryption
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
+ * The id this machine most likely had before its machine key rotated: the
+ * first-run id of the pre-rotation key (.machine_key.prev). Undefined when
+ * the key never rotated. A best guess, not a record: a machine whose old id
+ * was itself a clone id (see resolveDeviceIdentity) had a different one.
+ */
+export function previousDeviceId(): string | undefined {
+  try {
+    const prev = getMachineKey().previousSecret;
+    return prev ? deriveDeviceId(prev, "codecast-device-id-v1") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readDeviceBinding(): DeviceBinding | null {
+  try {
+    const b = JSON.parse(fs.readFileSync(DEVICE_BINDING_FILE, "utf8"));
+    if (typeof b?.hw === "string" && typeof b?.id === "string" && b.hw && b.id) {
+      return { hw: b.hw, id: b.id };
+    }
+  } catch {}
+  return null;
+}
+
+function writeDeviceBinding(binding: DeviceBinding): void {
+  try {
+    fs.writeFileSync(DEVICE_BINDING_FILE, JSON.stringify(binding), { mode: 0o600 });
+    fs.chmodSync(DEVICE_BINDING_FILE, 0o600); // mode option only applies at creation
+  } catch {} // identity must never throw; worst case we re-adopt next start
+}
+
+/**
+ * The marker provisioning leaves on a cloud host, relative to $HOME. The
+ * launcher's environment (systemd, launchd) names the box remote for the
+ * daemon it starts; the marker names it remote for every other way a daemon
+ * comes up there — a `cast` command run in a session's shell that found no
+ * daemon and started one, a restart from a terminal — so the box never serves
+ * as a laptop because of who started its daemon.
+ */
+export const REMOTE_DEVICE_MARKER_REL = ".codecast/remote-device";
+const REMOTE_DEVICE_MARKER = path.join(defaultConfigDir(), "remote-device");
+let cachedRemoteMarker: boolean | null = null;
+
+/** The remote verdict from its two sources: the launch environment, and the marker on disk. */
+export function resolveRemoteDevice(input: { env: string | undefined; marker: boolean }): boolean {
+  return input.env === "1" || input.marker;
+}
+
+/**
+ * True when this process runs on a remote box (a cloud host). A remote device
+ * only serves conversations explicitly moved to it (owner == this device) — it
+ * must never adopt, resume, or spawn sessions on its own. The launch
+ * environment is read per call (tests flip it); the marker once per process.
+ */
+export function isRemoteDevice(): boolean {
+  if (cachedRemoteMarker === null) {
+    try {
+      cachedRemoteMarker = fs.existsSync(REMOTE_DEVICE_MARKER);
+      // A process launched as a remote device records it, so a daemon started
+      // later without the variable (a self-restart, a hand-run start over SSH)
+      // still knows. Without it a Mac host's daemon took itself for a laptop
+      // and froze on the window server it does not have (2026-10-05).
+      if (!cachedRemoteMarker && process.env.CODECAST_REMOTE_DEVICE === "1") {
+        fs.mkdirSync(path.dirname(REMOTE_DEVICE_MARKER), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(REMOTE_DEVICE_MARKER, "");
+        cachedRemoteMarker = true;
+      }
+    } catch {
+      cachedRemoteMarker = false;
+    }
+  }
+  return resolveRemoteDevice({ env: process.env.CODECAST_REMOTE_DEVICE, marker: cachedRemoteMarker });
+}
+
+/**
+ * The machine's stable name.
+ *
+ * On macOS, `os.hostname()` returns the *transient* kernel hostname, which the
+ * OS silently overwrites with whatever name the network hands out — a DHCP
+ * offer or a reverse-DNS lookup of the leased IP. Join a hotspot or share a LAN
+ * with a phone that once held your IP and your Mac starts reporting itself as
+ * "Xiaomi-12-Lite". The names macOS actually keeps for the machine survive
+ * this, so prefer them: the admin-set HostName if present, otherwise the
+ * Bonjour LocalHostName (derived from the Computer Name, never DHCP). Only fall
+ * back to os.hostname() if scutil is unavailable. Cached — hostname is stable
+ * for a process lifetime and the daemon restarts often enough.
+ *
+ * Linux/Windows keep os.hostname() — they don't adopt DHCP names this way.
+ */
+export function stableHostname(): string {
+  if (cachedHostname) return cachedHostname;
+  cachedHostname = resolveStableHostname({
+    platform: process.platform,
+    osHostname: () => os.hostname(),
+    scutil: scutilGet,
+  });
+  return cachedHostname;
+}
+
+export async function stableHostnameAsync(): Promise<string> {
+  if (cachedHostname) return cachedHostname;
+  if (process.platform === "darwin") {
+    for (const key of ["HostName", "LocalHostName"]) {
+      const name = await execFileAsync("/usr/sbin/scutil", ["--get", key], { timeout: 2000 })
+        .then(({ stdout }) => stdout.trim(), () => "");
+      if (name) return cachedHostname = name;
+    }
+  }
+  return cachedHostname = os.hostname();
+}
+
+/**
+ * Pure name-resolution policy (no I/O), so every branch is testable. On macOS,
+ * prefer the admin-set HostName, then the Bonjour LocalHostName; only the
+ * transient os.hostname() is vulnerable to DHCP renaming, so it's the last
+ * resort. Other platforms always use os.hostname().
+ */
+export function resolveStableHostname(deps: {
+  platform: NodeJS.Platform;
+  osHostname: () => string;
+  scutil: (key: "HostName" | "LocalHostName") => string;
+}): string {
+  if (deps.platform !== "darwin") return deps.osHostname();
+  return (
+    deps.scutil("HostName") ||
+    deps.scutil("LocalHostName") ||
+    deps.osHostname()
+  );
+}
+
+/** One scutil name field, or "" if unset/unavailable (e.g. HostName not set → exit 1). */
+function scutilGet(key: "HostName" | "LocalHostName"): string {
+  try {
+    return execFileSync("/usr/sbin/scutil", ["--get", key], {
+      encoding: "utf8",
+      timeout: 2000,
+      // HostName unset is the common case; scutil prints "HostName: not set"
+      // and exits 1. Discard its stderr so that noise never reaches our logs.
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Human-readable label, e.g. "macOS - Ashots-MacBook", or an explicit name when
+ * one is set.
+ *
+ * The derived form is right for a personal machine whose hostname is already a
+ * name a human chose. It is wrong for a provisioned box: a Scaleway Mac's
+ * hostname is its UUID, so it shows up everywhere as
+ * "macOS - 36563bd2-ab96-4045-8aec-894b84a2f66c" — in the device chip, in
+ * `cast remote hosts`, and in the reorientation notice a moved agent reads.
+ * An explicit label replaces the whole string (not just the hostname half), so
+ * a named machine reads as "Cloud Mac" rather than "macOS - Cloud Mac".
+ *
+ * Precedence: CODECAST_DEVICE_LABEL (one-off runs, launchd plists) then
+ * config.json `device_label` (durable, survives restarts and reboots).
+ * Cached like the hostname, so a change applies on the next daemon start.
+ */
+export function deviceLabel(): string {
+  if (cachedLabel) return cachedLabel;
+  cachedLabel = resolveDeviceLabel({
+    platform: process.platform,
+    override: process.env.CODECAST_DEVICE_LABEL ?? readConfiguredLabel(),
+    hostname: stableHostname,
+  });
+  return cachedLabel;
+}
+
+/** Longest label we'll accept. Long enough for "MacBook Pro (work, Berlin)", short
+ * enough that a device chip and a notice sentence stay readable. */
+const MAX_LABEL_LENGTH = 64;
+
+/**
+ * Pure label policy (no I/O), mirroring resolveStableHostname so every branch is
+ * testable.
+ *
+ * The override is sanitized rather than trusted: this label is interpolated into
+ * the prose a moved agent reads ("This session now runs on <label>"), so a
+ * newline in it could forge an extra line of that notice. Collapsing whitespace
+ * and capping the length keeps a hand-edited config from becoming a way to write
+ * arbitrary lines into an agent's context. A blank/whitespace-only override
+ * falls through to the derived name rather than yielding an empty label.
+ */
+export function resolveDeviceLabel(deps: {
+  platform: NodeJS.Platform;
+  override?: string;
+  hostname: () => string;
+}): string {
+  const override = sanitizeLabel(deps.override);
+  if (override) return override;
+  const name =
+    deps.platform === "darwin" ? "macOS" : deps.platform === "win32" ? "Windows" : "Linux";
+  return `${name} - ${deps.hostname()}`;
+}
+
+/** Collapse all whitespace (incl. newlines) to single spaces, trim, cap length. */
+export function sanitizeLabel(raw: string | undefined): string {
+  return (raw ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH);
+}
+
+/** `device_label` from ~/.codecast/config.json, or "" when unset/unreadable. */
+function readConfiguredLabel(): string {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    return typeof cfg?.device_label === "string" ? cfg.device_label : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Platform tag for the devices table. */
+export function devicePlatform(): "darwin" | "linux" | "win32" | string {
+  return process.platform;
+}
+
+export interface DeviceInfo {
+  deviceId: string;
+  label: string;
+  platform: string;
+}
+
+export function deviceInfo(): DeviceInfo {
+  return { deviceId: deviceId(), label: deviceLabel(), platform: devicePlatform() };
+}

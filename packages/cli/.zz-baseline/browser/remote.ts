@@ -1,0 +1,427 @@
+/**
+ * Driving a Chrome that runs on another Mac.
+ *
+ * The shape was settled in docs/mac-backend.md: the CLI stays here, the browser
+ * runs there, and CDP travels over an SSH port forward. That is worth being
+ * deliberate about, because the alternative — running the agent on the remote
+ * and copying a profile up to it — is what forces the credential problem into
+ * its worst form. With the driver local, the cookies never need to be written
+ * to the remote disk at all: they are decrypted here and injected into the
+ * remote browser's memory through the tunnel, and the Keychain secret that
+ * would decrypt everything else never leaves this machine.
+ *
+ * The remote profile is deliberately EMPTY. It gains exactly the logins the
+ * work uses, when the work uses them (see credentials.ts), so a rented host
+ * never holds a copy of your whole browsing identity.
+ */
+
+import { execFileSync } from "node:child_process";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn } from "../proc.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isCdpAlive } from "./cdp.js";
+import { freePort } from "./instance.js";
+import type { RemoteHost } from "../remote/session-move.js";
+
+/** The profile the remote browser uses. Never a copy of ours. `$HOME`, not
+ *  `~`: a tilde after `--user-data-dir=` is not expanded, so Chrome took it
+ *  literally and kept every carried cookie in `$HOME/~/.codecast/...`, where
+ *  no wipe (all expanding `~`) ever reached. */
+const REMOTE_PROFILE = `"$HOME/.codecast/browser-profile"`;
+
+/**
+ * Stop whatever Chrome holds the remote profile, and delete it, the literal
+ * `~` copy older launches left included. `pkill -f` matches whole command
+ * lines, this shell's own among them, so the profile's name appears here only
+ * as `[b]rowser-profile`: that matches Chrome's command line and the
+ * directories on disk (as a glob) but not the text of this command.
+ */
+export function remoteProfileWipeCommand(): string {
+  return `pkill -f ".codecast/[b]rowser-profile" 2>/dev/null; sleep 1; rm -rf "$HOME"/.codecast/[b]rowser-profile "$HOME"/~/.codecast/[b]rowser-profile; true`;
+}
+
+/**
+ * Where Chrome lives, and what it needs, on each kind of remote.
+ *
+ * Linux is not just a different path. A headless Chrome on a small cloud box
+ * needs two flags it never needs on a desktop: `--no-sandbox`, because the
+ * kernel namespaces it wants are often unavailable in a stock cloud image, and
+ * `--disable-dev-shm-usage`, because /dev/shm defaults to 64MB there and Chrome
+ * dies silently when it fills. Measured on a t3.small: without the second flag
+ * the process starts, never opens its debugging port, and writes nothing to its
+ * log — which reads as a network problem and is not.
+ */
+const REMOTE_TARGETS = {
+  darwin: {
+    binary: '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+    extraArgs: "",
+  },
+  linux: {
+    binary: "google-chrome",
+    extraArgs: "--no-sandbox --disable-dev-shm-usage ",
+  },
+} as const;
+
+export type RemoteOs = keyof typeof REMOTE_TARGETS;
+
+/** Ask the remote what it is, so we launch the right binary with the right flags. */
+export function detectRemoteOs(host: RemoteHost): RemoteOs {
+  const uname = remoteExec(host, "uname -s", 20_000).trim().toLowerCase();
+  return uname.includes("darwin") ? "darwin" : "linux";
+}
+
+/**
+ * SSH options shared by every call to a host.
+ *
+ * Two of these are load-bearing rather than tidiness:
+ *
+ * `IdentitiesOnly` stops ssh offering every key in the agent before the one we
+ * asked for. Beyond being wrong, it burns the server's MaxAuthTries budget and
+ * turns a good key into an authentication failure — which is exactly how the
+ * Scaleway Mac was misdiagnosed as having rejected our key when it had not.
+ *
+ * `ControlMaster` reuses ONE connection for the several commands a launch
+ * makes. Opening a fresh TCP connection per command was failing intermittently
+ * with a bare exit 255 and no stderr, and it is slower for no reason: the
+ * multiplexed calls run over a socket that is already authenticated.
+ */
+function sshArgs(host: RemoteHost): string[] {
+  const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
+  return [
+    "-i", host.keyPath,
+    "-o", "IdentitiesOnly=yes",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=20",
+    "-o", "BatchMode=yes",
+    // Keepalives so a master whose link died is torn down instead of
+    // wedging every later client (see ensureUp in cloudHost.ts).
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=3",
+    "-o", "ControlMaster=auto",
+    "-o", `ControlPath=${socket}`,
+    "-o", "ControlPersist=60",
+  ];
+}
+
+/**
+ * Run one command on the remote and return its stdout.
+ *
+ * execFileSync throws a generic "Command failed" whose message omits the
+ * remote's own stderr, so a failure here arrives with nothing to act on — an
+ * empty error that could equally be a bad key, a missing binary, or a timeout.
+ * Re-throwing with stderr and the exit status attached is the difference
+ * between a debuggable failure and a guess.
+ */
+export function remoteExec(host: RemoteHost, command: string, timeoutMs = 30_000): string {
+  try {
+    return execFileSync("ssh", [...sshArgs(host), `${host.user}@${host.address}`, command], {
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (err) {
+    const e = err as { stderr?: string | Buffer; status?: number; signal?: string; message?: string };
+    const stderr = (e.stderr ? String(e.stderr) : "").trim();
+    const why = e.signal === "SIGTERM" ? `timed out after ${timeoutMs}ms` : `exit ${e.status ?? "?"}`;
+    // The last lines name what failed; the first is often a warning printed before it.
+    const tail = stderr.split("\n").map((l) => l.trim()).filter(Boolean).slice(-3).join(" | ");
+    throw new Error(`ssh ${host.user}@${host.address}: ${why}${tail ? ` — ${tail}` : ""}`);
+  }
+}
+
+/**
+ * Start something on the remote without waiting for it to finish.
+ *
+ * `spawn` rather than `execFileSync` because we genuinely do not want the exit
+ * code — see the call site. Errors are swallowed for the same reason: the only
+ * meaningful failure signal is the service not coming up, which the caller
+ * checks directly.
+ */
+function launchDetached(host: RemoteHost, command: string): void {
+  const child = spawn("ssh", [...sshArgs(host), "-n", `${host.user}@${host.address}`, command], {
+    stdio: ["ignore", "ignore", "ignore"],
+    detached: true,
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
+/**
+ * Copy one local file to a path on the remote (used for the cast bundles).
+ * Rides the multiplexed connection: on a lossy uplink a fresh scp handshake
+ * timed out at 5 minutes for an 8MB file, while the already-authenticated
+ * master moved the bytes fine. Ten minutes because the bundles are the only
+ * big thing that ever travels this way.
+ */
+export function scpTo(host: RemoteHost, localPath: string, remotePath: string): void {
+  execFileSync(
+    "scp",
+    [...sshArgs(host), localPath, `${host.user}@${host.address}:${remotePath}`],
+    { timeout: 600_000, stdio: ["ignore", "ignore", "pipe"] },
+  );
+}
+
+export class RemoteUnreachable extends Error {
+  constructor(host: RemoteHost, detail: string) {
+    super(
+      `cannot reach ${host.user}@${host.address}: ${detail}\n` +
+        `  The key at ${host.keyPath} was rejected or the host is down.\n` +
+        `  If the Mac was reimaged, its authorized_keys no longer has this key — add\n` +
+        `  ${host.keyPath}.pub through the Scaleway console, then try again.`,
+    );
+    this.name = "RemoteUnreachable";
+  }
+}
+
+export interface RemoteBrowser {
+  /** Loopback port on THIS machine that tunnels to the remote CDP port. */
+  localPort: number;
+  remotePort: number;
+  /** The `ssh -N -L` process holding the tunnel open. */
+  sshPid: number;
+  chromeVersion: string;
+  os: RemoteOs;
+  /** The X display Chrome renders into, when the host has one (live view). */
+  display?: string;
+}
+
+/**
+ * Start Chrome on the remote and tunnel its CDP port to loopback here.
+ *
+ * On a provisioned Linux host Chrome renders into the Xvfb display so the
+ * live-view stream can see it. Anywhere else it runs headless: a machine
+ * reached over SSH usually has no window server session to draw into, and a
+ * Chrome that cannot open a window exits without ever binding its debugging
+ * port — a failure that looks like a network problem and is not.
+ */
+export async function startRemoteBrowser(
+  host: RemoteHost,
+  opts: { localPort: number; remotePort?: number; windowSize?: { width: number; height: number }; spawn?: typeof spawn },
+): Promise<RemoteBrowser> {
+  const remotePort = opts.remotePort ?? 9222;
+
+  let os: RemoteOs;
+  let chromeVersion: string;
+  try {
+    os = detectRemoteOs(host);
+    chromeVersion = remoteExec(host, `${REMOTE_TARGETS[os].binary} --version 2>/dev/null || echo MISSING`);
+  } catch (err) {
+    throw new RemoteUnreachable(host, (err as Error).message.split("\n")[0]);
+  }
+  if (chromeVersion.includes("MISSING")) {
+    const install =
+      os === "darwin"
+        ? "brew install --cask google-chrome"
+        : "wget -qO /tmp/c.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y /tmp/c.deb";
+    throw new Error(
+      `Google Chrome is not installed on ${host.address}.\n` +
+        `  Install it there first:  ssh ${host.user}@${host.address} '${install}'`,
+    );
+  }
+
+  // Clear any Chrome left holding the profile: a second launch against a locked
+  // user-data-dir forwards its arguments to the running instance and exits, so
+  // the new debugging port is silently dropped.
+  remoteExec(host, remoteProfileWipeCommand());
+
+  const size = opts.windowSize ?? { width: 1440, height: 900 };
+  const t = REMOTE_TARGETS[os];
+
+  // Prefer a real (virtual) display over headless when the host has one. A
+  // provisioned Linux box runs Xvfb on :99 precisely so that Chrome's pixels
+  // exist somewhere the live-view stream can capture — headless Chrome renders
+  // to nowhere and x11grab would show an empty desktop. The probe is the X
+  // socket itself: if Xvfb is up, its unix socket exists.
+  let display = "";
+  if (os === "linux") {
+    try {
+      const disp = remoteExec(host, `[ -S /tmp/.X11-unix/X99 ] && echo :99 || true`, 15_000);
+      if (disp === ":99") display = disp;
+    } catch { /* no display service — fall back to headless */ }
+  }
+  const mode = display
+    ? `env DISPLAY=${display} ` // set for the launch below via prefix
+    : "";
+  const headlessFlag = display ? `--window-position=0,0 ` : `--headless=new `;
+
+  const launch =
+    `rm -rf ${REMOTE_PROFILE} && mkdir -p ${REMOTE_PROFILE} && setsid nohup ${mode}${t.binary} ` +
+    `--remote-debugging-port=${remotePort} --remote-debugging-address=127.0.0.1 ` +
+    `--user-data-dir=${REMOTE_PROFILE} ${headlessFlag}${t.extraArgs}` +
+    `--window-size=${size.width},${size.height} ` +
+    `--no-first-run --no-default-browser-check --disable-sync ` +
+    `about:blank > /tmp/cast-browser.log 2>&1 < /dev/null &`;
+  // Fire and forget, deliberately.
+  //
+  // ssh does not return until every descriptor on the session channel is
+  // closed, and a backgrounded Chrome keeps one open however carefully it is
+  // detached — measured: `setsid nohup chrome … >log 2>&1 </dev/null &` starts
+  // Chrome, which binds its port correctly, and STILL leaves ssh hanging until
+  // it is killed. Waiting on the exit code would therefore always fail on a
+  // launch that worked. The exit code tells us nothing anyway: whether the
+  // browser came up is answered by polling CDP through the tunnel below, which
+  // is the only evidence that actually matters.
+  launchDetached(host, launch);
+
+  // Bind the remote CDP port to loopback here. `-N` runs no command, so the
+  // process exists only to hold the forward open.
+  const tunnel = (opts.spawn ?? spawn)("ssh", cdpTunnelArgs(host, opts.localPort, remotePort), { stdio: ["ignore", "ignore", "ignore"], detached: true });
+  tunnel.unref();
+  if (!tunnel.pid) throw new Error("could not start the SSH tunnel");
+
+  // Generous: the tunnel is a fresh SSH handshake, and on a lossy network one
+  // was measured at 36s — a 40s cap then reported "Chrome never answered"
+  // while Chrome's own log showed it listening. The wait costs nothing when
+  // the network is fine; CDP answers within a second or two.
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    if (await isCdpAlive(opts.localPort)) {
+      return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion, os, display: display || undefined };
+    }
+    await sleep(400);
+  }
+  try {
+    process.kill(tunnel.pid, "SIGTERM");
+  } catch {
+    /* ignore */
+  }
+  const log = remoteExec(host, `tail -5 /tmp/cast-browser.log 2>/dev/null || true`).slice(0, 400);
+  throw new Error(
+    `the remote Chrome never answered on port ${remotePort}.` +
+      (log ? `\n  Its log said:\n  ${log.split("\n").join("\n  ")}` : ""),
+  );
+}
+
+/**
+ * The argv of a CDP port forward to `host`: loopback on both ends, `-N`.
+ *
+ * NOT the multiplexed args. A long-lived forward wants a connection of its
+ * own: one that rides the shared master dies with the CLI process that made
+ * it, and the browser then looks "not running" on the very next command,
+ * having worked perfectly a second earlier. Short exec calls want
+ * multiplexing; a forward does not. Shared by the remote browser launch
+ * (which keeps its tunnel open past this process) and the cookie carry into
+ * a cloud host's Chrome (withCdpTunnel, which closes it when done).
+ */
+export function cdpTunnelArgs(host: RemoteHost, localPort: number, remotePort: number): string[] {
+  return [
+    "-i", host.keyPath,
+    "-o", "IdentitiesOnly=yes",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=20",
+    "-o", "BatchMode=yes",
+    // Notice a dead peer instead of holding a tunnel to nothing.
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=3",
+    "-N",
+    // Bind the near end to IPv4 explicitly. Left to itself ssh may listen on
+    // [::1] only, and every probe of 127.0.0.1 then misses a tunnel that is
+    // working perfectly — which looks exactly like the remote being down.
+    // The far end is 127.0.0.1 too: the managed Chrome binds its debugging
+    // port to loopback only (instance.ts).
+    "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+    // Fail loudly if the port is taken rather than running a tunnel to nowhere.
+    "-o", "ExitOnForwardFailure=yes",
+    `${host.user}@${host.address}`,
+  ];
+}
+
+export interface CdpTunnelOptions {
+  /** How long CDP may take to answer through the forward (default 60 s). */
+  connectMs?: number;
+  /**
+   * A cap on the WHOLE run, `fn` included: at the deadline the tunnel is
+   * closed and the call throws. Set it below any hard kill the caller runs
+   * under, since a SIGKILL skips the `finally` that closes the forward.
+   */
+  deadlineMs?: number;
+  spawn?: typeof spawn;
+  isCdpAlive?: typeof isCdpAlive;
+}
+
+/**
+ * Run `fn` with a short-lived forward to the host Chrome's CDP port, then
+ * close it. The ssh child is not detached and is torn down in `finally`
+ * (SIGTERM, then SIGKILL after 5s), so the host's idle watchdog sees the
+ * :22 connection end when the work does. Resolves `fn`'s value; throws when
+ * ssh cannot start or exits before the forward is up, when CDP never answers
+ * through the tunnel within `connectMs`, or when the run outlives `deadlineMs`.
+ */
+export async function withCdpTunnel<T>(
+  host: RemoteHost,
+  remotePort: number,
+  fn: (localPort: number) => Promise<T>,
+  opts: CdpTunnelOptions = {},
+): Promise<T> {
+  const connectMs = opts.connectMs ?? 60_000;
+  const alive = opts.isCdpAlive ?? isCdpAlive;
+  const localPort = await freePort();
+  let stderr = "";
+  const tunnel = (opts.spawn ?? spawn)("ssh", cdpTunnelArgs(host, localPort, remotePort), { stdio: ["ignore", "ignore", "pipe"] });
+  tunnel.stderr?.on("data", (d) => { if (stderr.length < 2000) stderr += d.toString(); });
+  let exited = false;
+  let exitCode: number | null = null;
+  let spawnError: Error | null = null;
+  const exit = new Promise<void>((resolve) => {
+    tunnel.on("exit", (code) => { exited = true; exitCode = code; resolve(); });
+    tunnel.on("error", (err) => { exited = true; spawnError = err; resolve(); });
+  });
+  const close = async () => {
+    if (exited) return;
+    try { tunnel.kill("SIGTERM"); } catch { /* already gone */ }
+    await Promise.race([exit, sleep(5_000)]);
+    if (!exited) { try { tunnel.kill("SIGKILL"); } catch { /* gone */ } }
+  };
+  // The reason ssh is gone, so a laptop-side failure (no ssh binary, a bad
+  // key path, a refused connection) is never reported as the host's Chrome.
+  const sshFailure = (): string | null => {
+    if (spawnError) return `ssh could not start: ${(spawnError as Error).message}`;
+    if (!exited) return null;
+    const first = stderr.split("\n").map((l) => l.trim()).find(Boolean);
+    return `ssh exited with code ${exitCode ?? "?"} before the forward came up${first ? `: ${first}` : ""}`;
+  };
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    if (opts.deadlineMs === undefined) return;
+    deadlineTimer = setTimeout(() => reject(new Error(`the login carry did not finish within ${Math.round(opts.deadlineMs! / 1000)}s; the tunnel was closed`)), opts.deadlineMs);
+  });
+  const work = async (): Promise<T> => {
+    const until = Date.now() + connectMs;
+    for (;;) {
+      if (await alive(localPort)) break;
+      const failed = sshFailure();
+      if (failed) throw new Error(failed);
+      if (Date.now() >= until) {
+        const first = stderr.split("\n").map((l) => l.trim()).find(Boolean);
+        throw new Error(`the host's Chrome on port ${remotePort} never answered through the tunnel${first ? `: ${first}` : ""}`);
+      }
+      await sleep(400);
+    }
+    return await fn(localPort);
+  };
+  try {
+    return await Promise.race([work(), deadline]);
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    await close();
+  }
+}
+
+/** Close the tunnel and stop the remote browser. */
+export async function stopRemoteBrowser(host: RemoteHost, sshPid?: number): Promise<void> {
+  if (sshPid) {
+    try {
+      process.kill(sshPid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+  try {
+    // Wipe the profile as well: it holds cookies this machine sent, and a
+    // rented host should not keep them once the work is over.
+    remoteExec(host, remoteProfileWipeCommand(), 20_000);
+  } catch {
+    /* the host may already be unreachable; nothing else to do */
+  }
+}

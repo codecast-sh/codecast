@@ -1,0 +1,146 @@
+import { describe, expect, test } from "bun:test";
+import { shouldSelfHeal, buildLaunchdKickstartCommand, buildLaunchdPlistReloadCommand, parseLaunchdPrintPid, summarizeSamplingTraces } from "./daemon.js";
+
+const THRESHOLD = 5 * 60 * 1000;
+
+describe("shouldSelfHeal", () => {
+  test("does not restart when the event-loop tick is fresh", () => {
+    expect(shouldSelfHeal(0, false)).toBe(false);
+    expect(shouldSelfHeal(30_000, false)).toBe(false);
+  });
+
+  test("does not restart for a merely-slow loop just past the cadence", () => {
+    // 60s lag is the existing 'frozen' threshold; still well under the self-heal bar
+    // so transient load never triggers a restart.
+    expect(shouldSelfHeal(60_000, false)).toBe(false);
+    expect(shouldSelfHeal(THRESHOLD, false)).toBe(false); // boundary is exclusive
+  });
+
+  test("restarts once the tick is staler than the threshold (timers dead)", () => {
+    expect(shouldSelfHeal(THRESHOLD + 1, false)).toBe(true);
+    // post-sleep: hours of staleness
+    expect(shouldSelfHeal(5 * 60 * 60 * 1000, false)).toBe(true);
+  });
+
+  test("never restarts twice — already-healing wins regardless of staleness", () => {
+    expect(shouldSelfHeal(10 * 60 * 60 * 1000, true)).toBe(false);
+  });
+
+  // A wake from hibernate shows hours of wall staleness with the loop clock
+  // barely moved. On 2026-09-02 a 2234s wall gap restarted a daemon whose
+  // timers were fine, so staleness is now the smaller of the two clocks.
+  test("a wake from hibernate does not restart a healthy daemon", () => {
+    expect(shouldSelfHeal(2_234_000, false, THRESHOLD, 800)).toBe(false);
+  });
+
+  test("a genuinely dead timer still restarts, wake or no wake", () => {
+    expect(shouldSelfHeal(2_234_000, false, THRESHOLD, 2_234_000)).toBe(true);
+    // Loop time past the bar counts even when the wall gap is shorter.
+    expect(shouldSelfHeal(THRESHOLD + 1, false, THRESHOLD, THRESHOLD + 1)).toBe(true);
+  });
+
+  test("post-wake dead timers recover after three missed ticks instead of five minutes", () => {
+    expect(shouldSelfHeal(979_000, false, THRESHOLD, 90_000)).toBe(false);
+    expect(shouldSelfHeal(979_000, false, THRESHOLD, 90_001)).toBe(true);
+    expect(shouldSelfHeal(979_000, true, THRESHOLD, 308_000)).toBe(false);
+    expect(shouldSelfHeal(90_001, false, THRESHOLD, 90_001)).toBe(false);
+  });
+});
+
+describe("buildLaunchdKickstartCommand", () => {
+  // We imperatively kickstart launchd on self-heal rather than trusting KeepAlive to
+  // respawn after exit (observed: KeepAlive silently did not respawn, daemon stayed
+  // dead for hours). A malformed command here means the daemon never recovers, so the
+  // exact shape is load-bearing.
+  test("targets the daemon job in the user's gui domain with kill-before-start", () => {
+    expect(buildLaunchdKickstartCommand(501)).toBe(
+      "sleep 1; launchctl kickstart -k gui/501/sh.codecast.daemon",
+    );
+  });
+
+  test("interpolates the real uid", () => {
+    expect(buildLaunchdKickstartCommand(0)).toContain("gui/0/sh.codecast.daemon");
+    expect(buildLaunchdKickstartCommand(1234)).toContain("gui/1234/");
+  });
+});
+
+describe("buildLaunchdPlistReloadCommand", () => {
+  // The stable-identity plist migration edits the plist on disk, but launchd caches
+  // the job definition at bootstrap time — kickstart alone would keep the old one.
+  // The reload must bootout (killing the daemon, since it IS the job instance) and
+  // then bootstrap the rewritten plist from the same detached shell.
+  test("boots the job out, then bootstraps the rewritten plist", () => {
+    expect(buildLaunchdPlistReloadCommand(501, "/Users/x/Library/LaunchAgents/sh.codecast.daemon.plist")).toBe(
+      "sleep 1; launchctl bootout gui/501/sh.codecast.daemon; sleep 1; launchctl bootstrap gui/501 '/Users/x/Library/LaunchAgents/sh.codecast.daemon.plist'",
+    );
+  });
+});
+
+describe("parseLaunchdPrintPid", () => {
+  // Ownership ("is launchd's supervised instance THIS process?") is decided by
+  // comparing this pid against launchd's own answer. The env-var probe it replaced
+  // (XPC_SERVICE_NAME) leaked into self-spawned children, which then restarted via
+  // kickstart -k — a command that cannot kill a non-job process — leaving a rogue
+  // daemon running while the watchdog storm-kickstarted doomed duplicates.
+  const RUNNING_JOB = [
+    "gui/501/sh.codecast.daemon = {",
+    "\tactive count = 1",
+    "\tpath = /Users/ashot/Library/LaunchAgents/sh.codecast.daemon.plist",
+    "\tstate = running",
+    "\tprogram = /Users/ashot/.bun/bin/bun",
+    "\tpid = 72975",
+    "\tlast exit code = (never exited)",
+    "\truntime = {",
+    "\t\tstate = active",
+    "\t}",
+    "}",
+  ].join("\n");
+
+  test("extracts the instance pid from a running job's print output", () => {
+    expect(parseLaunchdPrintPid(RUNNING_JOB)).toBe(72975);
+  });
+
+  test("returns null when the job is loaded but has no running instance", () => {
+    const notRunning = RUNNING_JOB.split("\n").filter(l => !l.includes("pid =")).join("\n");
+    expect(parseLaunchdPrintPid(notRunning)).toBeNull();
+  });
+
+  test("ignores pid-like text that is not the instance pid line", () => {
+    expect(parseLaunchdPrintPid('\tspawn type = daemon\n\tsomething = "pid = 999 in a string"\n')).toBeNull();
+    expect(parseLaunchdPrintPid("")).toBeNull();
+  });
+});
+
+describe("summarizeSamplingTraces", () => {
+  const frame = (name: string, file = "daemon.ts", line = 1) => ({ name, sourceURL: `/x/${file}`, line });
+
+  test("names the dominant frame with its share of traces", () => {
+    const traces = {
+      traces: [
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+        { frames: [frame("idleTick")] },
+        { frames: [frame("parseChunk"), frame("syncPass")] },
+      ],
+    };
+    const out = summarizeSamplingTraces(traces, 2);
+    expect(out).toBe("parseChunk@daemon.ts:1 75%, syncPass@daemon.ts:1 75%");
+  });
+
+  test("counts a self-recursive frame once per trace", () => {
+    const traces = {
+      traces: [
+        { frames: [frame("walk"), frame("walk"), frame("walk"), frame("main")] },
+        { frames: [frame("main")] },
+      ],
+    };
+    expect(summarizeSamplingTraces(traces, 1)).toBe("main@daemon.ts:1 100%");
+  });
+
+  test("accepts the JSON-string form and returns empty on garbage or no traces", () => {
+    expect(summarizeSamplingTraces(JSON.stringify({ traces: [{ frames: [frame("f")] }] }))).toBe("f@daemon.ts:1 100%");
+    expect(summarizeSamplingTraces("not json")).toBe("");
+    expect(summarizeSamplingTraces(null)).toBe("");
+    expect(summarizeSamplingTraces({ traces: [] })).toBe("");
+  });
+});

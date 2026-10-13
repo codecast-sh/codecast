@@ -10,6 +10,7 @@ import { proposalRepliesText, type OrgProposalReply, type OrgReplyItem, type Org
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { proposalSeen } from "../components/org/proposalHooks";
 import { orgVerdictRevisedNotice, type OrgReplyInput, type OrgReplyOpts } from "../store/orgSlice";
+import { toolCallGist } from "./toolCallGist";
 
 export type PopulateFn = (text: string, opts?: { append?: boolean }) => void;
 
@@ -360,18 +361,6 @@ export function describeImageSource(conversationId: string, image: { messageId?:
 function clip(text: string, max: number): string {
   const one = text.replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max)}…` : one;
-}
-
-// The one input that says what a tool call did: the file, url or command.
-function toolCallGist(input: unknown): string {
-  let args: Record<string, unknown> | null = null;
-  try {
-    args = typeof input === "string" ? JSON.parse(input) : (input as Record<string, unknown>);
-  } catch {
-    return clip(String(input ?? ""), 80);
-  }
-  const value = args && ["file_path", "path", "url", "command", "description"].map((k) => args![k]).find((v) => typeof v === "string");
-  return value ? clip((value as string).split("\n")[0], 80) : "";
 }
 
 // Pin a note to a point of a gallery image: it joins the same batch as the

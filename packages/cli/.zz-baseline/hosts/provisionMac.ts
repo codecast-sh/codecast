@@ -1,0 +1,208 @@
+import { execFileSync } from "../proc.js";
+import { remoteExec } from "../browser/remote.js";
+import { pushCodecastConfig } from "../browser/provisionLinux.js";
+import { agentCliInstallScript, parseAgentCliReport } from "../browser/provisionAgents.js";
+import { readInstalledClientVersions } from "../remote/agentAuth.js";
+import { remoteHome, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
+import { cwdGitRoot } from "../cloud/hostGit.js";
+import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
+import { convexClient } from "../remote/convexClient.js";
+import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
+import { macDesktopScript, parseMacDesktop } from "./macLogin.js";
+
+/**
+ * FUSE for reached folders (cloud/reach.ts): FUSE-T needs no kernel extension
+ * (it serves each mount over a local NFS server), and its sshfs build mounts
+ * the laptop's folder. Both are Apple-notarized installer packages, installed
+ * with sudo rather than Homebrew because a Mac host's Homebrew often belongs to
+ * another login (ec2-user) than the one sessions run as.
+ */
+const FUSE_T_PKG = "https://github.com/macos-fuse-t/fuse-t/releases/download/1.2.9/fuse-t-macos-installer-1.2.9.pkg";
+const FUSE_T_SSHFS_PKG = "https://github.com/macos-fuse-t/sshfs/releases/download/1.0.2/sshfs-macos-installer-1.0.2.pkg";
+
+export const MAC_REACH_SCRIPT = `if ! pkgutil --pkgs='org\\.fuse-t\\.core.*' >/dev/null || [ ! -x /usr/local/bin/sshfs ]; then
+  pkgdir=$(mktemp -d)
+  curl -fsSL -o "$pkgdir/fuse-t.pkg" ${FUSE_T_PKG}
+  curl -fsSL -o "$pkgdir/sshfs.pkg" ${FUSE_T_SSHFS_PKG}
+  sudo -n installer -pkg "$pkgdir/fuse-t.pkg" -target / >/dev/null
+  sudo -n installer -pkg "$pkgdir/sshfs.pkg" -target / >/dev/null
+  rm -rf "$pkgdir"
+fi
+${SSHD_KEEPALIVE_SCRIPT}`;
+
+/** The browser `cast browser` drives. A stock AWS macOS image has none. */
+const MAC_CHROME_SCRIPT = `if [ ! -d "/Applications/Google Chrome.app" ]; then
+  chromedir=$(mktemp -d)
+  curl -fsSL -o "$chromedir/chrome.dmg" https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg
+  hdiutil attach -nobrowse -readonly -mountpoint "$chromedir/mnt" "$chromedir/chrome.dmg" >/dev/null
+  sudo -n ditto "$chromedir/mnt/Google Chrome.app" "/Applications/Google Chrome.app"
+  hdiutil detach "$chromedir/mnt" -quiet
+  rm -rf "$chromedir"
+fi`;
+
+export const MAC_HOST_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
+
+export function macServiceLabel(user: string): string {
+  if (!/^[a-zA-Z_][\w-]*$/.test(user)) throw new Error("unsupported Mac username");
+  return `sh.codecast.remote.${user}`;
+}
+
+export function macBaseScript(): string {
+  return `set -euo pipefail
+${MAC_HOST_PATH}
+[ "$(uname -s)" = Darwin ] || { echo 'This setup requires macOS' >&2; exit 1; }
+command -v brew >/dev/null || { echo 'Homebrew is required on this Mac: https://brew.sh' >&2; exit 1; }
+export HOMEBREW_NO_AUTO_UPDATE=1
+for tool in tmux jq node python3; do
+  command -v "$tool" >/dev/null || brew install "$tool"
+done
+command -v git >/dev/null
+command -v bun >/dev/null || curl -fsSL https://bun.sh/install | bash
+mkdir -p "$HOME/work" "$HOME/.codecast"
+for agent in .codex .claude .gemini .grok; do
+  if [ -L "$HOME/$agent" ]; then
+    echo "$agent is a linked configuration directory. Use a dedicated login with regular agent directories; setup will not replace shared dotfiles." >&2
+    exit 1
+  fi
+done
+${MAC_CHROME_SCRIPT}
+${MAC_REACH_SCRIPT}
+echo MAC-BASE-OK`;
+}
+
+export function macDaemonScript(host: Pick<RemoteHost, "user" | "homeDir">): string {
+  const home = remoteHome(host as RemoteHost);
+  if (!/^[a-zA-Z_][\w-]*$/.test(host.user) || !/^\/Users\/[\w.-]+$/.test(home)) throw new Error("unsupported Mac username or home directory");
+  const label = macServiceLabel(host.user);
+  return `set -euo pipefail
+${MAC_HOST_PATH}
+sudo -n true
+if ! sudo launchctl print system/${label} >/dev/null 2>&1; then
+  cast stop
+  if [ -f "$HOME/Library/LaunchAgents/sh.codecast.daemon.plist" ]; then
+    mv "$HOME/Library/LaunchAgents/sh.codecast.daemon.plist" "$HOME/Library/LaunchAgents/sh.codecast.daemon.plist.before-remote-setup"
+  fi
+fi
+CAST_BIN=$(command -v cast)
+case "$CAST_BIN" in *[!a-zA-Z0-9/_.-]*) echo 'Invalid cast path' >&2; exit 1;; esac
+mkdir -p "$HOME/.codecast/logs"
+# The marker makes the box a remote device for any daemon started here, not
+# only the one launchd starts (remote/device.ts).
+: > "$HOME/${REMOTE_DEVICE_MARKER_REL}"
+sudo tee /Library/LaunchDaemons/${label}.plist >/dev/null <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>${label}</string>
+<key>UserName</key><string>${host.user}</string>
+<key>ProgramArguments</key><array><string>$CAST_BIN</string><string>_daemon</string></array>
+<key>WorkingDirectory</key><string>${home}</string>
+<key>EnvironmentVariables</key><dict>
+<key>HOME</key><string>${home}</string>
+<key>PATH</key><string>${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+<key>CODECAST_REMOTE_DEVICE</key><string>1</string>
+<key>CODECAST_CLOUD</key><string>1</string>
+</dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
+<key>StandardOutPath</key><string>${home}/.codecast/logs/remote-service.log</string>
+<key>StandardErrorPath</key><string>${home}/.codecast/logs/remote-service.log</string>
+</dict></plist>
+PLIST
+sudo chown root:wheel /Library/LaunchDaemons/${label}.plist
+sudo chmod 644 /Library/LaunchDaemons/${label}.plist
+plutil -lint /Library/LaunchDaemons/${label}.plist
+sudo launchctl print system/${label} >/dev/null 2>&1 || sudo launchctl bootstrap system /Library/LaunchDaemons/${label}.plist
+sudo launchctl kickstart -k system/${label}
+for attempt in {1..30}; do
+  if sudo launchctl print system/${label} | grep -q 'state = running'; then echo MAC-DAEMON-OK; exit 0; fi
+  sleep 1
+done
+echo 'Mac service did not start; inspect ~/.codecast/logs/remote-service.log' >&2
+exit 1`;
+}
+
+function run(host: RemoteHost, script: string, timeout: number): string {
+  return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
+    input: `${MAC_HOST_PATH}\n${script}`, encoding: "utf8", timeout, maxBuffer: 8 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+/**
+ * codecast's base image, built on a fresh AWS Mac from its bootstrap login:
+ * runtimes and Chrome, the managed codecast login signed into the desktop, the
+ * signed release of cast (its helper matches the grants a person then gives
+ * once), and the agent CLIs. Nothing personal: no configuration push, no agent
+ * logins, no daemon and so no device identity.
+ */
+export async function buildMacBase(bootstrap: RemoteHost, log: (message: string) => void): Promise<{ login: RemoteHost; desktop: ReturnType<typeof parseMacDesktop> }> {
+  const { provisionMacLogin } = await import("./macLogin.js");
+  const { installHostRelease } = await import("./installRelease.js");
+  const { BASE_IMAGE_LOGIN } = await import("./image.js");
+  const base = (h: RemoteHost) => {
+    const out = run(h, macBaseScript(), 30 * 60_000);
+    if (!out.includes("MAC-BASE-OK")) throw new Error(`Mac setup did not complete: ${out.slice(-600)}`);
+  };
+  log(`runtimes and Chrome as ${bootstrap.user}, which owns Homebrew…`);
+  base(bootstrap);
+  const login = provisionMacLogin(bootstrap, BASE_IMAGE_LOGIN);
+  log(`runtimes as ${login.user}…`);
+  base(login);
+  installHostRelease(login, "darwin", log);
+  log("agent CLIs…");
+  log(parseAgentCliReport(run(login, agentCliInstallScript(readInstalledClientVersions(), { upgradeCodex: true }), 15 * 60_000)));
+  return { login, desktop: macDesktop(login) };
+}
+
+export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: boolean; gitIdentity?: string }, log: (message: string) => void) {
+  log("checking Mac and installing missing runtimes…");
+  const base = run(host, macBaseScript(), 15 * 60_000);
+  if (!base.includes("MAC-BASE-OK")) throw new Error(`Mac setup did not complete: ${base.slice(-600)}`);
+  const { installMacCast } = await import("./updateMac.js");
+  installMacCast(host, log);
+  log("installing missing agent CLIs…");
+  const agents = run(host, agentCliInstallScript(readInstalledClientVersions(), { upgradeCodex: true }), 15 * 60_000);
+  if (!agents.includes("AGENT-CLIS-OK")) throw new Error(`Agent setup did not complete: ${agents.slice(-600)}`);
+  log(parseAgentCliReport(agents));
+  log("connecting Codecast and syncing agent configuration…");
+  await pushCodecastConfig(host);
+  const localGitRoot = cwdGitRoot();
+  await readyHostHome(host, { onProgress: log, force: true, localGitRoot, repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined, gitIdentity: opts.gitIdentity });
+  if (!opts.skipDaemon) {
+    log("starting the Mac service (runs without an open login session)…");
+    const daemon = run(host, macDaemonScript(host), 60_000);
+    if (!daemon.includes("MAC-DAEMON-OK")) throw new Error(`Mac service failed: ${daemon.slice(-600)}`);
+  }
+  log("signing the session login into the Mac's desktop (cast computer, a headed browser)…");
+  const desktop = macDesktop(host);
+  const deviceId = readHostDeviceId(host);
+  if (!deviceId) throw new Error("Mac did not report its Codecast device identity");
+  const version = remoteExec(host, `${MAC_HOST_PATH}; cast --version`, 30_000).trim();
+  if (!opts.skipDaemon) {
+    const { client, api, token } = await convexClient();
+    await waitForDeviceOnline(client, api, token, deviceId, log);
+  }
+  return { deviceId, version, ...desktop };
+}
+
+/** Make the session login the Mac's desktop and report where that stands. */
+export function macDesktop(host: RemoteHost): ReturnType<typeof parseMacDesktop> {
+  return parseMacDesktop(run(host, macDesktopScript(host.user), 60_000));
+}
+
+/** The helper grants macOS lets only a person at the screen give, still missing
+ *  on a desktop that is live. Empty when both are on or unreadable. */
+export function macMissingGrants(host: RemoteHost): string[] {
+  try {
+    const out = remoteExec(host, `${MAC_HOST_PATH}; cast computer permissions --json`, 120_000);
+    const status = JSON.parse(out) as { permissions?: Array<{ id: string; status: string }> };
+    return (status.permissions ?? []).filter((p) => p.status !== "granted").map((p) => p.id === "screenshots" ? "Screen Recording" : "Accessibility");
+  } catch {
+    return [];
+  }
+}
+
+/** Whether any agent session runs on the Mac: a reboot would end it. */
+export function macRunsSessions(host: RemoteHost): boolean {
+  return remoteExec(host, "pgrep -x tmux >/dev/null && echo busy || echo idle", 30_000).trim() === "busy";
+}

@@ -1,0 +1,2505 @@
+import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
+import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/diff";
+import { structuredPayloadSummary, structuredPayloadKeysFromRaw, toolSummary } from "@codecast/shared/render";
+import { agentDisplayName, threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
+import type { AskResult, LivenessVerdict } from "@codecast/shared/contracts";
+
+// One glyph per liveness verdict. Green is positive contact. The gray ring is a
+// session that settled — its own agent said so, or we tore it down. The dim ? is
+// the row whose last word was "I am working" with no heartbeat behind it now:
+// nobody watched it end, so it is not settled, it is unverifiable (ct-49557).
+const LIVENESS_GLYPH: Record<LivenessVerdict, string> = {
+  live: `${c.green}●${c.reset}`,
+  unverifiable: UNVERIFIABLE_MARK,
+  exited: `${c.gray}○${c.reset}`,
+};
+
+/** Worktree name embedded in a path (".codecast/worktrees/<name>/…"), if any.
+ * Lets a feed card reveal worktree residence even when the session never
+ * registered one — it cd'd there per command and only its edits know. */
+export function worktreeFromPath(path: string | undefined): string | undefined {
+  return path?.match(/\/worktrees\/([^/]+)\//)?.[1];
+}
+
+/** Compact display for an edited file on a feed card: relative to the card's
+ * project (or its worktree copy) when possible, last segments otherwise. The
+ * generic shortenToolPath can't be used here — an absolute path under ~/src
+ * matches its `src/` anchor and yields a misleading "src/<repo>/…" prefix. */
+export function feedFilePath(filePath: string, projectPath?: string | null): string {
+  let rel = filePath;
+  const wt = filePath.match(/^.*\/worktrees\/[^/]+\//);
+  if (wt) {
+    rel = filePath.slice(wt[0].length);
+  } else if (projectPath && filePath.startsWith(projectPath.replace(/\/$/, "") + "/")) {
+    rel = filePath.slice(projectPath.replace(/\/$/, "").length + 1);
+  }
+  // Still absolute = outside the project entirely; keep that visible (~ or a
+  // foreign /Users/<other>/ prefix is itself the signal) via truncatePath.
+  if (rel.startsWith("/")) return truncatePath(rel, 45);
+  if (rel.length <= 45) return rel;
+  const segments = rel.split("/");
+  while (segments.length > 2 && segments.join("/").length > 42) segments.shift();
+  return "…/" + segments.join("/");
+}
+
+function shortenToolPath(path: string): string {
+  const match = path.match(/(?:packages|src|lib|app)\/.*$/);
+  if (match) return match[0];
+  const segments = path.split("/");
+  if (segments.length > 3) return segments.slice(-3).join("/");
+  return path;
+}
+
+function summarizeToolCall(tc: { name?: string; input?: unknown }): string {
+  const name = tc.name || "unknown";
+  let param = "";
+  try {
+    const input = typeof tc.input === "string" ? JSON.parse(tc.input) : tc.input;
+    if (input && typeof input === "object") {
+      const obj = input as Record<string, unknown>;
+      switch (name) {
+        case "Read":
+        case "Edit":
+        case "Write":
+          if (obj.file_path) param = shortenToolPath(String(obj.file_path));
+          break;
+        case "Bash":
+          if (obj.command) {
+            const cmd = String(obj.command).split("\n")[0].slice(0, 60);
+            param = cmd + (String(obj.command).length > 60 ? "..." : "");
+          }
+          break;
+        case "Grep":
+          param = obj.pattern ? `"${String(obj.pattern).slice(0, 30)}"` : "";
+          break;
+        case "Glob":
+          if (obj.pattern) param = String(obj.pattern);
+          break;
+        case "Agent":
+          if (obj.description) param = String(obj.description).slice(0, 40);
+          break;
+        case "StructuredOutput":
+          param = structuredPayloadSummary(obj);
+          break;
+      }
+    }
+  } catch {}
+  // Non-full reads cap tool input server-side (~500 chars), which chops a
+  // StructuredOutput payload mid-string and fails the JSON.parse above —
+  // salvage the top-level key names from the truncated prefix.
+  if (!param && name === "StructuredOutput" && typeof tc.input === "string") {
+    param = structuredPayloadKeysFromRaw(tc.input);
+  }
+  // Any other client's tool (Codex's commandExecution, Grok's run_terminal_command): the summary
+  // every client renderer gives it, under its own name.
+  if (!param) {
+    const summary = toolSummary({ name, input: typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}) }).split("\n")[0];
+    // An MCP tool's summary falls back to its method, which its name already says.
+    if (!name.includes(summary)) param = summary.length > 60 ? `${summary.slice(0, 60)}...` : summary;
+  }
+  return param ? `${name} ${param}` : name;
+}
+
+interface SearchMatch {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+}
+
+interface ContextMessage {
+  line: number;
+  role: string;
+  content: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+}
+
+interface SearchConversation extends SessionPresence {
+  id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  user?: { name: string | null; email: string | null };
+  recent_files?: string[];
+  worktree?: string;
+  machine?: string;
+  matches: SearchMatch[];
+  context: ContextMessage[];
+  title_match?: boolean;
+  /** What the session began as and was called before, when that answers the
+   *  query and its current title may not. */
+  origin?: { started_as?: string; earlier_titles?: string[] };
+  /** Worker sessions that matched and are folded into this row. */
+  workers?: number;
+}
+
+interface SearchResult {
+  total_matches: number;
+  conversations: SearchConversation[];
+  search_scope?: string;
+  // Set when the server answered in titles_only mode (content search died on a
+  // read-budget/capacity error and the CLI fell back — see cliSearchRequest).
+  titles_only?: boolean;
+  content_search_error?: string;
+  // Set when a -s/-e window reaches past the content mirror's retention:
+  // content matches can't cover the requested range, so title/summary hits
+  // (rows with title_match) are the reliable signal there.
+  content_window_days?: number;
+  // Operator walks (file:, repo:, ...) that stopped at a read budget: the rows
+  // are the newest part of the answer, and each line says how to reach more.
+  truncated?: string[];
+}
+
+interface SearchOptions {
+  projectPath?: string;
+}
+
+interface ReadMessage {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: unknown[];
+  tool_results?: unknown[];
+}
+
+interface ReadResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: ReadMessage[];
+  target_line?: number;
+}
+
+function formatDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) {
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  } else if (diffDays === 1) {
+    return "Yesterday";
+  } else if (diffDays < 7) {
+    return date.toLocaleDateString("en-US", { weekday: "short" });
+  } else {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+}
+
+export function formatRelativeTime(isoDate: string): string {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffMin < 1) {
+    return "just now";
+  } else if (diffMin < 60) {
+    return `${diffMin} min ago`;
+  } else if (diffHour < 24) {
+    return diffHour === 1 ? "1 hour ago" : `${diffHour} hours ago`;
+  } else if (diffDay === 1) {
+    return "yesterday";
+  } else if (diffDay < 7) {
+    return `${diffDay} days ago`;
+  } else {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+}
+
+function truncatePath(path: string | null, maxLen: number = 38): string {
+  if (!path) return "";
+  const home = process.env.HOME || "";
+  if (home && path.startsWith(home)) {
+    path = "~" + path.slice(home.length);
+  }
+  if (path.length > maxLen) {
+    const parts = path.split("/");
+    if (parts.length > 3) {
+      const prefix = parts[0];
+      const suffix = parts.slice(-2).join("/");
+      if ((prefix + "/.../" + suffix).length <= maxLen) {
+        return prefix + "/.../" + suffix;
+      }
+      return ".../" + suffix;
+    }
+  }
+  return path;
+}
+
+function wrapLines(text: string, width: number): string[] {
+  const words = text.split(/\s+/);
+  const result: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (line && line.length + 1 + word.length > width) {
+      result.push(line);
+      line = word;
+    } else {
+      line = line ? line + " " + word : word;
+    }
+  }
+  if (line) result.push(line);
+  return result;
+}
+
+function truncateId(id: string): string {
+  return id.slice(0, 7);
+}
+
+function formatRole(role: string): string {
+  return `[${role}]`;
+}
+
+// Display metadata for the three work states the server emits. Shared by
+// `cast feed` and `cast monitor` so the colour/label of a state is identical
+// everywhere the CLI shows it.
+const WORK_STATE_LABEL: Record<string, string> = {
+  needs_input: "needs input",
+  done: "done",
+  working: "working",
+  dormant: "dormant",
+  idle: "idle",
+};
+
+function colorForState(ws: string): string {
+  if (ws === "needs_input") return c.yellow;
+  if (ws === "done") return c.cyan;
+  if (ws === "working") return c.green;
+  if (ws === "dormant") return c.blue;
+  return c.gray;
+}
+
+// Compact one-token status badge: a liveness dot (● live / ○ not live), the
+// work-state word, the raw agent_status when it adds detail, and killed/pinned
+// tags. The killed tag is not cosmetic: classifyWorkState collapses a retired
+// row to "idle" (kill outranks every other signal), so without it a killed
+// session is indistinguishable from an ordinary idle one — while its tmux and
+// process may still be alive. Both surfaces that render this badge ship
+// is_killed from the server (inboxForCLI and the feed).
+//
+// WHERE IT ACTUALLY SHOWS, so nobody expects more than it does: because a
+// killed row classifies as idle, the DEFAULT `cast sessions` view (NEEDS INPUT
+// + WORKING only, idle collapsed to a "+ N idle" line) renders no card for it
+// at all. The tag appears under -a, --state idle/pinned, and --by-label. Pinning
+// affects sort order, not grouping, so a pinned killed row is still collapsed in
+// the default view. formatter.test.ts pins this rather than the docs alone.
+function formatStateBadge(s: SessionPresence): string {
+  const ws = s.work_state || "idle";
+  const liveGlyph = LIVENESS_GLYPH[sessionLivenessVerdict(s)];
+  const label = WORK_STATE_LABEL[ws] ?? ws;
+  const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
+    ? `${c.dim}:${s.agent_status}${c.reset}`
+    : "";
+  // A completed row (its process ended: SessionEnd, watchdog, teardown) that
+  // is not live again reads "ended"; a kill says more, so it wins.
+  const kill = s.is_killed
+    ? ` ${c.red}killed${c.reset}`
+    : s.is_completed && !s.is_live ? ` ${c.gray}ended${c.reset}` : "";
+  const pin = s.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
+  return `${liveGlyph} ${colorForState(ws)}${label}${c.reset}${detail}${kill}${pin}`;
+}
+
+/** The liveness facts a server session row ships (feedForCLI, searchForCLI,
+ * findSimilar, inboxForCLI), in the shape formatStateBadge reads. */
+export interface SessionPresence {
+  work_state?: string;
+  is_live?: boolean;
+  is_killed?: boolean;
+  is_completed?: boolean;
+  is_pinned?: boolean;
+  agent_status?: string;
+  /** Server sort key below relevance: 0 prompt cache warm, 1 cache expired,
+   * 2 killed or completed (recencyRankOf in convex/conversations.ts). */
+  recency_rank?: 0 | 1 | 2;
+}
+
+/** Copy just the liveness facts off a server row, for commands that rebuild
+ * session rows from several sources (`cast context`, `cast ask`). */
+export function pickSessionPresence(row: SessionPresence): SessionPresence {
+  const { work_state, is_live, is_killed, is_completed, agent_status, recency_rank } = row;
+  return { work_state, is_live, is_killed, is_completed, agent_status, recency_rank };
+}
+
+/** "● working | just now" / "○ idle killed | 3 days ago": the state badge and
+ * last activity age, so an agent sees before it messages a session whether the
+ * session is live, done, retired, or long quiet. A row from a server that ships
+ * no liveness facts shows the age alone rather than a made-up "idle". */
+export function formatSessionPresence(s: SessionPresence & { updated_at: string }): string {
+  const age = formatRelativeTime(s.updated_at);
+  return s.work_state === undefined ? age : `${formatStateBadge(s)} | ${age}`;
+}
+
+function wrapText(text: string, indent: string, maxWidth: number = 72): string {
+  const lines: string[] = [];
+  const paragraphs = text.split("\n");
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.trim() === "") {
+      lines.push("");
+      continue;
+    }
+
+    if (paragraph.startsWith("```") || paragraph.startsWith("   ") || paragraph.startsWith("\t")) {
+      lines.push(paragraph);
+      continue;
+    }
+
+    let currentLine = "";
+    const words = paragraph.split(/\s+/);
+
+    for (const word of words) {
+      if (currentLine.length + word.length + 1 > maxWidth) {
+        if (currentLine) {
+          lines.push(currentLine);
+          currentLine = indent + word;
+        } else {
+          lines.push(word);
+        }
+      } else {
+        currentLine = currentLine ? currentLine + " " + word : word;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export function formatSearchResults(result: SearchResult, options: SearchOptions = {}): string {
+  const lines: string[] = [];
+
+  lines.push("<SEARCHRESULTS>");
+
+  if (result.titles_only) {
+    lines.push(`${c.yellow}Content search unavailable${c.reset}${c.dim} (${result.content_search_error || "backend overloaded"}) — showing title/summary matches only. Try a more specific word for full-text results.${c.reset}`);
+    lines.push("");
+  } else if (result.content_window_days) {
+    lines.push(`${c.dim}Content search covers the last ${result.content_window_days} days; older sessions in this window match by title/summary only (marked "title match").${c.reset}`);
+    lines.push("");
+  }
+  for (const line of result.truncated ?? []) {
+    lines.push(`${c.yellow}Partial:${c.reset}${c.dim} ${line}${c.reset}`);
+  }
+  if (result.truncated?.length) lines.push("");
+
+  if (result.total_matches === 0 && result.conversations.length === 0) {
+    lines.push("No matches found.");
+    lines.push("Use --mine for only your sessions, -g for all teams.");
+    lines.push("</SEARCHRESULTS>");
+    return lines.join("\n");
+  }
+
+  const allTitleRows =
+    result.conversations.length > 0 && result.conversations.every((cv) => cv.title_match);
+  const sessions = `${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"}`;
+  lines.push(result.titles_only || allTitleRows
+    ? `Found ${sessions} by title/summary\n`
+    // An operator-only query (file:, commit:, pr: …) matches sessions, not messages.
+    : result.total_matches === 0
+    ? `Found ${sessions} matching the filters\n`
+    : `Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
+
+  for (const conv of result.conversations) {
+    lines.push(""); // Extra spacing before each conversation
+    const header = `${c.bold}── ${conv.title} ${c.reset}`;
+    const padding = "─".repeat(Math.max(0, 60 - conv.title.length - 4));
+    lines.push(header + padding);
+
+    const userDisplay = conv.user?.name || conv.user?.email;
+    const meta = [
+      `${c.cyan}${truncateId(conv.id)}${c.reset}`,
+      formatSessionPresence(conv),
+      `${c.dim}${conv.message_count} msgs${c.reset}`,
+      truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
+      userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      !result.titles_only && conv.title_match ? `${c.dim}title match${c.reset}` : "",
+    ].filter(Boolean).join(" | ");
+    lines.push(meta);
+
+    // Same location signals as the feed card: worktree residence (explicit or
+    // derived from its edits), machine, and the files it recently changed.
+    const worktree = conv.worktree || worktreeFromPath(conv.recent_files?.[0]);
+    const place = [
+      worktree ? `${c.magenta}worktree ${worktree}${c.reset}` : "",
+      conv.machine ? `on ${conv.machine}` : "",
+    ].filter(Boolean).join(" · ");
+    if (place) lines.push(`${c.dim}${place}${c.reset}`);
+    if (conv.recent_files?.length) {
+      const shown = conv.recent_files.slice(0, 3).map((p) => feedFilePath(p, conv.project_path)).join(", ");
+      const more = conv.recent_files.length > 3 ? ` +${conv.recent_files.length - 3}` : "";
+      lines.push(`${c.dim}edits:${c.reset} ${shown}${c.dim}${more}${c.reset}`);
+    }
+    // A long session drifts: say what it was before its title moved on.
+    if (conv.origin?.earlier_titles?.length) {
+      lines.push(`${c.dim}earlier titled:${c.reset} ${conv.origin.earlier_titles.join(" · ")}`);
+    }
+    if (conv.origin?.started_as) lines.push(`${c.dim}began as:${c.reset} ${conv.origin.started_as}`);
+    if (conv.workers) {
+      lines.push(`${c.dim}${conv.workers} worker session${conv.workers === 1 ? "" : "s"} of this one matched too${c.reset}`);
+    }
+    lines.push("");
+
+    for (const msg of conv.matches) {
+      const lineNum = `${c.dim}${String(msg.line).padStart(3)}:${c.reset}`;
+      const role = msg.role === "user"
+        ? `${c.blue}[user]${c.reset}`
+        : `${c.green}[assistant]${c.reset}`;
+      if (msg.content) {
+        lines.push(`${lineNum} ${role} ${msg.content}`);
+      }
+      lines.push("");
+    }
+  }
+
+  if (result.conversations.length > 0) {
+    lines.push("To explore:");
+    lines.push("  cast read <id> <line>:<line>   # read message range");
+    lines.push("  cast read <id>                 # read all messages");
+    lines.push("  cast summary <id>              # get session summary");
+    lines.push("  cast diff <id>                 # files a session changed, before attributing work");
+  }
+
+  lines.push("</SEARCHRESULTS>");
+
+  return lines.join("\n");
+}
+
+interface FormatOptions {
+  full?: boolean;
+  targetLine?: number;
+}
+
+/** The part of `cast read <id> --ask`'s answer the formatter reads (the shared AskResult contract). */
+export type ReadAskResult = Omit<AskResult, "citations" | "terms" | "prompt">;
+
+/** 3,4,5,9 → "3:5 9", in the range syntax `cast read` takes. */
+export function lineRanges(lines: number[]): string[] {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    out.push(j > i ? `${sorted[i]}:${sorted[j]}` : String(sorted[i]));
+    i = j;
+  }
+  return out;
+}
+
+/** The answer first, then where to read it, then what it cost. */
+export function formatAskResult(result: ReadAskResult): string {
+  const conv = result.conversation;
+  const header = `── ${conv.title} `;
+  const out = [header + "─".repeat(Math.max(0, 60 - header.length))];
+  out.push(`   ${fmt.id(conv.short_id)} | ${conv.lines}${result.scan_complete ? "" : "+"} lines | ${fmt.muted(result.question)}`, "");
+  out.push(result.answer.trim(), "");
+  // Lines counted from the end open with a tail read reaching back to the earliest one.
+  const fromEnd = result.cited_lines.filter((l) => l < 0);
+  const reads = [
+    ...lineRanges(result.cited_lines.filter((l) => l > 0)).map((r) => `cast read ${conv.short_id} ${r}`),
+    ...(fromEnd.length ? [`cast read ${conv.short_id} -n ${-Math.min(...fromEnd)}`] : []),
+  ];
+  if (reads.length) out.push(`${fmt.label("read:")} ${reads.map((r) => fmt.cmd(r)).join("  ")}`);
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  out.push(fmt.muted([
+    `${result.model.replace(/-\d{8}$/, "")}`,
+    `read ${result.scanned_lines} lines${result.scan_complete ? "" : ` (too long to read whole: msg ${result.unread?.after ?? "?"} to ${result.unread?.before ?? "?"} not read)`}, ${result.matched_lines} matched, showed ${result.shown_lines}`,
+    `${k(result.usage.input_tokens)} in / ${k(result.usage.output_tokens)} out, $${result.usage.cost_usd.toFixed(3)}`,
+    `${(result.took_ms / 1000).toFixed(1)}s`,
+  ].join(" · ")));
+  return out.join("\n");
+}
+
+export function formatReadResult(result: ReadResult, options: FormatOptions = {}): string {
+  const lines: string[] = [];
+
+  const conv = result.conversation;
+  const header = `── ${conv.title} `;
+  const padding = "─".repeat(Math.max(0, 60 - header.length));
+  lines.push(header + padding);
+
+  const meta = [
+    truncateId(conv.id),
+    formatDate(conv.updated_at),
+    `${conv.message_count} msgs`,
+    truncatePath(conv.project_path),
+  ].filter(Boolean).join(" | ");
+  lines.push(`   ${meta}`);
+
+  const targetLine = options.targetLine ?? result.target_line;
+  if (targetLine !== undefined) {
+    lines.push(`   ${fmt.muted(`↓ around linked message (line ${targetLine})`)}`);
+  }
+  lines.push("");
+
+  for (const msg of result.messages) {
+    // Skip empty messages (streaming artifacts)
+    const hasContent = msg.content && msg.content.trim();
+    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+    const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+    if (!hasContent && !hasToolCalls && !hasToolResults) {
+      continue;
+    }
+
+    const isTarget = targetLine !== undefined && msg.line === targetLine;
+    const lineNum = String(msg.line).padStart(4);
+    const role = formatRole(msg.role);
+    lines.push(isTarget ? `${fmt.accent("►")}${lineNum.slice(1)}: ${role} ${fmt.accent("← linked")}` : `${lineNum}: ${role}`);
+
+    if (hasContent) {
+      const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
+      lines.push(indentedContent);
+    }
+
+    if (hasToolCalls && msg.tool_calls) {
+      if (options.full) {
+        lines.push(`       <TOOL_CALLS>`);
+        for (const tc of msg.tool_calls as Array<{ name?: string; input?: unknown }>) {
+          lines.push(`       - ${tc.name || "unknown"}`);
+          if (tc.input) {
+            let parsed = tc.input;
+            try { if (typeof parsed === "string") parsed = JSON.parse(parsed); } catch {}
+            const inputStr = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
+            const indented = inputStr.split("\n").map((l: string) => "         " + l).join("\n");
+            lines.push(indented);
+          }
+        }
+        lines.push(`       </TOOL_CALLS>`);
+      } else {
+        const calls = msg.tool_calls as Array<{ name?: string; input?: unknown }>;
+        const first = summarizeToolCall(calls[0]);
+        const more = calls.length > 1 ? ` ...(${calls.length - 1} more)` : "";
+        lines.push(`       ${fmt.muted(`${first}${more}`)}`);
+        // A StructuredOutput call's INPUT is the agent's whole deliverable, and
+        // this collapsed line is all a non-full read shows of it — readers have
+        // mistaken that for an empty result. Point at the exact command.
+        if (calls.some((tc) => tc.name === "StructuredOutput")) {
+          lines.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line < 0 ? `-n ${-msg.line}` : msg.line} --full`)}`);
+        }
+      }
+    }
+
+    if (hasToolResults && msg.tool_results && options.full) {
+      lines.push(`       <TOOL_RESULTS>`);
+      for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
+        const prefix = tr.isError ? "[ERROR] " : "";
+        const content = tr.content || "(empty)";
+        const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
+        const indented = truncated.split("\n").map((l) => "         " + prefix + l).join("\n");
+        lines.push(indented);
+      }
+      lines.push(`       </TOOL_RESULTS>`);
+    }
+
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+// One message rendered for the `cast sessions <id> -w` live follow: a timestamped
+// role header + content, with tool calls summarized. Distinct from formatReadResult
+// (which is line-numbered for reading ranges) — a follow reads as a chat stream.
+export function formatStreamedMessage(msg: {
+  role: string;
+  content?: string | null;
+  timestamp?: string;
+  label?: string | null;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}): string {
+  const time = msg.timestamp
+    ? new Date(msg.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" })
+    : "";
+  const roleColor = msg.role === "assistant" ? c.green : msg.role === "user" ? c.cyan : c.gray;
+  // In multi-session mode each line is prefixed with its session so the merged
+  // stream stays legible; single-session follow omits it.
+  const label = msg.label ? `${c.magenta}${msg.label}${c.reset}  ` : "";
+  const out: string[] = [`${c.dim}${time}${c.reset}  ${label}${roleColor}${msg.role}${c.reset}`];
+  const content = (msg.content || "").trim();
+  if (content) out.push(content.split("\n").map((l) => "       " + l).join("\n"));
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    const first = summarizeToolCall(msg.tool_calls[0]);
+    const more = msg.tool_calls.length > 1 ? ` …(${msg.tool_calls.length - 1} more)` : "";
+    out.push(`       ${fmt.muted(`${first}${more}`)}`);
+  } else if (!content && msg.tool_results && msg.tool_results.length > 0) {
+    out.push(`       ${fmt.muted(`(${msg.tool_results.length} tool result${msg.tool_results.length > 1 ? "s" : ""})`)}`);
+  }
+  return out.join("\n");
+}
+
+interface FeedPreviewMessage {
+  line: number;
+  role: string;
+  content: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+}
+
+interface FeedConversation extends SessionPresence {
+  id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  user?: { name: string | null; email: string | null };
+  /** Second-party owner (steering member), when assigned. */
+  owner?: { name: string | null; email: string | null };
+  owned_by_me?: boolean;
+  preview: FeedPreviewMessage[];
+  /** Newest real prose messages — what the session is doing NOW. */
+  tail?: FeedPreviewMessage[];
+  idle_summary?: string;
+  /** Files the session recently edited (absolute paths, newest first). */
+  recent_files?: string[];
+  worktree?: string;
+  git_branch?: string;
+  machine?: string;
+  last_activity_at?: string;
+}
+
+interface FeedResult {
+  conversations: FeedConversation[];
+  scope: string;
+}
+
+interface FeedOptions {
+  projectPath?: string;
+  page?: number;
+}
+
+interface SummaryMessage {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}
+
+interface SummaryResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: SummaryMessage[];
+}
+
+interface FileChange {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+function parseToolInput(input: unknown): Record<string, unknown> | null {
+  if (!input) return null;
+  if (typeof input === "object") return input as Record<string, unknown>;
+  if (typeof input === "string") {
+    try {
+      return JSON.parse(input);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function extractFileChanges(messages: SummaryMessage[]): FileChange[] {
+  const fileChanges = new Map<string, { additions: number; deletions: number }>();
+
+  for (const msg of messages) {
+    if (!msg.tool_calls) continue;
+
+    for (const tc of msg.tool_calls) {
+      const input = parseToolInput(tc.input);
+      if (!input) continue;
+
+      if (tc.name === "Edit" || tc.name === "Write") {
+        const filePath = input.file_path as string;
+        if (!filePath) continue;
+
+        const existing = fileChanges.get(filePath) || { additions: 0, deletions: 0 };
+
+        if (tc.name === "Edit") {
+          const oldStr = (input.old_string as string) || "";
+          const newStr = (input.new_string as string) || "";
+          existing.additions += newStr.split("\n").length;
+          existing.deletions += oldStr.split("\n").length;
+        } else {
+          const content = (input.content as string) || "";
+          existing.additions += content.split("\n").length;
+        }
+
+        fileChanges.set(filePath, existing);
+      }
+    }
+  }
+
+  return Array.from(fileChanges.entries())
+    .map(([path, stats]) => ({ path, ...stats }))
+    .sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions));
+}
+
+function extractGoal(messages: SummaryMessage[]): string {
+  const firstUser = messages.find((m) => m.role === "user" && m.content);
+  if (!firstUser) return "No user message found";
+
+  const content = firstUser.content.trim();
+  const lines = content.split("\n");
+  if (lines.length <= 3) return content;
+
+  return lines.slice(0, 3).join("\n") + "...";
+}
+
+function extractApproach(messages: SummaryMessage[]): string[] {
+  const approaches: string[] = [];
+  const seen = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !msg.content) continue;
+
+    const content = msg.content.trim();
+    if (content.length < 20) continue;
+
+    const firstLine = content.split("\n")[0].slice(0, 100);
+    if (seen.has(firstLine)) continue;
+    seen.add(firstLine);
+
+    if (content.includes("I'll ") || content.includes("I will ") ||
+        content.includes("Let me ") || content.includes("I'm going to ")) {
+      const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
+      for (const sentence of sentences.slice(0, 2)) {
+        const trimmed = sentence.trim();
+        if (trimmed.length > 20 && trimmed.length < 150) {
+          approaches.push("- " + trimmed);
+          break;
+        }
+      }
+    }
+
+    if (approaches.length >= 5) break;
+  }
+
+  return approaches.slice(0, 5);
+}
+
+function extractKeyDecisions(messages: SummaryMessage[]): string[] {
+  const decisions: string[] = [];
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !msg.content) continue;
+
+    const content = msg.content.toLowerCase();
+    if (content.includes("chose ") || content.includes("decided ") ||
+        content.includes("instead of ") || content.includes("rather than ") ||
+        content.includes("better to ") || content.includes("approach is ")) {
+      const sentences = msg.content.match(/[^.!?]+[.!?]+/g) || [];
+      for (const sentence of sentences) {
+        const lower = sentence.toLowerCase();
+        if (lower.includes("chose") || lower.includes("decided") ||
+            lower.includes("instead") || lower.includes("rather than") ||
+            lower.includes("better to") || lower.includes("approach")) {
+          const trimmed = sentence.trim();
+          if (trimmed.length > 20 && trimmed.length < 200) {
+            decisions.push("- " + trimmed);
+            break;
+          }
+        }
+      }
+    }
+
+    if (decisions.length >= 3) break;
+  }
+
+  return decisions;
+}
+
+function summarizeOutcome(messages: SummaryMessage[]): string {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
+  if (!lastAssistant) return "Session ended";
+
+  const content = lastAssistant.content.trim();
+
+  if (content.toLowerCase().includes("successfully") ||
+      content.toLowerCase().includes("complete") ||
+      content.toLowerCase().includes("done") ||
+      content.toLowerCase().includes("finished")) {
+    const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
+    for (const sentence of sentences) {
+      if (sentence.toLowerCase().includes("success") ||
+          sentence.toLowerCase().includes("complete") ||
+          sentence.toLowerCase().includes("done") ||
+          sentence.toLowerCase().includes("finished")) {
+        return sentence.trim().slice(0, 150);
+      }
+    }
+  }
+
+  const firstSentence = content.match(/^[^.!?]+[.!?]+/);
+  return firstSentence ? firstSentence[0].trim().slice(0, 150) : "Session ended";
+}
+
+export function formatSummary(result: SummaryResult): string {
+  const lines: string[] = [];
+  const conv = result.conversation;
+  const sessionId = truncateId(conv.id);
+
+  lines.push(`<SUMMARY session="${sessionId}">`);
+  lines.push(`# ${conv.title}`);
+  lines.push("");
+
+  lines.push("## Goal");
+  lines.push(extractGoal(result.messages));
+  lines.push("");
+
+  const approaches = extractApproach(result.messages);
+  if (approaches.length > 0) {
+    lines.push("## Approach");
+    lines.push(approaches.join("\n"));
+    lines.push("");
+  }
+
+  lines.push("## Outcome");
+  lines.push(summarizeOutcome(result.messages));
+  lines.push("");
+
+  const fileChanges = extractFileChanges(result.messages);
+  if (fileChanges.length > 0) {
+    lines.push("## Files Changed");
+    for (const fc of fileChanges.slice(0, 10)) {
+      const shortPath = truncatePath(fc.path);
+      lines.push(`- ${shortPath} (+${fc.additions} -${fc.deletions})`);
+    }
+    if (fileChanges.length > 10) {
+      lines.push(`  ... and ${fileChanges.length - 10} more files`);
+    }
+    lines.push("");
+  }
+
+  const decisions = extractKeyDecisions(result.messages);
+  if (decisions.length > 0) {
+    lines.push("## Key Decisions");
+    lines.push(decisions.join("\n"));
+    lines.push("");
+  }
+
+  lines.push("</SUMMARY>");
+
+  return lines.join("\n");
+}
+
+interface ListConversation {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+}
+
+interface ListResult {
+  conversations: ListConversation[];
+  scope: string;
+}
+
+interface ListOptions {
+  projectPath?: string;
+  page?: number;
+}
+
+export function formatListResults(result: ListResult, options: ListOptions = {}): string {
+  const lines: string[] = [];
+
+  if (result.conversations.length === 0) {
+    lines.push("No sessions found.");
+    lines.push("Use --mine for only your sessions, -g for all teams.");
+    return lines.join("\n");
+  }
+
+  for (const conv of result.conversations) {
+    const id = truncateId(conv.id);
+    const date = formatDate(conv.updated_at);
+    const link = `https://codecast.sh/conversation/${conv.id}`;
+
+    const time = formatRelativeTime(conv.updated_at);
+    const col = 12;
+    const indent = " ".repeat(col);
+    const timePad = " ".repeat(Math.max(1, col - time.length));
+    const idPad = " ".repeat(Math.max(1, col - id.length));
+    const termWidth = process.stdout.columns || 80;
+    const textWidth = Math.max(20, termWidth - col);
+
+    const titleWrapped = wrapLines(conv.title, textWidth);
+    lines.push(`${c.dim}${time}${c.reset}${timePad}${c.bold}${titleWrapped[0]}${c.reset}`);
+    for (let i = 1; i < titleWrapped.length; i++) {
+      lines.push(`${indent}${c.bold}${titleWrapped[i]}${c.reset}`);
+    }
+    if (conv.subtitle) {
+      const subWrapped = wrapLines(conv.subtitle, textWidth);
+      lines.push(`${c.cyan}${id}${c.reset}${idPad}${c.dim}${subWrapped[0]}${c.reset}`);
+      for (let i = 1; i < subWrapped.length; i++) {
+        lines.push(`${indent}${c.dim}${subWrapped[i]}${c.reset}`);
+      }
+    } else {
+      lines.push(`${c.cyan}${id}${c.reset}`);
+    }
+    lines.push(`${indent}${c.blue}${c.underline}${link}${c.reset}`);
+    lines.push("");
+  }
+
+  const page = options.page ?? 1;
+  lines.push(`${c.dim}Page ${page}. Next: codecast list -p ${page + 1}${c.reset}`);
+
+  return lines.join("\n");
+}
+
+export function formatFeedResults(result: FeedResult, options: FeedOptions = {}): string {
+  const lines: string[] = [];
+
+  lines.push("<FEED>");
+
+  if (result.conversations.length === 0) {
+    lines.push("No conversations found.");
+    lines.push("Use --mine for only your sessions, -g for all teams.");
+    lines.push("</FEED>");
+    return lines.join("\n");
+  }
+
+  const pageInfo = options.page && options.page > 1 ? ` (page ${options.page})` : "";
+  lines.push(`Recent conversations (${result.conversations.length})${pageInfo}\n`);
+
+  // Machine labels earn their line only when they discriminate: several
+  // machines in view, or another person's session (their machine ≠ yours by
+  // definition). A single-machine solo feed would repeat one label as noise.
+  const distinctMachines = new Set(
+    result.conversations.map((cv) => cv.machine).filter(Boolean),
+  ).size;
+
+  for (const conv of result.conversations) {
+    const header = `── ${conv.title} `;
+    const padding = "─".repeat(Math.max(0, 60 - header.length));
+    lines.push(header + padding);
+
+    const userDisplay = conv.user?.name || conv.user?.email;
+    const ownerDisplay = conv.owned_by_me
+      ? "owned by you"
+      : conv.owner
+        ? `owner: ${conv.owner.name || conv.owner.email}`
+        : "";
+    const meta = [
+      truncateId(conv.id),
+      formatSessionPresence({ work_state: "idle", ...conv }),
+      `${conv.message_count} msgs`,
+      truncatePath(conv.project_path),
+      userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      ownerDisplay ? `${c.magenta}${ownerDisplay}${c.reset}` : "",
+    ].filter(Boolean).join(" | ");
+    lines.push(`   ${meta}`);
+
+    // WHERE the session actually works: an explicit worktree beats one derived
+    // from its edits; a session on another machine can't touch your tree.
+    const worktree = conv.worktree || worktreeFromPath(conv.recent_files?.[0]);
+    const quiet =
+      conv.last_activity_at && conv.work_state !== "working"
+        ? formatRelativeTime(conv.last_activity_at)
+        : "";
+    const showMachine = !!conv.machine && (distinctMachines >= 2 || !!conv.user);
+    const place = [
+      worktree ? `${c.magenta}worktree ${worktree}${c.reset}` : "",
+      conv.git_branch && conv.git_branch !== worktree && conv.git_branch !== "HEAD"
+        ? `branch ${conv.git_branch}`
+        : "",
+      showMachine ? `on ${conv.machine}` : "",
+      quiet && quiet !== formatRelativeTime(conv.updated_at) ? `last msg ${quiet}` : "",
+    ].filter(Boolean).join(" · ");
+    if (place) lines.push(`   ${c.dim}${place}${c.reset}`);
+
+    if (conv.recent_files?.length) {
+      const shown = conv.recent_files.slice(0, 3).map((p) => feedFilePath(p, conv.project_path)).join(", ");
+      const more = conv.recent_files.length > 3 ? ` +${conv.recent_files.length - 3}` : "";
+      lines.push(`   ${c.dim}edits:${c.reset} ${shown}${c.dim}${more}${c.reset}`);
+    }
+
+    if (conv.idle_summary && conv.work_state !== "working") {
+      lines.push(`   ${c.dim}summary:${c.reset} ${conv.idle_summary}`);
+    }
+    lines.push("");
+
+    const renderMsg = (msg: FeedPreviewMessage) => {
+      const lineNum = String(msg.line).padStart(4);
+      const role = formatRole(msg.role);
+      if (msg.role === "user") {
+        lines.push(`  ${lineNum}: ${role} ${msg.content}`);
+      } else {
+        lines.push(`       ${lineNum}: ${role} ${msg.content}`);
+      }
+    };
+
+    for (const msg of conv.preview) renderMsg(msg);
+    if (conv.tail?.length) {
+      const lastHead = conv.preview[conv.preview.length - 1];
+      if (!lastHead || conv.tail[0].line > lastHead.line + 1) {
+        lines.push(`       ${c.dim}⋮${c.reset}`);
+      }
+      for (const msg of conv.tail) renderMsg(msg);
+    }
+
+    lines.push("");
+  }
+
+  if (result.conversations.length > 0) {
+    const firstId = truncateId(result.conversations[0].id);
+    const page = options.page ?? 1;
+    lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     cast read ${firstId} <line> --full   # expand tool calls for a message`);
+    lines.push(`     cast diff ${firstId}                # files a session changed, before attributing work`);
+    lines.push(`     cast feed -p ${page + 1}                  # next page`);
+  }
+
+  lines.push("</FEED>");
+
+  return lines.join("\n");
+}
+
+interface MonitorSession {
+  id: string;
+  session_id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  agent_type?: string;
+  agent_status?: string;
+  work_state: string;
+  /** Retired (inbox_killed_at). Shipped by inboxForCLI; the watch stream reads
+   * it to emit a kill as a departure, and the snapshot badges it. */
+  is_killed?: boolean;
+  is_pinned: boolean;
+  is_live: boolean;
+  awaiting_input: boolean;
+  idle_summary: string | null;
+  /** The agent's own pinned "where this stands" line (cast state), when set. */
+  thread_state?: string | null;
+  /** Declared tri-state of that line: "working" | "blocked" | "done". */
+  thread_state_status?: string | null;
+  last_user_message: string | null;
+  label?: string | null;
+  active_plan: { short_id: string; title: string } | null;
+  active_task: { short_id: string; title: string } | null;
+  /** Second-party ownership: who RUNS it (when not the caller) / who OWNS it. */
+  run_by?: string | null;
+  owner?: { name: string | null; email: string | null } | null;
+  owned_by_me?: boolean;
+  role?: { handle: string; name: string } | null;
+}
+
+interface MonitorResult {
+  sessions: MonitorSession[];
+  // stashed / dismissed / killed are three distinct retirement states, not one
+  // "hidden" figure: stashed = hidden but agent ALIVE, dismissed = hidden and
+  // agent torn down, killed = retired (outranks both, so they never double-count).
+  counts: { working: number; needs_input: number; done?: number; dormant?: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; below_fold?: number; total: number };
+  labels?: Array<{ name: string; count: number }>;
+  scope: string;
+}
+
+interface MonitorOptions {
+  state?: string;
+  watch?: boolean;
+  interval?: number;
+  all?: boolean;
+  /** Group the snapshot by the user's labels instead of by work state. */
+  groupByLabel?: boolean;
+  /** "you" (solo) or "team" / "team: <member>" — shown in the header. */
+  scopeLabel?: string;
+  /** Command name for the header + hints (default "cast sessions"). */
+  command?: string;
+  /** Per-session change annotation for --watch: id -> "new" | "working→needs_input". */
+  changes?: Record<string, string>;
+}
+
+// Human label for a work_state transition shown in --watch when a session moves.
+function changeLabel(change: string): string {
+  if (change === "new") return `${c.cyan}NEW${c.reset}`;
+  const arrow = change.replace("_", " ").replace("→", `${c.reset}→${c.cyan}`);
+  return `${c.cyan}${arrow}${c.reset}`;
+}
+
+// One colored, natural-language line for a single work-state change — the unit
+// of the `cast sessions -w` change stream (append-only, never the full set).
+// to === null means the session left the watched set (stopped matching the
+// --state filter, or was dismissed).
+export function formatSessionChangeLine(ch: {
+  id: string; title?: string | null; from?: string | null; to: string | null;
+  is_pinned?: boolean; is_live?: boolean;
+}): string {
+  const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  if (ch.to == null) {
+    const was = String(ch.from ?? "").replace("_", " ");
+    return `${c.dim}${time}${c.reset}  ${c.gray}○${c.reset} ${c.gray}gone${c.reset}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${c.dim}(left the watched set${was ? ` — was ${was}` : ""})${c.reset}`;
+  }
+  const toLabel = WORK_STATE_LABEL[ch.to] ?? ch.to;
+  const dot = ch.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
+  const pin = ch.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
+  const delta = ch.from
+    ? `${c.dim}(${String(ch.from).replace("_", " ")} → ${toLabel})${c.reset}`
+    : `${c.cyan}(new)${c.reset}`;
+  return `${c.dim}${time}${c.reset}  ${dot} ${colorForState(ch.to)}${toLabel}${c.reset}${pin}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${delta}`;
+}
+
+// The `cast sessions` snapshot: a per-user, most-actionable-first view of every
+// session's work state. Renders flat when a --state filter is set, otherwise
+// grouped NEEDS INPUT → WORKING → IDLE. This is the STATIC view (no -w); watch
+// mode is a change stream rendered line-by-line via formatSessionChangeLine.
+export function formatMonitor(result: MonitorResult, options: MonitorOptions = {}): string {
+  const lines: string[] = [];
+  const counts = result.counts || { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, total: 0 };
+  const changes = options.changes || {};
+  const command = options.command || "cast sessions";
+  const clock = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  const scope = options.scopeLabel ? `${c.dim} · ${options.scopeLabel}${c.reset}` : "";
+  const live = options.watch ? `${c.dim} — live, every ${options.interval ?? 3}s (Ctrl-C to exit)${c.reset}` : "";
+  lines.push(`${c.bold}${command}${c.reset}${scope}${live}  ${c.dim}${clock}${c.reset}`);
+
+  // The header reads as "who acts next": you (needs input, done to review),
+  // the agent (working), a machine (dormant), nobody (idle). Older servers
+  // don't send done/dormant; those columns are simply absent then.
+  const summary = [
+    `${c.yellow}needs input ${counts.needs_input}${c.reset}`,
+    ...(counts.done !== undefined ? [`${c.cyan}done ${counts.done}${c.reset}`] : []),
+    `${c.green}working ${counts.working}${c.reset}`,
+    ...(counts.dormant !== undefined ? [`${c.blue}dormant ${counts.dormant}${c.reset}`] : []),
+    `${c.gray}idle ${counts.idle}${c.reset}`,
+  ];
+  const extra: string[] = [];
+  if (counts.pinned) extra.push(`${c.magenta}pinned ${counts.pinned}${c.reset}`);
+  if (counts.live) extra.push(`${c.green}live ${counts.live}${c.reset}`);
+  // Stashed keeps an agent ALIVE while dismissed does not, so merging them into
+  // one figure hid how many processes were still running. All three are TALLIES
+  // like `pinned` and `live` above — NOT a partition of the work-state buckets
+  // to their left. A row carries at most one retirement state (classifyRetirement
+  // picks one), but a LISTED one is also in its work_state figure and in
+  // `total`: a pinned killed session shows up in `idle 1 (pinned 1, killed 1)`.
+  // That is the intended reading of this line, not double-counting.
+  //
+  // EXPECTED, not a bug: this `stashed` figure and the web's Stashed group count
+  // different SETS for a stashed-then-killed row. The web tracks a bucket plus an
+  // orthogonal killed flag, so that row stays in its Stashed group; here killed
+  // wins the single tally, so it lands in `killed` instead. Both are right for
+  // their surface, and this one is the more useful answer where they differ —
+  // `stashed` advertises "agents still running", and a killed agent isn't one.
+  // See classifyRetirement (convex/inboxFilters.ts) for the full scope.
+  if (counts.stashed) extra.push(`${c.dim}stashed ${counts.stashed}${c.reset}`);
+  if (counts.dismissed) extra.push(`${c.dim}dismissed ${counts.dismissed}${c.reset}`);
+  if (counts.killed) extra.push(`${c.red}killed ${counts.killed}${c.reset}`);
+  // Rows under the inbox's cluster cut (the fold): its own figure, listed only
+  // under -a, never folded into the work-state columns.
+  if (counts.below_fold) extra.push(`${c.dim}folded ${counts.below_fold}${c.reset}`);
+  lines.push(
+    summary.join(`  ${c.dim}·${c.reset}  `) +
+    (extra.length ? `   ${c.dim}(${extra.join(", ")})${c.reset}` : "")
+  );
+
+  // Events line (--watch only): summarize what changed since the previous frame.
+  const changeIds = Object.keys(changes);
+  if (options.watch && changeIds.length > 0) {
+    const newCount = changeIds.filter((id) => changes[id] === "new").length;
+    const moved = changeIds.length - newCount;
+    const bits = [
+      newCount ? `${newCount} new` : "",
+      moved ? `${moved} changed state` : "",
+    ].filter(Boolean).join(", ");
+    lines.push(`${c.cyan}Δ ${bits} since last refresh${c.reset}`);
+  }
+  lines.push("");
+
+  if (result.sessions.length === 0) {
+    lines.push(`${c.dim}Nothing${options.state ? ` in "${options.state}"` : " to show"}.${c.reset}`);
+    return lines.join("\n");
+  }
+
+  const renderRow = (s: MonitorSession) => {
+    const badge = formatStateBadge(s);
+    const idPart = `${c.magenta}${truncateId(s.id)}${c.reset}`;
+    const mark = changes[s.id] ? `  ${changeLabel(changes[s.id])}` : "";
+    // Second-party-owned rows: show who runs it (this inbox shows it because
+    // the caller OWNS it), or who it's assigned to when the caller is the runner.
+    const runBy = s.run_by && s.owned_by_me ? `  ${c.magenta}⇄ run by ${s.run_by}${c.reset}` : "";
+    const ownedBy = !s.owned_by_me && s.owner ? `  ${c.dim}→ owner ${s.owner.name || s.owner.email}${c.reset}` : "";
+    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${runBy}${ownedBy}${mark}`);
+
+    const metaBits = [
+      formatRelativeTime(s.updated_at),
+      `${s.message_count} msgs`,
+      truncatePath(s.project_path),
+      s.agent_type,
+    ].filter(Boolean).join(`  ${c.dim}·${c.reset}  `);
+    // Label chip is redundant inside a --by-label group header.
+    const labelChip = s.label && !options.groupByLabel ? `  ${c.cyan}#${s.label}${c.reset}` : "";
+    lines.push(`   ${c.dim}${metaBits}${c.reset}${labelChip}`);
+
+    const ctx = s.active_plan
+      ? `${c.cyan}${s.active_plan.short_id}${c.reset} ${s.active_plan.title}`
+      : s.active_task
+        ? `${c.cyan}${s.active_task.short_id}${c.reset} ${s.active_task.title}`
+        : "";
+    if (ctx) lines.push(`   ${ctx}`);
+
+    // A pinned state is the agent's own account of where the row stands, so it
+    // outranks the generated summary and the last user message. Marked with a
+    // pin so a reader can tell the two apart at a glance.
+    const pinned = threadStateHeadline(s.thread_state || "");
+    if (pinned) {
+      // Marker color = the agent's declared status: cyan working, yellow
+      // blocked (ball in the human's court), green done, blue dormant.
+      const status = parseThreadStateStatus(s.thread_state_status);
+      const markerColor = status === "blocked" ? c.yellow : status === "done" ? c.green : status === "dormant" ? c.blue : c.cyan;
+      lines.push(`   ${markerColor}▪${c.reset} ${pinned.replace(/\s+/g, " ").slice(0, 86)}`);
+    } else {
+      const snippet = (s.idle_summary || s.last_user_message || "").replace(/\s+/g, " ").trim().slice(0, 88);
+      if (snippet) lines.push(`   ${c.dim}${snippet}${c.reset}`);
+    }
+    lines.push("");
+  };
+
+  if (options.groupByLabel) {
+    // Filing view: every row (idle included — labels mostly hold parked
+    // sessions), grouped in the user's label order, unlabeled last.
+    const groups: Array<{ title: string; items: MonitorSession[] }> = [];
+    for (const { name } of result.labels ?? []) {
+      const items = result.sessions.filter((s) => s.label === name);
+      if (items.length) groups.push({ title: `${c.cyan}${name}${c.reset}`, items });
+    }
+    const unlabeled = result.sessions.filter((s) => !s.label);
+    if (unlabeled.length) groups.push({ title: `${c.gray}unlabeled${c.reset}`, items: unlabeled });
+    for (const g of groups) {
+      lines.push(`${c.bold}${g.title}${c.reset} ${c.dim}(${g.items.length})${c.reset}`);
+      lines.push("");
+      g.items.forEach(renderRow);
+    }
+  } else if (options.state) {
+    result.sessions.forEach(renderRow);
+  } else {
+    // Default view reads top-down as "who acts next": NEEDS INPUT and DONE are
+    // yours, WORKING is the agent's, DORMANT is a machine's (an armed trigger,
+    // an open monitor, a declared wait). Idle sessions are summarized as a
+    // one-liner unless -a/--all is passed.
+    const groups: Array<[string, string]> = [
+      ["needs_input", `${c.yellow}NEEDS INPUT${c.reset}`],
+      ["done", `${c.cyan}DONE${c.reset}`],
+      ["working", `${c.green}WORKING${c.reset}`],
+      ["dormant", `${c.blue}DORMANT${c.reset}`],
+    ];
+    if (options.all) groups.push(["idle", `${c.gray}IDLE${c.reset}`]);
+
+    for (const [ws, label] of groups) {
+      const group = result.sessions.filter((s) => s.work_state === ws);
+      if (group.length === 0) continue;
+      lines.push(`${c.bold}${label}${c.reset} ${c.dim}(${group.length})${c.reset}`);
+      lines.push("");
+      group.forEach(renderRow);
+    }
+
+    if (!options.all) {
+      const idleCount = result.sessions.filter((s) => s.work_state === "idle").length;
+      if (idleCount > 0) lines.push(`${c.dim}+ ${idleCount} idle (${command} -a to show)${c.reset}`);
+      lines.push("");
+    }
+  }
+
+  lines.push(`${c.dim}cast read <id> <range>  ·  cast send <id> "msg"  ·  ${command} -w to watch${c.reset}`);
+  return lines.join("\n");
+}
+
+// `cast sessions --labels`: the user's labels with view-scoped session counts.
+export function formatLabelsList(result: MonitorResult, opts?: { project?: string | null }): string {
+  const labels = result.labels ?? [];
+  if (labels.length === 0) {
+    return opts?.project
+      ? `No labels with sessions in ${opts.project} — \`cast sessions --labels -g\` for all projects.`
+      : "No labels yet — file a session with `cast label set <name> <session>` (or use the web sessions sidebar → By label).";
+  }
+  const lines: string[] = [];
+  const labeled = labels.reduce((n, l) => n + l.count, 0);
+  const unlabeled = Math.max(0, (result.counts?.total ?? 0) - labeled);
+  const width = Math.max(...labels.map((l) => l.name.length));
+  const scope = opts?.project ? ` in ${opts.project} ${c.reset}${c.dim}(-g for all projects)` : "";
+  lines.push(`${c.bold}labels${c.reset} ${c.dim}· ${labels.length} labels, ${labeled} sessions filed${scope}${c.reset}\n`);
+  for (const l of labels) {
+    const count = l.count > 0 ? `${l.count}` : `${c.dim}0${c.reset}`;
+    lines.push(`  ${c.cyan}${l.name.padEnd(width)}${c.reset}  ${count}`);
+  }
+  if (unlabeled > 0) lines.push(`  ${c.dim}${"unlabeled".padEnd(width)}  ${unlabeled}${c.reset}`);
+  lines.push(`\n${c.dim}cast sessions --label <name>  ·  cast sessions --by-label${c.reset}`);
+  return lines.join("\n");
+}
+
+interface HandoffMessage {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}
+
+interface HandoffResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: HandoffMessage[];
+}
+
+export function formatHandoff(result: HandoffResult): string {
+  const lines: string[] = [];
+  const conv = result.conversation;
+  const now = new Date().toISOString();
+
+  lines.push(`<HANDOFF generated="${now}">`);
+  lines.push(`# Session Handoff: ${conv.title}`);
+  lines.push("");
+
+  const userRequests: Array<{ line: number; content: string; completed: boolean }> = [];
+  const filesModified = new Set<string>();
+  const filesRead = new Set<string>();
+  let currentFile: string | null = null;
+
+  for (let i = 0; i < result.messages.length; i++) {
+    const msg = result.messages[i];
+
+    if (msg.role === "user" && msg.content) {
+      const nextMsgs = result.messages.slice(i + 1);
+      const hasResponse = nextMsgs.some(m => m.role === "assistant" && (m.content || m.tool_calls?.length));
+      userRequests.push({
+        line: msg.line,
+        content: msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
+        completed: hasResponse,
+      });
+    }
+
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        const input = parseToolInput(tc.input);
+        if (tc.name === "Edit" || tc.name === "Write") {
+          const filePath = input?.file_path as string | undefined;
+          if (filePath) {
+            filesModified.add(filePath);
+            currentFile = filePath;
+          }
+        } else if (tc.name === "Read") {
+          const filePath = input?.file_path as string | undefined;
+          if (filePath) {
+            filesRead.add(filePath);
+            currentFile = filePath;
+          }
+        }
+      }
+    }
+  }
+
+  lines.push("## Current State");
+  const completed = userRequests.filter(r => r.completed);
+  const pending = userRequests.filter(r => !r.completed);
+
+  if (completed.length > 0) {
+    const recentCompleted = completed.slice(-3);
+    for (const req of recentCompleted) {
+      const shortContent = req.content.split("\n")[0].slice(0, 80);
+      lines.push(`- COMPLETE: ${shortContent}`);
+    }
+  }
+
+  if (pending.length > 0) {
+    for (const req of pending) {
+      const shortContent = req.content.split("\n")[0].slice(0, 80);
+      lines.push(`- PENDING: ${shortContent}`);
+    }
+  }
+
+  if (completed.length === 0 && pending.length === 0) {
+    lines.push("- No tracked requests");
+  }
+
+  lines.push("");
+
+  if (currentFile || filesModified.size > 0) {
+    lines.push("## Active Work");
+    if (currentFile) {
+      const shortPath = truncatePath(currentFile);
+      lines.push(`Current file: ${shortPath}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Key Context");
+  if (conv.project_path) {
+    lines.push(`- Project: ${truncatePath(conv.project_path)}`);
+  }
+  lines.push(`- Session: ${truncateId(conv.id)} (${conv.message_count} messages)`);
+  lines.push(`- Last activity: ${formatDate(conv.updated_at)}`);
+  lines.push("");
+
+  if (filesModified.size > 0) {
+    lines.push("## Files Modified");
+    const modifiedList = Array.from(filesModified).slice(-10);
+    for (const f of modifiedList) {
+      lines.push(`- ${truncatePath(f)}`);
+    }
+    lines.push("");
+  }
+
+  if (pending.length > 0) {
+    lines.push("## Next Steps");
+    for (let i = 0; i < Math.min(pending.length, 5); i++) {
+      const req = pending[i];
+      const shortContent = req.content.split("\n")[0].slice(0, 60);
+      lines.push(`${i + 1}. ${shortContent}`);
+    }
+    lines.push("");
+  }
+
+  const recentFiles = Array.from(filesRead).slice(-5).concat(Array.from(filesModified).slice(-5));
+  const uniqueFiles = [...new Set(recentFiles)].slice(-5);
+  if (uniqueFiles.length > 0) {
+    lines.push("## Files to Review");
+    for (const f of uniqueFiles) {
+      lines.push(`- ${truncatePath(f)}`);
+    }
+  }
+
+  lines.push("</HANDOFF>");
+
+  return lines.join("\n");
+}
+
+interface DiffMessage {
+  line?: number;
+  role?: string;
+  content?: string;
+  timestamp?: string;
+  tool_calls?: unknown[];
+  tool_results?: unknown[];
+}
+
+interface DiffSession {
+  id: string;
+  title: string;
+  messages: DiffMessage[];
+  // The server's materialized file changes for the session (Edit/Write calls
+  // plus what the shell-changes hook observed on disk). When present they are
+  // the source of truth for the file tree; the transcript scan below only
+  // covers sessions that predate materialization.
+  fileChanges?: CumulativeChange[];
+  // The server's byte budget cut some changes: the tree below is missing files.
+  fileChangesTruncated?: boolean;
+}
+
+interface DiffInput {
+  sessions: DiffSession[];
+  aggregated: boolean;
+  period?: "today" | "week";
+  mode?: "summary" | "full" | "patch";
+}
+
+interface FileStats {
+  status: "M" | "A" | "D";
+  additions: number;
+  deletions: number;
+  edits: Array<{ oldStr: string; newStr: string }>;
+  writeContent?: string;
+  // A ready unified patch (from the shared folding) that supersedes edits/writeContent.
+  patch?: string;
+}
+
+interface CommitInfo {
+  hash: string;
+  message: string;
+}
+
+function extractDiffData(sessions: DiffSession[]): {
+  files: Map<string, FileStats>;
+  commits: CommitInfo[];
+  toolCounts: Map<string, number>;
+  duration: number;
+  messageCount: number;
+} {
+  const files = new Map<string, FileStats>();
+  const commits: CommitInfo[] = [];
+  const toolCounts = new Map<string, number>();
+  let firstTimestamp: number | null = null;
+  let lastTimestamp: number | null = null;
+  let messageCount = 0;
+
+  for (const session of sessions) {
+    for (const msg of session.messages) {
+      messageCount++;
+
+      if (msg.timestamp) {
+        const ts = new Date(msg.timestamp).getTime();
+        if (!firstTimestamp || ts < firstTimestamp) firstTimestamp = ts;
+        if (!lastTimestamp || ts > lastTimestamp) lastTimestamp = ts;
+      }
+
+      if (msg.tool_calls) {
+        for (const tcRaw of msg.tool_calls) {
+          const tc = tcRaw as { name?: string; input?: unknown } | null;
+          if (!tc || !tc.name) continue;
+
+          toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
+
+          const tcInput = parseToolInput(tc.input);
+          if (!tcInput) continue;
+
+          if (tc.name === "Edit") {
+            const filePath = tcInput.file_path as string;
+            if (!filePath) continue;
+
+            const existing = files.get(filePath) || { status: "M" as const, additions: 0, deletions: 0, edits: [] };
+            const oldStr = (tcInput.old_string as string) || "";
+            const newStr = (tcInput.new_string as string) || "";
+            existing.additions += newStr.split("\n").length;
+            existing.deletions += oldStr.split("\n").length;
+            existing.edits.push({ oldStr, newStr });
+            files.set(filePath, existing);
+          } else if (tc.name === "Write") {
+            const filePath = tcInput.file_path as string;
+            if (!filePath) continue;
+
+            const existing = files.get(filePath);
+            const content = (tcInput.content as string) || "";
+            const lineCount = content.split("\n").length;
+
+            if (!existing) {
+              files.set(filePath, { status: "A", additions: lineCount, deletions: 0, edits: [], writeContent: content });
+            } else {
+              existing.additions += lineCount;
+              existing.writeContent = content;
+              files.set(filePath, existing);
+            }
+          } else if (tc.name === "Bash") {
+            const command = (tcInput.command as string) || "";
+            const commitMatch = command.match(/git commit\s+(?:-m\s+)?["']([^"']+)["']/);
+            if (commitMatch) {
+              commits.push({ hash: "pending", message: commitMatch[1].slice(0, 80) });
+            }
+          }
+        }
+      }
+
+      if (msg.tool_results) {
+        for (const trRaw of msg.tool_results) {
+          const tr = trRaw as { content?: string; isError?: boolean } | null;
+          if (!tr || !tr.content) continue;
+
+          const contentLines = tr.content.split("\n");
+          for (const line of contentLines) {
+            const gitCommitMatch = line.match(/\[[\w-]+\s+([a-f0-9]{7,8})\]\s+(.+)/);
+            if (gitCommitMatch && !commits.find(c => c.hash === gitCommitMatch[1])) {
+              commits.push({ hash: gitCommitMatch[1], message: gitCommitMatch[2].slice(0, 80) });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (const session of sessions) {
+    if (!session.fileChanges?.length) continue;
+    for (const file of computeCumulativeFiles(session.fileChanges, null)) {
+      files.set(file.filename, {
+        status: file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M",
+        additions: file.additions,
+        deletions: file.deletions,
+        edits: [],
+        patch: file.patch,
+      });
+    }
+  }
+
+  const duration = firstTimestamp && lastTimestamp
+    ? Math.round((lastTimestamp - firstTimestamp) / 60000)
+    : 0;
+
+  return { files, commits, toolCounts, duration, messageCount };
+}
+
+function formatUnifiedDiff(filePath: string, stats: FileStats): string[] {
+  const lines: string[] = [];
+  const shortPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+
+  if (stats.patch !== undefined) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push(...stats.patch.replace(/\n$/, "").split("\n"));
+    return lines;
+  }
+
+  if (stats.writeContent !== undefined && stats.edits.length === 0) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push("--- /dev/null");
+    lines.push(`+++ b/${shortPath}`);
+    const contentLines = stats.writeContent.split("\n");
+    lines.push(`@@ -0,0 +1,${contentLines.length} @@`);
+    for (const line of contentLines) {
+      lines.push(`+${line}`);
+    }
+    return lines;
+  }
+
+  if (stats.edits.length > 0) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push(`--- a/${shortPath}`);
+    lines.push(`+++ b/${shortPath}`);
+
+    for (const edit of stats.edits) {
+      const oldLines = edit.oldStr.split("\n");
+      const newLines = edit.newStr.split("\n");
+      lines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+      for (const line of oldLines) {
+        lines.push(`-${line}`);
+      }
+      for (const line of newLines) {
+        lines.push(`+${line}`);
+      }
+    }
+  }
+
+  return lines;
+}
+
+export function formatDiffResults(input: DiffInput): string {
+  const lines: string[] = [];
+  const { sessions, aggregated, period, mode = "summary" } = input;
+
+  if (sessions.length === 0) {
+    return "No sessions to analyze";
+  }
+
+  const { files, commits, toolCounts, duration, messageCount } = extractDiffData(sessions);
+
+  if (mode === "patch") {
+    for (const [filePath, stats] of Array.from(files.entries())) {
+      const diffLines = formatUnifiedDiff(filePath, stats);
+      if (diffLines.length > 0) {
+        lines.push(...diffLines);
+        lines.push("");
+      }
+    }
+    return lines.join("\n");
+  }
+
+  if (aggregated) {
+    const periodLabel = period === "today" ? "Today" : "This Week";
+    lines.push(`<DIFF period="${periodLabel}" sessions="${sessions.length}">`);
+    lines.push(`Sessions: ${sessions.length}`);
+  } else {
+    const session = sessions[0];
+    const sessionId = truncateId(session.id);
+    lines.push(`<DIFF session="${sessionId}" title="${session.title}">`);
+  }
+
+  if (duration > 0) {
+    const hours = Math.floor(duration / 60);
+    const mins = duration % 60;
+    const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} minute${mins !== 1 ? "s" : ""}`;
+    lines.push(`Duration: ${durationStr}`);
+  }
+  lines.push(`Messages: ${messageCount}`);
+  if (sessions.some((session) => session.fileChangesTruncated)) {
+    lines.push("Note: the session's file changes exceed the payload budget; some files are missing below.");
+  }
+  lines.push("");
+
+  if (files.size > 0) {
+    lines.push(`## Files Changed (${files.size})`);
+
+    const sortedFiles = Array.from(files.entries())
+      .sort((a, b) => (b[1].additions + b[1].deletions) - (a[1].additions + a[1].deletions));
+
+    for (const [filePath, stats] of sortedFiles.slice(0, 15)) {
+      const shortPath = truncatePath(filePath);
+      const paddedPath = shortPath.padEnd(40);
+      const statusIcon = stats.status;
+
+      if (stats.status === "A") {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} (new)`);
+      } else if (stats.status === "D") {
+        lines.push(` ${statusIcon} ${paddedPath} -${stats.deletions} (deleted)`);
+      } else if (stats.deletions > 0) {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} -${stats.deletions}`);
+      } else {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions}`);
+      }
+    }
+
+    if (files.size > 15) {
+      lines.push(`   ... and ${files.size - 15} more files`);
+    }
+    lines.push("");
+  }
+
+  if (mode === "full" && files.size > 0) {
+    lines.push("## Diffs");
+    for (const [filePath, stats] of Array.from(files.entries())) {
+      const diffLines = formatUnifiedDiff(filePath, stats);
+      if (diffLines.length > 0) {
+        lines.push(...diffLines);
+        lines.push("");
+      }
+    }
+  }
+
+  const validCommits = commits.filter(c => c.hash !== "pending");
+  if (validCommits.length > 0) {
+    lines.push(`## Commits (${validCommits.length})`);
+    for (const commit of validCommits.slice(0, 10)) {
+      lines.push(`[${commit.hash}] ${commit.message}`);
+    }
+    if (validCommits.length > 10) {
+      lines.push(`   ... and ${validCommits.length - 10} more commits`);
+    }
+    lines.push("");
+  }
+
+  if (toolCounts.size > 0) {
+    lines.push("## Tools Used");
+    const sortedTools = Array.from(toolCounts.entries())
+      .sort((a, b) => b[1] - a[1]);
+
+    for (const [tool, count] of sortedTools) {
+      lines.push(`- ${tool}: ${count} call${count === 1 ? "" : "s"}`);
+    }
+    lines.push("");
+  }
+
+  if (mode === "summary") {
+    lines.push("Use --full for file diffs, --patch for patch only");
+  }
+
+  lines.push("</DIFF>");
+
+  return lines.join("\n");
+}
+
+interface Decision {
+  id: string;
+  title: string;
+  rationale: string;
+  alternatives?: string[];
+  tags?: string[];
+  session_id?: string;
+  message_index?: number;
+  project_path?: string;
+  created_at: string;
+}
+
+interface DecisionsResult {
+  decisions: Decision[];
+  count: number;
+}
+
+export function formatDecisionsResults(result: DecisionsResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<DECISIONS count=${result.count}>`);
+
+  if (result.decisions.length === 0) {
+    lines.push("No decisions found.");
+    lines.push("</DECISIONS>");
+    return lines.join("\n");
+  }
+
+  for (const decision of result.decisions) {
+    const shortId = truncateId(decision.id);
+    const date = new Date(decision.created_at).toISOString().split("T")[0];
+
+    lines.push(`[${shortId}] ${date} - ${decision.title}`);
+    lines.push(`  Why: ${decision.rationale}`);
+
+    if (decision.tags && decision.tags.length > 0) {
+      lines.push(`  Tags: ${decision.tags.join(", ")}`);
+    }
+
+    if (decision.session_id) {
+      const sessionShort = truncateId(decision.session_id);
+      const msgPart = decision.message_index !== undefined ? ` msg ${decision.message_index}` : "";
+      lines.push(`  Session: [${sessionShort}]${msgPart}`);
+    }
+
+    lines.push(`  ID: ${decision.id}`);
+    lines.push("");
+  }
+
+  lines.push("</DECISIONS>");
+
+  return lines.join("\n");
+}
+
+interface Pattern {
+  id: string;
+  name: string;
+  description: string;
+  content?: string;
+  tags?: string[];
+  source_session_id?: string;
+  source_range?: string;
+  usage_count: number;
+  created_at: string;
+}
+
+interface PatternsListResult {
+  patterns: Pattern[];
+  count: number;
+}
+
+export function formatPatternsResults(result: PatternsListResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<PATTERNS count=${result.count}>`);
+
+  if (result.patterns.length === 0) {
+    lines.push("No patterns found.");
+    lines.push("</PATTERNS>");
+    return lines.join("\n");
+  }
+
+  for (let i = 0; i < result.patterns.length; i++) {
+    const pattern = result.patterns[i];
+    const num = String(i + 1).padStart(3, "0");
+
+    lines.push(`[P${num}] ${pattern.name}`);
+    lines.push(`  Description: ${pattern.description}`);
+
+    if (pattern.tags && pattern.tags.length > 0) {
+      lines.push(`  Tags: ${pattern.tags.join(", ")}`);
+    }
+
+    lines.push(`  Used: ${pattern.usage_count} time${pattern.usage_count === 1 ? "" : "s"}`);
+    lines.push("");
+  }
+
+  lines.push("</PATTERNS>");
+
+  return lines.join("\n");
+}
+
+interface PatternShowResult {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  tags?: string[];
+  source_session_id?: string;
+  source_range?: string;
+  usage_count: number;
+  created_at: string;
+}
+
+export function formatPatternShow(result: PatternShowResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<PATTERN name="${result.name}">`);
+  lines.push(`# ${result.name}`);
+  lines.push("");
+  lines.push("## Description");
+  lines.push(result.description);
+  lines.push("");
+
+  if (result.tags && result.tags.length > 0) {
+    lines.push("## Tags");
+    lines.push(result.tags.join(", "));
+    lines.push("");
+  }
+
+  lines.push("## Content");
+  lines.push(result.content);
+  lines.push("");
+
+  if (result.source_session_id) {
+    lines.push("## Source");
+    const sessionShort = truncateId(result.source_session_id);
+    const rangePart = result.source_range ? ` lines ${result.source_range}` : "";
+    lines.push(`Session [${sessionShort}]${rangePart}`);
+    lines.push("");
+  }
+
+  lines.push(`Used: ${result.usage_count} time${result.usage_count === 1 ? "" : "s"}`);
+  lines.push("</PATTERN>");
+
+  return lines.join("\n");
+}
+
+interface SimilarSession {
+  conversation_id: string;
+  session_id?: string;
+  title: string;
+  project_path?: string;
+  updated_at: string;
+  message_count: number;
+  match_type: string;
+  match_detail?: string;
+}
+
+interface SimilarResult {
+  sessions: SimilarSession[];
+  count: number;
+  query_type?: string;
+  query_value?: string;
+}
+
+export function formatSimilarResults(result: SimilarResult, query: { file?: string; session?: string }): string {
+  const lines: string[] = [];
+
+  const queryStr = query.file ? `--file ${query.file}` : `--session ${query.session}`;
+  lines.push(`<SIMILAR query="${queryStr}">`);
+
+  if (result.count === 0) {
+    if (query.file) {
+      lines.push(`No sessions found that touched ${query.file}`);
+      lines.push("");
+      lines.push("Note: File touch data may be sparse for older sessions.");
+    } else {
+      lines.push(`No similar sessions found for ${query.session}`);
+    }
+    lines.push("</SIMILAR>");
+    return lines.join("\n");
+  }
+
+  const queryLabel = query.file || query.session || "query";
+  lines.push(`Found ${result.count} session${result.count === 1 ? "" : "s"} that touched ${queryLabel}\n`);
+
+  for (const session of result.sessions) {
+    const sessionId = session.session_id ? truncateId(session.session_id) : truncateId(session.conversation_id);
+    const date = formatDate(session.updated_at);
+    const title = session.title || "Untitled";
+
+    lines.push(`[${sessionId}] ${date} - "${title}"`);
+
+    if (session.match_detail) {
+      const matchType = session.match_type === "file" ? "Modified" : "Related";
+      lines.push(`  Match: ${matchType} ${session.match_detail}`);
+    }
+
+    lines.push(`  Messages: ${session.message_count}`);
+
+    if (session.project_path) {
+      lines.push(`  Project: ${truncatePath(session.project_path)}`);
+    }
+
+    lines.push("");
+  }
+
+  if (result.sessions.length > 0) {
+    const firstId = result.sessions[0].session_id
+      ? truncateId(result.sessions[0].session_id)
+      : truncateId(result.sessions[0].conversation_id);
+    lines.push(`Use: cast read ${firstId} <range>  # read messages from a session`);
+  }
+
+  lines.push("</SIMILAR>");
+
+  return lines.join("\n");
+}
+
+interface AskSessionDetail {
+  id: string;
+  title: string;
+  messages: Array<{ line: number; role: string; content: string }>;
+  matchLines: number[];
+}
+
+interface AskInput {
+  query: string;
+  sessions: AskSessionDetail[];
+  searchTerms: string[];
+}
+
+function highlightTerms(text: string, terms: string[]): string {
+  let result = text;
+  for (const term of terms) {
+    const regex = new RegExp(`\\b(${term})\\b`, "gi");
+    result = result.replace(regex, "**$1**");
+  }
+  return result;
+}
+
+function extractRelevantSnippet(content: string, terms: string[], maxLength: number = 200): string {
+  if (!content) return "";
+
+  const lower = content.toLowerCase();
+  let bestStart = 0;
+  let bestScore = 0;
+
+  for (let i = 0; i < content.length; i += 50) {
+    const window = lower.slice(i, i + maxLength);
+    let score = 0;
+    for (const term of terms) {
+      if (window.includes(term.toLowerCase())) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+
+  let snippet = content.slice(bestStart, bestStart + maxLength);
+  if (bestStart > 0) snippet = "..." + snippet;
+  if (bestStart + maxLength < content.length) snippet = snippet + "...";
+
+  return snippet.replace(/\n+/g, " ").trim();
+}
+
+export function formatAskResults(input: AskInput): string {
+  const lines: string[] = [];
+  const { query, sessions, searchTerms } = input;
+
+  lines.push(`<ANSWER query="${query}">`);
+
+  if (sessions.length === 0) {
+    lines.push("No relevant information found.");
+    lines.push("</ANSWER>");
+    return lines.join("\n");
+  }
+
+  const snippets: Array<{
+    sessionId: string;
+    title: string;
+    line: number;
+    endLine: number;
+    role: string;
+    content: string;
+    relevance: number;
+  }> = [];
+
+  for (const session of sessions) {
+    for (const msg of session.messages) {
+      if (!msg.content) continue;
+
+      const isMatch = session.matchLines.includes(msg.line);
+      const termMatches = searchTerms.filter(t =>
+        msg.content.toLowerCase().includes(t.toLowerCase())
+      ).length;
+
+      if (isMatch || termMatches > 0) {
+        snippets.push({
+          sessionId: session.id,
+          title: session.title,
+          line: msg.line,
+          endLine: msg.line,
+          role: msg.role,
+          content: msg.content,
+          relevance: (isMatch ? 2 : 0) + termMatches,
+        });
+      }
+    }
+  }
+
+  snippets.sort((a, b) => b.relevance - a.relevance);
+  const topSnippets = snippets.slice(0, 5);
+
+  if (topSnippets.length === 0) {
+    lines.push("Found sessions but no specific matches for the query terms.");
+    lines.push("");
+    lines.push("Related sessions:");
+    for (const session of sessions.slice(0, 3)) {
+      lines.push(`- [${truncateId(session.id)}] ${session.title}`);
+    }
+    lines.push("</ANSWER>");
+    return lines.join("\n");
+  }
+
+  const grouped = new Map<string, typeof topSnippets>();
+  for (const snippet of topSnippets) {
+    const key = snippet.sessionId;
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key)!.push(snippet);
+  }
+
+  let firstSession = true;
+  for (const [sessionId, sessionSnippets] of grouped) {
+    const sessionTitle = sessionSnippets[0].title;
+    const shortId = truncateId(sessionId);
+
+    if (firstSession) {
+      const mainSnippet = sessionSnippets[0];
+      const excerpt = extractRelevantSnippet(mainSnippet.content, searchTerms, 300);
+      const highlighted = highlightTerms(excerpt, searchTerms);
+      lines.push(highlighted);
+      lines.push("");
+      firstSession = false;
+    }
+
+    const minLine = Math.min(...sessionSnippets.map(s => s.line));
+    const maxLine = Math.max(...sessionSnippets.map(s => s.endLine));
+
+    if (sessionSnippets.length > 1 || !firstSession) {
+      const preview = extractRelevantSnippet(sessionSnippets[0].content, searchTerms, 100);
+      lines.push(`- [${shortId}] ${sessionTitle}`);
+      lines.push(`  msg ${minLine}${maxLine !== minLine ? `-${maxLine}` : ""}: ${preview}`);
+    }
+  }
+
+  lines.push("");
+  lines.push("Sources:");
+  for (const [sessionId, sessionSnippets] of grouped) {
+    const shortId = truncateId(sessionId);
+    const minLine = Math.min(...sessionSnippets.map(s => s.line));
+    const maxLine = Math.max(...sessionSnippets.map(s => s.endLine));
+    const title = sessionSnippets[0].title;
+    lines.push(`- [${shortId}] msg ${minLine}${maxLine !== minLine ? `-${maxLine}` : ""}: ${title}`);
+  }
+
+  lines.push("</ANSWER>");
+
+  return lines.join("\n");
+}
+
+interface BlameTouch {
+  conversation_id: string;
+  session_id?: string;
+  title: string;
+  operation: string;
+  line_range?: string;
+  message_index: number;
+  timestamp: string;
+}
+
+interface BlameResult {
+  touches: BlameTouch[];
+  count: number;
+  file_path: string;
+  line?: number;
+}
+
+export function formatBlameResults(result: BlameResult): string {
+  const lines: string[] = [];
+
+  const shortPath = truncatePath(result.file_path);
+  const target = result.line ? `${shortPath}:${result.line}` : shortPath;
+
+  lines.push(`<BLAME target="${target}">`);
+
+  if (result.touches.length === 0) {
+    lines.push("No sessions found that touched this file.");
+    lines.push("</BLAME>");
+    return lines.join("\n");
+  }
+
+  lines.push(`File touched by ${result.count} session${result.count === 1 ? "" : "s"}\n`);
+
+  const groupedBySession = new Map<string, BlameTouch[]>();
+  for (const touch of result.touches) {
+    const key = touch.session_id || touch.conversation_id;
+    const existing = groupedBySession.get(key) || [];
+    existing.push(touch);
+    groupedBySession.set(key, existing);
+  }
+
+  for (const [sessionKey, touches] of groupedBySession) {
+    const first = touches[0];
+    const sessionId = first.session_id || truncateId(first.conversation_id);
+    const date = new Date(first.timestamp).toISOString().split("T")[0];
+
+    lines.push(`[${truncateId(sessionId)}] ${date} - "${first.title}"`);
+
+    const opCounts = new Map<string, number>();
+    for (const t of touches) {
+      opCounts.set(t.operation, (opCounts.get(t.operation) || 0) + 1);
+    }
+
+    const opSummary: string[] = [];
+    for (const [op, count] of opCounts) {
+      const opLabel = op === "write" ? "write (created)" : op;
+      opSummary.push(count > 1 ? `${count}x ${opLabel}` : opLabel);
+    }
+    lines.push(`  Operations: ${opSummary.join(", ")}`);
+
+    const lineRanges = touches.filter(t => t.line_range).map(t => t.line_range);
+    if (result.line && lineRanges.length > 0) {
+      const matching = lineRanges.filter(r => {
+        if (!r) return false;
+        const [start, end] = r.split("-").map(Number);
+        return result.line! >= start && result.line! <= (end || start);
+      });
+      if (matching.length > 0) {
+        lines.push(`  Line ranges: ${matching.slice(0, 3).join(", ")}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  if (groupedBySession.size > 0) {
+    const firstSession = result.touches[0];
+    const firstId = truncateId(firstSession.session_id || firstSession.conversation_id);
+    lines.push(`Use: cast read ${firstId}                # read full session`);
+  }
+
+  lines.push("</BLAME>");
+
+  return lines.join("\n");
+}
+
+interface ContextSession extends SessionPresence {
+  id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  preview?: string;
+  match_type: string;
+  match_detail?: string;
+  files?: string[];
+}
+
+interface ContextRelatedFile {
+  path: string;
+  session_count: number;
+}
+
+interface ContextInput {
+  query?: string;
+  sessions: ContextSession[];
+  related_files: ContextRelatedFile[];
+}
+
+export function formatContextResults(input: ContextInput): string {
+  const lines: string[] = [];
+  const { query, sessions, related_files } = input;
+
+  const queryDisplay = query || "(file-based search)";
+  lines.push(`<CONTEXT query="${queryDisplay}">`);
+
+  if (sessions.length === 0) {
+    lines.push("No relevant sessions found.");
+    lines.push("");
+    lines.push("Try:");
+    lines.push("  cast context \"your task description\"");
+    lines.push("  cast context --file path/to/file.ts");
+    lines.push("</CONTEXT>");
+    return lines.join("\n");
+  }
+
+  lines.push(`Found ${sessions.length} relevant session${sessions.length === 1 ? "" : "s"}\n`);
+
+  lines.push("## Most Relevant");
+  for (const session of sessions.slice(0, 5)) {
+    const shortId = truncateId(session.id);
+    const title = session.title || "Untitled";
+
+    lines.push(`[${shortId}] ${formatSessionPresence(session)} - "${title}"`);
+
+    if (session.preview) {
+      const previewClean = session.preview.replace(/\n+/g, " ").trim();
+      lines.push(`  Preview: ${previewClean}`);
+    }
+
+    if (session.files && session.files.length > 0) {
+      lines.push(`  Files: ${session.files.join(", ")}`);
+    }
+
+    lines.push("");
+  }
+
+  if (sessions.length > 5) {
+    lines.push(`... and ${sessions.length - 5} more sessions`);
+    lines.push("");
+  }
+
+  if (related_files.length > 0) {
+    lines.push("## Related Files");
+    for (const file of related_files.slice(0, 10)) {
+      const count = file.session_count;
+      lines.push(`- ${file.path} (${count} session${count === 1 ? "" : "s"})`);
+    }
+    lines.push("");
+  }
+
+  if (sessions.length > 0) {
+    const firstId = truncateId(sessions[0].id);
+    lines.push(`Use: cast read ${firstId} <range>  # read session messages`);
+    lines.push(`     cast summary ${firstId}        # get session summary`);
+  }
+
+  lines.push("</CONTEXT>");
+
+  return lines.join("\n");
+}
+
+interface ResumeConversation {
+  id: string;
+  session_id?: string;
+  title: string;
+  subtitle?: string | null;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  agent_type?: string;
+  preview?: string;
+  goal?: string;
+  user?: { name: string | null; email: string | null };
+}
+
+interface ResumeResult {
+  conversations: ResumeConversation[];
+  query: string;
+}
+
+export function formatResumeResults(result: ResumeResult): string {
+  const lines: string[] = [];
+  const { conversations, query } = result;
+
+  if (conversations.length === 0) {
+    lines.push(`${c.dim}No sessions found matching "${query}"${c.reset}`);
+    lines.push("");
+    lines.push("Try:");
+    lines.push("  cast resume \"different query\"");
+    lines.push("  cast feed -g  # browse all sessions");
+    return lines.join("\n");
+  }
+
+  const ownConvs = conversations.filter(cv => !cv.user);
+  const teamConvs = conversations.filter(cv => cv.user);
+
+  lines.push(`${c.dim}Found ${conversations.length} session${conversations.length === 1 ? "" : "s"} matching "${query}"${c.reset}`);
+  lines.push("");
+
+  const formatConv = (conv: ResumeConversation, idx: number) => {
+    const num = `${c.bold}${c.cyan}[${idx + 1}]${c.reset}`;
+    const title = conv.title || "Untitled";
+    const relTime = formatRelativeTime(conv.updated_at);
+
+    lines.push(`${num} ${c.bold}${title}${c.reset}`);
+
+    const meta = [
+      `${c.dim}${relTime}${c.reset}`,
+      `${c.dim}${conv.message_count} msgs${c.reset}`,
+    ];
+    if (conv.user) {
+      const name = conv.user.name || conv.user.email || "team member";
+      meta.push(`${c.magenta}${name}${c.reset}`);
+    }
+    const label = agentDisplayName(conv.agent_type);
+    if (label) {
+      meta.push(`${c.yellow}${label}${c.reset}`);
+    }
+    if (conv.project_path) {
+      meta.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
+    }
+    lines.push(`    ${meta.join(" | ")}`);
+
+    const firstMessage = conv.goal || conv.preview;
+    if (firstMessage) {
+      const msgLine = firstMessage.split("\n")[0].trim();
+      const maxLen = 85;
+      if (msgLine.length > maxLen) {
+        lines.push(`    ${c.green}>${c.reset} ${msgLine.slice(0, maxLen)}...`);
+      } else {
+        lines.push(`    ${c.green}>${c.reset} ${msgLine}`);
+      }
+    }
+
+    if (conv.subtitle) {
+      const subtitleLines = conv.subtitle.split("\n").filter((l) => l.trim());
+      const maxLines = 4;
+      const maxLineLen = 83;
+
+      for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
+        const rawLine = subtitleLines[j].trim();
+        if (rawLine.length > maxLineLen) {
+          lines.push(`      ${rawLine.slice(0, maxLineLen)}...`);
+        } else {
+          lines.push(`      ${rawLine}`);
+        }
+      }
+      if (subtitleLines.length > maxLines) {
+        lines.push(`      ${c.dim}... (${subtitleLines.length - maxLines} more)${c.reset}`);
+      }
+    }
+
+    lines.push("");
+  };
+
+  for (let i = 0; i < ownConvs.length; i++) {
+    formatConv(ownConvs[i], i);
+  }
+
+  if (teamConvs.length > 0) {
+    lines.push(`${c.dim}── Team ──${c.reset}`);
+    lines.push("");
+    for (let i = 0; i < teamConvs.length; i++) {
+      formatConv(teamConvs[i], ownConvs.length + i);
+    }
+  }
+
+  lines.push(`${c.dim}Run: cast resume "${query}" and use arrows to pick a session (q to quit)${c.reset}`);
+
+  return lines.join("\n");
+}
+
+type TreeNode = {
+  id: string;
+  short_id?: string;
+  title: string;
+  message_count: number;
+  parent_message_uuid?: string;
+  started_at: number;
+  status: string;
+  is_current: boolean;
+  children: TreeNode[];
+};
+
+export function formatTree(tree: TreeNode): string {
+  const lines: string[] = [];
+  lines.push("");
+  lines.push(`${c.bold}Fork Tree${c.reset}`);
+  lines.push("");
+
+  const renderNode = (node: TreeNode, prefix: string, isLast: boolean, isRoot: boolean) => {
+    const connector = isRoot ? "" : isLast ? "+-- " : "+-- ";
+    const marker = node.is_current ? `${c.bold}${c.magenta}*${c.reset} ` : "  ";
+    const shortId = node.short_id || node.id.slice(0, 7);
+    const title = node.title.length > 50 ? node.title.slice(0, 47) + "..." : node.title;
+    const titleColor = node.is_current ? `${c.bold}${c.magenta}` : "";
+    const titleReset = node.is_current ? c.reset : "";
+
+    lines.push(
+      `${prefix}${connector}${marker}${titleColor}${title}${titleReset} ${c.dim}(${shortId}, ${node.message_count} msgs)${c.reset}`
+    );
+
+    const childPrefix = isRoot ? "" : prefix + (isLast ? "    " : "|   ");
+    for (let i = 0; i < node.children.length; i++) {
+      renderNode(node.children[i], childPrefix, i === node.children.length - 1, false);
+    }
+  };
+
+  renderNode(tree, "  ", true, true);
+  lines.push("");
+
+  return lines.join("\n");
+}

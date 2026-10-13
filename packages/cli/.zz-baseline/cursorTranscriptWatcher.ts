@@ -1,0 +1,107 @@
+import { EventEmitter } from "events";
+import * as path from "path";
+import * as fs from "fs";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
+import { dirFilterByDepth, type WalkFile } from "./fsWalk.js";
+import { isCursorTranscriptPath } from "./workers/scanPolicy.js";
+
+export { isCursorTranscriptPath };
+
+export interface CursorTranscriptEvent {
+  sessionId: string;
+  filePath: string;
+  eventType: "add" | "change";
+}
+
+export interface CursorTranscriptWatcherEvents {
+  session: (event: CursorTranscriptEvent) => void;
+  error: (error: Error) => void;
+  ready: () => void;
+}
+
+export declare interface CursorTranscriptWatcher {
+  on<K extends keyof CursorTranscriptWatcherEvents>(
+    event: K,
+    listener: CursorTranscriptWatcherEvents[K]
+  ): this;
+  emit<K extends keyof CursorTranscriptWatcherEvents>(
+    event: K,
+    ...args: Parameters<CursorTranscriptWatcherEvents[K]>
+  ): boolean;
+}
+
+export class CursorTranscriptWatcher extends EventEmitter {
+  private watcher: RecursiveWatcher | null = null;
+  private historyPath: string;
+
+  constructor(historyPath?: string) {
+    super();
+    this.historyPath =
+      historyPath ||
+      path.join(process.env.HOME || "", ".cursor", "projects");
+  }
+
+  /** Resolves once the priming walk has emitted the existing transcripts;
+   *  immediately when there is no cursor projects dir to watch. */
+  start(): Promise<void> {
+    if (this.watcher) {
+      return this.watcher.whenPrimed();
+    }
+
+    if (!fs.existsSync(this.historyPath)) {
+      return Promise.resolve();
+    }
+
+    this.watcher = new RecursiveWatcher({
+      path: this.historyPath,
+      scanPolicy: { dirs: "cursor", files: "cursor" },
+      filter: isCursorTranscriptPath,
+      // A project dir holds canvases, mcps and terminals next to
+      // agent-transcripts; only the transcript subtree can hold a match.
+      dirFilter: dirFilterByDepth(() => true, (seg) => seg === "agent-transcripts", () => true),
+      // <proj>/agent-transcripts/<id>/<id>.jsonl is depth 4; one spare level.
+      maxDepth: 5,
+      callback: (filePath, eventType) => { if (eventType !== "unlink") this.handleFileEvent(filePath, eventType); },
+      onExisting: (files) => this.emitExistingFilesSorted(files),
+      debounceMs: 100,
+    });
+
+    this.watcher.on("error", (err: Error) => this.emit("error", err));
+    this.watcher.on("ready", () => this.emit("ready"));
+    this.watcher.start();
+    return this.watcher.whenPrimed();
+  }
+
+  whenPrimed(): Promise<void> {
+    return this.watcher ? this.watcher.whenPrimed() : Promise.resolve();
+  }
+
+  // Files the watcher's priming walk found (one walk serves both), newest first.
+  private async emitExistingFilesSorted(files: WalkFile[]): Promise<void> {
+    const watcher = this.watcher;
+    const matched = files.filter((f) => isCursorTranscriptPath(f.rel));
+    matched.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    for (let i = 0; i < matched.length; i++) {
+      if (i % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.watcher !== watcher) return;
+      const file = matched[i];
+      this.handleFileEvent(file.path, "add");
+    }
+  }
+
+  stop(): void {
+    if (this.watcher) {
+      this.watcher.stop();
+      this.watcher = null;
+    }
+  }
+
+  private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
+    this.emit("session", { sessionId: cursorTranscriptSessionId(filePath), filePath, eventType });
+  }
+}
+
+/** A transcript's chat id: its file name without the .txt / .jsonl extension. */
+export function cursorTranscriptSessionId(filePath: string): string {
+  return path.basename(filePath).replace(/\.(txt|jsonl)$/, "");
+}

@@ -1,0 +1,291 @@
+/**
+ * Per-workspace headless Chromium launcher.
+ *
+ * Spawns one Chrome instance per workspace with:
+ *   - Unique CDP port for programmatic control (claude-in-chrome, Playwright, raw CDP)
+ *   - Isolated user-data-dir so cookies/localStorage don't bleed across workspaces
+ *   - Headless mode by default; non-headless available for visual debugging
+ *
+ * Design choices:
+ *   - We do NOT bundle a Chromium binary. We discover the system's Chrome by
+ *     probing well-known paths and the PATH env. Users on machines without
+ *     Chrome get a clear error.
+ *   - The launched process is detached so it survives a daemon restart, but we
+ *     persist its pid so we can SIGTERM it on workspace release.
+ *   - --remote-debugging-port=0 would let Chrome pick a free port but we'd
+ *     have to parse it from DevToolsActivePort file. Instead we get a
+ *     pre-validated free port from the ports module (same primitive
+ *     allocatePorts uses) and pass it explicitly.
+ */
+
+import { spawn, spawnSync } from "../proc.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isPortFree } from "./ports.js";
+
+export interface ChromeInstance {
+  /** OS process id of the spawned Chromium. */
+  pid: number;
+  /** CDP port the instance is listening on (devtools protocol). */
+  cdpPort: number;
+  /** Isolated user-data-dir on disk. */
+  userDataDir: string;
+  /** Whether --headless=new was used. */
+  headless: boolean;
+  /** Resolved path to the Chromium binary that was launched. */
+  binaryPath: string;
+}
+
+export interface LaunchChromeOptions {
+  /** CDP port to bind. Should already be probed free. */
+  cdpPort: number;
+  /** Where to put the isolated profile. Created if absent. */
+  userDataDir: string;
+  /** Default true. Pass false for visual debugging. */
+  headless?: boolean;
+  /** Override binary path (else auto-detect). */
+  binaryPath?: string;
+  /** Max seconds to wait for CDP port to become listening. Default 20. */
+  readyTimeoutSec?: number;
+  /** Extra args appended after the standard set. */
+  extraArgs?: string[];
+}
+
+export class ChromeNotFoundError extends Error {
+  constructor(probed: string[]) {
+    super(
+      `Could not find a Chromium binary. Set CODECAST_CHROMIUM env var, or install Chrome/Chromium. Tried: ${probed.join(", ")}`,
+    );
+    this.name = "ChromeNotFoundError";
+  }
+}
+
+export class ChromeLaunchError extends Error {
+  constructor(message: string, public readonly pid?: number) {
+    super(message);
+    this.name = "ChromeLaunchError";
+  }
+}
+
+export class ChromeStopError extends Error {
+  constructor(public readonly pid: number, timeoutMs: number) {
+    super(`Chromium (pid ${pid}) is still alive ${timeoutMs}ms after SIGKILL`);
+    this.name = "ChromeStopError";
+  }
+}
+
+/**
+ * Resolve the Chromium/Chrome binary path. Returns null if none found
+ * (callers should throw ChromeNotFoundError with the probe list).
+ */
+export function findChromeBinary(): string | null {
+  const probes = chromeBinaryProbes();
+  for (const p of probes) {
+    try {
+      if (fs.existsSync(p) && !fs.statSync(p).isDirectory()) return p;
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
+    try {
+      const found = spawnSync("which", [name], { encoding: "utf-8" }).stdout?.trim();
+      if (found) return found;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/** Probe list (in priority order). Exported for error reporting. */
+export function chromeBinaryProbes(): string[] {
+  const probes: string[] = [];
+  for (const env of [process.env.CODECAST_CHROMIUM, process.env.CHROME_PATH]) if (env) probes.push(env);
+  // macOS app bundles
+  probes.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+  probes.push("/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary");
+  probes.push("/Applications/Chromium.app/Contents/MacOS/Chromium");
+  // Linux package names
+  probes.push("/usr/bin/google-chrome");
+  probes.push("/usr/bin/google-chrome-stable");
+  probes.push("/usr/bin/chromium");
+  probes.push("/usr/bin/chromium-browser");
+  // Snap (Linux)
+  probes.push("/snap/bin/chromium");
+  return probes;
+}
+
+/**
+ * Keychain flags for a macOS launch.
+ *
+ * Chrome on macOS stores its cookie encryption key ("Chrome Safe Storage") in
+ * the login keychain of the home directory it runs under. Under a home that
+ * has no login keychain (a test sandbox, a scratch HOME) the Security
+ * framework answers "no default keychain" (-25307) and macOS raises a modal
+ * "Keychain Not Found" dialog on the desktop for every launch, blocking Chrome
+ * until a person dismisses it. `--use-mock-keychain` makes Chrome keep the key
+ * in memory instead, which is right for such a home: no keychain can exist
+ * there. A real home keeps the real keychain, so profiles that already hold
+ * encrypted cookies stay readable.
+ */
+export function keychainArgs(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== "darwin") return [];
+  const home = env.HOME || os.homedir();
+  const loginKeychain = path.join(home, "Library", "Keychains", "login.keychain-db");
+  return fs.existsSync(loginKeychain) ? [] : ["--use-mock-keychain"];
+}
+
+/** Default args used for every launch. CDP + isolation + automation-friendly. */
+function defaultArgs(opts: LaunchChromeOptions): string[] {
+  return [
+    `--remote-debugging-port=${opts.cdpPort}`,
+    `--user-data-dir=${opts.userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...keychainArgs(),
+    // Disable Chrome's own update / metrics / telemetry side-channels.
+    "--disable-background-networking",
+    "--disable-sync",
+    "--disable-default-apps",
+    // Reduce flakiness in CI/sandbox environments.
+    "--disable-dev-shm-usage",
+    "--disable-features=Translate,InterestFeedContentSuggestions",
+    // Headful only, in effect: an occluded or backgrounded window otherwise
+    // reports visibilityState "hidden" and freezes rAF, so WebGL never paints
+    // and screenshots of it come back blank (see browser/instance.ts).
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+    // Faster startup; we don't need GPU for headless DOM/CDP work.
+    ...(opts.headless !== false ? ["--headless=new"] : []),
+    "--remote-debugging-address=127.0.0.1",
+    "about:blank",
+  ];
+}
+
+/**
+ * Spawn Chromium and wait until its CDP endpoint is reachable.
+ */
+export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeInstance> {
+  const binaryPath = opts.binaryPath ?? findChromeBinary();
+  if (!binaryPath) {
+    throw new ChromeNotFoundError(chromeBinaryProbes());
+  }
+
+  fs.mkdirSync(opts.userDataDir, { recursive: true });
+  const args = [...defaultArgs(opts), ...(opts.extraArgs ?? [])];
+
+  // A missing/invalid binary surfaces differently across runtimes: Node emits
+  // an async 'error' event on the child; Bun may throw synchronously OR emit
+  // 'error'. Capture all three into one ChromeLaunchError.
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(binaryPath, args, {
+      stdio: ["ignore", "ignore", "ignore"],
+      detached: true,
+    });
+  } catch (err) {
+    throw new ChromeLaunchError(
+      `failed to spawn Chromium at '${binaryPath}': ${(err as Error).message}`,
+    );
+  }
+
+  // Latch the first spawn 'error' (e.g., ENOENT) so the readiness loop can
+  // fail fast instead of letting it become an unhandled exception.
+  let spawnError: Error | null = null;
+  child.on("error", (err) => {
+    spawnError = err;
+  });
+
+  // Detach from parent so it survives daemon restart. We track its pid.
+  child.unref();
+
+  if (!child.pid) {
+    throw new ChromeLaunchError("Chromium spawn returned no pid");
+  }
+  const pid = child.pid;
+
+  const readyTimeoutMs = (opts.readyTimeoutSec ?? 20) * 1000;
+  const deadline = Date.now() + readyTimeoutMs;
+  // CDP port goes from free → bound when Chrome is ready.
+  // We poll isPortFree until it returns false (i.e., Chrome is listening).
+  while (Date.now() < deadline) {
+    // A spawn 'error' (e.g., bad binary path) latched asynchronously → fail fast.
+    if (spawnError) {
+      throw new ChromeLaunchError(
+        `failed to spawn Chromium at '${binaryPath}': ${(spawnError as Error).message}`,
+        pid,
+      );
+    }
+    // If the child crashed early, fail fast.
+    if (!isPidAlive(pid)) {
+      throw new ChromeLaunchError(
+        `Chromium exited before CDP became ready (pid ${pid})`,
+        pid,
+      );
+    }
+    if (!(await isPortFree(opts.cdpPort))) {
+      return {
+        pid,
+        cdpPort: opts.cdpPort,
+        userDataDir: opts.userDataDir,
+        headless: opts.headless !== false,
+        binaryPath,
+      };
+    }
+    await sleep(150);
+  }
+  // Timed out — kill the orphan before throwing.
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    /* ignore */
+  }
+  throw new ChromeLaunchError(
+    `Chromium CDP port ${opts.cdpPort} did not become listening within ${opts.readyTimeoutSec ?? 20}s`,
+    pid,
+  );
+}
+
+/** Politely stop a Chrome instance: SIGTERM, then SIGKILL after timeout. */
+export async function stopChrome(
+  pid: number,
+  opts: { timeoutMs?: number; killTimeoutMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 3000;
+  const killTimeoutMs = opts.killTimeoutMs ?? 3000;
+  const stages = [["SIGTERM", timeoutMs], ["SIGKILL", killTimeoutMs]] as const;
+  for (const [signal, waitMs] of stages) {
+    if (!isPidAlive(pid)) return;
+    try {
+      process.kill(pid, signal);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw err;
+    }
+
+    const deadline = performance.now() + waitMs;
+    while (performance.now() < deadline) {
+      if (!isPidAlive(pid)) return;
+      await sleep(Math.min(100, Math.max(0, deadline - performance.now())));
+    }
+  }
+  if (isPidAlive(pid)) throw new ChromeStopError(pid, killTimeoutMs);
+}
+
+/** Returns true if a process with `pid` is alive. Cheap; uses signal 0. */
+export function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fff_ffff) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM" || code === "EACCES") return true;
+    throw err;
+  }
+}

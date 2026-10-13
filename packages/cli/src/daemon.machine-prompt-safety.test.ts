@@ -9,7 +9,7 @@ import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialog } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
-import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
+import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
@@ -145,7 +145,7 @@ function fixture(transport = "tmux", cached = true) {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
-    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, isForcedPastDialog, setForcedPastDialog,
     clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
@@ -226,7 +226,7 @@ function fixture(transport = "tmux", cached = true) {
       "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-      "tmuxWatchablePrefix", "promptIsOwnText", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
+      "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
@@ -238,7 +238,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
     ].map(name => {

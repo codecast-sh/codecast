@@ -1,0 +1,255 @@
+// The live process gate on the machine-global Claude OAuth refresh (ct-49526).
+//
+// A refresh token is single use: the token endpoint mints a new pair and spends
+// the one it was handed. The daemon and a running `claude` read the SAME
+// credential store, so whichever refreshes second presents a token the endpoint
+// has already spent and gets invalid_grant — one of the two copies is stranded.
+// While a live claude holds the active credential the daemon therefore defers
+// its own refresh and reads back whatever the CLI rotated instead
+// (resnapshotIfActiveFresher in ccAccounts.ts).
+//
+// A session holds the keychain credential when it was launched on the
+// keychain login: unpinned, or pinned to the profile that IS the machine's
+// login (accountSourcePrefix runs those on the keychain too). A session pinned
+// to a dormant profile runs on that profile's own credential store instead
+// (ccAccounts.ts, "Per-profile credential stores"): it rotates that store, not
+// the keychain, so the daemon's dormant-profile rotation must stand back from
+// those profiles the same way (liveClaudeProfiles).
+//
+// The set is persisted, because a daemon restart with live panes must come back
+// with the gate still CLOSED — an empty in-memory set would let the first
+// maintenance tick rotate the token out from under a claude that outlived the
+// daemon. Persisted ids are seeded as unconfirmed and released by the first
+// reconcile against the live tmux list, so a pane that died while the daemon
+// was down cannot hold the gate shut forever.
+
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { defaultConfigDir } from "./config/configDir.js";
+import { isClaudeCommand, type ProcRow } from "./processTable.js";
+
+/** One live claude pane: the tmux session name, and the saved profile it was
+ *  launched under (absent = the machine's keychain login). */
+export interface LiveClaudeSession {
+  id: string;
+  account?: string;
+}
+
+interface GateEntry {
+  account?: string;
+  /** Restored from disk and not yet seen in a live tmux list. Holds the gate
+   *  closed until a reconcile either confirms or releases it. */
+  unconfirmed?: boolean;
+}
+
+interface GateFile {
+  sessions: LiveClaudeSession[];
+}
+
+const live = new Map<string, GateEntry>();
+const drainListeners = new Set<() => void>();
+// Which saved profile covers the machine's login right now. Installed by the
+// daemon (ccAccounts.activeProfileName); the default pins nothing, so every
+// pinned session counts as running on its own store.
+let activeProfileResolver: () => string | undefined = () => undefined;
+
+export function setActiveProfileResolver(resolver: () => string | undefined): void {
+  activeProfileResolver = resolver;
+}
+
+// Read-modify-write of one file from marks that can arrive together (two
+// sessions starting at once): without a chain the second write would race the
+// first and one mark would be lost across a restart.
+let writeChain: Promise<void> = Promise.resolve();
+
+function gateStatePath(): string {
+  const dir = defaultConfigDir();
+  return path.join(dir, "cc-live-gate.json");
+}
+
+/** Unpinned, or pinned to the profile that is the machine's login: both run on
+ *  the keychain credential the daemon would otherwise rotate. */
+function holdsActiveCredential(entry: GateEntry, activeProfile: string | undefined): boolean {
+  return !entry.account || entry.account === activeProfile;
+}
+
+function holderCount(): number {
+  const activeProfile = activeProfileResolver();
+  let n = 0;
+  for (const entry of live.values()) if (holdsActiveCredential(entry, activeProfile)) n++;
+  return n;
+}
+
+/** The dormant profiles a live claude runs on (their own stores). */
+export function liveClaudeProfiles(): Set<string> {
+  const activeProfile = activeProfileResolver();
+  const held = new Set<string>();
+  for (const entry of live.values()) {
+    if (entry.account && entry.account !== activeProfile) held.add(entry.account);
+  }
+  return held;
+}
+
+/** True while at least one live claude runs on the machine's keychain login.
+ *  Synchronous by design: the maintenance tick asks on every pass and the
+ *  answer must not cost it a file read. */
+export function hasLiveClaudeOnActiveCredential(): boolean {
+  return holderCount() > 0;
+}
+
+/** Every pane the gate believes is live, newest state first for logging. */
+export function liveClaudeSessions(): LiveClaudeSession[] {
+  return [...live.entries()].map(([id, entry]) => ({ id, ...(entry.account ? { account: entry.account } : {}) }));
+}
+
+/** Called when the last live claude on the keychain login goes away. The
+ *  deferred refresh can run again, and the usage windows that session was
+ *  spending are worth re-reading now rather than up to five minutes later. */
+export function onLiveClaudeDrained(listener: () => void): () => void {
+  drainListeners.add(listener);
+  return () => drainListeners.delete(listener);
+}
+
+function notifyIfDrained(hadHolders: boolean): void {
+  if (!hadHolders || holderCount() > 0) return;
+  for (const listener of [...drainListeners]) listener();
+}
+
+/** A claude pane just started. `account` is the saved profile it was launched
+ *  under, the same value accountSourcePrefix exports as CODECAST_CC_ACCOUNT. */
+export function markClaudeSessionLive(id: string, account?: string): void {
+  live.set(id, account ? { account } : {});
+  void persist();
+}
+
+/** A claude pane went away (killed, reaped, or replaced). */
+export function markClaudeSessionEnded(id: string): void {
+  const hadHolders = holderCount() > 0;
+  if (!live.delete(id)) return;
+  void persist();
+  notifyIfDrained(hadHolders);
+}
+
+/**
+ * Adopt the live tmux list as the truth.
+ *
+ * Ids the list no longer carries are released — that is what frees a seeded id
+ * whose pane died while the daemon was down. Ids the gate never knew are
+ * adopted: a pane started by a previous daemon build, or by hand in tmux, holds
+ * the credential just as firmly as one this process launched. The account
+ * attribution is refreshed from the list too, so a pane re-read after a restart
+ * is judged on its own stamp rather than on what the gate file remembered.
+ *
+ * Callers must pass a list they actually obtained. A tmux call that failed is
+ * not evidence of an empty machine, and reconciling on it would open the gate
+ * while claude is running.
+ */
+export function reconcileLiveClaudeSessions(alive: readonly LiveClaudeSession[]): void {
+  const hadHolders = holderCount() > 0;
+  const seen = new Set<string>();
+  for (const session of alive) {
+    seen.add(session.id);
+    live.set(session.id, session.account ? { account: session.account } : {});
+  }
+  for (const id of [...live.keys()]) if (!seen.has(id)) live.delete(id);
+  void persist();
+  notifyIfDrained(hadHolders);
+}
+
+/**
+ * The claude processes no stamped pane accounts for: a `claude` the user
+ * started by hand in their own terminal. It runs on the keychain login and
+ * self-refreshes it like any other, but carries no tmux stamp, so a gate built
+ * from stamps alone read the machine as idle and rotated the refresh token out
+ * from under it (2026-09-28: a hand-started session parked on "run /login" ten
+ * minutes in, one maintenance tick after launch).
+ *
+ * `stampedPanePids` are the pane pids of the stamped claude panes, which the
+ * gate already counts with their account. A process below one of them, or
+ * below another claude, is already represented. Each remaining process is one
+ * keychain holder, keyed `pid:<n>` so the next reconcile drops it once it exits.
+ */
+export function unstampedClaudeHolders(
+  procs: readonly ProcRow[],
+  stampedPanePids: ReadonlySet<number>,
+  uid: number | undefined = process.getuid?.(),
+): LiveClaudeSession[] {
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const out: LiveClaudeSession[] = [];
+  for (const proc of procs) {
+    if (uid !== undefined && proc.uid !== uid) continue;
+    if (!isClaudeCommand(proc.command) || stampedPanePids.has(proc.pid)) continue;
+    let covered = false;
+    const seen = new Set<number>();
+    for (let parent = byPid.get(proc.ppid); parent && !seen.has(parent.pid); parent = byPid.get(parent.ppid)) {
+      seen.add(parent.pid);
+      if (stampedPanePids.has(parent.pid) || isClaudeCommand(parent.command)) { covered = true; break; }
+    }
+    if (!covered) out.push({ id: `pid:${proc.pid}` });
+  }
+  return out;
+}
+
+/** Restore the gate from disk at daemon start. Every restored id is unconfirmed
+ *  — the gate is closed on it until a reconcile proves the pane is gone. */
+export async function seedLiveClaudeSessions(): Promise<LiveClaudeSession[]> {
+  let parsed: GateFile | null = null;
+  try {
+    parsed = JSON.parse(await fs.promises.readFile(gateStatePath(), "utf-8")) as GateFile;
+  } catch {
+    return [];
+  }
+  const restored: LiveClaudeSession[] = [];
+  for (const session of Array.isArray(parsed?.sessions) ? parsed.sessions : []) {
+    if (!session || typeof session.id !== "string" || !session.id) continue;
+    const account = typeof session.account === "string" && session.account ? session.account : undefined;
+    live.set(session.id, { ...(account ? { account } : {}), unconfirmed: true });
+    restored.push({ id: session.id, ...(account ? { account } : {}) });
+  }
+  return restored;
+}
+
+/** True while any restored id is still waiting for its first reconcile. */
+export function hasUnconfirmedClaudeSessions(): boolean {
+  for (const entry of live.values()) if (entry.unconfirmed) return true;
+  return false;
+}
+
+/**
+ * Persist the current set.
+ *
+ * Async throughout: this runs on the daemon's loop, where one synchronous write
+ * stalls delivery, injection and the heartbeat alike
+ * (daemon.loopBudget.guard.test.ts). Temp file plus rename, without the fsyncs
+ * atomicWriteFile does — the reconcile rebuilds this from tmux, so durability
+ * across a power cut buys nothing.
+ */
+async function persist(): Promise<void> {
+  const snapshot: GateFile = { sessions: liveClaudeSessions() };
+  writeChain = writeChain.then(async () => {
+    const file = gateStatePath();
+    const temp = `${file}.${process.pid}.tmp`;
+    try {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(temp, JSON.stringify(snapshot, null, 2), { mode: 0o644 });
+      await fs.promises.rename(temp, file);
+    } catch {
+      // The gate still holds in memory; the next mark retries the write.
+    }
+  });
+  return writeChain;
+}
+
+/** Await whatever persist() has queued — tests assert on the file. */
+export async function flushLiveClaudeGate(): Promise<void> {
+  await writeChain;
+}
+
+/** Drop all state, in memory and on disk. Tests only. */
+export async function resetLiveClaudeGate(): Promise<void> {
+  live.clear();
+  drainListeners.clear();
+  activeProfileResolver = () => undefined;
+  await persist();
+}

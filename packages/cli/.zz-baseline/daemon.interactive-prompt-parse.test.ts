@@ -1,0 +1,890 @@
+import { describe, expect, test } from "bun:test";
+import { parseInteractivePrompt, jsonlHasPendingAskUserQuestion, spendLimitDialogBanner, usageLimitMenuBanner, jsonlTailEndsWithLimitBanner } from "./daemon.js";
+import { classifyApiErrorBanner } from "@codecast/shared/contracts";
+
+// Regression coverage for dropped Q&A descriptions: Claude Code's AskUserQuestion
+// menu renders each option's description on indented continuation lines BELOW the
+// numbered label. The parser used to capture only same-line (2-space) descriptions
+// and treated the indented continuation lines as "gaps", so every multi-line
+// description was discarded — the web/mobile UIs rendered bare option pills.
+describe("parseInteractivePrompt option descriptions", () => {
+  test("captures multi-line indented descriptions from a real AskUserQuestion menu", () => {
+    const menu = [
+      "How do you want to proceed?",
+      "─────",
+      "□ Rollout",
+      "",
+      "How should I roll out and verify the new Sessions page?",
+      "",
+      "❯ 1. Deploy + restart now",
+      "     Deploy convex functions, restart the daemon, and deploy web — then I screenshot the live page to confirm buckets render.",
+      "     Note: daemon restart resets idle counters, so 'Idle 2h+' is empty for ~2h.",
+      "  2. Convex + web only, no restart",
+      "     Deploy the additive schema/functions and web now (safe, no disruption), but leave the daemon for you to restart later at",
+      "     a quiet moment. Page shows correct buckets once the daemon emits the new fields.",
+      "  3. Hold — commit only",
+      "     Don't deploy or restart anything. I commit the change to a branch and you deploy on your own schedule.",
+      "  4. Just leave it uncommitted",
+      "     Stop here. Changes stay in the working tree for you to review the diff first.",
+      "  5. Type something.",
+      "─────────────",
+      "  6. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("How should I roll out and verify the new Sessions page?");
+    expect(prompt!.options).toEqual([
+      {
+        label: "Deploy + restart now",
+        description:
+          "Deploy convex functions, restart the daemon, and deploy web — then I screenshot the live page to confirm buckets render. Note: daemon restart resets idle counters, so 'Idle 2h+' is empty for ~2h.",
+      },
+      {
+        label: "Convex + web only, no restart",
+        description:
+          "Deploy the additive schema/functions and web now (safe, no disruption), but leave the daemon for you to restart later at a quiet moment. Page shows correct buckets once the daemon emits the new fields.",
+      },
+      {
+        label: "Hold — commit only",
+        description:
+          "Don't deploy or restart anything. I commit the change to a branch and you deploy on your own schedule.",
+      },
+      {
+        label: "Just leave it uncommitted",
+        description: "Stop here. Changes stay in the working tree for you to review the diff first.",
+      },
+      { label: "Type something.", description: undefined },
+      { label: "Chat about this", description: undefined },
+    ]);
+  });
+
+  // A multiSelect AskUserQuestion renders a checkbox between the number and the
+  // label ("1. [ ] Restart"), indents each option's description only 2 spaces — the
+  // SAME column as the non-cursor option rows ("  2.") — and tops the menu with a
+  // "← ☐ Tab ✔ Tab →" question selector. The old parser required 4-space indented
+  // descriptions, so it broke its bottom-up scan at the first 2-space description,
+  // captured only the last 1-2 synthetic rows, stitched the dropped options' text
+  // into a garbled "question", and left "[ ]" glued to the labels. Real incident:
+  // the "Rollout" poll on jx71p2f scraped a card whose only options were
+  // "[ ] Type something" (desc "Submit") and "Chat about this".
+  test("parses a multiSelect menu: strips checkboxes, keeps all options + 2-space descriptions", () => {
+    const sep = "─".repeat(60);
+    const menu = [
+      sep,
+      "←  ☐ Rollout  ✔ Submit  →",
+      "",
+      "How do you want to roll out the fix? (Code is done + tested, currently uncommitted.)",
+      "",
+      "❯ 1. [ ] Restart local daemon",
+      "  launchctl kickstart -k the local daemon: activates the fix locally AND self-heals jx75xtr's 'm1' label via",
+      "  repairProjectPaths. Live tmux sessions survive; brief management gap.",
+      "  2. [ ] Redeploy + clean remote Mac",
+      "  Push updated daemon source to m1@51.159.120.28, restart its daemon, and delete the stale -Users-m1/1a0facc6.jsonl so it",
+      "  stops re-asserting /Users/m1.",
+      "  3. [ ] Commit the change",
+      "  Commit the daemon.ts + projectPathResolver.ts + test changes to a branch. Lets you roll out daemon restarts on your own",
+      "  schedule.",
+      "  4. [ ] Just leave it for now",
+      "  Code stays uncommitted in the working tree; you handle activation later. I'll stop here.",
+      "  5. [ ] Type something",
+      "     Submit",
+      sep,
+      "  6. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe(
+      "How do you want to roll out the fix? (Code is done + tested, currently uncommitted.)",
+    );
+    expect(prompt!.options).toEqual([
+      {
+        label: "Restart local daemon",
+        description:
+          "launchctl kickstart -k the local daemon: activates the fix locally AND self-heals jx75xtr's 'm1' label via repairProjectPaths. Live tmux sessions survive; brief management gap.",
+      },
+      {
+        label: "Redeploy + clean remote Mac",
+        description:
+          "Push updated daemon source to m1@51.159.120.28, restart its daemon, and delete the stale -Users-m1/1a0facc6.jsonl so it stops re-asserting /Users/m1.",
+      },
+      {
+        label: "Commit the change",
+        description:
+          "Commit the daemon.ts + projectPathResolver.ts + test changes to a branch. Lets you roll out daemon restarts on your own schedule.",
+      },
+      {
+        label: "Just leave it for now",
+        description: "Code stays uncommitted in the working tree; you handle activation later. I'll stop here.",
+      },
+      { label: "Type something", description: undefined },
+      { label: "Chat about this", description: undefined },
+    ]);
+    // No checkbox glyphs may survive into any label, and the tab-bar selector must
+    // not leak into the question/header.
+    for (const o of prompt!.options) expect(o.label).not.toMatch(/[\[\]☐☑✔]/);
+    expect(prompt!.question).not.toMatch(/Rollout|Submit|→/);
+    // The checkbox glyphs mark the menu as multiSelect — the only signal once the
+    // hook sidecar is stale, since a pending AUQ never reaches the JSONL on CC ≥2.1.201.
+    expect(prompt!.multiSelect).toBe(true);
+  });
+
+  // A checked multiSelect box ("[x]" / "[✓]") must strip just like the empty one.
+  test("strips checked-checkbox variants from multiSelect labels", () => {
+    const menu = [
+      "Which to enable?",
+      "❯ 1. [x] Caching          Speeds up repeat reads",
+      "  2. [✓] Compression",
+      "  3. [ ] Telemetry",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.options).toEqual([
+      { label: "Caching", description: "Speeds up repeat reads" },
+      { label: "Compression", description: undefined },
+      { label: "Telemetry", description: undefined },
+    ]);
+    expect(prompt!.multiSelect).toBe(true);
+  });
+
+  test("still parses same-line descriptions (legacy 2-space format)", () => {
+    const menu = [
+      "Pick an instance type",
+      "❯ 1. mac2-m2pro.metal    fastest, most expensive",
+      "  2. mac2.metal          cheapest",
+      "Enter to select · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.options).toEqual([
+      { label: "mac2-m2pro.metal", description: "fastest, most expensive" },
+      { label: "mac2.metal", description: "cheapest" },
+    ]);
+    expect(prompt!.multiSelect).toBeUndefined();
+  });
+
+  test("options without descriptions stay description-free", () => {
+    const menu = [
+      "instance type?",
+      "❯ 1. mac2-m2pro.metal",
+      "  2. mac2-m2.metal",
+      "  3. mac2.metal (cheapest)",
+      "Enter to select · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.options).toEqual([
+      { label: "mac2-m2pro.metal", description: undefined },
+      { label: "mac2-m2.metal", description: undefined },
+      { label: "mac2.metal (cheapest)", description: undefined },
+    ]);
+  });
+
+  // An AskUserQuestion whose options carry a `preview` renders the preview as a
+  // box to the RIGHT of the options. tmux capture-pane flattens those columns
+  // onto the option rows, so the trailing "│ … │" got captured as each option's
+  // description — the web card showed box-drawing glyphs smeared across options
+  // (real incident: the "Disk headroom" poll). The scrape must never emit box
+  // art; descriptions from the side panel are dropped (the full-fidelity card
+  // comes from the JSONL tool_use instead).
+  test("strips the right-hand preview side-panel box, never emits box-drawing glyphs", () => {
+    const menu = [
+      " ☐ Disk headroom",
+      "",
+      "The fix is a from-scratch search-index rebuild, but the backend disk is 88% full and I can't resize the Railway volume via",
+      "CLI. How do you want to handle disk headroom before I push the rebuild?",
+      "",
+      "❯ 1. I'll bump the volume         ┌──────────────────────────────────────────────────────────┐",
+      "    (Recommended)                 │ Railway dashboard -> project codecast -> convex-backend  │",
+      "  2. Proceed now, watch disk,     │ -> Settings -> Volume -> increase size to ~400GB.        │",
+      "    abort if needed               │ Apply (brief restart). Then say 'done' and I deploy      │",
+      "  3. Let me inspect disk first    │ the index rename. Rebuild runs with ample headroom;      │",
+      "                                  │ old stale segments drop and likely net-reclaim space.    │",
+      "                                  └──────────────────────────────────────────────────────────┘",
+      "",
+      "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "I'll bump the volume",
+      "Proceed now, watch disk,",
+      "Let me inspect disk first",
+    ]);
+    // The core invariant: no box-drawing characters anywhere in the parsed card.
+    const boxArt = /[─-╿]/; // Unicode "Box Drawing" block
+    expect(prompt!.question).not.toMatch(boxArt);
+    for (const o of prompt!.options) {
+      expect(o.label).not.toMatch(boxArt);
+      if (o.description !== undefined) expect(o.description).not.toMatch(boxArt);
+    }
+  });
+});
+
+// Newer AskUserQuestion menus print a short label "chip" ("□ Stale pending policy")
+// on its own line above the question, and the question itself wraps across several
+// rows. The scrape used to drop the chip (no header on the web card) and take only the
+// LAST wrapped line as the question (a mid-sentence fragment). These cover both fixes.
+describe("parseInteractivePrompt header chip + wrapped question", () => {
+  test("extracts the header chip and stitches a multi-line wrapped question", () => {
+    const menu = [
+      "────────────────────────────────────────────────────",
+      "□ Stale pending policy",
+      "",
+      "How should old undelivered pending messages be resolved? (Today they strand",
+      "after 1h and pin the session in 'Working' forever.)",
+      "",
+      "❯ 1. Deliver if recent, else resolve",
+      "     Keep reviving + delivering (resume the session) up to a cutoff (e.g. 24h); anything older is marked terminal so it drops",
+      "     out of Working WITHOUT injecting into a long-dead session. No 'really old' state, no surprise resurrection of sessions",
+      "     you've moved on from.",
+      "  2. Always deliver, any age",
+      "     Healer revives at any age; daemon resumes even long-finished sessions to inject. Literal 'send them'.",
+      "  3. Resolve only, never auto-inject",
+      "     Old strays are marked terminal + flag cleared so they leave Working; never auto-injected.",
+      "  4. Type something.",
+      "────────────────",
+      "  5. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.header).toBe("Stale pending policy");
+    // The full question, not just the trailing "after 1h …" fragment.
+    expect(prompt!.question).toBe(
+      "How should old undelivered pending messages be resolved? (Today they strand after 1h and pin the session in 'Working' forever.)",
+    );
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Deliver if recent, else resolve",
+      "Always deliver, any age",
+      "Resolve only, never auto-inject",
+      "Type something.",
+      "Chat about this",
+    ]);
+  });
+
+  // The selected option's `preview` renders as a box to the RIGHT of the options, and a
+  // standalone "Notes: press n to add notes" line sits below them. The header chip and a
+  // single-line question must survive; the box art must be dropped; and the "n to add
+  // notes" footer must validate the menu even when no option is pre-selected (no ❯).
+  test("single-line header + right-hand preview box + 'n to add notes' footer", () => {
+    const menu = [
+      "──────────────────────────────────────",
+      "□ Direction",
+      "",
+      "How do you want to proceed on the budget work?",
+      "",
+      "  1. Ship the small fix first        ┌───────────────────────────────────────────┐",
+      "  2. Write the v4 design doc         │ Step 1: dedicated outreach_generation bucket │",
+      "  3. Both, in sequence               │         (+ regression test, verify)          │",
+      "                                     │ Step 2: v4 design doc (_ctx-extension)       │",
+      "                                     │                                              │",
+      "                                     │ Stops the bleeding now AND lands             │",
+      "                                     │ the durable architecture proposal.           │",
+      "                                     └───────────────────────────────────────────┘",
+      "",
+      "              Notes: press n to add notes",
+      "",
+      "Chat about this",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.header).toBe("Direction");
+    expect(prompt!.question).toBe("How do you want to proceed on the budget work?");
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Ship the small fix first",
+      "Write the v4 design doc",
+      "Both, in sequence",
+    ]);
+    const boxArt = /[─-╿]/;
+    expect(prompt!.question).not.toMatch(boxArt);
+    for (const o of prompt!.options) {
+      expect(o.label).not.toMatch(boxArt);
+      if (o.description !== undefined) expect(o.description).not.toMatch(boxArt);
+    }
+  });
+
+  test("legacy menu with no chip yields no header", () => {
+    const menu = [
+      "Pick an instance type",
+      "❯ 1. mac2-m2pro.metal",
+      "  2. mac2.metal",
+      "Enter to select · Esc to cancel",
+    ].join("\n");
+
+    const prompt = parseInteractivePrompt(menu);
+    expect(prompt!.header).toBeUndefined();
+    expect(prompt!.question).toBe("Pick an instance type");
+  });
+});
+
+// The real AskUserQuestion tool_use lands in the JSONL (full fidelity) while the
+// prompt blocks, so the daemon must NOT also emit a degraded scraped card. This
+// drives that decision: a scrape defers iff the latest AskUserQuestion is unanswered.
+describe("jsonlHasPendingAskUserQuestion", () => {
+  const ask = (id: string) =>
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "AskUserQuestion", id, input: { questions: [{ header: "Rollout", question: "q?", options: [{ label: "A", description: "desc" }] }] } }] },
+    });
+  const answer = (id: string) =>
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: 'Your questions have been answered: "q?"="A"' }] } });
+  const text = (t: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+
+  test("pending tool_use with no result → true", () => {
+    expect(jsonlHasPendingAskUserQuestion([text("working"), ask("toolu_1")].join("\n"))).toBe(true);
+  });
+
+  test("answered tool_use → false", () => {
+    expect(jsonlHasPendingAskUserQuestion([ask("toolu_1"), answer("toolu_1"), text("moving on")].join("\n"))).toBe(false);
+  });
+
+  test("no AskUserQuestion at all → false", () => {
+    expect(jsonlHasPendingAskUserQuestion([text("hello"), text("world")].join("\n"))).toBe(false);
+  });
+
+  test("latest is pending even if an earlier one was answered → true", () => {
+    expect(jsonlHasPendingAskUserQuestion([ask("toolu_1"), answer("toolu_1"), ask("toolu_2")].join("\n"))).toBe(true);
+  });
+
+  test("tolerates a truncated/garbage leading line (tail cut mid-line)", () => {
+    const garbage = '{"type":"assistant","message":{"content":[{"type":"tool_us';
+    expect(jsonlHasPendingAskUserQuestion([garbage, ask("toolu_9")].join("\n"))).toBe(true);
+  });
+
+  test("empty input → false", () => {
+    expect(jsonlHasPendingAskUserQuestion("")).toBe(false);
+  });
+});
+
+// Regression: a prose ANSWER whose numbered section headings look like menu options
+// must not parse as an interactive prompt. The old gate searched the entire pane tail
+// below the first "option" for footer-ish hints (including a loose ↑.*↓), so a normal
+// numbered answer — with the idle composer, hint bar, and a session-limit banner far
+// below it — was minted as a fake AskUserQuestion poll card (conv jx795ez, msg 160).
+// A real menu's footer sits inside the dialog, adjacent to the options.
+describe("parseInteractivePrompt rejects prose answers with numbered sections", () => {
+  const proseAnswer = (bottomChrome: string[]) =>
+    [
+      "❯ before this runs - some questions: 1) i thought we are running the ai experiment at 10%?",
+      "",
+      "⏺ Implementation is in flight. Here are the answers to your three questions, all verified against production:",
+      "",
+      "  1. ai_identity — you're right about 10%, and here's what reconciles the numbers",
+      "",
+      "  The flag (outreach-email-ai-identity) is variant-weighted 1000/9000 — exactly 10%, with 3,351 ai_identity vs 29,871",
+      "  control assignments all-time. The ~116 exposures you're seeing (live count: 17 + 105 = 122) are from the flag_exposures table.",
+      "",
+      "  2. The \"coach prompt\" experiment",
+      "",
+      "  It's tip-prompt — the system prompt for live coaching tips streamed to callers during calls (generateCallTip.ts:815).",
+      "  The experiment ran 2026-04-14 → 2026-04-20 and is marked completed, but the flag still splits contacts 50/50.",
+      "",
+      "  3. What \"51% real\" means",
+      "",
+      "  Of 122 exposures, 62 (51%) are from real production sends; the rest are previews. Replies trend ↑ while bookings trend ↓",
+      "  on the disclosure arm, which is the tension to resolve.",
+      "",
+      "⏺ Waiting on the tranche-1 workflow to land; implementers are mid-flight.",
+      "",
+      ...bottomChrome,
+    ].join("\n");
+
+  test("idle composer with a draft + hint bar + session-limit banner → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ 1 [Pasted text #1][Pasted text #2]",
+      "─".repeat(80),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents     You've used 94% of your session limit · resets 3:30am (America/New_York) · /upgrade to keep using Claude Code",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("bare composer + git-style ahead/behind statusline (↑3 ↓2) → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "main ↑3 ↓2 · union-mobile · 94% used",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu directly below the same prose still parses", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "□ Next step",
+      "",
+      "Which fix should land first?",
+      "",
+      "❯ 1. Doom loop",
+      "  2. Pre-enrich dam",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Which fix should land first?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Doom loop", "Pre-enrich dam"]);
+  });
+});
+
+// Regression: this codebase's sessions talk ABOUT terminal UIs, so assistant prose
+// routinely contains literal key-hint vocabulary ("Enter to confirm · Esc to cancel",
+// "←/→ to move between chips") and numbered spec lists. Content heuristics cannot
+// separate that from a real menu — but a real blocking dialog REPLACES the composer,
+// so a spinner row ("✢ Actualizing…"), a composer caret ("❯"), or the shortcut bar
+// visible BELOW the candidate options proves the pane is NOT blocked. Two real
+// incidents (conv jx730d3, 2026-06-11): a 4-item chord spec minted a poll, and prose
+// mentioning "enter to confirm"/"esc to cancel" minted a Continue/Cancel card.
+// A message queued behind a running turn (Claude Code 2.1.263, captured live on
+// 2026-09-08): the queued text renders above the composer as a "❯" block with
+// indented continuation lines, the composer row reads "Press up to edit queued
+// messages", and the footer bar is replaced by "paste again to expand". Neither
+// variant may read it as a dialog — the machine guard would refuse every cast
+// send behind it, and the health check would mint a card whose "question" is
+// another session's message.
+describe("parseInteractivePrompt ignores a queued message above the composer", () => {
+  const queuedPane = [
+    "❯ Without using any tools, write a 3000 word essay about the history of the C programming language. Do not stop early.",
+    "",
+    "✻ Cultivating…",
+    "  ⎿  Tip: Running multiple Claude sessions? Use /color and /rename to tell them apart at a glance.",
+    "",
+    "  ❯ Hold fix is on the shared checkout at e750d83a03, working tree, four files:",
+    "    - outreach/backend/src/lib/agent/prompts/templates/partials/engagement-ladder.njk",
+    "    - outreach/backend/src/lib/agent/prompts/templates/partials/daily-review.njk",
+    "    - outreach/backend/tests/unit/__fixtures__/promptTemplateFidelity/playbook-review-due.txt",
+    "    - outreach/backend/tests/unit/__fixtures__/promptTemplateFidelity/playbook-review-idle.txt",
+    "    Six lines changed, promptTemplateFidelity green against them. The two ops files in the tree (agents/ops.ts, tools/postSlackMessage.ts) are someone else,",
+    "    not mine. timedMemory numbers follow when the three runs land.",
+    "─".repeat(160),
+    "❯ Press up to edit queued messages",
+    "─".repeat(160),
+    "  paste again to expand                                                                                                                                    /rc",
+  ].join("\n");
+
+  test("the health check sees no prompt", () => {
+    expect(parseInteractivePrompt(queuedPane)).toBeNull();
+  });
+
+  test("the machine guard sees no prompt", () => {
+    expect(parseInteractivePrompt(queuedPane, true)).toBeNull();
+  });
+
+  test("a queued message with a paste chip still open reads the same", () => {
+    const chip = queuedPane.replace("❯ Press up to edit queued messages", "❯ [Pasted text #1 +8 lines]");
+    expect(parseInteractivePrompt(chip)).toBeNull();
+    expect(parseInteractivePrompt(chip, true)).toBeNull();
+  });
+});
+
+describe("parseInteractivePrompt rejects prose when the live composer is below it", () => {
+  const composerChrome = [
+    "✢ Actualizing… (3m 6s · ↓ 14.4k tokens · thought for 2s)",
+    "  Fable 5 is now consuming usage credits instead of your plan limits. Update C…",
+    "─".repeat(80),
+    "❯ ",
+    "─".repeat(80),
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt",
+  ];
+
+  test("numbered chord-spec prose with hint-like rows below → null (the jx730d3 poll)", () => {
+    const pane = [
+      "⏺ Let me re-read the request as a spec:",
+      "",
+      "  1. Global chords — work anywhere in the new-session view, not just when the textarea has focus",
+      "  2. ⌥K (vim up) in addition to ⌥↑ → focus the project picker",
+      "  3. ⌥H/⌥L alongside ←/→ to move between chips",
+      "  4. ⌥J from the picker → commit project and drop down to agent selection; Enter",
+      "",
+      "  Also: ↑/↓ inside the agent list should wrap, and the footer reads Enter to confirm · Esc to cancel",
+      "  like the other pickers. Let me check how the existing picker handles this.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("prose mentioning enter/esc hints with the composer below → no confirmation card (the jx730d3 Continue/Cancel)", () => {
+    const pane = [
+      "⏺ Let me read the AgentSwitcher and find where both components are mounted:",
+      "",
+      "  The picker footer will say press Enter to confirm and Esc to cancel when open.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("markdown-quoted numbered list ('> 1. …' cursor lookalike) with composer below → null", () => {
+    const pane = [
+      "⏺ From the PR description:",
+      "",
+      "  > 1. Add the new picker",
+      "  > 2. Wire the chords",
+      "",
+      "  Looks reasonable. Working on it now.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a single weak hint atom below options is not a footer even with no composer (cut pane)", () => {
+    // Pane bottom cut right after the prose: no composer chrome captured. The lone
+    // "←/→ …" prose row below the list must not validate the menu by itself.
+    const pane = [
+      "⏺ Spec recap:",
+      "",
+      "  1. Global chords — work anywhere in the view",
+      "  2. Focus the project picker from the prompt",
+      "",
+      "  ⌥H/⌥L alongside ←/→ to move between chips",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu still parses (no composer below a blocking dialog)", () => {
+    const pane = [
+      "⏺ I need a decision before wiring the chords.",
+      "",
+      "──────────────────────────────────────────────",
+      "□ Chord scope",
+      "",
+      "Should the chords be global or picker-only?",
+      "",
+      "❯ 1. Global",
+      "  2. Picker-only",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Should the chords be global or picker-only?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Global", "Picker-only"]);
+  });
+
+  // Real captured pane (session 63d7b9cf, 2026-06-11): the usage-credit limit
+  // dialog blocks the agent with UNNUMBERED options, so it lands in the
+  // confirmation path. The question must come from below the dialog's ▔ top
+  // rule — the old extraction took the topmost non-hint line of the tail and
+  // shipped "singleton merge implementation:" (assistant prose above the
+  // dialog) as the card's question.
+  //
+  // NOTE: this asserts the PARSE layer only. checkForInteractivePrompt
+  // intercepts this dialog before the card is emitted (spendLimitDialogBanner)
+  // and ships the canonical limit banner instead — the Continue/Cancel card
+  // must never reach the web for a billing dialog.
+  test("usage-limit dialog: real confirmation with the dialog's own question", () => {
+    const pane = [
+      "⏺ This is bug-fix work — let me create a task to track it, then find the",
+      "  singleton merge implementation:",
+      "",
+      "  Searched for 3 patterns, read 1 file, ran 3 shell commands",
+      "▔".repeat(80),
+      "   What do you want to do?                       Usage credit balance: $30.01",
+      "",
+      "   ❯ Adjust monthly spend limit: Unlimited              ← or → to set a limit",
+      "     Wait for limit to reset                 Resets 2:50pm (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.question).toBe("What do you want to do?");
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (confirm)", "Cancel (cancel)"]);
+  });
+
+  test("a REAL bare confirmation (no composer anywhere) still parses", () => {
+    const pane = [
+      "⏺ I'm about to delete the file.",
+      "",
+      "Press Enter to continue, Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (continue)", "Cancel (cancel)"]);
+  });
+});
+
+// Real capture (session 9d308f48, Claude Code 2.1.270, 2026-09-14): after the
+// session moved to Opus 5, Claude Code raised its own effort recommendation as
+// an UNNUMBERED select list with no key hint footer. Nothing parsed it, so no
+// card reached the web and every delivery pasted into the dialog in a loop.
+const EFFORT_DIALOG_PANE = [
+  "❯ whats the per hour rate like we did for other preschool options",
+  "  ⎿  You've hit your monthly spend limit. Run /usage-credits to manage your limit.",
+  "",
+  "✻ Cooked for 1s · done 3:48 PM",
+  "",
+  "─".repeat(214),
+  " We recommend Opus 5 at medium effort",
+  "",
+  "   Opus 5 at medium effort is faster and uses fewer tokens so that you can get more tasks done. Opus 5 at medium effort solves the large majority of coding tasks as well as high. Run /effort to toggle.                 ",
+  " ".repeat(218),
+  "   ❯ Keep high",
+  "     Switch Opus 5 to medium effort",
+  "",
+  "",
+  "",
+].join("\n");
+
+describe("parseInteractivePrompt unnumbered select dialogs", () => {
+  test("the effort recommendation parses with its title, body and options", () => {
+    const prompt = parseInteractivePrompt(EFFORT_DIALOG_PANE);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("We recommend Opus 5 at medium effort");
+    expect(prompt!.detail).toBe(
+      "Opus 5 at medium effort is faster and uses fewer tokens so that you can get more tasks done. Opus 5 at medium effort solves the large majority of coding tasks as well as high. Run /effort to toggle.",
+    );
+    expect(prompt!.options).toEqual([{ label: "Keep high" }, { label: "Switch Opus 5 to medium effort" }]);
+    expect(prompt!.unnumbered).toBe(true);
+    expect(prompt!.isConfirmation).toBeUndefined();
+  });
+
+  test("the machine input guard sees it too", () => {
+    expect(parseInteractivePrompt(EFFORT_DIALOG_PANE, true)?.question).toBe("We recommend Opus 5 at medium effort");
+  });
+
+  test("the same rows in scrollback, with the live composer below, are not a dialog", () => {
+    const scrolled = [
+      EFFORT_DIALOG_PANE.trimEnd(),
+      "",
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    expect(parseInteractivePrompt(scrolled)).toBeNull();
+  });
+
+  test("an indented list with no rule above it is not a dialog", () => {
+    const prose = [
+      "⏺ The menu offers two choices:",
+      "",
+      "   ❯ Keep high",
+      "     Switch Opus 5 to medium effort",
+    ].join("\n");
+    expect(parseInteractivePrompt(prose)).toBeNull();
+  });
+
+  test("footer dialogs keep their existing confirmation shape", () => {
+    // The spend limit dialog is intercepted as a limit park by its
+    // confirmation shape; the select dialog path must not claim it.
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)?.isConfirmation).toBe(true);
+  });
+});
+
+// capture-pane -J fuses a full-width dialog rule onto the text row that follows it,
+// so the usage-limit dialog's question scraped as "▔▔▔…▔ What do you want to do?".
+describe("parseInteractivePrompt strips fused dialog rules from the question", () => {
+  test("▔-run glued onto the question row is dropped", () => {
+    const pane = [
+      "⏺ You've reached your usage limit.",
+      "",
+      "▔".repeat(80) + " What do you want to do?",
+      "",
+      "❯ 1. Switch to usage credits",
+      "  2. Wait for the reset",
+      "  3. Upgrade your plan",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("What do you want to do?");
+  });
+});
+
+// The spend-limit interstitial writes nothing to the JSONL (2026-08-14 incident,
+// session 1e954d8e: the 1:40pm park left the transcript untouched), so this pane
+// signature is codecast's ONLY limit-park signal. The banner it produces must
+// classify as kind "limit" — that classification is what drives the blocked
+// badge, the auto-switch check, and continue-on-reset.
+describe("spendLimitDialogBanner", () => {
+  test("recognizes the live interstitial and emits a canonical limit banner", () => {
+    const pane = [
+      "⏺ Still nothing on Apple's side — dropped again.",
+      "",
+      "▔".repeat(80),
+      "   What do you want to do?                       Usage credit balance: $0.00",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77              ← or → to set a limit",
+      "     Wait for limit to reset                 Resets 2:50pm (America/New_York)",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · Resets 2:50pm (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  // The exact shape from the 2026-08-14 screenshot: two-column rows, the
+  // "Press ← or →" helper row between options and footer, and a dated reset.
+  test("screenshot shape: helper row + dated reset column", () => {
+    const pane = [
+      "⏺ Still nothing on Apple's side — dropped again.",
+      "",
+      "▔".repeat(100),
+      "   What do you want to do?                                  Usage credit balance: $0.00",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77                        ← or → to set a limit",
+      "     Wait for limit to reset                          Resets Sep 1, 12:00am (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)?.isConfirmation).toBe(true);
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · Resets Sep 1, 12:00am (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("no reset column still yields a limit-classified banner", () => {
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = spendLimitDialogBanner(pane);
+    expect(banner).toBe("You've hit your monthly spend limit · parked at the spend limit dialog");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("dialog text without its footer (scrollback echo) does not match", () => {
+    const pane = [
+      "⏺ Earlier the pane showed:",
+      "   ❯ Adjust monthly spend limit: $702.77",
+      "     Wait for limit to reset",
+      "",
+      "❯ ",
+    ].join("\n");
+    expect(spendLimitDialogBanner(pane)).toBeNull();
+  });
+});
+
+// The NUMBERED sibling of the dialog above. It parses as an ordinary menu, so
+// the confirmation-only interception missed it and it shipped as a poll card
+// whose options are billing actions (observed 2026-08-15).
+describe("usageLimitMenuBanner", () => {
+  const labels = [
+    "Stop and wait for limit to reset",
+    "Switch to usage credits",
+    "Switch to Team plan",
+  ];
+
+  test("recognizes the usage-limit menu and emits a limit-classified banner", () => {
+    const pane = [
+      "⏺ Tokens minted and stashed.",
+      "",
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ 1. Stop and wait for limit to reset      Resets 3:30am (America/New_York)",
+      "     2. Switch to usage credits",
+      "     3. Switch to Team plan",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const banner = usageLimitMenuBanner(pane, labels);
+    expect(banner).toBe("You've hit your usage limit · Resets 3:30am (America/New_York)");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("no reset column still yields a limit-classified banner", () => {
+    const banner = usageLimitMenuBanner("   What do you want to do?", labels);
+    expect(banner).toBe("You've hit your usage limit · parked at the usage limit dialog");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+  });
+
+  test("a real question with the same generic prompt is left alone", () => {
+    const pane = [
+      "▔".repeat(80),
+      "   What do you want to do?",
+      "",
+      "   ❯ 1. Rebase onto main",
+      "     2. Merge main in",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(usageLimitMenuBanner(pane, ["Rebase onto main", "Merge main in"])).toBeNull();
+  });
+
+  test("an unrelated confirmation dialog does not match", () => {
+    const pane = [
+      "⏺ I'm about to delete the file.",
+      "",
+      "Press Enter to continue, Esc to cancel",
+    ].join("\n");
+    expect(spendLimitDialogBanner(pane)).toBeNull();
+  });
+});
+
+// Suppress-only mode: when the CLI already wrote its limit banner to the JSONL
+// (the mid-turn shape of the 2026-08-14 incident), the daemon must not stack a
+// synthetic banner — the JSONL banner is the park signal, and the fix is only
+// suppressing the scraped card that used to supersede it.
+describe("jsonlTailEndsWithLimitBanner", () => {
+  const banner = (text: string) => JSON.stringify({
+    isApiErrorMessage: true,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const realTurn = (text: string) => JSON.stringify({
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const limitText = "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
+
+  test("banner as the newest content entry → true", () => {
+    const jsonl = [realTurn("Checking the build."), banner(limitText), ""].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(true);
+  });
+
+  test("banner followed by a real turn (park over) → false", () => {
+    const jsonl = [banner(limitText), realTurn("Resumed after the reset.")].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(false);
+  });
+
+  test("meta entries after the banner don't hide it", () => {
+    const jsonl = [
+      banner(limitText),
+      JSON.stringify({ type: "summary", summary: "…" }),
+      JSON.stringify({ message: { role: "assistant", content: [] } }),
+    ].join("\n");
+    expect(jsonlTailEndsWithLimitBanner(jsonl)).toBe(true);
+  });
+
+  test("auth banner is not a limit park → false", () => {
+    expect(jsonlTailEndsWithLimitBanner(banner("Please run /login"))).toBe(false);
+  });
+
+  test("empty tail → false", () => {
+    expect(jsonlTailEndsWithLimitBanner("")).toBe(false);
+  });
+});

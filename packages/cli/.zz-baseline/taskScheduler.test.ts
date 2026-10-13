@@ -1,0 +1,553 @@
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
+import { deviceId } from "./remote/device.js";
+import { runTriggerPrecheck } from "./precheckRunner.js";
+import { triggerPrecheckPassed } from "@codecast/shared/contracts";
+
+/**
+ * Device-affinity regression tests (ct-36854): a daemon must never claim a
+ * scheduled task it cannot serve. The original bug ran an apply-mode task in
+ * the remote Mac's $HOME because the spawn path silently fell back when the
+ * task's project_path didn't exist on the claiming machine.
+ */
+
+let dir: string;
+let savedRemoteEnv: string | undefined;
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "tasksched-"));
+  savedRemoteEnv = process.env.CODECAST_REMOTE_DEVICE;
+  delete process.env.CODECAST_REMOTE_DEVICE;
+});
+
+afterEach(() => {
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (savedRemoteEnv === undefined) delete process.env.CODECAST_REMOTE_DEVICE;
+  else process.env.CODECAST_REMOTE_DEVICE = savedRemoteEnv;
+});
+
+interface MockCalls {
+  claimed: string[];
+  failed: Array<{ taskId: string; error: string }>;
+  injected: string[];
+  completed: string[];
+  /** The exact prompt each injection carried. */
+  prompts: string[];
+  /** Firings the precheck gate refused, with what it reported. */
+  skipped: Array<{ taskId: string; reason: string; command: string; exitCode?: number; timedOut: boolean; source?: string }>;
+}
+
+function makeScheduler(
+  dueTasks: any[],
+  opts: { claimResult?: (task: any) => any; filing?: "stashed" | "killed" | null; frame?: string } = {},
+) {
+  const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [], prompts: [], skipped: [] };
+  const byId = new Map(dueTasks.map((t) => [t._id, t]));
+  const syncService = {
+    getDueTasks: async () => dueTasks,
+    claimTask: async (taskId: string) => {
+      calls.claimed.push(taskId);
+      const task = byId.get(taskId);
+      // Default: halt executeTask right after the claim attempt so tests never
+      // reach the tmux spawn. Tests of post-claim behavior override this.
+      return opts.claimResult ? opts.claimResult(task) : null;
+    },
+    failTaskRun: async (taskId: string, _daemonId: string, error: string) => {
+      calls.failed.push({ taskId, error });
+    },
+    sendMessageToSession: async (conversationId: string, prompt: string) => {
+      calls.injected.push(conversationId);
+      calls.prompts.push(prompt);
+    },
+    completeTaskRun: async (taskId: string) => {
+      calls.completed.push(taskId);
+    },
+    renewTaskLease: async () => true,
+    // The injection path reads the session's inbox filing to decide whether to
+    // append the stashed preamble. The real one fails open (null on any error);
+    // the fake must exist at all, or the read throws and the whole injection is
+    // reported as a failed run.
+    getSessionFiling: async () => opts.filing ?? null,
+    getInjectFrame: async () => opts.frame ?? null,
+    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string, source?: string) => {
+      calls.skipped.push({
+        taskId,
+        reason,
+        command: result.command,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        source,
+      });
+      return true;
+    },
+  };
+  const scheduler = new TaskScheduler({
+    syncService: syncService as any,
+    config: {},
+    log: () => {},
+    runsFile: path.join(dir, "trigger-runs.json"),
+  });
+  return { scheduler: scheduler as any, calls };
+}
+
+const spawnTask = (id: string, projectPath?: string) => ({
+  _id: id,
+  title: `task ${id}`,
+  prompt: "do the thing",
+  project_path: projectPath,
+});
+
+describe("TaskScheduler across a daemon restart", () => {
+  // tr-1162 (2026-09-29): the daemon restarted a minute into a run. The new
+  // process had a fresh lease identity and an empty run table, so the run's
+  // conversation was born unstamped (a loose Needs Input card), the lease
+  // lapsed, and the re-claim respawned into the same tmux name and killed it.
+  it("keeps its lease identity and adopts the runs the previous daemon left live", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000, runSessionUuid: "run-uuid-1" });
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    expect(second.daemonId).toBe(first.daemonId);
+    second.start();
+    try {
+      const adopted = second.running.get("t1");
+      expect(adopted).toMatchObject({ tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000 });
+      expect(triggerRunTaskId("run-uuid-1")).toBe("t1");
+    } finally {
+      second.stop();
+    }
+  });
+
+  it("forgets a run once it is cleaned up", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000 });
+    first.cleanupTask("t1");
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    second.start();
+    try {
+      expect(second.running.size).toBe(0);
+    } finally {
+      second.stop();
+    }
+  });
+});
+
+describe("a run whose transcript syncs late", () => {
+  // tr-1423 (2026-10-09): the lease lapsed under a frozen daemon, the run was
+  // cleaned up, and its conversation was created 18 minutes later with no stamp.
+  it("keeps the birth stamp through cleanup and a restart until the row exists", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t9", tmuxSession: "ct-claude-late", startedAt: 1000, maxRuntimeMs: 600_000, runSessionUuid: "late-uuid" });
+    first.cleanupTask("t9");
+    expect(triggerRunTaskId("late-uuid")).toBe("t9");
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    second.start();
+    try {
+      expect(triggerRunTaskId("late-uuid")).toBe("t9");
+      forgetTriggerRun("late-uuid");
+      expect(triggerRunTaskId("late-uuid")).toBeUndefined();
+    } finally {
+      second.stop();
+    }
+  });
+});
+
+describe("TaskScheduler device affinity", () => {
+  it("does not claim a spawn task whose project_path is missing locally", async () => {
+    const { scheduler, calls } = makeScheduler([spawnTask("t1", path.join(dir, "nope"))]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual([]);
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("claims a spawn task whose project_path exists locally", async () => {
+    const { scheduler, calls } = makeScheduler([spawnTask("t1", dir)]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["t1"]);
+  });
+
+  it("an ineligible task does not shadow an eligible one behind it", async () => {
+    const { scheduler, calls } = makeScheduler([
+      spawnTask("wrong-machine", path.join(dir, "nope")),
+      spawnTask("here", dir),
+    ]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["here"]);
+  });
+
+  it("claims a path-less task on a local device but not on a remote one", async () => {
+    const local = makeScheduler([spawnTask("t1")]);
+    await local.scheduler.poll();
+    expect(local.calls.claimed).toEqual(["t1"]);
+
+    process.env.CODECAST_REMOTE_DEVICE = "1";
+    const remote = makeScheduler([spawnTask("t1")]);
+    await remote.scheduler.poll();
+    expect(remote.calls.claimed).toEqual([]);
+  });
+
+  it("claims injection tasks regardless of project_path (server routes delivery)", async () => {
+    const task = { ...spawnTask("t1", path.join(dir, "nope")), originating_conversation_id: "conv123" };
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["t1"]);
+    expect(calls.injected).toEqual(["conv123"]);
+    // Nothing about the inbox filing when the session is plainly visible.
+    expect(calls.prompts[0]).not.toContain("STASHED");
+    expect(calls.completed).toEqual(["t1"]);
+  });
+
+  it("claims a task created on this device", async () => {
+    const task = { ...spawnTask("t1", dir), created_device_id: deviceId() };
+    const { scheduler, calls } = makeScheduler([task]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["t1"]);
+  });
+
+  it("never claims a task created on another device, even with the checkout present", async () => {
+    const task = { ...spawnTask("t1", dir), created_device_id: "some-other-device" };
+    const { scheduler, calls } = makeScheduler([task]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual([]);
+  });
+
+  it("device binding outranks the injection exemption", async () => {
+    const task = {
+      ...spawnTask("t1", dir),
+      created_device_id: "some-other-device",
+      originating_conversation_id: "conv123",
+    };
+    const { scheduler, calls } = makeScheduler([task]);
+    await scheduler.poll();
+    expect(calls.claimed).toEqual([]);
+    expect(calls.injected).toEqual([]);
+  });
+
+  it("fails loudly (no $HOME fallback) when the checkout vanishes after the claim", async () => {
+    const task = spawnTask("t1", path.join(dir, "vanished"));
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.failed.length).toBe(1);
+    expect(calls.failed[0].taskId).toBe("t1");
+    expect(calls.failed[0].error).toContain("not found on this device");
+  });
+});
+
+describe("wake-time self-knowledge", () => {
+  const injectTask = () => ({
+    ...spawnTask("t1"),
+    originating_conversation_id: "conv123",
+  });
+
+  it("delivers the frame the server builds for every trigger path", async () => {
+    const frame = '<scheduled-task title="Check Growth\'s area" task-id="t1" trigger="tr-9">\n<role-card handle="growth" name="Growth lead" reports-to="Ada">Looks after: Growth</role-card>\nCheck your area.</scheduled-task>';
+    const { scheduler, calls } = makeScheduler([injectTask()], { claimResult: (t) => t, frame, filing: "stashed" });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toBe(frame);
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("tells a stashed session nobody is watching", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask()], {
+      claimResult: (t) => t,
+      filing: "stashed",
+    });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toContain("This session is STASHED");
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("says nothing when the filing cannot be read", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask()], {
+      claimResult: (t) => t,
+      filing: null,
+    });
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).not.toContain("STASHED");
+  });
+});
+
+describe("spawned run launch flags", () => {
+  it("pins the trigger's model after the configured flags, so it wins", () => {
+    const { agentBin, extraAgentArgs } = buildRunLaunch(
+      { ...spawnTask("t1"), mode: "apply", model: "opus" },
+      { agent_args: { claude: "--model fable" } } as any,
+    );
+    expect(agentBin).toBe("claude");
+    const last = extraAgentArgs.lastIndexOf("--model");
+    expect(extraAgentArgs[last + 1]).toBe("opus");
+    expect(extraAgentArgs.indexOf("--model")).toBeLessThan(last);
+  });
+
+  it("launches on the agent's saved default when no model is pinned", () => {
+    const { extraAgentArgs } = buildRunLaunch({ ...spawnTask("t1"), mode: "apply" }, {} as any);
+    expect(extraAgentArgs).not.toContain("--model");
+  });
+
+  it("a run parked at a usage limit resumes its own session instead of starting a fresh one", () => {
+    const { extraAgentArgs, runSessionUuid } = buildRunLaunch(
+      { ...spawnTask("t1"), mode: "apply", parked_run_session_uuid: "parked-uuid" },
+      {} as any,
+    );
+    expect(runSessionUuid).toBe("parked-uuid");
+    expect(extraAgentArgs).toContain("--resume");
+    expect(extraAgentArgs[extraAgentArgs.indexOf("--resume") + 1]).toBe("parked-uuid");
+    expect(extraAgentArgs).not.toContain("--session-id");
+  });
+
+  // ct-56748: a bare `claude -p` reads the machine keychain, which can sit
+  // signed out while every other launch runs on the fleet store.
+  it("runs a Claude run on the launch account, never the bare keychain login", () => {
+    const prefix = ". /home/x/.codecast/cc-fleet.env 2>/dev/null || true; ";
+    const script = buildRunScript({
+      agentType: "claude", agentBin: "claude", extraAgentArgs: ["--session-id", "u1"],
+      promptFile: "/tmp/p.txt", scriptFile: "/tmp/s.sh", accountPrefix: prefix,
+    });
+    const line = script.split("\n").find((l) => l.includes(" -p "))!;
+    expect(line.startsWith(`${prefix}claude -p "$(cat /tmp/p.txt)"`)).toBe(true);
+  });
+
+  it("leaves a codex run's launch alone", () => {
+    const script = buildRunScript({
+      agentType: "codex", agentBin: "codex", extraAgentArgs: [], promptFile: "/tmp/p.txt", scriptFile: "/tmp/s.sh",
+      accountPrefix: ". /x 2>/dev/null || true; ",
+    });
+    expect(script).not.toContain("/x 2>");
+  });
+
+  it("uses codex's -m for a codex trigger", () => {
+    const { agentBin, extraAgentArgs } = buildRunLaunch(
+      { ...spawnTask("t1"), agent_type: "codex", model: "gpt-5.3-codex" },
+      {} as any,
+    );
+    expect(agentBin).toBe("codex");
+    expect(extraAgentArgs).toContain("-m");
+    expect(extraAgentArgs[extraAgentArgs.indexOf("-m") + 1]).toBe("gpt-5.3-codex");
+  });
+});
+
+describe("trigger run lifecycle guidance", () => {
+  const task = (extra: Record<string, any> = {}) => ({
+    ...spawnTask("task-internal-id"), short_id: "tr-42", schedule_type: "recurring", mode: "apply",
+    prompt: "Keep the ongoing mandate active. Collect the next due cohort after its deadline.",
+    ...extra,
+  });
+  const assertLifecycle = (prompt: string) => {
+    expect(prompt).toContain("cast trigger complete tr-42 --summary");
+    expect(prompt).toContain("Completing one recurring run alone does not retire its trigger");
+    expect(prompt).toContain("bounded trigger and its terminal condition is verified complete");
+    expect(prompt).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
+    expect(prompt).toContain("Quiet or no-change results, quota errors, collector failures, unavailable sources, and pending deadlines are NOT proof of completion");
+    expect(prompt).toContain("A finding does not survive this run on its own");
+    expect(prompt).toContain("the next firing overwrites this trigger's summary");
+    expect(prompt).toContain("File it as a task, add it to the task or plan it already belongs to, or queue a decision");
+    expect(prompt).toContain("--needs-attention claims the human's eyes, so pass it only when they themselves must act");
+    expect(prompt).toContain("open the summary with the ask: what you need them to do");
+    expect(prompt).toContain("Work you have already given an owner does not need their eyes");
+    expect(prompt).toContain("says something needs a look without naming the action");
+    expect(prompt).toContain("widen the interval with cast trigger update tr-42 --every <longer>");
+    expect(prompt).toContain("A quiet run is a reason to slow a trigger down, never a reason to call it complete");
+    expect(prompt).toContain("Ongoing mandates remain active until explicitly ended");
+    expect(prompt).toContain("Do not close unrelated tasks or cancel other triggers");
+    expect(prompt).toContain("subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions");
+    expect(prompt).toContain("if cancellation is outside this run's authority, report the verified outcome and required cancellation");
+    expect(prompt).not.toContain("cast trigger cancel task-internal-id");
+  };
+
+  it("includes the protective lifecycle rules in a spawned run's briefing", () => {
+    const { scheduler } = makeScheduler([]);
+    const input = task();
+    const prompt = scheduler.buildPrompt(input);
+    expect(prompt).toContain(input.prompt);
+    assertLifecycle(prompt);
+  });
+
+  it("injects the same rules inline without changing the stored prompt or completing the purpose", async () => {
+    const input = task({ originating_conversation_id: "conv123" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    const original = input.prompt;
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    const prompt = calls.prompts[0];
+    expect(prompt).toContain(`<scheduled-task title="${input.title}" task-id="${input._id}">${original}`);
+    assertLifecycle(prompt);
+    expect(input.prompt).toBe(original);
+    expect(calls.completed).toEqual([input._id]);
+    expect(calls.failed).toEqual([]);
+    const start = "Trigger lifecycle defaults";
+    const spawnedPrompt = scheduler.buildPrompt(task());
+    expect(prompt.slice(prompt.indexOf(start), prompt.indexOf("</scheduled-task>")))
+      .toBe(spawnedPrompt.slice(spawnedPrompt.indexOf(start), spawnedPrompt.indexOf('\n- To set a follow-up trigger:')));
+  });
+
+  // A role's routine wakes a session whose opening message already says how it
+  // works, so it carries its own prompt and nothing else.
+  it("injects a role's routine with no lifecycle defaults", async () => {
+    const input = task({ originating_conversation_id: "conv123", role_id: "role1" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toBe(`<scheduled-task title="${input.title}" task-id="${input._id}">${input.prompt}</scheduled-task>`);
+  });
+
+  // The briefing and the server post by ONE rule (runResultThreadOf): a run is
+  // told its summary lands in a thread exactly when it does.
+  it("tells a run its summary is posted to a thread only when the server will post it", () => {
+    const { scheduler } = makeScheduler([]);
+    const posted = "Your summary will be posted as a message in the originating conversation thread.";
+    expect(scheduler.buildPrompt(task({ target_conversation_id: "thread1" }))).toContain(posted);
+    expect(scheduler.buildPrompt(task({ schedule_type: "once", created_by_conversation_id: "creator1" }))).toContain(posted);
+    // A repeating fresh run reports to its trigger row, never to the creator.
+    expect(scheduler.buildPrompt(task({ created_by_conversation_id: "creator1" }))).not.toContain(posted);
+    expect(scheduler.buildPrompt(task({ schedule_type: "once" }))).not.toContain(posted);
+  });
+
+  it("keeps the safe-mode mandate and launch restrictions while deferring unauthorized cancellation", () => {
+    const { scheduler } = makeScheduler([]);
+    const input = task({ mode: "propose" });
+    const prompt = scheduler.buildPrompt(input);
+    assertLifecycle(prompt);
+    expect(prompt).toContain("strictly read-only");
+    expect(prompt).toContain("Never modify files, run state-changing commands, commit, push, or deploy");
+    const { extraAgentArgs } = buildRunLaunch(input, {} as any);
+    expect(extraAgentArgs).toContain("--disallowedTools");
+    expect(extraAgentArgs.join(" ")).toContain("strictly read-only");
+  });
+
+  it("an inline run inherits its session permissions without a new mode mandate", async () => {
+    const input = task({ originating_conversation_id: "conv123", mode: "propose" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    await scheduler.poll();
+    assertLifecycle(calls.prompts[0]);
+    expect(calls.prompts[0]).not.toContain("This is a SAFE-mode scheduled run");
+  });
+});
+
+// `cast trigger add --precheck`: the gate decides whether a firing spends a
+// session at all. A refused firing must spawn nothing, inject nothing, and
+// leave a skip record — the only trace that the trigger fired.
+describe("precheck gate", () => {
+  const injectTask = (precheck: string, extra: Record<string, any> = {}) => ({
+    ...spawnTask("t1"),
+    originating_conversation_id: "conv123",
+    schedule_type: "recurring",
+    precheck,
+    ...extra,
+  });
+
+  it("exit 0 lets the run proceed and records no skip", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask("exit 0")], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.completed).toEqual(["t1"]);
+    expect(calls.skipped).toEqual([]);
+  });
+
+  it("a non-zero exit skips the run: nothing injected, nothing failed, a skip recorded", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask("exit 3")], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.claimed).toEqual(["t1"]);
+    expect(calls.injected).toEqual([]);
+    expect(calls.completed).toEqual([]);
+    // A skip is not a failure: retrying it would just re-run the same gate.
+    expect(calls.failed).toEqual([]);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.skipped[0]).toMatchObject({ taskId: "t1", command: "exit 3", exitCode: 3, timedOut: false });
+    expect(calls.skipped[0].reason).toBe("precheck exited 3");
+  });
+
+  it("gates a spawn run too — the tmux spawn is never reached", async () => {
+    const task = { ...spawnTask("t1", dir), schedule_type: "recurring", precheck: "exit 1" };
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("a precheck that never answers skips the run rather than stalling the trigger", async () => {
+    // The scheduler's gate is the 60s production timeout, so drive the runner
+    // it calls with a short one — the contract under test is that a timeout
+    // fails closed, which is what turns into a skip above.
+    const started = Date.now();
+    const result = await runTriggerPrecheck({ command: "sleep 30", cwd: dir, timeoutMs: 300 });
+    expect(result.timedOut).toBe(true);
+    expect(triggerPrecheckPassed(result)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("uses the claimed manual source even when the due row says recurring", async () => {
+    const marker = path.join(dir, "precheck-ran");
+    const task = injectTask(`touch '${marker}'; exit 1`, { project_path: dir, last_run_source: "recurring" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: t => ({ ...t, last_run_source: "manual" }) });
+    await scheduler.poll();
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.skipped).toEqual([]);
+  });
+
+  it.each(["recurring", "scheduled"])("a %s claim after a manual run applies the gate again", async source => {
+    const task = injectTask("exit 1", { project_path: dir, last_run_source: "manual" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: t => ({ ...t, last_run_source: source }) });
+    await scheduler.poll();
+    expect(calls.injected).toEqual([]);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.skipped[0].source).toBe(source);
+  });
+
+  it("a server without firing stamps derives the source from the schedule, never the old row", async () => {
+    const task = injectTask("exit 1", { project_path: dir, last_run_source: "manual" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: () => ({ status: "running" }) });
+    await scheduler.poll();
+    expect(calls.skipped[0].source).toBe("recurring");
+    expect(calls.injected).toEqual([]);
+  });
+
+  it("an event trigger ignores the precheck — the webhook already is the evidence", async () => {
+    const task = injectTask("exit 1", { schedule_type: "event" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+  });
+
+  it("runs ungated when the named directory is gone, rather than answering about $HOME", async () => {
+    const task = injectTask("exit 1", { project_path: path.join(dir, "vanished") });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+  });
+
+  it("a trigger with no precheck runs exactly as before", async () => {
+    const task = { ...spawnTask("t1"), originating_conversation_id: "conv123" };
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.poll();
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+  });
+});
+
+// The finished check reads the pane's process tree, never the prompt text: a
+// prompt ending in ":" (this machine's) is not a "$", and the old text check
+// left every finished run sitting until the 10 min cap.
+describe("runPaneFinished", () => {
+  it("a pane whose shell has no children is finished; a missing session is finished; a live child is not", async () => {
+    const tmux = await import("./tmux.js");
+    const live = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: 0, stdout: "4242\n", stderr: "" });
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(true);
+    expect(await runPaneFinished("ct-claude-x", async () => "4300\n")).toBe(false);
+    live.mockResolvedValue({ status: 1, stdout: "", stderr: "can't find session: ct-claude-x", code: 1 } as any);
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(true);
+    live.mockResolvedValue({ status: null, stdout: "", stderr: "", killed: true } as any);
+    expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(false);
+    live.mockRestore();
+  });
+});

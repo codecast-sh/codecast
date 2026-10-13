@@ -1,0 +1,38 @@
+event: status
+data: {"runId":"run-5e77f9d7-e1e5-4213-b30f-6d6051ec98e8","status":"FINISHED"}
+
+id: 1790668447451-0
+event: tool_call
+data: {"callId": "toolu_01VSnKCZ2NzLEgwaqadi5kJv", "name": "run_terminal_cmd", "status": "running", "args": {"command": "uname -a", "timeout": 600000, "toolCallId": "toolu_01VSnKCZ2NzLEgwaqadi5kJv", "simpleCommands": ["uname"], "parsingResult": {"executableCommands": [{"name": "uname", "args": [{"type": "word", "value": "-a"}], "fullText": "uname -a"}]}, "fileOutputThresholdBytes": "10000", "timeoutBehavior": "TIMEOUT_BEHAVIOR_BACKGROUND", "hardTimeout": 86400000, "description": "Get system information", "closeStdin": true, "conversationId": "bc-f778d439-1bd2-4f6a-ae1e-26ae7c4bdac5", "requestId": "serverGenReqId_163cf1c0-ffd8-427d-9dcb-83e5aa84572c"}}
+
+id: 1790668447775-0
+event: tool_call
+data: {"callId": "toolu_01VSnKCZ2NzLEgwaqadi5kJv", "name": "run_terminal_cmd", "status": "completed", "args": {"command": "uname -a", "timeout": 600000, "toolCallId": "toolu_01VSnKCZ2NzLEgwaqadi5kJv", "simpleCommands": ["uname"], "parsingResult": {"executableCommands": [{"name": "uname", "args": [{"type": "word", "value": "-a"}], "fullText": "uname -a"}]}, "fileOutputThresholdBytes": "10000", "timeoutBehavior": "TIMEOUT_BEHAVIOR_BACKGROUND", "hardTimeout": 86400000, "description": "Get system information", "closeStdin": true, "conversationId": "bc-f778d439-1bd2-4f6a-ae1e-26ae7c4bdac5", "requestId": "serverGenReqId_163cf1c0-ffd8-427d-9dcb-83e5aa84572c"}, "result": {"success": {"command": "uname -a", "stdout": "Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Thu Sep 24 16:04:37 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n", "executionTime": 321, "interleavedOutput": "Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Thu Sep 24 16:04:37 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n", "localExecutionTimeMs": 72}, "isBackground": false}}
+
+id: 1790668448495-0
+event: interaction_update
+data: {"type":"step-started","stepId":21}
+
+id: 1790668450040-0
+event: assistant
+data: {"text":"p"}
+
+id: 1790668450081-0
+event: assistant
+data: {"text":"ong"}
+
+id: 1790668450204-0
+event: interaction_update
+data: {"type":"turn-ended"}
+
+event: status
+data: {"runId":"run-5e77f9d7-e1e5-4213-b30f-6d6051ec98e8","status":"FINISHED"}
+
+id: 1790668453152-0
+event: result
+data: {"runId":"run-5e77f9d7-e1e5-4213-b30f-6d6051ec98e8","status":"FINISHED","text":"pong","durationMs":29740}
+
+id: 1790668453152-0
+event: done
+data: {}
+
