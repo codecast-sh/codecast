@@ -14,6 +14,7 @@ import "./sim.css";
 import { isJobStalled, type JobState } from "./simJobState";
 import { shortSha } from "@platform/evals/client";
 import { type GridRow, gridRows, markersFor, cellFailure, rowTouches, ago, simExitedBad, simOutcome, simSessionOpen, SIM_OPEN_WORDS } from "./simModel";
+import { Button } from "../ui/button";
 
 export type SweepState = JobState;
 
@@ -351,9 +352,9 @@ function SweepBar({ scenarios, sweep, onSweep }: { scenarios: string[]; sweep: S
         seeds
         <input className="evs-input" type="number" min={1} max={2000} value={seeds} onChange={(e) => setSeeds(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))} disabled={busy} aria-label="Seeds" style={{ width: 80 }} />
       </label>
-      <button type="button" className="ev-btn ev-btn--lg ev-btn--go sol-btn-solid" disabled={busy} onClick={() => onSweep(filter.trim(), seeds)} data-evs-sweep-start>
+      <Button type="button" variant="cyan" size="sm" disabled={busy} onClick={() => onSweep(filter.trim(), seeds)} data-evs-sweep-start>
         Run {seeds} seeds
-      </button>
+      </Button>
       <code className="ev-mono evs-note">
         bun run sim{filter.trim() ? ` ${filter.trim()}` : ""} --sweep {seeds}
       </code>

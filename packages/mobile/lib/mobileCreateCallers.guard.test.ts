@@ -5,6 +5,10 @@ const inboxSource = readFileSync(
   `${import.meta.dir}/../app/(tabs)/inbox.tsx`,
   "utf8",
 );
+const sheetSource = readFileSync(
+  `${import.meta.dir}/../components/session/NewSessionSheet.tsx`,
+  "utf8",
+);
 const authSource = readFileSync(
   `${import.meta.dir}/auth.tsx`,
   "utf8",
@@ -14,16 +18,16 @@ const layoutSource = readFileSync(
   "utf8",
 );
 
-function sourceBetween(start: string, end: string): string {
-  const startIndex = inboxSource.indexOf(start);
-  const endIndex = inboxSource.indexOf(end, startIndex);
+function sourceBetween(start: string, end: string, source = sheetSource): string {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex);
   expect(startIndex).toBeGreaterThanOrEqual(0);
   expect(endIndex).toBeGreaterThan(startIndex);
-  return inboxSource.slice(startIndex, endIndex);
+  return source.slice(startIndex, endIndex);
 }
 
 describe("mobile result-dependent create callers", () => {
-  // Starting a session is instant: the sheet closes and the stub opens in the
+  // Starting a session is instant: the stub opens and the sheet closes in the
   // same tick, with the create's outbox row already on disk. Awaiting the server
   // here put a network round trip between the tap and the screen.
   test("session create navigates to the stub without awaiting the server", () => {
@@ -31,12 +35,26 @@ describe("mobile result-dependent create callers", () => {
     expect(submit).toContain("deferCreate: true");
     expect(submit).not.toMatch(/\bawait\b/);
     const watch = submit.indexOf("watchSessionCreate(stubId, started.materialize(), create)");
-    const finish = submit.indexOf("finishSessionCreate(stubId)");
+    const finish = submit.indexOf("finishSessionCreate(stubId, !text)");
     expect(watch).toBeGreaterThanOrEqual(0);
     expect(finish).toBeGreaterThan(watch);
     const finishBody = sourceBetween("const finishSessionCreate", "const handleSubmit");
-    expect(finishBody).toContain("onClose()");
+    // The session is pushed under the sheet, and the sheet closes only once
+    // that screen has drawn, so it never slides off the screen it opened over.
     expect(finishBody).toContain("onSessionCreated(");
+    expect(finishBody).not.toContain("onClose()");
+    const host = sourceBetween("export function ComposeHost", "\n}\n");
+    expect(host).toContain("awaitSessionLanding()");
+    const sessionSource = readFileSync(`${import.meta.dir}/../app/session/[id].tsx`, "utf8");
+    expect(sessionSource).toMatch(/if \(!reveal\) return;\s*sessionLanded\(\);/);
+  });
+
+  // The sheet is prompt first: typed words become the first message, queued on
+  // the stub and sent once the create has a real id, never awaited here.
+  test("the sheet's words ride the stub as its first message", () => {
+    const submit = sourceBetween("const handleSubmit", "\n  return (");
+    expect(submit).toContain("store.addOptimisticMessage(stubId, text)");
+    expect(submit).toContain("store.sendMessageWhenReady(stubId, text, undefined, clientId)");
   });
 
   // A refused create must not vanish silently once the sheet is gone: it is
@@ -54,6 +72,7 @@ describe("mobile result-dependent create callers", () => {
     const picker = sourceBetween(
       "const openLabelPicker",
       "const handleSessionLongPress",
+      inboxSource,
     );
 
     expect(picker).toContain("mobileCreateFailureDisposition");
@@ -74,12 +93,12 @@ describe("mobile new-session launch options", () => {
   // the machine holding the checkout, and stable_mode overrides `cast stable`.
   test("only explicit non-default picks are stamped", () => {
     // The folder list is scoped only by an explicit machine pick.
-    expect(inboxSource).toContain("useScopedRecentProjects({ scopedDeviceId: deviceId,");
+    expect(sheetSource).toContain("useScopedRecentProjects({ scopedDeviceId: deviceId,");
     // The sheet paints from the store on open: machines and folders are fed
     // app-wide (StoreSyncBridge), never queried when the sheet appears.
-    expect(inboxSource).not.toContain("api.devices.listDevices");
-    expect(inboxSource).not.toContain("api.users.getRecentProjectPaths");
-    expect(inboxSource).toContain("devices.length > 1 &&");
+    expect(sheetSource).not.toContain("api.devices.listDevices");
+    expect(sheetSource).not.toContain("api.users.getRecentProjectPaths");
+    expect(sheetSource).toContain("devices.length > 1 &&");
 
     const builder = sourceBetween("const launchStampsForCreate", "const finishSessionCreate");
     expect(builder).toContain("deviceId && deviceId !== defaultDeviceId ? deviceId : undefined");
@@ -88,7 +107,7 @@ describe("mobile new-session launch options", () => {
     expect(builder).toContain('stable_mode: stableMode !== "auto" ? stableMode : undefined');
     expect(builder).toContain("isolated: isolated || undefined");
     // No preview to exclude from on mobile, so the sheet never collects one.
-    expect(inboxSource).not.toContain("stable_exclude");
+    expect(sheetSource).not.toContain("stable_exclude");
   });
 
   // Every launch option must ride the create mutation itself. A
@@ -97,12 +116,12 @@ describe("mobile new-session launch options", () => {
   // bound to one conversation (pl-224 review finding). One builder, spread into
   // every createSession call in the sheet, and no reconfigure path may exist.
   test("the options ride every create and never a follow-up reconfigure", () => {
-    const creates = inboxSource.split("store.createSession(").length - 1;
-    const stamped = inboxSource.split("...launchStampsForCreate(),").length - 1;
+    const creates = sheetSource.split("store.createSession(").length - 1;
+    const stamped = sheetSource.split("...launchStampsForCreate(),").length - 1;
     expect(creates).toBeGreaterThan(0);
     expect(stamped).toBe(creates);
-    expect(inboxSource).not.toContain('"reconfigureSession"');
-    expect(inboxSource).not.toContain("reconfigureSession(");
+    expect(sheetSource).not.toContain('"reconfigureSession"');
+    expect(sheetSource).not.toContain("reconfigureSession(");
   });
 
   // Bucket filing doesn't affect the spawn, but it must survive a create that
@@ -123,7 +142,7 @@ describe("mobile new-session launch options", () => {
     expect(stampIndex).toBeGreaterThanOrEqual(0);
     expect(materializeIndex).toBeGreaterThan(stampIndex);
     // The dead-code shape this replaced must not come back.
-    expect(inboxSource).not.toContain("awaitSessionCreate(conversationId)");
+    expect(sheetSource).not.toContain("awaitSessionCreate(conversationId)");
   });
 
   // listDevices' model_inventory is {hash, collected_at, clients} — feeding the
@@ -131,13 +150,13 @@ describe("mobile new-session launch options", () => {
   // not a function) the moment OpenCode or pi is selected on a machine that has
   // reported one.
   test("the dynamic rail indexes the inventory by client, never passes the record", () => {
-    expect(inboxSource).toContain("model_inventory?.clients?.[");
-    expect(inboxSource).not.toMatch(/featuredModelOptions\(inventory\b/);
+    expect(sheetSource).toContain("model_inventory?.clients?.[");
+    expect(sheetSource).not.toMatch(/featuredModelOptions\(inventory\b/);
   });
 
   // Re-tapping the already-active agent chip must not wipe a model/effort pick.
   test("only an actual agent switch resets the model rail", () => {
-    expect(inboxSource).toContain("if (a.id === agentId) return");
+    expect(sheetSource).toContain("if (a.id === agentId) return");
   });
 
   // A sheet that reopens holding the last launch's choices would silently apply
@@ -152,7 +171,6 @@ describe("mobile new-session launch options", () => {
       'setStableMode("auto")',
       "setIsolated(false)",
       "setBucketPick(undefined)",
-      "setShowAllRecents(false)",
     ]) {
       expect(finish).toContain(reset);
     }
