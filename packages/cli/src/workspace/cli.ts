@@ -29,9 +29,8 @@ import { sessionIdFromEnv } from "../sessionIdentity.js";
 import {
   clearRepoTrust,
   collectTrustTargets,
-  readRepoTrust,
   recordTrust,
-  reviewTrust,
+  reviewRepoTrust,
 } from "./trust.js";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
@@ -347,7 +346,7 @@ export function registerWorkspaceCommand(program: Command): void {
         console.log("Nothing to approve: this repo has no hook scripts and no manifest commands.");
         return;
       }
-      const findings = reviewTrust(readRepoTrust(repoRoot), all);
+      const findings = reviewRepoTrust(repoRoot, all);
       if (opts.list) {
         for (const target of all) {
           const finding = findings.find((f) => f.target.id === target.id);

@@ -61,6 +61,11 @@ export interface CcProfileMeta {
   // daemon's usage refresh, cleared by any re-save of the profile (a fresh
   // /login re-snapshots it). Readers treat it as "not a switch target".
   login_expired_at?: number;
+  // Anthropic refused the ACCOUNT, not a token: its organization disallows
+  // subscription OAuth (403 oauth_not_allowed_for_organization), so neither
+  // the login nor a setup token can carry a session and signing in again does
+  // not help. Set by the daemon's usage refresh, cleared by its next good probe.
+  access_refused_at?: number;
   active: boolean;
 }
 
@@ -245,6 +250,30 @@ export function writeActiveCredential(credentialJson: string): void {
     "-w",
     credentialJson,
   ]);
+}
+
+/**
+ * A cloud Mac's login arrives as a FILE: the primary pushes
+ * ~/.claude/.credentials.json over ssh, and an ssh session cannot write the
+ * keychain. Claude Code on macOS reads the keychain first and falls back to the
+ * file only when no item exists, so a stale or signed-out item shadows every
+ * push and parks each session on the host on "Login expired". The host's
+ * daemon runs in the GUI login, where the keychain is open, so it copies a
+ * pushable file into the item whenever the two differ. The primary is
+ * canonical: a remote never keeps a login of its own.
+ */
+export function adoptPushedCredential(): boolean {
+  if (!isRemoteDevice() || useFileStore()) return false;
+  const file = readCredentialFile()?.trim() ?? null;
+  if (!file || !credentialHealth(file).pushable) return false;
+  if (readLocalCredential()?.trim() === file) return false;
+  try {
+    writeActiveCredential(file);
+    return true;
+  } catch {
+    // A locked keychain (a CLI run over ssh): the daemon's next tick adopts it.
+    return false;
+  }
 }
 
 function claudeJsonPath(): string {
@@ -1569,15 +1598,20 @@ export function fleetBearer(
 
 /** A profile's login as the fleet should read it: the keychain when it is the
  *  machine's login (a live claude may have rotated it there), else the saved
- *  profile with its store overlaid. */
-async function fleetLoginFor(name: string): Promise<string | null> {
-  if (activeProfileName() === name) return readActiveCredentialAsync();
+ *  profile with its store overlaid. A keychain holding the logged-out stub says
+ *  nothing about the account: its sessions rotate in the profile's own store,
+ *  so the saved profile is read then, and kept fresh as a dormant one is. */
+async function fleetLoginFor(name: string): Promise<{ login: string | null; machine: boolean }> {
+  if (activeProfileName() === name) {
+    const login = await readActiveCredentialAsync();
+    if (credentialHealth(login).usable) return { login, machine: true };
+  }
   const raw = await readProfileSecretAsync(name);
-  if (!raw) return null;
+  if (!raw) return { login: null, machine: false };
   try {
-    return JSON.stringify(parseProfile(raw).credentials);
+    return { login: JSON.stringify(parseProfile(raw).credentials), machine: false };
   } catch {
-    return null;
+    return { login: null, machine: false };
   }
 }
 
@@ -1585,6 +1619,24 @@ async function readFleetStoreBlob(): Promise<string | null> {
   const dir = fleetStoreDir();
   if (useFileStore()) return fs.promises.readFile(storeCredentialFile(dir), "utf-8").catch(() => null);
   return keychainReadAsync(["find-generic-password", "-s", profileStoreKeychainService(dir), "-w"]).then((s) => s || null, () => null);
+}
+
+/** What a host should run on: the fleet store's bearer, the credential this
+ *  machine's sessions use, while it can serve; else null. It carries no refresh
+ *  token, so a host holding it can never rotate (and strand) a login here. */
+export function readFleetCredential(now = Date.now()): string | null {
+  if (!fleetStoreReady(now)) return null;
+  const dir = fleetStoreDir();
+  try {
+    if (useFileStore()) return fs.readFileSync(storeCredentialFile(dir), "utf-8") || null;
+    return execFileSync("/usr/bin/security", ["find-generic-password", "-s", profileStoreKeychainService(dir), "-w"], { encoding: "utf-8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function readFleetCredentialAsync(now = Date.now()): Promise<string | null> {
+  return fleetStoreReady(now) ? readFleetStoreBlob() : null;
 }
 
 async function writeFleetStoreBlob(blob: string): Promise<void> {
@@ -1610,7 +1662,7 @@ async function writeFleetStoreBlob(blob: string): Promise<void> {
  *  Throws when the profile can carry nothing now. */
 export async function putFleetOn(name: string, now = Date.now()): Promise<FleetState> {
   assertValidProfileName(name);
-  const bearer = fleetBearer(name, await fleetLoginFor(name), now);
+  const bearer = fleetBearer(name, (await fleetLoginFor(name)).login, now);
   if (!bearer) {
     throw new CcAccountError(`Profile "${name}" has no setup-token and no live login to put on the fleet — sign into it again from Settings`);
   }
@@ -1633,13 +1685,19 @@ export async function maintainFleetStore(now = Date.now()): Promise<string | nul
   if (!fleetStoreEnabled()) return null;
   const name = launchProfileName(now) ?? activeProfileName();
   if (!name) return null;
-  const login = await fleetLoginFor(name);
-  if (!readAccountTokenValue(name) && activeProfileName() !== name) {
+  const { login, machine } = await fleetLoginFor(name);
+  if (!readAccountTokenValue(name) && !machine) {
     const exp = oauthOf(login)?.expiresAt;
     if (typeof exp === "number" && exp - now < FLEET_REFRESH_AHEAD_MS) {
       const refreshed = await refreshProfileCredential(name, { now });
       if (refreshed.refreshed) return `refreshed "${name}" and ${describeFleetWrite(await putFleetOn(name, now))}`;
     }
+  }
+  // A refused account mints a good-looking store whose every session dies on
+  // its first turn, so putFleetOn succeeding says nothing about it.
+  if (readProfileIndex().profiles[name]?.access_refused_at) {
+    const moved = await failFleetOver(name, login, now);
+    if (moved) return moved;
   }
   const before = readFleetState();
   try {
@@ -1658,6 +1716,7 @@ export async function maintainFleetStore(now = Date.now()): Promise<string | nul
  *  A login that is merely about to lapse is not dead; the next tick refreshes it. */
 export function fleetLoginDead(name: string, login: string | null, now = Date.now()): boolean {
   const meta = readProfileIndex().profiles[name];
+  if (meta?.access_refused_at) return true;
   if (!meta || readAccountTokenValue(name)) return false;
   return !!meta.login_expired_at || !credentialHealth(login, now).usable;
 }
@@ -1682,7 +1741,10 @@ async function failFleetOver(dead: string, login: string | null, now: number): P
   for (const candidate of candidates) {
     try {
       const state = await putFleetOn(candidate.name, now);
-      return `"${dead}" is signed out (cast accounts signin ${dead}); moved the ${describeFleetWrite(state)}`;
+      const why = readProfileIndex().profiles[dead]?.access_refused_at
+        ? `"${dead}"'s organization refuses subscription access`
+        : `"${dead}" is signed out (cast accounts signin ${dead})`;
+      return `${why}; moved the ${describeFleetWrite(state)}`;
     } catch {
       // This one cannot carry either (its login lapsed since the last probe): try the next.
     }
@@ -1705,6 +1767,7 @@ export const FLEET_GATE_ACCOUNT = "+fleet";
  *  ready, else on the launch profile or the keychain. An empty prefix is the
  *  keychain login, attributed as such. */
 export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string) => void): { prefix: string; account?: string } {
+  adoptPushedCredential();
   if (!pin && fleetStoreReady() && fs.existsSync(fleetLaunchFile())) {
     return { prefix: sourceFilePrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
   }
@@ -1820,6 +1883,8 @@ export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: num
 }
 
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
+// Haiku 4.5, not 5.5: on a subscription token claude-haiku-5-5 answers a bare
+// call 429 with no window headers (three accounts, 2026-10-07).
 const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
@@ -2278,6 +2343,33 @@ export async function rotateOauthCredential(
       },
     },
   };
+}
+
+/** The account's organization refuses subscription OAuth: the 403 Claude
+ *  Code shows as "Your organization has disabled Claude subscription access".
+ *  The usage endpoint throws it as a CloudApiError, the model probe as a
+ *  CcAccountError quoting the body; both carry the provider's wording. */
+export function isOrgAccessRefusal(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /oauth_not_allowed_for_organization|not allowed for this organization/i.test(message);
+}
+
+/** Stamp (or clear, with `at` null) an account's org refusal on every profile
+ *  covering it. Returns the profile names whose stamp changed. */
+export function setAccessRefused(key: string, at: number | null): string[] {
+  const index = readProfileIndex();
+  const changed: string[] = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    if ((meta.uuid || meta.email) !== key || !!meta.access_refused_at === (at !== null)) continue;
+    const { access_refused_at: _prev, ...rest } = meta;
+    index.profiles[name] = at === null ? rest : { ...rest, access_refused_at: at };
+    changed.push(name);
+  }
+  if (changed.length) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return changed;
 }
 
 /** Stamp a profile dead in the index (see CcProfileMeta.login_expired_at). */
@@ -3046,9 +3138,13 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
       ? launch.since
       : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at }]) => {
-      const tok = accountLaunchInfo(name);
-      const setup = accountTokenInfo(name);
+    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at }]) => {
+      // The server's validator has no field for an org refusal, and its
+      // auto-switch already reads a dead login with no credential behind it as
+      // "never a target, its parks are dead". A refused account is exactly that.
+      const login_expired_at = expired ?? access_refused_at;
+      const tok = access_refused_at ? null : accountLaunchInfo(name);
+      const setup = access_refused_at ? null : accountTokenInfo(name);
       return {
         name,
         email,
