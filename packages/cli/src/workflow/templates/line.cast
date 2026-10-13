@@ -27,7 +27,10 @@
 // Stations, in order:
 //   ground      ties the cause to a goal and rates it; anything not ready, or
 //               serving no goal, parks with a comment (LE5)
-//   plan        only at risk = plan; a person approves it at plan_gate (LE7)
+//   plan        only at risk = plan: the approach written down before code
+//               exists, for the builder to hold to and the reviewer to check
+//               (LE7). Nobody approves it; a planner the record cannot carry
+//               to an approach stops the run
 //   analyze     acceptance criteria for the reviewer
 //   prove, red  the miss shown failing first; one that does not reproduce
 //               dissolves the cause with its evidence (LE8). A change to the
@@ -40,22 +43,26 @@
 //               the change, the project's check command, the reproduction
 //               now passing; a prompt change goes from verify to eval. A
 //               line cause is built by implement_line, on the line's own files
-//   ask         a builder that stops to ask (a needs_context or blocked
-//               handoff, or a pin that says blocked) puts its question to the
-//               person who answers for the project; Answer sends their note
-//               back to the builder, Drop closes the cause
+//   stopped     a planner or builder that cannot go on (a needs_context or
+//               blocked handoff, or a pin that says blocked) ends the run on
+//               purpose with its reason: the problem goes back to open with
+//               "Stopped: ..." on it and nobody is asked
 //   eval        the project's eval command (it picks what the branch owes),
 //               then `cast line eval-result` for the verdict (LP4); an eval
 //               that could not judge the change (exit 2: no scored reps on a
 //               side) stops at unscored with a blocker, never back at the builder
-//   review      the independent reviewer (L3, LE9)
+//   review      the independent reviewer (L3, LE9); a reject ends the run
+//               at rejected the same way, with the reviewer's note
 //   card_draft, card_write, card
 //               the facts code computes (proof, checks, diff, cost, reach),
 //               then the presenting station's own decision (base presenter +
 //               card_write.md), checked against those facts (LE10)
-//   decide      adopts that session's decision: an answer opening with Ship
-//               lands it, Drop closes the problem, any other goes back to
-//               the builder as the note (LE11)
+//   decide      the one question a run puts to a person, and the last thing
+//               it does before landing: it adopts that session's decision. An
+//               answer opening with Ship lands it, Drop closes the problem,
+//               any other goes back to the builder as the note (LE11). Every
+//               other way a run ends (a stop, a failure) leaves the problem
+//               open with why and asks nobody (on_failure=stop)
 //   rebase      the branch put on the default branch as the remote has it, and
 //               the project's check run on the result, since a card waits and
 //               the default branch moves; a conflict or a failing check goes
@@ -68,21 +75,22 @@
 //               sets [line.merge] auto or the line's role holds a merge grant
 //   watch       the cause watched for the profile's watch days after ship (LE12)
 digraph line {
-  graph [goal="$task_title"]
+  graph [goal="$task_title", on_failure=stop]
   rankdir=LR
 
   start [shape=Mdiamond, label="Start"]
   exit  [shape=Msquare,  label="Exit"]
+
+  // The run ends on purpose, in the words of the station that could not go
+  // on: the problem goes back to open with them, and nobody is asked.
+  stopped  [shape=Msquare, label="Stopped", stop="$handoff_note"]
+  rejected [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
 
   ground [label="Ground", backend=session, agent=claude, prompt="@line/ground.md"]
 
   park [label="Park", shape=parallelogram, script="@line/park.sh"]
 
   plan [label="Plan", backend=session, agent=claude, max_visits=3, prompt="@line/plan.md"]
-
-  plan_gate [label="Plan gate", shape=hexagon, category=approach,
-    prompt="Approve this plan?",
-    doc="$plan.output"]
 
   analyze [label="Analyze", backend=session, agent=claude, prompt="@line/analyze.md"]
 
@@ -108,12 +116,6 @@ digraph line {
   implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
 
   implement_line [label="Build line", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement_line.md"]
-
-  // The builder's own words (its handoff evidence, or its blocked pin) are the
-  // question; the gate climbs to the person who answers for the project.
-  ask [label="Builder asks", shape=hexagon, category=approach,
-    prompt="The builder stopped and needs your answer to go on.",
-    doc="$handoff_note"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=3600,
@@ -162,10 +164,9 @@ digraph line {
   ground -> analyze [condition="readiness = ready and goal_ref and goal_ref != none and risk != plan"]
   park -> exit
 
-  plan -> plan_gate
-  plan_gate -> analyze [label="[A] Approve :: Build to this plan"]
-  plan_gate -> plan    [label="[R] Revise :: Your note goes back to the planner"]
-  plan_gate -> drop    [label="[D] Drop :: Close the problem with your reason"]
+  // The plan goes straight on. A planner that pinned blocked ends the run.
+  plan -> analyze
+  plan -> stopped [condition="handoff = blocked and station_blocked = plan", label="cannot plan"]
 
   // A line cause takes its own prove and build stations; every route back to
   // the builder goes to the one its category names.
@@ -186,10 +187,8 @@ digraph line {
 
   implement -> verify      [condition="handoff = done"]
   implement_line -> verify [condition="handoff = done"]
-  implement -> ask         [condition="handoff = needs_context or handoff = blocked"]
-  implement_line -> ask    [condition="handoff = needs_context or handoff = blocked"]
-  ask -> reopen            [label="[A] Answer :: Your answer goes back to the builder"]
-  ask -> drop              [label="[D] Drop :: Close the problem with your reason"]
+  implement -> stopped      [condition="handoff = needs_context or handoff = blocked", label="cannot build"]
+  implement_line -> stopped [condition="handoff = needs_context or handoff = blocked", label="cannot build"]
   verify -> green          [condition="outcome = success and category != prompt"]
   verify -> eval           [condition="outcome = success and category = prompt"]
   verify -> implement      [condition="outcome = failure and category != line", label="checks failed"]
@@ -206,7 +205,7 @@ digraph line {
   review -> card_draft [condition="review_verdict = approve"]
   review -> implement      [condition="review_verdict = changes and category != line", label="changes"]
   review -> implement_line [condition="review_verdict = changes and category = line", label="changes"]
-  review -> exit       [condition="review_verdict = reject"]
+  review -> rejected   [condition="review_verdict = reject"]
 
   card_draft -> card_write
   card_write -> card

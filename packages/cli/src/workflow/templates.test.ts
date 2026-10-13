@@ -58,8 +58,8 @@ describe("line.cast template", () => {
     expect(graph.name).toBe("line");
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
-      "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "prove_line", "red", "dissolve",
-      "unproven", "implement", "implement_line", "ask", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
+      "start", "exit", "stopped", "rejected", "ground", "park", "plan", "analyze", "prove", "prove_line", "red", "dissolve",
+      "unproven", "implement", "implement_line", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
       "decide", "reopen", "drop", "rebase", "ship", "watch",
     ]);
     expect(graph.nodes.get("verify")?.type).toBe("command");
@@ -136,7 +136,7 @@ describe("line.cast template", () => {
         const m = name.match(nodeVar);
         if (known.has(name) || (m && graph.nodes.has(m[1]))) continue;
         // Shell locals and positionals in the station scripts.
-        if (/^([a-z]+|\d)$/.test(name) && texts.some((t) => t.includes(`${name}=`) || /^\d$/.test(name) || t.includes(`read -r ${name}`))) continue;
+        if (/^([a-z]+|\d)$/.test(name) && texts.some((t) => t.includes(`${name}=`) || /^\d$/.test(name) || t.includes(`read -r ${name}`) || t.includes(`for ${name} in `))) continue;
         unknown.add(name);
       }
     }
@@ -160,14 +160,23 @@ describe("line.cast template", () => {
     const fromStart = reach("start", next);
     expect([...graph.nodes.keys()].filter((id) => !fromStart.has(id))).toEqual([]);
     const toExit = reach("exit", (id) => graph.edges.filter((e) => e.to === id).map((e) => e.from));
-    expect([...fromStart].filter((id) => !toExit.has(id))).toEqual([]);
-    // Only exit is a dead end.
-    expect([...graph.nodes.keys()].filter((id) => id !== "exit" && next(id).length === 0)).toEqual([]);
+    // The two exits that end a run on purpose are ends too.
+    const stops = ["stopped", "rejected"];
+    expect([...fromStart].filter((id) => !toExit.has(id))).toEqual(stops);
+    expect(stops.map((id) => [graph.nodes.get(id)?.type, graph.nodes.get(id)?.stop])).toEqual([
+      ["exit", "$handoff_note"],
+      ["exit", "The reviewer rejected the change. $review_note"],
+    ]);
+    // Only the exits are dead ends.
+    expect([...graph.nodes.keys()].filter((id) => next(id).length === 0)).toEqual(["exit", ...stops]);
   });
 
-  test("the gates offer valid options: every edge labeled, unique keys, each with what happens", () => {
+  test("one gate, the presenter's, at the end; every other way a run ends asks nobody", () => {
     const gates = [...graph.nodes.values()].filter((n) => n.type === "human");
-    expect(gates.map((g) => g.id)).toEqual(["plan_gate", "ask", "decide"]);
+    expect(gates.map((g) => [g.id, g.asker])).toEqual([["decide", "card_write"]]);
+    expect(graph.on_failure).toBe("stop");
+    // The plan goes straight on; a planner that pinned blocked ends the run.
+    expect(from(graph, "plan")).toEqual(["analyze:", "stopped:handoff = blocked and station_blocked = plan"]);
     const options = (id: string) => graph.edges.filter((e) => e.from === id).map((e) => ({ ...parseGateEdgeLabel(e.label ?? ""), to: e.to, condition: e.condition }));
     for (const gate of gates) {
       // An answer that opens with none of the decide gate's verbs reaches the run as a note (the fallback edge).
@@ -177,9 +186,6 @@ describe("line.cast template", () => {
       expect(gate.prompt).toBeTruthy();
       expect(gate.category).toBeTruthy();
     }
-    expect(options("plan_gate").map((o) => `${o.key}:${o.to}`)).toEqual(["A:analyze", "R:plan", "D:drop"]);
-    // A builder's question: the answer goes back to the builder, or the cause closes.
-    expect(options("ask").map((o) => `${o.key}:${o.to}`)).toEqual(["A:reopen", "D:drop"]);
     // Ship goes through the rebase station first: a card waits while the default branch moves.
     expect(options("decide").map((o) => `${o.key ?? ""}:${o.to}`)).toEqual(["S:rebase", "R:reopen", "D:drop", ":reopen"]);
     expect(options("decide").at(-1)?.condition).toBe("outcome = success");
@@ -240,7 +246,7 @@ describe("line.cast template", () => {
     expect(fired("prove_line", { ...line, "prove_line.json": '{"reproduced":false}' })).toEqual(["dissolve"]);
     expect(fired("red", { ...line, "red.json": '{"red":true}' })).toEqual(["implement_line"]);
     expect(fired("red", { ...line, "red.json": '{"red":false}' })).toEqual(["prove_line"]);
-    expect(from(graph, "implement_line")).toEqual(["verify:handoff = done", "ask:handoff = needs_context or handoff = blocked"]);
+    expect(from(graph, "implement_line")).toEqual(["verify:handoff = done", "stopped:handoff = needs_context or handoff = blocked"]);
     expect(fired("verify", { ...line, outcome: "failure" })).toEqual(["implement_line"]);
     expect(fired("green", { ...line, outcome: "failure" })).toEqual(["implement_line"]);
     expect(fired("eval", { ...line, outcome: "failure", "eval.exit_code": "1" })).toEqual(["implement_line"]);
@@ -264,8 +270,8 @@ describe("line.cast template", () => {
   });
 
   test("review keeps its verdict routing; approve goes to the card; a refused card goes back to its writer", () => {
-    expect(from(graph, "implement")).toEqual(["verify:handoff = done", "ask:handoff = needs_context or handoff = blocked"]);
-    expect(from(graph, "review")).toEqual(["card_draft:review_verdict = approve", "implement:review_verdict = changes and category != line", "implement_line:review_verdict = changes and category = line", "exit:review_verdict = reject"]);
+    expect(from(graph, "implement")).toEqual(["verify:handoff = done", "stopped:handoff = needs_context or handoff = blocked"]);
+    expect(from(graph, "review")).toEqual(["card_draft:review_verdict = approve", "implement:review_verdict = changes and category != line", "implement_line:review_verdict = changes and category = line", "rejected:review_verdict = reject"]);
     expect(graph.nodes.get("review")?.reviewer).toBe(true);
     expect(graph.nodes.get("implement")?.reviewer).toBeUndefined();
     expect(from(graph, "card_draft")).toEqual(["card_write:"]);
@@ -660,6 +666,8 @@ describe("line.cast offline run through the session path", () => {
   let stationOf: Record<string, Station>;
   // What each station's hand pins as its state (the runner reads node JSON from it).
   let pinned: Partial<Record<Station, string>>;
+  // The status a hand pinned with it, when not done.
+  let pinnedStatus: Partial<Record<Station, string>>;
   let gateAnswers: string[];
   let effects: Partial<Record<Station, () => void>>;
 
@@ -677,6 +685,7 @@ describe("line.cast offline run through the session path", () => {
     spawnCount = 0;
     stationOf = {};
     gateAnswers = [];
+    pinnedStatus = {};
     task = { short_id: "ct-7", title: "Add the thing", status: "open", steps: [], assignee: "infra-lead" };
     pinned = {
       prove: 'Showed it failing.\n```json\n{"reproduced": true}\n```',
@@ -704,7 +713,7 @@ describe("line.cast offline run through the session path", () => {
         effects[stationOf[id]]?.();
         out = { sessions: [{ id, work_state: "done", is_live: false }] };
       } else if (route === "/cli/sessions/state/get") {
-        out = { ok: true, status: "done", state: pinned[stationOf[body.session]] ?? null };
+        out = { ok: true, status: pinnedStatus[stationOf[body.session]] ?? "done", state: pinned[stationOf[body.session]] ?? null };
       } else if (route === "/cli/workflow-runs/poll-gate") {
         out = { status: "paused", gate_response: gateAnswers.shift() ?? null };
       } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") out = { success: true, id: "sd-1" };
@@ -849,16 +858,14 @@ describe("line.cast offline run through the session path", () => {
     expect(stations()).toEqual(["ground"]);
   });
 
-  test("plan risk stops at the plan gate; Drop closes the cause without building", async () => {
+  test("plan risk plans and builds without asking: the first question is the presenter's, at the end", async () => {
     effects.ground = () => { task = { ...task, ...grounded, risk: "plan" }; };
     pinned.plan = "Approach: one table.";
-    gateAnswers = ["D"];
+    gateAnswers = ["S"];
     const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
     expect(outcome).toBe("completed");
-    expect(stations()).toEqual(["ground", "plan"]);
-    const gate = calls.find((c) => c.route === "/cli/workflow-runs/gate")!.body;
-    expect(gate).toMatchObject({ node_id: "plan_gate", category: "approach", prompt: "Approve this plan?", doc_md: "Approach: one table." });
-    expect(gate.choices.map((c: any) => c.key)).toEqual(["A", "R", "D"]);
+    expect(stations()).toEqual(["ground", "plan", "analyze", "prove", "implement", "review", "card_write"]);
+    expect(calls.filter((c) => c.route === "/cli/workflow-runs/gate").map((c) => c.body.node_id)).toEqual(["decide"]);
   }, 30000);
 
   test("a miss that does not reproduce dissolves the cause", async () => {
@@ -875,7 +882,7 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
     const comment = calls.find((c) => c.route === "/cli/work/comment")?.body;
     expect(comment?.comment_type).toBe("blocker");
-    expect(comment?.text).toContain("no outgoing edge from review");
+    expect(comment?.text).toContain("the line had no next step for it");
   });
 
   test("a run that fails on a problem closed meanwhile leaves the close standing: no reopen, no blocker (ct-59242, ct-59534)", async () => {
@@ -929,7 +936,7 @@ describe("line.cast offline run through the session path", () => {
     task.description = "SECRET DESCRIPTION";
     effects.review = () => { task = { ...task, status: "open", review_verdict: { verdict: "reject", at: Date.now() + 1 } }; };
     const outcome = await runWorkflow(graph, opts());
-    expect(outcome).toBe("completed");
+    expect(outcome).toBe("failed");
     const review = spawns().find((s) => s.station === "review")!.prompt as string;
     expect(review).toContain("Branch: codecast/line-ct-7");
     expect(review).toContain("Add the thing");
@@ -941,41 +948,36 @@ describe("line.cast offline run through the session path", () => {
     expect(review).not.toContain("session_id");
   }, 30000);
 
-  // A builder that stops to ask reaches the person who answers for the
-  // project as one decision on the gate rail (the run's spawner is the
-  // project's lead when it was started outside a session), and the answer
-  // resumes the run with the builder.
+  // A builder that cannot go on ends the run on purpose with its own words:
+  // the problem goes back to open with them, and nobody is asked anything.
   for (const status of ["needs_context", "blocked"] as const) {
-    test(`a ${status} handoff asks one decision with the builder's words; Answer sends the note back to the builder`, async () => {
-      let visits = 0;
+    test(`a ${status} handoff stops the run with the builder's words and asks nobody`, async () => {
       effects.implement = () => {
-        visits++;
-        task = visits === 1
-          ? { ...task, status: "in_review", execution_status: status, verification_evidence: "Which base should the fix target: main or the release branch?" }
-          : { ...task, status: "in_review", execution_status: "done", verification_evidence: "Built on main." };
+        task = { ...task, status: "in_review", execution_status: status, verification_evidence: "The fix needs the release branch, which this checkout does not have." };
       };
-      gateAnswers = ["A: target main", "S"];
-      const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
-      expect(outcome).toBe("completed");
-      expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "review", "card_write"]);
-      const gates = calls.filter((c) => c.route === "/cli/workflow-runs/gate").map((c) => c.body);
-      expect(gates.map((g) => g.node_id)).toEqual(["ask", "decide"]);
-      expect(gates[0]).toMatchObject({ prompt: "The builder stopped and needs your answer to go on.", doc_md: "Which base should the fix target: main or the release branch?", category: "approach" });
-      expect(gates[0].choices.map((c: any) => [c.key, c.target])).toEqual([["A", "reopen"], ["D", "drop"]]);
-      expect(spawns()[4].prompt).toContain("# Human Instructions\ntarget main");
-      // One rail: no failure decision, no blocker comment, the run never stopped.
+      const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1", spawnerSession: "owner-sess" }));
+      expect(outcome).toBe("failed");
+      expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
+      expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(false);
       expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
-      expect(calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
+      expect(calls.findLast((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
+      const blocker = calls.find((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")?.body.text;
+      expect(blocker).toBe("Stopped: The fix needs the release branch, which this checkout does not have.");
+      const ended = calls.findLast((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")?.body;
+      expect(ended?.fail_reason).toBe(blocker);
     }, 30000);
   }
 
-  test("a builder's question answered Drop closes the cause", async () => {
-    effects.implement = () => { task = { ...task, status: "in_review", execution_status: "needs_context", verification_evidence: "Is this still wanted?" }; };
-    gateAnswers = ["D: no longer wanted"];
-    expect(await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }))).toBe("completed");
-    expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
-    const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
-    expect(ended.slice(-3)).toEqual(["ask", "drop", "exit"]);
+  test("a planner that pins blocked stops the run with what is missing", async () => {
+    effects.ground = () => { task = { ...task, ...grounded, risk: "plan" }; };
+    pinnedStatus.plan = "blocked";
+    pinned.plan = "No record says which billing provider the new plan uses.";
+    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1", spawnerSession: "owner-sess" }));
+    expect(outcome).toBe("failed");
+    expect(stations()).toEqual(["ground", "plan"]);
+    expect(calls.some((c) => c.route === "/cli/workflow-runs/gate" || c.route === "/cli/decide")).toBe(false);
+    expect(calls.find((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")?.body.text)
+      .toBe("Stopped: No record says which billing provider the new plan uses.");
   }, 30000);
 
   test("a hand that ends with no handoff returns the task to open", async () => {
@@ -986,35 +988,15 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
   }, 30000);
 
-  test("a reject verdict completes the run and queues a decision with the reviewer's note", async () => {
+  test("a reject verdict stops the run with the reviewer's note and asks nobody", async () => {
     effects.review = () => { task = { ...task, status: "open", execution_status: "blocked", review_verdict: { verdict: "reject", note: "criterion B unmet", at: Date.now() + 1 } }; };
     const outcome = await runWorkflow(offlineLine(tmpDir), opts({ spawnerSession: "owner-sess" }));
-    expect(outcome).toBe("completed");
-    const decision = calls.find((c) => c.route === "/cli/decide")?.body;
-    expect(decision?.question).toContain("review rejected");
-    expect(decision?.context_md).toContain("criterion B unmet");
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("Decision queued");
-  }, 30000);
-
-  test("without an owning session the reject comment says no decision was queued", async () => {
-    effects.review = () => { task = { ...task, status: "open", execution_status: "blocked", review_verdict: { verdict: "reject", at: Date.now() + 1 } }; };
-    await runWorkflow(offlineLine(tmpDir), opts());
-    expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("No decision queued");
-  }, 30000);
-
-  test("retries exhausted parks the task in review as blocked", async () => {
-    const graph = offlineLine(tmpDir);
-    graph.nodes.get("verify")!.script = "false";
-    const outcome = await runWorkflow(graph, opts({ spawnerSession: "owner-sess" }));
     expect(outcome).toBe("failed");
-    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "implement"]);
-    expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "in_review", execution_status: "blocked" });
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("ran the most rounds this line allows");
-    expect(calls.find((c) => c.route === "/cli/decide")?.body.question).toContain("after 3 Implement rounds");
+    expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
+    expect(calls.find((c) => c.route === "/cli/work/comment")?.body).toMatchObject({ comment_type: "blocker", text: "Stopped: The reviewer rejected the change. criterion B unmet" });
   }, 30000);
 
-  test("the exhausted card says which station sent the work back and shows its check as a list", async () => {
+  test("rounds exhausted leaves the problem open with why, and asks nobody", async () => {
     const graph = offlineLine(tmpDir);
     graph.nodes.get("verify")!.script = [
       `echo '{"ok":false,"steps":[{"name":"typecheck","ok":false,"detail":"exit 1"},{"name":"tripwires","ok":true,"detail":"passed"}],"logs":"/tmp/run/cast-line"}'`,
@@ -1022,14 +1004,16 @@ describe("line.cast offline run through the session path", () => {
       `echo 'x mobile: 6 errors' >&2`,
       `exit 1`,
     ].join("\n");
-    await runWorkflow(graph, opts({ spawnerSession: "owner-sess" }));
-    const decision = calls.find((c) => c.route === "/cli/decide")?.body;
-    expect(decision.question).toBe("Verify still says “checks failed” after 3 Implement rounds on “Add the thing”. What next?");
-    expect(decision.context_md).toContain("Verify sent the last round back");
-    expect(decision.context_md).toContain("- ✗ typecheck: exit 1\n- ✓ tripwires");
-    expect(decision.context_md).toContain("```text\ncheck: typecheck\nx mobile: 6 errors\n```");
-    expect(decision.context_md).toContain("Logs: /tmp/run/cast-line");
-    expect(decision.context_md).not.toContain('{"ok"');
-    expect(decision.options.every((o: any) => o.description)).toBe(true);
+    const outcome = await runWorkflow(graph, opts({ spawnerSession: "owner-sess" }));
+    expect(outcome).toBe("failed");
+    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "implement"]);
+    expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
+    expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
+    const blocker = calls.find((c) => c.route === "/cli/work/comment")?.body;
+    expect(blocker?.comment_type).toBe("blocker");
+    expect(blocker?.text).toContain("ran the most rounds this line allows");
+    expect(blocker?.text).toContain("Verify sent the last round back");
+    expect(blocker?.text).toContain("- ✗ typecheck: exit 1\n- ✓ tripwires");
+    expect(blocker?.text).not.toContain('{"ok"');
   }, 30000);
 });
