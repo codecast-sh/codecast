@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getConversationPendingMessage, retryMessage, updateMessageStatus } from "./pendingMessages";
+import { getConversationPendingMessage, healAndNotifyStuckMessages, retryMessage, retryPendingMessageForUser, updateMessageStatus } from "./pendingMessages";
 import { updateAgentStatus } from "./managedSessions";
 import { makeFakeDb } from "./testDb";
 
@@ -52,6 +52,38 @@ describe("hold for a human prompt", () => {
     const f = setup({ status: "pending", delivery_disposition_reason: "waiting for a human answer in the terminal" });
     const status = await (getConversationPendingMessage as any)._handler(f.ctx, { conversation_id: CONVERSATION });
     expect(status?.hold_reason).toBe("waiting for a human answer in the terminal");
+  });
+
+  // jx78gaw (2026-10-10): held for days behind a dialog nobody was shown.
+  // The hold keeps the screen it was decided on for the card, and the
+  // person's Send anyway drops the hold and marks the row to go past the check.
+  test("a hold keeps the screen it was decided on, and the card can read it", async () => {
+    const f = setup();
+    await (retryMessage as any)._handler(f.ctx, { message_id: "message", device_id: "device", hold_reason: "waiting for a human answer in the terminal", hold_screen: "❯ 1. Yes\n  2. No" });
+    expect(f.row().delivery_hold_screen).toBe("❯ 1. Yes\n  2. No");
+    const status = await (getConversationPendingMessage as any)._handler(f.ctx, { conversation_id: CONVERSATION });
+    expect(status?.hold_screen).toBe("❯ 1. Yes\n  2. No");
+  });
+
+  test("Send anyway clears the hold and marks the row to go past the dialog check", async () => {
+    const f = setup({ status: "pending", delivery_disposition_reason: "waiting for a human answer in the terminal", delivery_hold_screen: "❯ 1. Yes" });
+    expect(await retryPendingMessageForUser(f.ctx, USER, CONVERSATION, { messageId: "message", force: true })).toBe("pending");
+    expect(f.row().delivery_force).toBe(true);
+    expect(f.row().delivery_disposition_reason).toBeUndefined();
+    expect(f.row().delivery_hold_screen).toBeUndefined();
+  });
+
+  test("a dialog hold is dropped once no daemon serves the session, and kept while one does", async () => {
+    const held = { status: "pending", delivery_disposition_reason: "waiting for a human answer in the terminal", delivery_hold_screen: "❯ 1. Yes" };
+    const live = setup(held);
+    await healAndNotifyStuckMessages(live.ctx, 110);
+    expect(live.row().delivery_disposition_reason).toBe("waiting for a human answer in the terminal");
+
+    const offline = setup(held);
+    await healAndNotifyStuckMessages(offline.ctx, 100 + 60 * 60_000);
+    expect(offline.row().status).toBe("pending");
+    expect(offline.row().delivery_disposition_reason).toBeUndefined();
+    expect(offline.row().delivery_hold_screen).toBeUndefined();
   });
 });
 

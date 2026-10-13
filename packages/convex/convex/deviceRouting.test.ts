@@ -336,3 +336,54 @@ describe("pickOwnerDevice — a machine that can't open the path doesn't win on 
     ).toBe("nose");
   });
 });
+
+describe("pickOwnerDevice — dead VMs and sleeping cloud hosts (jx7bt5n, 2026-10-12)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const path = "/home/ubuntu/src/union-mobile";
+  const laptop = local("laptop", { platform: "darwin", local_project_roots: ["/Users/ashot/src/union-mobile"] });
+  const deadVm = local("grok-vm", { platform: "linux", last_seen: NOW - 9 * DAY, local_project_roots: ["/home/box/.claude"] });
+  const host = remote("host", {
+    platform: "linux",
+    last_seen: NOW - 3 * 60 * 60 * 1000,
+    local_project_roots: ["/home/ubuntu/src/union-mobile"],
+    cloud_host: { managed_by: "laptop", state: "stopped", at: NOW - 10 * 60 * 1000 },
+  });
+
+  test("a sleeping cloud host that has the folder wins over a dead VM of the same platform", () => {
+    expect(pickOwnerDevice([laptop, deadVm, host], { projectPath: path }, NOW)).toBe("host");
+  });
+
+  test("a host the laptop stopped reporting is gone, so it never takes the session", () => {
+    const sibling = remote("sibling", { platform: "darwin", last_seen: NOW - 60_000, cloud_host: { managed_by: "laptop", state: "running", at: NOW - 60_000 } });
+    const gone = { ...host, cloud_host: { managed_by: "laptop", state: "stopped", at: NOW - 3 * DAY } };
+    expect(pickOwnerDevice([laptop, deadVm, gone, sibling], { projectPath: path }, NOW)).not.toBe("host");
+  });
+
+  test("a remote nothing reports as a cloud host is not booted for the work", () => {
+    const plainRemote = { ...host, cloud_host: undefined };
+    expect(pickOwnerDevice([deadVm, plainRemote], { projectPath: path }, NOW)).not.toBe("host");
+  });
+
+  test("with no machine serving the path, the queue skips a VM quiet for a day", () => {
+    const offlineLaptop = { ...laptop, last_seen: stale };
+    expect(pickOwnerDevice([offlineLaptop, deadVm], { projectPath: path }, NOW)).toBe("laptop");
+  });
+
+  test("a sleeping local that has the folder still gets the queue, however long it slept", () => {
+    const away = { ...laptop, last_seen: NOW - 3 * DAY };
+    const recentVm = { ...deadVm, last_seen: stale };
+    expect(pickOwnerDevice([away, recentVm], { projectPath: "/Users/ashot/src/union-mobile" }, NOW)).toBe("laptop");
+  });
+
+  test("when every local has gone quiet, the most recent one still owns it rather than nobody", () => {
+    expect(pickOwnerDevice([deadVm], { projectPath: path }, NOW)).toBe("grok-vm");
+  });
+});
+
+describe("pickOwnerDevice — a quiet laptop still outranks a remote without the checkout", () => {
+  test("every local quiet for days, an online remote Mac with no checkout → still the laptop", () => {
+    const laptop = local("laptop", { platform: "darwin", last_seen: NOW - 3 * 24 * 60 * 60 * 1000 });
+    const mini = remote("mini", { platform: "darwin", local_project_roots: ["/Users/codecast/src/app"] });
+    expect(pickOwnerDevice([laptop, mini], { projectPath: "/Users/ashot/src/other" }, NOW)).toBe("laptop");
+  });
+});

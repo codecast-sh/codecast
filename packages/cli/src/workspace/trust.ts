@@ -31,7 +31,9 @@ import { sessionIdFromEnv } from "../sessionIdentity.js";
 import { HOOKS_DIR } from "./hooks.js";
 import { parseManifest } from "./manifest.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
-import { defaultConfigDir } from "../config/configDir.js";
+import { primaryTrustPath, trustStorePath } from "./trustPaths.js";
+
+export { primaryTrustPath, trustStorePath };
 
 /** One piece of repo-authored code an acquire may execute. */
 export interface TrustTarget {
@@ -81,15 +83,14 @@ export function digestOf(text: string): string {
 // The store
 // ---------------------------------------------------------------------------
 
-/** Absolute path of the trust store. Outside every repo, on purpose. */
-export function trustStorePath(): string {
-  const dir = defaultConfigDir();
-  return path.join(dir, "workspace-trust.json");
-}
 
 function readStore(): Record<string, RepoTrust> {
+  return readStoreFile(trustStorePath());
+}
+
+function readStoreFile(file: string): Record<string, RepoTrust> {
   try {
-    const raw = JSON.parse(fs.readFileSync(trustStorePath(), "utf-8")) as unknown;
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as unknown;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       return raw as Record<string, RepoTrust>;
     }
@@ -110,6 +111,26 @@ function repoKey(repoRoot: string): string {
 
 export function readRepoTrust(repoRoot: string): RepoTrust {
   return readStore()[repoKey(repoRoot)] ?? {};
+}
+
+const approvalKey = (id: string, digest: string) => `${id}\0${digest}`;
+
+function primaryApprovals(): Set<string> {
+  const keys = new Set<string>();
+  for (const repo of Object.values(readStoreFile(primaryTrustPath()))) {
+    for (const [id, entry] of Object.entries(repo ?? {})) {
+      if (typeof entry?.digest === "string") keys.add(approvalKey(id, entry.digest));
+    }
+  }
+  return keys;
+}
+
+/** What is not approved for this repo right now, on this machine or the primary. */
+export function reviewRepoTrust(repoRoot: string, targets: TrustTarget[]): TrustFinding[] {
+  const findings = reviewTrust(readRepoTrust(repoRoot), targets);
+  if (findings.length === 0) return findings;
+  const carried = primaryApprovals();
+  return findings.filter((f) => !carried.has(approvalKey(f.target.id, f.target.digest)));
 }
 
 /**
@@ -250,7 +271,7 @@ export function reviewTrust(trusted: RepoTrust, targets: TrustTarget[]): TrustFi
 
 /** The ids in these roots that are not approved right now. */
 export function untrustedTargetIds(repoRoot: string, opts: CollectOptions): Set<string> {
-  const findings = reviewTrust(readRepoTrust(repoRoot), collectTrustTargets(opts));
+  const findings = reviewRepoTrust(repoRoot, collectTrustTargets(opts));
   return new Set(findings.map((f) => f.target.id));
 }
 
@@ -303,7 +324,7 @@ export function enforceWorkspaceTrust(opts: TrustGateOptions): TrustTarget[] {
   const targets = collectTrustTargets(opts);
   if (targets.length === 0) return targets;
 
-  const findings = reviewTrust(readRepoTrust(opts.repoRoot), targets);
+  const findings = reviewRepoTrust(opts.repoRoot, targets);
   const agent = opts.agentDriven ?? isAgentContext(opts.env);
 
   if (opts.grant) {

@@ -12,6 +12,7 @@ import {
   collectTrustTargets,
   digestOf,
   isAgentContext,
+  primaryTrustPath,
   readRepoTrust,
   recordTrust,
   trustStorePath,
@@ -204,6 +205,24 @@ describe("acquire trust gate", () => {
     recordTrust(repoRoot, collectTrustTargets({ hooksRoot: repoRoot }));
     const r = await acquireWorkspace(repoRoot, "agent-first", asAgent);
     expect(r.workspace.state).toBe("ready");
+  });
+
+  test("an approval pushed from the primary covers the same code at another path", async () => {
+    writeHook();
+    writeManifest();
+    // What the laptop pushes: its own store, keyed by ITS checkout path.
+    const approved = Object.fromEntries(collectTrustTargets({ hooksRoot: repoRoot })
+      .map((t) => [t.id, { digest: t.digest, text: t.text, trustedAt: new Date().toISOString() }]));
+    fs.mkdirSync(path.dirname(primaryTrustPath()), { recursive: true });
+    fs.writeFileSync(primaryTrustPath(), JSON.stringify({ "/Users/someone/src/repo": approved }));
+
+    const r = await acquireWorkspace(repoRoot, "carried", asAgent);
+    expect(r.workspace.state).toBe("ready");
+
+    // Code the person never read is still refused.
+    writeHook(`#!/usr/bin/env bash\necho changed > hook-out.txt\n`);
+    const message = await refusal(acquireWorkspace(repoRoot, "carried-b", asAgent));
+    expect(message).toContain(HOOK_REL);
   });
 
   test("skipping hooks and setup leaves nothing to approve", async () => {

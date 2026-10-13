@@ -30,7 +30,9 @@ import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
-import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
+import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
+import { cancelPendingSend } from "../../../lib/cancelPendingSend";
+import { HeldTerminalScreen } from "../HeldTerminalScreen";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
 import { agentBorderMap, agentColorMap, agentTextMap } from "../../../lib/conversationBlockStyles";
@@ -700,8 +702,33 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
   );
 }
 
-export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
+export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, pendingScreen, pendingMessageId, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; pendingScreen?: string; pendingMessageId?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
   const relativeTime = useRelativeTime();
+  // A queued card is never a dead end: the person can send it again, cancel
+  // it, and, when the daemon held it for a dialog, open the terminal rows it
+  // read and send past them. A card with no way out sat for three days
+  // behind a dialog nobody was shown (jx78gaw, 2026-10-13).
+  const [screenOpen, setScreenOpen] = useState(false);
+  const [acting, setActing] = useState<"send" | "cancel" | null>(null);
+  const canAct = !!pendingStatus && !!pendingMessageId && !!recipientConversationId;
+  const actOnQueued = async (kind: "send" | "cancel", force = false) => {
+    if (!canAct || acting) return;
+    setActing(kind);
+    try {
+      const ref = pendingCancelRef(pendingMessageId!);
+      const status = kind === "cancel"
+        // No text goes back to the composer: this was another session's message, not the reader's draft.
+        ? await cancelPendingSend(recipientConversationId!, ref, null)
+        : await useInboxStore.getState().retryPendingMessage(recipientConversationId!, { ...ref, force });
+      if (status === "delivered" || status === "injected") toast.info("This message has already reached the session");
+      else if (kind === "send" && status !== "pending") toast.info("This message is no longer queued");
+      else if (kind === "send") setScreenOpen(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : kind === "cancel" ? "Failed to cancel message" : "Failed to send message");
+    } finally {
+      setActing(null);
+    }
+  };
   const s = useTrackedStore([
     st => pendingStatus && recipientConversationId ? st.sessions[recipientConversationId]?.agent_status : undefined,
   ]);
@@ -789,10 +816,33 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
         {isTeammate && summary && (
           <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
         )}
-        {queueLabel && (
+        {queueLabel && (pendingScreen ? (
+          <button
+            type="button"
+            onClick={() => setScreenOpen(!screenOpen)}
+            aria-expanded={screenOpen}
+            data-testid="queued-message-screen-toggle"
+            className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 hover:bg-amber-500/25 rounded px-1.5 py-0.5 shrink-0 transition-colors"
+          >
+            <Clock className="w-2.5 h-2.5" />{queueLabel}
+            {screenOpen ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
+          </button>
+        ) : (
           <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
             <Clock className="w-2.5 h-2.5" />{queueLabel}
           </span>
+        ))}
+        {canAct && !pendingScreen && pendingStatus !== "injected" && (
+          <button type="button" onClick={() => { void actOnQueued("send"); }} disabled={!!acting} data-testid="queued-message-send"
+            className="text-[11px] text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
+            {acting === "send" ? "Sending…" : "Send now"}
+          </button>
+        )}
+        {canAct && (
+          <button type="button" onClick={() => { void actOnQueued("cancel"); }} disabled={!!acting} data-testid="queued-message-cancel"
+            className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
+            {acting === "cancel" ? "Cancelling…" : "Cancel"}
+          </button>
         )}
         {/* A queued message renders at the tail of the transcript, below turns
             that arrived after it, because it has not entered the thread yet —
@@ -803,6 +853,9 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
           <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
         )}
       </div>
+      {screenOpen && pendingScreen && (
+        <HeldTerminalScreen className="mx-3 mb-2" screen={pendingScreen} onSendAnyway={canAct ? () => { void actOnQueued("send", true); } : undefined} sending={acting === "send"} />
+      )}
       {/* A message from another session is someone else's context, not this
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
