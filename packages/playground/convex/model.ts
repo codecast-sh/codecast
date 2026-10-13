@@ -22,6 +22,12 @@ export async function touchApp(ctx: MutationCtx, app: Doc<"apps">, now = Date.no
 
 /** Post a system note ("Raccoon forked v12 into Haiku Wall"). `body` is the
  *  plain-text fallback; the shell renders from `note`. */
+/** Clay says something in the room outside a card: a chat row with the
+ *  blob for a face. */
+export async function postClayReply(ctx: MutationCtx, appId: Id<"apps">, body: string): Promise<Id<"messages">> {
+  return ctx.db.insert("messages", { app_id: appId, kind: "chat", body });
+}
+
 export async function postSystemNote(ctx: MutationCtx, appId: Id<"apps">, note: SystemNote, body: string): Promise<Id<"messages">> {
   return ctx.db.insert("messages", { app_id: appId, kind: "system", body, note });
 }

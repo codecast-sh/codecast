@@ -10,7 +10,7 @@
 // Not named after its main export: `ProposalSubjects.tsx` and the model's
 // `proposalSubjects.ts` are one path on a disk that ignores case, and a
 // resolver then picks between them by extension.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, orgProposalWork, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
@@ -26,6 +26,7 @@ import { proposalProgressWords, proposalSubjects, recordGroupCards, type RecordG
 import { askNames } from "./staffingAsks";
 import { RecordGroupRow } from "./RecordGroupRow";
 import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
 /** What a ref of the batch names a proposal by. */
@@ -114,8 +115,8 @@ function useEntryAnswer(key: string | null, comments: readonly PendingComment[] 
   const stale = !!key && !!pending && revisedAt(members) > pending.createdAt;
   // Withdrawn under the reader: the entry says so until they answer again.
   const [revised, setRevised] = useState(false);
-  useEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
+  useWatchEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
   return { answer: stale ? null : answer, revised, ...(key ? { onAnswer: (a: SubjectAnswer | null) => answerProposalCard(key, ref, a) } : {}) };
 }
 
@@ -196,6 +197,9 @@ function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { 
  * proposal), else one subject card per subject, numbered when there are two
  * or more, twelve at a time with "Show all N" past that.
  */
+/** A records proposal this small shows every record at once; past it, the groups fold to their totals. */
+const OPEN_RECORDS = 6;
+
 export function ProposalEntries({ proposal, changes, entries, batch, limit = 12, className }: {
   proposal: Proposal;
   changes: readonly OrgProposalChange[];
@@ -206,14 +210,16 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
   className?: string;
 }) {
   const [all, setAll] = useState(false);
-  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  // A proposal small enough to read at a glance starts open, so what is approved is on the card. A press settles it either way.
+  const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const focus = useFocusChange(changes);
-  const setOpen = (key: string, v: boolean) => setOpenKeys((prev) => { const next = new Set(prev); if (v) next.add(key); else next.delete(key); return next; });
+  const setOpen = (key: string, v: boolean) => setToggled((prev) => new Map(prev).set(key, v));
   if (entries.records) {
     const lone = entries.groups.length === 1;
+    const small = entries.groups.reduce((n, g) => n + g.rows.length, 0) <= OPEN_RECORDS;
     return (
-      <div className={cn("not-prose min-w-0", LEDGER_INKS, className)} data-proposal-groups={entries.groups.length}>
-        {entries.groups.map((group) => <AnsweredGroup key={group.key} proposal={proposal} batch={batch} group={group} focus={focus} lone={lone} open={openKeys.has(group.key)} onOpen={(v) => setOpen(group.key, v)} />)}
+      <div className={cn("not-prose min-w-0 [&>:first-child]:border-t-0", LEDGER_INKS, className)} data-proposal-groups={entries.groups.length}>
+        {entries.groups.map((group) => <AnsweredGroup key={group.key} proposal={proposal} batch={batch} group={group} focus={focus} lone={lone} open={toggled.get(group.key) ?? small} onOpen={(v) => setOpen(group.key, v)} />)}
       </div>
     );
   }
@@ -223,10 +229,10 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
   const lone = cards.length === 1;
   return (
     <div className={cn("not-prose min-w-0", LEDGER_INKS, className)} data-proposal-subjects={cards.length}>
-      <ol className="m-0 list-none p-0">
+      <ol className="m-0 list-none p-0 [&>li:first-child>*]:border-t-0">
         {shown.map((card, i) => (
           <li key={card.key} className="m-0 p-0">
-            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { lead: true, className: "py-[14px]" } : { ordinal: i + 1 })} />
+            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { className: "py-[14px]" } : { ordinal: i + 1 })} />
           </li>
         ))}
       </ol>
@@ -296,23 +302,21 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
   const records = entries.records ? entries.groups.flatMap((g) => g.rows.map((r) => r.change)) : undefined;
   const outcome = withdrawn ? "Withdrawn" : open === 0 ? proposalProgressWords(entries.cards, records) || "Nothing to decide" : undefined;
   const who = proposal.author?.name ? `${proposal.author.name}'s` : "the author's";
+  const above = takeover && answerable && (rest.length > 0 || pressed) && list.length > 1 ? <TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : undefined;
+  const left = onMap ? <LedgerWord onClick={onMap} aria-label="Show this proposal on the map" title="Open the org map beside this conversation" data-open-map={proposal.short_id}>Map</LedgerWord> : undefined;
+  const right = answerable && list.length > 1 && (rest.length > 0 || pressed) ? (
+    <LedgerWord className={cn("-mr-2", pressed && "text-[color:var(--ink-violet)]")} aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
+      {pressed && <Check className="-ml-0.5 mr-1 h-3 w-3" aria-hidden />}
+      {restLabel}
+    </LedgerWord>
+  ) : undefined;
   return (
     <>
       {!answerable && open > 0 && !withdrawn && proposal.status === "open" && (
         <p className={cn("m-0 mt-2 text-[11px] leading-[18px] text-[color:var(--ink-quiet)]")} data-proposal-readonly-line>Open this in {who} thread to answer.</p>
       )}
-      <LedgerClosingRow
-        className={cn("mt-2", className)}
-        above={takeover && answerable && (rest.length > 0 || pressed) && list.length > 1 ? <TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : undefined}
-        left={onMap ? <LedgerWord onClick={onMap} aria-label="Show this proposal on the map" title="Open the org map beside this conversation" data-open-map={proposal.short_id}>Map</LedgerWord> : undefined}
-        right={answerable && list.length > 1 && (rest.length > 0 || pressed) ? (
-          <LedgerWord className={cn("-mr-2", pressed && "text-[color:var(--ink-violet)]")} aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
-            {pressed && <Check className="-ml-0.5 mr-1 h-3 w-3" aria-hidden />}
-            {restLabel}
-          </LedgerWord>
-        ) : undefined}
-        outcome={outcome}
-      />
+      {/* A closing row with nothing in it draws no rule. */}
+      {(above || left || right || outcome) && <LedgerClosingRow className={cn("mt-2", className)} above={above} left={left} right={right} outcome={outcome} />}
     </>
   );
 }
