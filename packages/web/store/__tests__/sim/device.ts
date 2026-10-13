@@ -26,7 +26,7 @@
 
 import type { ReplicationChannel, ReplicationFollower, ReplicationHost, ReplicationMessage } from "@platform/engine";
 import { setGestureChannelFactory } from "../../gestureBridge";
-import { followerActionTee, promoteToHost, replicationFollowerFor, replicationHostFor } from "../../syncReplication";
+import { followerActionTee, promoteToHost, replicationFollowerFor, replicationHostFor, setFollowerTee } from "../../syncReplication";
 import { activeWindow, type RealmWindow } from "./realm";
 import { SimWindow, type BootScope, type SimPrincipal, type SimWindowWorld } from "./window";
 
@@ -169,7 +169,7 @@ export class SimDevice {
     this.followerRuntimes.set(
       w,
       replicationFollowerFor(w.name, channel, (synced) => {
-        if (synced) (w.store.getState() as any)._setActionTee(followerActionTee(channel, w.name));
+        if (synced) setFollowerTee(w.store.getState(), followerActionTee(channel, w.name));
       }),
     );
   }

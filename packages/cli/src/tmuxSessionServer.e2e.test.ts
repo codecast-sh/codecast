@@ -48,6 +48,14 @@ describe("one tmux server per agent session", () => {
     expect(tmuxRun(["has-session", "-t", own]).status).toBe(0);
   });
 
+  // The job's label must not reach the panes, or every process in them reads
+  // itself as that launchd job (interactiveJob.ts skips its cap and escape).
+  test("the server's environment carries no launchd job label", () => {
+    if (process.platform !== "darwin") return;
+    const r = tmuxRun(["show-environment", "-g", "-t", own, "CAST_LAUNCHD_LABEL"]);
+    expect(r.stdout).not.toContain("sh.codecast.tmux.");
+  });
+
   test("calls naming the session reach its server", () => {
     expect(tmuxRun(["send-keys", "-t", own, "-l", "echo routed-ok"]).status).toBe(0);
     expect(tmuxRun(["send-keys", "-t", own, "Enter"]).status).toBe(0);
