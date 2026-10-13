@@ -241,7 +241,8 @@ export function ChangeCardVerdictBar({ card, children }: { card: ChangeCard; chi
   );
 }
 
-const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Shipped", revise: "Sent back to revise", drop: "Dropped" };
+/** A Ship answer approves the change; whether it has landed is the run's to say, never the answer's. */
+const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Approved to ship", revise: "Sent back to revise", drop: "Dropped" };
 /** A trial run's answer records what the person would have done and ships nothing: it is never worded as done. */
 const VERDICT_WOULD: Record<ChangeVerdict, string> = { ship: "Would ship", revise: "Would revise", drop: "Would drop" };
 
