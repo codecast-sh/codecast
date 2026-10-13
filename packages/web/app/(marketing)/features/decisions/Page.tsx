@@ -16,7 +16,7 @@ const RELATED: { slug: string; why: string }[] = [
   { slug: "triggers", why: "An answer that should run work later: arm a trigger from the session that got it." },
   { slug: "agents", why: "Workers you spawn ask through the same queue, so a fan-out reaches you as one sitting." },
   { slug: "pull-requests", why: "A finished change can come to you as a card that asks Ship, Revise or Drop." },
-  { slug: "memory", why: "Record the why with cast decisions add, so the next agent starts from it." },
+  { slug: "memory", why: "The reasons behind a decision stay searchable, so the next agent starts from them." },
 ];
 
 function Related() {
@@ -50,7 +50,7 @@ function Cta() {
             Let your agents ask. Answer when you sit down.
           </h2>
           <p className="mt-5 text-[16px] leading-7 max-w-lg" style={{ color: SOL.base1 }}>
-            Install codecast, then <span className="font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: "rgba(181,137,0,.18)", color: SOL.base2 }}>cast install decide</span> to give your agents the snippet that says when to queue a choice and how to write the card. Your queue lives at <span className="font-mono" style={{ color: SOL.base2 }}>/questions</span> on the web and in the phone app.
+            Install codecast, open <b style={{ color: SOL.base2 }}>Agent features</b> from your account menu and switch on <b style={{ color: SOL.base2 }}>Decision queue</b>. Your agents learn when to queue a choice and how to write the card, and the queue waits in <b style={{ color: SOL.base2 }}>Questions</b> on the web, the desktop app and your phone.
           </p>
           <div className="mt-6 flex items-center gap-2 text-[13px] font-mono" style={{ color: SOL.base1 }}>
             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: Y }} />

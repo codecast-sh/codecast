@@ -67,15 +67,15 @@ function fixtures(o: Overrides = {}) {
         status: "active",
         trust: "direct",
         anchor_id: ANCHOR,
-        caps: { hands_per_day: 3, wakes_per_day: 10, tokens_per_day: 1_000_000 },
+        caps: { hands_per_day: 3, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true },
         created_by: HOST,
         created_at: 1,
         updated_at: 1,
         ...(o.role ?? {}),
       },
     ],
-    anchors: [{ _id: ANCHOR, team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: STANDING, project_path: "/srv/growth" }],
-    conversations: [{ _id: STANDING, session_id: "standing", user_id: HOST, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 1, standing_role_id: ROLE, anchor_id: ANCHOR, updated_at: NOW }],
+    anchors: [{ _id: ANCHOR, team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: STANDING }],
+    conversations: [{ _id: STANDING, session_id: "standing", user_id: HOST, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 1, standing_role_id: ROLE, anchor_id: ANCHOR, updated_at: NOW, project_path: "/srv/growth" }],
     workflows: [],
     workflow_runs: [],
     daemon_commands: [],
@@ -132,6 +132,19 @@ describe("orgLine.sweep (L9)", () => {
     expect(tables.org_roles[0].counters.hands).toBe(1);
   });
 
+  test("a role whose standing session was pulled to another person's machine runs there, in that session's folder", async () => {
+    const { ctx, tables } = fixtures();
+    // cast pull / cast role move: the session runs under Mate now, and Mate's
+    // daemon recorded its own checkout. The role and anchor rows still name Host.
+    Object.assign(tables.conversations.find((c) => c._id === STANDING)!, { user_id: MATE, project_path: "/Users/mate/src/growth" });
+    await sweepCore(ctx, NOW);
+    const run = tables.workflow_runs[0];
+    expect(run.user_id).toBe(MATE);
+    expect(run.project_path).toBe("/Users/mate/src/growth");
+    expect(tables.daemon_commands[0].user_id).toBe(MATE);
+    expect(tables.org_roles[0].host_user_id).toBe(HOST);
+  });
+
   test("uses the host's pushed workflow row when one carries the line's slug", async () => {
     const { ctx, tables } = fixtures({
       role: { line_workflow_slug: "feature" },
@@ -152,7 +165,7 @@ describe("orgLine.sweep (L9)", () => {
   });
 
   test("starts nothing once the role's hands cap is reached", async () => {
-    const { ctx, tables } = fixtures({ role: { caps: { hands_per_day: 1, wakes_per_day: 10, tokens_per_day: 1_000_000 }, counters: { day: TODAY, hands: 1, wakes: 0, tokens: 0 } } });
+    const { ctx, tables } = fixtures({ role: { caps: { hands_per_day: 1, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true }, counters: { day: TODAY, hands: 1, wakes: 0, tokens: 0 } } });
     const res = await sweepCore(ctx, NOW);
     expect(res.started).toHaveLength(0);
     expect(res.skipped_capped).toEqual([ROLE]);
@@ -162,7 +175,7 @@ describe("orgLine.sweep (L9)", () => {
   });
 
   test("a stale counter row from yesterday does not hold today's cap", async () => {
-    const { ctx, tables } = fixtures({ role: { caps: { hands_per_day: 1, wakes_per_day: 10, tokens_per_day: 1_000_000 }, counters: { day: "2020-01-01", hands: 1, wakes: 0, tokens: 0 } } });
+    const { ctx, tables } = fixtures({ role: { caps: { hands_per_day: 1, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true }, counters: { day: "2020-01-01", hands: 1, wakes: 0, tokens: 0 } } });
     const res = await sweepCore(ctx, NOW);
     expect(res.started).toHaveLength(1);
     expect(tables.org_roles[0].counters).toEqual({ day: TODAY, hands: 1, wakes: 0, tokens: 0 });
@@ -182,7 +195,7 @@ describe("orgLine.sweep (L9)", () => {
     }
   });
 
-  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker", async () => {
+  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker or wait", async () => {
     const role = () => fixtures().tables.org_roles[0];
     const cases: Array<[Record<string, any>, number]> = [
       [{}, 1],
@@ -194,6 +207,8 @@ describe("orgLine.sweep (L9)", () => {
       [{ blocked_by: ["ct-9"] }, 0],
       [{ blocked_by: ["ct-8"] }, 1],
       [{ blocked_by: ["ct-404"] }, 1],
+      [{ waits: [{ kind: "time", at: NOW + 3_600_000, state: "waiting", created_at: NOW }] }, 0],
+      [{ waits: [{ kind: "time", at: NOW - 1, state: "met", created_at: NOW - 2 }] }, 1],
       [{ project_id: "projects_elsewhere" }, 0],
     ];
     for (const [over, expected] of cases) {
@@ -214,7 +229,7 @@ describe("orgLine.sweep (L9)", () => {
 
   test("drains a backlog oldest first, bounded by the cap", async () => {
     const { ctx, tables } = fixtures({
-      role: { caps: { hands_per_day: 2, wakes_per_day: 10, tokens_per_day: 1_000_000 } },
+      role: { caps: { hands_per_day: 2, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true } },
       extra: {
         tasks: [
           task({ _id: "tasks_new", short_id: "ct-3", created_at: NOW - 10 }),
@@ -242,7 +257,7 @@ describe("orgLine admission (LE6)", () => {
     // Same short id shape in another workspace: never read for this team.
     { _id: "initiatives_other", short_id: "in-9", title: "Elsewhere", priority: "p0", status: "active", workspace: "team:teams_other", team_id: "teams_other", project_ids: [] },
   ];
-  const caps = (over: Record<string, any> = {}) => ({ caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, ...over } });
+  const caps = (over: Record<string, any> = {}) => ({ caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true, ...over } });
   // A pending card at the card gate of a run the role's standing session spawned.
   const card = (n: number, over: Record<string, any> = {}) => ({
     _id: `session_decisions_${n}`, conversation_id: STANDING, session_id: "standing", user_id: HOST, question: "Ship it?", options: [], blocking: true, status: "pending",
@@ -402,6 +417,48 @@ describe("orgLine admission (LE6)", () => {
     const after = await lineQueueFor(ctx, tables.org_roles[0], NOW);
     expect(after.waiting).toBe("hands cap reached");
     expect(after.items.map((i) => i.task_id)).toEqual(["tasks_b"]);
+  });
+
+  // LL5: the line's start switch, caps.line_on under the role's own switch.
+  test("a line whose start switch is off starts nothing, whatever the role's own switch says", async () => {
+    for (const role of [caps({ line_on: false }), { caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000 } }]) {
+      const { ctx, tables } = fixtures({ role, extra: { initiatives, tasks: [cause(), cause({ _id: "tasks_b", short_id: "ct-2" })] } });
+      expect(tables.org_roles[0].trust).toBe("direct");
+      const res = await sweepCore(ctx, NOW);
+      expect(res.started).toHaveLength(0);
+      expect(tables.workflow_runs).toHaveLength(0);
+      expect(tables.daemon_commands ?? []).toHaveLength(0);
+      expect(tables.tasks.every((t) => t.status === "open")).toBe(true);
+      const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
+      expect(q.waiting).toBe("line is off");
+      expect(q.items.every((i) => i.waiting === "line is off")).toBe(true);
+    }
+  });
+
+  test("on with N slots starts at most N, sweep after sweep, until a decision frees one", async () => {
+    for (const n of [1, 3]) {
+      const { ctx, tables } = fixtures({
+        role: caps({ cards: n, hands_per_day: 50 }),
+        extra: { initiatives, tasks: [1, 2, 3, 4, 5, 6].map((i) => cause({ _id: `tasks_s${i}`, short_id: `ct-s${i}`, created_at: NOW - 10_000 + i })) },
+      });
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(n);
+      expect((await sweepCore(ctx, NOW + 120_000)).started).toHaveLength(0);
+      expect(tables.workflow_runs).toHaveLength(n);
+    }
+  });
+
+  test("slots hold for a role with no standing session, and across a restart onto a new one", async () => {
+    const tasks = () => [1, 2, 3].map((i) => cause({ _id: `tasks_r${i}`, short_id: `ct-r${i}`, created_at: NOW - 10_000 + i }));
+    const seatless = fixtures({ role: { ...caps({ cards: 1, hands_per_day: 50 }), anchor_id: undefined }, extra: { initiatives, tasks: tasks() } });
+    expect((await sweepCore(seatless.ctx, NOW)).started).toHaveLength(1);
+    expect((await sweepCore(seatless.ctx, NOW + 120_000)).started).toHaveLength(0);
+    expect(seatless.tables.workflow_runs).toHaveLength(1);
+
+    const restarted = fixtures({ role: caps({ cards: 1, hands_per_day: 50 }), extra: { initiatives, tasks: tasks() } });
+    expect((await sweepCore(restarted.ctx, NOW)).started).toHaveLength(1);
+    restarted.tables.anchors[0].conversation_id = "conversations_standing2";
+    restarted.tables.conversations.push({ ...restarted.tables.conversations[0], _id: "conversations_standing2", session_id: "standing2" });
+    expect((await sweepCore(restarted.ctx, NOW + 120_000)).started).toHaveLength(0);
   });
 
   test("a role whose switch is off reads as off in the queue", async () => {

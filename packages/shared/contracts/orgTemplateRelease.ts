@@ -51,7 +51,7 @@ function keyed<T extends Record<string, any>>(prev: T[] | undefined, next: T[] |
 }
 const union = (...lists: string[][]) => [...new Set(lists.flat())];
 
-const EMPTY: OrgTemplate = { schemaVersion: 2, id: "", version: "0.0.0", name: "", description: "", role: { name: "", handle: "", charter: "", caps: { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 } }, routines: [] };
+const EMPTY: OrgTemplate = { schemaVersion: 2, id: "", version: "0.0.0", name: "", description: "", role: { name: "", handle: "", charter: "" }, routines: [] };
 
 /**
  * The classification plus the plain words for each change that set its
@@ -67,9 +67,12 @@ export function explainRelease(prev: OrgTemplate | null, next: OrgTemplate): Rel
 
   // Each authority change in a person's words: the Update card shows these verbatim.
   const authority: string[] = [];
-  const amount = (n: number | undefined) => (n === undefined ? "none" : n.toLocaleString("en-US"));
+  const amount = (n: number | undefined, none: string) => (n === undefined ? none : n.toLocaleString("en-US"));
   const CAPS = { hands_per_day: "Daily hands limit", wakes_per_day: "Daily wake limit", tokens_per_day: "Daily token limit", cards: "Card limit" } as const;
-  for (const [k, label] of Object.entries(CAPS) as [keyof typeof CAPS, string][]) if (p.role.caps[k] !== next.role.caps[k]) authority.push(`${label}: ${amount(p.role.caps[k])} to ${amount(next.role.caps[k])}`);
+  for (const [k, label] of Object.entries(CAPS) as [keyof typeof CAPS, string][]) {
+    const was = p.role.caps?.[k], now = next.role.caps?.[k];
+    if (was !== now) authority.push(`${label}: ${amount(was, k === "cards" ? "none" : "no limit")} to ${amount(now, k === "cards" ? "none" : "no limit")}`);
+  }
   if (p.role.name !== next.role.name) authority.push(`Role name: ${p.role.name} to ${next.role.name}`);
   if (p.role.handle !== next.role.handle) authority.push(`Handle: ${p.role.handle} to ${next.role.handle}`);
   if (p.role.line !== next.role.line) authority.push(`Line it runs: ${p.role.line ?? "none"} to ${next.role.line ?? "none"}`);

@@ -19,6 +19,15 @@ export type RunNodeSession = {
   updated_at?: number;
   agent_type?: string;
   parent_conversation_id?: string;
+  /** The session's pin (`cast state`): its first line is what the station says it did. */
+  state?: string;
+  state_status?: string;
+  /** The pin's json block, whole: what the station reported for its edges. */
+  result?: string;
+  /** The session was killed; with no message, it never started. */
+  killed?: boolean;
+  /** Its last `cast task handoff` on the run's task: how a builder ended. */
+  handoff?: { status: string; note?: string; at?: number };
 };
 
 export type RunNodeRow = {
@@ -41,6 +50,37 @@ export type RunNodeRow = {
 };
 
 export type RunNodeGroup = { title?: string; detail?: string; rows: RunNodeRow[] };
+
+type SyncedRun = { _id: string; node_statuses?: Array<{ node_id: string; session_id?: string; session?: unknown }> };
+
+/**
+ * Every run feed attaches each node's session under a read budget
+ * (workflow_runs.withAgentSessions), so a wide feed (the line floor) hands back
+ * older runs with bare nodes while the cause's own feed attached them. A bare
+ * node keeps the session the store already holds for the same node and hand,
+ * so the feeds overlay without stripping what a station reported. Returns the
+ * same array when nothing was carried.
+ */
+export function carryNodeSessions<T extends SyncedRun>(rows: T[], prev: Record<string, SyncedRun | undefined> | undefined): T[] {
+  if (!prev || !Array.isArray(rows)) return rows;
+  let changed = false;
+  const out = rows.map((r) => {
+    const old = r && prev[r._id]?.node_statuses;
+    if (!old?.length || !Array.isArray(r.node_statuses)) return r;
+    let nodes: NonNullable<SyncedRun["node_statuses"]> | null = null;
+    r.node_statuses.forEach((n, i) => {
+      if (n.session || !n.session_id) return;
+      const was = old.find((o) => o.node_id === n.node_id && o.session_id === n.session_id && o.session);
+      if (!was) return;
+      nodes ??= [...r.node_statuses!];
+      nodes[i] = { ...n, session: was.session };
+    });
+    if (!nodes) return r;
+    changed = true;
+    return { ...r, node_statuses: nodes };
+  });
+  return changed ? out : rows;
+}
 
 const HIDDEN_TYPES = new Set(["start", "exit"]);
 
@@ -127,6 +167,62 @@ export function runNodeLine(row: RunNodeRow): string | undefined {
   return line || undefined;
 }
 
+const VERDICT_WORDS: Record<string, string> = { PASS: "Passed", PASSED: "Passed", APPROVE: "Approved", APPROVED: "Approved", NEEDS_CHANGES: "Needs changes", REJECT: "Rejected", REJECTED: "Rejected", FAIL: "Failed", FAILED: "Failed" };
+
+/** The first string field named `key` (a regex source) in a JSON object's
+ *  head, at any depth, read even when the head was cut off mid-object (a
+ *  step's preview is the first few hundred characters). */
+function headField(text: string, key: string): { value: string; cut: boolean } | undefined {
+  const m = text.match(new RegExp(`"(?:${key})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)(")?`));
+  if (!m) return undefined;
+  const body = m[1].replace(/\\u?[0-9a-fA-F]{0,3}$/, "");
+  let value: string;
+  try { value = JSON.parse(`"${body}"`); } catch { value = body.replace(/\\(.)/g, "$1"); }
+  return { value, cut: !m[2] };
+}
+
+/** The keys schemas use for a step's result in words. */
+const PROSE_KEYS = ["why", "summary", "notes"];
+/** A reviewer's list of findings, and the key a finding says itself in. */
+const FINDING_LISTS = ["findings", "issues"];
+const FINDING_KEYS = "issue|problem|description|message";
+
+/** A step's output in words, never as the object it printed. A station
+ *  script's routing JSON reads as its `why`; an agent's structured result as
+ *  its `summary` or `notes`; a reviewer's as its verdict (with how many
+ *  findings, when the whole object is at hand) and what the first finding
+ *  says. Failing those, a whole object's first top-level sentence; JSON with
+ *  no prose reads as nothing, so the step's own words stand. Any other
+ *  output reads as it is. */
+export function scriptLine(line: string | undefined): string | undefined {
+  const text = line?.trim();
+  if (!text?.startsWith("{")) return line;
+  let obj: Record<string, unknown> | null = null;
+  try { obj = JSON.parse(text.slice(0, text.lastIndexOf("}") + 1)); } catch {}
+  // A whole object is read by its own top-level keys, so a finding's words
+  // never stand in for the result's summary; a cut head by the first match.
+  const field = (key: string) => {
+    if (!obj) return headField(text, key);
+    const v = obj[key];
+    return typeof v === "string" ? { value: v, cut: false } : undefined;
+  };
+  const listKey = obj ? FINDING_LISTS.find((k) => Array.isArray(obj![k])) : undefined;
+  const list = listKey ? obj![listKey] as unknown[] : undefined;
+  const firstFinding = list
+    ? (list[0] && typeof list[0] === "object" ? headField(JSON.stringify(list[0]), FINDING_KEYS) : undefined)
+    : obj ? undefined : headField(text, FINDING_KEYS);
+  const anySentence = () => {
+    const v = obj && Object.values(obj).find((x) => typeof x === "string" && /\s/.test(x.trim()));
+    return typeof v === "string" ? { value: v, cut: false } : undefined;
+  };
+  const verdict = field("verdict")?.value.trim().toUpperCase();
+  const prose = [...PROSE_KEYS.map(field), firstFinding].find((f) => f?.value.trim()) ?? (verdict ? undefined : anySentence());
+  const count = list?.length ? `: ${list.length} ${list.length === 1 ? listKey!.replace(/s$/, "") : listKey}` : "";
+  const head = verdict ? (VERDICT_WORDS[verdict] ?? verdict.charAt(0) + verdict.slice(1).toLowerCase().replace(/_/g, " ")) + count : "";
+  const words = prose ? prose.value.replace(/\s+/g, " ").trim() + (prose.cut ? "…" : "") : "";
+  return [head, words].filter(Boolean).join(". ") || undefined;
+}
+
 export function formatRunDuration(startMs: number, endMs?: number, now = Date.now()): string {
   const secs = Math.max(0, Math.floor(((endMs ?? now) - startMs) / 1000));
   if (secs < 60) return `${secs}s`;
@@ -146,5 +242,6 @@ export function wfStatusMeta(status?: string): { icon: string; cls: string; dot:
 
 export function wfFmtTokens(n?: number): string {
   if (!n) return "";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${n}`;
 }
