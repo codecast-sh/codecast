@@ -9,6 +9,9 @@ const restore = replaceGlobals({
   document: dom.window.document,
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,
+  // Evidence pages render through the markdown stack, whose Prism plugins
+  // feature-detect on Element once they see a document.
+  Element: dom.window.Element,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
@@ -24,8 +27,11 @@ mock.module("../../../hooks/useSyncTaskEvidence", () => ({
     images: evidence[id].map((name) => ({ url: `https://images.example/${name}.png`, message_id: `message-${id}` })),
   }),
 }));
-mock.module("../../../lib/taskStatuses", () => ({ useTeamTaskStatusList: () => [], boardOrderedStatuses: () => [] }));
-mock.module("../../../lib/stage", () => ({ openBrowserPane: () => {} }));
+// Spread, not replaced: the gallery's graph imports other exports of both.
+const realTaskStatuses = { ...(await import("../../../lib/taskStatuses")) };
+mock.module("../../../lib/taskStatuses", () => ({ ...realTaskStatuses, useTeamTaskStatusList: () => [], boardOrderedStatuses: () => [] }));
+const realStage = { ...(await import("../../../lib/stage")) };
+mock.module("../../../lib/stage", () => ({ ...realStage, openBrowserPane: () => {} }));
 mock.module("../../tasks/StationStrip", () => ({ ReviewVerdictChip: () => null }));
 mock.module("../../TaskStatusBadge", () => ({ TaskStatusBadge: () => null }));
 mock.module("next/link", () => ({ default: () => null }));

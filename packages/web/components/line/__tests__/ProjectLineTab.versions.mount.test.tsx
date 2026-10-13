@@ -19,6 +19,8 @@ const restoreGlobals = replaceGlobals({
   Node: dom.window.Node,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   matchMedia,
+  // The tab embeds the line workspace, whose panes measure themselves.
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 dom.window.HTMLElement.prototype.scrollTo = () => {};
