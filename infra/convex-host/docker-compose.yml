@@ -24,6 +24,13 @@ services:
     # the cycle (ct-52939). A live `docker update` does not survive a
     # recreate, so this line must match the running value.
     mem_limit: 128g
+    # Docker's default soft limit is 1024 open files. Every client websocket,
+    # HTTP keepalive and Postgres connection holds one, and at ~1000 the backend
+    # refused connections and fetches with EMFILE for 40 minutes, then aborted
+    # when the search cache cleaner panicked (2026-10-12). Applied live that day
+    # with `prlimit --nofile`, which does not survive a restart.
+    ulimits:
+      nofile: { soft: 524288, hard: 524288 }
     env_file: [.env]
     networks: [codecast]
     volumes:
