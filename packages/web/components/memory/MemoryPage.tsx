@@ -22,6 +22,7 @@ import { MemoryEditor, NEW_MEMORY } from "./MemoryEditor";
 import { BudgetMeter } from "./parts";
 import { MEMORY_VIEWS, TYPE_TONE, healthAlarm, memoryHealth, memoryHref, noteMatches, toneCss, typeKey, type MemoryView } from "./memoryView";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+import { Button } from "../ui/button";
 
 const MemoryMap = lazy(() => import("./MemoryMap"));
 
@@ -273,10 +274,10 @@ function MemoryBody({ fit }: { fit: Fit }) {
               className="w-full bg-sol-bg border border-sol-border/60 rounded-md pl-8 pr-2 py-1 text-[13px] text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan transition-colors"
             />
           </label>
-          <button type="button" onClick={() => open(NEW_MEMORY)} className="sol-btn sol-btn-primary text-xs px-3 py-1 inline-flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" />
+          <Button type="button" variant="secondary" size="xs" onClick={() => open(NEW_MEMORY)}>
+            <Plus />
             {fit === "narrow" ? "New" : "New memory"}
-          </button>
+          </Button>
         </div>
 
         <div className="flex-1 min-h-0 relative">

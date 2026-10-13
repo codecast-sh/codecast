@@ -128,6 +128,9 @@ describe("the stall notice", () => {
     expect(await noticeGoalStalls(ctx, await db.get("r1"), null, person([goal({})]), NOW)).toBe(1);
     expect(sent[0]).toMatchObject({ event_type: "goal_stall", entity_type: "org_role", entity_id: "or-1", direct_recipient_id: MATE });
     expect(sent[0].message).toContain("Close the round");
+    // A person reads focus, never goals (the brief's goals are their focus).
+    expect(sent[0].message).toContain("high on your focus");
+    expect(sent[0].message).not.toMatch(/\bgoals?\b/);
     expect(await noticeGoalStalls(ctx, await db.get("r1"), null, person([goal({})]), NOW + H)).toBe(0);
     expect(await noticeGoalStalls(ctx, await db.get("r1"), null, person([goal({})]), NOW + D)).toBe(1);
     // A stalled goal that is not high priority is the role's to name, not a notice.
