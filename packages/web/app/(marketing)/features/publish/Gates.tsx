@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { SOL, Terminal } from "../../blog/blogChrome";
+import { SOL } from "../../blog/blogChrome";
 import { C, CYAN, Flag, Section } from "./kit";
 
 type Gate = { id: string; flag: string; off?: string; name: string; short: string; what: ReactNode; screen: ReactNode };
@@ -32,22 +32,22 @@ function Btn({ children }: { children: ReactNode }) {
 const GATES: Gate[] = [
   {
     id: "password", short: "A password before the page loads.", flag: "--password-stdin", off: "--no-password", name: "Password",
-    what: <>Readers type a password before the page loads. The server keeps only a salted hash, and each page accepts 12 guesses a minute. Pass it on stdin so it never shows in the process list; <C>--password &lt;p&gt;</C> works but is visible in <C>ps</C>.</>,
+    what: <>Readers type a password before the page loads. The server keeps only a salted hash, and each page accepts 12 guesses a minute.</>,
     screen: <GateCard title="This page is password protected" body={<>Enter the password to view <b>Q3 churn audit</b>.</>}><Field placeholder="Password" value="••••••••" /><Btn>Unlock</Btn></GateCard>,
   },
   {
     id: "email", short: "An email address before viewing, logged per reader.", flag: "--email-gate", off: "--no-email-gate", name: "Email gate",
-    what: <>Readers give an email address before viewing. <C>cast publish viewers</C> then lists each address with how many times and when it opened the page. The address is not verified, so treat it as who said they were reading.</>,
+    what: <>Readers give an email address before viewing. <strong>Seen by</strong> in Manage sharing then lists each address with how many times and when it opened the page. The address is not verified, so treat it as who said they were reading.</>,
     screen: <GateCard title="Enter your email to view" body={<>The author of <b>Q3 churn audit</b> asks viewers to identify themselves.</>}><Field placeholder="you@company.com" value="maya@northwind.dev" /><Btn>Continue</Btn></GateCard>,
   },
   {
-    id: "expires", short: "The link closes after a duration you set.", flag: "--expires 7d", off: "--expires never", name: "Expiry",
-    what: <>The link stops working after a duration: <C>30m</C>, <C>24h</C>, <C>7d</C>, <C>2w</C>. The shortest is one minute. <C>never</C> clears it. The page and its history stay in your list; only the link closes.</>,
+    id: "expires", short: "The link closes after a duration you set.", flag: "--expires 7d", off: "--expires never", name: "Expires",
+    what: <>The link stops working after a duration, from one minute to weeks, or never. The page and its history stay in your list; only the link closes.</>,
     screen: <GateCard title="This link has expired" body={<>The author set an expiry on <b>Q3 churn audit</b> and it has passed.</>} />,
   },
   {
-    id: "edit", short: "Who can edit and publish from the browser.", flag: "--edit-mode link", name: "Edit mode",
-    what: <><C>owner</C> (the default): only you publish versions. <C>link</C>: the CLI prints an edit URL, and anyone holding it can edit and publish from the browser. <C>team</C>: signed-in teammates can. A version made in the browser records who made it.</>,
+    id: "edit", short: "Who can edit and publish from the browser.", flag: "--edit-mode link", name: "Editing",
+    what: <>By default only you publish versions. Open it to anyone holding an edit link, or to signed-in teammates, and they can edit and publish from the browser with <strong>Edit this page</strong>. A version made in the browser records who made it.</>,
     screen: (
       <div className="w-full max-w-[300px] rounded-xl border overflow-hidden text-left" style={{ borderColor: "rgba(88,110,117,.25)", boxShadow: "0 20px 40px -24px rgba(0,43,54,.45)" }}>
         <div className="flex items-center justify-between px-3 h-9 border-b font-mono text-[11px]" style={{ borderColor: SOL.base2, backgroundColor: SOL.base2, color: SOL.base01 }}>
@@ -74,6 +74,15 @@ const GATES: Gate[] = [
     ),
   },
 ];
+
+/** What a reader meets at each gate: the password, email and expiry screens side by side. */
+export function GateScreens() {
+  return (
+    <div className="grid sm:grid-cols-3 gap-4 justify-items-center">
+      {GATES.filter((g) => ["password", "email", "expires"].includes(g.id)).map((g) => <div key={g.id} className="w-full flex justify-center">{g.screen}</div>)}
+    </div>
+  );
+}
 
 function GateBoard() {
   const [active, setActive] = useState(GATES[0].id);
@@ -123,21 +132,13 @@ export function Gates() {
   return (
     <Section
       id="gates"
-      n="05"
+      n="04"
       title="Decide who can read it, for how long, and who can change it."
-      lede={<>Gates are flags on the publish. Change them later without republishing: <C>cast publish set churn-audit.md --expires 24h</C> leaves the content and version alone and only changes who gets in.</>}
+      lede={<>Open <strong>Manage sharing</strong> from the page&apos;s ⋯ menu (or <strong>Manage</strong> on its card in Pages) to set a password, an email gate, an expiry, comments, the session link and who can edit. A change leaves the content and version alone and only changes who gets in. An agent can set the same gates when it publishes; each one&apos;s flag is beside its name.</>}
     >
       <GateBoard />
       <div className="mt-10">
-        <div className="min-w-0 max-w-2xl [&>div]:my-0">
-          <Terminal label="share with a client for a week">
-            <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> printf &apos;%s&apos; &quot;$PW&quot; | cast publish deck/ \{"\n"}    --password-stdin --expires 7d --no-session</span>{"\n"}
-            <span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>Northwind launch review</span>  <span style={{ color: SOL.yellow }}>v1</span> → published{"\n"}
-            {"  "}<span style={{ color: CYAN }}>https://codecast.sh/a/Hm4tQz8YcLw2</span>{"\n"}
-            {"  "}<span style={{ color: SOL.base01 }}>gates:</span> password · expires in 7d · session link hidden
-          </Terminal>
-        </div>
-        <dl className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-6">
+        <dl className="grid sm:grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-6">
           {SAFETY.map((s) => (
             <div key={s.k}>
               <dt className="font-mono text-[13px] font-semibold flex items-center gap-2" style={{ color: SOL.base03 }}>

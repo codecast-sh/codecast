@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
-import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import { withSafetyBlock, isStashHidden, type UserRest, type ThreadStateStatus } from "@codecast/shared/contracts";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -17,7 +17,6 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { getProjectName, isFork, isAgentActive, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { msgCountColor, formatModel } from "../../lib/conversationProcessor";
-import { useLabelColor } from "../../lib/labelColors";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { SessionWorktreeChip } from "../SessionWorktreeChip";
@@ -34,6 +33,7 @@ import { PrStatusChip } from "../PrStatusChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { MetaDot } from "../entityDisplay";
+import { MODE_WORDS, type ModeWords } from "../../lib/surfaceRules";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import {
   AssignedPingStrip,
@@ -45,6 +45,7 @@ import {
   CardStatusSignals,
   CommentThreadsChip,
   ForkCorner,
+  SessionProjectChip,
   SelectTick,
   UnreadDot,
 } from "./SessionCardParts";
@@ -59,11 +60,18 @@ export type SessionCardChrome = {
   showModelBadge: boolean;
   showAgentIcon: boolean;
   showBranchPill: boolean;
+  /** Mark sessions on a cloud machine or on another of your machines. Absent means shown. */
+  showDeviceIcon?: boolean;
   /** The workspace asks for every session to have a face. */
   personifyAll: boolean;
   /** Branch, worktree and pull request chips at all (lib/surfaces.ts
    *  "gitChips"; off in hosted mode). Absent means shown. */
   showGitChips?: boolean;
+  /** The hover toolbar's Labels action (lib/surfaces.ts "inbox.labelStrip").
+   *  Absent means shown. */
+  showLabelStrip?: boolean;
+  /** The words for the viewer's mode. Absent means the developer's. */
+  words?: ModeWords;
 };
 
 /** The per-card live facts that are not fields of the session row. */
@@ -109,6 +117,9 @@ export type SessionCardViewProps = {
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
+  /** The declared status the row's section header already says (Needs input
+   *  under NEEDS INPUT): the card leaves that chip off rather than repeat it. */
+  sectionStatus?: ThreadStateStatus;
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
   // subagent — the trigger view renders a trigger's sessions as sub rows under
@@ -136,6 +147,8 @@ export type SessionCardViewProps = {
   anchorIdentity: AnchorIdentity | null;
   /** The cloud host a worktree runs on; a local worktree needs no host. */
   runHost?: Device | null;
+  /** The machine to mark beside the title: a cloud one, or one this window is not on. */
+  placeDevice?: Device | null;
   /** The resolved image thumbnail, when the row shows one. */
   thumbSrc?: string | null;
   /** A plain click opens; the panel reads the event for ⌘/shift selection gestures. */
@@ -154,6 +167,9 @@ export type SessionCardViewProps = {
   onPickCharacter?: (session: InboxSession, e: React.MouseEvent) => void;
   onToggleFavorite?: (id: string) => void;
   onOpenLabels?: (session: InboxSession) => void;
+  /** Clicking the card's project or label name: filter the list to it. */
+  onFilterProject?: (session: InboxSession, e: React.MouseEvent) => void;
+  onFilterLabel?: (session: InboxSession, e: React.MouseEvent) => void;
   onAckAssignment?: (id: string) => void;
   onOpenComments?: (id: string) => void;
   /** The "spawned by" / "handed off from" link. */
@@ -177,6 +193,7 @@ export function SessionCardView({
   isFavorite,
   sessionLabel,
   variant = "default",
+  sectionStatus,
   forkColorKey,
   subRow,
   roleSessions = 0,
@@ -190,6 +207,7 @@ export function SessionCardView({
   spawnedByTitle,
   anchorIdentity,
   runHost,
+  placeDevice,
   thumbSrc,
   onSelect,
   onDismiss,
@@ -203,13 +221,14 @@ export function SessionCardView({
   onPickCharacter,
   onToggleFavorite,
   onOpenLabels,
+  onFilterProject,
+  onFilterLabel,
   onAckAssignment,
   onOpenComments,
   onOpenParent,
   onPaneDragStart,
   onDropFiles,
 }: SessionCardViewProps) {
-  const getLabelColor = useLabelColor();
   // Idempotent, so a container that already applied it (for its own clock
   // signature) hands the same row through.
   const session = withSafetyBlock(row);
@@ -523,6 +542,9 @@ export function SessionCardView({
       <div
         role="button"
         tabIndex={0}
+        // A hosted row is named by its title and time, so the star and the
+        // state words nested in it never pile into the name a reader hears.
+        aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}, ${formatRowTime(session.updated_at, true)}` : undefined}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
@@ -586,8 +608,20 @@ export function SessionCardView({
             after={
               <>
               {titleSuffix && <span data-sv-title-suffix className="inline-flex flex-shrink-0 items-baseline gap-1.5 font-normal text-sol-text-dim"><MetaDot /><span>{titleSuffix}</span></span>}
+              {chrome.showDeviceIcon !== false && placeDevice && (
+                <span
+                  data-sv-device={placeDevice.is_remote ? "cloud" : "elsewhere"}
+                  className={`flex-shrink-0 self-center text-sol-text-dim ${placeDevice.is_remote ? "opacity-80" : "opacity-60"}`}
+                  title={placeDevice.is_remote
+                    ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}`
+                    : `Runs on ${deviceDisplayName(placeDevice)}, not this machine`}
+                >
+                  <DeviceIcon d={placeDevice} className={placeDevice.is_remote ? "w-3 h-3" : "w-2.5 h-2.5"} />
+                </span>
+              )}
               <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
                 <button
+                  data-sv-fav={isFavorite ? "on" : "off"}
                   onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }}
                   className={`flex-shrink-0 transition-all ${
                     isFavorite
@@ -640,7 +674,7 @@ export function SessionCardView({
             {/* Blocked and done earn a loud chip — those are the states the
                 human must act on or can stop thinking about. Working stays
                 quiet: the liveness pulse already says "running". */}
-            {stateView.status && stateView.status !== "working" && (
+            {stateView.status && stateView.status !== "working" && stateView.status !== sectionStatus && (
               <span
                 data-sv-status-chip
                 className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}
@@ -708,27 +742,13 @@ export function SessionCardView({
             </span>
           )}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
-          {(project !== "unknown" || sessionLabel) && (
-            // A label reads as a path under its project: the dot and a faded
-            // prefix in the project's color, then the label in its own color.
-            // Hover reveals project + directory.
-            <span
-              className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(sessionLabel ?? project).text}`}
-              title={`${project} · ${session.git_root || session.project_path || "no directory"}`}
-            >
-              {project !== "unknown" && (
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
-              )}
-              {sessionLabel && project !== "unknown" && sessionLabel.toLowerCase() !== project.toLowerCase() ? (
-                <span className="flex min-w-0">
-                  <span className={`truncate font-normal opacity-60 ${getLabelColor(project).text}`}>{project}/</span>
-                  <span className="flex-shrink-0 max-w-[10rem] truncate">{sessionLabel}</span>
-                </span>
-              ) : (
-                <span className="truncate">{sessionLabel ?? project}</span>
-              )}
-            </span>
-          )}
+          <SessionProjectChip
+            project={project}
+            label={sessionLabel}
+            directory={session.git_root || session.project_path}
+            onFilterProject={onFilterProject && ((e) => onFilterProject(session, e))}
+            onFilterLabel={onFilterLabel && ((e) => onFilterLabel(session, e))}
+          />
           {worktreeChip}
           {fleetChip}
           {/* The task this session owns: the fact that ties the card to its
@@ -765,7 +785,7 @@ export function SessionCardView({
                 {session.active_plan.title}
               </span>
             )}
-            {session.is_workflow_primary && session.workflow_run_status === "paused" && (
+            {session.workflow_run_id && !session.is_workflow_sub && session.workflow_run_status === "paused" && (
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30">
                 <span className="w-1 h-1 rounded-full bg-sol-magenta animate-pulse" />
                 Gate
@@ -783,13 +803,11 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
-            {/* A row with a same-name suffix already says when; its time
-                gives the title its room. */}
-            {!titleSuffix && (
-              <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
-                {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
-              </span>
-            )}
+            {/* Every row keeps its time column, so the list scans down one
+                edge; a same-name suffix only adds what the column cannot. */}
+            <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
+              {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
+            </span>
           </div>
         </div>
         <CardParentLinks
@@ -824,7 +842,7 @@ export function SessionCardView({
       </div>
       <CardPinBadge session={session} fadeGround={fadeGround} onPin={onPin} />
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <CardHoverToolbar session={session} fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
+        <CardHoverToolbar session={session} words={chrome.words ?? MODE_WORDS.developer} labels={chrome.showLabelStrip !== false} fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
       )}
       {!isForeignSession && (onRestore || onKill) && (
         <CardRestoreCluster session={session} variant={variant} isStashed={isStashed} onKill={onKill} onRestore={onRestore} />

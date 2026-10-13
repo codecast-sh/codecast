@@ -50,7 +50,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { activeTeamIdOf } from "../lib/activeTeam";
 import { tallyUnread } from "../lib/chatTimeline";
 import { foldReactions } from "../lib/chatViews";
-import type { ChatChannelView, ChatReaction } from "../components/chat/chatTypes";
+import type { ChatChannelAgentRef, ChatChannelView, ChatReaction } from "../components/chat/chatTypes";
 
 // ── Row shapes ──────────────────────────────────────────────────────────────
 //
@@ -309,7 +309,16 @@ export type ChatRailRow = {
   /** Roster of a private room or DM — derived by the server, absent on public
    *  channels (their audience is the team). */
   member_ids?: string[];
+  /** The roles and sessions inside the room (chat_channel_agents): each hears
+   *  every line a person posts. Ids and short ids only; names come from the
+   *  org tree and the session rows the store already holds. */
+  agents?: ChatChannelAgentRef[];
 };
+
+export type { ChatChannelAgentRef };
+
+export const chatAgentId = (a: ChatChannelAgentRef): string =>
+  a.kind === "role" ? a.role_id : a.conversation_id;
 
 // ── Stub ids ────────────────────────────────────────────────────────────────
 //
@@ -563,6 +572,10 @@ export type ChatSliceActions = {
    *  the room locally at once — waiting for the echo would leave you looking at
    *  a room you just walked out of. */
   removeChatChannelMember: (channelId: string, userId: string) => void;
+  /** Put roles or sessions in a room (any kind but a DM). Like the people
+   *  roster, the agents live on the server-derived rail row. */
+  addChatChannelAgents: (channelId: string, agents: ChatChannelAgentRef[]) => void;
+  removeChatChannelAgent: (channelId: string, agentId: string) => void;
   /** Returns the stub channel id, so the rail can select the new channel in the
    *  same tick. The altKey supersede moves it onto the real id on echo. */
   createChatChannel: (name: string, opts?: ChatCreateChannelOptions) => string;
@@ -585,6 +598,8 @@ export type ChatCreateChannelOptions = {
   kind?: "private";
   /** Initial roster for a private room, besides the creator. */
   memberIds?: string[];
+  /** Roles and sessions the room starts with, on either kind. */
+  agents?: ChatChannelAgentRef[];
 };
 
 export type ChatSliceState = ChatSliceData & ChatSliceActions;
@@ -1195,6 +1210,21 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       return { channelId, memberIds };
     }),
 
+    addChatChannelAgents: action(function (this: ChatDraft, channelId: string, agents: ChatChannelAgentRef[]) {
+      const row = this.chatRail.find((r) => String(r.channel_id) === channelId);
+      if (row) {
+        const have = new Set((row.agents ?? []).map(chatAgentId));
+        row.agents = [...(row.agents ?? []), ...agents.filter((a) => !have.has(chatAgentId(a)))];
+      }
+      return { channelId, agents };
+    }),
+
+    removeChatChannelAgent: action(function (this: ChatDraft, channelId: string, agentId: string) {
+      const row = this.chatRail.find((r) => String(r.channel_id) === channelId);
+      if (row?.agents) row.agents = row.agents.filter((a) => chatAgentId(a) !== agentId);
+      return { channelId, agentId };
+    }),
+
     removeChatChannelMember: action(function (this: ChatDraft, channelId: string, userId: string) {
       const row = this.chatRail.find((r) => String(r.channel_id) === channelId);
       if (row?.member_ids) row.member_ids = row.member_ids.filter((id) => String(id) !== userId);
@@ -1254,6 +1284,14 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       };
       // Creating a channel joins it — the same thing the server does.
       upsertRead(this, clientId, { last_read_at: now, notify_level: "mentions" });
+      // The agents it starts with paint on the stub's rail row; the server's
+      // row carries them once the create lands.
+      if (opts?.agents?.length) {
+        this.chatRail.push({
+          channel_id: clientId, sort_at: now, unread: 0, unread_mentions: 0,
+          notify_level: "mentions", joined: true, agents: opts.agents,
+        });
+      }
     }),
 
     // teamId defaults to the workspace the window is looking at — every caller
@@ -1663,6 +1701,7 @@ export function selectChatRail(
       isPrivate: channel.kind === "private",
       dmMemberIds,
       memberIds: rail?.member_ids,
+      agents: rail?.agents,
       topic: channel.topic,
       unreadCount: unread,
       mentionCount: mentions,
