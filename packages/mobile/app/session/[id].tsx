@@ -18,7 +18,9 @@ const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
 );
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
+import { mixColor } from '@/lib/solColor';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { useInboxStore, isConvexId, retryPendingSend, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
@@ -30,12 +32,13 @@ import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { NativePressable } from '@/lib/gestureHandler';
+import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
-import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
+import { isCodexTurnAbortedMessage, isHiddenSystemNotice, isInterruptNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
@@ -59,10 +62,22 @@ import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
+import { ComposeButton } from '@/components/session/ComposeButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { ApprovalCard } from '@/components/hosted/ApprovalCard';
-import { HostedStep } from '@/components/hosted/Steps';
-import { LANE_COPY, answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
+import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
+import { hostedApprovalAnswer, hostedApprovalState, type HostedApprovalState } from '@codecast/web/lib/hostedApproval';
+import { HostedSources, HostedStep } from '@/components/hosted/Steps';
+import { ReplyChips } from '@/components/hosted/ReplyChips';
+import { searchedSources } from '@codecast/web/lib/hostedReceipt';
+import { HostedNoticeRow } from '@/components/hosted/Notice';
+import { foldHostedRetries, hostedNoticeKind, lastAskOf } from '@codecast/web/lib/hostedNotice';
+import { Serif } from '@/constants/fonts';
+import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
+import { hostedComposerWords, hostedLastExchange } from '@codecast/web/lib/hostedComposer';
+import { useAllowanceOut } from '@codecast/web/components/simple/usePlanFigures';
+import { hostedConnectionWords } from '@codecast/web/components/conversation/HostedConnection';
+import { useLinkDown } from '@/hooks/useLinkDown';
+import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
@@ -71,7 +86,7 @@ import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
-import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
@@ -1069,272 +1084,6 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
         <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
       </RNView>
     </Pressable>
-  );
-}
-
-function getDistance(touches: { pageX: number; pageY: number }[]) {
-  const dx = touches[0].pageX - touches[1].pageX;
-  const dy = touches[0].pageY - touches[1].pageY;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function getMidpoint(touches: { pageX: number; pageY: number }[]) {
-  return {
-    x: (touches[0].pageX + touches[1].pageX) / 2,
-    y: (touches[0].pageY + touches[1].pageY) / 2,
-  };
-}
-
-function GalleryImage({ image, screenWidth, screenHeight, onZoomChange, onRequestClose }: { image: ImageData; screenWidth: number; screenHeight: number; onZoomChange?: (zoomed: boolean) => void; onRequestClose?: () => void }) {
-  const src = useImageSrc(image);
-
-  const scaleVal = useRef(new Animated.Value(1)).current;
-  const translateXVal = useRef(new Animated.Value(0)).current;
-  const translateYVal = useRef(new Animated.Value(0)).current;
-
-  const pinchState = useRef({ startDist: 0, startScale: 1, scale: 1 });
-  const panState = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0, tx: 0, ty: 0, isPanning: false });
-  const lastTap = useRef(0);
-  // Swipe-down-to-dismiss, armed only while un-zoomed (so it never fights pan).
-  const dismiss = useRef({ startY: 0, dy: 0, active: false });
-
-  const setZoomed = useCallback((scale: number) => {
-    onZoomChange?.(scale > 1.05);
-  }, [onZoomChange]);
-
-  const resetTransform = useCallback(() => {
-    Animated.parallel([
-      Animated.spring(scaleVal, { toValue: 1, useNativeDriver: true, tension: 100, friction: 10 }),
-      Animated.spring(translateXVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
-      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
-    ]).start();
-    pinchState.current.scale = 1;
-    panState.current.tx = 0;
-    panState.current.ty = 0;
-    setZoomed(1);
-  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
-
-  const handleTouchStart = useCallback((e: any) => {
-    const touches = e.nativeEvent.touches;
-    if (touches.length === 2) {
-      pinchState.current.startDist = getDistance(touches);
-      pinchState.current.startScale = pinchState.current.scale;
-      const mid = getMidpoint(touches);
-      panState.current.startX = mid.x;
-      panState.current.startY = mid.y;
-      panState.current.startTx = panState.current.tx;
-      panState.current.startTy = panState.current.ty;
-      panState.current.isPanning = false;
-    } else if (touches.length === 1) {
-      const now = Date.now();
-      if (now - lastTap.current < 300) {
-        if (pinchState.current.scale > 1) {
-          resetTransform();
-        } else {
-          Animated.spring(scaleVal, { toValue: 3, useNativeDriver: true, tension: 100, friction: 10 }).start();
-          pinchState.current.scale = 3;
-          setZoomed(3);
-        }
-        lastTap.current = 0;
-      } else {
-        lastTap.current = now;
-        if (pinchState.current.scale > 1.05) {
-          panState.current.startX = touches[0].pageX;
-          panState.current.startY = touches[0].pageY;
-          panState.current.startTx = panState.current.tx;
-          panState.current.startTy = panState.current.ty;
-          panState.current.isPanning = true;
-        } else {
-          dismiss.current.active = true;
-          dismiss.current.startY = touches[0].pageY;
-          dismiss.current.dy = 0;
-        }
-      }
-    }
-  }, [scaleVal, resetTransform, setZoomed]);
-
-  const handleTouchMove = useCallback((e: any) => {
-    const touches = e.nativeEvent.touches;
-    if (touches.length === 2) {
-      const dist = getDistance(touches);
-      const newScale = Math.min(5, Math.max(0.5, pinchState.current.startScale * (dist / pinchState.current.startDist)));
-      scaleVal.setValue(newScale);
-      pinchState.current.scale = newScale;
-      setZoomed(newScale);
-
-      const mid = getMidpoint(touches);
-      const newTx = panState.current.startTx + (mid.x - panState.current.startX);
-      const newTy = panState.current.startTy + (mid.y - panState.current.startY);
-      translateXVal.setValue(newTx);
-      translateYVal.setValue(newTy);
-      panState.current.tx = newTx;
-      panState.current.ty = newTy;
-    } else if (touches.length === 1 && panState.current.isPanning) {
-      const newTx = panState.current.startTx + (touches[0].pageX - panState.current.startX);
-      const newTy = panState.current.startTy + (touches[0].pageY - panState.current.startY);
-      translateXVal.setValue(newTx);
-      translateYVal.setValue(newTy);
-      panState.current.tx = newTx;
-      panState.current.ty = newTy;
-    } else if (touches.length === 1 && dismiss.current.active) {
-      // Follow the finger downward; ignore upward drag so it can't push the image up.
-      const dy = touches[0].pageY - dismiss.current.startY;
-      dismiss.current.dy = dy;
-      translateYVal.setValue(dy > 0 ? dy : 0);
-    }
-  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
-
-  const handleTouchEnd = useCallback(() => {
-    panState.current.isPanning = false;
-    if (dismiss.current.active) {
-      const dy = dismiss.current.dy;
-      dismiss.current.active = false;
-      dismiss.current.dy = 0;
-      if (dy > 120) {
-        onRequestClose?.();
-        return;
-      }
-      // Not far enough — snap the image back into place.
-      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }).start();
-    }
-    if (pinchState.current.scale < 1) {
-      resetTransform();
-    }
-  }, [resetTransform, onRequestClose, translateYVal]);
-
-  if (!src) return <RNView style={{ width: screenWidth, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
-  return (
-    <RNView
-      style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-    >
-      <Animated.View style={{ transform: [{ translateX: translateXVal }, { translateY: translateYVal }, { scale: scaleVal }] }}>
-        <Image source={{ uri: src }} style={{ width: screenWidth, height: screenHeight * 0.85 }} resizeMode="contain" />
-      </Animated.View>
-    </RNView>
-  );
-}
-
-// One thumb in the gallery's bottom filmstrip. Dimmed unless current; a
-// storage-backed entry shows a placeholder square until its URL resolves.
-function GalleryThumb({ image, active, onPress }: { image: ImageData; active: boolean; onPress: () => void }) {
-  const Theme = useTheme();
-  const src = useImageSrc(image);
-  if (!src) return <RNView style={[styles.galleryThumb, styles.galleryThumbPlaceholder]} />;
-  return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-      <Image
-        source={{ uri: src }}
-        style={[styles.galleryThumb, active ? styles.galleryThumbActive : styles.galleryThumbInactive]}
-        resizeMode="cover"
-      />
-    </TouchableOpacity>
-  );
-}
-
-const GALLERY_THUMB_STEP = 46; // 40px thumb + 6px gap, for strip auto-centering
-
-function ImageGallery({ images, initialIndex, visible, onClose }: {
-  images: ImageData[];
-  initialIndex: number;
-  visible: boolean;
-  onClose: () => void;
-}) {
-  const Theme = useTheme();
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [isZoomed, setIsZoomed] = useState(false);
-  const [isLandscape, setIsLandscape] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
-  const thumbStripRef = useRef<FlatList>(null);
-  const insets = useSafeAreaInsets();
-  const { width: deviceWidth, height: deviceHeight } = useWindowDimensions();
-
-  // Keep the active thumb centered as swipes/taps move the selection.
-  useEffect(() => {
-    if (!visible || images.length < 2) return;
-    thumbStripRef.current?.scrollToOffset({
-      offset: Math.max(0, currentIndex * GALLERY_THUMB_STEP - deviceWidth / 2 + GALLERY_THUMB_STEP / 2),
-      animated: true,
-    });
-  }, [visible, currentIndex, images.length, deviceWidth]);
-
-  const screenWidth = isLandscape ? deviceHeight : deviceWidth;
-  const screenHeight = isLandscape ? deviceWidth : deviceHeight;
-
-  useEffect(() => {
-    if (visible) {
-      setCurrentIndex(initialIndex);
-      setIsZoomed(false);
-      setIsLandscape(false);
-      setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
-    }
-  }, [visible, initialIndex]);
-
-  const handleZoomChange = useCallback((zoomed: boolean) => {
-    setIsZoomed(zoomed);
-  }, []);
-
-  const toggleLandscape = useCallback(() => {
-    setIsLandscape(prev => !prev);
-    setIsZoomed(false);
-  }, []);
-
-  if (!visible) return null;
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
-      <RNView style={styles.fullscreenOverlay}>
-        <RNView style={[styles.galleryContent, isLandscape && { transform: [{ rotate: '90deg' }], width: deviceHeight, height: deviceWidth }]}>
-          <FlatList
-            ref={flatListRef}
-            data={images}
-            horizontal
-            pagingEnabled
-            scrollEnabled={!isZoomed}
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} onRequestClose={onClose} />}
-            onMomentumScrollEnd={(e) => {
-              const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
-              setCurrentIndex(idx);
-            }}
-            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
-            initialScrollIndex={initialIndex}
-          />
-        </RNView>
-        <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
-          <FontAwesome name="close" size={20} color="#fff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.landscapeToggle} onPress={toggleLandscape} activeOpacity={0.7}>
-          <FontAwesome name="rotate-right" size={18} color={isLandscape ? Theme.accent : '#fff'} />
-        </TouchableOpacity>
-        <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
-        {images.length > 1 && (
-          <RNView style={[styles.galleryThumbStrip, { bottom: insets.bottom + 16 }]} pointerEvents="box-none">
-            <FlatList
-              ref={thumbStripRef}
-              data={images}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              keyExtractor={(_, i) => String(i)}
-              contentContainerStyle={styles.galleryThumbStripContent}
-              renderItem={({ item, index }) => (
-                <GalleryThumb
-                  image={item}
-                  active={index === currentIndex}
-                  onPress={() => {
-                    setCurrentIndex(index);
-                    flatListRef.current?.scrollToIndex({ index, animated: false });
-                  }}
-                />
-              )}
-            />
-          </RNView>
-        )}
-      </RNView>
-    </Modal>
   );
 }
 
@@ -2369,6 +2118,21 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+// Mobile twin of web's InterruptStatusLine: a stop is a control event, so it
+// reads as a centered rule, not a bubble someone typed.
+function InterruptStatusLine({ label = 'user interrupted', tone = 'sky' }: { label?: string; tone?: 'sky' | 'amber' }) {
+  const Theme = useTheme();
+  const color = tone === 'amber' ? Theme.yellow : Theme.textDim;
+  const rule = { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: tone === 'amber' ? Theme.yellow + '66' : Theme.border };
+  return (
+    <RNView style={styles.interruptLine}>
+      <RNView style={rule} />
+      <RNText style={[styles.interruptLineText, { color }]}>{label}</RNText>
+      <RNView style={rule} />
+    </RNView>
+  );
+}
+
 // --- Workflow events (mobile twin of web's WorkflowEventBlock) ---
 // A session's public link, in the one /share grammar (shared/entities).
 const conversationShareLink = (token: string) => `${CODECAST_BASE_URL}${sharePath('conversation', token)}`;
@@ -2507,6 +2271,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   bookmarkedSet?: Set<string>;
 }) {
   const Theme = useTheme();
+  // Hosted voices are the family look's; developer mode draws a hosted
+  // conversation as it draws any other.
+  const familyLook = useActiveLook() === 'family';
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -2589,6 +2356,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return <CommandStatusLine content={message.content} timestamp={message.timestamp} />;
   }
 
+  // Same rule as web's 'interrupt' kind: a hosted conversation's stop is told
+  // by its own notice, so only an aborted turn earns a line there.
+  if (isUser && isCodexTurnAbortedMessage(message.content)) {
+    return <InterruptStatusLine label={hostedAgent ? 'You stopped this' : 'turn aborted'} tone={hostedAgent ? 'sky' : 'amber'} />;
+  }
+  if (isUser && isInterruptNotice(message.content)) {
+    return hostedAgent ? null : <InterruptStatusLine />;
+  }
+
   const rawContentRaw = message.content || '';
   const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
@@ -2628,6 +2404,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return null;
   }
 
+  // A hosted conversation reads as two voices, as on the web: the person's
+  // words a quiet note in the interface face, the assistant's reply a letter
+  // in the reading face, and its narration before a step in the receipt's
+  // size and ink. Neither carries a name and time header.
+  const hostedVoice = hostedAgent && familyLook;
+  const bodyStyle = !hostedVoice
+    ? [styles.bubbleText, isUser ? styles.userText : styles.assistantText]
+    : isUser ? styles.hostedUserText : hasToolCalls ? styles.hostedNarration : styles.hostedReply;
+
   const handleTapToExpand = () => {
     if (globalCollapsed && !localExpanded) {
       setLocalExpanded(true);
@@ -2638,8 +2423,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   return (
     <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
       <RNView
-        style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
-        {showHeader && !isToolCallOnly && (
+        style={[styles.messageBubble, isUser ? (hostedVoice ? styles.hostedUserBubble : styles.userBubble) : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
+        {showHeader && !isToolCallOnly && !hostedVoice && (
         <RNView style={styles.bubbleHeader}>
           {isUser ? (
             <RNView style={styles.userAvatar}>
@@ -2689,7 +2474,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         >
           {(() => {
             if (typeof content !== 'string') {
-              return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+              return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
             }
             const apiError = parseApiErrorContent(content);
             if (apiError) {
@@ -2711,13 +2496,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return parseSkillBlocks(content).map((part, idx) =>
                 part.type === 'skill'
                   ? <SkillBlockCard key={idx} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
-                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  : <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
               );
             }
             if (content.includes('<teammate-message')) {
               return parseTeammateMessages(content).map((part, idx) =>
                 part.type === 'text'
-                  ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  ? <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
                   : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
               );
             }
@@ -2734,7 +2519,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 );
               }
             }
-            return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+            return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
           })()}
           {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
             <LinearGradient
@@ -2863,6 +2648,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               />
             );
           })}
+          {hostedAgent ? (
+            <HostedSources sources={searchedSources(message.tool_calls!, (tc) => message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id])} />
+          ) : null}
         </RNView>
       )}
 
@@ -2936,6 +2724,18 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 }) {
   const Theme = useTheme();
   const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
+  // The family look's send is the hosted composers' ring and ink disc.
+  const familyLook = useActiveLook() === 'family';
+  const { c: hostedColors } = useHostedTheme();
+  const answeredBefore = useInboxStore((s) => hosted && (s.messages[conversationId as string] ?? []).some((m: { role?: string }) => m.role === 'assistant'));
+  const hostedLast = useInboxStore((s) => (hosted ? hostedLastExchange(s.messages[conversationId as string] as any, s.sessionDecisions, conversationId as string, Date.now()) : null));
+  // A used-up month holds the send and says why in the box, as the web's
+  // composer does (usePlanFigures useAllowanceOut).
+  const allowanceOut = useAllowanceOut(hosted);
+  // A dropped link is said in the status slot, with what happens to a
+  // message still waiting to go (the web's HostedConnection words).
+  const linkDown = useLinkDown();
+  const unsent = useInboxStore((s) => hosted && (s.pendingMessages[conversationId as string] ?? []).length > 0);
   const words = useModeWords();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
@@ -3117,6 +2917,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       message,
     ).trim();
     if (!trimmedMessage && selectedImages.length === 0) return;
+    if (allowanceOut) return;
     setError(null);
 
     const images: OptimisticImage[] = selectedImages.map(img => img.storageId
@@ -3147,16 +2948,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     setExpanded(false);
   };
 
-  const canSend = !!message.trim() || selectedImages.length > 0;
+  const canSend = (!!message.trim() || selectedImages.length > 0) && !allowanceOut;
   const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
   const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
-  // A hosted turn has no process to interrupt, so it never offers stop.
-  const showStop = agentWorking && isOwner && !canSend && !hosted;
+  // While a turn works and the box is empty, send becomes Stop. A hosted
+  // turn stops through the store's stopHostedTurn, the web's visible Stop,
+  // so stopping never rests on a gesture a person who does not code would
+  // not know.
+  const showStop = !canSend && (hosted ? hostedWorking : agentWorking && isOwner);
 
   // The interrupt is the shared store action (web's Escape); the daemon judges
   // whether the agent is mid-turn and paints the interruption line.
   const handleStop = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (hosted) {
+      useInboxStore.getState().stopHostedTurn(conversationId);
+      return;
+    }
     useInboxStore.getState().sendEscape(conversationId).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'Could not stop the agent');
     });
@@ -3187,8 +2995,11 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             style={styles.removeImageButton}
             onPress={() => removeImage(img.uri)}
             activeOpacity={0.7}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Remove image"
           >
-            <FontAwesome name="times-circle" size={20} color={Theme.red} />
+            <Feather name="x" size={12} color="#fff" />
           </TouchableOpacity>
         </RNView>
       ))}
@@ -3197,8 +3008,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 
   // Status lives in the otherwise-empty middle of the button row: zero extra
   // height, and it can never overlap the conversation.
-  const statusMeta = hostedWorking
-    ? { color: AGENT_STATUS_META.working.color, label: LANE_COPY.conversation.working }
+  // A hosted wait reads as the web's one wait: "Getting started…" before
+  // the first reply, "Thinking…" after, in quiet ink in the family look.
+  const statusMeta = hosted && linkDown
+    ? { color: Theme.textMuted, dot: Theme.textMuted0, label: hostedConnectionWords(linkDown, unsent) }
+    : hostedWorking
+    ? { color: familyLook ? Theme.textMuted : AGENT_STATUS_META.working.color, dot: familyLook ? Theme.text : AGENT_STATUS_META.working.color, label: answeredBefore ? 'Thinking…' : 'Getting started…' }
     : managedSession?.managed && !hosted
       ? AGENT_STATUS_META[managedSession.agent_status ?? '']
       : undefined;
@@ -3206,15 +3021,15 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   const actionsRowEl = (
     <RNView style={styles.composerActions}>
       {hosted ? null : (
-        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.7}>
-          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
+        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Attach image">
+          <Feather name="plus" size={18} color={Theme.textMuted} />
         </TouchableOpacity>
       )}
       <RNView style={styles.composerSpacer}>
         {statusMeta && (
           <RNView style={styles.composerStatus}>
-            <PulsingDot color={statusMeta.color} />
-            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.composerStatusText, { color: statusMeta.color }]}>
+            <PulsingDot color={(statusMeta as { dot?: string }).dot ?? statusMeta.color} />
+            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} numberOfLines={2} style={[styles.composerStatusText, { color: statusMeta.color, flexShrink: 1 }]}>
               {statusMeta.label}
             </RNText>
           </RNView>
@@ -3228,7 +3043,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, familyLook && sendDisc(hostedColors, 'family', canSend || showStop).style]}
         onPress={showStop ? handleStop : handleSend}
         activeOpacity={0.7}
         delayPressIn={0}
@@ -3238,20 +3053,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         accessibilityLabel={showStop ? words.stopWorking : 'Send'}
       >
         {showStop
-          ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
+          ? <FontAwesome name="stop" size={11} color={familyLook ? sendDisc(hostedColors, 'family', true).icon : '#fff'} />
+          : <FontAwesome name="arrow-up" size={14} color={familyLook ? sendDisc(hostedColors, 'family', canSend).icon : '#fff'} />}
       </NativePressable>
     </RNView>
   );
 
+  // The web composer's resting words for the same exchange (lib/hostedComposer).
   const placeholder = hosted
-    ? (waitsOnAnswer ? LANE_COPY.conversation.change : LANE_COPY.conversation.reply)
+    ? allowanceOut ?? hostedComposerWords(hostedLast, waitsOnAnswer)
     : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
   // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
   // the agent is not actively producing; a pill tap sends its text directly
   // through the shared dispatch, long-press fills the composer instead.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  // Hosted mode has no reply suggestion (surface composer.suggestion).
+  const suggestionsOn = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const suggestionsEnabled = useSurface('composer.suggestion') && suggestionsOn;
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
@@ -3276,7 +3094,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             styles.textInput,
             // Grow with the text up to a third of the screen; beyond that it scrolls.
             { maxHeight: Math.round(winHeight * 0.33) },
-            inputHeight > 44 && styles.textInputWithExpand,
+            inputHeight > 44 && !!message && styles.textInputWithExpand,
           ]}
           value={message}
           onChangeText={onChangeText}
@@ -3288,7 +3106,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           maxFontSizeMultiplier={CHROME_FONT_CAP}
           onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
         />
-        {inputHeight > 44 && (
+        {/* Only typed text earns it: a long placeholder (a held month's
+            sentence) wraps too, and has nothing to expand. */}
+        {inputHeight > 44 && !!message && (
           <TouchableOpacity
             style={styles.expandButton}
             onPress={() => setExpanded(true)}
@@ -3475,8 +3295,17 @@ function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNod
 }
 
 export default function SessionDetailScreen() {
-  const { id, message, focus } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
+  const { id, message, focus, reveal } = useLocalSearchParams<{ id: string; message?: string; focus?: string; reveal?: string }>();
   const Theme = useTheme();
+  // reveal=1 only shapes the push (no transition under the closing new
+  // session sheet, app/_layout); once it has landed it goes, so going back
+  // slides as it does everywhere else.
+  const routeNav = useRouter();
+  useEffect(() => {
+    if (!reveal) return;
+    const task = InteractionManager.runAfterInteractions(() => routeNav.setParams({ reveal: undefined }));
+    return () => task.cancel();
+  }, [reveal, routeNav]);
   // A push tapped on a closed app lands here before the cache is read back.
   // The session screen decides what it shows from the row (a conversation
   // with the hosted assistant has no machine chrome and its own reply box),
@@ -3515,6 +3344,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const gitChips = useSurface('gitChips');
   const internalsShown = useSurface('conversation.internals');
   const diffSurface = useSurface('diff');
+  const stickyPromptShown = useSurface('conversation.stickyPrompt');
   const words = useModeWords();
   // The store's server dispatch is wired once, at the root (StoreSyncBridge
   // mounts useSyncCore above every screen), and must not be wired again here:
@@ -3549,6 +3379,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  // Whether anything sits above the visible window (the hosted top fade).
+  const [hasAbove, setHasAbove] = useState(false);
   const flatListLayoutHeightRef = useRef(0);
   const lastContentHeightRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -3647,6 +3479,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // resume, tool calls read as plain steps (HostedStep), and the approvals it
   // waits on sit at the foot of the transcript with the actual draft.
   const hosted = isHostedAgentType(conversation?.agent_type);
+  const familyLook = useActiveLook() === 'family';
   // The registry decides what a mode shows on any conversation (a local
   // session opened in assistant mode too); `hosted` adds what a hosted
   // conversation never has. Internals: restart, resume, folding, token counts.
@@ -3654,6 +3487,25 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const diffShown = diffSurface && !hosted;
   const approvals = useConversationApprovals(String(conversation?._id ?? id));
   const hostedApprovals = hosted ? approvals : NO_APPROVALS;
+  // The family look's jump arrows are solid sheet discs, as its other
+  // controls are: the developer's ghost disc reads as a smudge over the
+  // reading face.
+  const { c: hostedColors } = useHostedTheme();
+  const jumpFamily = { backgroundColor: hostedColors.sheet, opacity: 1, borderColor: hostedColors.lineStrong, shadowOpacity: 0.08, shadowRadius: 6 };
+  // Where the parked approval stands, read from the transcript and the
+  // decision rows (lib/hostedApproval), as the web reads it: once answered,
+  // the card's place holds "You said yes. On it…" until the turn moves on;
+  // before its row lands, a quiet "Getting the card ready…".
+  const hostedApprovalAt = useInboxStore((st): HostedApprovalState => {
+    if (!hosted) return 'none';
+    const key = String(conversation?._id ?? id);
+    return hostedApprovalState(st.messages[key] as any, Object.values(st.sessionDecisions) as any[], key);
+  });
+  const parkedStatus = useManagedSessionFields(String(conversation?._id ?? id))?.agent_status === 'permission_blocked';
+  const settledAnswer = hostedApprovals.length === 0 ? hostedApprovalAnswer(hostedApprovalAt) : null;
+  const hostedTurnRunning = useConversationWorking(String(conversation?._id ?? id)) && hosted;
+  const linkDown = useLinkDown();
+  const cardPending = hostedApprovals.length === 0 && hostedApprovalAt === 'pending' && parkedStatus;
   // A failed send tries again through the store's one retry rule
   // (retryPendingSend, which the web's failed bubble uses too, and which also
   // covers a conversation whose create never landed). This screen only
@@ -3763,6 +3615,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [conversation?.messages, commits, pullRequests]);
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
+  // A hosted turn that failed and was tried again reads as one turn, as on
+  // the web: the earlier notices and the repeated request fold away and the
+  // shown notice counts the attempts (lib/hostedNotice foldHostedRetries).
+  const retryFold = useMemo(() => {
+    if (!hosted) return null;
+    const rows = allMessages.map((m) => ({
+      ...m,
+      person: m.role === 'user' && !isToolResultCarrier(m) && !!m.content && !m.content.trim().startsWith('<') && !parseDecisionAnswer(m.content),
+    }));
+    return { ...foldHostedRetries(rows), personTurns: rows.filter((r) => r.person).length };
+  }, [hosted, allMessages]);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -4253,6 +4116,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const activeStickyId = stickyActive?.id ?? null;
 
   const stickyPrompt = useMemo<StickyPrompt | null>(() => {
+    // Hosted mode has no sticky prompt (surface conversation.stickyPrompt).
+    if (!stickyPromptShown) return null;
     // Mid jump the window is reloading and activeStickyId churns; the claim
     // that the visible output belongs to prompt N is wrong until the target
     // message lands. The pill names the TARGET instead, in its pending form,
@@ -4275,7 +4140,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return { id: row._id, ordinal: row.originalIndex + 1, text: row.display };
     // dismissedStickyVersion stands in for the Set, which mutates in place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
+  }, [stickyPromptShown, userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
 
   const navTicks = useMemo(() => {
     // activeStickyId is always a sticky eligible user message, so it is in
@@ -4664,6 +4529,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
     const distanceFromTop = scrollHeight - offset - clientHeight;
     setIsNearTop(distanceFromTop < 96);
+    setHasAbove(distanceFromTop > 4);
 
     const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
     scrollProgressAnim.setValue(progress);
@@ -4726,24 +4592,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         <SessionHeaderBar inFlow>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
         </SessionHeaderBar>
-        <RNView style={styles.skeletonContainer}>
-          <RNView style={styles.skeletonHeader}>
-            <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
-            <RNView style={[styles.skeletonBlock, { width: '30%', height: 12, marginTop: 8 }]} />
-          </RNView>
-          {[1, 2, 3].map(i => (
-            <RNView key={i} style={styles.skeletonMessage}>
-              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <RNView style={[styles.skeletonBlock, { width: 18, height: 18, borderRadius: 9 }]} />
-                <RNView style={[styles.skeletonBlock, { width: 60, height: 12 }]} />
-                <RNView style={[styles.skeletonBlock, { width: 40, height: 10 }]} />
-              </RNView>
-              <RNView style={[styles.skeletonBlock, { width: '90%', height: 12, marginBottom: 6 }]} />
-              <RNView style={[styles.skeletonBlock, { width: '70%', height: 12, marginBottom: 6 }]} />
-              <RNView style={[styles.skeletonBlock, { width: '50%', height: 12 }]} />
-            </RNView>
-          ))}
-        </RNView>
+        <ConversationSkeleton />
       </RNView>
     );
   }
@@ -4796,18 +4645,24 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               maxFontSizeMultiplier={CHROME_FONT_CAP}
             />
           </Pressable>
-          {/* Two actions at most: the prompt list and More. Huddle, images and
-              the board live in More, where a live huddle is listed first. */}
+          {/* The prompt list, More, and the compose pencil that starts the
+              next session from here. Huddle, images and the board live in
+              More, where a live huddle is listed first. */}
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
-          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6} accessibilityLabel="More actions">
+          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }} activeOpacity={0.6} accessibilityLabel="More actions">
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
             {huddle.enabled && huddle.inRoom > 0 && <RNView style={styles.moreLiveDot} />}
           </TouchableOpacity>
+          <ComposeButton size={18} />
         </SessionHeaderBar>
+        {/* A hosted conversation in hosted mode is named by its title alone,
+            as on the web: the strip would only repeat "Codecast assistant"
+            and a time, so it folds to nothing (its layout reports 0 and the
+            list starts under the title bar). */}
         <Animated.View
-          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }]}
+          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }, hosted && !internalsShown && styles.foldedStrip]}
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
@@ -5014,12 +4869,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           }}
           onContentSizeChange={(_w, h) => {
             lastContentHeightRef.current = h;
+            setHasAbove(h - lastScrollYRef.current - flatListLayoutHeightRef.current > 4);
           }}
           // The list is inverted, so its header is the foot of the transcript:
           // what a hosted conversation waits on the person for.
-          ListHeaderComponent={hostedApprovals.length > 0 ? (
+          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending ? (
             <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
+              {settledAnswer ? <ApprovalSettled label={settledAnswer} /> : cardPending ? <ApprovalPending /> : null}
             </RNView>
           ) : null}
           ListFooterComponent={
@@ -5084,6 +4941,23 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             // Hide standalone tool result messages (they're shown inline with tool calls)
             if (isToolResultCarrier(item)) {
               return null;
+            }
+            if (retryFold?.hidden.has(item._id)) return null;
+
+            // A hosted turn's stop notice: one calm block with its move, and
+            // only the last row's notice offers one (components/hosted/Notice).
+            const notice = hosted && item.role === 'assistant' ? hostedNoticeKind(item) : null;
+            if (notice) {
+              return (
+                <HostedNoticeRow
+                  kind={notice}
+                  content={item.content || ''}
+                  conversationId={String(conversation._id)}
+                  retryText={lastAskOf(allMessages.slice(0, originalIndex))}
+                  live={originalIndex === allMessages.length - 1}
+                  retries={(retryFold?.attempts.get(item._id) ?? 1) - 1}
+                />
+              );
             }
 
             // An approval's answer in a hosted conversation: a quiet note
@@ -5272,9 +5146,20 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                   childConversationMap={conversation.child_conversation_map}
                   bookmarkedSet={bookmarkedSet}
               />
+                {hosted && item.role === 'assistant' && originalIndex === allMessages.length - 1 ? (
+                  <RNView style={{ paddingHorizontal: 16 }}>
+                    <ReplyChips
+                      conversationId={String(conversation._id)}
+                      reply={item.content}
+                      asked={lastAskOf(allMessages.slice(0, originalIndex))}
+                      personTurns={retryFold?.personTurns ?? 0}
+                      working={hostedTurnRunning}
+                    />
+                  </RNView>
+                ) : null}
                 {isQueued && (
                   <RNView style={styles.pendingStatusRow}>
-                    <RNText style={styles.pendingStatusText}>Queued</RNText>
+                    <RNText style={styles.pendingStatusText}>{hosted && linkDown ? hostedConnectionWords(linkDown, true) : 'Queued'}</RNText>
                   </RNView>
                 )}
                 {isFailed && (
@@ -5285,7 +5170,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     </RNText>
                     {item._clientId ? (
                       <Pressable onPress={() => retryFailedSend(item._clientId!, item.content ?? '')} hitSlop={8} accessibilityRole="button">
-                        <RNText style={[styles.pendingStatusText, { color: Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
+                        <RNText style={[styles.pendingStatusText, { color: hosted ? Theme.text : Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
                       </Pressable>
                     ) : null}
                   </RNView>
@@ -5297,7 +5182,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           contentContainerStyle={[
             styles.messageList,
             { paddingBottom: 12 },
-            allMessages.length === 0 && { flex: 1 },
+            // Grow to center the empty state, never pin to the viewport: a list
+            // squeezed by the keyboard and an attachment strip shrank its text
+            // frames until iOS drew half of each line.
+            allMessages.length === 0 && { flexGrow: 1 },
           ]}
           ListEmptyComponent={
             (conversation.message_count ?? 0) > 0 ? (
@@ -5367,6 +5255,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="always"
         />
+        {/* The hosted transcript's top edge, as the web's: a 24px fade under
+            the title once the reading has scrolled past the first line, so
+            lines slide out of view rather than being cut, and the first line
+            is never dimmed. */}
+        {hosted && familyLook && hasAbove && (
+          <LinearGradient
+            colors={[Theme.bg, Theme.bg + '00']}
+            style={{ position: 'absolute', left: 0, right: 0, top: insets.top + HEADER_BAR_HEIGHT, height: 24 }}
+            pointerEvents="none"
+          />
+        )}
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
@@ -5416,7 +5315,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             >
               <TouchableOpacity
                 onPress={handleJumpToStart}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to first message"
@@ -5424,7 +5323,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToStart ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-up" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-up" size={18} color={familyLook ? hostedColors.ink2 : Theme.textDim} />
                 )}
               </TouchableOpacity>
             </Animated.View>
@@ -5433,7 +5332,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             <RNView style={styles.jumpBottomButtonWrap} pointerEvents="box-none">
               <TouchableOpacity
                 onPress={handleJumpToEnd}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to latest message"
@@ -5441,7 +5340,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToEnd ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-down" size={18} color={familyLook ? hostedColors.ink2 : Theme.textDim} />
                 )}
                 {newMessageCount > 0 && (
                   <RNView style={styles.jumpBadge}>
@@ -5523,7 +5422,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         </RNView>
       </Modal>
       <ImageGallery
-        images={allSessionImages}
+        items={allSessionImages}
+        useSrc={useImageSrc}
+        accent={Theme.accent}
         initialIndex={galleryIndex}
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
@@ -5532,7 +5433,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -5562,8 +5463,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   headerIconBtn: S.headerIconBtn,
   headerFace: { marginRight: 8 },
+  // The family look names a conversation in the reading face, as the web's
+  // hosted conversation header does.
   headerTitleText: {
     ...S.headerTitleText,
+    ...(look === 'family' ? { fontFamily: Serif.regular, fontSize: 18, fontWeight: '500' as const } : null),
     color: Theme.text,
   },
   headerTitlePress: {
@@ -5675,6 +5579,39 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   assistantText: {
     color: Theme.text,
   },
+  // Hosted voices (MessageBubble bodyStyle): the web's hosted-mode sizes,
+  // 14px for the person, a 17px letter for the reply, 13.5px muted narration.
+  foldedStrip: {
+    height: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    borderBottomWidth: 0,
+    overflow: 'hidden',
+  },
+  hostedUserBubble: {
+    alignSelf: 'stretch',
+    marginTop: 14,
+    marginBottom: 6,
+    paddingTop: 10,
+    backgroundColor: Theme.userBubble,
+    borderRadius: 10,
+  },
+  hostedUserText: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: Theme.text,
+  },
+  hostedReply: {
+    fontFamily: Serif.regular,
+    fontSize: 17,
+    lineHeight: 26,
+    color: Theme.text,
+  },
+  hostedNarration: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: Theme.textMuted,
+  },
   thinkingBlock: {
     marginHorizontal: 14,
     marginVertical: 1,
@@ -5772,6 +5709,17 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 11,
     color: Theme.textDim,
     flex: 1,
+  },
+  interruptLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  interruptLineText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
   commandStatusLine: {
     flexDirection: 'row',
@@ -5916,23 +5864,35 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   previewImage: {
     width: 80,
     height: 80,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
   },
   imageUploadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 8,
+    borderRadius: 10,
     justifyContent: 'center' as const,
     alignItems: 'center' as const,
   },
   removeImageButton: {
     position: 'absolute',
-    top: -8,
-    right: -8,
-    backgroundColor: Theme.bg,
+    top: 5,
+    right: 5,
+    width: 20,
+    height: 20,
     borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
   },
-  imageButton: S.imageButton,
+  imageButton: {
+    ...S.imageButton,
+    borderRadius: 16,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
   // One rounded card: full-width input on top, action row underneath. Buttons
   // living below the text (not beside it) is what gives the input the whole
   // screen width, matching the web/reference composer.
@@ -5999,13 +5959,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   sendButton: {
     ...S.sendButton,
-    backgroundColor: Theme.blue,
+    minWidth: 32,
+    height: 32,
+    borderRadius: 16,
+    paddingLeft: 9,
+    paddingRight: 9,
+    backgroundColor: mixColor(Theme.blue, 80, Theme.text),
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
   },
   stopButton: {
-    backgroundColor: Theme.red,
+    backgroundColor: mixColor(Theme.red, 80, Theme.text),
   },
   // Workflow event anchors
   wfStartedRow: {
@@ -6457,45 +6422,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderBottomLeftRadius: 8,
     borderBottomRightRadius: 8,
   },
-  galleryCounter: {
-    position: 'absolute',
-    top: 64,
-    left: 0,
-    right: 0,
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 13,
-    fontWeight: '500',
-    zIndex: 10,
-  },
-  galleryThumbStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 10,
-  },
-  galleryThumbStripContent: {
-    paddingHorizontal: 12,
-    gap: 6,
-    alignItems: 'center',
-    flexGrow: 1,
-    justifyContent: 'center',
-  },
-  galleryThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-  },
-  galleryThumbActive: {
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.9)',
-  },
-  galleryThumbInactive: {
-    opacity: 0.45,
-  },
-  galleryThumbPlaceholder: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
   imageLoading: {
     height: 60,
     justifyContent: 'center',
@@ -6752,31 +6678,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderRadius: 4,
     padding: 4,
   },
-  fullscreenOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullscreenClose: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  landscapeToggle: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  galleryContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   // Thinking label
   // User avatar
   userAvatar: {
@@ -6788,26 +6689,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.userBubble,
   },
   // Skeleton loading
-  skeletonContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  skeletonHeader: {
-    height: 12,
-    width: '40%',
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 4,
-  },
-  skeletonBlock: {
-    height: 60,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 6,
-  },
-  skeletonMessage: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
   // Jump badge for new messages
   jumpBadge: {
     position: 'absolute',
@@ -6845,10 +6726,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flex: 1,
   },
   emptyState: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
+    paddingVertical: 24,
     gap: 10,
   },
   emptyStateText: {

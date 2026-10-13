@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Button } from "../ui/button";
 import { AlertTriangle, Loader2, MonitorUp, RotateCw, Trash2, Users } from "lucide-react";
 import { recordingFailureWords, recordingSubject, type CallView } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -717,16 +718,17 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
       }}
     >
       <span className="text-sol-text-secondary">Delete for everyone?</span>
-      <button
+      <Button
         type="button"
+        variant="red"
+        size="xs"
         onClick={() => {
           setAsking(false);
           onConfirm();
         }}
-        className="sol-btn-solid rounded bg-sol-red px-1.5 py-0.5 font-medium text-white"
       >
         Delete
-      </button>
+      </Button>
       <button
         type="button"
         onClick={() => setAsking(false)}

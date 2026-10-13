@@ -1,9 +1,8 @@
 // Preview entry: the REAL org role cards over a fixture world, for eyeballing
 // the staffing 2 surfaces without a backend (docs/architecture/org-staffing.md
-// S10 tenure chips, S13 faces, S5 ghost seats, S16 the seat dialog). The cards
-// are the shipped components in a real React Flow context, so what renders here
-// is what the org page renders. `?theme=light` flips the theme; default dark.
-// `?view=seat` shows the seat dialog instead of the cards.
+// S10 tenure chips, S13 faces, S5 ghost seats). The cards are the shipped
+// components in a real React Flow context, so what renders here is what the
+// org page renders. `?theme=light` flips the theme; default dark.
 import "../app/globals.css";
 import "@xyflow/react/dist/style.css";
 import React from "react";
@@ -11,8 +10,8 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { ReactFlow, ReactFlowProvider, type Node } from "@xyflow/react";
 import { RoleCard, type RoleNodeData } from "../components/org/OrgNodeCards";
-import { HeadSeatDialog } from "../components/org/HeadSeatDialog";
 import { ORG_SIZES } from "../components/org/orgLayout";
+import { roleCardRows } from "../components/org/orgCardModel";
 import { roleTenureChip } from "../components/org/orgMeta";
 import { EMPTY_COUNTS, type OrgRole } from "../components/org/orgTypes";
 
@@ -67,14 +66,14 @@ const ROLES: { role: OrgRole; ghost?: RoleNodeData["ghost"] }[] = [
 const nodes: Node[] = ROLES.map((r, i) => ({
   id: r.role._id,
   type: "role",
-  position: { x: 40 + (i % 3) * (ORG_SIZES.role.w + 48), y: 40 + Math.floor(i / 3) * (ORG_SIZES.role.h + 90) },
+  position: { x: 40 + (i % 3) * (ORG_SIZES.role.w + 48), y: 40 + Math.floor(i / 3) * 360 },
   draggable: false,
   // The layout resolves the tenure chip against the whole tree (orgLayout
   // roleBranch); with no tree here the refs are already short ids, so the same
   // helper on a null tree renders what the card would draw.
   data: { role: r.role, collapsed: false, hidden: 0, overflow: 0, tenure: roleTenureChip(r.role.tenure, null) ?? undefined, ...(r.ghost ? { ghost: r.ghost } : {}) } as unknown as Record<string, unknown>,
-  // The same height the layout gives a seat: a program takes an extra row.
-  style: { width: ORG_SIZES.role.w, height: ORG_SIZES.role.h + (r.role.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) },
+  // The same height the layout gives a seat (orgCardModel): a program takes an extra row.
+  style: { width: ORG_SIZES.role.w, height: roleCardRows(r.role, { ghost: !!r.ghost, tenure: r.role.tenure?.kind === "program" }).h },
 }));
 
 function Cards() {
@@ -95,25 +94,10 @@ function Cards() {
   );
 }
 
-function Seat() {
-  return (
-    <div className="min-h-screen bg-sol-bg text-sol-text">
-      <HeadSeatDialog
-        open
-        onClose={() => {}}
-        agentName="Anchor"
-        threadShortId="jx7abcd"
-        messageCount={412}
-        onConfirm={() => {}}
-      />
-    </div>
-  );
-}
-
 // The cards link to scope pages through the next/link compat shim, which uses
 // react-router's navigate — so the preview needs a router in the tree.
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MemoryRouter>{params.get("view") === "seat" ? <Seat /> : <Cards />}</MemoryRouter>
+    <MemoryRouter><Cards /></MemoryRouter>
   </React.StrictMode>,
 );

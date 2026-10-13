@@ -42,8 +42,13 @@ export async function main(): Promise<number> {
     .addHelpText(
       'after',
       `
-The loop: ${fmt.cmd('./evals freeze create title@jx7c6zk:142')} → ${fmt.cmd('./evals check title --reps 5')} (the baseline) → edit the prompt → ${fmt.cmd('./evals check title')} → ${fmt.cmd('./evals freeze results <id>')}.
-A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfaces, ${fmt.cmd('./evals doctor')} says what is missing, ${fmt.cmd('./evals snippet show')} prints the reference agents get.`,
+The loop: ${fmt.cmd('./evals freeze create title@jx7c6zk:142')} → ${fmt.cmd('./evals check title')} (the baseline) → edit the prompt → ${fmt.cmd('./evals check title')} → ${fmt.cmd('./evals freeze results <id>')}.
+A surface is one prod prompt; ${fmt.cmd('./evals')} lists them. A ref names its surface and a moment, ${fmt.cmd('<surface>@<ref>')}: a session
+and line (title@jx7c6zk:142), a call, a trigger, a snapshot, or ${fmt.cmd('<surface>@fixture:<case>')}. A bad ref lists every form.
+Find moments with ${fmt.cmd('./evals convo inbox')} and ${fmt.cmd('./evals convo find "<text>"')}. Reads change nothing and take --json.
+Real data (private freezes, snapshots, runs, labels) lives in EVALS_HOME (~/.local/share/codecast/evals); labels push to
+a private repo. Only synthetic fixtures under packages/evals enter git. ${fmt.cmd('./evals check --help')} explains the verdict,
+${fmt.cmd('./evals doctor')} says what is missing, docs/architecture/evals.md has the design.`,
     );
 
   // The network-backed seams are built on first use, so `runs`, `freeze list`
