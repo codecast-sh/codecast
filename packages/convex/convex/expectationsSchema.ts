@@ -24,13 +24,15 @@ export const expectationValidator = v.object({
   note: v.optional(v.string()),
   citations: v.array(citation),
   retired_reason: v.optional(v.string()),
+  // The day the line came into force (YYYY-MM-DD); judges.briefAt leaves it out for moments before it.
+  since: v.optional(v.string()),
   added_in: v.number(),
   changed_in: v.number(),
 });
 
 export const expectationOpValidator = v.union(
-  v.object({ op: v.literal("add"), text: v.string(), part: v.string(), note: v.optional(v.string()), citations: v.array(citation), status: v.optional(v.union(v.literal("active"), v.literal("retired"))), reason: v.optional(v.string()) }),
-  v.object({ op: v.literal("edit"), id: v.string(), text: v.optional(v.string()), part: v.optional(v.string()), note: v.optional(v.string()), citations: v.array(citation) }),
+  v.object({ op: v.literal("add"), text: v.string(), part: v.string(), note: v.optional(v.string()), since: v.optional(v.string()), citations: v.array(citation), status: v.optional(v.union(v.literal("active"), v.literal("retired"))), reason: v.optional(v.string()) }),
+  v.object({ op: v.literal("edit"), id: v.string(), text: v.optional(v.string()), part: v.optional(v.string()), note: v.optional(v.string()), since: v.optional(v.string()), citations: v.array(citation) }),
   v.object({ op: v.literal("retire"), id: v.string(), reason: v.string(), citations: v.array(citation) }),
 );
 
@@ -50,7 +52,7 @@ export const expectationTables = {
     next_n: v.number(),
     items: v.array(expectationValidator),
     summary: v.string(),
-    how: v.union(v.literal("person"), v.literal("auto")),
+    how: v.union(v.literal("person"), v.literal("auto"), v.literal("stand_in")),
     proposal_id: v.optional(v.id("expectation_proposals")),
     created_at: v.number(),
   })

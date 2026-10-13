@@ -18,6 +18,7 @@ import visualCanvas from "./content/visual-canvas.md?raw";
 import publish from "./content/publish.md?raw";
 import teamSessions from "./content/team-sessions.md?raw";
 import shareASession from "./content/share-a-session.md?raw";
+import t3Code from "./content/t3-code.md?raw";
 import whichSessionWroteThisLine from "./content/which-session-wrote-this-line.md?raw";
 import searchSessionsAcrossMachines from "./content/search-sessions-across-machines.md?raw";
 import threadState from "./content/thread-state.md?raw";
@@ -49,6 +50,7 @@ const CONTENT: Record<string, string> = {
   "publish": publish,
   "team-sessions": teamSessions,
   "share-a-session": shareASession,
+  "t3-code": t3Code,
   "which-session-wrote-this-line": whichSessionWroteThisLine,
   "search-sessions-across-machines": searchSessionsAcrossMachines,
   "thread-state": threadState,

@@ -12,6 +12,7 @@ const names = [
   "wakeStatusAfterPark", "clearHibernationPark", "forgetHibernationPark", "clearSessionTrackingForKill",
   "subagentParentSessionFromPath", "noteSubagentActivity", "subagentActiveAgoMs", "resetSubagentActivityForTests",
   "sendAgentStatus", "markTurnStarted", "statusFlipStartsTurn", "reapOneTerminal", "withTmuxLock", "injectViaTmux",
+  "knownAgentStatus",
 ] as const;
 
 type PublicNames = Extract<typeof names[number], keyof typeof import("../daemon.js")>;
@@ -50,6 +51,8 @@ export function createHibernationHarness() {
     classifyLivePaneFor: forbidden("classify"), detectSessionAgentType: forbidden("agent-type"),
     injectViaTmuxInner: async (...args: unknown[]) => { record("inject")(...args); },
     readConversationCache: () => ({}),
+    // No hook status files in this world: the status is what the daemon last sent.
+    agentStatusOnDisk: () => undefined,
     productionHibernationIo: Object.fromEntries([
       "policy", "tmuxSessions", "awakeIdleMs", "subagentActiveAgoMs", "conversationIds",
       "askSidecarMtimeMs", "transcriptLastRealMs", "lifecycle", "canReapPidTree", "deliveryActive", "park", "now",
@@ -63,7 +66,7 @@ export function createHibernationHarness() {
     "pendingOpenTaskReports", "lastOpenTasksSentJson", "tmuxTargetLocks",
     "hibernationInFlight", "hibernationEvidenceJobs", "hibernationRefusedAt", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared", "lastTargetRefusal",
   ].map((name) => `const ${name} = new Map();`).join("\n");
-  const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds"]
+  const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds", "abandonedEvidenceJobs"]
     .map((name) => `const ${name} = new Set();`).join("\n");
   const body = names.map((name) => functionBlock(source, name).text.replace(/^export /, "")).join("\n");
   const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`
@@ -74,6 +77,7 @@ export function createHibernationHarness() {
     const WORKING_STATUS_THROTTLE_MS = 10_000;
     const TMUX_LOCK_WAIT_MS = 60_000;
     const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;
+    const HIBERNATE_ABANDONED_EVIDENCE_MAX = 4 * HIBERNATE_MAX_PER_PASS;
     const SETTLE_STATUSES_WITH_TASKS = new Set(["idle", "waiting", "dormant", "done"]);
     const stopManagedSessionHeartbeat = (id) => managedHeartbeatSessions.delete(id);
     ${body}
