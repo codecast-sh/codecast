@@ -1,0 +1,27 @@
+/* The Ask block: the question, the answer box, the two outcomes. */
+.ask { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ask-q { margin: 0; max-width: 78ch; font-size: var(--lw-fs-md); font-weight: 650; line-height: 1.5; color: var(--lw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-why { margin: 0; max-width: 86ch; font-size: var(--lw-fs-sm); line-height: 1.55; color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.ask-box { display: block; width: 100%; max-width: 86ch; resize: vertical; min-height: 56px; margin-top: 4px; padding: 9px 11px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-base); line-height: 1.5; }
+.ask-box:focus { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+.ask-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask-why summary { cursor: pointer; width: fit-content; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.ask-why[open] summary { margin-bottom: 4px; }
+.ask-why p { margin: 0; }
+.ask-fields { display: grid; grid-template-columns: max-content minmax(0, 60ch); gap: 6px 12px; align-items: center; margin-top: 4px; }
+.ask-field { display: contents; }
+.ask-field > span { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-field input { height: 30px; padding: 0 10px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-sm); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-base); }
+.ask-field input:focus { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+@container (max-width: 560px) { .ask-fields { grid-template-columns: minmax(0, 1fr); } }
+/* What grounding still does not know, beside "Is this a real problem?". */
+.ask-open { margin: 0; max-width: 78ch; display: flex; flex-direction: column; gap: 2px; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.ask-open > span { font-size: var(--lw-fs-xs, 11px); color: var(--lw-ink-3); }
+/* An ask that weighs alternatives: each is a one-press answer, with what it would mean. */
+.ask-choices { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-top: 4px; }
+.ask-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 40ch; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--lw-person) 38%, var(--lw-rule)); border-radius: var(--lw-r); background: var(--lw-card); color: var(--lw-ink); font: inherit; text-align: left; cursor: pointer; }
+.ask-choice b { font-size: var(--lw-fs-base); font-weight: 600; }
+.ask-choice span { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-choice:hover { background: var(--lw-person-soft); }
+.ask-choice:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+.ask-then { align-self: center; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
