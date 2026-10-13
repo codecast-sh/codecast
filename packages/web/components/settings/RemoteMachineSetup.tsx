@@ -48,7 +48,7 @@ export function RemoteMachineSetup({ open, onOpenChange }: { open: boolean; onOp
         <div className="grid gap-3 sm:grid-cols-2">
           {form.mode === "existing" ? field("instance", "EC2 instance ID", "i-…") : <>
             {field("name", "Machine name", form.platform === "mac" ? "dev-mac" : "dev-linux")}
-            {saved ? field("image", `Image (optional; starts from your saved ${saved.name})`, saved.id) : field("image", form.platform === "mac" ? "macOS AMI ID" : "Ubuntu 24.04 x86_64 AMI ID", "ami-…")}
+            {saved ? field("image", `Image (optional; starts from your saved ${saved.name})`, saved.id) : field("image", form.platform === "mac" ? "macOS AMI ID (optional; starts from codecast's base image)" : "Ubuntu 24.04 x86_64 AMI ID", "ami-…")}
             {field("keyName", "AWS key pair name", "dev-key")}
             {field("subnet", "Public subnet ID", "subnet-…")}
             {field("securityGroup", "SSH security group ID", "sg-…")}

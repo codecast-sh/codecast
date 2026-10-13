@@ -1,0 +1,11 @@
+{
+  "note": "The six problems the presenter prompt is iterated on (scripts/line-present-replay.ts). Seven problems have a built fix, a checkpoint and a worktree as of 2026-10-12 (--list); ct-59229 is the one left out, the spare. Each verdict below is what the last prod presenter concluded, not a label to grade against.",
+  "cases": [
+    { "ref": "ct-59338", "role": "prompt-only fix with rich examples", "why": "One prompt file rewrites the missed-call follow-up; the last card reached 19 of 20 conversations and recommended ship, so the page has many real before and after emails to show." },
+    { "ref": "ct-59227", "role": "a code fix", "why": "Four source files change how booking notice is counted for an offered time; the page has to show a code change readably to someone who does not live in the code." },
+    { "ref": "ct-59425", "role": "a fix that sends less", "why": "The daily matching run may now offer nobody, about 15 fewer intro offers a week; the page has to say what the member hears instead of a silence." },
+    { "ref": "ct-59433", "role": "the honest answer is not to ship", "why": "The fix works where it applies but reached 0 of 7 of the problem's conversations after the regrouping; the decision must say it misses, plainly." },
+    { "ref": "ct-59462", "role": "a small one", "why": "A one-line prompt change whose report was withdrawn (0 of 0 conversations); the page should be as short as the decision is." },
+    { "ref": "ct-59267", "role": "many conversations", "why": "Twenty-five conversations sit on the problem and the fix reached nine; the page has to show which it covers and which it leaves, without a wall of text." }
+  ]
+}

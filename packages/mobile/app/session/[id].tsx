@@ -18,7 +18,9 @@ const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
 );
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
+import { mixColor } from '@/lib/solColor';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { useInboxStore, isConvexId, retryPendingSend, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
@@ -30,12 +32,18 @@ import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { NativePressable } from '@/lib/gestureHandler';
+import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
+import { foldToolRuns, type ToolRun } from '@/lib/toolRuns';
+import { FreshRows } from '@/lib/freshRows';
+import { ROW_LAYOUT, arriveEntering, sendEntering } from '@/lib/transcriptMotion';
+import { messageRowKey, uniqueRowKeys } from '@codecast/web/lib/messageRowKey';
+import Reanimated, { Easing as ReEasing, FadeIn, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
-import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
+import { isCodexTurnAbortedMessage, isHiddenSystemNotice, isInterruptNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
@@ -59,10 +67,24 @@ import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
+import { ComposeButton } from '@/components/session/ComposeButton';
+import { sessionLanded } from '@/lib/compose';
+import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/components/session/SessionActionsSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { ApprovalCard } from '@/components/hosted/ApprovalCard';
-import { HostedStep } from '@/components/hosted/Steps';
-import { LANE_COPY, answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
+import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
+import { hostedApprovalAnswer, hostedApprovalState, type HostedApprovalState } from '@codecast/web/lib/hostedApproval';
+import { HostedSources, HostedStep } from '@/components/hosted/Steps';
+import { ReplyChips } from '@/components/hosted/ReplyChips';
+import { searchedSources } from '@codecast/web/lib/hostedReceipt';
+import { HostedNoticeRow } from '@/components/hosted/Notice';
+import { foldHostedRetries, hostedNoticeKind, lastAskOf } from '@codecast/web/lib/hostedNotice';
+import { Serif } from '@/constants/fonts';
+import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
+import { hostedComposerWords, hostedLastExchange } from '@codecast/web/lib/hostedComposer';
+import { useAllowanceOut } from '@codecast/web/components/simple/usePlanFigures';
+import { hostedConnectionWords } from '@codecast/web/components/conversation/HostedConnection';
+import { useLinkDown } from '@/hooks/useLinkDown';
+import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
@@ -71,8 +93,8 @@ import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
-import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
-import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
+import { Theme, Spacing, chipShell, chipText, chipQuiet, CHROME_FONT_CAP, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
+import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
   toolSummary,
@@ -1069,272 +1091,6 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
         <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
       </RNView>
     </Pressable>
-  );
-}
-
-function getDistance(touches: { pageX: number; pageY: number }[]) {
-  const dx = touches[0].pageX - touches[1].pageX;
-  const dy = touches[0].pageY - touches[1].pageY;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function getMidpoint(touches: { pageX: number; pageY: number }[]) {
-  return {
-    x: (touches[0].pageX + touches[1].pageX) / 2,
-    y: (touches[0].pageY + touches[1].pageY) / 2,
-  };
-}
-
-function GalleryImage({ image, screenWidth, screenHeight, onZoomChange, onRequestClose }: { image: ImageData; screenWidth: number; screenHeight: number; onZoomChange?: (zoomed: boolean) => void; onRequestClose?: () => void }) {
-  const src = useImageSrc(image);
-
-  const scaleVal = useRef(new Animated.Value(1)).current;
-  const translateXVal = useRef(new Animated.Value(0)).current;
-  const translateYVal = useRef(new Animated.Value(0)).current;
-
-  const pinchState = useRef({ startDist: 0, startScale: 1, scale: 1 });
-  const panState = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0, tx: 0, ty: 0, isPanning: false });
-  const lastTap = useRef(0);
-  // Swipe-down-to-dismiss, armed only while un-zoomed (so it never fights pan).
-  const dismiss = useRef({ startY: 0, dy: 0, active: false });
-
-  const setZoomed = useCallback((scale: number) => {
-    onZoomChange?.(scale > 1.05);
-  }, [onZoomChange]);
-
-  const resetTransform = useCallback(() => {
-    Animated.parallel([
-      Animated.spring(scaleVal, { toValue: 1, useNativeDriver: true, tension: 100, friction: 10 }),
-      Animated.spring(translateXVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
-      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
-    ]).start();
-    pinchState.current.scale = 1;
-    panState.current.tx = 0;
-    panState.current.ty = 0;
-    setZoomed(1);
-  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
-
-  const handleTouchStart = useCallback((e: any) => {
-    const touches = e.nativeEvent.touches;
-    if (touches.length === 2) {
-      pinchState.current.startDist = getDistance(touches);
-      pinchState.current.startScale = pinchState.current.scale;
-      const mid = getMidpoint(touches);
-      panState.current.startX = mid.x;
-      panState.current.startY = mid.y;
-      panState.current.startTx = panState.current.tx;
-      panState.current.startTy = panState.current.ty;
-      panState.current.isPanning = false;
-    } else if (touches.length === 1) {
-      const now = Date.now();
-      if (now - lastTap.current < 300) {
-        if (pinchState.current.scale > 1) {
-          resetTransform();
-        } else {
-          Animated.spring(scaleVal, { toValue: 3, useNativeDriver: true, tension: 100, friction: 10 }).start();
-          pinchState.current.scale = 3;
-          setZoomed(3);
-        }
-        lastTap.current = 0;
-      } else {
-        lastTap.current = now;
-        if (pinchState.current.scale > 1.05) {
-          panState.current.startX = touches[0].pageX;
-          panState.current.startY = touches[0].pageY;
-          panState.current.startTx = panState.current.tx;
-          panState.current.startTy = panState.current.ty;
-          panState.current.isPanning = true;
-        } else {
-          dismiss.current.active = true;
-          dismiss.current.startY = touches[0].pageY;
-          dismiss.current.dy = 0;
-        }
-      }
-    }
-  }, [scaleVal, resetTransform, setZoomed]);
-
-  const handleTouchMove = useCallback((e: any) => {
-    const touches = e.nativeEvent.touches;
-    if (touches.length === 2) {
-      const dist = getDistance(touches);
-      const newScale = Math.min(5, Math.max(0.5, pinchState.current.startScale * (dist / pinchState.current.startDist)));
-      scaleVal.setValue(newScale);
-      pinchState.current.scale = newScale;
-      setZoomed(newScale);
-
-      const mid = getMidpoint(touches);
-      const newTx = panState.current.startTx + (mid.x - panState.current.startX);
-      const newTy = panState.current.startTy + (mid.y - panState.current.startY);
-      translateXVal.setValue(newTx);
-      translateYVal.setValue(newTy);
-      panState.current.tx = newTx;
-      panState.current.ty = newTy;
-    } else if (touches.length === 1 && panState.current.isPanning) {
-      const newTx = panState.current.startTx + (touches[0].pageX - panState.current.startX);
-      const newTy = panState.current.startTy + (touches[0].pageY - panState.current.startY);
-      translateXVal.setValue(newTx);
-      translateYVal.setValue(newTy);
-      panState.current.tx = newTx;
-      panState.current.ty = newTy;
-    } else if (touches.length === 1 && dismiss.current.active) {
-      // Follow the finger downward; ignore upward drag so it can't push the image up.
-      const dy = touches[0].pageY - dismiss.current.startY;
-      dismiss.current.dy = dy;
-      translateYVal.setValue(dy > 0 ? dy : 0);
-    }
-  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
-
-  const handleTouchEnd = useCallback(() => {
-    panState.current.isPanning = false;
-    if (dismiss.current.active) {
-      const dy = dismiss.current.dy;
-      dismiss.current.active = false;
-      dismiss.current.dy = 0;
-      if (dy > 120) {
-        onRequestClose?.();
-        return;
-      }
-      // Not far enough — snap the image back into place.
-      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }).start();
-    }
-    if (pinchState.current.scale < 1) {
-      resetTransform();
-    }
-  }, [resetTransform, onRequestClose, translateYVal]);
-
-  if (!src) return <RNView style={{ width: screenWidth, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
-  return (
-    <RNView
-      style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-    >
-      <Animated.View style={{ transform: [{ translateX: translateXVal }, { translateY: translateYVal }, { scale: scaleVal }] }}>
-        <Image source={{ uri: src }} style={{ width: screenWidth, height: screenHeight * 0.85 }} resizeMode="contain" />
-      </Animated.View>
-    </RNView>
-  );
-}
-
-// One thumb in the gallery's bottom filmstrip. Dimmed unless current; a
-// storage-backed entry shows a placeholder square until its URL resolves.
-function GalleryThumb({ image, active, onPress }: { image: ImageData; active: boolean; onPress: () => void }) {
-  const Theme = useTheme();
-  const src = useImageSrc(image);
-  if (!src) return <RNView style={[styles.galleryThumb, styles.galleryThumbPlaceholder]} />;
-  return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-      <Image
-        source={{ uri: src }}
-        style={[styles.galleryThumb, active ? styles.galleryThumbActive : styles.galleryThumbInactive]}
-        resizeMode="cover"
-      />
-    </TouchableOpacity>
-  );
-}
-
-const GALLERY_THUMB_STEP = 46; // 40px thumb + 6px gap, for strip auto-centering
-
-function ImageGallery({ images, initialIndex, visible, onClose }: {
-  images: ImageData[];
-  initialIndex: number;
-  visible: boolean;
-  onClose: () => void;
-}) {
-  const Theme = useTheme();
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [isZoomed, setIsZoomed] = useState(false);
-  const [isLandscape, setIsLandscape] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
-  const thumbStripRef = useRef<FlatList>(null);
-  const insets = useSafeAreaInsets();
-  const { width: deviceWidth, height: deviceHeight } = useWindowDimensions();
-
-  // Keep the active thumb centered as swipes/taps move the selection.
-  useEffect(() => {
-    if (!visible || images.length < 2) return;
-    thumbStripRef.current?.scrollToOffset({
-      offset: Math.max(0, currentIndex * GALLERY_THUMB_STEP - deviceWidth / 2 + GALLERY_THUMB_STEP / 2),
-      animated: true,
-    });
-  }, [visible, currentIndex, images.length, deviceWidth]);
-
-  const screenWidth = isLandscape ? deviceHeight : deviceWidth;
-  const screenHeight = isLandscape ? deviceWidth : deviceHeight;
-
-  useEffect(() => {
-    if (visible) {
-      setCurrentIndex(initialIndex);
-      setIsZoomed(false);
-      setIsLandscape(false);
-      setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
-    }
-  }, [visible, initialIndex]);
-
-  const handleZoomChange = useCallback((zoomed: boolean) => {
-    setIsZoomed(zoomed);
-  }, []);
-
-  const toggleLandscape = useCallback(() => {
-    setIsLandscape(prev => !prev);
-    setIsZoomed(false);
-  }, []);
-
-  if (!visible) return null;
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
-      <RNView style={styles.fullscreenOverlay}>
-        <RNView style={[styles.galleryContent, isLandscape && { transform: [{ rotate: '90deg' }], width: deviceHeight, height: deviceWidth }]}>
-          <FlatList
-            ref={flatListRef}
-            data={images}
-            horizontal
-            pagingEnabled
-            scrollEnabled={!isZoomed}
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} onRequestClose={onClose} />}
-            onMomentumScrollEnd={(e) => {
-              const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
-              setCurrentIndex(idx);
-            }}
-            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
-            initialScrollIndex={initialIndex}
-          />
-        </RNView>
-        <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
-          <FontAwesome name="close" size={20} color="#fff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.landscapeToggle} onPress={toggleLandscape} activeOpacity={0.7}>
-          <FontAwesome name="rotate-right" size={18} color={isLandscape ? Theme.accent : '#fff'} />
-        </TouchableOpacity>
-        <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
-        {images.length > 1 && (
-          <RNView style={[styles.galleryThumbStrip, { bottom: insets.bottom + 16 }]} pointerEvents="box-none">
-            <FlatList
-              ref={thumbStripRef}
-              data={images}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              keyExtractor={(_, i) => String(i)}
-              contentContainerStyle={styles.galleryThumbStripContent}
-              renderItem={({ item, index }) => (
-                <GalleryThumb
-                  image={item}
-                  active={index === currentIndex}
-                  onPress={() => {
-                    setCurrentIndex(index);
-                    flatListRef.current?.scrollToIndex({ index, animated: false });
-                  }}
-                />
-              )}
-            />
-          </RNView>
-        )}
-      </RNView>
-    </Modal>
   );
 }
 
@@ -2369,6 +2125,21 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+// Mobile twin of web's InterruptStatusLine: a stop is a control event, so it
+// reads as a centered rule, not a bubble someone typed.
+function InterruptStatusLine({ label = 'user interrupted', tone = 'sky' }: { label?: string; tone?: 'sky' | 'amber' }) {
+  const Theme = useTheme();
+  const color = tone === 'amber' ? Theme.yellow : Theme.textDim;
+  const rule = { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: tone === 'amber' ? Theme.yellow + '66' : Theme.border };
+  return (
+    <RNView style={styles.interruptLine}>
+      <RNView style={rule} />
+      <RNText style={[styles.interruptLineText, { color }]}>{label}</RNText>
+      <RNView style={rule} />
+    </RNView>
+  );
+}
+
 // --- Workflow events (mobile twin of web's WorkflowEventBlock) ---
 // A session's public link, in the one /share grammar (shared/entities).
 const conversationShareLink = (token: string) => `${CODECAST_BASE_URL}${sharePath('conversation', token)}`;
@@ -2488,8 +2259,43 @@ function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
   return null;
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet }: {
+/** Calls a run shows when opened fade in, for this long after the tap (a cell mounting late still catches it). */
+const RUN_FADE_WINDOW_MS = 600;
+const RUN_CALLS_ENTERING = FadeIn.duration(200);
+const CHEVRON_EASE = ReEasing.bezier(0.23, 1, 0.32, 1);
+
+/** The person's bubble: the user tint at this alpha over the screen. */
+const USER_BUBBLE_ALPHA = '30';
+
+/** A folded run of tool calls: one quiet line saying what it did; a tap opens the calls under it. */
+function ToolRunRow({ run, expanded, onToggle }: { run: ToolRun; expanded: boolean; onToggle: () => void }) {
+  const Theme = useTheme();
+  const turn = useSharedValue(expanded ? 1 : 0);
+  useEffect(() => { turn.set(withTiming(expanded ? 1 : 0, { duration: 180, easing: CHEVRON_EASE, reduceMotion: ReduceMotion.System })); }, [expanded, turn]);
+  const chevronStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.get() * 90}deg` }] }));
+  return (
+    <Pressable
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggle(); }}
+      hitSlop={6}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      accessibilityLabel={`${run.steps} steps: ${run.summary}`}
+      style={({ pressed }) => [styles.toolRunRow, pressed && { opacity: 0.6 }]}
+    >
+      <Reanimated.View style={chevronStyle}>
+        <FontAwesome name="chevron-right" size={8} color={Theme.textDim} />
+      </Reanimated.View>
+      <RNText style={styles.toolRunText} numberOfLines={1}>{run.summary}</RNText>
+    </Pressable>
+  );
+}
+
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun }: {
   message: Message;
+  /** Someone other than the session's owner who sent this turn, named above the bubble. */
+  sender?: string;
+  /** The folded run of tool calls this message belongs to (lib/toolRuns). */
+  toolRun?: { run: ToolRun; expanded: boolean; justOpened: boolean; onToggle: () => void };
   agentType?: string;
   model?: string;
   showHeader?: boolean;
@@ -2507,6 +2313,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   bookmarkedSet?: Set<string>;
 }) {
   const Theme = useTheme();
+  // Hosted voices are the family look's; developer mode draws a hosted
+  // conversation as it draws any other.
+  const familyLook = useActiveLook() === 'family';
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -2589,6 +2398,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return <CommandStatusLine content={message.content} timestamp={message.timestamp} />;
   }
 
+  // Same rule as web's 'interrupt' kind: a hosted conversation's stop is told
+  // by its own notice, so only an aborted turn earns a line there.
+  if (isUser && isCodexTurnAbortedMessage(message.content)) {
+    return <InterruptStatusLine label={hostedAgent ? 'You stopped this' : 'turn aborted'} tone={hostedAgent ? 'sky' : 'amber'} />;
+  }
+  if (isUser && isInterruptNotice(message.content)) {
+    return hostedAgent ? null : <InterruptStatusLine />;
+  }
+
   const rawContentRaw = message.content || '';
   const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
@@ -2628,6 +2446,23 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return null;
   }
 
+  // A folded run shows as one row on its first message; the rest draw nothing until it opens.
+  const runHead = toolRun?.run.head === message._id;
+  const toolsFolded = !!toolRun && !toolRun.expanded;
+  if (toolsFolded && !runHead) return null;
+
+  // A hosted conversation reads as two voices, as on the web: the person's
+  // words a quiet note in the interface face, the assistant's reply a letter
+  // in the reading face, and its narration before a step in the receipt's
+  // size and ink. Neither carries a name and time header.
+  const hostedVoice = hostedAgent && familyLook;
+  const bodyStyle = !hostedVoice
+    ? [styles.bubbleText, isUser ? styles.userText : styles.assistantText]
+    : isUser ? styles.hostedUserText : hasToolCalls ? styles.hostedNarration : styles.hostedReply;
+
+  // The bubble's fill over the screen, for the fade that clips a long turn.
+  const userFill = blendOver(Theme.userBubble + USER_BUBBLE_ALPHA, Theme.bg);
+
   const handleTapToExpand = () => {
     if (globalCollapsed && !localExpanded) {
       setLocalExpanded(true);
@@ -2637,25 +2472,19 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
   return (
     <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
+      {isUser && sender && !hostedVoice ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
       <RNView
-        style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
-        {showHeader && !isToolCallOnly && (
+        style={[styles.messageBubble, isUser ? (hostedVoice ? styles.hostedUserBubble : styles.userBubble) : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
+        {/* The person's turn is the bubble itself; only the agent's opens with a name. */}
+        {showHeader && !isToolCallOnly && !hostedVoice && !isUser && (
         <RNView style={styles.bubbleHeader}>
-          {isUser ? (
-            <RNView style={styles.userAvatar}>
-              <RNText style={styles.userAvatarText}>{(userName || 'Y')[0].toUpperCase()}</RNText>
-            </RNView>
-          ) : agentType ? (
-            <RNView style={[styles.agentDot, { backgroundColor: agentTypeColor(agentType) }]} />
-          ) : null}
-          <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
-            {isUser ? (userName || 'You') : assistantLabel(agentType)}
-          </RNText>
-          {!isUser && model && showHeader && !hostedAgent && (
+          {agentType ? <RNView style={[styles.agentDot, { backgroundColor: agentTypeColor(agentType) }]} /> : null}
+          <RNText style={[styles.bubbleRole, styles.assistantRole]}>{assistantLabel(agentType)}</RNText>
+          {model && !hostedAgent && (
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
           <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
-            <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatRelativeTime(message.timestamp)}</RNText>
+            <RNText style={[styles.bubbleTime, styles.assistantTime]}>{formatRelativeTime(message.timestamp)}</RNText>
           </Pressable>
           {isBookmarked && (
             <FontAwesome name="bookmark" size={10} color="#d97706" style={{ marginLeft: 2 }} />
@@ -2665,7 +2494,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
       {/* Collapsed feed hides thinking to cut noise — EXCEPT a pure-reasoning turn,
           where thinking is the only content and hiding it leaves an empty bubble. */}
-      {hasThinking && (!effectiveCollapsed || (!content.trim() && !hasToolCalls && !hasImages)) && (
+      {hasThinking && !(toolsFolded && !content.trim()) && (!effectiveCollapsed || (!content.trim() && !hasToolCalls && !hasImages)) && (
         <ThinkingBlock content={message.thinking!.trim()} />
       )}
 
@@ -2681,7 +2510,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         <>
         <RNView
           style={[
-            styles.bubbleContent,
+            isUser && !hostedVoice ? styles.userBubbleContent : styles.bubbleContent,
             isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
             !isUser && !contentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
             isUser && !userContentExpanded && !isLongContent && estimatedOverflow && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
@@ -2689,7 +2518,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         >
           {(() => {
             if (typeof content !== 'string') {
-              return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+              return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
             }
             const apiError = parseApiErrorContent(content);
             if (apiError) {
@@ -2711,13 +2540,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return parseSkillBlocks(content).map((part, idx) =>
                 part.type === 'skill'
                   ? <SkillBlockCard key={idx} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
-                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  : <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
               );
             }
             if (content.includes('<teammate-message')) {
               return parseTeammateMessages(content).map((part, idx) =>
                 part.type === 'text'
-                  ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  ? <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
                   : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
               );
             }
@@ -2734,11 +2563,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 );
               }
             }
-            return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+            return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
           })()}
           {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
             <LinearGradient
-              colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
+              colors={isUser ? [userFill + '00', userFill] : [Theme.bg + '00', Theme.bg]}
               style={styles.contentGradientOverlay}
               pointerEvents="none"
             />
@@ -2779,8 +2608,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </>
       ) : null}
 
-      {hasToolCalls && (
-        <RNView style={isToolCallOnly ? styles.toolCallsCompact : styles.toolCallsContainer}>
+      {runHead && (
+        <ToolRunRow run={toolRun!.run} expanded={!toolsFolded} onToggle={toolRun!.onToggle} />
+      )}
+      {hasToolCalls && !toolsFolded && (
+        <Reanimated.View entering={toolRun?.justOpened ? RUN_CALLS_ENTERING : undefined} style={isToolCallOnly ? styles.toolCallsCompact : styles.toolCallsContainer}>
           {message.tool_calls!.map((tc) => {
             const result = message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id];
 
@@ -2863,7 +2695,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               />
             );
           })}
-        </RNView>
+          {hostedAgent ? (
+            <HostedSources sources={searchedSources(message.tool_calls!, (tc) => message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id])} />
+          ) : null}
+        </Reanimated.View>
       )}
 
       {forkChildren && forkChildren.length > 0 && (
@@ -2936,6 +2771,18 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 }) {
   const Theme = useTheme();
   const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
+  // The family look's send is the hosted composers' ring and ink disc.
+  const familyLook = useActiveLook() === 'family';
+  const { c: hostedColors } = useHostedTheme();
+  const answeredBefore = useInboxStore((s) => hosted && (s.messages[conversationId as string] ?? []).some((m: { role?: string }) => m.role === 'assistant'));
+  const hostedLast = useInboxStore((s) => (hosted ? hostedLastExchange(s.messages[conversationId as string] as any, s.sessionDecisions, conversationId as string, Date.now()) : null));
+  // A used-up month holds the send and says why in the box, as the web's
+  // composer does (usePlanFigures useAllowanceOut).
+  const allowanceOut = useAllowanceOut(hosted);
+  // A dropped link is said in the status slot, with what happens to a
+  // message still waiting to go (the web's HostedConnection words).
+  const linkDown = useLinkDown();
+  const unsent = useInboxStore((s) => hosted && (s.pendingMessages[conversationId as string] ?? []).length > 0);
   const words = useModeWords();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
@@ -3117,6 +2964,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       message,
     ).trim();
     if (!trimmedMessage && selectedImages.length === 0) return;
+    if (allowanceOut) return;
     setError(null);
 
     const images: OptimisticImage[] = selectedImages.map(img => img.storageId
@@ -3132,14 +2980,15 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       return;
     }
 
-    // Same send-clear as web: remount the native box, keep focus, ignore IME
-    // restores of the just-sent text. Do not dismiss the keyboard — a follow-up
-    // is the ordinary next gesture. clearDraftFinal is the only draft write
-    // (client_state + conversation row via the outbox); a parallel
-    // patchConversation is what used to put the sent text back.
+    // Same send-clear as web: remount the native box and ignore IME restores
+    // of the just-sent text. The keyboard goes with the send, so the person
+    // watches their turn land and the reply arrive over the whole screen.
+    // clearDraftFinal is the only draft write (client_state + conversation row
+    // via the outbox); a parallel patchConversation is what used to put the
+    // sent text back.
     clearTimeout(draftTimerRef.current);
     draftRef.current = '';
-    clearAfterSend(content);
+    clearAfterSend(content, { keepFocus: false });
     setSelectedImages([]);
     setInputHeight(0);
     useInboxStore.getState().clearDraftFinal(conversationId);
@@ -3147,16 +2996,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     setExpanded(false);
   };
 
-  const canSend = !!message.trim() || selectedImages.length > 0;
+  const canSend = (!!message.trim() || selectedImages.length > 0) && !allowanceOut;
   const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
   const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
-  // A hosted turn has no process to interrupt, so it never offers stop.
-  const showStop = agentWorking && isOwner && !canSend && !hosted;
+  // While a turn works and the box is empty, send becomes Stop. A hosted
+  // turn stops through the store's stopHostedTurn, the web's visible Stop,
+  // so stopping never rests on a gesture a person who does not code would
+  // not know.
+  const showStop = !canSend && (hosted ? hostedWorking : agentWorking && isOwner);
 
   // The interrupt is the shared store action (web's Escape); the daemon judges
   // whether the agent is mid-turn and paints the interruption line.
   const handleStop = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (hosted) {
+      useInboxStore.getState().stopHostedTurn(conversationId);
+      return;
+    }
     useInboxStore.getState().sendEscape(conversationId).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'Could not stop the agent');
     });
@@ -3187,8 +3043,11 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             style={styles.removeImageButton}
             onPress={() => removeImage(img.uri)}
             activeOpacity={0.7}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Remove image"
           >
-            <FontAwesome name="times-circle" size={20} color={Theme.red} />
+            <Feather name="x" size={12} color="#fff" />
           </TouchableOpacity>
         </RNView>
       ))}
@@ -3197,8 +3056,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 
   // Status lives in the otherwise-empty middle of the button row: zero extra
   // height, and it can never overlap the conversation.
-  const statusMeta = hostedWorking
-    ? { color: AGENT_STATUS_META.working.color, label: LANE_COPY.conversation.working }
+  // A hosted wait reads as the web's one wait: "Getting started…" before
+  // the first reply, "Thinking…" after, in quiet ink in the family look.
+  const statusMeta = hosted && linkDown
+    ? { color: Theme.textMuted, dot: Theme.textMuted0, label: hostedConnectionWords(linkDown, unsent) }
+    : hostedWorking
+    ? { color: familyLook ? Theme.textMuted : AGENT_STATUS_META.working.color, dot: familyLook ? Theme.text : AGENT_STATUS_META.working.color, label: answeredBefore ? 'Thinking…' : 'Getting started…' }
     : managedSession?.managed && !hosted
       ? AGENT_STATUS_META[managedSession.agent_status ?? '']
       : undefined;
@@ -3206,15 +3069,15 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   const actionsRowEl = (
     <RNView style={styles.composerActions}>
       {hosted ? null : (
-        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.7}>
-          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
+        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Attach image">
+          <Feather name="plus" size={18} color={Theme.textMuted} />
         </TouchableOpacity>
       )}
       <RNView style={styles.composerSpacer}>
         {statusMeta && (
           <RNView style={styles.composerStatus}>
-            <PulsingDot color={statusMeta.color} />
-            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.composerStatusText, { color: statusMeta.color }]}>
+            <PulsingDot color={(statusMeta as { dot?: string }).dot ?? statusMeta.color} />
+            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} numberOfLines={2} style={[styles.composerStatusText, { color: statusMeta.color, flexShrink: 1 }]}>
               {statusMeta.label}
             </RNText>
           </RNView>
@@ -3228,7 +3091,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, familyLook && sendDisc(hostedColors, 'family', canSend || showStop).style]}
         onPress={showStop ? handleStop : handleSend}
         activeOpacity={0.7}
         delayPressIn={0}
@@ -3238,20 +3101,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         accessibilityLabel={showStop ? words.stopWorking : 'Send'}
       >
         {showStop
-          ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
+          ? <FontAwesome name="stop" size={11} color={familyLook ? sendDisc(hostedColors, 'family', true).icon : '#fff'} />
+          : <FontAwesome name="arrow-up" size={14} color={familyLook ? sendDisc(hostedColors, 'family', canSend).icon : '#fff'} />}
       </NativePressable>
     </RNView>
   );
 
+  // The web composer's resting words for the same exchange (lib/hostedComposer).
   const placeholder = hosted
-    ? (waitsOnAnswer ? LANE_COPY.conversation.change : LANE_COPY.conversation.reply)
+    ? allowanceOut ?? hostedComposerWords(hostedLast, waitsOnAnswer)
     : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
   // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
   // the agent is not actively producing; a pill tap sends its text directly
   // through the shared dispatch, long-press fills the composer instead.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  // Hosted mode has no reply suggestion (surface composer.suggestion).
+  const suggestionsOn = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const suggestionsEnabled = useSurface('composer.suggestion') && suggestionsOn;
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
@@ -3276,7 +3142,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             styles.textInput,
             // Grow with the text up to a third of the screen; beyond that it scrolls.
             { maxHeight: Math.round(winHeight * 0.33) },
-            inputHeight > 44 && styles.textInputWithExpand,
+            inputHeight > 44 && !!message && styles.textInputWithExpand,
           ]}
           value={message}
           onChangeText={onChangeText}
@@ -3288,7 +3154,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           maxFontSizeMultiplier={CHROME_FONT_CAP}
           onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
         />
-        {inputHeight > 44 && (
+        {/* Only typed text earns it: a long placeholder (a held month's
+            sentence) wraps too, and has nothing to expand. */}
+        {inputHeight > 44 && !!message && (
           <TouchableOpacity
             style={styles.expandButton}
             onPress={() => setExpanded(true)}
@@ -3475,8 +3343,20 @@ function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNod
 }
 
 export default function SessionDetailScreen() {
-  const { id, message, focus } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
+  const { id, message, focus, reveal } = useLocalSearchParams<{ id: string; message?: string; focus?: string; reveal?: string }>();
   const Theme = useTheme();
+  // reveal=1 only shapes the push (no transition under the closing new
+  // session sheet, app/_layout); once it has landed it goes, so going back
+  // slides as it does everywhere else.
+  // The first render of a revealed session is what lets the sheet go: it has
+  // drawn under the sheet by now (lib/compose).
+  const routeNav = useRouter();
+  useEffect(() => {
+    if (!reveal) return;
+    sessionLanded();
+    const task = InteractionManager.runAfterInteractions(() => routeNav.setParams({ reveal: undefined }));
+    return () => task.cancel();
+  }, [reveal, routeNav]);
   // A push tapped on a closed app lands here before the cache is read back.
   // The session screen decides what it shows from the row (a conversation
   // with the hosted assistant has no machine chrome and its own reply box),
@@ -3515,6 +3395,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const gitChips = useSurface('gitChips');
   const internalsShown = useSurface('conversation.internals');
   const diffSurface = useSurface('diff');
+  const stickyPromptShown = useSurface('conversation.stickyPrompt');
   const words = useModeWords();
   // The store's server dispatch is wired once, at the root (StoreSyncBridge
   // mounts useSyncCore above every screen), and must not be wired again here:
@@ -3549,6 +3430,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  // Whether anything sits above the visible window (the hosted top fade).
+  const [hasAbove, setHasAbove] = useState(false);
   const flatListLayoutHeightRef = useRef(0);
   const lastContentHeightRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -3604,7 +3487,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const floatingHeaderOpacity = useRef(new Animated.Value(1)).current;
   const floatingHeaderOffsetRef = useRef(0);
   const lastScrollYRef = useRef(0);
-  const activePulse = useRef(new Animated.Value(1)).current;
   const didInitialScrollRef = useRef(false);
   const initialScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -3647,6 +3529,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // resume, tool calls read as plain steps (HostedStep), and the approvals it
   // waits on sit at the foot of the transcript with the actual draft.
   const hosted = isHostedAgentType(conversation?.agent_type);
+  const familyLook = useActiveLook() === 'family';
   // The registry decides what a mode shows on any conversation (a local
   // session opened in assistant mode too); `hosted` adds what a hosted
   // conversation never has. Internals: restart, resume, folding, token counts.
@@ -3654,6 +3537,25 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const diffShown = diffSurface && !hosted;
   const approvals = useConversationApprovals(String(conversation?._id ?? id));
   const hostedApprovals = hosted ? approvals : NO_APPROVALS;
+  // The family look's jump arrows are solid sheet discs, as its other
+  // controls are: the developer's ghost disc reads as a smudge over the
+  // reading face.
+  const { c: hostedColors } = useHostedTheme();
+  const jumpFamily = { backgroundColor: hostedColors.sheet, opacity: 1, borderColor: hostedColors.lineStrong, shadowOpacity: 0.08, shadowRadius: 6 };
+  // Where the parked approval stands, read from the transcript and the
+  // decision rows (lib/hostedApproval), as the web reads it: once answered,
+  // the card's place holds "You said yes. On it…" until the turn moves on;
+  // before its row lands, a quiet "Getting the card ready…".
+  const hostedApprovalAt = useInboxStore((st): HostedApprovalState => {
+    if (!hosted) return 'none';
+    const key = String(conversation?._id ?? id);
+    return hostedApprovalState(st.messages[key] as any, Object.values(st.sessionDecisions) as any[], key);
+  });
+  const parkedStatus = useManagedSessionFields(String(conversation?._id ?? id))?.agent_status === 'permission_blocked';
+  const settledAnswer = hostedApprovals.length === 0 ? hostedApprovalAnswer(hostedApprovalAt) : null;
+  const hostedTurnRunning = useConversationWorking(String(conversation?._id ?? id)) && hosted;
+  const linkDown = useLinkDown();
+  const cardPending = hostedApprovals.length === 0 && hostedApprovalAt === 'pending' && parkedStatus;
   // A failed send tries again through the store's one retry rule
   // (retryPendingSend, which the web's failed bubble uses too, and which also
   // covers a conversation whose create never landed). This screen only
@@ -3763,6 +3665,48 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [conversation?.messages, commits, pullRequests]);
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
+  // Each run of tool calls folds to one row the person opens by tapping; a
+  // hosted conversation already tells its steps in its own words.
+  const toolRuns = useMemo(() => hosted ? new Map<string, ToolRun>() : foldToolRuns(allMessages, isToolResultCarrier), [allMessages, hosted]);
+  const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(() => new Set());
+  // When a run was last opened, so the calls it shows fade in then and not on a later remount.
+  const runOpenedAt = useRef(new Map<string, number>());
+  const toggleRun = useCallback((head: string) => setOpenRuns(prev => {
+    const next = new Set(prev);
+    if (!next.delete(head)) {
+      next.add(head);
+      runOpenedAt.current.set(head, Date.now());
+    }
+    return next;
+  }), []);
+
+  // Row keys survive the optimistic-to-server handoff (web's messageRowKey), so
+  // a sent bubble keeps its cell and never animates twice.
+  const rowKeysOldestFirst = useMemo(() => uniqueRowKeys(allMessages.map(messageRowKey)), [allMessages]);
+  const rowKeys = useMemo(() => [...rowKeysOldestFirst].reverse(), [rowKeysOldestFirst]);
+  // Only rows that just arrived animate in (lib/freshRows). Updated as the
+  // keys change, before the rows below read it in this same render.
+  const freshRows = useMemo(() => new FreshRows(), [id]);
+  useMemo(() => freshRows.update(rowKeysOldestFirst, Date.now()), [freshRows, rowKeysOldestFirst]);
+  const rowEntering = (item: Message, key: string) => {
+    const now = Date.now();
+    console.log('[motion]', key, freshRows.isFresh(key, now));
+    if (freshRows.isFresh(key, now)) return item.role === 'user' ? sendEntering : arriveEntering;
+    const run = toolRuns.get(item._id);
+    if (run && run.head !== item._id && now - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS) return RUN_CALLS_ENTERING;
+    return undefined;
+  };
+  // A hosted turn that failed and was tried again reads as one turn, as on
+  // the web: the earlier notices and the repeated request fold away and the
+  // shown notice counts the attempts (lib/hostedNotice foldHostedRetries).
+  const retryFold = useMemo(() => {
+    if (!hosted) return null;
+    const rows = allMessages.map((m) => ({
+      ...m,
+      person: m.role === 'user' && !isToolResultCarrier(m) && !!m.content && !m.content.trim().startsWith('<') && !parseDecisionAnswer(m.content),
+    }));
+    return { ...foldHostedRetries(rows), personTurns: rows.filter((r) => r.person).length };
+  }, [hosted, allMessages]);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -4253,6 +4197,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const activeStickyId = stickyActive?.id ?? null;
 
   const stickyPrompt = useMemo<StickyPrompt | null>(() => {
+    // Hosted mode has no sticky prompt (surface conversation.stickyPrompt).
+    if (!stickyPromptShown) return null;
     // Mid jump the window is reloading and activeStickyId churns; the claim
     // that the visible output belongs to prompt N is wrong until the target
     // message lands. The pill names the TARGET instead, in its pending form,
@@ -4275,7 +4221,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return { id: row._id, ordinal: row.originalIndex + 1, text: row.display };
     // dismissedStickyVersion stands in for the Set, which mutates in place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
+  }, [stickyPromptShown, userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
 
   const navTicks = useMemo(() => {
     // activeStickyId is always a sticky eligible user message, so it is in
@@ -4443,44 +4389,55 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     })));
   };
 
+  // The "…" sheet (components/session/SessionActionsSheet). Built each render
+  // so an open sheet shows live state (a favorite just toggled, a huddle
+  // someone joined).
+  const [actionsVisible, setActionsVisible] = useState(false);
+  const hasDiff = !!conversation?.git_branch && diffShown;
   const handleMoreActions = useCallback(() => {
-    const items: SheetItem[] = [];
-    if (huddle.enabled && huddle.inRoom > 0) items.push({ label: `Join Huddle (${huddle.inRoom})`, onPress: huddle.press });
-    items.push({ label: 'Search', onPress: () => setSearchVisible(v => !v) });
-    items.push({ label: 'Share', onPress: handleShareConversation });
-    items.push({ label: 'Copy', onPress: handleCopyMenu });
-    // git_diff lives off the conversation doc now and is fetched lazily on
-    // expand; surface "View Diff" whenever there's a branch (panel stays empty
-    // if there turns out to be no diff).
-    if (conversation?.git_branch && diffShown) {
-      setDiffWanted(true);
-      items.push({ label: diffExpanded ? 'Hide Diff' : 'View Diff', onPress: () => setDiffExpanded(d => !d) });
-    }
-    if (allSessionImages.length > 0) {
-      items.push({ label: `Images (${allSessionImages.length})`, onPress: () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); } });
-    }
-    if (boardHref) items.push({ label: 'Open Board', onPress: () => router.push(boardHref as never) });
-    if (huddle.enabled && huddle.inRoom === 0 && !huddle.pressDisabled) items.push({ label: 'Start Huddle', onPress: huddle.press });
-    items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
-    if (moveVerbs.includes('switch')) items.push({ label: 'Switch Agent…', onPress: () => pickAgentFor('switch') });
-    items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
-    if (conversation && isConvexId(conversation._id) && internals) {
-      items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
-    }
-    const rare: SheetItem[] = [];
-    if (hasForkFamily) rare.push({ label: 'Fork Tree', onPress: () => setTreeModalVisible(true) });
-    if (moveVerbs.includes('fork') && conversation && isConvexId(conversation._id)) rare.push({ label: 'Fork as…', onPress: () => pickAgentFor('fork') });
-    // Folding every message to a line is a way to skim a long agent run; a
-    // hosted conversation is short prose with nothing to fold.
-    if (internals) rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
-    if (conversation?.session_id && internals) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
-    if (rare.length > 0) items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
+    Keyboard.dismiss();
+    // git_diff lives off the conversation doc and is fetched lazily; asking
+    // for it now has it ready by the time View Diff is tapped (the panel
+    // stays empty if there turns out to be no diff).
+    if (hasDiff) setDiffWanted(true);
+    setActionsVisible(true);
+  }, [hasDiff]);
+  const isRealConversation = !!conversation && isConvexId(conversation._id);
+  const actionTiles: SessionTile[] = [
+    ...(allSessionImages.length > 0 ? [{ key: 'images', label: 'Images', icon: 'image' as const, count: allSessionImages.length, onPress: () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); } }] : []),
+    { key: 'search', label: 'Search', icon: 'search', onPress: () => setSearchVisible(v => !v) },
+    { key: 'share', label: 'Share', icon: 'share', onPress: handleShareConversation },
+    { key: 'copy', label: 'Copy', icon: 'copy', onPress: handleCopyMenu },
+    ...(huddle.enabled && (huddle.inRoom > 0 || !huddle.pressDisabled)
+      ? [{ key: 'huddle', label: huddle.inRoom > 0 ? 'Join' : 'Huddle', icon: 'headphones' as const, count: huddle.inRoom || undefined, live: huddle.inRoom > 0, onPress: huddle.press }]
+      : []),
+  ];
+  const actionGroups: SessionRow[][] = [
+    [
+      { key: 'rename', label: 'Rename', icon: 'edit-3', onPress: () => setRenameVisible(true) },
+      { key: 'favorite', label: 'Favorite', icon: 'star', on: !!conversation?.is_favorite, onPress: handleToggleFavorite },
+      ...(moveVerbs.includes('switch') ? [{ key: 'switch', label: 'Switch agent', icon: 'repeat' as const, value: conversation ? agentDisplayName(conversation.agent_type) : undefined, onPress: () => pickAgentFor('switch') }] : []),
+      ...(moveVerbs.includes('fork') && isRealConversation ? [{ key: 'fork', label: 'Fork as…', icon: 'git-branch' as const, onPress: () => pickAgentFor('fork') }] : []),
+    ],
+    [
+      ...(hasDiff ? [{ key: 'diff', label: diffExpanded ? 'Hide diff' : 'View diff', icon: 'git-commit' as const, onPress: () => setDiffExpanded(d => !d) }] : []),
+      ...(boardHref ? [{ key: 'board', label: 'Open board', icon: 'layout' as const, onPress: () => router.push(boardHref as never) }] : []),
+      ...(hasForkFamily ? [{ key: 'tree', label: 'Fork tree', icon: 'git-merge' as const, onPress: () => setTreeModalVisible(true) }] : []),
+      // Folding every message to a line is a way to skim a long agent run; a
+      // hosted conversation is short prose with nothing to fold.
+      ...(internals ? [{ key: 'collapse', label: 'Collapse messages', icon: 'minimize-2' as const, on: collapsed, onPress: () => setCollapsed(c => !c) }] : []),
+    ],
+    [
+      ...(isRealConversation && internals ? [{ key: 'restart', label: isRestarting ? 'Restarting…' : 'Restart session', icon: 'rotate-cw' as const, onPress: () => { if (!isRestarting) restartSession(); } }] : []),
+      ...(conversation?.session_id && internals ? [{ key: 'resume', label: 'Copy resume command', icon: 'terminal' as const, onPress: handleCopyResume }] : []),
+    ],
     // The inbox row's own action under the inbox row's own name. Setting a
     // conversation aside is undone from the list, so in hosted words it is
     // not drawn as a delete.
-    items.push(hosted ? { label: words.stash, onPress: handleDismiss } : { label: 'Dismiss', destructive: true, onPress: handleDismiss });
-    showActionSheet(undefined, items);
-  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting, hosted, internals, diffShown, words]);
+    [hosted
+      ? { key: 'dismiss', label: words.stash, icon: 'archive', onPress: handleDismiss }
+      : { key: 'dismiss', label: 'Dismiss', icon: 'x-circle', destructive: true, onPress: handleDismiss }],
+  ];
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4664,6 +4621,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
     const distanceFromTop = scrollHeight - offset - clientHeight;
     setIsNearTop(distanceFromTop < 96);
+    setHasAbove(distanceFromTop > 4);
 
     const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
     scrollProgressAnim.setValue(progress);
@@ -4706,19 +4664,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     }
   }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
 
-  useEffect(() => {
-    if (isActive) {
-      const pulse = Animated.loop(
-        Animated.sequence([
-          Animated.timing(activePulse, { toValue: MOBILE_PULSE.live.low, duration: MOBILE_PULSE.live.leg, useNativeDriver: true }),
-          Animated.timing(activePulse, { toValue: 1, duration: MOBILE_PULSE.live.leg, useNativeDriver: true }),
-        ])
-      );
-      pulse.start();
-      return () => pulse.stop();
-    }
-  }, [isActive]);
-
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
@@ -4726,24 +4671,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         <SessionHeaderBar inFlow>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
         </SessionHeaderBar>
-        <RNView style={styles.skeletonContainer}>
-          <RNView style={styles.skeletonHeader}>
-            <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
-            <RNView style={[styles.skeletonBlock, { width: '30%', height: 12, marginTop: 8 }]} />
-          </RNView>
-          {[1, 2, 3].map(i => (
-            <RNView key={i} style={styles.skeletonMessage}>
-              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <RNView style={[styles.skeletonBlock, { width: 18, height: 18, borderRadius: 9 }]} />
-                <RNView style={[styles.skeletonBlock, { width: 60, height: 12 }]} />
-                <RNView style={[styles.skeletonBlock, { width: 40, height: 10 }]} />
-              </RNView>
-              <RNView style={[styles.skeletonBlock, { width: '90%', height: 12, marginBottom: 6 }]} />
-              <RNView style={[styles.skeletonBlock, { width: '70%', height: 12, marginBottom: 6 }]} />
-              <RNView style={[styles.skeletonBlock, { width: '50%', height: 12 }]} />
-            </RNView>
-          ))}
-        </RNView>
+        <ConversationSkeleton />
       </RNView>
     );
   }
@@ -4751,10 +4679,274 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   if (!conversation) {
     return (
       <RNView style={styles.errorContainer}>
+        {/* The one state with no title bar of its own: the nav header's back. */}
+        <Stack.Screen options={{ headerShown: true }} />
         <RNText style={styles.errorText}>Conversation not found</RNText>
       </RNView>
     );
   }
+
+  // One transcript row, as the list draws it; null for rows that never show.
+  const renderRow = (item: Message, index: number): ReactNode => {
+    if (item.content) item = { ...item, content: stripPastedContent(item.content) };
+    // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
+    const originalIndex = invertedMessages.length - 1 - index;
+    let prevNonToolResult: Message | null = null;
+    for (let i = originalIndex - 1; i >= 0; i--) {
+      const prev = allMessages[i];
+      if (isToolResultCarrier(prev)) continue;
+      if (prev.role === 'user' && prev.content && isCommandMessage(prev.content)) continue;
+      prevNonToolResult = prev;
+      break;
+    }
+    const showHeader = !prevNonToolResult || prevNonToolResult.role !== item.role;
+    // A person's direct send (<user-message from="Name">) is that person's
+    // own bubble: unwrap the body and name them — web's direct_user kind.
+    const directUser = item.role === 'user' ? parseUserMessage(item.content) : null;
+
+    // Hide standalone tool result messages (they're shown inline with tool calls)
+    if (isToolResultCarrier(item)) {
+      return null;
+    }
+    if (retryFold?.hidden.has(item._id)) return null;
+
+    // A hosted turn's stop notice: one calm block with its move, and
+    // only the last row's notice offers one (components/hosted/Notice).
+    const notice = hosted && item.role === 'assistant' ? hostedNoticeKind(item) : null;
+    if (notice) {
+      return (
+        <HostedNoticeRow
+          kind={notice}
+          content={item.content || ''}
+          conversationId={String(conversation._id)}
+          retryText={lastAskOf(allMessages.slice(0, originalIndex))}
+          live={originalIndex === allMessages.length - 1}
+          retries={(retryFold?.attempts.get(item._id) ?? 1) - 1}
+        />
+      );
+    }
+
+    // An approval's answer in a hosted conversation: a quiet note
+    // where the card was, not a message bubble, and nothing when the
+    // step already says it (lane.ts answerNote). A failed one stays
+    // a bubble below, which says it failed.
+    if (hosted && item.role === 'user' && !item._isFailed) {
+      const answer = parseDecisionAnswer(item.content)?.answer;
+      const note = answerNote(answer);
+      if (answer && !note) return null;
+      if (note) {
+        return (
+          <RNView style={{ alignSelf: 'center', marginVertical: 6, paddingVertical: 4, paddingHorizontal: 12, borderRadius: 999, backgroundColor: Theme.bgHighlight }}>
+            <RNText style={{ fontSize: 12, color: Theme.textMuted }}>{note}</RNText>
+          </RNView>
+        );
+      }
+    }
+
+    // Detect plan content in user messages (like web)
+    if (item.role === 'user' && item.content) {
+      const planContent = extractPlanContent(item.content);
+      if (planContent) {
+        return <PlanBlock content={planContent} timestamp={item.timestamp} />;
+      }
+      if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
+        return <CompactionSummaryBlock content={item.content} />;
+      }
+    }
+
+    // Machine-delivered turns (cast send, cast trigger) render as
+    // dedicated cards, not user bubbles of raw XML — mirrors web's
+    // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
+    if (item.role === 'user' && item.content) {
+      // A session moving between its role and the person
+      // (org-roles-run-work.md R1, revised): the same inline divider
+      // the web draws, in both threads: the role's face, the move,
+      // the whole line as markdown, the time.
+      if (isSessionEscalationMessage(item.content)) {
+        const esc = parseSessionEscalation(item.content);
+        if (esc) {
+          const inChild = (conversation?.short_id ?? String(id).slice(0, 7)) === esc.session.short_id;
+          const caption = sessionEscalationCaption(esc, { inChild });
+          return (
+            <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
+              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
+                <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
+                <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+              </RNView>
+              {!!esc.line && (
+                <RNView style={{ marginTop: 8, borderWidth: 1, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
+                  <MarkdownContent text={esc.line} baseStyle={styles.teammateContent} isUser={false} />
+                </RNView>
+              )}
+            </RNView>
+          );
+        }
+      }
+      if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
+        const parsed = parseAgentSwitchNotice(item.content);
+        const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
+        return (
+          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
+            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+            <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
+            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+          </RNView>
+        );
+      }
+      if (isMachineSwitchNotice(item.content) || item.subtype === 'machine_switch') {
+        const parsed = parseMachineSwitchNotice(item.content);
+        const label = parsed?.machineChanged === false
+          ? 'moved to another directory'
+          : parsed ? `now running on ${parsed.toLabel}` : 'machine switched';
+        return (
+          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
+            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+            <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
+            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+          </RNView>
+        );
+      }
+      const sessionMsg = parseInboundSessionMessage(item.content);
+      if (sessionMsg) {
+        // A huddle digest rides the session-message rail: show the
+        // summary under the call's title, never the wire tag.
+        const huddle = parseHuddleSummaryTag(sessionMsg.body);
+        if (huddle) {
+          return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
+        }
+        return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
+      }
+      if (isSessionMessage(item.content)) {
+        const authored = parseAgentAuthoredMessage(item.content);
+        if (authored) {
+          const huddle = parseHuddleSummaryTag(authored.body);
+          if (huddle) {
+            return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
+          }
+          return <SessionMessageBlock from={authored.from} body={authored.body} timestamp={item.timestamp} />;
+        }
+      }
+      // A subagent reporting back to its parent arrives in the same
+      // shape under its own tag; same rail, chrome that says so.
+      if (isAgentMessage(item.content)) {
+        const report = parseAgentAuthoredMessage(item.content);
+        if (report) {
+          return <SessionMessageBlock variant="agent" from={report.from} body={report.body} timestamp={item.timestamp} />;
+        }
+      }
+      const unwrappedReport = parseUnwrappedSessionReport(item.content);
+      if (unwrappedReport) {
+        return <SessionMessageBlock from={unwrappedReport.from} name={unwrappedReport.name} body={unwrappedReport.body} timestamp={item.timestamp} />;
+      }
+      if (isScheduledTaskMessage(item.content)) {
+        return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
+      }
+      const chatWake = parseChatWakePrompt(item.content);
+      if (chatWake) {
+        return <ChatWakeBlock wake={chatWake} timestamp={item.timestamp} />;
+      }
+    }
+
+    if (item.role === 'user' && item.content && isTaskNotification(item.content)) {
+      const stripped = item.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
+      if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) {
+        return <TaskNotificationLine content={item.content} timestamp={item.timestamp} childConversationMap={conversation.child_conversation_map} />;
+      }
+    }
+
+    if (item.role === 'user' && item.content) {
+      const t = item.content.trim();
+      if (t.includes('Your task is to create a detailed summary') ||
+          t.startsWith('Read the output file to retrieve the result:') ||
+          t.startsWith('Full transcript available at:')) {
+        return null;
+      }
+    }
+
+    const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
+    const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
+    const isHighlighted = highlightedMessageId === item._id;
+    // Local-first: an optimistic bubble is the message. Web only labels
+    // queued/stuck after a grace; a "Sending" chip made a landed send
+    // look like it was still waiting. Queued (agent busy/offline) and
+    // failed stay labeled because those are the states that need a verb.
+    const isQueued = !!item._isQueued;
+    const isFailed = item._isFailed;
+    const isPending = item._isOptimistic || isQueued;
+    const run = toolRuns.get(item._id);
+    return (
+      <RNView style={[
+        isSearchDimmed ? { opacity: 0.25 } : undefined,
+        (isCurrentSearchMatch || isHighlighted) && styles.searchHighlight,
+        shareSelectionMode && { paddingLeft: 28 },
+        isFailed ? { opacity: 0.55 } : isPending ? { opacity: 0.8 } : undefined,
+      ]}>
+        {shareSelectionMode && (
+          <Pressable
+            onPress={() => handleToggleMessageSelection(item._id)}
+            style={styles.selectionCheckbox}
+          >
+            <FontAwesome
+              name={selectedMessageIds.has(item._id) ? "check-square" : "square-o"}
+              size={16}
+              color={selectedMessageIds.has(item._id) ? Theme.cyan : Theme.textDim}
+            />
+          </Pressable>
+        )}
+        <MessageBubble
+          message={directUser ? { ...item, content: directUser.body } : item}
+          agentType={conversation.agent_type}
+          model={conversation.model}
+          showHeader={showHeader}
+          forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
+          conversationId={conversation._id}
+          onFork={agentSupportsFork(conversation.agent_type) ? handleForkFromMessage : undefined}
+          taskSubjectMap={taskSubjectMap}
+          globalToolResultMap={globalToolResultMap}
+          globalImageMap={globalImageMap}
+          openGallery={openGallery}
+          userName={directUser?.from || conversation.user?.name || conversation.user?.email?.split('@')[0]}
+          sender={directUser?.from}
+          showToast={showToast}
+          collapsed={collapsed}
+          childConversationMap={conversation.child_conversation_map}
+          bookmarkedSet={bookmarkedSet}
+          toolRun={run ? { run, expanded: openRuns.has(run.head) || (!!highlightedMessageId && run.members.includes(highlightedMessageId)), justOpened: Date.now() - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS, onToggle: () => toggleRun(run.head) } : undefined}
+      />
+        {hosted && item.role === 'assistant' && originalIndex === allMessages.length - 1 ? (
+          <RNView style={{ paddingHorizontal: 16 }}>
+            <ReplyChips
+              conversationId={String(conversation._id)}
+              reply={item.content}
+              asked={lastAskOf(allMessages.slice(0, originalIndex))}
+              personTurns={retryFold?.personTurns ?? 0}
+              working={hostedTurnRunning}
+            />
+          </RNView>
+        ) : null}
+        {isQueued && (
+          <RNView style={styles.pendingStatusRow}>
+            <RNText style={styles.pendingStatusText}>{hosted && linkDown ? hostedConnectionWords(linkDown, true) : 'Queued'}</RNText>
+          </RNView>
+        )}
+        {isFailed && (
+          <RNView style={styles.pendingStatusRow}>
+            <FontAwesome name="exclamation-circle" size={11} color={Theme.red} />
+            <RNText style={[styles.pendingStatusText, { color: Theme.red }]}>
+              Failed to send
+            </RNText>
+            {item._clientId ? (
+              <Pressable onPress={() => retryFailedSend(item._clientId!, item.content ?? '')} hitSlop={8} accessibilityRole="button">
+                <RNText style={[styles.pendingStatusText, { color: hosted ? Theme.text : Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
+              </Pressable>
+            ) : null}
+          </RNView>
+        )}
+      </RNView>
+    );
+  };
 
   return (
     <>
@@ -4782,12 +4974,16 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             style={styles.headerFace}
             badge={conversation.agent_type ? <AgentLogoSvg agentType={conversation.agent_type} size={10} /> : undefined}
           />
-          {/* Tap the title to rename (the web's inline title edit). */}
+          {/* Tap the title bar to go to the top of the conversation, as on
+              any iOS nav bar (the status bar's tap lands on the newest
+              message in this inverted list). Hold to rename; More has it too. */}
           <Pressable
             style={styles.headerTitlePress}
-            onPress={() => setRenameVisible(true)}
+            onPress={handleJumpToStart}
+            onLongPress={() => setRenameVisible(true)}
             accessibilityRole="button"
-            accessibilityLabel="Rename"
+            accessibilityLabel="Go to top"
+            accessibilityHint="Hold to rename"
           >
             <MobileSessionIdentityLine
               row={identityRow}
@@ -4796,18 +4992,24 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               maxFontSizeMultiplier={CHROME_FONT_CAP}
             />
           </Pressable>
-          {/* Two actions at most: the prompt list and More. Huddle, images and
-              the board live in More, where a live huddle is listed first. */}
+          {/* The prompt list, More, and the compose pencil that starts the
+              next session from here. Huddle, images and the board live in
+              More, where a live huddle is listed first. */}
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
-          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6} accessibilityLabel="More actions">
+          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }} activeOpacity={0.6} accessibilityLabel="More actions">
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
             {huddle.enabled && huddle.inRoom > 0 && <RNView style={styles.moreLiveDot} />}
           </TouchableOpacity>
+          <ComposeButton size={18} />
         </SessionHeaderBar>
+        {/* A hosted conversation in hosted mode is named by its title alone,
+            as on the web: the strip would only repeat "Codecast assistant"
+            and a time, so it folds to nothing (its layout reports 0 and the
+            list starts under the title bar). */}
         <Animated.View
-          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }]}
+          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }, hosted && !internalsShown && styles.foldedStrip]}
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
@@ -4817,19 +5019,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.sessionMeta}
               >
+                {/* Every chip wears one quiet shell; only its icon carries color. */}
                 {conversation.agent_type && (
-                  <RNView style={styles.metaBadgeIcon}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={13} />
-                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+                  <RNView style={styles.metaChip}>
+                    <AgentLogoSvg agentType={conversation.agent_type} size={11} />
+                    <RNText style={styles.metaChipText} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                       {formatAgentType(conversation.agent_type)}
                     </RNText>
                   </RNView>
-                )}
-                {activityAt > 0 && (
-                  <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
-                )}
-                {isActive && (
-                  <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
                 {modelPicker && !hosted ? (
                   <ModelSwitcherChip
@@ -4853,18 +5050,18 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                         }
                       }
                     }}
-                    style={[styles.metaChip, chipTint(Theme.green)]}
+                    style={styles.metaChip}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.green} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
                 {chipsExpanded ? (
                   <>
                     {(conversation.fork_count ?? 0) > 0 && (
-                      <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, chipTint(Theme.violet)]}>
+                      <Pressable onPress={() => setTreeModalVisible(true)} style={styles.metaChip}>
                         <FontAwesome name="code-fork" size={10} color={Theme.violet} />
-                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>{conversation.fork_count}</RNText>
                       </Pressable>
                     )}
                     {!hosted && (
@@ -4875,9 +5072,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                       />
                     )}
                     {latestUsage && internals && (
-                      <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
+                      <RNView style={styles.metaChip}>
                         <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
-                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>
                           {Math.round((latestUsage.contextSize / 200000) * 100)}%
                         </RNText>
                       </RNView>
@@ -4885,10 +5082,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     {conversation.parent_conversation_id && (
                       <Pressable
                         onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                        style={[styles.metaChip, chipTint(Theme.violet)]}
+                        style={styles.metaChip}
                       >
                         <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>Parent</RNText>
                       </Pressable>
                     )}
                     {conversation.forked_from_details && (
@@ -4901,20 +5098,20 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                             router.push(`/session/${details.conversation_id}`);
                           }
                         }}
-                        style={[styles.metaChip, chipTint(Theme.cyan)]}
+                        style={styles.metaChip}
                       >
                         <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
-                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>@{conversation.forked_from_details.username}</RNText>
                       </Pressable>
                     )}
                   </>
                 ) : extraChipCount > 0 && (
                   <Pressable
                     onPress={() => setChipsExpanded(true)}
-                    style={[styles.metaChip, chipTint(Theme.textDim)]}
+                    style={styles.metaChip}
                     accessibilityLabel={`Show ${extraChipCount} more details`}
                   >
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>+{extraChipCount}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>+{extraChipCount}</RNText>
                   </Pressable>
                 )}
               </ScrollView>
@@ -4999,8 +5196,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         {/* The wrap carries the far jump dim (listOpacity): the overlays and
             the tick rail stay at full opacity while the stale frame fades. */}
         <Animated.View style={{ flex: 1, opacity: listOpacity }}>
-        <FlatList
+        <Reanimated.FlatList
           ref={flatListRef}
+          itemLayoutAnimation={ROW_LAYOUT}
           style={{ flex: 1 }}
           data={invertedMessages}
           inverted={true}
@@ -5014,12 +5212,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           }}
           onContentSizeChange={(_w, h) => {
             lastContentHeightRef.current = h;
+            setHasAbove(h - lastScrollYRef.current - flatListLayoutHeightRef.current > 4);
           }}
           // The list is inverted, so its header is the foot of the transcript:
           // what a hosted conversation waits on the person for.
-          ListHeaderComponent={hostedApprovals.length > 0 ? (
+          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending ? (
             <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
+              {settledAnswer ? <ApprovalSettled label={settledAnswer} /> : cardPending ? <ApprovalPending /> : null}
             </RNView>
           ) : null}
           ListFooterComponent={
@@ -5065,239 +5265,18 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             </>
           }
           renderItem={({ item, index }) => {
-            if (item.content) item = { ...item, content: stripPastedContent(item.content) };
-            // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
-            const originalIndex = invertedMessages.length - 1 - index;
-            let prevNonToolResult: Message | null = null;
-            for (let i = originalIndex - 1; i >= 0; i--) {
-              const prev = allMessages[i];
-              if (isToolResultCarrier(prev)) continue;
-              if (prev.role === 'user' && prev.content && isCommandMessage(prev.content)) continue;
-              prevNonToolResult = prev;
-              break;
-            }
-            const showHeader = !prevNonToolResult || prevNonToolResult.role !== item.role;
-            // A person's direct send (<user-message from="Name">) is that person's
-            // own bubble: unwrap the body and name them — web's direct_user kind.
-            const directUser = item.role === 'user' ? parseUserMessage(item.content) : null;
-
-            // Hide standalone tool result messages (they're shown inline with tool calls)
-            if (isToolResultCarrier(item)) {
-              return null;
-            }
-
-            // An approval's answer in a hosted conversation: a quiet note
-            // where the card was, not a message bubble, and nothing when the
-            // step already says it (lane.ts answerNote). A failed one stays
-            // a bubble below, which says it failed.
-            if (hosted && item.role === 'user' && !item._isFailed) {
-              const answer = parseDecisionAnswer(item.content)?.answer;
-              const note = answerNote(answer);
-              if (answer && !note) return null;
-              if (note) {
-                return (
-                  <RNView style={{ alignSelf: 'center', marginVertical: 6, paddingVertical: 4, paddingHorizontal: 12, borderRadius: 999, backgroundColor: Theme.bgHighlight }}>
-                    <RNText style={{ fontSize: 12, color: Theme.textMuted }}>{note}</RNText>
-                  </RNView>
-                );
-              }
-            }
-
-            // Detect plan content in user messages (like web)
-            if (item.role === 'user' && item.content) {
-              const planContent = extractPlanContent(item.content);
-              if (planContent) {
-                return <PlanBlock content={planContent} timestamp={item.timestamp} />;
-              }
-              if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
-                return <CompactionSummaryBlock content={item.content} />;
-              }
-            }
-
-            // Machine-delivered turns (cast send, cast trigger) render as
-            // dedicated cards, not user bubbles of raw XML — mirrors web's
-            // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
-            if (item.role === 'user' && item.content) {
-              // A session moving between its role and the person
-              // (org-roles-run-work.md R1, revised): the same inline divider
-              // the web draws, in both threads: the role's face, the move,
-              // the whole line as markdown, the time.
-              if (isSessionEscalationMessage(item.content)) {
-                const esc = parseSessionEscalation(item.content);
-                if (esc) {
-                  const inChild = (conversation?.short_id ?? String(id).slice(0, 7)) === esc.session.short_id;
-                  const caption = sessionEscalationCaption(esc, { inChild });
-                  return (
-                    <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
-                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                        <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
-                        <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
-                        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                      </RNView>
-                      {!!esc.line && (
-                        <RNView style={{ marginTop: 8, borderWidth: 1, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
-                          <MarkdownContent text={esc.line} baseStyle={styles.teammateContent} isUser={false} />
-                        </RNView>
-                      )}
-                    </RNView>
-                  );
-                }
-              }
-              if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
-                const parsed = parseAgentSwitchNotice(item.content);
-                const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
-                return (
-                  <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
-                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                    <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
-                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                  </RNView>
-                );
-              }
-              if (isMachineSwitchNotice(item.content) || item.subtype === 'machine_switch') {
-                const parsed = parseMachineSwitchNotice(item.content);
-                const label = parsed?.machineChanged === false
-                  ? 'moved to another directory'
-                  : parsed ? `now running on ${parsed.toLabel}` : 'machine switched';
-                return (
-                  <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
-                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                    <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
-                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                  </RNView>
-                );
-              }
-              const sessionMsg = parseInboundSessionMessage(item.content);
-              if (sessionMsg) {
-                // A huddle digest rides the session-message rail: show the
-                // summary under the call's title, never the wire tag.
-                const huddle = parseHuddleSummaryTag(sessionMsg.body);
-                if (huddle) {
-                  return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
-                }
-                return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
-              }
-              if (isSessionMessage(item.content)) {
-                const authored = parseAgentAuthoredMessage(item.content);
-                if (authored) {
-                  const huddle = parseHuddleSummaryTag(authored.body);
-                  if (huddle) {
-                    return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
-                  }
-                  return <SessionMessageBlock from={authored.from} body={authored.body} timestamp={item.timestamp} />;
-                }
-              }
-              // A subagent reporting back to its parent arrives in the same
-              // shape under its own tag; same rail, chrome that says so.
-              if (isAgentMessage(item.content)) {
-                const report = parseAgentAuthoredMessage(item.content);
-                if (report) {
-                  return <SessionMessageBlock variant="agent" from={report.from} body={report.body} timestamp={item.timestamp} />;
-                }
-              }
-              const unwrappedReport = parseUnwrappedSessionReport(item.content);
-              if (unwrappedReport) {
-                return <SessionMessageBlock from={unwrappedReport.from} name={unwrappedReport.name} body={unwrappedReport.body} timestamp={item.timestamp} />;
-              }
-              if (isScheduledTaskMessage(item.content)) {
-                return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
-              }
-              const chatWake = parseChatWakePrompt(item.content);
-              if (chatWake) {
-                return <ChatWakeBlock wake={chatWake} timestamp={item.timestamp} />;
-              }
-            }
-
-            if (item.role === 'user' && item.content && isTaskNotification(item.content)) {
-              const stripped = item.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
-              if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) {
-                return <TaskNotificationLine content={item.content} timestamp={item.timestamp} childConversationMap={conversation.child_conversation_map} />;
-              }
-            }
-
-            if (item.role === 'user' && item.content) {
-              const t = item.content.trim();
-              if (t.includes('Your task is to create a detailed summary') ||
-                  t.startsWith('Read the output file to retrieve the result:') ||
-                  t.startsWith('Full transcript available at:')) {
-                return null;
-              }
-            }
-
-            const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
-            const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
-            const isHighlighted = highlightedMessageId === item._id;
-            // Local-first: an optimistic bubble is the message. Web only labels
-            // queued/stuck after a grace; a "Sending" chip made a landed send
-            // look like it was still waiting. Queued (agent busy/offline) and
-            // failed stay labeled because those are the states that need a verb.
-            const isQueued = !!item._isQueued;
-            const isFailed = item._isFailed;
-            const isPending = item._isOptimistic || isQueued;
-            return (
-              <RNView style={[
-                isSearchDimmed ? { opacity: 0.25 } : undefined,
-                (isCurrentSearchMatch || isHighlighted) && styles.searchHighlight,
-                shareSelectionMode && { paddingLeft: 28 },
-                isFailed ? { opacity: 0.55 } : isPending ? { opacity: 0.8 } : undefined,
-              ]}>
-                {shareSelectionMode && (
-                  <Pressable
-                    onPress={() => handleToggleMessageSelection(item._id)}
-                    style={styles.selectionCheckbox}
-                  >
-                    <FontAwesome
-                      name={selectedMessageIds.has(item._id) ? "check-square" : "square-o"}
-                      size={16}
-                      color={selectedMessageIds.has(item._id) ? Theme.cyan : Theme.textDim}
-                    />
-                  </Pressable>
-                )}
-                <MessageBubble
-                  message={directUser ? { ...item, content: directUser.body } : item}
-                  agentType={conversation.agent_type}
-                  model={conversation.model}
-                  showHeader={showHeader}
-                  forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
-                  conversationId={conversation._id}
-                  onFork={agentSupportsFork(conversation.agent_type) ? handleForkFromMessage : undefined}
-                  taskSubjectMap={taskSubjectMap}
-                  globalToolResultMap={globalToolResultMap}
-                  globalImageMap={globalImageMap}
-                  openGallery={openGallery}
-                  userName={directUser?.from || conversation.user?.name || conversation.user?.email?.split('@')[0]}
-                  showToast={showToast}
-                  collapsed={collapsed}
-                  childConversationMap={conversation.child_conversation_map}
-                  bookmarkedSet={bookmarkedSet}
-              />
-                {isQueued && (
-                  <RNView style={styles.pendingStatusRow}>
-                    <RNText style={styles.pendingStatusText}>Queued</RNText>
-                  </RNView>
-                )}
-                {isFailed && (
-                  <RNView style={styles.pendingStatusRow}>
-                    <FontAwesome name="exclamation-circle" size={11} color={Theme.red} />
-                    <RNText style={[styles.pendingStatusText, { color: Theme.red }]}>
-                      Failed to send
-                    </RNText>
-                    {item._clientId ? (
-                      <Pressable onPress={() => retryFailedSend(item._clientId!, item.content ?? '')} hitSlop={8} accessibilityRole="button">
-                        <RNText style={[styles.pendingStatusText, { color: Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
-                      </Pressable>
-                    ) : null}
-                  </RNView>
-                )}
-              </RNView>
-            );
+            const row = renderRow(item, index);
+            if (row == null) return null;
+            return <Reanimated.View entering={rowEntering(item, rowKeys[index])}>{row}</Reanimated.View>;
           }}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(_item, index) => rowKeys[index]}
           contentContainerStyle={[
             styles.messageList,
             { paddingBottom: 12 },
-            allMessages.length === 0 && { flex: 1 },
+            // Grow to center the empty state, never pin to the viewport: a list
+            // squeezed by the keyboard and an attachment strip shrank its text
+            // frames until iOS drew half of each line.
+            allMessages.length === 0 && { flexGrow: 1 },
           ]}
           ListEmptyComponent={
             (conversation.message_count ?? 0) > 0 ? (
@@ -5367,6 +5346,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="always"
         />
+        {/* The hosted transcript's top edge, as the web's: a 24px fade under
+            the title once the reading has scrolled past the first line, so
+            lines slide out of view rather than being cut, and the first line
+            is never dimmed. */}
+        {hosted && familyLook && hasAbove && (
+          <LinearGradient
+            colors={[Theme.bg, Theme.bg + '00']}
+            style={{ position: 'absolute', left: 0, right: 0, top: insets.top + HEADER_BAR_HEIGHT, height: 24 }}
+            pointerEvents="none"
+          />
+        )}
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
@@ -5406,17 +5396,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               style={[
                 styles.jumpTopButtonWrap,
                 {
-                  // Overlay lives in the list pane (already below the pinned
-                  // header). Only the collapsing metadata strip still overlays
-                  // this pane, so offset by that, not the header again.
-                  top: floatingHeaderHeight + 4,
+                  // The list pane starts at the screen's top edge, under the
+                  // pinned title bar and the metadata strip (both stack above
+                  // it), so anchor below both, where the sticky pill sits.
+                  top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + 8,
                   transform: [{ translateY: floatingHeaderY }, { translateY: stickyOffsetY }],
                 },
               ]}
             >
               <TouchableOpacity
                 onPress={handleJumpToStart}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to first message"
@@ -5424,7 +5414,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToStart ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-up" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-up" size={18} color={familyLook ? hostedColors.ink2 : Theme.textMuted} />
                 )}
               </TouchableOpacity>
             </Animated.View>
@@ -5433,7 +5423,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             <RNView style={styles.jumpBottomButtonWrap} pointerEvents="box-none">
               <TouchableOpacity
                 onPress={handleJumpToEnd}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to latest message"
@@ -5441,7 +5431,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToEnd ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-down" size={18} color={familyLook ? hostedColors.ink2 : Theme.textMuted} />
                 )}
                 {newMessageCount > 0 && (
                   <RNView style={styles.jumpBadge}>
@@ -5497,6 +5487,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         currentMessageId={activeStickyId}
         onSelect={jumpToMessage}
       />
+      <SessionActionsSheet
+        visible={actionsVisible}
+        onClose={() => setActionsVisible(false)}
+        tiles={actionTiles}
+        groups={actionGroups}
+      />
       <RenameSessionSheet
         conversationId={String(conversation._id)}
         title={conversation.title || ''}
@@ -5523,7 +5519,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         </RNView>
       </Modal>
       <ImageGallery
-        images={allSessionImages}
+        items={allSessionImages}
+        useSrc={useImageSrc}
+        accent={Theme.accent}
         initialIndex={galleryIndex}
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
@@ -5532,7 +5530,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -5562,8 +5560,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   headerIconBtn: S.headerIconBtn,
   headerFace: { marginRight: 8 },
+  // The family look names a conversation in the reading face, as the web's
+  // hosted conversation header does.
   headerTitleText: {
     ...S.headerTitleText,
+    ...(look === 'family' ? { fontFamily: Serif.regular, fontSize: 18, fontWeight: '500' as const } : null),
     color: Theme.text,
   },
   headerTitlePress: {
@@ -5602,22 +5603,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  // Shared shell for every metadata chip (fork, branch, device, usage, links).
-  metaChip: chipShell,
-  metaChipText: chipText,
-  metaBadge: chipText,
-  messageCountText: {
-    ...S.messageCountText,
-    color: Theme.textMuted,
-  },
-  activeDot: {
-    ...S.dot,
-    backgroundColor: Theme.greenBright,
-    shadowColor: Theme.greenBright,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 4,
-  },
+  // Shared shell for every metadata chip (agent, model, branch, device,
+  // usage, links): one neutral outline, so the row reads as one set.
+  metaChip: { ...chipShell, ...chipQuiet(Theme) },
+  metaChipText: { ...chipText, color: Theme.textMuted },
   messageList: S.messageList,
   permissionsContainer: {
     marginBottom: 16,
@@ -5625,9 +5614,12 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   messageBubble: S.messageBubble,
   userBubble: {
     ...S.userBubble,
-    backgroundColor: Theme.userBubble + '26',
-    borderColor: Theme.userBubble + '66',
+    backgroundColor: Theme.userBubble + USER_BUBBLE_ALPHA,
   },
+  userBubbleContent: S.userBubbleContent,
+  userBubbleSender: { ...S.userBubbleSender, color: Theme.textDim },
+  toolRunRow: S.toolRunRow,
+  toolRunText: { ...S.toolRunText, color: Theme.textDim },
   assistantBubble: {
     backgroundColor: 'transparent',
     // Stretch, don't shrink-wrap: a flex-start bubble sizes to its widest
@@ -5638,16 +5630,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   assistantBubbleFirst: S.assistantBubbleFirst,
   bubbleHeader: S.bubbleHeader,
   bubbleRole: S.bubbleRole,
-  userRole: {
-    color: Theme.userBubble,
-  },
   assistantRole: {
     color: Theme.textMuted0,
   },
   bubbleTime: S.bubbleTime,
-  userTime: {
-    color: Theme.textDim,
-  },
   assistantTime: {
     color: Theme.textDim,
   },
@@ -5674,6 +5660,39 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   assistantText: {
     color: Theme.text,
+  },
+  // Hosted voices (MessageBubble bodyStyle): the web's hosted-mode sizes,
+  // 14px for the person, a 17px letter for the reply, 13.5px muted narration.
+  foldedStrip: {
+    height: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    borderBottomWidth: 0,
+    overflow: 'hidden',
+  },
+  hostedUserBubble: {
+    alignSelf: 'stretch',
+    marginTop: 14,
+    marginBottom: 6,
+    paddingTop: 10,
+    backgroundColor: Theme.userBubble,
+    borderRadius: 10,
+  },
+  hostedUserText: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: Theme.text,
+  },
+  hostedReply: {
+    fontFamily: Serif.regular,
+    fontSize: 17,
+    lineHeight: 26,
+    color: Theme.text,
+  },
+  hostedNarration: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: Theme.textMuted,
   },
   thinkingBlock: {
     marginHorizontal: 14,
@@ -5772,6 +5791,17 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 11,
     color: Theme.textDim,
     flex: 1,
+  },
+  interruptLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  interruptLineText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
   commandStatusLine: {
     flexDirection: 'row',
@@ -5916,23 +5946,35 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   previewImage: {
     width: 80,
     height: 80,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
   },
   imageUploadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 8,
+    borderRadius: 10,
     justifyContent: 'center' as const,
     alignItems: 'center' as const,
   },
   removeImageButton: {
     position: 'absolute',
-    top: -8,
-    right: -8,
-    backgroundColor: Theme.bg,
+    top: 5,
+    right: 5,
+    width: 20,
+    height: 20,
     borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
   },
-  imageButton: S.imageButton,
+  imageButton: {
+    ...S.imageButton,
+    borderRadius: 16,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
   // One rounded card: full-width input on top, action row underneath. Buttons
   // living below the text (not beside it) is what gives the input the whole
   // screen width, matching the web/reference composer.
@@ -5999,13 +6041,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   sendButton: {
     ...S.sendButton,
-    backgroundColor: Theme.blue,
+    minWidth: 32,
+    height: 32,
+    borderRadius: 16,
+    paddingLeft: 9,
+    paddingRight: 9,
+    backgroundColor: mixColor(Theme.blue, 80, Theme.text),
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
   },
   stopButton: {
-    backgroundColor: Theme.red,
+    backgroundColor: mixColor(Theme.red, 80, Theme.text),
   },
   // Workflow event anchors
   wfStartedRow: {
@@ -6457,45 +6504,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderBottomLeftRadius: 8,
     borderBottomRightRadius: 8,
   },
-  galleryCounter: {
-    position: 'absolute',
-    top: 64,
-    left: 0,
-    right: 0,
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 13,
-    fontWeight: '500',
-    zIndex: 10,
-  },
-  galleryThumbStrip: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 10,
-  },
-  galleryThumbStripContent: {
-    paddingHorizontal: 12,
-    gap: 6,
-    alignItems: 'center',
-    flexGrow: 1,
-    justifyContent: 'center',
-  },
-  galleryThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-  },
-  galleryThumbActive: {
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.9)',
-  },
-  galleryThumbInactive: {
-    opacity: 0.45,
-  },
-  galleryThumbPlaceholder: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
   imageLoading: {
     height: 60,
     justifyContent: 'center',
@@ -6593,17 +6601,16 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Theme.bgAlt + 'B3',
-    opacity: 0.72,
+    backgroundColor: Theme.bgAlt,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight + '99',
+    borderColor: Theme.border,
   },
   // Teammate messages
   teammateMessage: {
@@ -6752,62 +6759,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderRadius: 4,
     padding: 4,
   },
-  fullscreenOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullscreenClose: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  landscapeToggle: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  galleryContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   // Thinking label
-  // User avatar
-  userAvatar: {
-    ...S.userAvatar,
-    backgroundColor: Theme.userBubble + '40',
-  },
-  userAvatarText: {
-    ...S.userAvatarText,
-    color: Theme.userBubble,
-  },
   // Skeleton loading
-  skeletonContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  skeletonHeader: {
-    height: 12,
-    width: '40%',
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 4,
-  },
-  skeletonBlock: {
-    height: 60,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 6,
-  },
-  skeletonMessage: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
   // Jump badge for new messages
   jumpBadge: {
     position: 'absolute',
@@ -6845,10 +6798,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flex: 1,
   },
   emptyState: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
+    paddingVertical: 24,
     gap: 10,
   },
   emptyStateText: {
@@ -6884,7 +6837,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     right: 0,
     height: 80,
   },
-  metaBadgeIcon: S.metaBadgeIcon,
   planFullscreen: {
     flex: 1,
     backgroundColor: Theme.bg,
