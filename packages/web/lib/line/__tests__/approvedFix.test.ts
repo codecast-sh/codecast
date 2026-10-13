@@ -36,11 +36,11 @@ describe("unlandedFix", () => {
     expect(unlandedFix({ status: "open", history: h({ regressed: true }) })).toBeNull();
     expect(unlandedFix({ status: "open", history: h() }, { isTrial: (r) => r === "r1" })).toBeNull();
   });
-  test("as a need: counted, grouped under Approved, not merged, and never the problem band's own", () => {
+  test("as a need: the line's to land, never For you's, and never the problem band's own", () => {
     const n = unlandedNeed({ id: "t1", ref: "ct-57458", title: "Intro email", name: null, projectId: "p", process: "g" }, unlandedFix({ status: "done", history: h() })!);
-    expect(n).toMatchObject({ kind: "unlanded", counted: true, since: NOW - 6 * DAY, approvedBy: "u1", aliases: ["sd-465"] });
-    expect(needCount([n])).toBe(1);
-    expect(needGroups([n]).map((g) => g.label)).toEqual(["Approved, not merged"]);
+    expect(n).toMatchObject({ kind: "unlanded", counted: false, since: NOW - 6 * DAY, approvedBy: "u1", aliases: ["sd-465"] });
+    expect(needCount([n])).toBe(0);
+    expect(needGroups([n])).toEqual([]);
     expect(needOfCase([n], "t1")).toBeNull();
   });
 });

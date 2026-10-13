@@ -381,7 +381,7 @@ function SpaceSwitcher({ space, onPick }: { space: LineSpaceState; onPick: (key:
       </button>
       {open && (
         <div className="lw-pop lw-filter-pop" role="listbox" aria-label="Workspace">
-          <div className="lw-pop-h"><span className="lw-filter-check" /><span className="lw-filter-name">Workspace</span><span>Open</span></div>
+          <div className="lw-pop-h"><span className="lw-filter-check" /><span className="lw-filter-name">Workspace</span><span>Open problems</span></div>
           {space.spaces.map((x) => (
             <button key={x.key} type="button" role="option" aria-selected={x.key === space.key} data-empty={x.open ? undefined : ""} onClick={() => { if (x.key !== space.key) onPick(x.key); setOpen(false); }} data-line-space-option={x.key}>
               <span className="lw-filter-check">{x.key === space.key && <Check className="w-3.5 h-3.5" />}</span>
