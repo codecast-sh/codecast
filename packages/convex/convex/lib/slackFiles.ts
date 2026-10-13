@@ -1,7 +1,7 @@
-// Slack files on mirrored lines. An image the installation's token can read
-// is copied into storage and becomes a chat attachment; anything else becomes
-// a link line, which recoverLinkedFiles turns back into the image once a
-// token can read it.
+// Slack files on mirrored lines. An image or video the installation's token
+// can read is copied into storage and becomes a chat attachment; anything else
+// becomes a link line, which recoverLinkedFiles turns back into the media once
+// a token can read it.
 import type { Doc } from "../_generated/dataModel";
 import type { ActionCtx } from "../_generated/server";
 import type { ChatAttachment } from "./chatAttachment";
@@ -9,21 +9,22 @@ import { slackApi } from "./slackApi";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
+const isMedia = (mime: string) => mime.startsWith("image/") || mime.startsWith("video/");
+
 export async function mirrorFiles(ctx: ActionCtx, install: Doc<"slack_installations">, files: any[]): Promise<{ attachments: ChatAttachment[]; extra: string[] }> {
   const attachments: ChatAttachment[] = [];
   const extra: string[] = [];
   for (const f of files ?? []) {
     if (!f || f.mode === "tombstone" || f.mode === "hidden_by_limit") continue;
     const mime = String(f.mimetype ?? "");
-    const isImage = mime.startsWith("image/");
     const size = Number(f.size ?? 0);
     const url = f.url_private_download || f.url_private;
-    if (isImage && url && size > 0 && size <= MAX_FILE_BYTES) {
+    if (isMedia(mime) && url && size > 0 && size <= MAX_FILE_BYTES) {
       try {
         const resp = await fetch(url, { headers: { Authorization: `Bearer ${install.bot_token}` } });
         // A token without access to the file gets Slack's sign-in page back,
-        // often as a 200: only real image bytes become an attachment.
-        if (resp.ok && (resp.headers.get("content-type") ?? "").startsWith("image/")) {
+        // often as a 200: only real media bytes become an attachment.
+        if (resp.ok && isMedia(resp.headers.get("content-type") ?? "")) {
           const blob = await resp.blob();
           const storageId = await ctx.storage.store(new Blob([await blob.arrayBuffer()], { type: mime }));
           attachments.push({

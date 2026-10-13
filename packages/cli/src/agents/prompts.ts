@@ -8,7 +8,7 @@
  * and every title escaped where it sits on a line of ours (ct-49593).
  */
 import { inlineForeignText } from "@codecast/shared/contracts";
-import { renderFencedPlanRecord, renderFencedTaskRecord } from "@codecast/shared/tasks";
+import { renderFencedPlanRecord, renderFencedTaskRecord, type TaskEffort } from "@codecast/shared/tasks";
 
 // --- Model Stylesheet Types & Resolution ---
 
@@ -16,7 +16,7 @@ export interface ResolvedModel {
   provider: "anthropic" | "openai" | "gemini" | "unknown";
   model: string;
   raw: string;
-  reasoning_effort?: "low" | "medium" | "high";
+  reasoning_effort?: TaskEffort;
   temperature?: number;
   backend?: string;
 }
@@ -88,7 +88,14 @@ export function resolveTaskModel(plan: any, task: any, defaultModel = "opus"): s
   return resolved.model;
 }
 
+/** The model and effort a session spawned for `task` launches with (task-graph.md
+ *  TG8): the task's own `model` and `effort` win over the plan's stylesheet. */
 export function resolveTaskModelFull(plan: any, task: any, defaultModel = "opus"): ResolvedModel {
+  const resolved = stylesheetModel(plan, task, defaultModel);
+  return task.effort ? { ...resolved, reasoning_effort: task.effort } : resolved;
+}
+
+function stylesheetModel(plan: any, task: any, defaultModel: string): ResolvedModel {
   if (task.model) return { ...parseModelSpec(task.model), raw: task.model };
   if (!plan.model_stylesheet) return parseModelSpec(defaultModel);
 

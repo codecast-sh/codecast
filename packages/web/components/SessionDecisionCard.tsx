@@ -1,18 +1,22 @@
 "use client";
 
 import { approvalButtonLabel } from "@codecast/shared/contracts/assistant";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
 import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
+import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
+import { GateRunChip } from "./decisions/DecisionCompactCard";
+import { useSyncDecisionDetail, useDecisionDetail } from "../hooks/useSyncDecisionDetail";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
@@ -21,7 +25,7 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { ChevronUp, ChevronDown, ArrowUpRight, Link2 } from "lucide-react";
+import { ChevronUp, ChevronDown, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import "./decisions/decisions.css";
@@ -70,9 +74,17 @@ import { LANE_COPY } from "./simple/lane";
 // row's permission_blocked status is the ONLY evidence, and any "nothing
 // pending, must be resolved" inference on mount destroys a real question.
 
+// A session can hold several open asks. Its card shows them one at a time:
+// an answer brings up the next, already open, so a run of them is one digit
+// each. `more` is how many wait behind this one.
 type Size = "full" | "line";
 
-export function SessionDecisionCard({ item, stepper }: { item: QueueItem; stepper: DecisionStepper | null }) {
+// The last conversation whose ask was settled from its open sheet, and when:
+// the next ask of that session opens as the sheet too, where the reader is.
+let settledFromSheet: { conversationId: string; at: number } | null = null;
+const CONTINUE_MS = 5_000;
+
+export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueItem; stepper: DecisionStepper | null; more?: number }) {
   const {
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
     answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
@@ -84,7 +96,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // agent in the wording.
   const hosted = useIsHostedConversation(item.conversationId);
 
-  const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
+  const [size, setSize] = useState<Size>(() => {
+    const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
+    return item.blocking || stepper || continuing ? "full" : "line";
+  });
   const full = size === "full";
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
@@ -153,8 +168,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // The kinds beyond a single choice (the-line.md L10: multi, rank, form)
   // answer through DecisionAnswerControls on the live store row, which
   // carries the form and takes the digit and Enter keys itself; the card's
-  // own digits stand down for them. Anything with a document or option pages
-  // links to the decision page, where there is room to read.
+  // own digits stand down for them.
   const decisionRow = useInboxStore((s) => (item.source === "decide" && item.decisionId ? s.sessionDecisions[item.decisionId] : undefined));
   const kind = item.source === "decide" ? (item.kind ?? "single") : "single";
   // A change card (LE11) answers Ship, Revise or Drop through its own
@@ -166,16 +180,27 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const cardBar = !!card && richControls;
   const pageSlugs = item.source === "decide" ? optionPageSlugs(item.options) : [];
   const shareHref = item.source === "decide" && item.decisionId ? decisionHref({ _id: item.decisionId, short_id: item.shortId }) : null;
-  const documentHref = needsDocumentPage(item) ? shareHref : null;
+  // The open sheet reads the decision the way its page does: the attached
+  // document, the facts and the ladder come from the same detail
+  // (DecisionSections), so the sheet never sends the reader elsewhere to
+  // see what they are answering. Folded, nothing is drawn, so nothing loads.
+  const decideId = item.source === "decide" ? item.decisionId : undefined;
+  useSyncDecisionDetail(full ? decideId : undefined);
+  const detail = useDecisionDetail(decideId);
+  const detailDecision = detail ? (decisionRow ?? detail.decision) : null;
 
-  const onDone = stepper?.onDone;
-  const answer = useCallback((index: number) => { answerItem(index); onDone?.(); }, [answerItem, onDone]);
+  const stepperDone = stepper?.onDone;
+  const onDone = useCallback(() => {
+    if (size === "full") settledFromSheet = { conversationId: item.conversationId, at: Date.now() };
+    stepperDone?.();
+  }, [size, item.conversationId, stepperDone]);
+  const answer = useCallback((index: number) => { answerItem(index); onDone(); }, [answerItem, onDone]);
   const answerFreeText = useCallback((text: string) => {
     if (!text.trim()) return;
     answerItemFreeText(text);
-    onDone?.();
+    onDone();
   }, [answerItemFreeText, onDone]);
-  const dismiss = useCallback(() => { dismissItem(); onDone?.(); }, [dismissItem, onDone]);
+  const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
 
   const onExit = stepper?.onExit;
   // Off the inbox (the /questions stepper) "open" must leave for the inbox;
@@ -189,6 +214,36 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const shrink = useCallback(() => { foldedByScroll.current = false; setSize("line"); }, []);
   const shrinkByScroll = useCallback(() => { foldedByScroll.current = true; setSize("line"); }, []);
   const grow = useCallback(() => setSize("full"), []);
+
+  // Folding swaps the sheet for the pill in one frame, and the eye loses it.
+  // A faint veil the size of the sheet collapses into the pill, which answers
+  // with one ring: the motion says where the question went.
+  const wasFull = useRef(full);
+  useLayoutEffect(() => {
+    const folded = wasFull.current && !full;
+    wasFull.current = full;
+    const root = rootRef.current;
+    const pane = root?.parentElement;
+    const pill = root?.querySelector<HTMLElement>("[data-decision-fold-pill]");
+    if (!folded || !root || !pane || !pill || typeof pill.animate !== "function") return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const from = pane.getBoundingClientRect(), to = pill.getBoundingClientRect(), base = root.getBoundingClientRect();
+    const tint = `var(${item.blocking ? "--sol-yellow" : "--sol-blue"})`;
+    const veil = document.createElement("div");
+    veil.style.cssText = `position:absolute;pointer-events:none;left:${from.left - base.left}px;top:${from.top - base.top}px;width:${from.width}px;height:${from.height}px;background:color-mix(in srgb, ${tint} 14%, transparent)`;
+    root.appendChild(veil);
+    const landed = `inset(${to.top - from.top}px ${from.right - to.right}px ${from.bottom - to.bottom}px ${to.left - from.left}px round 999px)`;
+    const collapse = veil.animate(
+      [{ clipPath: "inset(0px 0px 0px 0px round 0px)", opacity: 1 }, { clipPath: landed, opacity: 1, offset: 0.8 }, { clipPath: landed, opacity: 0 }],
+      { duration: 340, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    );
+    collapse.onfinish = collapse.oncancel = () => veil.remove();
+    const ring = pill.animate(
+      [{ boxShadow: "0 0 0 0 transparent" }, { boxShadow: `0 0 0 3px color-mix(in srgb, ${tint} 35%, transparent)`, offset: 0.5 }, { boxShadow: "0 0 0 7px transparent" }],
+      { duration: 620, easing: "ease-out" },
+    );
+    return () => { collapse.cancel(); ring.cancel(); };
+  }, [full, item.blocking]);
 
   useWatchEffect(() => {
     if (full || !foldedByScroll.current) return;
@@ -262,9 +317,12 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
     answerDecision(item.decisionId, input);
-    onDone?.();
+    onDone();
   }, [item.decisionId, answerDecision, onDone]);
 
+  // Where this ask sits: in the queue being stepped, else among its own
+  // session's open asks when there are several.
+  const place = stepper ?? (more > 0 ? { position: 1, total: more + 1 } : null);
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
@@ -326,11 +384,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     </button>
   );
 
-  const documentLink = documentHref && (
-    <a href={documentHref} data-decision-document className="inline-flex items-center gap-1 text-[11px] text-sol-blue hover:underline" title="The decision page: the document, the pages, the ladder">
-      read the full decision<ArrowUpRight className="w-3 h-3" />
-    </a>
-  );
+  // A gate on a workflow run (the-line.md L4): the run this question pauses.
+  const runChip = detailDecision?.workflow_run_id ? <GateRunChip runId={detailDecision.workflow_run_id} nodeId={detailDecision.gate_node_id} className="text-[11px]" /> : null;
+  const facts = detail && detailDecision ? <DecisionFacts decision={detailDecision} detail={detail} className={card ? "" : "mt-4 mb-5"} /> : null;
 
   const whoIsAsking = askingRole ? (
     <div className="flex items-center gap-2 min-w-0 flex-1" data-decision-asker={askingRole.handle}>
@@ -387,7 +443,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   // The reasoning, in the page's body type: the authored context of a
   // `cast decide`, or the detail an AskUserQuestion carries.
-  const reasoning = item.contextMd
+  const body = detail && detailDecision && hasDecisionBody(detailDecision, detail) ? <DecisionBody decision={detailDecision} detail={detail} /> : null;
+  const reasoning = detail
+    ? null
+    : item.contextMd
     ? <MarkdownRenderer content={item.contextMd} />
     : poll?.question.detail
       ? <span className="whitespace-pre-line">{poll.question.detail}</span>
@@ -398,10 +457,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const showRecent = !item.contextMd && !!recentText && !hosted;
   const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
-  const contextBlock = (card || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
+  const contextBlock = (card || detail || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
       {/* The headline above already says the change and its cause. */}
       {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
+      {/* A run's gate is owned by the session that started the run or the
+          project's lead, not this log: discuss it with them (ct-58330). */}
+      {decideId && decisionRow?.workflow_run_id && <DecisionDiscussion decisionId={decideId} compact />}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -418,7 +480,15 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       {showThreadState && (
         <div className="text-sm text-sol-text-muted border-l-2 border-sol-border pl-3 whitespace-pre-wrap">{session!.thread_state}</div>
       )}
-      {item.reportSlug && !card && <PublishedPageEmbed slug={item.reportSlug} />}
+      {body}
+      {card && facts}
+      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} />}
+      {detail && detailDecision && (
+        <div>
+          <div className="decision-kicker">The ladder</div>
+          <DecisionLadder decision={detailDecision} detail={detail} now={now} />
+        </div>
+      )}
       {showUnreadable && (
         <div className="text-sm text-sol-text-dim">
           This session is waiting on you, but its question is only visible in its terminal so far.
@@ -516,10 +586,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         <div className="decision-sheet-head-cq shrink-0 border-b border-sol-border/70">
           <div className="decision-sheet-col mx-auto w-full px-6 h-10 flex items-center gap-3 min-w-0">
             {whoIsAsking}
-            {stepper && (
-              <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums">
-                <span className="decision-head-wide">decision {stepper.position} of {stepper.total}</span>
-                <span className="decision-head-short">{stepper.position}/{stepper.total}</span>
+            {place && (
+              <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums" data-decision-place>
+                <span className="decision-head-wide">decision {place.position} of {place.total}</span>
+                <span className="decision-head-short">{place.position}/{place.total}</span>
               </span>
             )}
             {/* A hosted approval is the person's own: no link to share it, and
@@ -546,12 +616,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto">
           <div className="decision-sheet-col mx-auto w-full px-6 pt-4 pb-6">
-            {(askedLine || documentLink) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
+            {(askedLine || runChip) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{runChip}</div>}
             <DecisionProposalOrigin contextMd={item.contextMd} className="mb-2 text-[12px]" size="md" />
             {/* A card leads with its change, the way its page does. */}
             {card
               ? <ChangeCardHeadline card={card} question={question} className="mb-2" />
-              : question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
+              : question && <h1 className={`decision-question text-sol-text ${facts ? "" : "mb-5"}`}>{question}</h1>}
+            {!card && facts}
             {cardBar ? (
               <>
                 <ChangeCardVerdictBar card={card!}>{answerBlock}</ChangeCardVerdictBar>
@@ -606,6 +677,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       <button
         onClick={grow}
         title={foldTitle}
+        data-decision-fold-pill
         className={`flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-[11px] transition-colors ${
           item.blocking ? "border-sol-yellow/50 text-sol-text hover:bg-sol-yellow/10" : "border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg"
         }`}
@@ -613,7 +685,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         {dot}
         {askingRole && <RoleFace role={askingRole} size={14} className="shrink-0" />}
         <span className="truncate max-w-[16rem]">{askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
-        <span className="opacity-70">{stepper ? `· ${stepper.position} of ${stepper.total}` : "· answer"}</span>
+        <span className="opacity-70">{place ? `· ${place.position} of ${place.total}` : "· answer"}</span>
         <ChevronUp className="w-3.5 h-3.5" />
       </button>
     </div>

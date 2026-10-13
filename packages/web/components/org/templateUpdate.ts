@@ -80,8 +80,7 @@ export function updateCard(s: UpdateSource): UpdateCard | null {
     return { kind: c, heading: CLASS_HEADING[c], changes: s.update_changes?.authority_changed ?? [], note: "This cannot arrive as an update. A separate permission request follows for you to decide.", action: null, changelogs };
   }
   if (c === "structure") {
-    const added = s.update_changes?.routines_added.length ?? 0;
-    return { kind: c, heading: CLASS_HEADING[c], changes: lines, note: added === 1 ? "The new routine arrives paused and needs Activate under Triggers once it is ready." : added > 1 ? "New routines arrive paused; each needs Activate under Triggers once it is ready." : null, action: "Update", changelogs };
+    return { kind: c, heading: CLASS_HEADING[c], changes: lines, note: null, action: "Update", changelogs };
   }
   if (c === "content") return { kind: c, heading: CLASS_HEADING[c], changes: [], note: "The charter, prompts or guides changed. What the role does and may do stay the same.", action: "Update", changelogs };
   return { kind: "unclassified", heading: null, changes: lines, note: null, action: "Update", changelogs };
