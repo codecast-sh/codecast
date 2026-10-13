@@ -5,15 +5,14 @@
 // reader (WaitingItem), and when it leaves the list the next one opens. No row
 // carries a button: every act is in the reader, next to the whole text.
 //
-// The list is what the viewer can answer now, and nothing else: fixes to
-// decide, questions, new problems to confirm, and runs that finished a step and wait
-// on a yes to go on, across every process. The nav's
-// count, the list and the reader's "N of M" are the same rows. What no answer
-// can reach (a run that must ask again, a problem behind a line that is off)
-// lives on Problems; under the list one quiet line each points there, counted
-// by the Problems list itself so the two numbers cannot differ. A row is the
-// problem's title; the reader's head names the problem once (ref, title, age)
-// and the body opens on what is asked. The open item is `need` in the URL; an older link's `decision` or
+// The list is what a line puts in front of a person, and nothing else: the
+// decision a session presents at the end of its run, one per problem, across
+// every process, and a trial's practice decisions apart, last. Everything else
+// a problem waits on (a fix to land, a fact for the lead, a run to ask again)
+// is the line's, filed on Problems and the line's own page, never here. The
+// nav's count, the list and the reader's "N of M" are the same rows. A row is
+// the problem's title; the reader's head names the problem once (ref, title,
+// age) and the body opens on what is asked. The open item is `need` in the URL; an older link's `decision` or
 // `card` settles on it. A need the address names that is not in the list is
 // said to be so, never swapped for another item. J and K walk the list while
 // focus is in it; nothing here moves focus into the reader, where a decision
@@ -27,23 +26,19 @@ import { processName } from "../../../../lib/line/lineGraphs";
 import { isPractice, needForRef, needGroups, needOrder, needsOfLine, type LineNeed } from "../../../../lib/line/lineNeeds";
 import { problemHeadName, problemListName } from "../../../../lib/line/problemTable";
 import { leftWhy } from "../../../../lib/line/leftList";
-import { type StatusKey } from "../../../../lib/line/problemStatus";
 import { KeyCap } from "../../../KeyCap";
 import { LineDecision, LineDecisionPrefetch } from "../../widgets/LineDecision";
 import { WaitingItem } from "../../widgets/WaitingItem";
 import { useTrialHref } from "../../../../hooks/useSyncTrial";
-import { ProblemPointers, useAllProblems } from "./ProblemPointers";
+import { useAllProblems } from "./ProblemPointers";
 import type { LineViewProps } from "./types";
 import "./foryou.css";
-
-/** The Problems chips For you points at, under its list: what waits on a new run or on a line that is off. */
-const ELSEWHERE: ReadonlyArray<StatusKey> = ["newask", "notstarted"];
 
 const SCROLL_KEY = "line:foryou:scroll";
 
 export function ForYouView({ model, workspace, selection, select, href, pinned }: LineViewProps) {
   const { now, ready } = workspace;
-  // Only what an answer can reach; the rest is Problems' (the pointers below the list).
+  // Only the decisions (lineNeeds COUNTED): the rest is the line's, on Problems, and an address naming one says so.
   // `process` in the address (the Line page's "N waiting on you") narrows the list to that line, and to the project
   // picked there; the chip over the list lifts it.
   const line = selection.process;
@@ -125,9 +120,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const toRun = (n: LineNeed | null) => (runId: string, taskId: string | null, step?: string) => select({ view: "problems", run: runId, graph: n?.process ?? selection.graph, ...(step ? { step } : {}) }, taskId);
   // `status` is the Problems page's own key: it rides on the address the selection writes.
   const problemsHref = href({ view: "problems", need: null, decision: null, card: null });
-  // The pointers' counts are the Problems list's own (every process, no chip or search), so its chips say the same.
   const allProblems = useAllProblems({ model, workspace, selection, process: line });
-  const problemCounts = allProblems.counts.by;
   // A problem the address names that waits on the viewer no more: its name, where it stands, and what moved it.
   const left = useMemo(() => {
     if (!missing) return null;
@@ -136,9 +129,8 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
     const row = allProblems.all.find((r) => r.id === issue.id) ?? null;
     return { issue, phrase: row?.stand.phrase ?? null, ...leftWhy(issue.history, workspace.names, now) };
   }, [missing, workspace.problems, workspace.names, allProblems.all, now]);
-  const elsewhere = ELSEWHERE.filter((k) => problemCounts[k] > 0);
-  // One item and nothing else to list: the reader takes the whole width (its header still says 1 of 1).
-  const single = order.length === 1 && !!current && elsewhere.length === 0;
+  // One item: the reader takes the whole width (its header still says 1 of 1).
+  const single = order.length === 1 && !!current;
 
   return (
     <div className="fy" data-line-foryou={real} data-line-foryou-open={current?.ref ?? orphan ?? undefined} data-single={single ? "" : undefined}>
@@ -175,7 +167,6 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
             </ul>
           </section>
         ))}
-        <ProblemPointers keys={ELSEWHERE} counts={problemCounts} href={href} process={line} className="fy-elsewhere" label="On Problems" />
         {order.length > 1 && <p className="fy-keys" aria-hidden><KeyCap size="xs">J</KeyCap><KeyCap size="xs">K</KeyCap></p>}
       </div>
 
