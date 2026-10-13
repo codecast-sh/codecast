@@ -100,3 +100,37 @@ export function CopyCommand({ cmd, className = "", onDark = false }: { cmd: stri
     </button>
   );
 }
+
+/**
+ * A screenshot of the real app: full width, rounded, lazy unless it sits in
+ * the first screen, with an optional caption. `dark` frames it for a dark band.
+ */
+export function Shot({ src, alt, width, height, caption, className = "", eager = false, dark = false }: { src: string; alt: string; width: number; height: number; caption?: ReactNode; className?: string; eager?: boolean; dark?: boolean }) {
+  return (
+    <figure className={className}>
+      <img
+        src={src}
+        alt={alt}
+        width={width}
+        height={height}
+        loading={eager ? "eager" : "lazy"}
+        className="block w-full h-auto rounded-xl border"
+        style={dark
+          ? { borderColor: "#0b4a5a", backgroundColor: "#0f2a33", boxShadow: "0 24px 60px -28px rgba(0,0,0,.6)" }
+          : { borderColor: "rgba(88,110,117,.25)", boxShadow: "0 18px 40px -26px rgba(0,43,54,.4)" }}
+      />
+      {caption && <figcaption className="mt-3 text-[13px] leading-6" style={{ color: dark ? SOL.base1 : SOL.base00 }}>{caption}</figcaption>}
+    </figure>
+  );
+}
+
+/** The CLI form of a section, demoted under the app story: a small label, then the terminal. */
+export function ForScripts({ children, note }: { children: ReactNode; note?: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 font-mono text-[11.5px] font-semibold uppercase tracking-wide" style={{ color: SOL.base1 }}>For scripts and agents</div>
+      {note && <p className="mb-3 text-[13.5px] leading-[1.6]" style={{ color: SOL.base01 }}>{note}</p>}
+      {children}
+    </div>
+  );
+}

@@ -6,7 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -390,7 +390,7 @@ export const createSessionFromCli = mutation({
     // under it, so its verdict is recorded as its own.
     const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
     if (review?.role) await gateRoleCaps(review.role);
-    // A hand's first turn opens with the unattended mandate and the hand
+    // A hand's first turn opens with the unattended opening and the hand
     // briefing (the-line.md L2): who it works for and how it ends its turn.
     const handTask: any = roleGate && spawner?.active_task_id ? await ctx.db.get(spawner.active_task_id) : null;
     const handProject: any = handTask?.project_id ? await ctx.db.get(handTask.project_id) : null;
@@ -425,7 +425,11 @@ export const createSessionFromCli = mutation({
       spawnerConversationId: spawner?._id,
       handoffFrom,
       prompt,
-      fleet: subagentFields ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
+      // A worker joins the fleet when its spawner declares the fleet's limits
+      // (`cast spawn --subagent` always does). A workflow station's hand is
+      // nested under its run but paced by it, one station at a time, so it
+      // never waits for a slot behind the machine's other workers.
+      fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
@@ -507,7 +511,7 @@ export async function recordHandStart(ctx: { db: any }, role: any, conversationI
 }
 
 // The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):
-// the unattended mandate, who the hand works for, the goal of the project the
+// the unattended opening, who the hand works for, the goal of the project the
 // task serves (org-staffing.md S7), and the structured ending. Written where
 // the hand pointer is written, so no hand can start without it.
 /** The first line of a hand's briefing; a session whose first message opens
@@ -531,7 +535,7 @@ export function handBriefing(
     `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
     `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
     `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
-    `- End EVERY turn with a handoff, never a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
+    `- End every turn with a handoff, not a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
   ].join("\n");
-  return `${UNATTENDED_MANDATE}\n\n${header}\n\n${(prompt ?? "").trim()}`.trim();
+  return applyUnattended(`${header}\n\n${(prompt ?? "").trim()}`.trim(), `the role ${role.name} (@${role.handle})`);
 }

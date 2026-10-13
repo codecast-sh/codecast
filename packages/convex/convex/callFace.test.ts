@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { mirrorAgentTurn } from "./callChat";
 import { syncAgentFeeds } from "./transcripts";
-import { ask, brief, dispatchFace, FACE_HOST_AGENT, FACE_IDS, STYLIZED_FACES, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
+import { ask, brief, dispatchFace, ensureFaces, FACE_HOST_AGENT, FACE_IDS, STYLIZED_FACES, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, removeAgent, said, tell } from "./callFace";
 import { makeFakeDb } from "./testDb";
 
 // An agent fed live into a huddle gets a face in the room when its team has
@@ -249,11 +249,55 @@ describe("the wire", () => {
     expect(sent).toEqual([]);
   });
 
-  test("leave removes the face from the room", async () => {
-    const sent = recordFetch();
+  test("leave tells the worker to go, puts the face out, and clears its dispatch", async () => {
+    const sent = recordFetch((url) => (url.endsWith("ListDispatch") ? listing("JS_RUNNING") : {}));
     await call(leave, { runQuery: async () => false }, { room_key: "session:conv1", conversation_id: "conv1" });
-    expect(sent[0].url).toBe("https://lk.example/twirp/livekit.RoomService/RemoveParticipant");
-    expect(sent[0].body).toEqual({ room: "session:conv1", identity: "agent:conv1" });
+    expect(sent.map((x) => x.url.slice(LK.length))).toEqual([
+      "RoomService/SendData",
+      "RoomService/RemoveParticipant",
+      "AgentDispatchService/ListDispatch",
+      "AgentDispatchService/DeleteDispatch",
+    ]);
+    expect(JSON.parse(atob(sent[0].body.data))).toEqual({ conversation_id: "conv1", kind: "leave" });
+    expect(sent[1].body).toEqual({ room: "session:conv1", identity: "agent:conv1" });
+  });
+
+  test("ensureFaces takes out an agent no longer fed and seats the one that is, in one request", async () => {
+    const two = {
+      agent_dispatches: [
+        { id: "AD_gone", agent_name: FACE_HOST_AGENT, metadata: JSON.stringify({ conversation_id: "conv2" }), state: { jobs: [{ state: { status: "JS_RUNNING" } }] } },
+      ],
+    };
+    const sent = recordFetch((url) => (url.endsWith("ListDispatch") ? two : {}));
+    const actx = { runQuery: async () => [{ ...faceFeed, realtime: true }] };
+    expect(await call(ensureFaces, actx, { room_key: "session:conv1" })).toBe(1);
+    expect(sent.map((x) => x.url.slice(LK.length))).toEqual([
+      "AgentDispatchService/ListDispatch",
+      "RoomService/SendData",
+      "RoomService/RemoveParticipant",
+      "AgentDispatchService/DeleteDispatch",
+      "AgentDispatchService/CreateDispatch",
+    ]);
+    expect(JSON.parse(atob(sent[1].body.data))).toEqual({ conversation_id: "conv2", kind: "leave" });
+    expect(sent[2].body.identity).toBe("agent:conv2");
+  });
+
+  test("ensureFaces from someone who may not act on the room touches nothing", async () => {
+    const sent = recordFetch();
+    expect(await call(ensureFaces, { runQuery: async () => null }, { room_key: "session:conv1" })).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  test("removeAgent ends the feed and takes the face out in the same request", async () => {
+    const sent = recordFetch(() => ({}));
+    const ran: { name: string; args: any }[] = [];
+    const actx = {
+      auth: { getUserIdentity: async () => ({ subject: "ub|s1", tokenIdentifier: "t" }) },
+      runMutation: async (ref: unknown, args: any) => void ran.push({ name: getFunctionName(ref as any), args }),
+    };
+    await call(removeAgent, actx, { room_key: "session:conv1", conversation_id: "conv1" });
+    expect(ran).toEqual([{ name: "transcripts:removeAgentFromRoom", args: { user_id: "ub", room_key: "session:conv1", conversation_id: "conv1" } }]);
+    expect(sent.map((x) => x.url.slice(LK.length)).slice(0, 2)).toEqual(["RoomService/SendData", "RoomService/RemoveParticipant"]);
   });
 });
 
