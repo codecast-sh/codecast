@@ -16,12 +16,14 @@
  *   2. The machine you last picked by hand, if it's still online.
  *   3. An online local that actually HAS this checkout.
  *   4. Any online local — tie broken by device_id, which never changes.
- *   5. An online remote holding the checkout, then any local, then any online remote.
+ *   5. An online remote holding the checkout, then a sleeping cloud host holding it,
+ *      then a local that has the files, then any local still in service, then any
+ *      online remote. A machine quiet for a day never wins on platform alone.
  *
  * Kept pure, and out of the component, so the ladder is testable.
  */
 
-import { deviceWakesOnUse, platformCanOpenPath } from "@codecast/shared/contracts";
+import { cloudHostBootable, deviceServesPath, deviceWakesOnUse, machineGoneQuiet, machineOutOfService, platformCanOpenPath, type CloudHostReport } from "@codecast/shared/contracts";
 
 export type MachineCandidate = {
   device_id: string;
@@ -30,6 +32,7 @@ export type MachineCandidate = {
   last_seen: number;
   local_project_roots?: string[];
   platform?: string;
+  cloud_host?: CloudHostReport | null;
 };
 
 /**
@@ -39,6 +42,16 @@ export type MachineCandidate = {
  * this alias keeps the picker's vocabulary.
  */
 export const wakesOnUse = deviceWakesOnUse;
+
+/**
+ * The machines a picker lists: every one still in service, plus the one this
+ * session already runs on or has picked, so its chip still says where it is.
+ * A dead VM or a cloud host whose instance is gone stays out of the row;
+ * Settings → Devices is where it is seen and removed.
+ */
+export function listedMachines<T extends MachineCandidate>(machines: T[], keepId?: string | null, now = Date.now()): T[] {
+  return machines.filter((d) => d.device_id === keepId || !machineOutOfService(d, machines, now));
+}
 
 /**
  * Deterministic tiebreak. device_id is a stable machine fingerprint, so the same
@@ -192,9 +205,12 @@ export function defaultMachineId(
      * sleeps. Default: online only — an offline laptop or agent box is gone.
      */
     wakeOk?: (d: MachineCandidate) => boolean;
+    now?: number;
   } = {},
 ): string | null {
   const { ownerDeviceId, projectPath, lastPicked, localDeviceId } = opts;
+  const now = opts.now ?? Date.now();
+  const roster = devices;
   const canServe = (d: MachineCandidate) => d.online || !!opts.wakeOk?.(d);
 
   // 1. An existing conversation stays on the machine that owns it. This OUTRANKS
@@ -216,7 +232,11 @@ export function defaultMachineId(
   if (picked && canServe(picked) && (canOpen(picked, projectPath) || opts.wakeOk?.(picked))) return picked.device_id;
 
   const hasCheckout = (d: MachineCandidate) => !!projectPath && deviceSeesPath(d, projectPath);
-  devices = preferOpenable(devices, projectPath);
+  // Narrow to the machines that can open the path, but only on the word of
+  // one that holds it or is still in service: a long-dead VM must not narrow
+  // the pool down to itself.
+  const openable = devices.filter((d) => canOpen(d, projectPath));
+  if (openable.some((d) => hasCheckout(d) || !machineGoneQuiet(d, now))) devices = openable;
 
   const onlineLocals = devices.filter((d) => !d.is_remote && d.online);
   if (onlineLocals.length > 0) {
@@ -230,10 +250,18 @@ export function defaultMachineId(
   const remoteWithCheckout = devices.filter((d) => d.is_remote && d.online && hasCheckout(d));
   if (remoteWithCheckout.length > 0) return stable(remoteWithCheckout);
 
-  // …otherwise the work queues for a local machine to pick up when it wakes.
+  // …a sleeping cloud host holding it boots for the work…
+  const hostWithCheckout = devices.filter((d) => hasCheckout(d) && cloudHostBootable(d, roster));
+  if (hostWithCheckout.length > 0) return stable(hostWithCheckout);
+
+  // …otherwise the work queues for a local machine to pick up when it wakes:
+  // one that has the files, else one still in service, else any.
   const locals = devices.filter((d) => !d.is_remote);
-  if (locals.length > 0) {
-    return owner && locals.some((d) => d.device_id === owner.device_id) ? owner.device_id : stable(preferOpenable(locals, projectPath));
+  const holders = projectPath ? locals.filter((d) => deviceServesPath(d, [projectPath])) : [];
+  const live = locals.filter((d) => !machineGoneQuiet(d, now));
+  for (const pool of [holders, live, locals]) {
+    if (pool.length === 0) continue;
+    return owner && pool.some((d) => d.device_id === owner.device_id) ? owner.device_id : stable(preferOpenable(pool, projectPath));
   }
 
   // Cloud-only user: an online remote is the only machine that can serve.
