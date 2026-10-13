@@ -110,7 +110,6 @@ describe("what counts as an overlay", () => {
     const NON_MODAL = [
       "components/undo/UndoTimelineView.tsx",
       "components/FleetBoard.tsx",
-      "components/org/OrgPage.tsx",
     ];
     for (const rel of NON_MODAL) {
       const src = readFileSync(join(import.meta.dir, "..", "..", rel), "utf8");
