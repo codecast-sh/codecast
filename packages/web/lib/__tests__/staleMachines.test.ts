@@ -33,3 +33,13 @@ describe("staleMachines", () => {
     expect(stale.map((d) => d.device_id)).toEqual(["b", "e"]);
   });
 });
+
+test("a cloud host whose instance is gone joins the cleanup group; a sleeping one does not", () => {
+  const now = 100 * 86_400_000;
+  const report = (at: number, state = "stopped") => ({ managed_by: "laptop", instance_id: "i", provider: "aws" as const, state: state as any, images: [], logins_held: [], at });
+  const asleep = { device_id: "asleep", online: false, is_remote: true, platform: "linux", last_seen: now - 5 * 86_400_000, cloud_host: report(now) };
+  const gone = { device_id: "gone", online: false, is_remote: true, platform: "linux", last_seen: now - 5 * 86_400_000, cloud_host: report(now, "missing") };
+  const { current, stale } = splitStaleMachines([asleep, gone], now);
+  expect(current.map((d) => d.device_id)).toEqual(["asleep"]);
+  expect(stale.map((d) => d.device_id)).toEqual(["gone"]);
+});

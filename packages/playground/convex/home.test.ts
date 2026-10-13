@@ -4,7 +4,8 @@ import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { mintVisitor } from "../src/lib/mint";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { PRESENCE } from "./lib/presence";
 import type { Id } from "./_generated/dataModel";
 import { STILL_AUTHOR_FIRST_MS, STILL_MAX_BYTES } from "./lib/limits";
 
@@ -35,7 +36,7 @@ async function setup() {
   const B = await mintVisitor(register);
   const make = async (name: string) => (await t.mutation(api.apps.create, { ...A, name })).app_id as Id<"apps">;
   const enter = (who: typeof A, app_id: Id<"apps">) => t.mutation(api.presence.heartbeat, { ...who, app_id, viewing_version: null });
-  const gallery = async () => (await t.query(api.apps.gallery, { ...A })).apps;
+  const gallery = async () => (await t.query(api.apps.gallery, {})).apps;
   const image = (bytes: number, type = "image/webp") => t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(bytes)], { type })));
   return { t, A, B, make, enter, gallery, image };
 }
@@ -57,11 +58,49 @@ describe("the gallery", () => {
     expect((await s.gallery()).map((c) => [c.name, c.here_count])).toEqual([["Two here", 2], ["One here", 1], ["Newest", 0], ["Quiet", 0]]);
   });
 
+  test("follows arrivals and departures, never heartbeats", async () => {
+    const s = await setup();
+    const app = await s.make("Tea Tally");
+    const card = async () => {
+      const c = (await s.gallery())[0];
+      return [c.here_count, c.here.map((p) => p.id)];
+    };
+    await s.enter(s.A, app);
+    await s.enter(s.B, app);
+    expect(await card()).toEqual([2, [s.A.visitor_id, s.B.visitor_id]]);
+    const crowd = async () => (await s.t.run((ctx) => ctx.db.query("crowds").collect()))[0];
+    const before = await crowd();
+    jest.advanceTimersByTime(PRESENCE.heartbeatMs);
+    await s.enter(s.A, app);
+    expect((await crowd())._creationTime).toBe(before._creationTime);
+    expect(await crowd()).toEqual(before);
+    await s.t.mutation(api.presence.leave, { ...s.A, app_id: app });
+    expect(await card()).toEqual([1, [s.B.visitor_id]]);
+    // B's tab closes without a word: the prune takes B out once the row lapses.
+    jest.advanceTimersByTime(PRESENCE.staleMs);
+    await s.t.mutation(internal.presence.prune, {});
+    expect(await card()).toEqual([0, []]);
+    expect(await s.t.run((ctx) => ctx.db.query("crowds").collect())).toEqual([]);
+  });
+
   test("leaves out an app Clay has not made yet, even with its maker in it", async () => {
     const s = await setup();
     const made = await s.t.mutation(api.apps.create, { ...s.A, prompt: "a frog choir" });
     await s.enter(s.A, made.app_id as Id<"apps">);
     expect(await s.gallery()).toEqual([]);
+  });
+
+  test("shows a burst of near-copies by one maker once, and nothing unlisted, forks included", async () => {
+    const s = await setup();
+    await s.make("Shared tally");
+    jest.advanceTimersByTime(1_000);
+    const again = await s.make("Shared Tally");
+    await s.t.mutation(api.apps.create, { ...s.B, name: "Shared tally" });
+    const hidden = await s.t.mutation(api.apps.create, { ...s.A, name: "Harness app", unlisted: true });
+    const fork = await s.t.mutation(api.apps.fork, { ...s.B, app_id: hidden.app_id as Id<"apps">, number: 1, name: "Harness fork" });
+    await s.enter(s.B, fork.app_id as Id<"apps">);
+    expect((await s.gallery()).map((c) => [c.id, c.name])).toEqual([[expect.anything(), "Shared tally"], [again, "Shared Tally"]]);
+    expect((await s.t.query(api.activity.recent, {})).map((e) => e.app_name).filter((n) => n.startsWith("Harness"))).toEqual([]);
   });
 
   test("says what made the live version instead of its number", async () => {
@@ -89,7 +128,7 @@ describe("right now", () => {
         await ctx.db.patch(app, { version_count: a.version_count + 1, live_version: a.version_count + 1 });
       });
     }
-    const feed = await s.t.query(api.activity.recent, { ...s.A });
+    const feed = await s.t.query(api.activity.recent, {});
     expect(feed.map((e) => [e.app_name, e.said, e.live])).toEqual([["Tea Tally", "adds a moon", true]]);
     expect(feed.some((e) => e.slug === made.slug)).toBe(false);
   });

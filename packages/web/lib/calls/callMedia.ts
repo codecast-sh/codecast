@@ -51,6 +51,17 @@ export function participantTiles(room: Room): ParticipantTile[] {
   return out;
 }
 
+/** The tiles a call stage draws, split by kind. Your own screen share is
+ *  left out: you are already looking at it, and drawing it back on a screen
+ *  it captures shows the stage inside itself, over and over. The share
+ *  button's lit state is what says you are sharing. */
+export function stageTiles(tiles: ParticipantTile[]): { screens: ParticipantTile[]; cameras: ParticipantTile[] } {
+  return {
+    screens: tiles.filter((t) => t.kind === "screen" && !t.isLocal),
+    cameras: tiles.filter((t) => t.kind === "camera"),
+  };
+}
+
 export { isMediaDenial };
 
 // Why did capture fail? livekit resolves null (no throw) when getUserMedia
