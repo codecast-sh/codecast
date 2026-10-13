@@ -1,16 +1,19 @@
 "use client";
-import { useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { settingsOnMap } from "../../../lib/line/lineMapUrl";
+import { AuthGuard } from "../../../components/AuthGuard";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { LinePage } from "../../../components/line/LinePage";
 
-// /line/settings: the line's settings live on its map now (line-map.md LX1).
-// Every link in (lineSettingsHref) lands on the map with the matching panel
-// open: a station's panel for ?station=, else the line's settings panel at
-// the ?section= it names.
+// /line/settings?project=<p>&graph=<line>: the settings of a line, a page of
+// the line app (LineWorkspace `settings`), in the workspace /line reads and
+// with its nav and switchers. lineSettingsHref links here, with a ?section= or
+// ?station= to land on; with no project, the line names it, else the page
+// lists the lines.
 export default function LineSettingsRoute() {
-  const router = useRouter();
-  const search = useSearchParams();
-  const to = settingsOnMap(search);
-  useEffect(() => { router.replace(to); }, [router, to]);
-  return null;
+  return (
+    <AuthGuard>
+      <ErrorBoundary name="Line settings">
+        <LinePage settings />
+      </ErrorBoundary>
+    </AuthGuard>
+  );
 }

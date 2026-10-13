@@ -242,9 +242,6 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                       Review suggestion
                     </button>
                   )}
-                  {plan && (actions?.onDismissPlan
-                    ? <button type="button" onClick={() => actions.onDismissPlan!(plan.deviceId, now + 3600_000)} className="text-[11px] text-sol-text-muted hover:text-sol-text">Dismiss for 1h</button>
-                    : <span className="text-[11px] text-sol-text-dim" title={off}>Dismiss for 1h</span>)}
                 </div>
               )}
               <OffloadRuns runs={runs} sessions={sessions} destinations={destinations} now={now} actions={actions} actionsDisabledReason={actionsDisabledReason} />
