@@ -242,14 +242,14 @@ from a browser identity (`refuseUnlessHuman`); revoked the same way. A change
 is an immediate wake with the authority as cause. `cast role show` prints it.
 
 **Trust and authority are independent, and the coupling is stated.** Trust is
-authority over codecast; authority is over something outside it. A CMO at
-`understand` may hold a spend authority and still not start hands. The rule a
-person will feel: a routine in `apply` mode that requires a `spend` or
-`publish` authority is offered activation only when the role's trust is
-`decide` or above; at `understand` it runs in `propose` mode whatever the
-manifest says, and the role page's routine row says so ("runs as propose:
-trust is understand"). The first visit's promise, nothing changes until you
-accept, holds: raising trust is the accept.
+authority over codecast; authority is over something outside it. A hire
+starts work on its own by default (only the Head of People does not), so a
+CMO holding a spend authority acts on it. A role whose Starts work on its own
+switch a person turned off may still hold a spend authority and not start
+hands: a routine in `apply` mode that requires a `spend` or `publish`
+authority then runs in `propose` mode whatever the manifest says, and the role
+page's routine row says so ("only recommends: Starts work on its own is
+off").
 
 **Credentials.** A `secret` input binds to a credential the host machine
 holds. `cast org template bind <instance> --secret <key>=<path>` records on

@@ -605,6 +605,22 @@ describe("cast org apply", () => {
     expect(history.some((h: any) => h.field === "line_workflow_slug" && h.new_value === "feature")).toBe(true);
   });
 
+  // The card's switch is what the person approved: a hire starts work on its
+  // own unless the card turned that off, and the off they approved holds.
+  test("a role proposal's Starts work on its own switch lands on the created role", async () => {
+    const db = fixtures({
+      session_decisions: [
+        proposalDecision("sd_on", "sd-30", { kind: "role", name: "Market lead", handle: "market", scope: { projects: ["pr-1"] } }, { status: "answered", answer_index: 0 }),
+        proposalDecision("sd_off", "sd-31", { kind: "role", name: "Quiet lead", handle: "quiet", scope: { projects: ["pr-1"] }, trust: "understand" }, { status: "answered", answer_index: 0 }),
+      ],
+    });
+    await performApplyDecision(ctxOf(db), ME as any, "sd-30", { provision: false });
+    await performApplyDecision(ctxOf(db), ME as any, "sd-31", { provision: false });
+    const roles = await db.query("org_roles").collect();
+    expect(roles.find((r: any) => r.handle === "market")?.trust).toBe("direct");
+    expect(roles.find((r: any) => r.handle === "quiet")?.trust).toBe("understand");
+  });
+
   test("creates the accepted roles with scope, parent and charter, folds change text in, skips the rest, and is idempotent", async () => {
     const db = fixtures({
       session_decisions: [
