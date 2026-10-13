@@ -2,7 +2,7 @@
 // snippet around it looks like, and how a match is marked. The header search,
 // the /search page and chat search all render from these, so a hit looks the
 // same wherever it is shown.
-import { parseSearchTerms, parseQueryTerms, termSpans, snippetAround } from "@codecast/shared/search";
+import { parseSearchTerms, parseQueryTerms, termSpans, snippetAround, stripWrapperTags } from "@codecast/shared/search";
 
 export { parseSearchTerms };
 
@@ -19,10 +19,9 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
   spans.forEach(([start, end], i) => {
     if (start > at) parts.push(<span key={`t${i}`}>{text.slice(at, start)}</span>);
     parts.push(
-      <mark
-        key={`m${i}`}
-        className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
-      >
+      // The conversation's own hit style (globals.css mark.search-hit), so a
+      // word found reads the same in a title, a snippet and the transcript.
+      <mark key={`m${i}`} className="search-hit">
         {text.slice(start, end)}
       </mark>,
     );
@@ -32,15 +31,10 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
   return <>{parts}</>;
 }
 
-/** Machine wrappers a message can carry (a session message, a reminder, a
- *  command tag): a tag-shaped name, lower case, its attributes, or the cut
- *  tail of one at either edge of a stored snippet. */
-const WRAPPER_TAG = /<\/?[a-z][a-z0-9]*(?:[-:_][a-z0-9]+)+(?:\s[^<>]*)?>|^[a-z0-9-]*(?:\s[a-z_]+="[^"]*")+\s*>|<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?$/g;
-
-/** A snippet as text a person reads: machine wrappers (`<session-message>`,
- *  `<system-reminder>`) go, the words inside them stay. */
+/** A snippet as one line a person reads: machine wrappers out (the shared
+ *  stripWrapperTags), whitespace folded. */
 export function stripSnippetMarkup(text: string): string {
-  return text.replace(WRAPPER_TAG, " ").replace(/\s{2,}/g, " ").trim();
+  return stripWrapperTags(text).replace(/\s{2,}/g, " ").trim();
 }
 
 /** The stretch of `content` that shows the most of the query (snippetAround),

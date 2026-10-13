@@ -13,7 +13,7 @@ import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { scopeIds } from "./lib/orgScope";
 import { ownsWork, projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
-import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadDetails, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
+import { atCap, capacity, capacityFlags, DAILY_CAP_KEYS, type HealthFlag, isOverloaded, overloadDetails, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
@@ -108,7 +108,7 @@ export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now
   const byDay = new Map<string, number>();
   for (const at of wakes) byDay.set(utcDay(at), (byDay.get(utcDay(at)) ?? 0) + 1);
   const caps = capsFor(role);
-  const daysAtCap = Array.from(byDay.values()).filter((n) => n >= caps.wakes_per_day).length;
+  const daysAtCap = Array.from(byDay.values()).filter((n) => atCap(n, caps.wakes_per_day)).length;
   // A row stamped a moment after `now` (a write racing the read) is today, not a negative day.
   const idle_days = lastScopeEventAt ? Math.max(0, Math.floor((now - lastScopeEventAt) / D)) : null;
   const age_days = Math.floor((now - (role.created_at ?? now)) / D);
@@ -589,7 +589,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       items_per_day: activity.wakes_7d.total / 7,
       decisions_per_day: decisions7 / 7,
       live_hands: hands.filter((s) => s.state === "working" || s.state === "needs_input" || s.state === "dormant").length,
-      hands_cap: caps.hands_per_day,
+      hands_cap: caps.hands_per_day ?? null,
       direct_reports: reportsOf.get(rid) ?? 0,
       open_stalls: stalls + stuckHands + unseenWaits + goalStalls,
       cap_hit_days: activity.wakes_7d.cap_hit_days,
@@ -598,12 +598,12 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const spend = {
       wakes_today: counters.wakes,
       wakes_7d_avg: activity.wakes_7d.total / 7,
-      wakes_cap: caps.wakes_per_day,
+      wakes_cap: caps.wakes_per_day ?? null,
       tokens_today: counters.tokens,
       // Tokens are counted per day on the role's counters only; the ledger
       // keeps no daily history, so the week's average is not known.
       tokens_7d_avg: null as number | null,
-      tokens_cap: caps.tokens_per_day,
+      tokens_cap: caps.tokens_per_day ?? null,
       cap_hits_7d: activity.wakes_7d.cap_hit_days,
       // A 7 day average of one burst reads as a daily rate; the days say which.
       wakes_by_day: activity.wakes_7d.by_day,
@@ -788,11 +788,12 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   for (const t of tasks) if (isOpen(t) && t.plan_id) bump(openByPlan, String(t.plan_id));
   // The company's budget as it stands: the caps of every active role summed,
   // so a proposal states the total it asks a person to allow, not a sum by hand.
-  const caps_total = { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 };
+  // One active role with no limit on a key makes that key's total null: no limit.
+  const caps_total: Record<(typeof DAILY_CAP_KEYS)[number], number | null> = { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 };
   for (const r of roles) {
     if (r.status !== "active") continue;
     const c = capsFor(r);
-    caps_total.hands_per_day += c.hands_per_day; caps_total.wakes_per_day += c.wakes_per_day; caps_total.tokens_per_day += c.tokens_per_day;
+    for (const k of DAILY_CAP_KEYS) { const cap = c[k]; const sum = caps_total[k]; caps_total[k] = sum === null || cap === undefined ? null : sum + cap; }
   }
   const company = {
     caps_total,

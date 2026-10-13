@@ -9,10 +9,13 @@ import { themedStyles } from '@/constants/Theme';
 export function BottomSheet({
   visible,
   onClose,
+  onDismiss,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
+  /** iOS: the sheet has finished sliding away, so another modal can open. */
+  onDismiss?: () => void;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -22,6 +25,7 @@ export function BottomSheet({
       transparent
       animationType="slide"
       onRequestClose={onClose}
+      onDismiss={onDismiss}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
