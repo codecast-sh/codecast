@@ -113,6 +113,8 @@ export type LineInboxInput = {
   trialProjects?: ReadonlySet<string>;
   /** The viewer: a problem assigned to them waits on them, since the line never starts a problem a person holds. */
   viewer?: string | null;
+  /** Tasks a run's decision is about that are not line problems in view, by id: the decision still names its problem. */
+  otherTasks?: ReadonlyMap<string, { title: string; short_id: string | null; project_id: string | null }>;
   now: number;
 };
 
@@ -331,11 +333,12 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
   const isFix = (x: (typeof input.decisions)[number]) => isLineCard(x) || (x.status === "pending" && !!x.workflow_run_id && !!x.task_id && byId.has(x.task_id));
   for (const d of input.decisions.filter((x) => isFix(x) && !x.trial).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))) {
     const t = d.task_id ? byId.get(d.task_id) : undefined;
-    // A card whose problem is not in view still names itself: its own question and ref.
-    const own = t ? null : { title: oneLine(d.question) ?? "A card", ref: d.short_id ?? null };
+    // A card whose problem is not a line problem in view still names the task it is about, else its own question and ref.
+    const other = !t && d.task_id ? input.otherTasks?.get(d.task_id) : undefined;
+    const own = t ? null : other ? { title: other.title, ref: other.short_id, projectId: other.project_id } : { title: oneLine(d.question) ?? "A card", ref: d.short_id ?? null };
     const card = (d as { card?: { headline?: string; recommend?: { verdict?: string } | null } | null }).card;
     // A card names its fix in its headline; a plain decision asks its own question.
-    rows.push({ ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: t ? oneLine(card?.headline) ?? decisionAsk(d.question) : null, runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null });
+    rows.push({ ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: t || other ? oneLine(card?.headline) ?? decisionAsk(d.question) : null, runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null });
   }
 
   // Trial cards, oldest first: each is a trial run paused at its gate, waiting on the answer (trialCardWaits). One its
