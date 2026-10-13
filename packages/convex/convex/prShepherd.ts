@@ -90,6 +90,11 @@ export async function patchPullRequest(
   if (after.state === "merged" || after.state === "closed") {
     await closeOutShepherd(ctx, after, after.state);
   }
+  // Tasks waiting on this PR settle in a transaction of their own, from every
+  // path that moves it (webhook, refresh, reconcile): task-graph.md TG2.
+  if (after.waiting_task_ids?.length && (after.state !== before.state || after.checks_state !== before.checks_state)) {
+    await ctx.scheduler?.runAfter(0, internal.taskWaits.settlePr, { pr_id: prId });
+  }
 
   return { pr: after, previousState, stateChanged: state !== previousState };
 }
@@ -854,66 +859,142 @@ export const applyMergeState = internalMutation({
   },
 });
 
+type MergeStateResult = { ok: boolean; reason?: string; retry?: boolean };
+
+/** Ask GitHub for one pull request's merge state and write it down. */
+async function fetchMergeState(
+  ctx: any,
+  prId: Id<"pull_requests">,
+  tokenFor: (pr: PR) => Promise<string | null>,
+): Promise<MergeStateResult> {
+  const pr: PR | null = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: prId });
+  if (!pr) return { ok: false, reason: "no_pr" };
+  if (pr.state !== "open") return { ok: false, reason: "not_open" };
+
+  const token = await tokenFor(pr);
+  if (!token) return { ok: false, reason: "no_token" };
+
+  const [owner, repo] = pr.repository.split("/");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  const response = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}`, { headers });
+  if (!response.ok) {
+    return { ok: false, reason: `github ${response.status}` };
+  }
+  const data = await response.json();
+
+  let behindBy: number | undefined;
+  const baseRef = data.base?.ref;
+  const headRef = data.head?.ref;
+  if (baseRef && headRef) {
+    const compare = await fetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/compare/${encodeURIComponent(baseRef)}...${encodeURIComponent(headRef)}`,
+      { headers },
+    );
+    if (compare.ok) {
+      const compareData = await compare.json();
+      behindBy = compareData.behind_by;
+    }
+  }
+
+  const result = await ctx.runMutation(internal.prShepherd.applyMergeState, {
+    pr_id: prId,
+    mergeable: data.mergeable ?? null,
+    mergeable_state: data.mergeable_state,
+    head_sha: data.head?.sha,
+    base_sha: data.base?.sha,
+    draft: !!data.draft,
+    requested_reviewers: (data.requested_reviewers ?? []).map((r: any) => r.login),
+    behind_by: behindBy,
+  });
+  return { ok: true, retry: result.retry };
+}
+
 export const refreshMergeState = internalAction({
   args: {
     pr_id: v.id("pull_requests"),
     attempt: v.optional(v.number()),
   },
-  handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+  handler: async (ctx, args): Promise<MergeStateResult> => {
     const attempt = args.attempt ?? 0;
-    const pr = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: args.pr_id });
-    if (!pr) return { ok: false, reason: "no_pr" };
-    if (pr.state !== "open") return { ok: false, reason: "not_open" };
-
-    const token: string | null = await ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: args.pr_id });
-    if (!token) return { ok: false, reason: "no_token" };
-
-    const [owner, repo] = pr.repository.split("/");
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    };
-
-    const response = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${pr.number}`, { headers });
-    if (!response.ok) {
-      return { ok: false, reason: `github ${response.status}` };
-    }
-    const data = await response.json();
-
-    let behindBy: number | undefined;
-    const baseRef = data.base?.ref;
-    const headRef = data.head?.ref;
-    if (baseRef && headRef) {
-      const compare = await fetch(
-        `${GITHUB_API_BASE}/repos/${owner}/${repo}/compare/${encodeURIComponent(baseRef)}...${encodeURIComponent(headRef)}`,
-        { headers },
-      );
-      if (compare.ok) {
-        const compareData = await compare.json();
-        behindBy = compareData.behind_by;
-      }
-    }
-
-    const result = await ctx.runMutation(internal.prShepherd.applyMergeState, {
-      pr_id: args.pr_id,
-      mergeable: data.mergeable ?? null,
-      mergeable_state: data.mergeable_state,
-      head_sha: data.head?.sha,
-      base_sha: data.base?.sha,
-      draft: !!data.draft,
-      requested_reviewers: (data.requested_reviewers ?? []).map((r: any) => r.login),
-      behind_by: behindBy,
-    });
-
+    const result = await fetchMergeState(ctx, args.pr_id, (pr) =>
+      ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id }),
+    );
     if (result.retry && attempt < MAX_MERGE_STATE_ATTEMPTS) {
       await ctx.scheduler.runAfter(MERGE_STATE_RETRY_MS, internal.prShepherd.refreshMergeState, {
         pr_id: args.pr_id,
         attempt: attempt + 1,
       });
     }
+    return result;
+  },
+});
 
-    return { ok: true };
+// A push to a base branch touches every open PR aimed at it, and a busy repo
+// has hundreds. One job per PR filled the scheduler's ten slots with GitHub
+// round trips for minutes after each merge to main (littlebird, ~212 PRs, ~425
+// jobs a push), so every other scheduled write in prod waited behind them.
+// A batch holds one slot and runs a few requests at a time.
+const MERGE_STATE_BATCH_SIZE = 100;
+const MERGE_STATE_BATCH_CONCURRENCY = 4;
+
+/** Schedule merge state refreshes for many pull requests at once. */
+export async function scheduleMergeStateRefreshes(
+  ctx: { scheduler: any },
+  prIds: Id<"pull_requests">[],
+  delayMs: number,
+): Promise<void> {
+  for (let i = 0; i < prIds.length; i += MERGE_STATE_BATCH_SIZE) {
+    await ctx.scheduler.runAfter(delayMs, internal.prShepherd.refreshMergeStates, {
+      pr_ids: prIds.slice(i, i + MERGE_STATE_BATCH_SIZE),
+      attempt: 0,
+    });
+  }
+}
+
+export const refreshMergeStates = internalAction({
+  args: {
+    pr_ids: v.array(v.id("pull_requests")),
+    attempt: v.number(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    // Every PR in a batch shares a repository, so a token found for one PR
+    // reads the rest of its team's rows. A miss is asked again per PR: the
+    // fallback looks at each PR's own linked sessions.
+    const tokens = new Map<string, Promise<string | null>>();
+    const tokenFor = async (pr: PR): Promise<string | null> => {
+      const key = String(pr.team_id ?? "");
+      const known = await tokens.get(key);
+      if (known) return known;
+      const asked = ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id });
+      if (!tokens.has(key)) tokens.set(key, asked);
+      return await asked;
+    };
+
+    const queue = [...args.pr_ids];
+    const unanswered: Id<"pull_requests">[] = [];
+    const worker = async () => {
+      for (let id = queue.shift(); id; id = queue.shift()) {
+        try {
+          const result = await fetchMergeState(ctx, id, tokenFor);
+          if (result.retry) unanswered.push(id);
+        } catch (error) {
+          console.error(`[prShepherd] merge state refresh failed for ${id}:`, error);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: MERGE_STATE_BATCH_CONCURRENCY }, worker));
+
+    if (unanswered.length > 0 && args.attempt < MAX_MERGE_STATE_ATTEMPTS) {
+      await ctx.scheduler.runAfter(MERGE_STATE_RETRY_MS, internal.prShepherd.refreshMergeStates, {
+        pr_ids: unanswered,
+        attempt: args.attempt + 1,
+      });
+    }
   },
 });
 
