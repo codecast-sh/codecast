@@ -6,7 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
-import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
+import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -14,6 +14,7 @@ import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./s
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
+import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
 
@@ -340,6 +341,10 @@ export const createSessionFromCli = mutation({
     // session is stamped review_of_task_id, never org_role_id, and counts
     // against the caps of the role doing the task's work.
     review_for_task: v.optional(v.string()),
+    // The task a hand is started for (a workflow station passes its run's
+    // task): its briefing names this task, not whatever the spawner is bound
+    // to at the moment.
+    hand_task: v.optional(v.string()),
     title: v.optional(v.string()),
     // `cast handoff --to` / handoff.start: any ref to a session the caller
     // runs or owns. The new session continues it: born with
@@ -390,9 +395,15 @@ export const createSessionFromCli = mutation({
     // under it, so its verdict is recorded as its own.
     const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
     if (review?.role) await gateRoleCaps(review.role);
-    // A hand's first turn opens with the unattended mandate and the hand
+    // A hand's first turn opens with the unattended opening and the hand
     // briefing (the-line.md L2): who it works for and how it ends its turn.
-    const handTask: any = roleGate && spawner?.active_task_id ? await ctx.db.get(spawner.active_task_id) : null;
+    // The task it was started for; the spawner's own binding only when none
+    // was named, since a standing session's binding drifts between its hands.
+    const handTask: any = !roleGate
+      ? null
+      : args.hand_task
+        ? await findAccessibleTask(ctx, userId, args.hand_task)
+        : spawner?.active_task_id ? await ctx.db.get(spawner.active_task_id) : null;
     const handProject: any = handTask?.project_id ? await ctx.db.get(handTask.project_id) : null;
     const prompt = roleGate ? handBriefing(roleGate, asDef.prompt, handTask?.short_id ?? undefined, handProject) : asDef.prompt;
 
@@ -425,7 +436,11 @@ export const createSessionFromCli = mutation({
       spawnerConversationId: spawner?._id,
       handoffFrom,
       prompt,
-      fleet: subagentFields ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
+      // A worker joins the fleet when its spawner declares the fleet's limits
+      // (`cast spawn --subagent` always does). A workflow station's hand is
+      // nested under its run but paced by it, one station at a time, so it
+      // never waits for a slot behind the machine's other workers.
+      fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
@@ -463,9 +478,14 @@ export async function gateHandStart(ctx: { db: any }, spawner: any | null): Prom
 // task's owning session, else of the latest linked session that carries one.
 // A hand that handed this task off and started its next task has moved its
 // binding (lib/taskOwner.ts), yet the work under review is still its role's.
-async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<{ task: any; role: any | null }> {
+async function findAccessibleTask(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<any> {
   const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
   if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error(`Task not found: ${shortId}`);
+  return task;
+}
+
+async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortId: string): Promise<{ task: any; role: any | null }> {
+  const task = await findAccessibleTask(ctx, userId, shortId);
   const bound = await boundSessionsOf(ctx, task);
   const linked = (await Promise.all([...(task.conversation_ids ?? [])].reverse().map((id: any) => ctx.db.get(id))))
     .filter((c: any) => c && String(c.review_of_task_id ?? "") !== String(task._id));
@@ -487,10 +507,10 @@ export async function gateRoleCaps(role: any): Promise<void> {
   const now = Date.now();
   const caps = capsFor(role);
   const counters = countersFor(role, now);
-  if (counters.hands >= caps.hands_per_day) {
+  if (atCap(counters.hands, caps.hands_per_day)) {
     throw new Error(`${role.name} (@${role.handle}) reached today's limit of ${caps.hands_per_day} hands; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
-  if (counters.tokens >= caps.tokens_per_day) {
+  if (atCap(counters.tokens, caps.tokens_per_day)) {
     throw new Error(`${role.name} (@${role.handle}) reached today's limit; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
 }
@@ -507,7 +527,7 @@ export async function recordHandStart(ctx: { db: any }, role: any, conversationI
 }
 
 // The briefing a hand starts with (org-roles-standing.md T4, the-line.md L2):
-// the unattended mandate, who the hand works for, the goal of the project the
+// the unattended opening, who the hand works for, the goal of the project the
 // task serves (org-staffing.md S7), and the structured ending. Written where
 // the hand pointer is written, so no hand can start without it.
 /** The first line of a hand's briefing; a session whose first message opens
@@ -531,7 +551,7 @@ export function handBriefing(
     `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
     `- A question you cannot answer yourself goes to your role, attached to the task: \`cast decide --task ${ct} "<question>" -o ... -o ...\`, then end your turn.`,
     `- If you review another hand's work, end with \`cast task verdict ${ct} approve|changes|reject --note -\`.`,
-    `- End EVERY turn with a handoff, never a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
+    `- End every turn with a handoff, not a pin: \`cast task handoff ${ct} --status done|blocked|needs_context --evidence - <<'EOF'\` with what you changed, what you verified, and what is left.`,
   ].join("\n");
-  return `${UNATTENDED_MANDATE}\n\n${header}\n\n${(prompt ?? "").trim()}`.trim();
+  return applyUnattended(`${header}\n\n${(prompt ?? "").trim()}`.trim(), `the role ${role.name} (@${role.handle})`);
 }

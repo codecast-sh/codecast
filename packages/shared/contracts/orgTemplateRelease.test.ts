@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { OrgTemplate } from "./orgTemplateManifest";
-import { updateNames, bumpRefusal, changelogBetween, changelogSections, classifyRelease, jumpBetween, mergeClassifications, releaseNote, updateOffer, versionBump, withClasses, type ReleaseLike } from "./orgTemplateRelease";
+import { updateNames, bumpRefusal, explainRelease, changelogBetween, changelogSections, classifyRelease, jumpBetween, mergeClassifications, releaseNote, updateOffer, versionBump, withClasses, type ReleaseLike } from "./orgTemplateRelease";
 
 const base = (version = "1.0.0"): OrgTemplate => ({
   schemaVersion: 2, id: "growth", version, name: "CMO", description: "One project CMO",
@@ -31,8 +31,11 @@ describe("classifyRelease", () => {
     });
     expect(classifyRelease(base(), next)).toEqual({ class: "structure", changes: { ...NONE, routines_added: ["social"], routines_removed: ["ads"], routines_recadenced: [{ id: "seo", from: "7d", to: "3d" }], inputs_added: ["accounts.publora"], setup_added: ["measurement"], ledgers_changed: ["cmo"] } });
   });
-  test("caps, authority, a routine's mode, the line and the role's name or handle are authority, in human words", () => {
-    expect(classifyRelease(base(), edit("2.0.0", (m) => { m.role.caps.tokens_per_day = 400000; })).changes.authority_changed).toEqual(["Daily token limit: 200,000 to 400,000"]);
+  test("default caps only shape new hires, so changing or dropping them is structure", () => {
+    expect(explainRelease(base(), edit("1.1.0", (m) => { m.role.caps.tokens_per_day = 400000; }))).toMatchObject({ class: "structure", why: ["role.caps.tokens_per_day 200000 -> 400000"] });
+    expect(bumpRefusal(base(), edit("1.1.0", (m) => { delete m.role.caps; }))).toBeNull();
+  });
+  test("authority, a routine's mode, the line and the role's name or handle are authority, in human words", () => {
     expect(classifyRelease(base(), edit("2.0.0", (m) => { m.authority!.push({ id: "site-write", kind: "write", label: "Site" }); })).changes.authority_changed).toEqual(["New permission: Site"]);
     expect(classifyRelease(base(), edit("2.0.0", (m) => { m.routines[1]!.mode = "apply"; })).changes.authority_changed).toEqual(["Ads now acts on its own (it only proposed before)"]);
     expect(classifyRelease(base(), edit("2.0.0", (m) => { m.role.line = "feature"; })).changes.authority_changed).toEqual(["Line it runs: none to feature"]);
@@ -57,7 +60,7 @@ describe("the bump a class needs", () => {
     expect(bumpRefusal(base(), { ...next, version: "1.1.0" })).toBeNull();
   });
   test("authority needs a major; content takes any newer version; the first release takes any", () => {
-    expect(bumpRefusal(base(), edit("1.1.0", (m) => { m.role.caps.wakes_per_day = 1; }))).toMatch(/an authority release \(Daily wake limit: 12 to 1\), so it needs a major version bump over 1\.0\.0; 1\.1\.0 is a minor bump\. Publish it as 2\.0\.0/);
+    expect(bumpRefusal(base(), edit("1.1.0", (m) => { m.role.line = "feature"; }))).toMatch(/an authority release \(Line it runs: none to feature\), so it needs a major version bump over 1\.0\.0; 1\.1\.0 is a minor bump\. Publish it as 2\.0\.0/);
     expect(bumpRefusal(base(), base("1.0.1"))).toBeNull();
     expect(bumpRefusal(null, base("0.0.1"))).toBeNull();
   });
@@ -134,8 +137,6 @@ describe("releaseNote", () => {
       "### 1.1.0",
       "- Adds the social post.",
       "A person must:",
-      "- Activate Social post (1d) from the role page: it arrived paused.",
-      "- Resume SEO weekly from the role page: its cadence moved from 7d to 3d, so it is paused for review.",
       "- Complete the new setup step \"Connect Publora\" from the role page.",
       "- Bind the new secret Publora key from the role page.",
     ]);
