@@ -43,25 +43,27 @@ the decision kit: you write content, never CSS, and `cast decide kit` prints
 the guide. Build the page first, where you learn what the decision is; write
 the card last, from it.
 
-**The page** is pictures of the problem and the fix, carried by real cases.
-It opens on the case the decision turns on, as the person in it met it, the
-moment at fault marked, and beside it what that person gets with the change,
-produced by running the change on it, never written by hand; a before needs
-the same evidence as an after. When the change is words an agent follows or a
-person receives, those words before and after are the change, and the page
-shows them. Further cases group by what the change did to each, the alike ones
-folded. Code (the diff, the files, the tests, the checks) is how the change was
-made, not what it does: it waits behind one fold or the run's link, and the
-page does not spend itself on it. The page ends once the reader could choose.
+**The page** is pictures of the problem and the fix, carried by real cases, and
+reads whole under the card: it opens where the card's words stop, never telling
+them again, on the case the decision turns on as the person in it met it, the
+moment at fault marked, beside what that person gets with the change, produced
+by running the change, never written by hand. A before needs an after's
+evidence, and both show the same cases. A picture is the thing as people meet
+it (the words they get or an agent follows, the screen they see), never text
+drawn to stand for it, and fits a phone's width. A case is named by what tells
+it apart, never by an id or hash. Further cases group by what the change did to
+each, the alike ones folded. Code is how the change was made, not what it does:
+it waits behind one fold. The page ends once the reader could choose.
 
 **The card** is the page's top in small. The question is the choice about
 people, short, as the reader would put it to themselves; adopting the change is
-one answer to it, never the question. The answers are the open courses, yours
-first, each said as what it does, then `::` and the fact that sizes it and what
-happens next; no two leave people in the same place. The context is a few
-sentences, well under a hundred words, read at a glance on a phone: what was
-wrong, what the change does, what cuts hardest against your lean, and what you
-would do.
+one answer to it, never the question. The answers are the open courses, any
+your page turned up among them, yours first, each said as what it does to
+people, then `::` and the fact that sizes it, plain on the card alone; how the
+change is built and shipped is no answer's business. No two leave people in the
+same place. The context is a few sentences, well under a hundred words: what
+was wrong, what the change does, what cuts hardest against your lean, what you
+would do, and why you would still do it given that.
 
 ## Only what the record holds
 
@@ -69,7 +71,8 @@ Every message, name, time and number comes from the record or from something
 you read or ran, quoted exactly; quotation marks surround only words someone
 wrote or said. Each count says what it counted, out of how many and from where,
 opens to its cases, and is the same wherever it appears. A cause is a finding
-only when something isolated it; otherwise it is your reading and says so.
+only when something isolated it, and so is the claim that something was not
+the cause; otherwise it is your reading and says so.
 What the record lacks is said once where it bears, never filled in. Before
 posting, rebuild every number on the card from the page's cases, then read card
 and page top to bottom as the reader meeting them cold.
@@ -77,5 +80,6 @@ and page top to bottom as the reader meeting them cold.
 ## After you post
 
 Pin your report the way the line's brief asks, without waiting for the answer.
-A message from the reader wakes you: answer from the record, and correct the
-decision where they show it wrong.
+Everything you write from here may reach the reader beside the decision: write
+it to them, under every rule above. A message from the reader wakes you: answer
+from the record, and correct the decision where they show it wrong.
