@@ -3,6 +3,8 @@ import { makeFakeDb } from "./testDb";
 import { getEntry, listEntries, performUndo, planUndo } from "./orgChanges";
 import { performCreateRole, performRetireRole, performSetCaps, performSetProjectLead, performSetTrust, performUpdateRole } from "./orgRoles";
 import { applyOrgChange } from "./orgInit";
+import { gateRoleCaps } from "./spawn";
+import { roleMayStartHands } from "./orgLine";
 import { performReparentSession } from "./sessionOwnership";
 import { openOrgBatch } from "./lib/orgChangeLog";
 import { invertRow, orgLogLine } from "@codecast/shared/contracts/orgChange";
@@ -60,6 +62,33 @@ describe("org history round trips", () => {
     await roundTrip(f, role._id, () => performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }), ["caps"]);
     await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, on: false }), ["trust"]);
     await roundTrip(f, role._id, () => performUpdateRole(f.ctx(), ME as any, { role_id: role._id, name: "Market" }), ["name"]);
+  });
+  // A role starts with no daily limits; a limit exists only once a person sets one, and null lifts it.
+  test("a new role has no daily limits, starts hands past any count, and a limit a person sets holds until lifted", async () => {
+    const f = fixture(); const role = await f.role();
+    expect((await f.db.get(role._id)).caps).toBeUndefined();
+    const busy = { ...(await f.db.get(role._id)), trust: "direct", counters: { day: new Date().toISOString().slice(0, 10), hands: 500, wakes: 900, tokens: 50_000_000 } };
+    await expect(gateRoleCaps(busy)).resolves.toBeUndefined();
+    expect(roleMayStartHands({ ...busy, caps: { line_on: true } }, Date.now())).toBe(true);
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 3 });
+    expect((await f.db.get(role._id)).caps).toEqual({ hands_per_day: 3 });
+    await expect(gateRoleCaps({ ...busy, caps: { hands_per_day: 3 } })).rejects.toThrow("limit of 3 hands");
+    expect(roleMayStartHands({ ...busy, caps: { hands_per_day: 3, line_on: true } }, Date.now())).toBe(false);
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, tokens: 1000 });
+    expect((await f.db.get(role._id)).caps).toEqual({ hands_per_day: 3, tokens_per_day: 1000 });
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: null });
+    expect((await f.db.get(role._id)).caps).toEqual({ tokens_per_day: 1000 });
+  });
+  // learning-loop.md LL5: the line's start switch rides the caps a person sets.
+  test("the line's start switch and slots are stored with the caps, kept by other cap edits, and undone to off", async () => {
+    const f = fixture(); const role = await f.role();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, line_on: true, cards: 2 });
+    expect((await f.db.get(role._id)).caps).toMatchObject({ line_on: true, cards: 2 });
+    await f.undo();
+    expect((await f.db.get(role._id)).caps?.line_on).toBeFalsy();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, line_on: true });
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 });
+    expect((await f.db.get(role._id)).caps).toMatchObject({ hands_per_day: 8, line_on: true });
   });
   for (const [kind, target, fields, change] of [
     ["task_status", "tasks_t", ["status", "closed_at", "review_verdict"], { task: "ct-1", status: "done", reason: "finished" }],
@@ -551,7 +580,7 @@ describe("S21: the record stays one chain under attack", () => {
     expect(await f.undo(undone)).toMatchObject({ already_applied: true });
     // The original still answers both verbs from here.
     expect(await f.undo(original)).toMatchObject({ changed: 1 });
-    expect((await f.db.get(role._id)).caps.hands_per_day).not.toBe(8);
+    expect((await f.db.get(role._id)).caps?.hands_per_day).not.toBe(8);
     expect(await f.redo(original)).toMatchObject({ changed: 1 });
     expect((await f.db.get(role._id)).caps.hands_per_day).toBe(8);
   });

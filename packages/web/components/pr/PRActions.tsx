@@ -30,6 +30,8 @@ import {
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { formatAcceleratorParts } from "../../shortcuts";
 import { ConfirmButton } from "../integrations/parts";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { prMergeLedger } from "../consequential/ledgers";
 import { CodeMenuItem, CodeShareItems } from "../menus/CodeShareItems";
 import { copyText } from "../../lib/copyText";
 import { sharePageUrl } from "../../lib/utils";
@@ -351,7 +353,11 @@ export function MergeMenu({ pr }: { pr: any }) {
   const blocked = pr.mergeable === false || pr.mergeable_state === "blocked" || pr.mergeable_state === "dirty";
   const reason = blocked ? state?.label : pr.checks_state === "pending" ? "Checks are still running" : undefined;
 
+  const [reviewing, setReviewing] = useState(false);
+  // A merge lands on the base branch and is undone only by a revert: every path to it opens the review first.
+  const ask = () => setReviewing(true);
   const go = async () => {
+    setReviewing(false);
     setBusy(true);
     try {
       const result = await merge({ repository: pr.repository, number: pr.number, method, delete_branch: deleteBranch });
@@ -368,7 +374,9 @@ export function MergeMenu({ pr }: { pr: any }) {
       <button
         type="button"
         disabled={busy || blocked}
-        onClick={go}
+        onClick={ask}
+        aria-haspopup="dialog"
+        data-pr-merge
         title={reason ? `${reason}. GitHub decides; try anyway from the menu.` : `${METHODS.find((m) => m.key === method)!.label}${deleteBranch ? ", then delete the branch" : ""}`}
         className="inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-sol-violet hover:bg-sol-violet/10 disabled:opacity-50 transition-colors"
       >
@@ -406,13 +414,20 @@ export function MergeMenu({ pr }: { pr: any }) {
           {blocked && (
             <>
               <DropdownMenuSeparator className="bg-sol-border" />
-              <DropdownMenuItem className="cursor-pointer text-[12px] text-sol-text-muted" onClick={go}>
+              <DropdownMenuItem className="cursor-pointer text-[12px] text-sol-text-muted" onClick={ask} data-pr-merge-anyway>
                 Try to merge anyway
               </DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      {reviewing && (
+        <SwitchReview
+          ledger={prMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, method: METHODS.find((m) => m.key === method)!.label, deleteBranch, files: pr.changed_files, additions: pr.additions, deletions: pr.deletions, checks: pr.checks_state, blockedBy: blocked ? state?.label : undefined })}
+          onClose={() => setReviewing(false)}
+          onConfirm={go}
+        />
+      )}
     </span>
   );
 }

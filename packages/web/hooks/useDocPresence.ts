@@ -32,6 +32,8 @@ export type PresenceRow = {
   can_send?: boolean;
   /** compose: rows only. Where this person is reading the transcript. */
   anchor?: PresenceAnchor;
+  /** compose: rows only. When the anchor last moved; the heartbeat does not touch it. */
+  anchor_at?: number;
   /** compose: rows only. Others' drafts this person just sent as parts of one joint turn. */
   claims?: Array<{ user_id: string; text: string; at: number; how?: string }>;
 };
