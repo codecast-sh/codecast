@@ -61,9 +61,11 @@ describe("ops slice", () => {
 
   it("grant and revoke move the grant list; remove drops the source", async () => {
     useInboxStore.getState().grantOpsAction(SOURCE, "jobs.rerun");
-    expect(useInboxStore.getState().opsApps[SOURCE].grants.map((g: any) => g.action)).toEqual(["jobs.rerun"]);
+    expect(useInboxStore.getState().opsSources[SOURCE].grants.map((g: any) => g.action)).toEqual(["jobs.rerun"]);
+    // The echo carries the server's own stamp and replaces the painted entry: a grant is never locked.
+    expect(Object.keys(useInboxStore.getState().pending).filter((k) => k.endsWith(":grants"))).toEqual([]);
     useInboxStore.getState().revokeOpsAction(SOURCE, "jobs.rerun");
-    expect(useInboxStore.getState().opsApps[SOURCE].grants).toEqual([]);
+    expect(useInboxStore.getState().opsSources[SOURCE].grants).toEqual([]);
     useInboxStore.getState().removeOpsSource(SOURCE);
     expect(useInboxStore.getState().opsSources[SOURCE]).toBeUndefined();
     // Its groups and samples go with it: the server purges them, and the

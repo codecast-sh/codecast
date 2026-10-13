@@ -1,3 +1,4 @@
+import { defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -54,6 +55,7 @@ class Server {
   standingPath?: string;
   /** An apply path that ignores the proposal's line (line-profile.md LP7). */
   dropsLine = false;
+  dropsTrust = false;
   constructor(readonly dir: string) { this.project = { _id: "project-1", short_id: "pr-1", title: "Product", project_path: dir, workspace: "team:team-1" }; }
   deps: OrgInitDeps = {
     readWorkspace: async (team) => ({ kind: "team", teamId: team || "unrelated-active-team" }),
@@ -102,7 +104,7 @@ class Server {
         const proposal: any = decision.answer_index === 1 ? applyProposalChanges(base, decision.answer_text).proposal : base;
         if (this.roles.some((r) => r.handle === proposal.handle)) return { status: "error", error: "Role handle exists" };
         // As applyRole: the proposal's caps (cards included) and its line, unless a test plays an older backend that drops the line.
-        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, ...(proposal.line && !this.dropsLine ? { line_workflow_slug: proposal.line } : {}), trust: "understand", status: "active" };
+        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, ...(proposal.line && !this.dropsLine ? { line_workflow_slug: proposal.line } : {}), trust: !this.dropsTrust && proposal.trust ? proposal.trust : defaultTrustFor(proposal), status: "active" };
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
@@ -259,10 +261,19 @@ describe("proposal and lifecycle fake API", () => {
     f.server.approve(); f.server.decisions[0].blocking = false; await expect(f.reconcile()).rejects.toThrow("blocking decision");
     f.server.decisions[0].blocking = true; f.server.approve(2); expect((await f.reconcile()).phase).toBe("declined"); expect(f.server.roles).toHaveLength(0);
   });
-  test("changed scope, changed proposal, and invalid trust stop before apply", async () => {
+  test("a hire starts work on its own unless the person turns that off on the card", async () => {
+    const on = fixture(); await on.install(); on.server.approve(); await on.reconcile();
+    expect(on.server.roles[0].trust).toBe("direct");
+    const off = fixture(); await off.install(); off.server.approve(1); off.server.decisions[0].answer_text = '{"trust":"understand"}'; await off.reconcile();
+    expect(off.server.roles[0].trust).toBe("understand");
+  });
+  test("a backend that drops the approved switch is refused instead of hiring a role nobody approved", async () => {
+    const f = fixture(); await f.install(); f.server.dropsTrust = true; f.server.approve(1); f.server.decisions[0].answer_text = '{"trust":"understand"}';
+    await expect(f.reconcile()).rejects.toThrow("differs from what was approved");
+  });
+  test("changed scope, changed proposal and a changed proposal stop before apply", async () => {
     const f = fixture(); await f.install(); f.server.approve(1);
     f.server.decisions[0].answer_text = '{"scope":{"projects":[]}}'; await expect(f.reconcile()).rejects.toThrow("Approved scope differs");
-    f.server.decisions[0].answer_text = '{"trust":"act"}'; await expect(f.reconcile()).rejects.toThrow("start at understand");
     f.server.decisions[0].answer_text = ''; f.server.decisions[0].context_md = f.server.decisions[0].context_md.replace('"handle": "product-cmo"', '"handle": "other"');
     await expect(f.reconcile()).rejects.toThrow("Proposal changed"); expect(f.server.roles).toHaveLength(0);
   });
@@ -460,7 +471,7 @@ describe("upgrades and adoption", () => {
   test("same-version changed digest and caps changes require explicit human path", async () => {
     const f = await ready(); fs.writeFileSync(path.join(f.root, "org/weekly.md"), "changed");
     await expect(upgradeTemplate(f.server.deps, "product", f.root, { ...f.options, apply: true })).rejects.toThrow("Same-version");
-    const m = manifest(); m.version = "1.3.0"; m.role.caps.hands_per_day = 100;
+    const m = manifest(); m.version = "1.3.0"; m.role.caps!.hands_per_day = 100;
     await expect(upgradeTemplate(f.server.deps, "product", folder(m), { ...f.options, apply: true })).rejects.toThrow("identity or caps");
   });
   test("explicit adoption never duplicates or rewrites existing channel triggers", async () => {
@@ -586,7 +597,7 @@ describe("the project's lead", () => {
     await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "growth" })).rejects.toThrow(/me or @handle/);
     expect(server.writes()).toHaveLength(0);
     const receipt = await installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@growth" });
-    expect(receipt.proposal).toMatchObject({ reports_to: "@growth", avatar: "fox", tenure: { kind: "program", ends: { project: "pr-1" }, then: "review" }, trust: "understand" });
+    expect(receipt.proposal).toMatchObject({ reports_to: "@growth", avatar: "fox", tenure: { kind: "program", ends: { project: "pr-1" }, then: "review" }, trust: "direct" });
   });
 });
 

@@ -55,6 +55,12 @@ export interface Config extends CloudSessionSyncSettings {
   // silence the loop without unwinding the code.
   wip_snapshots_enabled?: boolean;
 
+  // --- Level sweep (daemon.ts sweepLevelCheckouts, land/levelSweep.ts) ---
+  // Shared checkouts whose repo sets `[ship] level = true` follow their
+  // upstream in place every minute. Set false to stop this machine doing it
+  // for every repo, whatever the repo says.
+  level_checkouts_enabled?: boolean;
+
   // --- Device identity ---
   // Explicit name for THIS machine, replacing the derived "macOS - <hostname>".
   // Set it on a provisioned box whose hostname is a UUID (a Scaleway Mac reads as
@@ -291,12 +297,17 @@ export interface Config extends CloudSessionSyncSettings {
   // repository, CODECAST_SESSION_TRAILER=0 in one environment.
   session_trailer?: boolean;
 
-  // --- Subagent fleet (shared/contracts/subagentFleet.ts) ---
-  // How many `cast spawn --subagent` workers one session (default 4) and this
-  // machine (default 8) run at once; a spawn past either waits in a queue.
-  // `cast config subagents.per_session 6`. Also the default `--max` of
+  // --- Queue limits (cast queue lists every queue) ---
+  // How many `cast spawn --subagent` workers one session (default 10) and this
+  // machine (default 24) run at once; a spawn past either waits in a queue
+  // (shared/contracts/subagentFleet.ts). Also the default `--max` of
   // `cast plan orchestrate` and `autopilot`.
   subagents?: { per_session?: number; per_machine?: number };
+  // How many typecheck watchers this machine keeps (default 6) and how many
+  // commands run as Interactive jobs at once (default 8); past either, a
+  // caller waits its turn (machineCaps.ts). `cast config check.per_machine 8`.
+  check?: { per_machine?: number };
+  interactive_jobs?: { per_machine?: number };
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;

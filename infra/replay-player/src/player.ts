@@ -16,17 +16,23 @@
 //                and a "frame" message); __codecastReplaySeek(t) draws another
 //
 // Every time it speaks is on the replay clock (ms since the stream's first
-// event), mapped from rrweb's own offsets through the manifest's t0.
+// event, ending at the replay's duration), mapped from rrweb's own offsets
+// through the manifest's t0 (clock.ts).
 import { Replayer } from "@rrweb/replay";
 import {
+  REPLAY_DOM_LIMITS,
   REPLAY_FRAME_LIMITS,
   REPLAY_PLAYER_SOURCE,
   REPLAY_PLAYER_SPEEDS,
   parseReplayHostMessage,
   parseReplayPlayerUrl,
+  replayCaptureProblem,
+  replayPlayerUrl,
   type ReplayPlayerManifest,
   type ReplayPlayerMessage,
 } from "../../../packages/shared/contracts/replayPlayer";
+import { replayClock } from "./clock";
+import { remoteAssetHosts, remoteAssetsLabel } from "./remoteAssets";
 
 type FrameState =
   | { state: "loading" }
@@ -41,13 +47,45 @@ declare global {
 }
 
 const CONTROLS_H = 44;
+/** The remote-assets strip under the page when there is no control bar to hold its button. */
+const STRIP_H = 28;
 
 /** A player message without its tag, one variant at a time. */
 type Outgoing = ReplayPlayerMessage extends infer M ? (M extends ReplayPlayerMessage ? Omit<M, "source"> : never) : never;
 
+// The page embedding the player. Commands are obeyed only from that window,
+// and messages go only to its origin: from location.ancestorOrigins where the
+// browser has it, else from the first command the parent sends. Until then
+// (Firefox) every message is held, and the only thing posted to "*" is a bare
+// `hello`, which says nothing; a host answers it with a `hello` of its own.
+let hostOrigin: string | null = (location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins?.[0] ?? null;
+const held: Outgoing[] = [];
+let helloAt = 0;
+
 function post(msg: Outgoing) {
-  if (window.parent !== window) window.parent.postMessage({ source: REPLAY_PLAYER_SOURCE, ...msg }, "*");
+  if (window.parent === window) return;
+  if (hostOrigin) {
+    window.parent.postMessage({ source: REPLAY_PLAYER_SOURCE, ...msg }, hostOrigin);
+    return;
+  }
+  // A held clock or state is superseded by the newer one.
+  if (msg.type === "time" || msg.type === "state") {
+    const i = held.findIndex((m) => m.type === msg.type);
+    if (i >= 0) held.splice(i, 1);
+  }
+  held.push(msg);
+  if (Date.now() - helloAt > 250) {
+    helloAt = Date.now();
+    window.parent.postMessage({ source: REPLAY_PLAYER_SOURCE, type: "hello" }, "*");
+  }
 }
+
+// Learns the host's origin from its first command, then sends what was held.
+window.addEventListener("message", (e) => {
+  if (hostOrigin || window.parent === window || e.source !== window.parent || !parseReplayHostMessage(e.data)) return;
+  hostOrigin = e.origin;
+  for (const m of held.splice(0)) post(m);
+});
 
 function fail(message: string) {
   window.__codecastReplay = { state: "error", message };
@@ -59,18 +97,66 @@ function fail(message: string) {
   post({ type: "error", message });
 }
 
+/**
+ * What a whole capture may inflate to, across its chunks. A chunk is held to
+ * REPLAY_DOM_LIMITS.chunk_max_inflated_bytes; SDK chunks are uploaded by
+ * anyone holding a source's public ingest key, so a few MB of gzip that
+ * inflate to gigabytes must stop here, in a viewer's tab or the renderer.
+ */
+const CAPTURE_MAX_INFLATED_BYTES = 4 * REPLAY_DOM_LIMITS.chunk_max_inflated_bytes;
+let inflatedTotal = 0;
+
+/** A stream's bytes, refusing past `max` (and past the capture's total) as they arrive. */
+async function readCapped(stream: ReadableStream<Uint8Array>, max: number): Promise<Uint8Array<ArrayBuffer>> {
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    inflatedTotal += value.byteLength;
+    if (n > max || inflatedTotal > CAPTURE_MAX_INFLATED_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error("the recording is larger than a capture may be");
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(n);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.byteLength;
+  }
+  return out;
+}
+
 async function readChunk(url: string): Promise<unknown[]> {
   const res = await fetch(url, { referrerPolicy: "no-referrer", credentials: "omit" });
-  if (!res.ok) throw new Error(`a recording chunk answered ${res.status}`);
-  let bytes = new Uint8Array(await res.arrayBuffer());
-  // R2 serves a chunk stored with Content-Encoding: gzip already inflated; a
+  if (!res.ok || !res.body) throw new Error(`a recording chunk answered ${res.status}`);
+  // R2 serves a chunk stored with Content-Encoding: gzip already inflated (the
+  // browser inflates it into this stream, so it is counted as it arrives); a
   // chunk uploaded without that header arrives as the gzip bytes themselves.
+  let bytes = await readCapped(res.body, REPLAY_DOM_LIMITS.chunk_max_inflated_bytes);
   if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    const inflated = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    bytes = new Uint8Array(await new Response(inflated).arrayBuffer());
+    bytes = await readCapped(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")), REPLAY_DOM_LIMITS.chunk_max_inflated_bytes);
   }
   const parsed = JSON.parse(new TextDecoder().decode(bytes));
   return Array.isArray(parsed) ? parsed : [];
+}
+
+/** Every chunk, a few at a time, in order. */
+async function readChunks(urls: string[], parallel = 4): Promise<unknown[]> {
+  const out: unknown[][] = new Array(urls.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < urls.length) {
+      const i = next++;
+      out[i] = await readChunk(urls[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, urls.length) }, lane));
+  return out.flat();
 }
 
 const fmt = (ms: number) => {
@@ -126,12 +212,13 @@ async function main() {
 
   let events: any[] = [];
   try {
-    for (const url of manifest.dom_urls) events = events.concat(await readChunk(url));
+    events = await readChunks(manifest.dom_urls);
   } catch (err) {
     return fail(`The recording could not be read: ${err instanceof Error ? err.message : String(err)}`);
   }
   events = events.filter((e) => e && typeof e.type === "number" && typeof e.timestamp === "number").sort((a, b) => a.timestamp - b.timestamp);
-  if (!events.some((e) => e.type === 2)) return fail("This capture has no full snapshot of the page, so there is nothing to draw.");
+  const problem = replayCaptureProblem(events);
+  if (problem) return fail(problem);
 
   const stage = document.getElementById("stage")!;
   const replayer = new Replayer(events, {
@@ -144,15 +231,32 @@ async function main() {
     UNSAFE_replayCanvas: false,
     pauseAnimation: true,
     speed: 1,
+    // A recorded page's own `scroll-behavior: smooth` turns every scroll
+    // rrweb applies into an animation: a seek glides instead of landing, and
+    // a frame is right only if the animation ends before it is shot (in a
+    // background tab it never does). The replayed page always scrolls at once.
+    insertStyleRules: [
+      "html, body, * { scroll-behavior: auto !important; }",
+      // The cast browser extension's agent-tab frame and pointer (a fixed,
+      // full-viewport red border it mounts on <html>; browser-extension
+      // borderSource) is in any recording made while an agent drove the tab.
+      // It is codecast's chrome, not the customer's page.
+      "html > div[id^='cast-'][data-cast-color] { display: none !important; }",
+    ],
   });
   const meta = replayer.getMetaData();
-  const lead = meta.startTime - manifest.t0;
-  const toOffset = (t: number) => Math.min(Math.max(0, t - lead), meta.totalTime);
-  const toClock = (offset: number) => Math.max(0, offset + lead);
+  const { duration, toOffset, toClock, endOffset } = replayClock(manifest, meta);
   // rrweb draws the events strictly before the offset it is given; a moment
   // includes what happened at it, so it is drawn a millisecond past.
   const drawAt = (offset: number) => offset + 1;
-  const duration = toClock(meta.totalTime);
+
+  // Remote assets load only on this view's say-so (worker.ts header). Their
+  // button lives in the control bar, or in a strip under the page when there
+  // is no bar: never over the recorded page.
+  const remoteHosts = mode === "interactive" && !params.remote_assets ? remoteAssetHosts(events) : [];
+  const showStrip = remoteHosts.length > 0 && !showControls;
+  /** What the player draws below the recorded page. */
+  const belowH = (showControls ? CONTROLS_H : 0) + (showStrip ? STRIP_H : 0);
 
   let size = { width: 1024, height: 768 };
   const firstMeta = events.find((e) => e.type === 4 && e.data?.width && e.data?.height);
@@ -160,7 +264,7 @@ async function main() {
 
   const layout = () => {
     const availW = mode === "frame" ? REPLAY_FRAME_LIMITS.max_width : window.innerWidth;
-    const availH = mode === "frame" ? REPLAY_FRAME_LIMITS.max_height : window.innerHeight - (showControls ? CONTROLS_H : 0);
+    const availH = mode === "frame" ? REPLAY_FRAME_LIMITS.max_height : window.innerHeight - belowH;
     const scale = Math.min(1, availW / size.width, availH / size.height);
     const w = Math.round(size.width * scale), h = Math.round(size.height * scale);
     stage.style.width = `${w}px`;
@@ -227,7 +331,7 @@ async function main() {
   const sendTime = () => post({ type: "time", t_ms: now(), playing });
   const setPlaying = (on: boolean, at?: number) => {
     const offset = at === undefined ? replayer.getCurrentTime() : toOffset(at);
-    if (on) replayer.play(offset >= meta.totalTime ? 0 : offset);
+    if (on) replayer.play(offset >= endOffset ? toOffset(0) : offset);
     else replayer.pause(at === undefined ? offset : drawAt(offset));
     playing = on;
     paint();
@@ -236,12 +340,13 @@ async function main() {
   };
   const seek = (t: number, play = playing) => setPlaying(play, t);
 
-  replayer.on("finish", () => {
+  const finish = () => {
     playing = false;
     paint();
     post({ type: "state", playing, speed });
     sendTime();
-  });
+  };
+  replayer.on("finish", finish);
   toggle.addEventListener("click", () => setPlaying(!playing));
   scrub.addEventListener("input", () => seek(Number(scrub.value), false));
   speedSel.addEventListener("change", () => {
@@ -256,6 +361,9 @@ async function main() {
     }
   });
   window.addEventListener("message", (e) => {
+    // Only the embedding page drives playback, never another window that found
+    // this one. The listener above has learned its origin by now.
+    if (e.source !== window.parent || window.parent === window || e.origin !== hostOrigin) return;
     const msg = parseReplayHostMessage(e.data);
     if (!msg) return;
     if (msg.type === "seek") seek(msg.t_ms, msg.play ?? playing);
@@ -268,8 +376,30 @@ async function main() {
       post({ type: "state", playing, speed });
     }
   });
+  // The opt-in names the hosts, and reloads the page with it at the time it
+  // stands at. The reload is the CSP's: a page's policy is fixed when it loads.
+  if (remoteHosts.length) {
+    const remoteBtn = document.querySelector<HTMLButtonElement>("#remote")!;
+    remoteBtn.textContent = remoteAssetsLabel(remoteHosts);
+    remoteBtn.title = `This recording's images and fonts are on other sites, which would see that you opened it: ${remoteHosts.join(", ")}`;
+    remoteBtn.hidden = false;
+    remoteBtn.addEventListener("click", () => {
+      location.replace(replayPlayerUrl({ ...params, t_ms: now(), autoplay: playing, remote_assets: true }, location.origin));
+    });
+    if (showStrip) {
+      const strip = document.getElementById("strip")!;
+      strip.append(remoteBtn);
+      strip.hidden = false;
+    } else bar.append(remoteBtn);
+  }
+
   setInterval(() => {
     if (!playing) return;
+    // The capture may run past the replay's end; playback stops at the end.
+    if (replayer.getCurrentTime() >= endOffset) {
+      replayer.pause(drawAt(endOffset));
+      return finish();
+    }
     paint();
     sendTime();
   }, 250);
@@ -278,7 +408,7 @@ async function main() {
   replayer.pause(drawAt(toOffset(start)));
   paint();
   window.__codecastReplay = { state: "ready", t_ms: now(), url: urlAt(events, meta.startTime, toOffset(start)), width: size.width, height: size.height, outline: "" };
-  post({ type: "ready", duration_ms: duration, width: size.width, height: size.height, t_ms: now() });
+  post({ type: "ready", duration_ms: duration, width: size.width, height: size.height, t_ms: now(), below_px: belowH });
   if (params.autoplay) setPlaying(true);
 }
 
