@@ -169,7 +169,7 @@ refused; the web role page is the one door. Retire (`performRetireRole`)
 tears the seat down: live hands get one interrupt, the standing session's
 routines are cancelled, its held turns dropped, and its anchor decommissioned
 (kill command, bot off the roster).
-A hand's first turn opens with the unattended mandate and a briefing that
+A hand's first turn opens with the unattended opening and a briefing that
 names `cast task handoff`, `cast task verdict` and `cast decide --task`
 (`spawn.handBriefing`, written where the hand pointer is written). Usage: `messages.rollUpUsage` from the CLI
 parser's `usageOf` on Claude assistant records, into
