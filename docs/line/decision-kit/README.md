@@ -142,6 +142,15 @@ A case may hold a `<dk-msg>`, a `<dk-pair>`, a `<dk-gap>` or a `<dk-view>`.
 
 **A table.** A few rows of counts read across, as a plain `<table>` with `<th>` headers; the first column names the row and the rest are numbers. Every header and row label says, in the founder's words, which version a person met and what happened to them; a cell is one count out of its whole. On a phone a table of three or more columns stacks each row under its name, a label and value per column, so every column stays in view.
 
+**A grid of results.** When what people see is a grid of passes and fails (an eval's runs, a check's history), draw it as cells, never as letters in `<pre>`. Each row is one case, named whole by what tells it apart, its cells one letter each (`P` pass, `F` fail, `.` not run, oldest first) and its `note` the count it is sorted by. Before and after are two grids over the same rows.
+
+```html
+<dk-cells>
+  <figcaption>Today: the 5 cases that flip most, newest 30 runs</figcaption>
+  <dk-row name="Search status, when the carrier answers late" note="8 flips">..P.F..PF</dk-row>
+</dk-cells>
+```
+
 **A caveat** the reader must not miss: `<dk-caveat><b>Not checked:</b> …</dk-caveat>`.
 
 **The thing itself, in the product.** A link that opens the product's own view of a record, whole: a conversation, a person, a call, a match, a need.

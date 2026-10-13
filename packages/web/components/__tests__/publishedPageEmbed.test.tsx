@@ -10,12 +10,14 @@ import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const client = new ConvexReactClient("https://example.convex.cloud");
-const watchQuery = spyOn(client, "watchQuery").mockImplementation(() => ({
+// The page's metadata answers (an open page, so the frame mounts); every other query is still loading.
+const SHARED = { title: "A page", kind: "html", version: 1, gated: false, user: null };
+const watchQuery = spyOn(client, "watchQuery").mockImplementation(((query: unknown) => ({
   onUpdate: () => () => {},
-  localQueryResult: () => undefined,
+  localQueryResult: () => (String((query as { [k: symbol]: unknown })[Symbol.for("functionName")] ?? "") === "artifacts:getShared" ? SHARED : undefined),
   localQueryLogs: () => undefined,
   journal: () => undefined,
-}));
+})) as never);
 
 function markup(slug = "abc") {
   return renderToStaticMarkup(

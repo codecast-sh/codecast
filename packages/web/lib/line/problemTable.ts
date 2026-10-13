@@ -136,12 +136,10 @@ export function problemHeadName(issue: { title: string; name?: string | null }, 
 const LIST_MAX = 90;
 /** How far past LIST_MAX a list name may run to end its clause whole. */
 const REACH = 40;
-// A parenthetical carrying evidence a list reader cannot use: a call id, a Slack ts, a clock time.
-const ID_ASIDE = /\s*\((?=[^()]*(?:\b[0-9a-f]{7,}\b|\d{5,}|\b\d{1,2}:\d{2}))[^()]*\)/gi;
 
 /**
- * A problem as a list names it: its written name (cause.named) when it has one, else its title
- * cut to one scannable clause, never mid-word, with id asides dropped. The page keeps the title whole.
+ * A problem as a list names it: its written name (cause.named, which lineRetitle writes for every title), else its
+ * title cut to one scannable clause, never mid-word. The page keeps the title whole.
  */
 export function problemListName(issue: { title: string; name?: string | null }): string {
   if (issue.name?.trim()) return issue.name.trim();
@@ -149,7 +147,7 @@ export function problemListName(issue: { title: string; name?: string | null }):
   // A title stored cut at its cap: its first whole clause, never the cut.
   const whole = clauseHeading(title);
   if (whole && whole.length <= LIST_MAX) return whole;
-  const t = problemTitle(title).replace(ID_ASIDE, "").replace(/\s+([:,;.])/g, "$1").replace(/\s+/g, " ").trim();
+  const t = problemTitle(title).replace(/\s+/g, " ").trim();
   if (t.length <= LIST_MAX) return t;
   // A closing "…, not a defect" turns the whole sentence around: cut it off and the name says the opposite.
   if (t.length <= LIST_MAX + 24 && /,\s+not\s[^,]*$/i.test(t)) return t;
