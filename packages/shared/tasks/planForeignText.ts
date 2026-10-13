@@ -28,6 +28,8 @@ import {
   fenceForeignText,
   inlineForeignText,
 } from "../contracts/fence";
+import { notReadyLabel, prWords, type GraphTask, type WaitLabelOptions } from "./graph";
+import { openBlockerLabels, planVerdicts, type GraphOutside } from "./planVerdicts";
 
 /**
  * Caps the task renderer has no equivalent for.
@@ -82,12 +84,13 @@ export type ForeignPlanComment = {
   timestamp?: number | null;
 };
 
-export type ForeignPlanTask = {
+/** A plan task as `plans.get` returns it: its graph fields decide which group
+ *  it is listed in (graph.ts readiness, as `cast task ready` judges it). */
+export type ForeignPlanTask = GraphTask & {
+  _id?: unknown;
   short_id?: string | null;
   title?: string | null;
   description?: string | null;
-  status?: string | null;
-  blocked_by?: string[] | null;
   external?: { provider?: string | null; identifier?: string | null } | null;
 };
 
@@ -100,6 +103,9 @@ export type ForeignPlanRecord = {
   acceptance_criteria?: string[] | null;
   /** Oldest first, as `mergePlanEntries` orders them. */
   comments?: ForeignPlanComment[] | null;
+  /** The rows the tasks' blockers and parents name outside the plan, and
+   *  every ref looked up (`plans.get`); without it those stay unknown and block. */
+  graph_outside?: GraphOutside | null;
 };
 
 /** Names the plan concretely, the way the task renderer names an issue. */
@@ -193,11 +199,14 @@ export type PlanTaskListOptions = {
    * plan show` does not, because a human is scanning for status.
    */
   descriptions?: boolean;
+  /** How a PR is named (the CLI's checkoutWords); in full by default. */
+  words?: WaitLabelOptions;
 };
 
 const DONE_STATUSES = new Set(["done", "dropped"]);
 
-function taskLine(task: ForeignPlanTask, opts: PlanTaskListOptions): string[] {
+/** `why` is what holds the task back, printed after its title. */
+function taskLine(task: ForeignPlanTask, opts: PlanTaskListOptions, why: string | null): string[] {
   const id = inlineForeignText(task.short_id) || "?";
   const title = inlineForeignText(task.title);
   const provider = task.external?.provider;
@@ -208,8 +217,7 @@ function taskLine(task: ForeignPlanTask, opts: PlanTaskListOptions): string[] {
       `${provider}${task.external?.identifier ? ` ${task.external.identifier}` : ""}`,
     )}]`
     : "";
-  const blockers = (task.blocked_by || []).map((b) => inlineForeignText(b)).filter((b) => b);
-  const by = blockers.length > 0 ? ` (by ${blockers.join(", ")})` : "";
+  const by = why ? ` (${inlineForeignText(why)})` : "";
   const lines = [`- ${id}: ${title}${by}${origin}`];
   if (opts.descriptions && !DONE_STATUSES.has(String(task.status || ""))) {
     const desc = inlineForeignText(task.description);
@@ -234,23 +242,35 @@ export function renderFencedPlanTasks(
   const all = tasks || [];
   if (all.length === 0) return null;
 
+  // Readiness is graph.ts's, the rule `cast task ready` and `cast plan wave`
+  // apply: a finished blocker clears, a wait holds, a worked parent holds.
+  const { statusOf, verdicts } = planVerdicts(all, plan.graph_outside);
+  const words = opts.words ?? prWords(null);
+  const why = (t: ForeignPlanTask): string | null => {
+    const v = verdicts.get(t)!;
+    if (!v.ready && v.reason !== "status" && v.reason !== "blocked") return notReadyLabel(t, v, words);
+    if (DONE_STATUSES.has(String(t.status || ""))) return null;
+    const open = openBlockerLabels(t, statusOf, words);
+    return open.length ? `blocked by: ${open.join(", ")}` : null;
+  };
+
   const done = all.filter((t) => t.status === "done");
   const inProgress = all.filter((t) => t.status === "in_progress");
   const open = all.filter((t) => t.status === "open");
-  const ready = open.filter((t) => !t.blocked_by?.length);
-  const blocked = open.filter((t) => t.blocked_by?.length);
+  const ready = open.filter((t) => verdicts.get(t)!.ready);
+  const waiting = open.filter((t) => !verdicts.get(t)!.ready);
   const other = all.filter(
     (t) => !["done", "in_progress", "open"].includes(String(t.status || "")),
   );
 
   const group = (heading: string, rows: ForeignPlanTask[]): string[] =>
-    rows.length === 0 ? [] : [`\n${heading}:`, ...rows.flatMap((t) => taskLine(t, opts))];
+    rows.length === 0 ? [] : [`\n${heading}:`, ...rows.flatMap((t) => taskLine(t, opts, why(t)))];
 
   const body = [
     `Tasks (${done.length}/${all.length} done)`,
     ...group("In progress", inProgress),
     ...group("Ready", ready),
-    ...group("Blocked", blocked),
+    ...group("Not ready", waiting),
     ...group("Done", done),
     ...group("Other", other),
   ].join("\n");
