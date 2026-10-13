@@ -52,29 +52,10 @@
 .lwn-twin .lw-act { margin-left: auto; }
 .ask-q .lwn-ref { font-size: inherit; color: var(--lw-ink); }
 
-/* A built fix's diff, read in the reader: the shared changed-file rows, framed like the reader's other blocks. */
-.lwn-diff { border: 1px solid var(--lw-line, var(--sol-border)); border-radius: 8px; overflow: hidden; }
-.lwn-h-end { margin-left: auto; font-weight: 500; }
-
-/* A built fix for review (Review): what it does, then the facts its act follows from (gates, main, merge). */
-.lwn-does { margin: 0 0 var(--lw-s3); font-size: var(--lw-fs-md); font-weight: 600; line-height: 1.45; color: var(--lw-ink); text-wrap: pretty; }
-.lwn-does[data-line-need-review-does="reading"], .lwn-does[data-line-need-review-does="none"] { font-weight: 500; color: var(--lw-ink-3); }
-.lwn-state { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 var(--lw-s4); font-size: var(--lw-fs-sm); }
-.lwn-state > div { display: contents; }
-.lwn-state dt { color: var(--lw-ink-3); }
-.lwn-state dd { margin: 0; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
-.lwn-state > div[data-tone="warn"] dd { color: var(--sol-yellow); }
-.lwn-state > div[data-tone="ok"] dd { color: var(--sol-green); }
-.lwn-gate[data-state="pass"] { color: var(--sol-green); }
-.lwn-gate[data-state="red"], .lwn-gate[data-state="changes"] { color: var(--sol-red); }
-.lwn-gate .lw-link { color: inherit; font: inherit; padding: 0; border: 0; background: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-/* Regenerated fixtures folded under the change: one row, opened on demand. */
-.lwn-fold { margin-top: 6px; }
-.lwn-fold-row { display: inline-flex; align-items: center; gap: 6px; padding: 4px 2px; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
-.lwn-fold-row:hover { color: var(--lw-ink); }
-.lwn-fold-row svg { transition: transform var(--lw-fast); }
-.lwn-fold-row svg[data-open] { transform: rotate(90deg); }
-.lwn-fold > .lwn-diff { margin-top: 4px; }
+/* A fix no session has presented yet (NotPresented): one line, the session and the run as links on it. */
+.lwn-pending { align-items: baseline; font-weight: 500; color: var(--lw-ink-2); }
+.lwn-pending > span { font-weight: 650; color: var(--lw-ink); }
+.lwn-dock .lwn-facts dd .lw-link { font-size: inherit; }
 /* A built fix in one line (ReviewSummary): its red gate and main's lead as figures, then its act. */
 .lwn-sum { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
 .lwn-sum-facts { display: inline-flex; gap: 0; flex-wrap: wrap; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
