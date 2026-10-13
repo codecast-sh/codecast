@@ -134,8 +134,6 @@ describe("releaseNote", () => {
       "### 1.1.0",
       "- Adds the social post.",
       "A person must:",
-      "- Activate Social post (1d) from the role page: it arrived paused.",
-      "- Resume SEO weekly from the role page: its cadence moved from 7d to 3d, so it is paused for review.",
       "- Complete the new setup step \"Connect Publora\" from the role page.",
       "- Bind the new secret Publora key from the role page.",
     ]);

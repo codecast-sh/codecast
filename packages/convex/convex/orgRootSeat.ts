@@ -100,7 +100,8 @@ export async function performSeatRootRoles(ctx: any, dryRun: boolean, only?: Rea
       // it: the seating note reads as theirs, and the role's admin is the
       // person who already runs the agent. A failure here propagates, so
       // the whole run rolls back with it.
-      const out = await performStaff(ctx, a.host_user_id, { team_id: a.team_id ?? undefined, seat: "existing", project_path: a.project_path ?? undefined });
+      const standing = a.conversation_id ? await ctx.db.get(a.conversation_id) : null;
+      const out = await performStaff(ctx, a.host_user_id, { team_id: a.team_id ?? undefined, seat: "existing", project_path: standing?.project_path ?? undefined });
       row.root_role = out.role.short_id;
       row.action = "seated";
       seated++;
