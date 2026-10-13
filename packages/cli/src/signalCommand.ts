@@ -188,7 +188,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--source <name>", "The finder: sentry, posthog, evals, agentwatch, insight, lesson, org_health, issue, person, ...")
     .option("--kind <kind>", `What it saw: ${SIGNAL_KINDS.join(", ")}`)
     .option("--fingerprint <key>", "The stable key the finder computes (error group, eval surface+check, the product's group id); findings with one key join one problem. Default: <source>:<title slug>")
-    .option("--title <text>", "One line, in the finder's words")
+    .option("--title <text>", "One line saying what went wrong, in the product's terms; ids, hashes, threads and refs go in --detail")
     .option("--detail <markdown>", stdinText("The observation"))
     .option("--url <url>", "Where a person can see it")
     .option("--subject <ref>", "The file, surface, prompt id or route it concerns; from a finder that judges behavior, the expectation it breaks (ex-<project>-<n>)")

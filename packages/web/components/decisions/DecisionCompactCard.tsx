@@ -322,7 +322,7 @@ export function DecisionCompactCardView({
             page. Clipped like the context: a page is taller than a card. */}
         {decision.report_slug && !decision.card && (
           <div className="mt-1" data-decision-report={decision.report_slug}>
-            <PublishedPageEmbed slug={decision.report_slug} height={240} />
+            <PublishedPageEmbed slug={decision.report_slug} decision={decision._id} height={240} />
           </div>
         )}
         {pageCount > 0 && (

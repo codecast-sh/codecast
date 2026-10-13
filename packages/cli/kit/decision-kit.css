@@ -64,8 +64,8 @@ main {
 main > *, section > * { max-width: var(--dk-measure); }
 main > section { max-width: none; margin-top: var(--dk-gap); }
 main > section + section { padding-top: var(--dk-gap); border-top: 1px solid var(--dk-line); }
-section > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally),
-main > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally) { max-width: none; }
+section > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-cells),
+main > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-cells) { max-width: none; }
 section > dk-thread, main > dk-thread { max-width: 50rem; }
 
 h1, h2 {
@@ -97,7 +97,7 @@ pre { margin: 1.75rem 0 0; padding: 0.9rem 1.1rem; background: var(--dk-sunk); b
 pre mark { background: color-mix(in srgb, var(--dk-yellow) 24%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
 p > small:only-child { display: block; line-height: 1.5; }
 :focus-visible { outline: 2px solid var(--dk-blue); outline-offset: 2px; border-radius: 4px; }
-section > :is(dk-thread, dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-gap, dl, blockquote, pre) { margin-top: 1.75rem; }
+section > :is(dk-thread, dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-cells, dk-gap, dl, blockquote, pre) { margin-top: 1.75rem; }
 section > h3 + :is(*, dk-thread, dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-gap, dl, blockquote, pre) { margin-top: 0.75rem; }
 section > details { max-width: none; }
 section > dk-view { margin-top: 1rem; }
@@ -404,3 +404,39 @@ th:last-child, td:last-child { padding-right: 0; }
 td { font-variant-numeric: tabular-nums; }
 :is(th, td):not(:first-child) { text-align: right; }
 td:first-child { overflow-wrap: anywhere; }
+
+/* A grid of results, drawn as cells: name, the row's cells, its count. */
+dk-cells { display: block; }
+dk-cells > figcaption { font-size: 0.82rem; font-weight: 600; color: var(--dk-ink-2); margin-bottom: 0.5rem; }
+dk-cells > dk-row { display: grid; grid-template-columns: minmax(0, 1fr) min(24rem, 48%) 5.5rem; align-items: center; gap: 0.35rem 0.9rem; padding: 0.4rem 0; border-bottom: 1px solid var(--dk-line); font-size: 0.88rem; line-height: 1.35; }
+.dk-cells-name { min-width: 0; color: var(--dk-ink); }
+.dk-cells-note { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--dk-ink-2); }
+.dk-cells-run { display: flex; flex-wrap: wrap; gap: 2px; }
+dk-cells i[data-v] { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+dk-cells i[data-v="pass"] { background: var(--dk-green); }
+dk-cells i[data-v="fail"] { background: var(--dk-red); }
+dk-cells i[data-v="none"] { background: transparent; box-shadow: inset 0 0 0 1px var(--dk-line-strong); }
+.dk-cells-legend { display: flex; gap: 1rem; margin: 0.6rem 0 0; font-size: 0.78rem; color: var(--dk-ink-3); }
+.dk-cells-legend > span { display: inline-flex; align-items: center; gap: 0.35rem; }
+@media (max-width: 640px) {
+  dk-cells > dk-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .dk-cells-run { grid-column: 1; }
+  .dk-cells-name { grid-column: 1 / -1; }
+}
+
+/* ── Screens: the product as people see it ── */
+section > :is(dk-shot, dk-shots), main > :is(dk-shot, dk-shots) { max-width: none; margin-top: 1.75rem; }
+dk-shot, dk-shots { display: block; min-width: 0; }
+dk-shots > figcaption { font-size: 0.82rem; font-weight: 600; color: var(--dk-ink-2); margin-bottom: 0.5rem; }
+.dk-shot-label { margin-bottom: 0.6rem; font: 620 0.93rem/1.3 var(--dk-text); color: var(--dk-ink-2); }
+.dk-shot-frame { display: block; border: 1px solid var(--dk-line-strong); border-radius: 8px; overflow: hidden; background: var(--dk-surface); cursor: zoom-in; }
+.dk-shot-frame > img { display: block; width: 100%; height: auto; }
+.dk-shot-note { margin: 0.55rem 0 0; font-size: 0.93rem; line-height: 1.45; color: var(--dk-ink-2); }
+dk-example .dk-shows > * + :is(dk-shot, dk-shots) { margin-top: 1rem; }
+.dk-shot-tabs { display: inline-flex; margin-bottom: 0.6rem; border: 1px solid var(--dk-line-strong); border-radius: 999px; padding: 2px; }
+.dk-shot-tabs > button { appearance: none; border: 0; background: none; border-radius: 999px; padding: 0.3rem 0.9rem; font: 560 0.86rem/1.35 var(--dk-text); color: var(--dk-ink-2); cursor: pointer; }
+.dk-shot-tabs > button[aria-pressed="true"] { background: var(--dk-ink); color: var(--dk-bg); }
+.dk-shot-stack { display: grid; }
+.dk-shot-stack > dk-shot { grid-area: 1 / 1; }
+.dk-shot-stack > dk-shot[data-off] { visibility: hidden; }
+.dk-shot-stack .dk-shot-label { display: none; }

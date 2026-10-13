@@ -12,7 +12,7 @@ import { clauseHeading } from "../lineFlow";
 import { errorTitle } from "@codecast/shared/contracts/ingest";
 import type { ProblemSource } from "./stepRuns";
 import type { Overlap } from "./overlap";
-import { countIn, type OverviewWindow } from "./problemsOverview";
+import { countIn, stripSig, type OverviewWindow } from "./problemsOverview";
 import { problemStand, STATUS_LABELS, STATUS_ORDER, type ProblemFacts, type ProblemStand, type StatusKey } from "./problemStatus";
 
 /** Where a problem stands, as a person acts on it. */
@@ -136,12 +136,10 @@ export function problemHeadName(issue: { title: string; name?: string | null }, 
 const LIST_MAX = 90;
 /** How far past LIST_MAX a list name may run to end its clause whole. */
 const REACH = 40;
-// A parenthetical carrying evidence a list reader cannot use: a call id, a Slack ts, a clock time.
-const ID_ASIDE = /\s*\((?=[^()]*(?:\b[0-9a-f]{7,}\b|\d{5,}|\b\d{1,2}:\d{2}))[^()]*\)/gi;
 
 /**
- * A problem as a list names it: its written name (cause.named) when it has one, else its title
- * cut to one scannable clause, never mid-word, with id asides dropped. The page keeps the title whole.
+ * A problem as a list names it: its written name (cause.named, which lineRetitle writes for every title), else its
+ * title cut to one scannable clause, never mid-word. The page keeps the title whole.
  */
 export function problemListName(issue: { title: string; name?: string | null }): string {
   if (issue.name?.trim()) return issue.name.trim();
@@ -149,7 +147,7 @@ export function problemListName(issue: { title: string; name?: string | null }):
   // A title stored cut at its cap: its first whole clause, never the cut.
   const whole = clauseHeading(title);
   if (whole && whole.length <= LIST_MAX) return whole;
-  const t = problemTitle(title).replace(ID_ASIDE, "").replace(/\s+([:,;.])/g, "$1").replace(/\s+/g, " ").trim();
+  const t = problemTitle(title).replace(/\s+/g, " ").trim();
   if (t.length <= LIST_MAX) return t;
   // A closing "…, not a defect" turns the whole sentence around: cut it off and the name says the opposite.
   if (t.length <= LIST_MAX + 24 && /,\s+not\s[^,]*$/i.test(t)) return t;
@@ -471,7 +469,7 @@ export const shownOrder = (sections: ReadonlyArray<ProblemSection>): string[] =>
 
 /** Everything a row draws, so a model rebuild keeps the rows that did not move. */
 export const problemRowSig = (r: ProblemRow): string =>
-  [r.id, r.issue.title, r.issue.ref ?? "", r.stand.status, r.stand.phrase, r.stand.cause?.key ?? "", r.stand.quiet ? 1 : 0, r.stand.ready ? 1 : 0, r.stand.act ?? "", r.stand.gate ?? "", r.series ? 1 : 0, r.projectId ?? "", r.inWindow, r.before ?? "", r.seenAt, r.dupOf ?? "", r.hay.length, r.aboutSteps.join(","), r.foldedInto ?? "", (r.twins ?? []).map((t) => t.id).join(",")].join("|");
+  [r.id, r.issue.title, r.issue.ref ?? "", r.stand.status, r.stand.phrase, r.stand.cause?.key ?? "", r.stand.quiet ? 1 : 0, r.stand.liveAt ?? "", r.stand.ready ? 1 : 0, r.stand.act ?? "", r.stand.gate ?? "", r.series ? 1 : 0, r.projectId ?? "", r.inWindow, r.before ?? "", r.seenAt, r.dupOf ?? "", r.hay.length, r.aboutSteps.join(","), r.foldedInto ?? "", (r.twins ?? []).map((t) => t.id).join(","), stripSig(r.issue.history)].join("|");
 
 // ── what the workspace counts ────────────────────────────────────────────────
 

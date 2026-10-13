@@ -23,6 +23,7 @@ import { useActiveWorkspaceKey, useWorkspaceCollection } from "./useWorkspaceCol
 import { useSyncRuns } from "./useSyncRuns";
 import { useSyncTaskSignals } from "./useSyncSignals";
 import { useSyncTrial, useTrialCards, useTrialProjects, useTrialRuns } from "./useSyncTrial";
+import { useLineSpaceKeys } from "./useLineSpace";
 import { trialCardIsFor } from "../lib/line/trialAudience";
 import { useTeamRosterIdentity } from "./useTeamRoster";
 import { autoStartWord, isCause, trialStartWord, scopeLine, type LineAdmission, type LineProject, type RollupRow } from "../lib/lineFlow";
@@ -183,7 +184,10 @@ export type LineWorkspace = {
  */
 /** `pinned`: the app is one project's own (its Line tab), so what waits on the viewer is that project's too. Otherwise a
  *  project picked in the filter narrows Problems and Line only: For you and its count always cover every project. */
-export function useLineWorkspace(projectId: string | null, graphKey: string | null, caseId?: string | null, { pinned = false }: { pinned?: boolean } = {}): LineWorkspace {
+export function useLineWorkspace(projectId: string | null, graphKey: string | null, caseId?: string | null, { pinned = false, everySpace = false }: { pinned?: boolean; everySpace?: boolean } = {}): LineWorkspace {
+  // The line's own page lists trials from every workspace it holds (For you); a fence or link reads the active one.
+  const allSpaces = useLineSpaceKeys();
+  const spaceKeys = everySpace ? allSpaces : undefined;
   const projectRow = useInboxStore((s) => (projectId ? ((s.projects as Record<string, LineProject>)?.[projectId] ?? null) : null));
   const workspace = useProjectWorkspace(projectRow as { workspace?: string | null; team_id?: string | null } | null);
   const { now, lineRows, projects, rollup: rollupRows, admissions, ready } = useLineFloor(projectId, workspace);
@@ -252,10 +256,10 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     ...roster.map((m) => [m._id, m.name ?? m.email ?? ""] as [string, string]),
   ]), [roster, roleNames]);
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const trialRows = useTrialProjects();
+  const trialRows = useTrialProjects(spaceKeys);
   const trialProjects = useMemo(() => new Set(trialRows.map((p) => p._id)), [trialRows]);
   // The runs a trial started (its own rows, and every run on a trial project's problem): an answer at their gates ships nothing.
-  const trialRunRows = useTrialRuns({ all: true });
+  const trialRunRows = useTrialRuns({ all: true, workspaces: spaceKeys });
   const trialRuns = useMemo(() => {
     const out = new Set(trialRunRows.map((r) => r.run_id).filter((x): x is string => !!x));
     for (const r of lineRows.runs as unknown as Array<{ _id: string; task_id?: string }>) {
@@ -278,11 +282,25 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     return { ...lineRows, runs: lineRows.runs.filter((r) => !!r.task_id && causes.has(r.task_id)) };
   }, [projectId, scoped, lineRows]);
   // Trial cards: a trial run's gates ask no one, so they wait here as the Inbox's own group (fed as /trial feeds them).
+  // For you lists every workspace's, so they are read from each workspace the line holds (LineWorkspace feeds them).
   useSyncTrial();
-  const allTrialCards = useTrialCards();
+  const allTrialCards = useTrialCards({ workspaces: spaceKeys });
   // A card a role owns (a judge fix, asked of the person its line ends at) waits only on the people it is asked of.
   const trialCards = useMemo(() => allTrialCards.filter((c) => trialCardIsFor(c, viewerId)), [allTrialCards, viewerId]);
-  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, now]);
+  // A run's decision about a task that is not a line problem (a task filed by hand, a judge fix) names that task, read from the store.
+  const otherIds = useMemo(() => {
+    const causes = new Set(everyRow.tasks.filter(isCause).map((t) => t._id));
+    return [...new Set((everyRow.decisions as Array<{ task_id?: string | null }>).map((d) => d.task_id).filter((id): id is string => !!id && !causes.has(id)))].sort();
+  }, [everyRow]);
+  const otherSig = useInboxStore((s) => otherIds.map((id) => {
+    const t = (s.tasks as Record<string, { title?: string; short_id?: string; project_id?: string } | undefined> | undefined)?.[id];
+    return t?.title ? [id, t.short_id ?? "", t.project_id ?? "", t.title].join("\u0001") : "";
+  }).filter(Boolean).join("\u0002"));
+  const otherTasks = useMemo(() => new Map(otherSig ? otherSig.split("\u0002").map((x) => {
+    const [id, ref, project, title] = x.split("\u0001");
+    return [id, { title, short_id: ref || null, project_id: project || null }] as const;
+  }) : []), [otherSig]);
+  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, otherTasks, now]);
   const projectInbox = useMemo(() => (projectId ? allInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => r.projectId === projectId) })).filter((g) => g.rows.length > 0) : allInbox), [allInbox, projectId]);
   const forYouByCase = useMemo(() => inboxKindByCase(projectInbox), [projectInbox]);
 

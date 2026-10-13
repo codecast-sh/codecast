@@ -12,6 +12,7 @@
 import { memo, useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { backTimes, type CauseHistory, type HistoryAttempt, type HistoryClose } from "../../../../../lib/line/causeHistory";
 import {
+  defaultRange, rangeDomain, TIME_RANGES, type TimeRange,
   alignDown, attemptEndWords, attemptMarkWords, attemptTone, bucketCounts, bucketStep, bucketWords, closeStepLabel, comebackTimes, momentWords, notDeployed, shownWatches, spanWords, timeTicks,
   type Domain, type MarkTone,
 } from "../../../../../lib/line/timeline";
@@ -90,6 +91,28 @@ function packLanes(marks: ReadonlyArray<AttemptMark>, x: (t: number) => number, 
     out.set(m.key, { lane, w: Math.max(span, m.minW) });
   }
   return out;
+}
+
+const RANGE_WORDS: Record<TimeRange, string> = { "24h": "24h", "7d": "7d", "30d": "30d", all: "All" };
+
+/** The window a chart shows: a range preset (opening on the smallest that holds the history), or a span dragged to zoom. */
+export function useTimelineDomain(h: CauseHistory, now: number) {
+  const [range, setRange] = useState<TimeRange>(() => defaultRange(h, now));
+  const [zoom, setZoom] = useState<Domain | null>(null);
+  const domain = useMemo(() => zoom ?? rangeDomain(range, h, now), [zoom, range, h, now]);
+  const pickRange = useCallback((r: TimeRange) => { setRange(r); setZoom(null); }, []);
+  const onZoom = useCallback((d: Domain) => setZoom(d), []);
+  const onReset = useCallback(() => setZoom(null), []);
+  return { range: zoom ? null : range, pickRange, domain, onZoom, onReset };
+}
+
+/** The range presets over a chart; none is pressed while zoomed. */
+export function TimeRangeSeg({ range, pick }: { range: TimeRange | null; pick: (r: TimeRange) => void }) {
+  return (
+    <span className="lw-seg" role="tablist" aria-label="Time range">
+      {TIME_RANGES.map((r) => <button key={r} type="button" role="tab" aria-selected={range === r} onClick={() => pick(r)} data-line-timeline-range={r}>{RANGE_WORDS[r]}</button>)}
+    </span>
+  );
 }
 
 export type TimelineChartProps = {
