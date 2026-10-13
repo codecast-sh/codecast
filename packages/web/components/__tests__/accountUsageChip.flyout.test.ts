@@ -13,7 +13,8 @@ const chip = readFileSync(join(web, "components/AccountUsageChip.tsx"), "utf8");
 
 describe("usage chip hover panel vs titlebar drag", () => {
   test("globals.css marks [data-flyout] no-drag", () => {
-    const rule = css.match(/\[data-flyout\]\s*\{([^}]+)\}/);
+    // [data-flyout] may share its block with other selectors (modal layers).
+    const rule = css.match(/(?:^|[},])\s*\[data-flyout\]\s*(?:,[^{}]*)?\{([^}]+)\}/m);
     expect(rule).toBeTruthy();
     expect(rule![1]).toMatch(/-webkit-app-region:\s*no-drag/);
   });

@@ -1,0 +1,115 @@
+{
+  "about": "A workflow run's own log (is_workflow_primary with its run, isRunLog) is never a member: not the stashed one a task's run is born as, not a live one, not one whose session id the daemon rebound. A person's session that hosts a run carries only the run pointer and stays a member.",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "_id": "log_stashed",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 6,
+      "is_idle": true,
+      "agent_status": "stopped",
+      "title": "agentwatch_trial_judge",
+      "session_id": "wf-run_a",
+      "workflow_run_id": "run_a",
+      "is_workflow_primary": true,
+      "inbox_stashed_at": "E-30m",
+      "inbox_stash_hidden": true
+    },
+    {
+      "_id": "log_live",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 3,
+      "is_idle": false,
+      "agent_status": "working",
+      "title": "line",
+      "session_id": "wf-run_b",
+      "workflow_run_id": "run_b",
+      "is_workflow_primary": true
+    },
+    {
+      "_id": "log_rebound",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 9,
+      "is_idle": true,
+      "agent_status": "stopped",
+      "title": "agentwatch_trial",
+      "session_id": "7222ec51-rebound",
+      "workflow_run_id": "run_c",
+      "is_workflow_primary": true
+    },
+    {
+      "_id": "host",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 40,
+      "is_idle": false,
+      "agent_status": "working",
+      "title": "Feedback line pipeline",
+      "workflow_run_id": "run_d"
+    },
+    {
+      "_id": "plain",
+      "status": "active",
+      "updated_at": "E-4m",
+      "message_count": 12,
+      "is_idle": true,
+      "agent_status": "stopped",
+      "title": "Plain session"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 1,
+        "done": 0,
+        "dormant": 0,
+        "working": 1,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "50938bae97e8c8f2",
+    "placements": {
+      "hostz400000000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "plainz50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ]
+    },
+    "sort_at": {
+      "hostz400000000000000000000000000": -180000,
+      "plainz50000000000000000000000000": -240000
+    },
+    "sort_order": {}
+  }
+}
