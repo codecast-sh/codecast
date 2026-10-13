@@ -1,3 +1,4 @@
+import { defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -7,7 +8,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, cutoverTemplate, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -54,6 +55,7 @@ class Server {
   standingPath?: string;
   /** An apply path that ignores the proposal's line (line-profile.md LP7). */
   dropsLine = false;
+  dropsTrust = false;
   constructor(readonly dir: string) { this.project = { _id: "project-1", short_id: "pr-1", title: "Product", project_path: dir, workspace: "team:team-1" }; }
   deps: OrgInitDeps = {
     readWorkspace: async (team) => ({ kind: "team", teamId: team || "unrelated-active-team" }),
@@ -102,7 +104,7 @@ class Server {
         const proposal: any = decision.answer_index === 1 ? applyProposalChanges(base, decision.answer_text).proposal : base;
         if (this.roles.some((r) => r.handle === proposal.handle)) return { status: "error", error: "Role handle exists" };
         // As applyRole: the proposal's caps (cards included) and its line, unless a test plays an older backend that drops the line.
-        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, ...(proposal.line && !this.dropsLine ? { line_workflow_slug: proposal.line } : {}), trust: "understand", status: "active" };
+        const role = { _id: "role-1", short_id: "or-1", handle: proposal.handle, name: proposal.name, scope: { project_ids: [this.project._id], plan_ids: [] }, charter: proposal.charter, caps: proposal.caps, ...(proposal.line && !this.dropsLine ? { line_workflow_slug: proposal.line } : {}), trust: !this.dropsTrust && proposal.trust ? proposal.trust : defaultTrustFor(proposal), status: "active" };
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
@@ -124,6 +126,12 @@ class Server {
       }
       case "/cli/tasks/pause": { if (this.pauseWorks) this.triggers.find((t) => t._id === body.task_id).status = "paused"; return { success: this.pauseWorks }; }
       case "/cli/tasks/update": Object.assign(this.triggers.find((t) => t._id === body.task_id), body); return { success: true };
+      // As applyActivate: the first run one cadence out, the install's exit 1 gate cleared.
+      case "/cli/org/template/activate": {
+        const t = this.triggers.find((r) => r._id === body.task_id);
+        if (t.status !== "paused") return false;
+        Object.assign(t, { status: "scheduled", run_at: Date.now() + t.interval_ms, ...(t.precheck === "exit 1" ? { precheck: undefined } : {}) }); return true;
+      }
       case "/cli/org/template/instance": {
         const row = this.instances.find((r) => r.instance_key === body.instance_key) ?? this.instances.find((r) => r.instance === body.instance && r.project_id === body.project_id && r.phase === "awaiting_host");
         if (row) { Object.assign(row, structuredClone(body)); return row; }
@@ -250,8 +258,10 @@ describe("proposal and lifecycle fake API", () => {
     expect(f.server.roles).toHaveLength(1); expect(f.server.triggers).toHaveLength(2);
     expect(f.server.calls.find((c) => c.endpoint === "/cli/org/apply-decision")?.body.provision).toBe(false);
     expect(f.server.calls.find((c) => c.endpoint === "/cli/role/provision")?.body.project_path).toBe(f.dir);
-    for (const t of f.server.triggers) { expect(t.status).toBe("paused"); expect(t.precheck).toBeUndefined(); expect(t.run_at).toBeUndefined(); expect(t.originating_conversation_id).toBe("standing-1"); expect(t.run_count).toBe(0); }
+    // Created paused, then turned on because each is ready: the first run one cadence out, never at once.
+    for (const t of f.server.triggers) { expect(t.status).toBe("scheduled"); expect(t.precheck).toBeUndefined(); expect(t.run_at).toBeGreaterThan(Date.now() + t.interval_ms - 60_000); expect(t.originating_conversation_id).toBe("standing-1"); expect(t.run_count).toBe(0); }
     expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(0);
+    expect(f.server.calls.filter((c) => c.endpoint === "/cli/org/template/activate")).toHaveLength(2);
   });
   test("unanswered, rejected, advisory and delegated answers cannot create roles", async () => {
     const f = fixture(); await f.install(); await f.reconcile(); expect(f.server.roles).toHaveLength(0);
@@ -259,10 +269,19 @@ describe("proposal and lifecycle fake API", () => {
     f.server.approve(); f.server.decisions[0].blocking = false; await expect(f.reconcile()).rejects.toThrow("blocking decision");
     f.server.decisions[0].blocking = true; f.server.approve(2); expect((await f.reconcile()).phase).toBe("declined"); expect(f.server.roles).toHaveLength(0);
   });
-  test("changed scope, changed proposal, and invalid trust stop before apply", async () => {
+  test("a hire starts work on its own unless the person turns that off on the card", async () => {
+    const on = fixture(); await on.install(); on.server.approve(); await on.reconcile();
+    expect(on.server.roles[0].trust).toBe("direct");
+    const off = fixture(); await off.install(); off.server.approve(1); off.server.decisions[0].answer_text = '{"trust":"understand"}'; await off.reconcile();
+    expect(off.server.roles[0].trust).toBe("understand");
+  });
+  test("a backend that drops the approved switch is refused instead of hiring a role nobody approved", async () => {
+    const f = fixture(); await f.install(); f.server.dropsTrust = true; f.server.approve(1); f.server.decisions[0].answer_text = '{"trust":"understand"}';
+    await expect(f.reconcile()).rejects.toThrow("differs from what was approved");
+  });
+  test("changed scope, changed proposal and a changed proposal stop before apply", async () => {
     const f = fixture(); await f.install(); f.server.approve(1);
     f.server.decisions[0].answer_text = '{"scope":{"projects":[]}}'; await expect(f.reconcile()).rejects.toThrow("Approved scope differs");
-    f.server.decisions[0].answer_text = '{"trust":"act"}'; await expect(f.reconcile()).rejects.toThrow("start at understand");
     f.server.decisions[0].answer_text = ''; f.server.decisions[0].context_md = f.server.decisions[0].context_md.replace('"handle": "product-cmo"', '"handle": "other"');
     await expect(f.reconcile()).rejects.toThrow("Proposal changed"); expect(f.server.roles).toHaveLength(0);
   });
@@ -326,16 +345,29 @@ describe("proposal and lifecycle fake API", () => {
     await f.reconcile(); expect(f.server.roles[0].charter).toBe("Only report, never buy"); expect(readReceipt(f.dir, "product").role?.handle).toBe("approved-cmo");
     f.server.roles[0].charter = "Later human charter"; await f.reconcile(); expect(f.server.roles[0].charter).toBe("Later human charter");
   });
-  test("status and instructions read only; paused/gated routines refuse execution", async () => {
-    const f = await ready(); const count = f.server.writes().length;
+  test("a routine a person paused stays paused through status and refuses execution; instructions read only", async () => {
+    const f = await ready(); f.server.triggers[0].status = "paused"; const count = f.server.calls.length;
     await templateStatus(f.server.deps, "product", f.options);
+    expect(f.server.triggers[0].status).toBe("paused");
     await expect(templateInstructions(f.server.deps, "product", "weekly", f.options)).rejects.toThrow("paused or gated");
-    f.server.triggers[0].status = "scheduled"; f.server.triggers[0].precheck = undefined;
+    f.server.triggers[0].status = "scheduled";
     expect(await templateInstructions(f.server.deps, "product", "weekly", f.options)).toContain("growth@1.2.0");
-    expect(f.server.writes()).toHaveLength(count);
+    expect(f.server.calls.slice(count).filter((c) => !["/cli/org/tree", "/cli/projects/get", "/cli/sessions", "/cli/tasks/list"].includes(c.endpoint))).toEqual([]);
+  });
+  test("a routine that becomes ready turns on at the next status; one behind a person's precheck stays paused", async () => {
+    // Both as created and never turned on, while the role is paused: nothing turns on.
+    const f = await ready();
+    for (const t of f.server.triggers) { t.status = "paused"; t.run_at = undefined; }
+    f.server.roles[0].status = "paused";
+    await templateStatus(f.server.deps, "product", f.options);
+    expect(f.server.triggers.map((t) => t.status)).toEqual(["paused", "paused"]);
+    f.server.roles[0].status = "active"; f.server.triggers[1].precheck = "test -f ready.txt";
+    await templateStatus(f.server.deps, "product", f.options);
+    expect(f.server.triggers.map((t) => t.status)).toEqual(["scheduled", "paused"]);
+    expect(f.server.triggers[1].precheck).toBe("test -f ready.txt");
   });
   test("activation guidance preserves a custom human precheck", async () => {
-    const f = await ready(); f.server.triggers[0].precheck = "test -f ready.txt";
+    const f = await ready(); f.server.triggers[0].status = "paused"; f.server.triggers[0].precheck = "test -f ready.txt";
     const status = await templateStatus(f.server.deps, "product", f.options);
     expect(status.routines.weekly.gated).toBe(true); expect(status.routines.weekly.activation.commands).toEqual([]);
     expect(f.server.triggers[0].precheck).toBe("test -f ready.txt");
@@ -365,6 +397,14 @@ describe("a role that owns a line", () => {
     const f = fixture(lineManifest()); await f.install(); f.server.dropsLine = true; f.server.approve();
     await expect(f.reconcile()).rejects.toThrow("approved line line");
     expect(f.server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(false);
+  });
+  test("a template without caps validates and hires a role with no daily limits", async () => {
+    const m = manifest(); delete m.role.caps;
+    expect(validateTemplate(m).role.caps).toBeUndefined();
+    const f = fixture(m); await f.install();
+    expect("caps" in readReceipt(f.dir, "product").proposal).toBe(false);
+    f.server.approve(); expect((await f.reconcile()).phase).toBe("ready");
+    expect(f.server.roles[0].caps).toBeUndefined();
   });
   test("a template without a line proposes none", async () => {
     const f = fixture(); await f.install();
@@ -407,7 +447,8 @@ describe("upgrades and adoption", () => {
       const result = await upgradeTemplate(f.server.deps, "product", direction === "forward" ? next : f.root, { ...f.options, apply: true });
       expect(result.unchanged).toBeUndefined(); expect(result.recovery).toBe(direction); expect(result.receipt.phase).toBe("ready"); expect(result.receipt.upgrade).toBeUndefined();
       expect(f.server.triggers[0].interval_ms).toBe((direction === "forward" ? 14 : 7) * 86400000); expect(f.server.triggers[1].interval_ms).toBe((direction === "forward" ? 2 : 1) * 86400000);
-      expect(f.server.triggers.every((r) => r.status === "paused")).toBe(true);
+      // Both were on before the upgrade: back on at the cadence the upgrade settled on.
+      expect(f.server.triggers.every((r) => r.status === "scheduled")).toBe(true);
     });
   }
   test("interrupted rollback can retry without resuming or duplicating routines", async () => {
@@ -440,7 +481,7 @@ describe("upgrades and adoption", () => {
     const source = folder(m); f.server.failAfter = "/cli/tasks/create";
     await expect(upgradeTemplate(f.server.deps, "product", source, { ...f.options, apply: true })).rejects.toThrow("after server success");
     const r = await upgradeTemplate(f.server.deps, "product", source, { ...f.options, apply: true });
-    expect(r.applied).toBe(true); expect(f.server.triggers).toHaveLength(3); expect(f.server.triggers[2].status).toBe("paused");
+    expect(r.applied).toBe(true); expect(f.server.triggers).toHaveLength(3); expect(f.server.triggers[2].status).toBe("scheduled");
   });
   test("preview is read only; preserve ids, human charter, caps, grants and pauses", async () => {
     const f = await ready();
@@ -453,14 +494,14 @@ describe("upgrades and adoption", () => {
     expect(preview.added).toEqual(["social"]); expect(preview.removed).toEqual(["ads"]); expect(f.server.writes()).toHaveLength(originalWrites);
     const applied = await upgradeTemplate(f.server.deps, "product", next, { ...f.options, apply: true });
     expect(applied.receipt.role).toEqual(receipt.role); expect(applied.receipt.grants).toEqual({ ads: 0 }); expect(f.server.roles[0].charter).toBe("Human charter"); expect(f.server.roles[0].trust).toBe("propose");
-    expect(f.server.triggers[0].status).toBe("scheduled"); expect(f.server.triggers[1].status).toBe("paused"); expect(f.server.triggers[2].status).toBe("paused");
+    expect(f.server.triggers[0].status).toBe("scheduled"); expect(f.server.triggers[1].status).toBe("paused"); expect(f.server.triggers[2].status).toBe("scheduled");
     expect(applied.receipt.routines.ads.retired).toBe(true);
     await expect(templateInstructions(f.server.deps, "product", "ads", f.options)).rejects.toThrow("retired");
   });
   test("same-version changed digest and caps changes require explicit human path", async () => {
     const f = await ready(); fs.writeFileSync(path.join(f.root, "org/weekly.md"), "changed");
     await expect(upgradeTemplate(f.server.deps, "product", f.root, { ...f.options, apply: true })).rejects.toThrow("Same-version");
-    const m = manifest(); m.version = "1.3.0"; m.role.caps.hands_per_day = 100;
+    const m = manifest(); m.version = "1.3.0"; m.role.caps!.hands_per_day = 100;
     await expect(upgradeTemplate(f.server.deps, "product", folder(m), { ...f.options, apply: true })).rejects.toThrow("identity or caps");
   });
   test("explicit adoption never duplicates or rewrites existing channel triggers", async () => {
@@ -482,7 +523,7 @@ describe("upgrades and adoption", () => {
     const f = await ready(); f.server.triggers[1].interval_ms = 3 * 86400000;
     const m = manifest(); m.version = "1.3.0"; m.routines[0].every = "2w"; m.routines[1].every = "2d";
     const result = await upgradeTemplate(f.server.deps, "product", folder(m), { ...f.options, apply: true });
-    expect(f.server.triggers[0].interval_ms).toBe(14 * 86400000); expect(f.server.triggers[0].status).toBe("paused");
+    expect(f.server.triggers[0].interval_ms).toBe(14 * 86400000); expect(f.server.triggers[0].status).toBe("scheduled");
     expect(f.server.triggers[1].interval_ms).toBe(3 * 86400000); expect(result.cadenceOverrides[0].id).toBe("ads");
   });
   test("removed external routine is recorded retired without changing its server object", async () => {
@@ -493,6 +534,92 @@ describe("upgrades and adoption", () => {
   });
 });
 function saveReceipt(dir: string, receipt: any) { atomicJson(receiptPath(dir, receipt.instance), receipt); }
+
+// Cutover (org-hire.md H3): an adopted trigger handed to the template's own
+// routine, at the cadence it runs at now, with the old one paused and kept.
+describe("cutover", () => {
+  const DAY = 86400000;
+  async function adopted(status = "scheduled") {
+    const f = fixture();
+    // A channel trigger from before the template, adopted as its ads routine.
+    f.server.triggers.push({ _id: "external-1", short_id: "tr-462", project_path: f.dir, originating_conversation_id: "old-standing-session", status, prompt: "existing channel", schedule_type: "recurring", interval_ms: 3 * DAY, run_count: 40, run_at: Date.now() + DAY });
+    f.options.adopt = ["ads=tr-462"];
+    await f.install(); f.server.approve(); await f.reconcile(); await bindTemplate(f.server.deps, "product", f.options);
+    return f;
+  }
+  const live = (f: Awaited<ReturnType<typeof adopted>>) => f.server.triggers.filter((t) => ["scheduled", "running"].includes(t.status));
+  test("creates the managed routine at the adopted trigger's live cadence, pauses and keeps the adopted one, turns the new one on, and rewrites receipt and server row", async () => {
+    const f = await adopted();
+    expect(f.server.instances[0].routines.ads).toMatchObject({ triggerId: "external-1", external: true });
+    // A person moved the adopted trigger's cadence after adoption: the cutover carries the live one.
+    f.server.triggers[0].interval_ms = 5 * DAY;
+    const result = await cutoverTemplate(f.server.deps, "product", [], f.options);
+    const receipt = readReceipt(f.dir, "product");
+    const made = f.server.triggers.find((t) => t.context_summary === `org-template:${receipt.key}:ads`);
+    expect(structuredClone(made)).toMatchObject({ prompt: expect.stringContaining("cast org template instructions 'product' 'ads'"), originating_conversation_id: "standing-1", project_path: f.dir, schedule_type: "recurring", interval_ms: 5 * DAY, status: "scheduled", run_count: 0 });
+    expect(made.run_at).toBeGreaterThan(Date.now() + 5 * DAY - 60_000);
+    expect(f.server.triggers.find((t) => t._id === "external-1")).toMatchObject({ status: "paused", interval_ms: 5 * DAY, prompt: "existing channel" });
+    expect(result.cutover).toEqual({ ads: { from: "external-1", to: made._id, intervalMs: 5 * DAY, on: true } });
+    expect(receipt.routines.ads).toEqual({ every: "1d", triggerId: made._id, paused: false, actualIntervalMs: 5 * DAY });
+    expect(receipt.retiredByCutover).toEqual({ ads: "external-1" });
+    expect(receipt.cutover).toBeUndefined();
+    expect(f.server.instances[0].routines.ads).toEqual({ triggerId: made._id });
+    // One live trigger per routine, and the managed routine's own loader runs it.
+    expect(live(f).map((t) => t.context_summary)).toEqual([`org-template:${receipt.key}:weekly`, `org-template:${receipt.key}:ads`]);
+    expect(await templateInstructions(f.server.deps, "product", "ads", f.options)).toContain("Run ads for product");
+    // A rerun changes nothing; naming it again says it is already done.
+    const writes = f.server.writes().length;
+    expect((await cutoverTemplate(f.server.deps, "product", [], f.options)).cutover).toEqual({});
+    expect((await cutoverTemplate(f.server.deps, "product", ["ads"], f.options)).skipped).toEqual(["ads"]);
+    expect(f.server.writes()).toHaveLength(writes); expect(f.server.triggers).toHaveLength(3);
+    // The adopted trigger resumed by hand is paused again at the next status: the routine never runs twice.
+    f.server.triggers[0].status = "scheduled";
+    await templateStatus(f.server.deps, "product", f.options);
+    expect(f.server.triggers[0].status).toBe("paused");
+  });
+  for (const endpoint of ["/cli/tasks/create", "/cli/tasks/pause", "/cli/org/template/instance", "/cli/org/template/activate"]) {
+    test(`a rerun after an interruption at ${endpoint} finishes the same cutover without a second routine`, async () => {
+      const f = await adopted(); f.server.triggers[0].interval_ms = 4 * DAY;
+      f.server.failAfter = endpoint;
+      await expect(cutoverTemplate(f.server.deps, "product", ["ads"], f.options)).rejects.toThrow("after server success");
+      // Never two live triggers, even mid-cutover.
+      const key = readReceipt(f.dir, "product").key;
+      const forAds = () => f.server.triggers.filter((t) => t._id === "external-1" || t.context_summary === `org-template:${key}:ads`);
+      expect(forAds().filter((t) => ["scheduled", "running"].includes(t.status)).length).toBeLessThanOrEqual(1);
+      // A person changes the adopted cadence again before the rerun: the journal keeps the one the cutover began with.
+      f.server.triggers[0].interval_ms = 9 * DAY;
+      const result = await cutoverTemplate(f.server.deps, "product", ["ads"], f.options);
+      expect(forAds()).toHaveLength(2);
+      const made = forAds().find((t) => t._id !== "external-1")!;
+      expect(made).toMatchObject({ interval_ms: 4 * DAY, status: "scheduled" });
+      expect(f.server.triggers.find((t) => t._id === "external-1")!.status).toBe("paused");
+      // Interrupted only at its last step (turning the new routine on), the cutover itself had finished: the rerun names it done.
+      if (endpoint === "/cli/org/template/activate") expect(result).toMatchObject({ cutover: {}, skipped: ["ads"] });
+      else expect(result.cutover.ads).toEqual({ from: "external-1", to: made._id, intervalMs: 4 * DAY, on: true });
+      expect(readReceipt(f.dir, "product").cutover).toBeUndefined();
+      expect(f.server.instances[0].routines.ads).toEqual({ triggerId: made._id });
+      expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/create")).toHaveLength(2);
+    });
+  }
+  test("an adopted trigger that was paused hands over a paused routine that stays paused for a person", async () => {
+    const f = await adopted("paused");
+    await cutoverTemplate(f.server.deps, "product", ["ads"], f.options);
+    const receipt = readReceipt(f.dir, "product");
+    const made = f.server.triggers.find((t) => t.context_summary === `org-template:${receipt.key}:ads`);
+    expect(made.status).toBe("paused"); expect(receipt.routines.ads.held).toBe(true);
+    await templateStatus(f.server.deps, "product", f.options); await bindTemplate(f.server.deps, "product", f.options);
+    expect(made.status).toBe("paused");
+  });
+  test("refuses a routine that is not adopted, an unknown one, and an instance that is not ready", async () => {
+    const f = await adopted();
+    await expect(cutoverTemplate(f.server.deps, "product", ["weekly"], f.options)).rejects.toThrow("not adopted");
+    await expect(cutoverTemplate(f.server.deps, "product", ["nope"], f.options)).rejects.toThrow("Not a routine");
+    const fresh = fixture(); await fresh.install();
+    await expect(cutoverTemplate(fresh.server.deps, "product", [], fresh.options)).rejects.toThrow("ready instance");
+    expect(f.server.triggers.find((t) => t._id === "external-1")!.status).toBe("scheduled");
+  });
+});
+
 
 describe("manifest v2 hires", () => {
   test("answers substitute into the handle, charter, routine titles and instructions; secrets never enter the receipt", async () => {
@@ -586,7 +713,7 @@ describe("the project's lead", () => {
     await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "growth" })).rejects.toThrow(/me or @handle/);
     expect(server.writes()).toHaveLength(0);
     const receipt = await installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@growth" });
-    expect(receipt.proposal).toMatchObject({ reports_to: "@growth", avatar: "fox", tenure: { kind: "program", ends: { project: "pr-1" }, then: "review" }, trust: "understand" });
+    expect(receipt.proposal).toMatchObject({ reports_to: "@growth", avatar: "fox", tenure: { kind: "program", ends: { project: "pr-1" }, then: "review" }, trust: "direct" });
   });
 });
 
@@ -608,7 +735,11 @@ describe("instance record, readiness and the loader", () => {
     expect(status.ask).toMatchObject({ id: "search-console", who: "human", status: "open" });
     expect(status.readiness.weekly).toEqual({ ready: false, mode: "propose", missing: ["evidence technical has no pass"] });
     expect(status.readiness.ads).toEqual({ ready: true, mode: "propose", missing: [] });
-    await expect(setupTemplate(server.deps, "acme", "search-console", { ...options, done: true })).rejects.toThrow(/person's step/);
+    // The role may mark a person's step once it sees it done.
+    await setupTemplate(server.deps, "acme", "search-console", { ...options, done: true });
+    expect(status.readiness.ads).toEqual({ ready: true, mode: "propose", missing: [] });
+    expect(server.triggers.find((t: any) => t.title === "Ads monitoring").status).toBe("scheduled");
+    expect(server.triggers.find((t: any) => t.title === "CMO portfolio review").status).toBe("paused");
     await setupTemplate(server.deps, "acme", "measurement", { ...options, done: true, evidence: "ct-48703" });
     await evidenceTemplate(server.deps, "acme", "technical", { ...options, status: "pass", source: "https://codecast.sh/t/ct-48700", detail: ["routes=38"] });
     await reportTemplate(server.deps, "acme", ["primary_events_7d=7"], { ...options, source: "ct-48702" });
@@ -621,10 +752,9 @@ describe("instance record, readiness and the loader", () => {
     status = await templateStatus(server.deps, "acme", options);
     expect(status.readiness.weekly).toEqual({ ready: true, mode: "apply", missing: [] });
     expect(status.scoreboard.primary_events_7d).toMatchObject({ value: "7", source: "ct-48702" });
-    expect(status.setup.map((r: any) => [r.id, r.status])).toEqual([["search-console", "open"], ["measurement", "done"]]);
-    // A person activates the routine; its instructions then carry the mode it runs in now.
-    const weekly = server.triggers.find((t: any) => t.title === "CMO portfolio review");
-    Object.assign(weekly, { status: "scheduled", precheck: undefined });
+    expect(status.setup.map((r: any) => [r.id, r.status])).toEqual([["search-console", "done"], ["measurement", "done"]]);
+    // Ready once its evidence passed: the host step turned it on, and its instructions carry the mode it runs in now.
+    expect(server.triggers.find((t: any) => t.title === "CMO portfolio review").status).toBe("scheduled");
     expect(await templateInstructions(server.deps, "acme", "weekly", options)).toContain("grants remain authoritative.\nMode now: apply.\n\nRun weekly");
     // The pass ages out: same schedule, propose mode, and the run is told why.
     const receipt = readReceipt(server.dir, "acme");
@@ -689,7 +819,7 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "cutover", "upgrade", "instructions"]);
   expect(template.commands.find((c) => c.name() === "learn")!.commands.map((c) => c.name())).toEqual(["pass", "status", "due", "rollout"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
@@ -740,7 +870,7 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(bound.phase).toBe("ready");
     expect(bound.role).toMatchObject({ id: "role-1", handle: "acme-cmo", sessionId: "standing-1" });
     expect(bound.config).toEqual({ "product.slug": "acme" });
-    // Seated and armed: the standing session was provisioned, the routines created paused.
+    // Seated and armed: the standing session was provisioned, the routines created and turned on.
     expect(server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(true);
     // The role's charter is the loader for the pinned release, as a terminal install
     // proposes it, set before the standing session is seated and briefed.
@@ -748,7 +878,7 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(charterAt).toBeGreaterThan(-1);
     expect(charterAt).toBeLessThan(server.calls.findIndex((c) => c.endpoint === "/cli/role/provision"));
     expect(server.roles[0].charter).toContain("cast org template instructions 'acme-growth' 'charter'");
-    expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "paused"], ["Ads monitoring", "paused"]]);
+    expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "scheduled"], ["Ads monitoring", "scheduled"]]);
     // The server row is the same row, taken over by the receipt's key, ready, with the secret by hash only.
     expect(server.instances).toHaveLength(1);
     expect(server.instances[0]).toMatchObject({ _id: "inst-1", instance_key: bound.key, phase: "ready", role_id: "role-1", host: { dir: server.dir }, ledgers: { cmo: { shortId: "ct-1" } } });
@@ -766,7 +896,7 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(server.triggers).toHaveLength(2);
     // The receipt is a full one: status and instructions work on it.
     const status = await templateStatus(server.deps, "acme-growth", options);
-    expect(status.routines.weekly.status).toBe("paused");
+    expect(status.routines.weekly.status).toBe("scheduled");
     expect(await templateInstructions(server.deps, "acme-growth", "charter", options)).toContain("Own Product only");
   });
   test("bind moves the instance to an accepted upgrade from the record, or to --to, through the journalled upgrade; nothing waiting binds in place", async () => {

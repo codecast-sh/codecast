@@ -5,7 +5,7 @@ import { declineText, notRunText, refusalText, startedText } from "@platform/age
 import { calendarTools } from "./calendar";
 import { mailTools } from "./mail";
 import { searchWebTool, webTools } from "./web";
-import { mailSearch, personName, stepAsk, stepCount, stepOutcome, stepText, visibleSteps, STEPS_SHOWN } from "./steps";
+import { mailSearch, personName, stepAsk, stepAskWhy, stepCount, stepOutcome, stepText, visibleSteps, STEPS_SHOWN } from "./steps";
 
 /** A result that came back fine, with nothing to count. */
 const OK = { content: "ok" };
@@ -82,7 +82,7 @@ describe("how a step came out", () => {
     expect(stepText({ name: "write_doc" })).toBe("Writing a note");
     expect(stepText({ name: "schedule_routine", input: { title: "Water the plants" } }, undefined, { asking: true })).toBe('Waiting for your go-ahead to set up the routine "Water the plants"');
     expect(stepText(replace, undefined, { asking: true })).toBe("Waiting for your go-ahead to update a note");
-    expect(stepText(replace, { content: declineText("replace_doc", "not now"), is_error: true })).toBe("Didn't update a note (you said no)");
+    expect(stepText(replace, { content: declineText("replace_doc", "not now"), is_error: true })).toBe("Didn't update a note (you said not now)");
     expect(stepText(replace, { content: BUDGET, is_error: true })).toBe("Didn't update a note");
     expect(stepText(replace, { content: "Doc not found", is_error: true })).toBe("Couldn't update a note");
     expect(stepText({ name: "send_email", input: { to: "dana@x.org" } }, undefined, { asking: true })).toBe("Waiting for your go-ahead to send an email to Dana");
@@ -95,10 +95,15 @@ describe("how a step came out", () => {
     expect(stepAsk({ name: "frobnicate" })).toBeNull();
   });
 
+  it("says why reading a page the person did not name asks", () => {
+    expect(stepAskWhy({ name: "fetch_page", input: { url: "https://simplyprint.io" } })).toContain("didn't name this site");
+    expect(stepAskWhy({ name: "send_email" })).toBeNull();
+  });
+
   it("keeps a call's own past-tense sentence for a step that happened", () => {
     const call = { name: "replace_doc", summary: "Updated your groceries note" };
     expect(stepText(call, OK)).toBe("Updated your groceries note");
-    expect(stepText(call, { content: declineText("replace_doc"), is_error: true })).toBe("Didn't update a note (you said no)");
+    expect(stepText(call, { content: declineText("replace_doc"), is_error: true })).toBe("Didn't update a note (you said not now)");
   });
 });
 
