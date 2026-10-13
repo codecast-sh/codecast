@@ -37,12 +37,15 @@ const ratio = (part: number, whole: number) => (whole > 0 ? part / whole : null)
  * new one. A signal a person placed by hand says nothing about what the line
  * understands, so it counts on neither side.
  */
+/** How a finding joins a problem the line already knows: by key, by a judge, by reading the same, or by being the same written message. */
+const EXPLAINED = new Set(["fingerprint", "judge", "similar", "message"]);
+
 export function explainedShare(signals: ReadonlyArray<Pick<LineSignal, "created_at" | "attach">>, w: MetricsWindow): ExplainedShare {
   let explained = 0;
   let opened = 0;
   for (const s of signals) {
     if (!inWindow(s.created_at, w)) continue;
-    if (s.attach === "fingerprint" || s.attach === "judge") explained++;
+    if (s.attach && EXPLAINED.has(s.attach)) explained++;
     else if (s.attach === "new") opened++;
   }
   return { explained, opened, share: ratio(explained, explained + opened) };
