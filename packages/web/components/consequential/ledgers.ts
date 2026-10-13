@@ -1,0 +1,258 @@
+// The reviews of the app's other consequential switches and acts, as data
+// (ConsequentialSwitch SwitchLedger). Each is built from what its surface has
+// on hand, and every row is a label and a value a glance takes in.
+import type { SwitchLedger } from "./ConsequentialSwitch";
+import { MERGES_NEVER, RUNNING_ROW, STOP, dayCostFigure, dayLimitFigure, plural, priceRow, usd, type RunCost } from "./lineStartLedger";
+
+const compact = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+const areaOf = (projects: string[]) => (projects.length === 0 ? "No projects set" : projects.length <= 2 ? projects.join(", ") : `${projects.length} projects`);
+
+/** A role's own switch (shared/contracts/roleAutonomy): it starts work and answers decisions in its area. */
+export function roleAutonomyLedger(r: { name: string; handle: string; caps: { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null }; usedToday?: number | null; projects: string[]; merges: boolean; cost?: RunCost | null }): SwitchLedger {
+  // A role with no daily cap of its own has none: the review says so rather than show a default.
+  const n = r.caps.hands_per_day ?? null;
+  return {
+    name: "Start work and decide",
+    subject: `${r.name} · @${r.handle}`,
+    hands: { its: ["Approach", "Next step", "What to start"], yours: ["Approving fixes", r.merges ? "Limits" : "Merge, deploy", "This switch"] },
+    figures: [
+      n != null ? dayLimitFigure(n) : { value: "∞", label: "a day, no cap", tone: "warn" },
+      { value: String(r.usedToday ?? 0), label: "used today" },
+      ...(n != null ? [dayCostFigure(r.cost, n)] : r.cost ? [{ value: `~${usd(r.cost.avgUsd)}`, label: "a session, est.", tone: "warn" as const }] : []),
+    ],
+    rows: [
+      { k: "Area", v: areaOf(r.projects) },
+      { k: "Runs on", v: "Its machine · repo, shell" },
+      r.merges ? { k: "Merges", v: "On its own", tone: "warn" } : { k: "Merges", v: MERGES_NEVER, tone: "ok" },
+      { k: "Tokens", v: r.caps.tokens_per_day != null ? `${compact(r.caps.tokens_per_day)} a day, max` : "No cap", ...(r.caps.tokens_per_day == null ? { tone: "warn" as const } : {}) },
+      priceRow(r.cost),
+      RUNNING_ROW,
+    ],
+    stop: STOP,
+    confirm: "Let it decide",
+  };
+}
+
+/** A line's merge step, turned back on under the limit it already has. */
+export function mergeStepLedger(r: { name: string; limit: number | null; used: number }): SwitchLedger {
+  return {
+    name: "Merge step",
+    subject: r.name,
+    figures: r.limit === null ? [{ value: "∞", label: "merges a day", tone: "warn" }] : [{ value: String(r.limit), label: "merges a day, max", tone: "warn" }, { value: String(r.used), label: "today" }],
+    rows: [
+      { k: "Merges", v: "Approved branches", tone: "warn" },
+      { k: "Into", v: "Default branch" },
+      { k: "When", v: "Checks pass" },
+      { k: "To undo", v: "Revert PR" },
+    ],
+    stop: "Switch off",
+    confirm: "Turn on merging",
+  };
+}
+
+/** An issue source that starts a session whenever an outside issue takes its label or assignee. */
+export function issueSpawnLedger(r: { provider: "GitHub" | "Linear"; source: string; label?: string; assignee?: string }): SwitchLedger {
+  return {
+    name: "Spawn on delegation",
+    subject: r.source,
+    figures: [{ value: "1", label: "session per issue", tone: "warn" }, { value: "∞", label: "a day", tone: "warn" }],
+    rows: [
+      ...(r.label ? [{ k: "Label", v: r.label }] : []),
+      ...(r.assignee ? [{ k: "Assignee", v: r.assignee }] : []),
+      { k: "Who can", v: `Anyone on ${r.provider}`, tone: "warn" as const },
+    ],
+    stop: "Switch off",
+    confirm: "Turn on spawning",
+  };
+}
+
+/** An issue source that creates an outside issue for every task born in its project. */
+export function issuePushLedger(r: { provider: "GitHub" | "Linear"; source: string }): SwitchLedger {
+  return {
+    name: `Create issues on ${r.provider}`,
+    subject: r.source,
+    figures: [{ value: "1", label: "issue per new task", tone: "warn" }],
+    rows: [
+      { k: "Sends", v: "Title · description", tone: "warn" },
+      { k: "Seen by", v: `${r.source} on ${r.provider}` },
+      { k: "To undo", v: `Close on ${r.provider}` },
+    ],
+    stop: "Switch off",
+    confirm: `Send to ${r.provider}`,
+  };
+}
+
+/** A session's permission prompts, switched off for the rest of the session. */
+export function allowAllLedger(r: { pending: number }): SwitchLedger {
+  return {
+    name: "Allow all",
+    subject: "This session",
+    figures: [{ value: String(r.pending), label: "approved now", tone: "warn" }, { value: "0", label: "prompts after", tone: "warn" }],
+    rows: [
+      { k: "Runs", v: "Every tool call", tone: "warn" },
+      { k: "Can touch", v: "Files · shell · network", tone: "warn" },
+      { k: "Lasts", v: "Until the session ends" },
+      { k: "Other sessions", v: "Still ask", tone: "ok" },
+    ],
+    stop: "Change mode in the composer",
+    confirm: "Allow all",
+    keep: "Not now",
+  };
+}
+
+/** A member's team visibility raised to the whole conversation, for new sessions. */
+export function shareInFullLedger(r: { team: string; others: number; sees: string }): SwitchLedger {
+  return {
+    name: "Share in full",
+    subject: r.team,
+    figures: [{ value: String(r.others), label: r.others === 1 ? "teammate reads" : "teammates read", tone: "warn" }],
+    rows: [
+      { k: "They see", v: "Whole transcripts", tone: "warn" },
+      { k: "Today", v: r.sees },
+      { k: "Applies to", v: "New sessions" },
+      { k: "Past", v: "Unchanged", tone: "ok" },
+    ],
+    stop: "Settings › Sync",
+    confirm: "Share in full",
+    keep: "Not now",
+  };
+}
+
+/** One problem's line started again from its first step. */
+export function startAgainLedger(r: { problem: string; project: string | null; branch?: boolean; cost?: RunCost | null; about?: string | null }): SwitchLedger {
+  return {
+    name: "Start a new run",
+    subject: r.problem,
+    figures: [
+      { value: "1", label: "run starts now" },
+      r.cost ? { value: `~${usd(r.cost.avgUsd)}`, label: "est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
+      ...(r.about ? [{ value: `~${r.about}`, label: "until it asks you" }] : []),
+    ],
+    rows: [
+      ...(r.project ? [{ k: "Repo", v: r.project }] : []),
+      r.branch ? { k: "From", v: "Its fix branch", tone: "ok" } : { k: "From", v: "main" },
+      { k: "Ends", v: "Your decision" },
+      { k: "Merges", v: MERGES_NEVER, tone: "ok" },
+    ],
+    stop: "Stop from its page",
+    confirm: "Start the run",
+    keep: "Not now",
+  };
+}
+
+/** Every problem under one failure cause started again (line-journeys.md LJ6.7). */
+export function startTheseAgainLedger(r: { cause: string; count: number; projects: string[]; cost?: RunCost | null; about?: string | null }): SwitchLedger {
+  return {
+    name: r.count === 1 ? "Start it again" : "Start these again",
+    subject: r.cause,
+    figures: [
+      { value: String(r.count), label: r.count === 1 ? "run starts now" : "runs start now", tone: "warn" },
+      r.cost ? { value: `~${usd(r.cost.avgUsd * r.count)}`, label: "in all, est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
+      ...(r.about ? [{ value: `~${r.about}`, label: "each" }] : []),
+    ],
+    rows: [
+      { k: "Where", v: areaOf(r.projects) },
+      { k: "Failed on", v: r.cause, tone: "warn" },
+      { k: "Ends", v: "Your decision" },
+      { k: "Merges", v: MERGES_NEVER, tone: "ok" },
+    ],
+    stop: "Stop from each run's page",
+    confirm: r.count === 1 ? "Start the run" : `Start ${r.count} runs`,
+    keep: "Not now",
+  };
+}
+
+/** A pull request merged into its base branch: one act, undone only by a revert. */
+export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string }): SwitchLedger {
+  const alert = r.checks === "failure" ? "Checks failing" : r.blockedBy ? `GitHub: ${r.blockedBy}` : r.checks === "pending" ? "Checks still running" : undefined;
+  return {
+    name: `Merge #${r.number}`,
+    subject: r.title,
+    shift: ["Open", "Merged"],
+    alert,
+    figures: [
+      ...(r.files != null ? [{ value: String(r.files), label: r.files === 1 ? "file" : "files" }] : []),
+      ...(r.additions != null ? [{ value: `+${r.additions}`, label: `−${r.deletions ?? 0} lines` }] : []),
+      { value: r.base, label: "lands on", tone: "warn" as const },
+    ],
+    rows: [
+      { k: "Method", v: r.method },
+      ...(r.checks === "success" ? [{ k: "Checks", v: "Passing", tone: "ok" as const }] : []),
+      { k: "Branch", v: r.deleteBranch ? "Deleted after" : "Kept" },
+      { k: "Then", v: `Deploys from ${r.base}` },
+      { k: "To undo", v: "Revert PR" },
+    ],
+    confirm: alert ? "Merge anyway" : `Merge into ${r.base}`,
+    keep: "Not now",
+  };
+}
+
+/** An agent's permission mode set to skip every prompt, for every session it starts from here. */
+export function agentFullAccessLedger(r: { agent: string; label: string; from: string; sandbox: boolean }): SwitchLedger {
+  return {
+    name: `${r.agent}: ${r.label}`,
+    subject: "New sessions",
+    shift: [r.from, r.label],
+    figures: [{ value: "0", label: "prompts", tone: "warn" }, { value: r.sandbox ? "Yes" : "No", label: "sandbox", tone: r.sandbox ? undefined : "warn" }],
+    rows: [
+      { k: "Runs", v: "Every tool call", tone: "warn" },
+      { k: "Can touch", v: r.sandbox ? "Workspace" : "All files · network", tone: r.sandbox ? undefined : "warn" },
+      { k: "Applies to", v: "New sessions, every machine" },
+      { k: "Running", v: "Keep their mode", tone: "ok" },
+    ],
+    stop: `Pick ${r.from}`,
+    confirm: `Use ${r.label}`,
+    keep: `Keep ${r.from}`,
+  };
+}
+
+/** Every off agent feature in a group, turned on at once on one machine. */
+export function featuresAllLedger(r: { group: string; machine: string; names: string[] }): SwitchLedger {
+  return {
+    name: `${r.group} features`,
+    subject: r.machine,
+    figures: [{ value: String(r.names.length), label: "capabilities added", tone: "warn" }],
+    rows: [
+      { k: "Adds", v: plural(r.names.length, "feature"), list: r.names },
+      { k: "Applies to", v: "New sessions here" },
+    ],
+    stop: "Each card's switch",
+    confirm: `Turn on ${r.names.length}`,
+  };
+}
+
+/** A paused routine set running: a recurring agent run on its schedule. */
+export function routineActivateLedger(r: { title: string; every: string; applies: boolean; cost?: RunCost | null }): SwitchLedger {
+  return {
+    name: `Activate ${r.title}`,
+    subject: `Every ${r.every}`,
+    shift: ["Paused", "Running"],
+    figures: [{ value: "1", label: `paid run every ${r.every}`, tone: "warn" }, r.cost ? { value: `~${usd(r.cost.avgUsd)}`, label: "a run, est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" }],
+    rows: [
+      r.applies ? { k: "Acts", v: "Applies changes", tone: "warn" } : { k: "Acts", v: "Proposes only", tone: "ok" },
+      { k: "First run", v: "Next slot" },
+    ],
+    stop: "Pause its trigger",
+    confirm: "Activate",
+    keep: "Keep paused",
+  };
+}
+
+/** A selection of sessions ended, some of them mid-turn. */
+export function killSessionsLedger(r: { total: number; working: string[] }): SwitchLedger {
+  const w = r.working.length;
+  return {
+    name: `Kill ${r.total} sessions`,
+    subject: `${w} working now`,
+    shift: ["Running", "Ended"],
+    figures: [{ value: String(w), label: "cut off mid-turn", tone: "warn" }, { value: String(r.total), label: "end" }],
+    rows: [
+      { k: "Working", v: plural(w, "session"), list: r.working.slice(0, 4).concat(w > 4 ? [`+${w - 4} more`] : []), tone: "warn" },
+      { k: "Lost", v: "Unfinished turns", tone: "warn" },
+      { k: "Triggers", v: "Canceled" },
+      { k: "To undo", v: "Restore · turn lost" },
+    ],
+    confirm: `Kill ${r.total}`,
+    keep: "Keep running",
+  };
+}

@@ -15,10 +15,10 @@ export function DecisionsLayer() {
       lede={
         <>
           <p>
-            Some conclusions should not depend on anyone finding the right session. <C>cast decisions add</C> records one with its reason, tags and project. Name the session that settled it in the reason, so the next reader can open the whole argument with <C>cast read</C>.
+            Some conclusions should not depend on anyone finding the right session. The decisions log records one with its reason, tags and project, and names the session that settled it, so the next reader can open the whole argument.
           </p>
           <p>
-            Agents and people read the same log: list it, filter by tags or project, or search titles before relitigating a choice the team already made.
+            The log lives in the CLI today, with no screen in the app: agents record a decision when a session settles one, and read the log before relitigating a choice the team already made. Ask your agent what was decided about something and it reads it for you.
           </p>
         </>
       }
@@ -81,7 +81,7 @@ export function TeachLayer() {
       lede={
         <>
           <p>
-            None of this helps if agents never run it. The installer asks one question, <em>Enable agent memory?</em>, defaulting to yes, and writes a <C>## Memory</C> section into the instruction file of each agent on the machine: <C>~/.claude/CLAUDE.md</C>, <C>~/.codex/AGENTS.md</C>, a Cursor rule, and so on.
+            Everything above works for you in the app. It helps your agents only if they use it too. The installer asks one question, <em>Enable agent memory?</em>, defaulting to yes, and writes a <C>## Memory</C> section into the instruction file of each agent on the machine: <C>~/.claude/CLAUDE.md</C>, <C>~/.codex/AGENTS.md</C>, a Cursor rule, and so on.
           </p>
           <p>
             The section is a command reference with one instruction: search past conversations liberally, when starting a task, when debugging, and when the user refers to earlier work. Nothing runs on its own; the agent decides when to call it. When codecast updates and the section&apos;s text changed, it is rewritten in place.
@@ -142,7 +142,7 @@ cast blame <file>`}
           {t.dim("</stable-context>")}
         </Pane>
         <div className="space-y-3">
-          <Note label="cast stable team">The team&apos;s last 14 days, up to 15 sessions, in this project. <C>-g</C> for every project.</Note>
+          <Note label="cast stable team">The team&apos;s last 14 days, up to 15 sessions, in this project. <C>-g</C> for every project. A CLI setting, like the rest of this section.</Note>
           <Note label="cast stable solo" color={SOL.cyan}>Only your own last 7 days, up to 10 sessions. <C>cast stable off</C> stops it.</Note>
           <p className="text-[13.5px] leading-6 px-1" style={{ color: SOL.base01 }}>
             Injected at session start for Claude Code, Codex, Cursor and OpenCode. It is a snapshot: the agent is told to check <C>cast diff</C> and <C>cast read</C> before crediting work to a session. Skipped memory at install? <C>cast memory</C> turns it on later.

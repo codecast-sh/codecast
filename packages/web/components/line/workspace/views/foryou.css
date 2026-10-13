@@ -1,0 +1,62 @@
+/* For you (ForYouView, line-journeys.md LJ8.1): a list of what waits and the
+   reader beside it. Two columns from the first paint; the list never changes
+   width, and each side scrolls on its own. */
+.lw-stage-in:has(> .fy) { height: 100%; }
+.fy { display: grid; grid-template-columns: 420px minmax(0, 1fr); height: 100%; min-height: 0; }
+
+.fy-list { min-height: 0; overflow: auto; padding: var(--lw-s3) var(--lw-s2) var(--lw-s5); border-right: 1px solid var(--lw-rule); }
+.fy-list[data-settling] .fy-group-h .lw-num { opacity: .5; }
+.fy-group + .fy-group { margin-top: var(--lw-s4); }
+/* What no answer can reach yet sits below a rule, quieter: listed, never counted. */
+.fy-group[data-first-uncounted] { margin-top: var(--lw-s4); padding-top: var(--lw-s4); border-top: 1px solid var(--lw-rule); }
+.fy-group-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; padding: 0 10px; font-size: var(--lw-fs-xs); font-weight: 650; letter-spacing: .01em; color: var(--lw-ink-2); }
+.fy-group[data-counted] .fy-group-h .lw-num { color: var(--lw-person); font-weight: 700; }
+.fy-group-h .lw-num { color: var(--lw-ink-3); font-weight: 500; }
+.fy-rows { list-style: none; margin: 0; padding: 0; }
+
+.fy-row {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 9px 10px 9px 12px; border: 0; border-radius: var(--lw-r);
+  background: none; font: inherit; text-align: left; text-decoration: none; color: inherit; cursor: pointer;
+  box-shadow: inset 2px 0 0 transparent; transition: background-color var(--lw-fast) var(--lw-ease);
+}
+.fy-row:hover { background: var(--lw-paper-2); }
+.fy-row:active { background: color-mix(in srgb, var(--lw-paper-2) 70%, var(--lw-rule)); }
+.fy-row[aria-current="true"] { background: var(--lw-person-soft); box-shadow: inset 2px 0 0 var(--lw-person); }
+.fy-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
+.fy-ask {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  font-size: var(--lw-fs-base); line-height: 1.4; font-weight: 550; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere;
+}
+.fy-group:not([data-counted]) .fy-ask { font-weight: 450; color: var(--lw-ink-2); }
+.fy-meta { display: flex; flex-wrap: wrap; column-gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fy-meta > span + span::before { content: "·"; margin-right: 6px; color: var(--lw-ink-3); opacity: .7; }
+
+.fy-notstarted { margin-top: var(--lw-s4); padding-top: 12px; border-top: 1px solid var(--lw-rule); border-radius: 0 0 var(--lw-r) var(--lw-r); }
+.fy-notstarted .fy-ask { display: flex; align-items: baseline; gap: 8px; font-weight: 550; }
+.fy-notstarted .lw-num { color: var(--lw-ink-3); font-weight: 500; }
+.fy-go { width: 14px; height: 14px; margin-left: auto; align-self: center; color: var(--lw-ink-3); }
+.fy-none { margin: 6px 12px; font-size: var(--lw-fs-base); font-weight: 550; color: var(--lw-ink); }
+.fy-keys { display: flex; gap: 4px; margin: var(--lw-s4) 12px 0; opacity: .55; }
+
+.fy-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.fy-reader-h { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 20px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fy-process { font-weight: 600; color: var(--lw-ink-2); }
+.fy-trial { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
+.fy-trial:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+.fy-pos { margin-left: auto; }
+.fy-reader-h .lw-iconbtn:disabled { opacity: .3; pointer-events: none; }
+/* The reader's body is the one box its content fills: a decision scrolls inside it and docks its answers at its foot. */
+.fy-reader-b { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.fy-reader-b > * { flex: 1; min-height: 0; }
+
+.fy-clear { flex: 1; display: grid; place-items: center; }
+.fy-figure { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 14px 22px; border-radius: var(--lw-r-lg); text-decoration: none; color: var(--lw-ink-2); font-size: var(--lw-fs-sm); transition: background-color var(--lw-fast); }
+.fy-figure:hover { background: var(--lw-paper-2); }
+.fy-figure b { font-size: var(--lw-fs-2xl); font-weight: 650; color: var(--lw-ink); line-height: 1.1; }
+
+@media (max-width: 1100px) { .fy { grid-template-columns: 320px minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .fy { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 34%) minmax(0, 1fr); }
+  .fy-list { border-right: 0; border-bottom: 1px solid var(--lw-rule); }
+}
+@media (prefers-reduced-motion: reduce) { .fy-row, .fy-trial, .fy-figure { transition: none; } }

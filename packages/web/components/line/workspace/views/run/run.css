@@ -1,0 +1,145 @@
+/* A run's page (RunPage, line-journeys.md LJ8.4) on the workspace's tokens
+   (workspace.css): the head with the stage track and the state line, the
+   steps on the left, the selected step on the right. A mark says how a step
+   went by shape and color: a filled dot done, a red one failed, a blue ring
+   waiting on a person, a pulsing one running, a hollow one with no record. */
+
+.rp {
+  position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--lw-paper);
+  container-type: inline-size; container-name: runpage; font-size: var(--lw-fs-base);
+}
+.rp-mono { font-family: var(--lw-mono); font-size: .93em; }
+.rp-missing { padding: 14px 24px; }
+
+/* ── head ── */
+.rp-head { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 14px 24px 14px; border-bottom: 1px solid var(--lw-rule-2); background: var(--lw-card); min-width: 0; }
+.rp-head-top { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.rp-crumb { display: flex; align-items: center; gap: 7px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); min-width: 0; }
+.rp-crumb [aria-current] { color: var(--lw-ink); font-weight: 650; }
+.rp-crumb-link { border: 0; background: none; padding: 2px 0; font: inherit; color: var(--lw-ink-2); cursor: pointer; border-radius: 4px; }
+.rp-crumb-link.rp-mono { font-family: var(--lw-mono); }
+.rp-crumb-link:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+.rp-crumb-link:focus-visible, .rp-step-btn:focus-visible, .rp-row:focus-visible, .rp-next:focus-visible, .rp-h-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 1px; }
+.rp-runs { display: inline-flex; align-items: center; gap: 2px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.rp-step-btn { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--lw-ink-2); cursor: pointer; transition: background var(--lw-fast), color var(--lw-fast); }
+.rp-step-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--lw-ink) 7%, transparent); color: var(--lw-ink); }
+.rp-step-btn:disabled { opacity: .3; cursor: default; }
+.rp-findings { margin-left: auto; white-space: nowrap; }
+.rp-title { margin: 0; font-size: var(--lw-fs-lg); font-weight: 650; line-height: 1.3; letter-spacing: -.012em; color: var(--lw-ink); max-width: 96ch; text-wrap: pretty; overflow-wrap: anywhere; }
+
+/* ── body: steps | step ── */
+.rp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); }
+@container runpage (max-width: 720px) {
+  .rp-body { grid-template-columns: 1fr; grid-template-rows: minmax(132px, 30%) minmax(0, 1fr); }
+  .rp-trace-wrap { border-right: 0; border-bottom: 1px solid var(--lw-rule-2); }
+  .rp-head, .rp-step { padding-left: 16px; padding-right: 16px; }
+}
+.rp-trace-wrap { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-right: 1px solid var(--lw-rule-2); background: var(--lw-paper-2); }
+.rp-main { min-height: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--lw-paper); display: flex; flex-direction: column; }
+.rp-main:has(> .rp-step[data-boxed]) { overflow: hidden; }
+
+/* ── the steps ── */
+.rp-trace { list-style: none; margin: 0; padding: 8px 0 28px; }
+.rp-trace > li { position: relative; }
+/* The spine through every mark, so the steps read as one path. */
+.rp-trace > li::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0; width: 1px; background: var(--lw-rule); }
+.rp-trace > li:first-child::before { top: 20px; }
+.rp-trace > li:last-child::before { bottom: calc(100% - 20px); }
+.rp-row {
+  position: relative; width: 100%; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: start; column-gap: 11px;
+  padding: 9px 14px 9px 16px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: background var(--lw-fast);
+}
+.rp-row:hover { background: color-mix(in srgb, var(--lw-ink) 5%, transparent); }
+.rp-row[aria-current] { background: var(--lw-card); box-shadow: inset 2px 0 0 var(--lw-ink); }
+.rp-row-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rp-row-label { display: flex; align-items: baseline; gap: 8px; font-size: var(--lw-fs-base); font-weight: 600; line-height: 1.35; color: var(--lw-ink); }
+.rp-row[data-kind="script"] .rp-row-label, .rp-row[data-kind="end"] .rp-row-label { font-weight: 450; color: var(--lw-ink-2); }
+.rp-row[data-mark="skipped"] .rp-row-label { color: var(--lw-ink-3); }
+.rp-row[data-mark="failed"] .rp-row-label { color: var(--lw-bad); }
+.rp-rounds { font-size: var(--lw-fs-xs); font-weight: 450; color: var(--lw-ink-3); white-space: nowrap; }
+.rp-row-gist { font-size: var(--lw-fs-sm); line-height: 1.4; color: var(--lw-ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.rp-row[aria-current] .rp-row-gist { color: var(--lw-ink-2); }
+.rp-took { padding-top: 2px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.rp-mark { position: relative; z-index: 1; flex: none; width: 11px; height: 11px; margin-top: 4px; border-radius: 50%; justify-self: center; background: var(--lw-ink-2); box-shadow: 0 0 0 3px var(--lw-paper-2); }
+.rp-row[aria-current] .rp-mark { box-shadow: 0 0 0 3px var(--lw-card); }
+.rp-mark[data-mark="failed"] { background: var(--lw-bad); }
+.rp-mark[data-mark="waiting"], .rp-row[aria-current] .rp-mark[data-mark="waiting"] { background: var(--lw-person); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lw-person) 24%, var(--lw-card)); }
+.rp-mark[data-mark="live"] { background: var(--lw-live); animation: lw-pulse 2s var(--lw-ease) infinite; color: var(--lw-live); }
+.rp-mark[data-mark="skipped"] { background: var(--lw-paper-2); box-shadow: inset 0 0 0 1.5px var(--lw-ink-3), 0 0 0 3px var(--lw-paper-2); }
+
+/* ── the selected step ── */
+.rp-step { padding: 20px 28px 56px; display: flex; flex-direction: column; gap: 22px; min-width: 0; animation: rp-in var(--lw-med) var(--lw-ease-out) both; }
+@keyframes rp-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .rp-step { animation: none; } .rp-mark[data-mark="live"] { animation: none; } }
+.rp-step[data-boxed] { flex: 1; min-height: 0; padding: 0; gap: 0; }
+.rp-step[data-boxed] > .rp-step-head { padding: 14px 28px 12px; border-bottom: 1px solid var(--lw-rule-2); }
+.rp-need { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rp-need > * { flex: 1; min-height: 0; }
+.rp-step-head { display: flex; align-items: flex-start; gap: 16px; }
+.rp-step-title { flex: 1; min-width: 0; }
+.rp-step-title h2 { margin: 0; font-size: var(--lw-fs-xl); font-weight: 650; letter-spacing: -.018em; line-height: 1.2; }
+.rp-step-meta { margin: 6px 0 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.rp-step-meta .rp-mark, .rp-step-meta .rp-mark[data-mark] { margin: 0 -4px 0 0; box-shadow: none; }
+.rp-step-meta [data-run-step-state] { color: var(--lw-ink-2); font-weight: 600; }
+.rp-step[data-mark="failed"] .rp-step-meta [data-run-step-state] { color: var(--lw-bad); }
+.rp-step[data-mark="waiting"] .rp-step-meta [data-run-step-state] { color: var(--lw-person-deep); }
+.rp-step-acts { flex: none; display: flex; align-items: center; gap: 14px; padding-top: 2px; }
+.rp-step-acts .lw-act { height: 30px; padding: 0 14px; }
+
+.rp-part { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.rp-h { margin: 0; display: flex; align-items: center; gap: 9px; font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); }
+.rp-h-link { margin-left: auto; font-weight: 450; display: inline-flex; align-items: center; gap: 3px; }
+.rp-h-toggle { border: 0; background: none; padding: 3px 0; font: inherit; font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); cursor: pointer; text-align: left; align-self: flex-start; border-radius: 4px; }
+.rp-h-toggle:hover { color: var(--lw-ink); }
+.rp-part[data-open] > .rp-h-toggle .lw-chev { transform: rotate(45deg) translate(-2px, -2px); }
+.rp-h-n { font-weight: 450; color: var(--lw-ink-3); }
+
+.rp-fold { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.rp-fold > * { max-width: 100%; }
+.rp-md { font-size: var(--lw-fs-md); line-height: 1.6; color: var(--lw-ink); max-width: 78ch; min-width: 0; overflow-wrap: anywhere; }
+.rp-md > :first-child { margin-top: 0; }
+.rp-md > :last-child { margin-bottom: 0; }
+.rp-pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: var(--lw-fs-base); line-height: 1.55; color: var(--lw-ink); max-width: 86ch; }
+.rp-pre-mono { font-family: var(--lw-mono); font-size: var(--lw-fs-sm); line-height: 1.6; padding: 11px 13px; border-radius: var(--lw-r-sm); background: var(--lw-sunk); max-width: none; align-self: stretch; }
+.rp-var { border-radius: 3px; padding: 0 2px; background: color-mix(in srgb, var(--lw-person) 13%, transparent); color: var(--lw-person-deep); }
+.rp-var[data-unset] { background: none; color: var(--lw-ink-3); font-style: italic; box-shadow: inset 0 -1px 0 var(--lw-rule); }
+.rp-note { margin: 0; font-size: var(--lw-fs-base); color: var(--lw-ink-3); line-height: 1.5; }
+.rp-note[data-tone="bad"] { color: var(--lw-bad); }
+.rp-question { margin: 0; font-size: var(--lw-fs-md); line-height: 1.55; color: var(--lw-ink); max-width: 74ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rp-fail { margin: 0; padding: 10px 13px; border-radius: var(--lw-r-sm); background: var(--lw-bad-soft); color: var(--lw-ink); font-size: var(--lw-fs-base); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: inset 3px 0 0 var(--lw-bad); }
+
+/* facts: a label column and its values, aligned across rows */
+.rp-facts { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 20px; font-size: var(--lw-fs-base); line-height: 1.5; }
+.rp-facts > div { display: contents; }
+.rp-facts dt { color: var(--lw-ink-3); white-space: nowrap; }
+.rp-facts dd { margin: 0; color: var(--lw-ink); min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.rp-checks { display: flex; flex-direction: column; gap: 6px; }
+.rp-check { display: grid; grid-template-columns: 14px minmax(96px, max-content) minmax(0, 1fr); column-gap: 10px; align-items: start; font-size: var(--lw-fs-base); line-height: 1.5; }
+.rp-check .rp-mark { box-shadow: none; margin-top: 5px; background: var(--lw-ok); }
+.rp-check .rp-mark[data-mark="failed"] { background: var(--lw-bad); }
+.rp-check-name { font-weight: 600; color: var(--lw-ink); }
+.rp-check[data-ok="false"] .rp-check-name { color: var(--lw-bad); }
+.rp-check-detail { color: var(--lw-ink-2); min-width: 0; overflow-wrap: anywhere; }
+.rp-errors { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; font-size: var(--lw-fs-base); color: var(--lw-ink); }
+.rp-errors li { padding-left: 12px; box-shadow: inset 3px 0 0 var(--lw-bad); line-height: 1.5; overflow-wrap: anywhere; }
+
+.rp-tools { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.rp-tools ol { margin: 0; padding: 0; list-style: none; align-self: stretch; counter-reset: tool; }
+.rp-tools li { counter-increment: tool; display: grid; grid-template-columns: 26px 92px minmax(0, 1fr) auto; column-gap: 10px; padding: 4px 0; font-size: var(--lw-fs-sm); line-height: 1.45; border-bottom: 1px solid var(--lw-rule-2); }
+.rp-tools li::before { content: counter(tool); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; text-align: right; }
+.rp-tools-tool { font-weight: 600; color: var(--lw-ink-2); }
+.rp-tools-target { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-2); overflow-wrap: anywhere; min-width: 0; }
+.rp-tools-err { color: var(--lw-bad); font-weight: 600; }
+
+/* what it decided, and the step the run went to next */
+.rp-then { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 16px; border-top: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-base); }
+.rp-then-k { color: var(--lw-ink-3); }
+.rp-then-said { color: var(--lw-ink-2); font-weight: 600; }
+.rp-then-said[data-mark="failed"] { color: var(--lw-bad); }
+.rp-next { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 3px 0; font: inherit; font-weight: 600; color: var(--lw-ink); cursor: pointer; border-radius: 4px; }
+.rp-next svg { color: var(--lw-ink-3); transition: transform var(--lw-fast) var(--lw-ease-out); }
+.rp-next:hover svg { transform: translateX(2px); color: var(--lw-ink); }
+.rp-next:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--lw-rule); }
