@@ -22,7 +22,7 @@ type MachineResourceRow = { _id: string; device_id: string; received_at: number;
 
 const rowSig = (r: MachineResourceRow) => `${r.device_id}|${r.received_at}`;
 
-/** Feeder: the caller's machine reports. Global (the pressure notice reads it), so only the sync host subscribes; followers get the rows by replication. */
+/** Feeder: the caller's machine reports. Global (the top bar gauge reads it), so only the sync host subscribes; followers get the rows by replication. */
 export function useSyncMachineResources(enabled = true) {
   const host = useIsSyncHost();
   return useSyncCollection("machineResources", api.machineResources.listMine, enabled && host ? {} : "skip");
@@ -128,7 +128,6 @@ export function useResourceMonitor() {
     const out: OffloadPlan[] = [];
     for (const source of machines) {
       if (source.role !== "local") continue;
-      // Dismissing quiets the app-wide notice (ResourcePressureNotice); this page always offers the plan.
       const plan = buildOffloadPlan({ source, machines, sessions, devices: devices as any, candidates, now });
       if (plan) out.push(plan);
     }

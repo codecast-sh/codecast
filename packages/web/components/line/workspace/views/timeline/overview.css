@@ -1,0 +1,66 @@
+/* The top of Problems (line-journeys.md LJ8.2): three figures, then findings
+   per day as stacked bars, the five busiest problems in their own colours and
+   the rest one neutral band, with a diamond under the day a fix went out. */
+
+.lwf { display: flex; align-items: flex-start; gap: clamp(24px, 5vw, 64px); min-width: 0; flex-wrap: wrap; }
+.lwf-fig { display: grid; gap: 3px; min-width: 0; }
+.lwf-main { display: grid; gap: 3px; color: inherit; text-decoration: none; border-radius: 6px; }
+.lwf b { font-size: var(--lw-fs-2xl); font-weight: 750; line-height: 1; letter-spacing: -.02em; color: var(--lw-ink); }
+.lwf b small { font-size: var(--lw-fs-md); font-weight: 550; letter-spacing: 0; color: var(--lw-ink-3); }
+.lwf-l { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); white-space: nowrap; }
+.lwf-more { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); text-decoration: none; white-space: nowrap; width: max-content; border-radius: 4px; }
+.lwf-more[data-tone="better"] { color: var(--lw-ok); }
+.lwf-more[data-tone="worse"] { color: var(--lw-bad); }
+a.lwf-main:hover .lwf-l, a.lwf-more:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+a.lwf-main:focus-visible, a.lwf-more:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 3px; }
+a.lwf-main[aria-current] .lwf-l, a.lwf-more[aria-current] { color: var(--lw-ink); font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+
+.lwo {
+  --lwo-0: var(--sol-blue); --lwo-1: var(--sol-orange); --lwo-2: var(--sol-violet); --lwo-3: var(--sol-cyan); --lwo-4: var(--sol-magenta);
+  --lwo-other: color-mix(in srgb, var(--lw-ink-3) 34%, var(--lw-paper));
+  padding: var(--lw-s2) var(--lw-s5) var(--lw-s3); border-bottom: 1px solid var(--lw-rule-2);
+}
+.lwo-chart { position: relative; }
+.lwo-box { width: 100%; overflow: hidden; }
+.lwo-svg { display: block; user-select: none; }
+.lwo-grid .lwo-base { stroke: var(--lw-rule); stroke-width: 1; }
+.lwo-ymax { font-size: 10px; fill: var(--lw-ink-3); text-anchor: end; font-variant-numeric: tabular-nums; }
+.lwo-tick { font-size: 10.5px; fill: var(--lw-ink-3); text-anchor: middle; }
+.lwo-hit { fill: transparent; }
+.lwo-bars g[data-hover] .lwo-hit { fill: color-mix(in srgb, var(--lw-ink) 5%, transparent); }
+.lwo-seg { fill: var(--lwo-other); transition: opacity var(--lw-fast); }
+.lwo-seg[data-slot="0"] { fill: var(--lwo-0); }
+.lwo-seg[data-slot="1"] { fill: var(--lwo-1); }
+.lwo-seg[data-slot="2"] { fill: var(--lwo-2); }
+.lwo-seg[data-slot="3"] { fill: var(--lwo-3); }
+.lwo-seg[data-slot="4"] { fill: var(--lwo-4); }
+.lwo-seg[data-dim] { opacity: .2; }
+.lwo-fix { fill: var(--lw-ok); stroke: var(--lw-ok); stroke-width: 1.5; }
+.lwo-fix[data-kind="merged"] { fill: var(--lw-paper); }
+.lwo-bars a { cursor: pointer; }
+.lwo-bars a:focus-visible { outline: none; }
+.lwo-bars a:focus-visible .lwo-seg { stroke: var(--lw-ink); stroke-width: 1.5; }
+
+.lwo-tip { max-width: 380px; }
+.lwo-tip .lwo-tip-when { margin-bottom: 3px; }
+.lwo-tip .lwo-tip-row { display: grid; grid-template-columns: 9px auto minmax(0, 1fr) auto; align-items: baseline; gap: 7px; opacity: .8; }
+.lwo-tip .lwo-tip-row[data-on] { opacity: 1; font-weight: 650; }
+.lwo-tip .lwo-tip-ref { font-variant-numeric: tabular-nums; color: var(--lw-paper); }
+.lwo-tip .lwo-tip-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.lwo-tip .lw-num { color: var(--lw-paper); font-weight: 650; }
+.lwo-tip .lwo-tip-fix { margin-top: 3px; color: color-mix(in srgb, var(--lw-ok) 60%, var(--lw-paper)); }
+.lwo-tip-row i { flex: none; width: 9px; height: 9px; border-radius: 2px; background: var(--lwo-other); transform: translateY(-.5px); }
+[data-slot="0"] > i { background: var(--lwo-0); }
+[data-slot="1"] > i { background: var(--lwo-1); }
+[data-slot="2"] > i { background: var(--lwo-2); }
+[data-slot="3"] > i { background: var(--lwo-3); }
+[data-slot="4"] > i { background: var(--lwo-4); }
+
+/* What a diamond under a day means, only when one is drawn. */
+.lwo-marks { display: flex; gap: 16px; justify-content: flex-end; margin-top: 2px; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.lwo-marks span { display: inline-flex; align-items: center; gap: 8px; }
+.lwo-marks i { width: 7px; height: 7px; border-radius: 1px; transform: rotate(45deg); background: var(--lw-ok); box-shadow: inset 0 0 0 1.5px var(--lw-ok); }
+.lwo-marks i[data-kind="merged"] { background: var(--lw-paper); }
+@media (prefers-reduced-motion: reduce) { .lwo-seg { transition: none; } }
+.lwf-none { padding: 6px 0 2px; }
+.lwf-none .lwf-l { font-size: var(--lw-fs-md); color: var(--lw-ink-2); font-weight: 600; }

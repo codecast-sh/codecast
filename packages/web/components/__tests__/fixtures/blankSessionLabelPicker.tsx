@@ -9,7 +9,8 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLInputE
 }
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {}, back() {} }), usePathname: () => "/inbox" }));
+const realNav = { ...(await import("next/navigation")) };
+mock.module("next/navigation", () => ({ ...realNav, useRouter: () => ({ push() {}, replace() {}, back() {} }), usePathname: () => "/inbox", useSearchParams: () => new URLSearchParams() }));
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
   ...convexReact,
@@ -19,7 +20,8 @@ mock.module("convex/react", () => ({
   useConvexAuth: () => ({ isAuthenticated: false, isLoading: false }),
 }));
 const errors: string[] = [];
-mock.module("sonner", () => ({ toast: { success() {}, error: (message: string) => errors.push(message) } }));
+// A gesture with an undo entry raises its toast by calling toast() itself (gestureToast).
+mock.module("sonner", () => ({ toast: Object.assign(() => "toast", { success() {}, dismiss() {}, error: (message: string) => errors.push(message) }) }));
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { ActionSubmenu } = await import("../../CommandPalette");

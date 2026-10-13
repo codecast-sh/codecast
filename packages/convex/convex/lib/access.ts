@@ -7,6 +7,8 @@
 // owner-or-team shape but routes through privacy.ts because conversation access
 // is materially more nuanced than tasks/docs/plans (see below).
 
+import type { Scheduler } from "convex/server";
+import { internal } from "../_generated/api";
 import { Doc, Id } from "../_generated/dataModel";
 import { findConversationBySessionReference } from "../conversationSessionLookup";
 import { canOwnerOrTeamAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
@@ -37,7 +39,9 @@ export * from "./accessKeys";
 // the access layer too (canAccessDoc uses it directly).
 export { isTeamMember };
 
-type AccessCtx = { db: any };
+/** `scheduler` is optional only so helpers typed `{ db }` (and their tests)
+ *  can call the restamp; a mutation always has one. */
+type AccessCtx = { db: any; scheduler?: Scheduler };
 
 // ── Owner-or-workspace: tasks, docs, plans, projects ──
 // One rule: the owner always has access; anyone else has access iff the row's
@@ -298,6 +302,7 @@ export async function recomputeWorkspaceForConversation(
   gather((await ownerLinkedRows(ctx, conv.user_id)).filter((row: any) => linkedConversationId(row) === convId));
 
   let updated = 0;
+  const movedTasks: Id<"tasks">[] = [];
   for (const row of rows) {
     if (linkedConversationId(row) !== convId) continue;
     const key = computeWorkspaceKey(row, conv);
@@ -307,7 +312,13 @@ export async function recomputeWorkspaceForConversation(
       // recompute in this execution.
       row.workspace = key;
       updated++;
+      if (/^ct-\d+$/.test(row.short_id ?? "")) movedTasks.push(row._id);
     }
+  }
+  // A task that moved may sit on a dependency edge into its old workspace,
+  // which readiness cannot read across: the job cuts it and tells the dependent.
+  if (movedTasks.length && ctx.scheduler) {
+    await ctx.scheduler.runAfter(0, internal.taskLinks.cutCrossedEdges, { task_ids: movedTasks });
   }
   return updated;
 }
