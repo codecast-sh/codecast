@@ -137,7 +137,9 @@ export interface LoadNewerInput {
  * bottom, which re-enters the trigger band with no user input and rips through
  * every remaining page. The caller therefore also gates on a wheel-down "arm"
  * (consumed per load) exactly as load-older does — that intent state lives
- * outside this pure function, same as loadOlderArmedRef.
+ * outside this pure function, same as loadOlderArmedRef — except while the
+ * window cannot scroll: then nothing can snap and loading stops once it
+ * overflows, so it fills without intent.
  */
 export function shouldLoadNewer(i: LoadNewerInput): boolean {
   if (!i.hasMoreBelow || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;
@@ -182,6 +184,34 @@ export function shouldAdjustScrollForResize(i: ResizeAdjustInput): boolean {
   if (i.held) return false;
   return i.itemStart < i.scrollOffset;
 }
+
+/**
+ * Hand the view back to the reader. Every virtualizer scrollToIndex/scrollToEnd
+ * leaves a reconcile loop running for up to 5s that re-scrolls to its target
+ * whenever the target moves, and nothing the reader does stops it. At the tail
+ * of a streaming session each append issues a fresh scrollToEnd, so a reader
+ * who wheeled away was pulled back the moment a row grew or a row below
+ * mounted and measured. The loop's state is private, so clear it by name.
+ */
+export function releaseScrollTarget(virtualizer: object): void {
+  (virtualizer as { scrollState: unknown }).scrollState = null;
+}
+
+/**
+ * Whether a scroll event hands the view back to tail-follow. Only the reader
+ * moving down to the bottom does. The virtualizer also moves scrollTop down on
+ * its own: a row that starts above the viewport and grows shifts the view by
+ * the growth, which is every streamed chunk once the last row is taller than
+ * the screen. That shift keeps the reader's distance from the bottom, so
+ * counting it as a return re-pinned a reader who had scrolled up a little.
+ */
+export function shouldResumeFollow(i: { nearBottom: boolean; scrolledDown: boolean; readerMovingDown: boolean }): boolean {
+  return i.nearBottom && i.scrolledDown && i.readerMovingDown;
+}
+
+// How long after a downward wheel, key or touch its scroll events still count
+// as the reader's. Trackpad momentum keeps sending wheel events, so it renews.
+export const READER_SCROLL_WINDOW_MS = 400;
 
 export type FeedJumpDensity = "full" | "condensed" | "compact";
 

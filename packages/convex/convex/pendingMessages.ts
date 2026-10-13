@@ -1,4 +1,5 @@
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
+import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
@@ -147,11 +148,16 @@ export function isTerminalPendingStatus(status: string): boolean {
   return TERMINAL_STATUSES.has(status as PendingStatus);
 }
 
+// Enough for the bottom of a 220-column pane (the dialog and the composer
+// under it); the rest is scrollback nobody needs to decide.
+const HOLD_SCREEN_MAX_CHARS = 6000;
+
 async function rependPendingMessage(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string; retry_count: number },
   retryCount: number,
-  holdReason?: string,
+  hold?: { reason: string; screen?: string },
+  force?: boolean,
 ): Promise<boolean> {
   if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
@@ -162,7 +168,9 @@ async function rependPendingMessage(
     retry_count: retryCount,
     delivered_at: undefined,
     paste_verified_at: undefined,
-    delivery_disposition_reason: holdReason,
+    delivery_disposition_reason: hold?.reason,
+    delivery_hold_screen: hold?.screen,
+    ...(force ? { delivery_force: true } : {}),
   });
   return true;
 }
@@ -1064,6 +1072,7 @@ export const updateMessageStatus = mutation({
     device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "daemon:updateMessageStatus");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1106,7 +1115,8 @@ export async function retryPendingMessageForUser(
   ctx: { db: any; scheduler?: WakeScheduler },
   userId: Id<"users">,
   conversationId: Id<"conversations">,
-  ref: { messageId?: string; clientId?: string },
+  // force: the person read the held screen and chose "Send anyway".
+  ref: { messageId?: string; clientId?: string; force?: boolean },
 ): Promise<string> {
   if (!ref.messageId && !ref.clientId) throw new Error("Message identity required");
   const message = ref.messageId
@@ -1127,7 +1137,7 @@ export async function retryPendingMessageForUser(
   if ((message.kill_generation ?? 0) < (conversation.pending_kill_generation ?? 0)) {
     throw new Error("This message was stopped when the session was killed");
   }
-  if (await rependPendingMessage(ctx, message, 0)) await wakeHostedConversation(ctx, conversation, "message");
+  if (await rependPendingMessage(ctx, message, 0, undefined, ref.force)) await wakeHostedConversation(ctx, conversation, "message");
   await ctx.db.patch(conversationId, { has_pending_messages: true });
   return "pending";
 }
@@ -1277,6 +1287,9 @@ export const retryMessage = mutation({
     // attempts spent the whole budget in seven minutes and stranded a message
     // for 49 minutes on 2026-09-08.
     hold_reason: v.optional(v.string()),
+    // The terminal rows the hold was decided on, shown to the person behind
+    // the held message (delivery_hold_screen).
+    hold_screen: v.optional(v.string()),
     api_token: v.optional(v.string()),
     device_id: v.optional(v.string()),
   },
@@ -1304,7 +1317,7 @@ export const retryMessage = mutation({
     }
 
     const updated = args.hold_reason
-      ? await rependPendingMessage(ctx, message, message.retry_count, args.hold_reason)
+      ? await rependPendingMessage(ctx, message, message.retry_count, { reason: args.hold_reason, screen: args.hold_screen?.slice(-HOLD_SCREEN_MAX_CHARS) })
       : await rependPendingMessage(ctx, message, message.retry_count + 1);
 
     return { success: true, skipped: !updated };
@@ -1320,6 +1333,7 @@ export const cancelPendingMessage = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cancelPendingMessage");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1691,7 +1705,7 @@ export const getConversationPendingMessage = query({
     }
     const shown = (m: (typeof msgs)[number]) => ({
       message_id: m._id, client_id: m.client_id, created_at: m.created_at, queue_at: m.queue_at, retry_count: m.retry_count,
-      status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason,
+      status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason, hold_screen: m.delivery_hold_screen,
       delivery_status: m.delivery_status, queued: m.queued,
       from_user_id: m.from_user_id, from_name: authors.get(m.from_user_id.toString())?.name, from_image: authors.get(m.from_user_id.toString())?.image,
     });
@@ -1924,6 +1938,7 @@ async function notifyStuckCrossUserSend(
 
 export const retryStuckMessages: RegisteredMutation<"internal", Record<string, never>, Promise<void>> = internalMutation({
   handler: async (ctx) => {
+    noteWriteCause(ctx, "cron:retryStuckMessages");
     await healAndNotifyStuckMessages(ctx, Date.now());
   },
 });
@@ -2019,6 +2034,13 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         await notifyStuckCrossUserSend(ctx, msg, crossUserNotify.reach);
         notified++;
         if (crossUserNotify.reach === "gone") continue; // cancelled — nothing more to do with this row
+      }
+      // A dialog hold describes a pane: the screen the daemon read on it. Once no daemon is
+      // serving the session there is no pane, and the card would go on saying "waiting for a
+      // human answer" about a terminal that is gone (jx78gaw, three days, 2026-10-13). Drop
+      // the hold so the row reads as what it is: queued for a session that is offline.
+      if (msg.delivery_hold_screen && !live.has(conversationId)) {
+        await ctx.db.patch(msg._id, { delivery_disposition_reason: undefined, delivery_hold_screen: undefined });
       }
       // Session not ready to receive (busy / blocked / stopped / gone): leave the message
       // exactly as-is — preserved, never dropped — and revive it once the session is idle.

@@ -81,11 +81,11 @@ signals {
                 breaks (`ex-<project>-<n>`, the-line-model.md LM5)
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
-  task_id       the cause it attached to (LE4)
+  task_id       the cause it attached to (LE4); absent while held
   project_id    the cause's project, else the one it was filed for (LP1)
   filed_for_project_id  set when the finder filed it for a project other
                 than its cause's (LE4)
-  attach        "fingerprint" | "judge" | "new" | "person"
+  attach        "fingerprint" | "judge" | "new" | "person" | "held"
 }
 ```
 
@@ -105,11 +105,38 @@ line: the line starts at attach.
 2. **Judge.** Otherwise the five closest open causes (text match on title and
    subject) go to one small call: "same cause as one of these, or none?". It
    answers with a task id, `none`, or `unsure`. `unsure` is `none`.
-3. **New.** Otherwise a new cause: a task with `source: "signal"`,
+3. **New, only by an explicit step.** Otherwise a new cause opens only when
+   something decided the signal is work: a person filed it (`person`, which
+   includes a cause filed from the line page), the line's learn station filed
+   it from a person's card answer (`lesson`, LE12), or a line profile in the
+   workspace declares its finder with `opens_causes = true` (line-profile.md
+   LP3). The cause is a task with `source: "signal"`,
    `triage_status: "suggested"`, the signal's title, and `cause` fields
-   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`).
+   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`), and the
+   signals held under its key before it opened join it.
+4. **Held.** Anything else stays a signal: no task, `attach: "held"`. An
+   automated finder (an error tracker, a nightly eval, a cluster judge) can
+   report far more than anyone works, so its observations count as evidence
+   until a line converts them, and a fingerprint an open cause already holds
+   still attaches to it in step 1.
 
 A cause that receives a signal while in `watch` (LE12) reopens.
+
+**A product's issue key (learning-loop.md LL3).** A product that groups its own
+findings files each one with `issue: true` (`cast signal add --issue <key>`),
+its fingerprint being the issue's key. That key is exactly one problem: the
+signal reaches only the cause holding the key (`cause.issue_key`), never
+another by the judge, and opens or is held by the rules above otherwise. A
+cause that gathered several keys before keys were exact keeps the first issue
+to reach it; the others open their own. The product's edits are followed:
+`cast signal merge --issue A --into B` stamps `merged_into: B` on A's signals
+(so A keeps resolving to B), folds A's open cause into B's (its signals move,
+`merged_keys` lists A, and A's cause is dropped as `duplicate_of` B with
+`cause.merged_into`), or makes A's cause B's when B has none. `cast signal
+split --issue C --from A [--move sg-...]` files C's first signal, which opens
+C's cause with `cause.split_from: A` whatever the profiles declare, and the
+named signals move there re-keyed to C with `split_from: A`. A finding also
+carries its `judge`, `judge_version` and `severity`.
 
 ## LE5. Ground: every cause names the goal it serves
 
@@ -123,10 +150,11 @@ project's when it has one, else its workspace's, never the repo profile's
 default project; the same brief `cast task update` checks the goal_ref
 against), and the cause with its signals, and writes four fields:
 
-- `goal_ref`: the initiative metric or project goal the cause threatens, or
-  `none`. A cause with `none` parks as `suggested` and never reaches a person
-  unless its signal count crosses the workspace threshold.
-- `category`: `code` | `prompt` | `ux` | `infra` | `data`.
+- `goal_ref`: the initiative metric or project goal the cause threatens,
+  `line` for a change to the line itself, or `none`. A cause with `none` parks
+  as `suggested` and never reaches a person unless its signal count crosses
+  the workspace threshold.
+- `category`: `code` | `prompt` | `ux` | `infra` | `data` | `line`.
 - `risk`: `low` | `review` | `plan`. `plan` means architecture, cross cutting
   design, schema, billing or anything in the protected decision categories:
   the run stops at a plan gate before build.
@@ -134,6 +162,13 @@ against), and the cause with its signals, and writes four fields:
 
 Priority is computed, not judged: goal priority × severity × signal count,
 in `lib/linePriority.ts`.
+
+The line is a goal of its own. Every brief offers `line`, the line's own
+health: its three numbers (the-line-model.md LM8) moving the right way and
+every station doing its job. Only a change to the line itself (category
+`line`, line-map.md LX6) serves it; a product goal never stretches to cover
+line plumbing, and line plumbing never parks as serving nothing. It carries no
+priority of its own, so it ranks as an unranked goal.
 
 A fresh cause is grounded before admission, so admission can rank it and
 spends a hand only on causes worth one. `lineGround.sweep` takes the oldest
@@ -194,6 +229,14 @@ information during build sends the run back here instead of steering build.
 A miss that cannot be reproduced closes the cause as `dissolved` with the
 evidence; it is a success, not a failure.
 
+A Prove that ends without its proof (it failed outright, or `prove.json` is
+missing or says neither `reproduced: true` nor `false`) has neither shown the
+miss nor ruled it out, so the run goes to `unproven` and ends there. The cause
+moves back to `open` (a hand that already handed off `blocked` or
+`needs_context` leaves it in review) and gets a blocker comment carrying what
+Prove tried, or the run's last error when Prove left no output. It is never
+built on or dissolved; a person reruns the line once the miss can be shown.
+
 **Build.** One change, in the worktree, within the profile's size budget
 (400 changed lines by default; more splits or returns to plan). Prompt changes
 follow the profile's prompting standard (codecast's `docs/prompting.md` by
@@ -249,10 +292,9 @@ reads the rest. Everything else is assembled from what the nodes recorded.
 
 The card becomes a blocking gate decision bound to the task and run (the-line.md
 L4), with the card as its report and three options: Ship, Revise (a note goes
-back to build), Drop (close with the reason). Cards for one line on one day
-share a stack (`stack="Line · <role> · <date>"`), so the person clears them in
-one sitting. The answer patches the run through `finalizeAnswer`; nothing is
-relayed by a session.
+back to build), Drop (close with the reason). A card is one decision in the
+person's one queue; the line files no stack of its own. The answer patches the
+run through `finalizeAnswer`; nothing is relayed by a session.
 
 ## LE12. Ship, watch, learn
 

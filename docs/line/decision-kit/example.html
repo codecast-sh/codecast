@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Should the reminder fix go out with its new wording, which nobody at the shop has read?</title>
+<link rel="stylesheet" href="cast:decision-kit">
+</head>
+<body>
+<main>
+
+<!-- Every name, message and number on this page is invented. It shows the
+     kit's pieces (README.md); a real page uses the record and only the pieces
+     its decision turns on. The header (the question and the bottom line) is for the
+     page read alone: framed under the card it is hidden, so the page opens on the conversation. -->
+
+<header>
+<h1>Should the reminder fix go out with its new wording, which nobody at the shop has read?</h1>
+<p>Reminders reach people after their event has started; the fix sends them an hour ahead with new wording, and I would ship the timing now and hold the wording until the shop has read it.</p>
+</header>
+
+<section>
+<h2>What Ines got</h2>
+<p>Ines booked two seats for a Thursday reading at 7 pm. Her reminder arrived at 7:58.</p>
+
+<dk-thread who="Ines Okafor" role="Booked two seats, Sep 18">
+  <dk-msg us from="Harbor Books" channel="Email" time="Sep 12, 10:02" subject="You're booked: An evening with Mara Lind">
+Hi Ines,
+
+Two seats are held for you on Thursday, September 18. Doors open at 6:30 and the reading starts at 7:00.
+
+See you there,
+Harbor Books
+  </dk-msg>
+  <dk-msg from="Ines Okafor" channel="Email" time="Sep 12, 10:40">
+Thank you! Could you text me a reminder on the day? I always forget.
+  </dk-msg>
+  <dk-msg us from="Harbor Books" channel="Email" time="Sep 12, 11:15">
+Of course. You'll get a text an hour before the doors open.
+  </dk-msg>
+  <dk-event>The reading starts <time>Sep 18, 19:00</time></dk-event>
+  <dk-msg us miss from="Harbor Books" channel="Text" time="Sep 18, 19:58"
+    note="Sent 58 minutes after the reading began, and 2.5 hours after the time we promised.">
+Reminder: <mark>your reading starts soon.</mark> Doors open at 6:30 pm tonight.
+  </dk-msg>
+  <dk-msg from="Ines Okafor" channel="Text" time="Sep 18, 20:03">
+I'm sitting in it. Bit late!
+  </dk-msg>
+</dk-thread>
+
+<blockquote>A reminder that arrives after the thing it reminds you of reads as a system nobody is watching.
+<cite>The comms judge, on this text</cite></blockquote>
+
+<dk-view ref="shop:booking/4f1c2a9e-77b3-4c1d-9a55-0d2e6b7f1a10">Open Ines's booking in the shop admin</dk-view>
+</section>
+
+<section>
+<h2>The change</h2>
+<p>The reminder job subtracts an hour from the wrong field.</p>
+
+<dk-diff>
+<script type="text/plain">
+diff --git a/jobs/reminders.ts b/jobs/reminders.ts
+index 3b1f0aa..9c2d7e1 100644
+--- a/jobs/reminders.ts
++++ b/jobs/reminders.ts
+@@ -18,9 +18,9 @@ export function reminderTime(event: ShopEvent): Date {
+   // One text per booking, an hour ahead, so people have time to travel.
+   const HOUR = 60 * 60 * 1000;
+   if (event.cancelled) return NEVER;
+-  return new Date(event.doorsClose.getTime() - HOUR);
++  return new Date(event.doorsOpen.getTime() - HOUR);
+ }
+
+ export function reminderText(event: ShopEvent): string {
+   return `Reminder: your reading starts soon. Doors open at ${clock(event.doorsOpen)} tonight.`;
+</script>
+</dk-diff>
+
+<p>The same branch rewords the text so it says when, not "soon". A change to words reads as running text:</p>
+
+<dk-diff file="copy/reminder.txt">
+  <template data-before>Reminder: your reading starts soon. Doors open at {{ doors }} tonight.</template>
+  <template data-after>Reminder: your reading with {{ author }} is tonight. Doors open at {{ doors }}, an hour from now.</template>
+</dk-diff>
+</section>
+
+<section>
+<h2>What Ines would have got</h2>
+<dk-pair>
+  <dk-side label="What she got, at 7:58 pm">
+    <dk-msg from="Harbor Books" channel="Text" time="Sep 18, 19:58">
+Reminder: your reading starts soon. Doors open at 6:30 pm tonight.
+    </dk-msg>
+  </dk-side>
+  <dk-side label="With the change, at 5:30 pm">
+    <dk-msg from="Harbor Books" channel="Text" time="Sep 18, 17:30">
+Reminder: your reading with Mara Lind is tonight. Doors open at 6:30 pm, an hour from now.
+    </dk-msg>
+  </dk-side>
+</dk-pair>
+<dk-facts>
+  <dk-fact><b>0 of 41</b> September reminders arrived before the doors opened</dk-fact>
+  <dk-fact><b>41 of 41</b> arrive an hour before, the same reminders replayed on the change</dk-fact>
+</dk-facts>
+<dk-caveat><b>Not checked:</b> events that run past midnight. September had none.</dk-caveat>
+</section>
+
+<section>
+<h2>Two more people it happened to</h2>
+<dk-examples>
+  <dk-example>
+    <h3>Tomas Reyes</h3>
+    <p>Booked a children's story hour for Saturday at 10 am</p>
+    <p><b>What he needed:</b> an hour's notice to get two kids across town.</p>
+    <dk-pair>
+      <dk-side label="Got, at 11:30 am">
+        <dk-msg from="Harbor Books" channel="Text">Reminder: your reading starts soon. Doors open at 9:45 am today.</dk-msg>
+      </dk-side>
+      <dk-side label="With the change, at 8:45 am">
+        <dk-msg from="Harbor Books" channel="Text">Reminder: story hour with Pip Arden is today. Doors open at 9:45 am, an hour from now.</dk-msg>
+      </dk-side>
+    </dk-pair>
+  </dk-example>
+  <dk-example>
+    <h3>Wen Zhao</h3>
+    <p>Booked a poetry night that was later cancelled</p>
+    <p><b>What she needed:</b> no reminder at all.</p>
+    <dk-gap>
+      <b>Nothing was sent, before or after</b>
+      Cancelled events already send no reminder. The change does not touch that.
+    </dk-gap>
+  </dk-example>
+</dk-examples>
+</section>
+
+<section>
+<h2>Everyone it reached</h2>
+<dk-tally of="September reminder replayed" of-many="September reminders replayed">
+  <dk-group>
+    <h3>Now arrive before the doors open</h3>
+    <ul>
+      <li><dk-view ref="shop:booking/4f1c2a9e-77b3-4c1d-9a55-0d2e6b7f1a10">Ines Okafor</dk-view> author talk, 7 pm</li>
+      <li><dk-view ref="shop:booking/1a2b3c4d-0000-4000-8000-000000000001">Tomas Reyes</dk-view> story hour, 10 am</li>
+      <li><dk-view ref="shop:booking/1a2b3c4d-0000-4000-8000-000000000002">Lena Brandt</dk-view> book club, 6 pm</li>
+    </ul>
+  </dk-group>
+  <dk-group>
+    <h3>No reminder, before or after</h3>
+    <ul>
+      <li><dk-view ref="shop:booking/1a2b3c4d-0000-4000-8000-000000000003">Wen Zhao</dk-view> event cancelled</li>
+    </ul>
+  </dk-group>
+</dk-tally>
+</section>
+
+</main>
+</body>
+</html>

@@ -38,7 +38,7 @@ import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktop
 import { grantTab } from "./bridge/host.js";
 import { readCdpJson, listTargets } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
-import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
+import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
 import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
 import { ensurePinnedTab, pinnedTabBrowser, recoverGoneTab, touchBoundTarget } from "./pinnedTab.js";
@@ -46,9 +46,10 @@ import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS }
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
-import { readState, stopInstance, writeState } from "./instance.js";
+import { probeLiveness, readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
+import { authorizesTeardown } from "@codecast/shared/contracts";
 import { auditLanding, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, viaFor } from "./siteGuard.js";
 import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
@@ -181,12 +182,13 @@ async function targetOf(verb: string, args: string[]): Promise<{ ctx: Ctx; args:
 /**
  * Make sure the managed browser is up before a verb needs it. `open` is where
  * a session's browsing begins, so it starts the browser when there is none —
- * quietly, behind the human's windows, reusing the profile clone.
+ * quietly, behind the human's windows, reusing the profile clone. A live pid
+ * is not a working browser: the probe replaces one that is provably hung, and
+ * leaves a merely slow one for the verb to report.
  */
 async function ensureBrowser(c: Ctx): Promise<void> {
   if (isRealSession(c.session) || isPaneSession(c.session)) return;
-  const state = readState();
-  if (state && isPidAlive(state.pid)) return;
+  if (!authorizesTeardown(await probeLiveness(readState()))) return;
   await startLocalBrowser({ ...DEFAULT_START, quiet: true });
 }
 
@@ -1684,8 +1686,10 @@ sessions' tabs).`,
   // session is kept: the daemon drives no tab of its own.
   br.command("reap", { hidden: true })
     .description("Close engine browsers whose agent is gone")
-    .action(async () => {
-      const swept = describeReap(await reapEngineOrphans({ keep: null }));
+    .option("--ended <session id>", "This agent session was just killed: close its tabs now")
+    .action(async (o: { ended?: string }) => {
+      const live = o.ended ? withEndedSession(scanLiveOwners(), o.ended) : undefined;
+      const swept = describeReap(await reapEngineOrphans({ keep: null, force: !!o.ended, live }));
       if (swept) console.log(swept);
     });
 

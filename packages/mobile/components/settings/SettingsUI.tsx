@@ -9,10 +9,37 @@ import {
   Platform,
 } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
-import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { Spacing, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 
 type IconName = React.ComponentProps<typeof FontAwesome>['name'];
+
+/** The family look draws a row's icons in Feather's thin stroke, as the web's
+ *  hosted settings do with lucide; a name with no stroke twin keeps its
+ *  FontAwesome glyph. */
+const STROKE: Partial<Record<IconName, React.ComponentProps<typeof Feather>['name']>> = {
+  tachometer: 'pie-chart',
+  'envelope-o': 'mail',
+  'bell-o': 'bell',
+  adjust: 'sun',
+  lock: 'lock',
+  'info-circle': 'info',
+  users: 'users',
+  key: 'key',
+  laptop: 'monitor',
+  trash: 'trash-2',
+  'chevron-right': 'chevron-right',
+  clipboard: 'clipboard',
+  'exclamation-triangle': 'alert-triangle',
+  refresh: 'refresh-cw',
+  'share-square-o': 'share',
+};
+
+function RowIcon({ name, size, color }: { name: IconName; size: number; color: string }) {
+  const stroke = useActiveLook() === 'family' ? STROKE[name] : undefined;
+  return stroke ? <Feather name={stroke} size={size + 1} color={color} /> : <FontAwesome name={name} size={size} color={color} />;
+}
 
 /** The page every settings screen scrolls in: keyboard-aware for the profile
  *  editors, padded so cards sit off the edges. */
@@ -65,11 +92,14 @@ export function ToggleRow({ label, description, value, onValueChange }: {
 
 export function SettingsSwitch({ value, onValueChange }: { value: boolean; onValueChange: (v: boolean) => void }) {
   const Theme = useTheme();
+  // The family look spends its accent on what waits on the person, so an
+  // "on" reads in the family's ok green.
+  const on = useActiveLook() === 'family' ? Theme.green : Theme.accent;
   return (
     <Switch
       value={value}
       onValueChange={onValueChange}
-      trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+      trackColor={{ false: Theme.bgHighlight, true: on }}
       thumbColor="#fff"
       ios_backgroundColor={Theme.bgHighlight}
     />
@@ -88,7 +118,7 @@ export function NavRow({ icon, iconColor, label, description, detail, trailingIc
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel={label}>
       {icon ? (
         <RNView style={styles.iconSlot}>
-          <FontAwesome name={icon} size={15} color={iconColor ?? (tone === 'danger' ? Theme.red : Theme.textMuted)} />
+          <RowIcon name={icon} size={15} color={iconColor ?? (tone === 'danger' ? Theme.red : Theme.textMuted)} />
         </RNView>
       ) : null}
       <RNView style={styles.rowText}>
@@ -97,13 +127,13 @@ export function NavRow({ icon, iconColor, label, description, detail, trailingIc
       </RNView>
       <RNView style={styles.trailing}>
         {typeof detail === 'string' ? <RNText style={styles.detail} numberOfLines={1}>{detail}</RNText> : detail}
-        <FontAwesome name={trailingIcon ?? 'chevron-right'} size={trailingIcon ? 15 : 10} color={trailingIcon ? Theme.textMuted : Theme.textMuted0} />
+        <RowIcon name={trailingIcon ?? 'chevron-right'} size={trailingIcon ? 15 : 10} color={trailingIcon ? Theme.textMuted : Theme.textMuted0} />
       </RNView>
     </TouchableOpacity>
   );
 }
 
-export const settingsStyles = themedStyles((Theme) => StyleSheet.create({
+export const settingsStyles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -115,12 +145,14 @@ export const settingsStyles = themedStyles((Theme) => StyleSheet.create({
   section: {
     marginTop: Spacing.xl,
   },
+  // Group labels read in sentence case in the family look, as the web's
+  // hosted group labels do.
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
     color: Theme.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    textTransform: look === 'family' ? 'none' : 'uppercase',
+    letterSpacing: look === 'family' ? 0 : 0.5,
     marginBottom: Spacing.sm,
     marginLeft: Spacing.xs,
   },

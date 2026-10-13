@@ -74,7 +74,8 @@ export function pendingRetryClientId(messageId: string): string | undefined {
   return messageId.startsWith("serverpending_") ? undefined : messageId;
 }
 
-export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string; queued?: boolean; from_user_id?: string };
+// hold_screen: the terminal rows the daemon read when it held the message for a dialog.
+export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string; hold_screen?: string; queued?: boolean; from_user_id?: string };
 // getConversationPendingMessage: the primary row (oldest in flight, else the
 // newest settled) plus `inflight`, every undelivered row. Older servers send
 // no `inflight`.
@@ -174,6 +175,7 @@ export function serverPendingBubbles(
       ...(row.status === "delivered" ? {} : { _isOptimistic: true }),
       _serverPendingStatus: row.status,
       _serverPendingReason: row.hold_reason,
+      _serverPendingScreen: row.hold_screen,
       _recoveryContinue: isRecoveryContinueClientId(row.client_id),
     });
   }
