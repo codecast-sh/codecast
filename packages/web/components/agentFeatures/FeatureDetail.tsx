@@ -23,12 +23,15 @@ export function FeatureDialog({
   slug,
   feature,
   control,
+  setup,
   onClose,
 }: {
   slug: string | null;
   /** The catalog entry; null for Stable context, which is not one. */
   feature: SnippetDescriptor | null;
   control: React.ReactNode;
+  /** The one-time step on the machine a feature needs before agents can use it. */
+  setup?: React.ReactNode;
   onClose: () => void;
 }) {
   const e = slug ? FEATURE_EXPLAINERS[slug] : undefined;
@@ -59,6 +62,8 @@ export function FeatureDialog({
 
         <div className="scrollbar-auto min-h-0 flex-1 overflow-y-auto">
           <FeatureVignette slug={slug} className="h-[210px] rounded-none border-0 border-b border-sol-border/50 text-[11px]" />
+
+          {setup && <div className="border-b border-sol-border/50 px-6 py-5">{setup}</div>}
 
           <div className="grid gap-x-8 gap-y-6 px-6 py-6 sm:grid-cols-2">
             <ExplainList title="What you'll see" items={e.youSee} dot={tone.dot} />
@@ -95,17 +100,7 @@ export function FeatureDialog({
           )}
 
           <dl className="mx-6 mt-6 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 border-t border-sol-border/60 pt-5 text-[12px]">
-            {feature ? (
-              <>
-                <DetailRow label="Install" mono>
-                  cast install {feature.slug}
-                  {feature.aliases?.length ? <span className="text-sol-text-dim"> (or {feature.aliases.join(", ")})</span> : null}
-                </DetailRow>
-                <DetailRow label="Writes to">{feature.writesTo}</DetailRow>
-              </>
-            ) : (
-              <DetailRow label="Install" mono>cast stable solo | team | off</DetailRow>
-            )}
+            {feature && <DetailRow label="Writes to">{feature.writesTo}</DetailRow>}
             {hooks.map((h) => (
               <DetailRow key={h.file} label="Hook">
                 {h.name} (~/.claude/hooks/{h.file}), added and removed with the switch
