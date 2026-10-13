@@ -1,17 +1,19 @@
 "use client";
-// The one reader for something that waits on a person (line-journeys.md
-// LJ6.2). Wherever a waiting thing is named (For you, a problem's band, a
-// run's person step, a step's waiting rows) this is what shows it, so the
-// thing is read and answered where it is named:
-//   decision          the session's decision, whole (LineDecision), answered on it
+// The one reader for a need (line-journeys.md LJ6.2). Wherever one is named
+// (For you, a problem's band, a run's person step, a step's waiting rows) this
+// is what shows it, so the thing is read and answered where it is named. For
+// you lists only the counted kinds (lineNeeds COUNTED: the end decision and a
+// person's own acts); the rest are read on their problem:
+//   decision          the session's decision, whole (LineDecision), answered on it; a trial card no session has
+//                     presented yet is one line naming the step it is with, that session and its run (NotPresented)
 //   question, confirm the question in full, the findings it rests on, the answer box; a twin folded in (the line
 //                     reads it as the same problem under another id) is named under it with Merge into
 //   duplicate         a twin whose older problem asks nothing: which one it is the same as, both's findings, Merge into
-//   reask             the paused run's proposal and the one act that has its agent ask again
+//   reask             the same line, and the one act that has its agent ask again
 //   lapsed            the decision nobody answered, read only, and its answers: Drop now, or a new run to ask again
 //   stopped           the yes it waits on in one line, the step's last message whole, Yes (recorded for the next run) or a new run
-//   review            a build handed off for review: what the review needs in the builder's words, the gate it left red,
-//                     its branch, and Open its pull request (Ship, through its review)
+//   review, unlanded  a built fix: the decision its run's session presented it as, whole (LineDecision), else the
+//                     NotPresented line; under it its branch and the act its facts call for (send back, rebuild, land)
 //   fixed             the commit main already fixes it in and the run's note, Close as fixed
 //   assigned          the problem's note and findings, Hand it to the line (unassign: the sweep can start it) or Close
 //   ask               what an agent asked a person to do by a date: when, the agent's reason whole, the task where it is
@@ -25,6 +27,9 @@ import { useCollectionRows } from "../../../hooks/useCollectionRows";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useSyncTaskSignals } from "../../../hooks/useSyncSignals";
 import { useTrialCards } from "../../../hooks/useSyncTrial";
+import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
+import { answersAtGate } from "../../../lib/line/lineInbox";
+import { decisionRef, runFixDecision } from "../../../lib/line/fixDecision";
 import { adviceWord, goOnProof, oneCaseClaim, proseAdvice, stoppedAsk, waitNote, type LineNeed, type StoppedAsk } from "../../../lib/line/lineNeeds";
 import { findingLeads, rebaseLandLedger } from "../../../lib/line/problemPage";
 import { listedFindings } from "../../../lib/line/findingEvidence";
@@ -38,7 +43,6 @@ import { opsHref } from "../../ops/opsPaths";
 import Link from "next/link";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { answerProblem, ProblemAsk } from "../workspace/views/problem/AskBlock";
-import { TrialCardPanel } from "../workspace/views/TrialCardPanel";
 import { FindingPlaceholder, FindingReader, useFinderName, type ReaderSignal } from "./FindingReader";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { mergeProblemLedger } from "../../../lib/line/findingLedger";
@@ -51,11 +55,9 @@ import { LandAgain } from "../workspace/views/problem/LandAgain";
 import { CloseAsFixed } from "../workspace/views/problem/CloseProblem";
 import { useRepoCompare } from "../../../hooks/useRepoBrowse";
 import { useCommitLive, useFixBranch, useFixCommitChecks, useProblemCiRun } from "../../../hooks/useFixCommitChecks";
-import { FileDiffList } from "../../FileDiffView";
 import { branchStanding } from "../../../lib/line/mergeFixLedger";
-import { foldGenerated } from "../../../lib/line/diffFold";
-import { changeSays, reviewGates, reviewMove, sendBackNote, type GateState } from "../../../lib/line/fixReview";
-import { ChevronRight } from "lucide-react";
+import { fixHolder, reviewGates, reviewMove, sendBackNote } from "../../../lib/line/fixReview";
+import { ReaskNotice } from "./ReaskRun";
 import { deployOfCommit, failingTestOf, fixCiFacts, fixedNoteRest, newestDeploy, undeployedCited, type DeployFact } from "../../../lib/line/fixedOnMain";
 import "./waitingItem.css";
 
@@ -84,20 +86,20 @@ export type WaitingItemProps = {
 /** Opens a run, at one of its steps when `step` is given (the run page's step). */
 export type RunOpener = (runId: string, taskId: string | null, step?: string) => void;
 
-export function WaitingItem({ need, evidence = true, onProblem, onRun, head = true, asked = !head, inline = false, act = true, runShown = null, now = Date.now() }: WaitingItemProps) {
+export function WaitingItem({ need, evidence = true, onProblem, onRun, head = true, asked = !head, inline = false, act = true, runShown = null }: WaitingItemProps) {
   const nav = useLineNav();
   const toProblem = onProblem ?? ((id: string) => nav?.openCase?.(id));
   const toRun: RunOpener = onRun ?? ((runId, taskId) => nav?.openRun(runId, taskId));
   const body = need.kind === "decision" && need.decisionRef ? (
     <LineDecision key={need.decisionRef} id={need.decisionRef} onProblem={toProblem} onRun={toRun} head={head} inline={inline} act={act} />
   ) : need.kind === "reask" || (need.kind === "decision" && need.cardRef) ? (
-    <TrialCardNeed need={need} now={now} onProblem={toProblem} onRun={toRun} head={head} />
+    <TrialCardNeed need={need} onProblem={toProblem} onRun={toRun} head={head} runShown={runShown} />
   ) : need.kind === "lapsed" ? (
     <Lapsed need={need} onProblem={toProblem} onRun={toRun} head={head} inline={inline} />
   ) : need.kind === "stopped" ? (
     <Stopped need={need} onProblem={toProblem} onRun={toRun} runShown={runShown} head={head} asked={asked} evidence={evidence} />
   ) : need.kind === "review" || need.kind === "unlanded" ? (
-    <Review need={need} onProblem={toProblem} onRun={toRun} head={head} evidence={evidence} />
+    <Review need={need} onProblem={toProblem} onRun={toRun} head={head} inline={inline} runShown={runShown} />
   ) : need.kind === "fixed" ? (
     <Fixed need={need} onProblem={toProblem} onRun={toRun} evidence={evidence} />
   ) : need.kind === "assigned" ? (
@@ -246,13 +248,43 @@ function TwinFeed({ caseId }: { caseId: string }) {
   return null;
 }
 
-/** A trial card no session posted: answered at its run's own gate while the run waits there, else (a reask) read whole
- *  with the one act that has its agent present it again. */
-function TrialCardNeed({ need, now, onProblem, onRun, head }: { need: LineNeed; now: number; onProblem: (taskId: string) => void; onRun: (runId: string, taskId: string | null) => void; head: boolean }) {
+type HolderRun = { node_statuses?: Array<{ node_id: string; status: string; label?: string; session?: { _id?: string } | null }> };
+/** The session a fix with no decision is with (fixReview fixHolder), as "step|label|session|preparing". */
+const holderSig = (rows: Record<string, HolderRun> | undefined, runId: string | null, step: string | null | undefined) => {
+  const h = fixHolder(runId ? rows?.[runId]?.node_statuses : null, step);
+  return h ? [h.step, h.label ?? "", h.sessionId, h.preparing ? "1" : ""].join("\u0000") : "";
+};
+
+/** A fix no session has presented as a decision yet: one line naming the step it is with, that session to open and
+ *  talk to, and its run. The decision is the session's to write, so nothing here stands in for it from the run's own
+ *  figures (its gates, its files, its findings): those are the run's, one link away. */
+function NotPresented({ need, onRun, runShown }: { need: LineNeed; onRun: RunOpener; runShown: string | null }) {
+  const sig = useInboxStore((s) => holderSig((s as unknown as { workflowRuns?: Record<string, HolderRun> }).workflowRuns, need.runId, need.fail?.step));
+  const [step, label, session, preparing] = sig.split("\u0000");
+  const who = label || (step ? stepLabel({ id: step }) : "");
+  return (
+    <p className="lwn-ask lwn-pending" data-line-need-not-presented={preparing ? "preparing" : "waiting"}>
+      <span>{!who ? "No session has presented this fix yet" : preparing ? `${who} is preparing this decision` : `Waiting on ${who} to present it`}</span>
+      {session && <button type="button" className="lw-link" onClick={() => openConversationBeside(session)} data-line-need-session={session}>Open its session</button>}
+      {need.runId && need.runId !== runShown && <button type="button" className="lw-link" onClick={() => onRun(need.runId!, need.caseId)} data-line-need-run>Open the run</button>}
+    </p>
+  );
+}
+
+/** A trial card no session posted as a decision: the NotPresented line, and where no answer can land at all (its step
+ *  left the line, or nothing asked it) the one act that has its run's agent present it. */
+function TrialCardNeed({ need, onProblem, onRun, head, runShown }: { need: LineNeed; onProblem: (taskId: string) => void; onRun: RunOpener; head: boolean; runShown: string | null }) {
   const cards = useTrialCards();
   const card = need.cardRef ? cards.find((c) => c.short_id === need.cardRef) ?? null : null;
-  if (!card) return <div className="lwn-scroll"><div className="lwn-col">{head && <NeedHead need={need} onProblem={onProblem} />}<p className="lwn-said">{need.ask}</p></div></div>;
-  return <TrialCardPanel card={card} now={now} head={head} onProblem={() => onProblem(card.task_id)} onRun={() => onRun(card.run_id, card.task_id)} />;
+  return (
+    <div className="lwn-scroll">
+      <div className="lwn-col">
+        {head && <NeedHead need={need} onProblem={onProblem} />}
+        <NotPresented need={need} onRun={onRun} runShown={runShown} />
+        {card?.status === "waiting" && !answersAtGate(card) && <ReaskNotice taskId={card.task_id} task={card.task_short_id} reason={card.stale_gate ? "Its step left the line, so an answer has nowhere to go." : "No session asked this, so nobody can take an answer."} />}
+      </div>
+    </div>
+  );
 }
 
 type CardRow = { _id: string; short_id?: string; task_id?: string; status: string; created_at?: number };
@@ -386,14 +418,6 @@ type GateRun = { node_statuses?: Array<{ node_id: string; status: string }> };
 const gateSig = (rows: Record<string, GateRun> | undefined, runId: string | null) =>
   (runId ? rows?.[runId]?.node_statuses ?? [] : []).map((n) => `${n.node_id}:${n.status}`).join(" ");
 
-const GATE_WORDS: Record<GateState["state"], string> = { pass: "passed", red: "red", changes: "asked for changes", skipped: "not rerun" };
-
-/** A built fix read for review, from its facts: what the change does in its own commits' words; how its gates ended on
- *  the last build, the red one opening its output; where its branch stands against main and whether it still merges
- *  cleanly; the change itself (every file and its hunks, read from the branch on GitHub, regenerated fixtures folded
- *  under one row); and the act those facts call for: back to its builder when a gate is red or the branch shares files
- *  main has moved, else approving it (Ship, through its review; every row's act is named alike). An approved fix
- *  nothing merged (`unlanded`) reads the same, with who approved it and how long it has sat: they land it. */
 /** A built fix's review read from facts (its branch, its gates on the last build, where it stands against main) and
  *  the one act that moves it on: the same for the reader below and for a step page's closed row (ReviewSummary). */
 function useReviewFacts(need: LineNeed) {
@@ -456,70 +480,28 @@ export function ReviewSummary({ need }: { need: LineNeed }) {
   );
 }
 
-function Review({ need, onProblem, onRun, head, evidence }: { need: LineNeed; onProblem: (taskId: string) => void; onRun: RunOpener; head: boolean; evidence: boolean }) {
+/** A built fix waiting on review, or approved and not merged: the decision its run's session presented it as, whole and
+ *  first, as that session wrote it (an approved one reads with its answer on record). A fix no session has presented is
+ *  the NotPresented line. Under either, the branch and the act its facts call for: back to its builder when a gate is
+ *  red or the branch shares files main has moved, else landing it (Ship, through its review). */
+function Review({ need, onProblem, onRun, head, inline, runShown }: { need: LineNeed; onProblem: (taskId: string) => void; onRun: RunOpener; head: boolean; inline: boolean; runShown: string | null }) {
   const f = useReviewFacts(need);
-  const { fb, found, branch, standing, change, gates, checks, unlanded, move, approved } = f;
-  const files = useMemo(() => (found?.files ?? []).map((x) => ({ ...x, changes: x.additions + x.deletions })), [found]);
-  const fold = useMemo(() => foldGenerated(files), [files]);
-  const [generatedOpen, setGeneratedOpen] = useState(false);
-  const says = useMemo(() => changeSays(found?.commits), [found]);
+  const { branch, unlanded, approved } = f;
+  const ref = useInboxStore((s) => {
+    const d = runFixDecision(s.sessionDecisions as never, (s as unknown as { lineCards?: never }).lineCards, need.caseId, need.runId);
+    return d ? decisionRef(d) : null;
+  });
   return (
     <>
-      <div className="lwn-thing lwn-scroll">
-        <div className="lwn-col">
-          {head && <NeedHead need={need} onProblem={onProblem} />}
-          {/* What the change does, in its own commits' words: never the builder's hand-off line. */}
-          <p className="lwn-does" data-line-need-review-does={says ? "" : found ? "none" : "reading"}>
-            {says ? says.line : found ? "Its commits do not say what it changes" : branch ? "Reading its commits" : "No branch named by its run"}
-            {says && says.more > 0 && <span className="lwn-h-note"> and {says.more} more {says.more === 1 ? "change" : "changes"}</span>}
-          </p>
-          <dl className="lwn-state" data-line-need-review-state={move?.act ?? "landing"}>
-            {gates.some((g) => g.state !== "skipped") && (
-              <div data-tone={gates.some((g) => g.state === "red" || g.state === "changes") ? "warn" : "ok"} data-line-need-review-gates>
-                <dt>Last build</dt>
-                <dd>{gates.filter((g) => g.state !== "skipped").map((g, i) => (
-                  <span key={g.step} className="lwn-gate" data-state={g.state}>
-                    {i > 0 && " · "}
-                    {(g.state === "red" || g.state === "changes") && need.runId
-                      ? <button type="button" className="lw-link" title={`Open ${g.name}'s output`} onClick={() => onRun(need.runId!, need.caseId, g.step)} data-line-need-gate-open={g.step}>{g.name} {GATE_WORDS[g.state]}{g.words && g.state === "red" ? `: ${g.words}` : ""}</button>
-                      : `${g.name} ${GATE_WORDS[g.state]}`}
-                  </span>
-                ))}</dd>
-              </div>
-            )}
-            {checks && <div data-tone={checks.state === "failure" ? "warn" : "ok"}><dt>CI</dt><dd>{checks.failing.length ? `${checks.failing.length} red: ${checks.failing.slice(0, 2).join(", ")}` : checks.running.length ? `${checks.running.length} running` : `${checks.passed} pass`}</dd></div>}
-            {standing && <div data-tone={standing.behind > 0 ? "warn" : undefined} data-line-need-review-standing={standing.conflicts ? "conflicts" : standing.behind > 0 ? "behind" : "level"}><dt>{standing.base}</dt><dd>{standing.behind ? `${standing.behind} ${standing.behind === 1 ? "commit" : "commits"} ahead of it` : `Level with ${standing.base}`}</dd></div>}
-            {standing && standing.behind > 0 && (
-              <div data-tone={standing.conflicts ? "warn" : "ok"} data-line-need-review-merge={standing.conflicts ? "may-conflict" : "clean"} title={found!.on_both.length ? found!.on_both.join("\n") : undefined}>
-                <dt>Merge</dt><dd>{standing.conflicts ? `May conflict: ${standing.onBoth} of its ${standing.onBoth === 1 ? "file" : "files"} changed on ${standing.base} too` : "Clean: no file changed on both"}</dd>
-              </div>
-            )}
-          </dl>
-          <section data-line-need-review-diff={found ? files.length : branch ? "reading" : "none"}>
-            <h3 className="lwn-h">
-              The change
-              {change && <span className="lw-num" data-line-need-review-size>{change.files} {change.files === 1 ? "file" : "files"} · +{change.added} −{change.removed}</span>}
-              {found?.url && <a className="lwn-link lwn-h-end" href={found.url} target="_blank" rel="noopener noreferrer">On GitHub</a>}
-            </h3>
-            {!branch ? <p className="lwn-h-note">No branch named by its run</p>
-              : !fb ? <p className="lwn-h-note">Reading {branch}</p>
-              : !found ? <p className="lwn-h-note">{branch} is not on GitHub in this project's repositories</p>
-              : <>
-                <FileDiffList files={fold.change} emptyText={`${branch} changes nothing against ${found.base}`} className="lwn-diff" />
-                {/* Regenerated fixtures and snapshots, one row: the change above reads first. */}
-                {fold.words && (
-                  <div className="lwn-fold" data-line-need-review-generated={fold.generated.length}>
-                    <button type="button" className="lwn-fold-row" aria-expanded={generatedOpen} onClick={() => setGeneratedOpen(!generatedOpen)}>
-                      <ChevronRight className="w-3.5 h-3.5" aria-hidden data-open={generatedOpen ? "" : undefined} />{fold.words}
-                    </button>
-                    {generatedOpen && <FileDiffList files={fold.generated} className="lwn-diff" />}
-                  </div>
-                )}
-              </>}
-          </section>
-          {need.runId && <button type="button" className="lwn-link" onClick={() => onRun(need.runId!, need.caseId)}>Open the run</button>}
-          {evidence && need.caseId && <Evidence caseId={need.caseId} count={need.findings ?? 0} title={need.title} />}
-        </div>
+      <div className="lwn-thing" data-line-need-review={ref ? "decision" : "not-presented"}>
+        {ref ? <LineDecision key={ref} id={ref} onProblem={onProblem} onRun={onRun} head={head} inline={inline} act={false} /> : (
+          <div className="lwn-scroll">
+            <div className="lwn-col">
+              {head && <NeedHead need={need} onProblem={onProblem} />}
+              <NotPresented need={need} onRun={onRun} runShown={runShown} />
+            </div>
+          </div>
+        )}
       </div>
       <footer className="lwn-dock" data-line-need-dock>
         <dl className="lwn-facts">
@@ -527,8 +509,9 @@ function Review({ need, onProblem, onRun, head, evidence }: { need: LineNeed; on
           {unlanded ? <>
             <div data-line-need-approved=""><dt>Approved</dt><dd>{approved}</dd></div>
             {need.behind && <div data-tone="warn" data-line-need-landing="behind"><dt>Landing</dt><dd>Refused: branch behind {need.behind}</dd></div>}
-            {need.since && <div data-tone={Date.now() - need.since > 86_400_000 ? "warn" : undefined}><dt>Waiting</dt><dd>{Math.max(0, Math.floor((Date.now() - need.since) / 86_400_000))}d, not merged</dd></div>}
+            {need.since && <div data-tone={Date.now() - need.since > 86_400_000 ? "warn" : undefined}><dt>Waiting</dt><dd>{ageShort(Math.max(0, Date.now() - need.since))}, not merged</dd></div>}
           </> : need.since && <div><dt>Handed off</dt><dd>{dateWords(need.since)}</dd></div>}
+          {ref && need.runId && need.runId !== runShown && <div><dd><button type="button" className="lw-link" onClick={() => onRun(need.runId!, need.caseId)} data-line-need-run>Open the run</button></dd></div>}
         </dl>
         <ReviewAct need={need} f={f} />
       </footer>
