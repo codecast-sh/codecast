@@ -217,7 +217,7 @@ describe("a person's status wins (LM3)", () => {
     const { t, ids, read } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
     const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
-    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the cause was dropped by a person" });
+    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was dropped by a person" });
     expect((await read()).task.status).toBe("dropped");
   });
 
@@ -226,6 +226,34 @@ describe("a person's status wins (LM3)", () => {
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
     const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
     expect(run.status).toBe("running");
+  });
+
+  test("a trial project's run is a line run whatever its graph: a drop stops one waiting at a gate, never one whose own script station is closing (ct-59242, ct-59534)", async () => {
+    const trialNodes = [node("start", T0), node("bind", T0 + 1)];
+    const onTrial = async (run: Record<string, any>) => {
+      const s = await setup({ status: "in_review" }, { workflow_name: "agentwatch_trial", node_statuses: trialNodes, ...run });
+      await s.t.run(async (ctx) => {
+        const project = await ctx.db.insert("projects", { title: "Trial", user_id: s.ids.owner, workspace: `user:${s.ids.owner}`, status: "active", line_trial: { since: T0, by: s.ids.owner }, created_at: T0, updated_at: T0 } as any);
+        const workflow = await ctx.db.insert("workflows", { user_id: s.ids.owner, name: "agentwatch_trial", slug: "agentwatch_trial", source: "", nodes: [{ id: "decide", label: "Decide", shape: "hexagon", type: "human" }, { id: "judge_wrong", label: "Judge wrong", shape: "parallelogram", type: "script", script: "cast line dissolve" }], edges: [], created_at: T0, updated_at: T0 } as any);
+        await ctx.db.patch(s.ids.taskId, { project_id: project } as any);
+        await ctx.db.patch(s.ids.runId, { workflow_id: workflow } as any);
+      });
+      await s.t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+      return s.t.run(async (ctx) => (await ctx.db.get(s.ids.runId)) as any);
+    };
+    expect(await onTrial({ status: "paused", current_node_id: "decide", gate_node_id: "decide" })).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was dropped by a person" });
+    expect((await onTrial({ status: "running", current_node_id: "judge_wrong" })).status).toBe("running");
+  });
+
+  test("a run its problem's close ended keeps that reason and leaves the closed problem alone when its runner reports the failure it saw", async () => {
+    const { t, ids, read } = await setup({ status: "in_review" }, { status: "paused", current_node_id: "decide", gate_node_id: "decide", node_statuses: lineNodes("decide") });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    await t.mutation(api.workflow_runs.updateProgress, { api_token: TOKEN, run_id: ids.runId, current_node_id: "decide", node_id: "decide", node_status: "failed", run_status: "failed", fail_reason: "no outgoing edge from decide (outcome failure, review_verdict none)" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was dropped by a person" });
+    const { task } = await read();
+    expect(task.status).toBe("dropped");
+    expect(task.execution_status).toBeUndefined();
   });
 
   test("a session's close is not a person's: the run goes on", async () => {
