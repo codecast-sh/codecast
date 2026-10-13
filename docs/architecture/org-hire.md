@@ -124,6 +124,10 @@ tested in `orgTemplateArtifact.v2.test.ts`.
 }
 ```
 
+**Caps** (`role.caps`) are optional. A role has no daily limits unless a
+person sets one, so a manifest without caps hires an unlimited role; caps it
+names are the limits the hire starts with, and a person changes them after.
+
 **Inputs** (`inputs[]`): `key` is a dotted slug; `kind` is `string | number |
 money | boolean | choice | project_ref | doc_ref | task_ref | secret`;
 `required`, `default`, `help`, `choices` for `choice`, `unlocks` (routine or
@@ -242,14 +246,14 @@ from a browser identity (`refuseUnlessHuman`); revoked the same way. A change
 is an immediate wake with the authority as cause. `cast role show` prints it.
 
 **Trust and authority are independent, and the coupling is stated.** Trust is
-authority over codecast; authority is over something outside it. A CMO at
-`understand` may hold a spend authority and still not start hands. The rule a
-person will feel: a routine in `apply` mode that requires a `spend` or
-`publish` authority is offered activation only when the role's trust is
-`decide` or above; at `understand` it runs in `propose` mode whatever the
-manifest says, and the role page's routine row says so ("runs as propose:
-trust is understand"). The first visit's promise, nothing changes until you
-accept, holds: raising trust is the accept.
+authority over codecast; authority is over something outside it. A hire
+starts work on its own by default (only the Head of People does not), so a
+CMO holding a spend authority acts on it. A role whose Starts work on its own
+switch a person turned off may still hold a spend authority and not start
+hands: a routine in `apply` mode that requires a `spend` or `publish`
+authority then runs in `propose` mode whatever the manifest says, and the role
+page's routine row says so ("only recommends: Starts work on its own is
+off").
 
 **Credentials.** A `secret` input binds to a credential the host machine
 holds. `cast org template bind <instance> --secret <key>=<path>` records on
@@ -307,9 +311,9 @@ has a pass record younger than its `max_age`, and the trust rule of H4 allows
 its mode. The instance row carries `readiness: { <routine>: { ready, mode,
 missing: [...] } }`, recomputed on every evidence, authority, setup, trust or
 binding write. The role page's routine rows show each as paused and not ready
-(with what is missing), paused and ready (with Activate), or active.
+(with what is missing), paused by a person, or active.
 
-Readiness offers activation; it does not perform it. A person activates.
+Readiness turns a routine on (H8): nobody has to click Activate.
 
 **Lapse after activation.** When a required pass record ages past `max_age`,
 or an authority expires, while the routine is active, the routine keeps its
@@ -343,7 +347,7 @@ with their last value and age; the brief's fact block leads with them for a
 template role, before the scope summary. A value older than the routine's
 cadence renders dimmed. No number is stored without a source.
 
-## H8. Routines: created paused, activated by a person, once ready
+## H8. Routines: created paused, turned on once ready
 
 **Atomic paused create.** `agentTasks.createTask` accepts `status: "paused"`
 for recurring triggers: the row is inserted paused with `run_at` unset and
@@ -351,19 +355,30 @@ zero runs. The year-ahead `run_at` and `precheck: "exit 1"` gate in
 org-templates.md retire; `managedTrigger` recognises both forms until every
 instance is rebound.
 
-**Activation** is one control on the role page per ready routine, human only.
-It sets `run_at = now + interval` and resumes, the same two writes the
-documented CLI procedure performs, in one mutation
-(`agentTasks.activateRoutine`), and records `activated_by` on the instance
-row. A routine whose live cadence a person changed keeps that cadence through
-upgrades (org-templates.md, cadence overrides). `cast org template activate
-<instance> <routine>` is the shell form and carries the same human-only rule.
+**Activation** sets `run_at = now + interval` and resumes, in one mutation
+(`orgTemplates.activateRoutine`). The host step runs it itself: bind,
+reconcile, upgrade and `status` turn on every managed routine that is ready
+and waiting, meaning created paused and never on, or paused by an upgrade
+for its new cadence. One that is not ready stays paused and turns on at the
+next of those once it is. A routine a person paused after it was on, or one
+behind a precheck a person set, stays paused. The role page's Activate and
+`cast org template activate <instance> <routine>` turn one on now; a person
+or the role may use either. A routine whose live cadence a person changed
+keeps that cadence through upgrades (org-templates.md, cadence overrides).
 
 **Adoption** keeps its meaning: `--adopt <routine>=tr-N` records an external
-trigger; the role page shows it as external with its own session, and offers
-a cutover when the person wants it: pause the external trigger, activate the
-managed routine, record both on the instance. Codecast's five growth triggers
-cross over this way, one at a time, when the founder chooses.
+trigger; the role page shows it as external with its own session.
+`cast org template cutover <instance> [routine...] --dir <checkout>` moves
+adopted routines (default: every one) onto the template's own: it creates the
+managed routine exactly as reconcile creates a missing one, at the adopted
+trigger's live cadence; pauses the adopted trigger and keeps it, recorded on
+the receipt under `retiredByCutover`; points the receipt and the instance row
+at the managed routine; and turns it on when ready. The adopted trigger is
+paused before the managed one can turn on, and the arm pass keeps it paused
+afterwards, so a routine never has two live triggers. An adopted trigger that
+was paused hands over a managed routine held paused for a person. Each step
+is journaled on the receipt (`cutover`), so a rerun after an interruption
+finishes the same cutover without creating a second routine.
 
 ## H9. Learning: from one instance to the template to every instance
 
@@ -582,8 +597,8 @@ proposal) and, once accepted, the button that runs it on the machine. Manual:
   exists.
 - **The instance record**: `evidence`, `report` and `setup` verbs over
   `orgTemplateState.ts`. A pass and a scoreboard value need a source a person
-  can open; an agent session cannot mark a person's setup item; a role's own
-  item needs evidence. State lives on the receipt until the instances table
+  can open; anyone who sees a setup item done marks it, the role included; a
+  role's own item needs evidence. State lives on the receipt until the instances table
   exists; the verbs and their rules stay as they are when it does.
 - **Readiness**: `packages/shared/contracts/orgTemplateReadiness.ts`, one pure
   module for the CLI, the server and the web. Any unmet requirement, never met
@@ -631,9 +646,9 @@ proposal) and, once accepted, the button that runs it on the machine. Manual:
   - `agentTasks.insertTask` accepts `status: "paused"` (no `run_at`, never for
     an event trigger) and `applyActivate` sets the first run one interval out
     and clears an install's `exit 1` gate, keeping a person's own precheck.
-    `orgTemplates.activateRoutine` is the human only mutation; the CLI's
-    `activate` verb calls it and is refused for an agent session with the
-    reason. `ensureRoutines` creates routines paused and pauses at once on a
+    `orgTemplates.activateRoutine` is the mutation, open to a person or the
+    role; the CLI's `activate` verb and its arm pass (`armReadyRoutines`)
+    call it. `ensureRoutines` creates routines paused and pauses at once on a
     backend that ignores the status; the activation guidance drops the gate
     flag when there is no gate.
   - `performEscalateSession` accepts a role's own standing session, so the
@@ -803,14 +818,14 @@ Every change on a stable instance waits for a person's click (sd-424); nothing
 here applies an update by itself.
 
 - **The rules** in `shared/contracts/orgTemplateRelease.ts`. `classifyRelease
-  (prev, next)` diffs two manifests: **authority** (caps, authority entries, a
-  routine's mode, the line, the role's name or handle), **structure** (routines
-  added, removed or re-cadenced; inputs, setup, evidence, ledgers, scoreboard;
-  any other manifest field) or **content** (the manifest is the same but for its
+  (prev, next)` diffs two manifests: **authority** (authority entries, a routine's
+  mode, the line, the role's name or handle), **structure** (routines added,
+  removed or re-cadenced; inputs, setup, evidence, ledgers, scoreboard; the
+  default caps, which only shape new hires; any other manifest field) or **content** (the manifest is the same but for its
   version: only files changed). `changes` is the Update card's locked shape
   (`routines_added`, `routines_recadenced: {id, from, to}`, `inputs_added`,
   `setup_added`, `*_changed`, and `authority_changed` in a person's words, e.g.
-  "Daily token limit: 200,000 to 400,000", "New permission: Paid search").
+  "Line it runs: none to feature", "New permission: Paid search").
   `bumpRefusal` needs patch, minor or major for the three classes and names the
   change that forced the class. `updateOffer`, `jumpBetween` (forward: the
   releases in between merged, widest class; a rollback: the direct diff),

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  errorTitle,
   DEFAULT_PROMOTE,
   GROUP_KINDS,
   INGEST_LIMITS,
@@ -239,5 +240,19 @@ describe("sourceConfigProblem", () => {
     expect(sourceConfigProblem("sentry", { projects: ["web", "../x"] })).toMatch(/not a Sentry project slug/);
     expect(sourceConfigProblem("sentry", { allowed_origins: ["https://x"] })).toMatch(/does not apply/);
     expect(sourceConfigProblem("app", undefined)).toBeNull();
+  });
+});
+
+describe("errorTitle", () => {
+  test("an error that says itself twice says it once, and its words lead (ct-58610)", () => {
+    expect(errorTitle("Email dispatch giving up after >24h of transient deferral: Rate limit exceeded. Retry after 1 seconds.: Rate limit exceeded. Retry after 1 seconds.")).toEqual({
+      title: "Email dispatch giving up after >24h of transient deferral: Rate limit exceeded. Retry after 1 seconds.",
+      words: "Email dispatch giving up after >24h of transient deferral",
+      error: "Rate limit exceeded. Retry after 1 seconds.",
+    });
+  });
+  test("a bare error message stays whole", () => {
+    expect(errorTitle("TypeError: Cannot read properties of null (reading 'id')")).toEqual({ title: "TypeError: Cannot read properties of null (reading 'id')", words: null, error: null });
+    expect(errorTitle("Rate limit exceeded")).toEqual({ title: "Rate limit exceeded", words: null, error: null });
   });
 });
