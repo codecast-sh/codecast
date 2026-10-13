@@ -175,7 +175,7 @@ function Feed({ now }: { now: number }) {
   const agentType = PHONE_SESSION.agent;
   return (
     <div {...fly("phone/phone.feed", MOBILE_SESSION_STYLE.messageList)} className="flex flex-col">
-      <PhoneMessage role="user" name={EARLIER.from} agentType={agentType} time={mobileRelativeTime(now - 4_000, now)}>
+      <PhoneMessage role="user" sender={EARLIER.from} agentType={agentType} time={mobileRelativeTime(now - 4_000, now)}>
         <PhoneMessageText>{EARLIER.task}</PhoneMessageText>
       </PhoneMessage>
       <PhoneMessage role="assistant" agentType={agentType} model={PHONE_SESSION.model} time={mobileRelativeTime(now - 3_000, now)}>
@@ -191,7 +191,7 @@ function Feed({ now }: { now: number }) {
       </FilmGrow>
       <FilmGrow at={PHONE_AT.sent}>
         <div {...fly("phone/phone.steer")} data-phone="steer">
-          <PhoneMessage role="user" name={ME} agentType={agentType} time="just now">
+          <PhoneMessage role="user" agentType={agentType} time="just now">
             <PhoneMessageText>{STEER}</PhoneMessageText>
           </PhoneMessage>
         </div>
