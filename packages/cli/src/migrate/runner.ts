@@ -119,7 +119,10 @@ export interface RunnerIo {
 
   /** Wake and resolve the cloud host behind a device id (throws when this machine cannot reach it). */
   prepareHost(deviceId: string): Promise<void>;
-  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string; migrationId: string; batchId: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
+  /** Why the cloud host could not run a Claude session now (it has no live
+   *  login and this machine has none to give it), or null when it can. */
+  hostLoginGap(deviceId: string): Promise<string | null>;
+  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
   /** The reorientation notice for the moved agent, from what the transfer proved. */
   notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult, stoppedOnSource?: Array<{ name: string; via?: string }>): string | null;
@@ -254,6 +257,13 @@ export async function migrateRow(
     const prepareBeforeStop = facts.direction === "to_cloud" && batch.interrupt_on_timeout === false;
     if (prepareBeforeStop && !(await prepareDestination("waiting_idle"))) return fail(`${facts.to_label ?? "the cloud host"} never came online; the session was left running locally`);
 
+    // A session moved to a host with no login resumes on "Login expired", and
+    // stopping it here already killed what it ran in the background: refuse first.
+    if (facts.direction === "to_cloud") {
+      const gap = await io.hostLoginGap(facts.to_device_id);
+      if (gap) return fail(`${facts.to_label ?? "the cloud host"} has no Claude login (${gap}); the session was left running here`);
+    }
+
     // ── 2. quiesce the current owner so the transcript is final ─────────────
     // For a move back, the owner is the cloud host: wake it and wait for its
     // daemon before asking, or the command dies in the queue unclaimed.
@@ -308,7 +318,7 @@ export async function migrateRow(
       }
       await io.report(id, { status: "transferring", stage: owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)" });
       try {
-        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead, migrationId: id, batchId: batch.batch_id });
+        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead });
         transfer = t;
         if (owner) ledger.settle(key, t.pushedHead);
       } catch (err) {
