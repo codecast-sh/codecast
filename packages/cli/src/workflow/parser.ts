@@ -309,6 +309,10 @@ class Parser {
     if (attrs.doc) node.doc = String(attrs.doc);
     if (attrs.category) node.category = String(attrs.category);
     if (attrs.card) node.card = String(attrs.card);
+    if (attrs.asker) node.asker = String(attrs.asker);
+    if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
+    if (attrs.system) node.system = String(attrs.system);
+    if (attrs.output) node.output = String(attrs.output) === "text" ? "text" : "json";
 
     return node;
   }
@@ -324,6 +328,7 @@ function shapeToType(shape: NodeShape): NodeType {
     case "component": return "parallel_fanout";
     case "tripleoctagon": return "parallel_fanin";
     case "tab": return "prompt";
+    case "note": return "call";
     default: return "agent";
   }
 }
@@ -332,7 +337,9 @@ function shapeToType(shape: NodeShape): NodeType {
 
 export function parseWorkflowFile(filePath: string): WorkflowGraph {
   const src = fs.readFileSync(filePath, "utf-8");
-  return parseWorkflowSource(src, path.dirname(filePath));
+  const graph = parseWorkflowSource(src, path.dirname(filePath));
+  graph.sources = [path.resolve(filePath), ...(graph.sources ?? [])];
+  return graph;
 }
 
 export function parseWorkflowSource(src: string, dir?: string): WorkflowGraph {
@@ -346,12 +353,17 @@ export function parseWorkflowSource(src: string, dir?: string): WorkflowGraph {
     const resolveRef = (value: string | undefined) => {
       if (!value?.startsWith("@")) return value;
       const refPath = path.join(dir, value.slice(1));
-      return fs.existsSync(refPath) ? fs.readFileSync(refPath, "utf-8") : value;
+      if (!fs.existsSync(refPath)) return value;
+      sources.add(path.resolve(refPath));
+      return fs.readFileSync(refPath, "utf-8");
     };
+    // Every file the graph inlined: a runner compares them at a gate's answer (runResume.ts runnerStamp).
+    const sources = new Set<string>();
     for (const node of graph.nodes.values()) {
       if (node.prompt) node.prompt = resolveRef(node.prompt);
       if (node.script) node.script = resolveRef(node.script);
     }
+    if (sources.size) graph.sources = [...sources];
   }
 
   return graph;
@@ -380,6 +392,12 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
     if (node.type === "command" && !node.script) {
       errors.push(`Command node '${node.id}' has no script attribute`);
     }
+    if (node.type === "call" && !node.prompt) {
+      errors.push(`Call node '${node.id}' has no prompt attribute`);
+    }
+    if (node.type === "call" && node.max_tokens !== undefined && !(Number.isInteger(node.max_tokens) && node.max_tokens > 0)) {
+      errors.push(`Call node '${node.id}' has max_tokens ${node.max_tokens}: a whole number above 0`);
+    }
     if (node.type === "agent" && !node.prompt) {
       // Warning, not error - agent might be guided by goal
     }
@@ -396,7 +414,8 @@ const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter((
 
 export function graphHash(graph: WorkflowGraph): string {
   const sorted = sortedAttrs;
-  const { nodes, edges, ...attrs } = graph;
+  // Where the graph was read from is not what it is.
+  const { nodes, edges, sources: _sources, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
     nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),
