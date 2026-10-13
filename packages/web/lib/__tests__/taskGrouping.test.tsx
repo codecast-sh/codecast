@@ -221,7 +221,7 @@ describe("the assignee axis with roles", () => {
     expect(html(result[0].icon)).toContain('data-avatar="fox"');
     expect(html(result[0].extra)).toContain('href="/org/or-growth"');
     expect(html(result[1].icon)).not.toContain("data-assignee-role");
-    expect(html(result[1].extra)).toContain('href="/team/samvit"');
+    expect(html(result[1].extra)).toContain('href="/org/@samvit"');
   });
 
   it("assigns to a role when a task is dropped on the role's group", () => {

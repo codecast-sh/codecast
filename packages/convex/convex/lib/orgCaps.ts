@@ -2,13 +2,8 @@
 // and its switch (S23.1). Leaf module: read from every write path and from
 // org.health, so it imports nothing that imports them back.
 
-import { DEFAULT_LINE_CARDS_CAP, DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
-import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-
-// The numbers live in the shared capacity model, which the analyzer prompt
-// and org.health read too.
-export const DEFAULT_CAPS = DEFAULT_ROLE_CAPS;
-export const DEFAULT_TRUST = "understand" as const;
+import { DEFAULT_LINE_CARDS_CAP, type RoleDailyCaps } from "@codecast/shared/contracts/orgCapacity";
+import { autonomyOn, defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
 
 export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -27,8 +22,11 @@ export function countersFor(role: { counters?: RoleCounters | null }, now: numbe
   return { day, hands: 0, wakes: 0, tokens: 0 };
 }
 
-export function capsFor(role: { caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number } | null }) {
-  return { ...DEFAULT_CAPS, ...(role.caps ?? {}) };
+// The role's stored caps. A role starts with none and an absent daily limit
+// is no limit (orgCapacity.atCap); only what a person set holds.
+export type RoleCaps = RoleDailyCaps & { cards?: number; line_on?: boolean };
+export function capsFor(role: { caps?: RoleCaps | null }): RoleCaps {
+  return { ...(role.caps ?? {}) };
 }
 
 /** caps.cards (LE6), the default when the role has none. */
@@ -36,8 +34,8 @@ export function cardsCapOf(role: { caps?: { cards?: number } | null }): number {
   return role.caps?.cards ?? DEFAULT_LINE_CARDS_CAP;
 }
 
-export function trustOf(role: { trust?: string | null }): "understand" | "decide" | "direct" {
-  return (role.trust as any) ?? DEFAULT_TRUST;
+export function trustOf(role: { trust?: string | null; handle?: string }): "understand" | "decide" | "direct" {
+  return (role.trust as any) ?? defaultTrustFor(role);
 }
 
 // The switch (org-staffing.md S23.1): does the role start work on its own? The

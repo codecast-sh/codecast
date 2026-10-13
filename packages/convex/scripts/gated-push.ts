@@ -14,7 +14,7 @@
 //   3. take a signature of every file that ships;
 //   4. run the whole-program typecheck (`cast check convex`; a plain tsc when
 //      cast is not on PATH) and stop on any error;
-//   5. push once (`convex dev --once`);
+//   5. push once (`convex dev --once --typecheck disable`);
 //   6. take the signature again. If it moved, the push may have bundled a
 //      mid-edit state, so it is dirty again and goes around once more.
 // Function logs keep streaming in the same pane through `convex logs`.
@@ -197,7 +197,8 @@ async function typecheck(): Promise<CheckResult> {
 }
 
 async function push(): Promise<number> {
-  const r = await run([join(PKG, "node_modules", ".bin", "convex"), "dev", "--once"], { cwd: PKG, inherit: true, timeoutMs: 15 * 60_000 });
+  // Step 4 already proved the tree green; the CLI's own pass would be a second fresh whole-program tsc per push.
+  const r = await run([join(PKG, "node_modules", ".bin", "convex"), "dev", "--once", "--typecheck", "disable"], { cwd: PKG, inherit: true, timeoutMs: 15 * 60_000 });
   return r.code;
 }
 

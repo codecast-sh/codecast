@@ -25,25 +25,21 @@ function markup(slug = "abc") {
   );
 }
 
-function titleOrder(html: string): string[] {
-  return [...html.matchAll(/title="([^"]+)"/g)].map((m) => m[1]);
+// The verbs on the page's floating toolbar, in the order a reader meets them.
+function toolbarVerbs(html: string): string[] {
+  const bar = html.match(/<span class="page-embed__bar"[\s\S]*?<\/span><span class="page-embed__grip"/)?.[0] ?? "";
+  return [...bar.matchAll(/<button[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
 }
 
 describe("PublishedPageEmbed header actions", () => {
-  test("copy link to the published page is first, then collapse, then open in a pane", () => {
-    const titles = titleOrder(markup("my-page"));
-    const copy = titles.indexOf("Copy link to published page");
-    const expand = titles.indexOf("Expand");
-    const pane = titles.indexOf("Open beside your work, as a pane");
-    expect(copy).toBeGreaterThanOrEqual(0);
-    expect(expand).toBeGreaterThan(copy);
-    expect(pane).toBeGreaterThan(expand);
+  test("copy link to the published page is first, then expand, the two ways to open it, and collapse", () => {
+    expect(toolbarVerbs(markup("my-page"))).toEqual(["Copy link", "Expand", "Open beside your work", "Open in a new tab", "Collapse"]);
   });
 
   test("open points at the public share URL, not the serving origin", () => {
     const html = markup("my-page");
     expect(html).toContain('href="https://codecast.sh/a/my-page"');
-    expect(html).toContain("Copy link to published page");
+    expect(html).not.toContain('href="https://convex.codecast.sh');
   });
 });
 
@@ -56,6 +52,9 @@ const restoreGlobals = replaceGlobals({
     clipboard: { writeText: (t: string) => { written.push(t); return Promise.resolve(); } },
   }),
   HTMLElement: dom.window.HTMLElement,
+  // useFrameTheme posts the theme to a framed page on the next frame.
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 // react-dom/client decides at load whether a DOM exists, so it is loaded
@@ -83,7 +82,7 @@ describe("PublishedPageEmbed copy", () => {
         </ConvexProvider>,
       ),
     );
-    const btn = container.querySelector('[aria-label="Copy link to published page"]') as HTMLButtonElement;
+    const btn = container.querySelector('[aria-label="Copy link"]') as HTMLButtonElement;
     expect(btn).toBeTruthy();
     await act(() => btn.click());
     expect(written).toEqual(["https://codecast.sh/a/my-page"]);
@@ -176,7 +175,7 @@ describe("PublishedPageEmbed notes", () => {
       const sent: any[] = [];
       frame.contentWindow!.postMessage = ((m: unknown) => { sent.push(m); }) as any;
       const toggle = container.querySelector('[aria-pressed]') as HTMLButtonElement;
-      expect(toggle.textContent).toContain("Comment");
+      expect(toggle.getAttribute("aria-label")).toBe("Pin a note, or select text on the page");
       await act(() => toggle.click());
       expect(sent.at(-1)).toMatchObject({ type: "codecast:notes", pinMode: true, notes: [] });
 
@@ -194,7 +193,7 @@ describe("PublishedPageEmbed notes", () => {
 
       await fromFrame({ type: "codecast:note-body", id: note.id, body: " fix this first " });
       expect(useInboxStore.getState().getReviewComments("conv-1")[0].body).toBe("fix this first");
-      expect(container.querySelector('[aria-pressed]')!.textContent).toContain("1 note");
+      expect(container.querySelector('[aria-pressed]')!.textContent).toBe("1");
 
       await fromFrame({ type: "codecast:note-remove", id: note.id });
       expect(useInboxStore.getState().getReviewComments("conv-1")).toEqual([]);

@@ -1,5 +1,4 @@
 .page { position: fixed; inset: 0; overflow: hidden; background: var(--paper); }
-.waiting { position: fixed; inset: 0; display: grid; place-items: center; background: var(--paper); }
 .appCol { position: absolute; top: 0; left: 0; bottom: 0; transition: right var(--t-move) var(--ease-out); }
 .appArea { position: absolute; top: 0; left: 0; right: 0; z-index: var(--z-frame); transition: bottom var(--t-move) var(--ease-out); }
 /* The past, marked so it reads on any app, dark or light: an ink edge with a
@@ -29,3 +28,6 @@
    version that just went live (PreviewFrame). Still in the viewport, so the
    browser keeps drawing it. */
 .stillFrame { position: absolute; top: 0; left: 0; z-index: -1; border: 0; opacity: 0; pointer-events: none; }
+/* The version on screen did not load: the way out covers the stage. */
+.failed { position: absolute; inset: 0; z-index: var(--z-outline); display: grid; place-items: center; background: var(--paper); animation: global(fade-in) var(--t-quick); }
+.stuck { position: absolute; left: 0; right: 0; bottom: var(--s6); display: grid; justify-items: center; z-index: var(--z-outline); }
