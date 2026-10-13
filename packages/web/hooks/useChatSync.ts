@@ -18,6 +18,7 @@
 
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useIsSyncHost } from "./useSyncRole";
+import { agentName, agentTitle, type AnchorRow } from "./useSyncAnchors";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
@@ -50,6 +51,7 @@ import {
   buildHandleSets,
   foldReactions,
   memberName,
+  type RoleSeat,
   threadRollups,
   toMessageViews,
   type ChatMember,
@@ -143,6 +145,11 @@ const sessionOriginSig = makeCollectionSig<any>(
   (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}`,
 );
 
+/** Role seats: what a role's standing agent's chat lines show (seatAuthorFor). */
+const seatSig = makeCollectionSig<any>(
+  (a) => `${a.bot_user_id ?? ""}|${a.status}|${a.team_name ?? ""}|${a.role ? `${a.role.short_id}|${a.role.name}|${a.role.handle}|${a.role.avatar ?? ""}|${a.role.given_name ?? ""}|${a.role.assistant?.reach ?? ""}` : ""}`,
+);
+
 /** Slack mirrors: everything the header pill and the settings dialog branch on. */
 export const slackLinksSig = makeCollectionSig<ChatSlackLinkRow>(
   (l) =>
@@ -169,7 +176,9 @@ export const reactionsSig = makeCollectionSig<ChatReactionRow>(
 function railSig(rail: ChatRailRow[]): string {
   let out = "";
   for (const r of rail ?? []) {
-    out += `${r.channel_id}|${r.sort_at}|${r.unread}|${r.unread_mentions}|${r.notify_level}|${r.joined}|${r.last_message?._id ?? ""};`;
+    // The rosters too: the member panel paints the people and agents in a room from these rows.
+    const agents = (r.agents ?? []).map((a) => (a.kind === "role" ? a.role_id : a.conversation_id)).join(",");
+    out += `${r.channel_id}|${r.sort_at}|${r.unread}|${r.unread_mentions}|${r.notify_level}|${r.joined}|${r.last_message?._id ?? ""}|${(r.member_ids ?? []).join(",")}|${agents};`;
   }
   return out;
 }
@@ -601,6 +610,17 @@ export function useMessageViews(
     // The signature is the real dep: the raw map ref flips on every push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionsSig]);
+  const sa = useTrackedStore([(s: any) => seatSig(s.anchors)]);
+  const seatsSig = seatSig(sa.anchors);
+  const seatFor = useMemo(() => {
+    const map = new Map<string, RoleSeat>();
+    for (const a of Object.values(sa.anchors ?? {}) as AnchorRow[]) {
+      if (!a?.bot_user_id || !a.role?.short_id || a.status === "decommissioned") continue;
+      map.set(String(a.bot_user_id), { name: agentName(a), title: agentTitle(a) ?? a.role.name, shortId: a.role.short_id, handle: a.role.handle, avatar: a.role.avatar });
+    }
+    return (id: string) => map.get(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seatsSig]);
   return useMemo(() => {
     const rollups = threadRollups(Object.values(rollupSource));
     const byMessage = new Map<string, ChatReactionRow[]>();
@@ -618,12 +638,13 @@ export function useMessageViews(
       summaries,
       sendState: chatSendState,
       sessionFor,
+      seatFor,
       reactionsFor: (messageId) => {
         const list = byMessage.get(messageId);
         return list ? foldReactions(list, viewerId, nameOf) : undefined;
       },
     });
-  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries, sessionFor]);
+  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries, sessionFor, seatFor]);
 }
 
 /** One channel's timeline, ready to render. Roots only — replies live in the

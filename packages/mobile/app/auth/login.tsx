@@ -174,10 +174,10 @@ export default function LoginScreen() {
               activeOpacity={0.8}
             >
               {loading && !showEmailForm ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={Theme.bg} />
               ) : (
                 <View style={styles.buttonContent}>
-                  <Ionicons name="logo-apple" size={20} color="#fff" style={styles.buttonIcon} />
+                  <Ionicons name="logo-apple" size={20} color={Theme.bg} style={styles.buttonIcon} />
                   <Text style={styles.appleButtonText}>Continue with Apple</Text>
                 </View>
               )}
@@ -348,7 +348,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     alignItems: 'center',
   },
   appleButtonText: {
-    color: '#fff',
+    color: Theme.bg,
     fontSize: FontSize.lg,
     fontWeight: '600',
   },

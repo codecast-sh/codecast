@@ -1,0 +1,65 @@
+/* A step's runs (StepRuns): one block per problem, a fixed column grid per run. */
+.sr-filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.sr-list { display: flex; flex-direction: column; border: 1px solid var(--lw-rule); border-radius: var(--lw-r, 10px); background: var(--lw-card); overflow: hidden; }
+.sr-group { border-top: 1px solid var(--lw-rule); }
+.sr-group:first-child { border-top: 0; }
+.sr-group[data-hl] { box-shadow: inset 3px 0 0 var(--lw-agent); }
+
+.sr-prob { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 64px; gap: 10px; align-items: center; padding: 8px 12px 2px; font-size: var(--lw-fs-sm); }
+.sr-ref { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; text-decoration: none; }
+a.sr-ref:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 2px; }
+.sr-title { color: var(--lw-ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-src { justify-self: end; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-plum); background: var(--lw-plum-soft); padding: 1px 7px; border-radius: 5px; white-space: nowrap; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
+.sr-src small { margin-left: 4px; opacity: .75; font-size: inherit; }
+.sr-count { white-space: nowrap; display: inline-flex; align-items: center; justify-content: flex-end; gap: 1px; font: inherit; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); font-variant-numeric: tabular-nums; color: var(--lw-ink-2); background: none; border: 0; padding: 1px 2px; border-radius: 5px; cursor: pointer; }
+.sr-count:hover { color: var(--lw-ink); background: var(--lw-paper-2); }
+.sr-count svg { width: 11px; height: 11px; transition: transform var(--lw-fast); }
+.sr-count[aria-expanded="true"] svg { transform: rotate(90deg); }
+.sr-count i { width: 6px; height: 6px; border-radius: 50%; background: var(--lw-bad); margin-left: 4px; }
+
+/* The outcome and its meta on one line; what the step concluded under them, the row's full width. */
+.sr-line { display: grid; grid-template-columns: minmax(0, 1fr) auto 36px 32px 44px; grid-template-areas: "tag next dur age lab" "out out out out out"; gap: 2px 10px; align-items: center; padding: 3px 12px 7px; min-height: 28px; font-size: var(--lw-fs-sm); cursor: pointer; transition: background var(--lw-fast); }
+.sr-run[data-earlier] .sr-line { padding-top: 5px; padding-bottom: 5px; border-top: 1px dashed var(--lw-rule-2); }
+.sr-line:hover, .sr-run[data-open] > .sr-line { background: var(--lw-card-2); }
+.sr-line:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: -2px; }
+.sr-run[data-hl] > .sr-line { background: var(--lw-agent-soft); }
+.sr-tag { grid-area: tag; display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
+.sr-tag > .lw-oc { flex: 0 0 auto; }
+.sr-tag > .sr-vo { flex: 0 1 auto; }
+.sr-tag > .vo[data-kind="text"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-tag > .sr-back, .sr-tag > .sr-fold { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sr-sum { margin: 0 0 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.sr-back, .sr-fold { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
+.sr-back { color: var(--lw-bad); font-weight: 700; }
+.sr-fold { color: var(--lw-ink-3); }
+.sr-earlier { width: 12px; height: 12px; flex: none; color: var(--lw-ink-3); }
+.sr-out { grid-area: out; color: var(--lw-ink-2); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.sr-out[data-none] { display: none; }
+.sr-next { grid-area: next; justify-self: end; display: inline-flex; align-items: center; gap: 4px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap; max-width: 20ch; min-width: 0; overflow: hidden; }
+.sr-next > span { overflow: hidden; text-overflow: ellipsis; }
+.sr-next svg { width: 11px; height: 11px; flex: none; color: var(--lw-ink-3); }
+.sr-next[data-end] { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.sr-dur { grid-area: dur; }
+.sr-age { grid-area: age; }
+.sr-num { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sr-lab { grid-area: lab; display: flex; justify-content: flex-end; }
+
+.sr-detail { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--lw-card-2); border-top: 1px solid var(--lw-rule-2); animation: lw-rise var(--lw-med) var(--lw-ease) both; }
+.sr-kv { display: grid; grid-template-columns: 144px minmax(0, 1fr); gap: 10px; font-size: var(--lw-fs-sm); }
+.sr-kv > span { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); padding-top: 2px; }
+.sr-kv > p { margin: 0; color: var(--lw-ink); line-height: 1.5; overflow-wrap: anywhere; }
+.sr-kv[data-verdict="wrong"] > p { color: var(--lw-bad); }
+.sr-prose { white-space: pre-wrap; max-height: 320px; overflow: auto; }
+.sr-detail .lw-fields { grid-template-columns: 144px minmax(0, 1fr); gap: 4px 10px; }
+.sr-links { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 0 154px; }
+.sr-more { padding: 8px 12px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+
+/* A narrow drawer (a split pane): the duration and the detail's indent give way first. */
+@container (max-width: 600px) {
+  .sr-prob { grid-template-columns: auto minmax(0, 1fr) auto 60px; gap: 8px; }
+  .sr-src { max-width: 18ch; }
+  .sr-line { grid-template-columns: minmax(0, 1fr) auto 32px 44px; grid-template-areas: "tag next age lab" "out out out out"; gap: 2px 8px; }
+  .sr-dur { display: none; }
+  .sr-kv, .sr-detail .lw-fields { grid-template-columns: 112px minmax(0, 1fr); gap: 8px; }
+  .sr-links { padding-left: 120px; }
+}

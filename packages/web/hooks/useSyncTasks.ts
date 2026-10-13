@@ -204,16 +204,18 @@ export function useSyncTasks() {
  * `store.tasks` collection that page views render.
  */
 /**
- * Per-view feeder: one project's tasks in the workspace it lives in, for a
- * project page opened from another workspace (its Line tab reads the
- * project's causes there). The workspace feeder above covers the active
- * workspace, so this one subscribes only when `workspace` names another.
+ * Per-view feeder: tasks in a workspace that is not the active one, one
+ * project's (a project page opened from another workspace: its Line tab reads
+ * the project's causes there) or, with no project, the workspace's own window
+ * (the line app reading the workspace its address names). The workspace feeder
+ * above covers the active workspace, so this one subscribes only when
+ * `workspace` names another.
  */
 export function useSyncProjectTasks(projectId: string | null | undefined, workspace: string | null | undefined, enabled = true) {
   const { args } = useFeederWorkspace(workspace);
   const teamId = args === "skip" ? "skip" : args.team_id ?? "";
   const queryArgs = useMemo(
-    () => (!enabled || !projectId || !workspace || teamId === "skip" ? "skip" : { ...(teamId ? { team_id: teamId, workspace: "team" } : { workspace: "personal" }), project_id: projectId, include_derived: true }),
+    () => (!enabled || !workspace || teamId === "skip" ? "skip" : { ...(teamId ? { team_id: teamId, workspace: "team" } : { workspace: "personal" }), ...(projectId ? { project_id: projectId } : {}), include_derived: true }),
     [enabled, projectId, workspace, teamId],
   );
   return useSyncCollection("tasks", api.tasks.webList, queryArgs as any, { select: selectTaskItems });
@@ -256,15 +258,17 @@ export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): 
       }
     }
   }
-  const { subtasks, ...rest } = row as any;
+  const { subtasks, graph_tasks, ...rest } = row as any;
   useInboxStore.getState().syncRecord("tasks", String(rest._id), rest);
   // The detail ships the task's direct children (taskMining.directSubtasks)
-  // so a surface without the list feeder draws the same checklist. Each joins
-  // the one tasks collection, merged over any row the list already holds so
-  // its enriched fields survive.
-  if (Array.isArray(subtasks)) {
+  // so a surface without the list feeder draws the same checklist, and the
+  // tasks its graph names (lib/taskGraph graphNeighbors) so Blocked by reads
+  // their live state. Each joins the one tasks collection, merged over any
+  // row the list already holds so its enriched fields survive.
+  const linked = [...(Array.isArray(subtasks) ? subtasks : []), ...(Array.isArray(graph_tasks) ? graph_tasks : [])];
+  if (linked.length) {
     const tasks = useInboxStore.getState().tasks as Record<string, any>;
-    for (const child of subtasks) {
+    for (const child of linked) {
       if (!child || !collectionRowValidator("tasks")!(child)) continue;
       const prev = tasks[String(child._id)];
       useInboxStore.getState().syncRecord("tasks", String(child._id), prev ? { ...prev, ...child } : child);

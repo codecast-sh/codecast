@@ -38,6 +38,9 @@ import {
   isAutoContinueEnabled,
   autoRecoveryEnabled,
   isBlockedConversation,
+  isCurrentBlock,
+  blockedAt,
+  BLOCKED_WINDOW_MS,
   isRemoteAuthBlocked,
   isSubagentConversation,
   isDeviceOnline,
@@ -47,7 +50,6 @@ import {
   shouldSweepStaleFlag,
   LOGIN_FLOW_STALE_MS,
   MINT_FLOW_STALE_MS,
-  STALE_FLAG_AFTER_MS,
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_SPACING_MS,
   pickThrottleContinueBatch,
@@ -74,10 +76,9 @@ import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
 // linger on sessions that died mid-banner weeks ago (first live run selected 51
-// conversations, 50 of them stale). 48h covers "the fleet hit the limit
-// overnight" while excluding the graveyard; the cap bounds the resume stampede
+// conversations, 50 of them stale). The window is BLOCKED_WINDOW_MS, judged on
+// when the block landed (isCurrentBlock); the cap bounds the resume stampede
 // a mass-revive can trigger (each continue may spawn a `claude --resume`).
-const BLOCKED_WINDOW_MS = 48 * 60 * 60 * 1000;
 const MAX_REVIVE = 30;
 
 // Blocked conversations split by standing: subagents (workers spawned by/for
@@ -99,13 +100,15 @@ async function listBlockedConversations(
   subagentCount: number;
   totalBlocked: number;
 }> {
-  const since = Date.now() - BLOCKED_WINDOW_MS;
+  const now = Date.now();
+  // updated_at is never older than the block, so the index range is a
+  // superset; isCurrentBlock then drops old parks whose row was touched since.
   const recent = await ctx.db
     .query("conversations")
-    .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", since))
+    .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", now - BLOCKED_WINDOW_MS))
     .order("desc")
     .take(1000);
-  const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter(isBlockedConversation);
+  const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter((c: Doc<"conversations">) => isBlockedConversation(c) && isCurrentBlock(c, now));
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
   const selected = (includeSafety
@@ -208,7 +211,7 @@ async function workerParks(
             ...parent,
             pending_api_error: true,
             pending_api_error_kind: "limit",
-            pending_api_error_at: worker.pending_api_error_at ?? worker.updated_at,
+            pending_api_error_at: blockedAt(worker),
             model: worker.model ?? parent.model,
           }
         : null);
@@ -1839,9 +1842,9 @@ export const autoSwitchCheck = internalMutation({
     // Continue-only mode acts on the current incident alone: a park older than
     // a full session window has already sat through a reset the user could
     // have used — resuming it now spends the fresh window on abandoned work.
-    // (With auto-switch on the user opted into the wider 48h revive.)
+    // (With auto-switch on the user opted into the wider BLOCKED_WINDOW_MS revive.)
     const recentEnough = (c: Doc<"conversations">): boolean =>
-      allowSwitch || (c.pending_api_error_at ?? c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS;
+      allowSwitch || blockedAt(c) >= now - AUTO_CONTINUE_WINDOW_MS;
     const limitBlocked = blocked.filter((c) => c.pending_api_error_kind === "limit" && recentEnough(c));
     // A park is evidence about the account the session RAN on, and a Codex
     // session does not run on a Claude account: its window, its reset time and
@@ -1977,7 +1980,7 @@ export const autoSwitchCheck = internalMutation({
       const codexDecision = decideAutoSwitch({
         now,
         resetCredit: codexResetCreditOffer(primary, codexLimit),
-        parkedAt: Math.max(...codexLimit.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
+        parkedAt: Math.max(...codexLimit.map(blockedAt)),
         activeEmail: primary.codex_accounts?.active_email,
         activeSince: primary.codex_accounts?.active_since,
         profiles: primary.codex_accounts?.profiles ?? [],
@@ -2086,8 +2089,8 @@ export const autoSwitchCheck = internalMutation({
       // and does nothing for a Claude session. The Codex pass above is the only
       // place it can be offered, so the wrong-provider redeem is impossible by
       // construction rather than by a filter that could be dropped.
-      parkedAt: Math.max(...targets.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
-      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)) : null,
+      parkedAt: Math.max(...targets.map(blockedAt)),
+      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map(blockedAt)) : null,
       activeEmail,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
@@ -2407,17 +2410,18 @@ export const listStaleCodexSessions = query({
 export const sweepStaleApiErrorFlags = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const cutoff = Date.now() - STALE_FLAG_AFTER_MS;
-    const stale = await ctx.db
+    // Every flagged row, oldest touch first: the age that matters is when the
+    // block landed, and a re-synced row carries an old block on a fresh
+    // updated_at, so the index range cannot cut on it. The flagged set stays
+    // small because this sweep keeps it that way.
+    const now = Date.now();
+    const flagged = await ctx.db
       .query("conversations")
-      .withIndex("by_pending_api_error", (q) =>
-        q.eq("pending_api_error", true).lt("updated_at", cutoff),
-      )
+      .withIndex("by_pending_api_error", (q) => q.eq("pending_api_error", true))
       .take(500);
     let swept = 0;
-    for (const conv of stale) {
-      // Re-verify with the shared predicate (guards against future index drift).
-      if (!shouldSweepStaleFlag(conv, Date.now())) continue;
+    for (const conv of flagged) {
+      if (!shouldSweepStaleFlag(conv, now)) continue;
       await ctx.db.patch(conv._id, {
         pending_api_error: false,
         pending_api_error_kind: undefined,
