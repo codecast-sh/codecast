@@ -6,6 +6,7 @@
 // @platform/assistant's (the storage-free half of the assistant, shared with
 // Averil); the values are codecast's product and stay here.
 import { planIn, type PlanCatalog, type PlanSpec as PlatformPlanSpec } from "@platform/assistant/plans";
+import { CHEAP_MODEL } from "./modelOptions";
 
 /** `conversations.agent_type` of a hosted conversation: a Convex action runs
  *  its turns, and no device ever claims it. The registry entry is
@@ -26,8 +27,12 @@ export type TurnReason = (typeof TURN_REASONS)[number];
  *  whose `subtype` names the kind, and the web draws a notice with one action
  *  for it: `error` and `unavailable` offer Try again, `budget` opens Plan,
  *  `time` offers Keep going. `unavailable` is a provider outage the engine
- *  retries by itself. */
-export const NOTICE_KINDS = ["error", "unavailable", "budget", "time", "safety"] as const;
+ *  retries by itself. `verify` asks for the code mailed to the person's
+ *  address before the Free allowance serves them, and the turn picks up by
+ *  itself once they enter it. `limit` is a Free turn refused for a reason
+ *  that is not the person's month (their address's Free allowance is in use
+ *  on another account, or Free turns are paused for the day). */
+export const NOTICE_KINDS = ["error", "unavailable", "budget", "time", "safety", "verify", "limit"] as const;
 export type NoticeKind = (typeof NOTICE_KINDS)[number];
 const NOTICE_SUBTYPE_PREFIX = "hosted_notice:";
 
@@ -104,7 +109,7 @@ export type PlanId = (typeof PLAN_IDS)[number];
 
 export type PlanSpec = PlatformPlanSpec<PlanId>;
 
-const HAIKU = "claude-haiku-4-5-20251001";
+const HAIKU = CHEAP_MODEL;
 const SONNET = "claude-sonnet-5-5";
 const OPUS = "claude-opus-5-5";
 const HOUR_MS = 60 * 60 * 1000;
@@ -180,16 +185,13 @@ export function topupCredit(paidUsd: number): number {
  *  the device, which the card says for itself (web RoutineNotifyLine). */
 export const ROUTINE_SHOWS_UP = "Each run arrives in your inbox.";
 
-/** What Yes does on a routine's approval card: when it starts (`start`, a
- *  phrase such as "tomorrow, Thursday, at 8:00 AM", empty when unknown), that
- *  a repeating one runs until paused, and where it arrives. The card's words
- *  (convex assistant/turns.ts approveWords) and the marketing page's drawn
- *  card both say it through here. */
-export function routineYesWords(start: string, repeats: boolean): string {
-  const at = start ? ` ${start}` : "";
-  return repeats
-    ? `I'll start${at} and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`
-    : `I'll do it${at || " that one time"}. ${ROUTINE_SHOWS_UP}`;
+/** What Yes does on a routine's approval card, saying only what the card's
+ *  summary and When line do not: that a repeating one runs until paused,
+ *  and where each run arrives. The When line already says when it starts.
+ *  The card's words (convex assistant/turns.ts approveWords) and the
+ *  marketing page's drawn card both say it through here. */
+export function routineYesWords(repeats: boolean): string {
+  return repeats ? `Runs until you pause it. ${ROUTINE_SHOWS_UP}` : "Runs once. What it finds arrives in your inbox.";
 }
 
 export const APPROVAL_ANSWERS = { approve: "Approve", always: "Always allow", decline: "Decline" } as const;
@@ -281,6 +283,12 @@ export function approvalButtonLabel(label: string): string {
  *  The plan screen sizes the Free month with it ("Room for about 400
  *  everyday requests"); remeasure as real usage grows. */
 export const TYPICAL_REQUEST_USD = 0.005;
+
+/** What every Free turn together may spend in one UTC day before new Free
+ *  turns pause until the next (convex/assistant/freeGate.ts). The deployment's
+ *  HOSTED_FREE_DAILY_USD overrides it. A ceiling on our own spend, not on
+ *  any one person: each person's month is their plan's allowance. */
+export const FREE_DAILY_CEILING_USD = 25;
 
 /** Where Stripe sends a person back after checkout or the portal, and what
  *  `?<param>=` says happened. The server builds the URLs (convex/billing.ts)
