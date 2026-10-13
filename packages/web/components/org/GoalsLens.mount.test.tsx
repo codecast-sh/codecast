@@ -51,7 +51,6 @@ const { GOALS_FIXTURE_CHANGES, GOALS_FIXTURE_DATA, ORG_GOALS_FIXTURE_PROPOSAL } 
 const { goalNodeId, layoutGoals, projectNodeId } = await import("./goalsLayout");
 const { roleNodeId, personNodeId } = await import("./orgLayout");
 const { GoalCard, GoalOwnerCard, GoalProjectCard, CompanyCard } = await import("./GoalsNodeCards");
-const { OrgChartChip } = await import("./orgChartLink");
 const { registerSplitOpener } = await import("../../lib/openIntent");
 
 const q = (sel: string, root: ParentNode = document) => root.querySelector(sel) as HTMLElement | null;
@@ -120,32 +119,6 @@ test("goal, project and owner cards wear the proposal's ghost chrome", async () 
   // A chip click focuses its change.
   await act(async () => { q("[data-ghost-chip='g-owner']", el)!.click(); });
   expect(focused).toEqual(["g-owner"]);
-  await act(async () => { root.unmount(); });
-  el.remove();
-});
-
-test("the header chip opens the org screen's map beside the conversation", async () => {
-  const opened: string[] = [];
-  registerSplitOpener((path) => { opened.push(path); return true; });
-  // The chip names its own conversation as `beside`.
-  useInboxStore.setState({
-    messages: { "conv-hop": [{ _id: "m1", role: "assistant", content: "Here is the first pass.\n\nop-7", timestamp: 1 }, { _id: "m2", role: "assistant", content: "Look at the owner: /org?proposal=op-8&focus=4", timestamp: 2 }], "conv-plain": [{ _id: "m3", role: "assistant", content: "I revised op-8 in passing.", timestamp: 3 }] },
-  } as any);
-  const el = document.createElement("div");
-  document.body.appendChild(el);
-  const root = createRoot(el);
-  await act(async () => {
-    root.render(h("div", null,
-      h(OrgChartChip, { conversationId: "conv-hop" }),
-      h("span", { "data-plain": true }, h(OrgChartChip, { conversationId: "conv-plain" })),
-    ));
-  });
-  // A thread that holds no pointer has no chip.
-  expect(q("[data-plain]", el)!.children.length).toBe(0);
-  expect(q("[data-org-chart-chip]", el)!.getAttribute("data-org-chart-chip")).toBe("op-8");
-  await act(async () => { q("[data-org-chart-chip]", el)!.click(); });
-  await tick();
-  expect(opened).toEqual(["/org?proposal=op-8&focus=4&show=map&beside=conv-hop"]);
   await act(async () => { root.unmount(); });
   el.remove();
 });

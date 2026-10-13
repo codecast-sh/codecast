@@ -92,6 +92,26 @@ describe("buildPublishPayload", () => {
     expect(() => buildPublishPayload(path.join(dir, "data.csv"))).toThrow(/\.html or \.md/);
   });
 
+  it("a bundle's cast-data.json travels as data, never as a served file", () => {
+    write("index.html", "<title>Dash</title><cast-stat query='spend'></cast-stat>");
+    const decl = { queries: { spend: { reader: "usage", args: { days: 7 }, refresh: "15m" } } };
+    write("cast-data.json", JSON.stringify(decl));
+    const p = buildPublishPayload(dir);
+    expect(p.files!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(p.data).toEqual(decl);
+    expect(publishRequestBody(p, {}).data).toEqual(decl);
+  });
+
+  it("a malformed cast-data.json stops the publish with what to fix", () => {
+    write("index.html", "<title>Dash</title>");
+    write("cast-data.json", "{ nope");
+    expect(() => buildPublishPayload(dir)).toThrow(/cast-data\.json is not valid JSON/);
+    write("cast-data.json", JSON.stringify({ queries: { spend: { reader: "nope" } } }));
+    expect(() => buildPublishPayload(dir)).toThrow(/unknown reader "nope"/);
+    write("cast-data.json", JSON.stringify({ queries: { spend: { reader: "usage", refresh: "10s" } } }));
+    expect(() => buildPublishPayload(dir)).toThrow(/at least 1m/);
+  });
+
   it("honors the --title override everywhere", () => {
     write("index.html", "<title>Ignored</title>");
     expect(buildPublishPayload(dir, "Override").title).toBe("Override");
