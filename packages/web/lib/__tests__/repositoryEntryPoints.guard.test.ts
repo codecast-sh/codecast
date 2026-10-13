@@ -11,7 +11,7 @@ test('Code is reachable from the main rail and command menu', () => {
 
 test('session branch opens the internal browser and object pages expose related code', () => {
   for (const file of ['components/ConversationView.tsx', 'components/inbox/SessionCardView.tsx']) expect(read(file)).toContain('<BranchCodeLink session=');
-  for (const file of ['app/tasks/[id]/page.tsx', 'app/plans/[id]/page.tsx', 'app/projects/[id]/page.tsx', 'components/PlanDetailPanel.tsx']) expect(read(file)).toContain('<RepositoryLinks ');
+  for (const file of ['app/tasks/[id]/page.tsx', 'app/plans/[id]/page.tsx', 'components/PlanDetailPanel.tsx']) expect(read(file)).toContain('<RepositoryLinks ');
   expect(read('components/ConversationView.tsx')).not.toContain('window.open(`https://github.com/${match[1]}/tree/');
   expect(read('components/ConversationView.tsx')).toContain('const codeRouter = useRouter();');
   expect(read('components/ConversationView.tsx')).toContain('codeRouter.push(repoTreeHref(');

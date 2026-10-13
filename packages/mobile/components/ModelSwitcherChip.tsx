@@ -9,7 +9,7 @@ import { Feather } from '@expo/vector-icons';
 import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, launchRailOptions, liveRailOptions, modelAgentKey } from '@codecast/shared/contracts';
 import { canControlModel, commitModelChange, modelOptionKey, modelFitsAgent, effortGlyph } from '@codecast/web/lib/modelSwitch';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
-import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
+import { Theme, chipShell, chipText, chipQuiet, CHROME_FONT_CAP } from '../constants/Theme';
 import { themedStyles, useTheme } from '@/constants/Theme';
 
 // Session-header model/effort chip + bottom-sheet switcher — the mobile
@@ -68,7 +68,7 @@ export function ModelSwitcherChip({
       <Feather name="cpu" size={10} color={Theme.cyan} />
       <Text style={styles.chipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</Text>
       {!!glyph && <Text style={styles.chipGlyph}>{glyph}</Text>}
-      {interactive && <Feather name="chevron-down" size={9} color={Theme.cyan} style={{ opacity: 0.7 }} />}
+      {interactive && <Feather name="chevron-down" size={9} color={Theme.textDim} />}
     </View>
   );
 
@@ -109,18 +109,18 @@ export function ModelSwitcherChip({
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  // The session header's shared chip shell, cyan-tinted.
+  // The session header's shared chip shell, neutral like its neighbors.
   chip: {
     ...chipShell,
-    ...chipTint(Theme.cyan),
+    ...chipQuiet(Theme),
   },
   chipText: {
     ...chipText,
-    color: Theme.cyan,
+    color: Theme.textMuted,
   },
   chipGlyph: {
     fontSize: 10,
-    color: Theme.cyan,
+    color: Theme.textMuted,
     opacity: 0.8,
   },
 }));

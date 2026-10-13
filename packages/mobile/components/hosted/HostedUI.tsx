@@ -6,6 +6,7 @@ import { type ReactNode } from 'react';
 import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { Easing, FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
+import Feather from '@expo/vector-icons/Feather';
 import { MOTION_CURVE } from '@platform/design';
 import { Text } from '@/components/Themed';
 import { HOSTED_RADIUS_SM, useHostedTheme } from './hostedTheme';
@@ -31,6 +32,7 @@ export function HostedButton({
   disabled = false,
   onPress,
   hint,
+  icon,
   style,
 }: {
   label: string;
@@ -40,6 +42,8 @@ export function HostedButton({
   onPress: () => void;
   /** Read aloud after the label: what the answer means. */
   hint?: string;
+  /** A trailing stroke icon, as the web's link out to another app carries. */
+  icon?: React.ComponentProps<typeof Feather>['name'];
   style?: StyleProp<ViewStyle>;
 }) {
   const { c } = useHostedTheme();
@@ -68,6 +72,8 @@ export function HostedButton({
           borderWidth: 1,
           borderColor: look.border,
           backgroundColor: pressed ? look.pressed : look.bg,
+          flexDirection: 'row',
+          gap: 6,
           alignItems: 'center',
           justifyContent: 'center',
           opacity: disabled ? 0.45 : 1,
@@ -79,6 +85,7 @@ export function HostedButton({
       <Text style={{ color: look.fg, fontSize: small ? 13 : 14, fontWeight: '600' }} numberOfLines={1}>
         {label}
       </Text>
+      {icon ? <Feather name={icon} size={small ? 12 : 13} color={look.fg} /> : null}
     </Pressable>
   );
 }
