@@ -584,6 +584,23 @@ export const removeRoute = mutation({
   },
 });
 
+/** Anyone in the room may put an agent out of it (callFace.removeAgent),
+ *  not only the scribe or whoever added it: an agent talking over the room
+ *  is the room's to stop, the way a guest is. */
+export const removeAgentFromRoom = internalMutation({
+  args: { user_id: v.id("users"), room_key: v.string(), conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    if (!(await authorizeRoom(ctx, args.user_id, args.room_key)).ok) throw new Error("Not in this room");
+    const t = await liveTranscriptFor(ctx, args.room_key);
+    if (!t) return;
+    for (const r of t.routes) {
+      if (r.kind !== "session") continue;
+      const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
+      if (conv && String(conv._id) === args.conversation_id) return await dropRoute(ctx, t, r.kind, r.target);
+    }
+  },
+});
+
 /** Take one route off a transcript and let the fed sessions follow. */
 async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
   await ctx.db.patch(t._id, {

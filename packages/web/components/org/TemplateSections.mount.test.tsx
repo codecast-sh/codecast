@@ -26,7 +26,7 @@ async function verifyTemplateSections() {
     // search-console carries the guide the host rendered at bind; measurement names one the page does not hold yet.
     setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly", how: "org/setup/search-console.md", guide: "# Verify acme.io\n\n1. Add the TXT record from /src/acme." }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [], how: "org/setup/measurement.md" }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
     ask: { id: "search-console", title: "Verify the domain", unlocks: ["seo-weekly"] },
-    readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["runs as propose: trust is understand"] } },
+    readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["only recommends: Starts work on its own is off"] } },
     routines: [
       { id: "cmo-weekly", title: "CMO weekly", every: "7d", mode: "propose", trigger: { id: "tasks_1", short_id: "tr-1", status: "paused" } },
       { id: "seo-weekly", title: "SEO weekly", every: "7d", mode: "apply", trigger: { id: "tasks_2", short_id: "tr-2", status: "paused" } },
@@ -66,8 +66,8 @@ async function verifyTemplateSections() {
   // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
   assert.match(text, /Let Codecast learn from this workspace's template roles/);
   assert.match(text, /never transcripts, quotes, names, customer data or code/);
-  const learning = () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!;
-  assert.equal(learning().checked, false);
+  const learning = () => document.querySelector<HTMLElement>('[data-template-learning] [role="switch"]')!;
+  assert.equal(learning().getAttribute("aria-checked"), "false");
   assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
   await act(async () => learning().click());
   assert.deepEqual(learningSet, [true]);
@@ -109,7 +109,11 @@ async function verifyTemplateSections() {
   await act(async () => buttons("Skip")[0]!.click());
   await act(async () => buttons("Reopen")[0]!.click());
   assert.deepEqual(marked, [["key-1", "search-console", "done"], ["key-1", "search-console", "skipped"], ["key-1", "bing", "open"]]);
+  // Activate opens the review of a recurring paid run; only the review's button sets it running.
   await act(async () => buttons("Activate")[0]!.click());
+  assert.deepEqual(activated, [], "the button alone activates nothing");
+  assert.match(document.querySelector("[data-switch-review]")!.textContent!, /paid agent run every 7d/);
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-switch-confirm]")!.click());
   assert.deepEqual(activated, ["tasks_1"]);
   // Ready with a missing secret: the page binds it from here, sealed to the machine's key, never as a value.
   assert.ok(document.querySelector('[data-host-purpose="secrets"]'));
@@ -165,7 +169,9 @@ async function verifyTemplateSections() {
   assert.match(body, /Setting up on MacBook…/);
   assert.equal(document.querySelector("[data-host-run]"), null, "no second request while one runs");
   body = await rerender({ phase: "awaiting_host", host_step: { state: "failed", device_label: "MacBook", error: "Instance is proposal; reconcile first" } });
-  assert.match(body, /MacBook: Instance is proposal; reconcile first/);
+  // The machine's CLI-worded error is said in a person's words (hostErrorWords).
+  assert.match(body, /MacBook: The role and its routines are not set up yet\./);
+  assert.doesNotMatch(body, /reconcile first/);
   assert.equal(run().textContent, "Try again on MacBook");
   body = await rerender({ phase: "awaiting_host", bind_host: { device: null, dir: null, reason: "No machine has run codecast for this workspace's host recently." } });
   assert.match(body, /No machine has run codecast/);
@@ -174,14 +180,14 @@ async function verifyTemplateSections() {
   await type('textarea[name="secret:accounts.ads"]', "x");
   assert.match(document.body.textContent!, /too old to receive a secret/);
   assert.equal(run().disabled, true);
-  // The Update card (sd-424) leads with the class. Structure: each change by its title, new routines arrive paused; earlier changelogs fold.
+  // The Update card (sd-424) leads with the class. Structure: each change by its title, no note; earlier changelogs fold.
   const changes = { routines_added: ["seo-daily"], routines_removed: [], routines_recadenced: [{ id: "cmo-weekly", from: "7d", to: "1d" }], inputs_added: [], inputs_removed: [], setup_added: ["search-console-2"], setup_removed: [], evidence_changed: [], ledgers_changed: [], scoreboard_changed: [], authority_changed: [] };
   const changelogs = [{ version: "2.2.0", text: "Adds a daily SEO pass." }, { version: "2.1.0", text: "Names the owning account." }];
   body = await rerender({ update_available: "2.2.0", update_class: "structure", update_changes: changes, update_changelogs: changelogs, releases_behind: 2, update_names: { routines: { "seo-daily": { title: "SEO daily", every: "1d" } }, setup: { "search-console-2": "Verify the second domain" } } });
   assert.equal(document.querySelector("[data-template-behind]")!.textContent, " · 2 releases behind");
   assert.equal(document.querySelector("[data-update-heading]")!.textContent, "Changes what the role does");
   assert.deepEqual([...document.querySelectorAll("[data-update-changes] li")].map((li) => li.textContent), ["New routine: SEO daily (every 1d)", "CMO weekly runs every 1d instead of every 7d", "New setup step: Verify the second domain"]);
-  assert.match(document.querySelector("[data-update-note]")!.textContent!, /arrives paused and needs Activate/);
+  assert.equal(document.querySelector("[data-update-note]"), null);
   assert.equal(document.querySelector("[data-template-changelog-earlier]")!.getAttribute("data-template-changelog-earlier"), "1");
   assert.equal(document.querySelector("details[data-template-changelog-earlier]")!.hasAttribute("open"), false);
   assert.equal(buttons("Update").length, 1);

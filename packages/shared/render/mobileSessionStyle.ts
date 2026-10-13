@@ -46,7 +46,11 @@ export const MOBILE_SESSION_STYLE = {
   dot: DOT,
   messageList: { padding: 16 },
   messageBubble: { marginBottom: 2, borderRadius: 12, overflow: "hidden" },
-  userBubble: { borderWidth: 1, alignSelf: "stretch", maxWidth: "100%", marginTop: 12, marginBottom: 4 },
+  // The person's turn is a filled bubble on the right with its tail corner squared, as in Messages.
+  userBubble: { alignSelf: "flex-end", maxWidth: "84%", borderRadius: 18, borderBottomRightRadius: 5, marginTop: 12, marginBottom: 6 },
+  userBubbleContent: { paddingLeft: 13, paddingRight: 13, paddingTop: 8, paddingBottom: 8 },
+  /** Who sent it, above a bubble from someone other than the session's owner. */
+  userBubbleSender: { alignSelf: "flex-end", fontSize: 11, marginTop: 12, marginBottom: -8, marginRight: 6 },
   assistantBubble: { alignSelf: "stretch" },
   assistantBubbleFirst: { marginTop: 8 },
   bubbleHeader: { flexDirection: "row", justifyContent: "flex-start", alignItems: "center", gap: 8, paddingLeft: 14, paddingRight: 14, paddingTop: 10, paddingBottom: 4 },
@@ -61,6 +65,9 @@ export const MOBILE_SESSION_STYLE = {
   toolCallOnlyBubble: { marginBottom: 1 },
   toolCallsCompact: { paddingLeft: 14, paddingRight: 14, paddingTop: 2, paddingBottom: 2, gap: 1 },
   toolCallsContainer: { paddingLeft: 14, paddingRight: 14, paddingBottom: 8, gap: 2 },
+  /** A folded run of tool calls: one quiet line, a chevron and what the run did. */
+  toolRunRow: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", maxWidth: "100%", marginLeft: 14, marginRight: 14, marginTop: 2, marginBottom: 6, paddingTop: 3, paddingBottom: 3 },
+  toolRunText: { fontSize: 12, lineHeight: 17, flexShrink: 1 },
   toolCallHeader: { fontSize: 12, lineHeight: 18 },
   toolCallName: { fontSize: 12, fontWeight: "600" },
   toolCallSummary: { fontSize: 12 },

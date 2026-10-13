@@ -1,4 +1,5 @@
 import '@/lib/polyfills';
+import { ComposeHost } from '@/components/session/NewSessionSheet';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -13,9 +14,10 @@ import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 
-import { Palettes, setActiveScheme, useActiveScheme, type ColorScheme } from '@/constants/Theme';
+import { paletteFor, setActiveLook, setActiveScheme, useActiveLook, useActiveScheme, type ColorScheme, type Look } from '@/constants/Theme';
 import { useColorScheme } from '@/components/useColorScheme';
-import { Mono, markLateFacesLoaded, useLateFacesLoaded } from '@/constants/fonts';
+import { Mono, markFamilyFacesLoaded, markLateFacesLoaded, uiFace, useFacesVersion, useLateFacesLoaded } from '@/constants/fonts';
+import { useHostedMode } from '@codecast/web/lib/surfaces';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -206,9 +208,9 @@ export default wrapRoot(RootLayout);
 // our StyleSheets, so parity with web has to come through the nav theme:
 // Solarized surfaces + JetBrains Mono faces. fontWeight stays 'normal' in
 // every entry — the face carries the weight (see constants/fonts.ts).
-function solarizedNavTheme(scheme: ColorScheme, late: boolean) {
+function solarizedNavTheme(scheme: ColorScheme, look: Look, late: boolean) {
   const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
-  const palette = Palettes[scheme];
+  const palette = paletteFor(scheme, look);
   return {
     ...base,
     colors: {
@@ -221,18 +223,45 @@ function solarizedNavTheme(scheme: ColorScheme, late: boolean) {
       notification: palette.red,
     },
     fonts: {
-      regular: { fontFamily: Mono.regular, fontWeight: 'normal' },
-      medium: { fontFamily: late ? Mono.medium : Mono.regular, fontWeight: 'normal' },
-      bold: { fontFamily: Mono.semiBold, fontWeight: 'normal' },
-      heavy: { fontFamily: late ? Mono.bold : Mono.semiBold, fontWeight: 'normal' },
+      regular: { fontFamily: uiFace(Mono.regular, late, look), fontWeight: 'normal' },
+      medium: { fontFamily: uiFace(Mono.medium, late, look), fontWeight: 'normal' },
+      bold: { fontFamily: uiFace(Mono.semiBold, late, look), fontWeight: 'normal' },
+      heavy: { fontFamily: uiFace(Mono.bold, late, look), fontWeight: 'normal' },
     },
   } as const;
 }
 
+// Hosted mode wears the family look (paper, ink, Instrument Sans and
+// Newsreader), as the web's hosted mode does; its faces load the first time
+// the look turns on, and text sets in the system face until they land.
+function useLookFromMode(): Look {
+  const look: Look = useHostedMode() ? 'family' : 'classic';
+  useLayoutEffect(() => {
+    setActiveLook(look);
+  }, [look]);
+  useEffect(() => {
+    if (look !== 'family') return;
+    void Font.loadAsync({
+      InstrumentSans: require('../assets/fonts/InstrumentSans-Regular.ttf'),
+      'InstrumentSans-Medium': require('../assets/fonts/InstrumentSans-Medium.ttf'),
+      'InstrumentSans-SemiBold': require('../assets/fonts/InstrumentSans-SemiBold.ttf'),
+      'InstrumentSans-Bold': require('../assets/fonts/InstrumentSans-Bold.ttf'),
+      Newsreader: require('../assets/fonts/Newsreader-Regular.ttf'),
+      'Newsreader-Medium': require('../assets/fonts/Newsreader-Medium.ttf'),
+      'Newsreader-SemiBold': require('../assets/fonts/Newsreader-SemiBold.ttf'),
+      'Newsreader-Italic': require('../assets/fonts/Newsreader-Italic.ttf'),
+    }).then(markFamilyFacesLoaded, () => {});
+  }, [look]);
+  return look;
+}
+
 function RootLayoutNav() {
+  useLookFromMode();
   const scheme = useActiveScheme();
+  const look = useActiveLook();
   const lateFaces = useLateFacesLoaded();
-  const navTheme = useMemo(() => solarizedNavTheme(scheme, lateFaces), [scheme, lateFaces]);
+  const faces = useFacesVersion();
+  const navTheme = useMemo(() => solarizedNavTheme(scheme, look, lateFaces), [scheme, look, lateFaces, faces]);
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (
@@ -250,7 +279,13 @@ function RootLayoutNav() {
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
                   <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
-                  <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
+                  {/* reveal=1 is a session the new session sheet just started:
+                      it is pushed with no transition under the closing sheet,
+                      so it is already there when the sheet clears it. */}
+                  <Stack.Screen
+                    name="session/[id]"
+                    options={({ route }) => ({ title: 'Conversation', animation: (route.params as { reveal?: string } | undefined)?.reveal ? 'none' : 'default' })}
+                  />
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
                   <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
@@ -269,6 +304,7 @@ function RootLayoutNav() {
                     options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
                   />
                 </Stack>
+                <ComposeHost />
                 {calls ? (
                   <OverlayErrorBoundary>
                     <Suspense fallback={null}>
