@@ -22,7 +22,7 @@ export type OrgRoleHealth = {
   /** Which rows the load and the ledger were counted from, and by what rule. */
   counted?: { rule: "scope" | "remainder"; projects: number; plans: number; tasks: number; complete: boolean; note: string };
   spend: {
-    wakes_today: number; wakes_7d_avg: number; wakes_cap: number; tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number; cap_hits_7d: number;
+    wakes_today: number; wakes_7d_avg: number; wakes_cap: number | null; tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number | null; cap_hits_7d: number;
     /** Delivered wakes by UTC day (YYYY-MM-DD) over the week. */
     wakes_by_day?: Record<string, number>;
   };
