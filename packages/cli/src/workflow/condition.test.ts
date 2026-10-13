@@ -81,6 +81,9 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and rebase.exit_code = 1", { outcome: "failure", "rebase.exit_code": "2" }, false],
     ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "2" }, true],
     ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "1" }, false],
+    // A planner that pinned blocked stops the run; a blocked handoff left on the task by an earlier run does not.
+    ["handoff = blocked and station_blocked = plan", { handoff: "blocked", station_blocked: "plan" }, true],
+    ["handoff = blocked and station_blocked = plan", { handoff: "blocked" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {
