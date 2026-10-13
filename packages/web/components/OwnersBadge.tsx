@@ -17,8 +17,9 @@ import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type Handoff
 import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { RoleFace } from "./org/RoleFace";
-import type { OrgReportsTo } from "./org/orgTypes";
+import type { OrgReportsTo, OrgRole } from "./org/orgTypes";
 import { RoleHoverCard } from "./identity/RoleHoverCard";
+import { PersonHoverCard } from "./identity/PersonHoverCard";
 import { sessionFitsARole } from "../lib/makeRole";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
@@ -240,13 +241,14 @@ export function OwnerMenuItems({
 }
 
 /** A role's own session: one line, who the role reports to, which is whose
- *  inbox it is in. Picking a person or a role moves the role (the chart's
- *  drag), so the chart and the inbox can never disagree. */
+ *  inbox it is in. People and roles sit in one list, each a hover away from
+ *  who it is. Picking one moves the role (the chart's drag), so the chart and
+ *  the inbox can never disagree. */
 function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleId, onPick }: {
   people: any[];
   currentUserId?: string;
   ownerId?: string;
-  roles: Array<{ _id: string; name: string; handle: string }>;
+  roles: OrgRole[];
   parentRoleId?: string;
   onPick: (to: OrgReportsTo) => void;
 }) {
@@ -255,33 +257,33 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Reports to · whose inbox
       </DropdownMenuLabel>
-      {people.map((m: any) => (
-        <DropdownMenuCheckboxItem
-          key={m._id}
-          checked={!parentRoleId && ownerId === m._id}
-          onSelect={() => { if (parentRoleId || ownerId !== m._id) onPick({ kind: "user", user_id: m._id }); }}
-          className="text-xs gap-2"
-        >
-          <OwnerAvatar name={m.name || m.email || "?"} image={m.image || m.github_avatar_url} />
-          <span className="flex-1 truncate">{m.name || m.email?.split("@")[0]}{m._id === currentUserId ? " (you)" : ""}</span>
-        </DropdownMenuCheckboxItem>
-      ))}
-      {roles.length > 0 && (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="text-xs gap-2">
-            <Network className="w-3.5 h-3.5 shrink-0" /> Under a role
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="max-h-[280px] overflow-y-auto">
-            {roles.map((r) => (
-              <DropdownMenuCheckboxItem key={r._id} checked={parentRoleId === r._id} onSelect={() => { if (parentRoleId !== r._id) onPick({ kind: "role", role_id: r._id }); }} className="text-xs gap-2">
-                <RoleFace role={r as any} size={18} />
-                <span className="flex-1 truncate">{r.name}</span>
-                <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      )}
+      <div className="max-h-[320px] overflow-y-auto">
+        {people.map((m: any) => {
+          const name = m.name || m.email?.split("@")[0];
+          return (
+            <DropdownMenuCheckboxItem
+              key={m._id}
+              checked={!parentRoleId && ownerId === m._id}
+              onSelect={() => { if (parentRoleId || ownerId !== m._id) onPick({ kind: "user", user_id: m._id }); }}
+              className="text-xs gap-2"
+            >
+              <PersonHoverCard person={{ userId: m._id, handle: m.github_username, name, image: m.image || m.github_avatar_url }} side="left" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
+                <OwnerAvatar name={name || "?"} image={m.image || m.github_avatar_url} />
+                <span className="flex-1 truncate">{name}{m._id === currentUserId ? " (you)" : ""}</span>
+              </PersonHoverCard>
+            </DropdownMenuCheckboxItem>
+          );
+        })}
+        {roles.map((r) => (
+          <DropdownMenuCheckboxItem key={r._id} checked={parentRoleId === r._id} onSelect={() => { if (parentRoleId !== r._id) onPick({ kind: "role", role_id: r._id }); }} className="text-xs gap-2">
+            <RoleHoverCard role={r} side="left" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
+              <RoleFace role={r} size={16} />
+              <span className="flex-1 truncate">{r.name}</span>
+              <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
+            </RoleHoverCard>
+          </DropdownMenuCheckboxItem>
+        ))}
+      </div>
     </>
   );
 }
