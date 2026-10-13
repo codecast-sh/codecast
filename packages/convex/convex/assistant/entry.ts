@@ -17,7 +17,8 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { startHostedConversationFor } from "./start";
 import { wakeCauseValidator } from "../assistantSchema";
-import { leaseTurn, leaseExpired, runTurn, stopRunningTurn } from "./turns";
+import { leaseTurn, leaseExpired, resumeAfterNotice, runTurn, stopRunningTurn } from "./turns";
+import { confirmEmailCode, sendEmailCode } from "../lib/emailProof";
 import { turnsIn } from "./input";
 import { TURN_DEADLINE_MS } from "@codecast/shared/contracts/assistant";
 
@@ -136,5 +137,34 @@ export const stop = mutation({
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation || conversation.user_id !== userId) return false;
     return await stopRunningTurn(ctx, args.conversation_id);
+  },
+});
+
+/** Mails the signed-in person a new code for a conversation stopped on
+ *  `verify` (freeGate.ts), replacing the one sent with the stop. */
+export const sendEmailProof = mutation({
+  args: {},
+  handler: async (ctx): Promise<{ sent_to: string }> => {
+    const userId = await getAuthUserId(ctx);
+    const user = userId ? await ctx.db.get(userId) : null;
+    if (!user) throw new Error("Not authenticated");
+    return await sendEmailCode(ctx, user);
+  },
+});
+
+/** The person entered the mailed code: their email is proven, and the
+ *  conversation that stopped on `verify` picks up the ask it stopped on. A
+ *  wrong or expired code throws the sentence to show (lib/emailProof). */
+export const confirmEmailProof = mutation({
+  args: { code: v.string(), conversation_id: v.optional(v.id("conversations")) },
+  handler: async (ctx, args): Promise<{ resumed: boolean }> => {
+    const userId = await getAuthUserId(ctx);
+    const user = userId ? await ctx.db.get(userId) : null;
+    if (!user) throw new Error("Not authenticated");
+    await confirmEmailCode(ctx, user, args.code);
+    const conversation = args.conversation_id ? await ctx.db.get(args.conversation_id) : null;
+    if (!conversation || conversation.user_id !== user._id || conversation.hosted_stop !== "verify") return { resumed: false };
+    const outcome = await resumeAfterNotice(ctx, conversation._id);
+    return { resumed: outcome === "started" || outcome === "queued" };
   },
 });
