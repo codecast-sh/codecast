@@ -45,6 +45,7 @@ function world(opts: {
   resumeError?: string | null;
   resumeNeverExecutes?: boolean;
   transferError?: string;
+  hostLoginGap?: string;
   cancelAfterPolls?: number;
   deviceOnline?: boolean;
 }) {
@@ -89,6 +90,7 @@ function world(opts: {
     sendNotice: async (convId, text) => { calls.push(["notice", convId, text]); },
     deviceOnline: async (d) => { calls.push(["deviceOnline", d]); return opts.deviceOnline ?? true; },
     prepareHost: async (d) => { calls.push(["prepareHost", d]); },
+    hostLoginGap: async () => opts.hostLoginGap ?? null,
     transferToCloud: async (f, o) => {
       calls.push(["transferToCloud", f.session_id, o.skipTree, o.pushedHead]);
       if (opts.transferError) throw new Error(opts.transferError);
@@ -238,6 +240,16 @@ describe("migrateRow — a session to the cloud", () => {
     expect(out).toEqual({ migration_id: "m1", outcome: "failed", detail: "rsync: connection unexpectedly closed" });
     expect(w.calls.some((c) => c[0] === "finish")).toBe(false);
     expect(w.calls.find((c) => c[0] === "fail")).toEqual(["fail", "m1", "rsync: connection unexpectedly closed", false]);
+  });
+
+  // jx758nr: moved to a host whose login had lapsed, it lost its background
+  // workflow to the stop and resumed on "Login expired".
+  test("a host with no Claude login is refused before the session is stopped", async () => {
+    const w = world({ statuses: ["idle"], hostLoginGap: "this machine has none to give it: logged-out stub (empty tokens)" });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(out.detail).toContain("has no Claude login");
+    expect(w.kinds()).toEqual(["begin", "fail"]);
   });
 
   test("a resume that errors on the destination is reported as a failure of the moved session", async () => {

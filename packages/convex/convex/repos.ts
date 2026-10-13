@@ -52,6 +52,7 @@ const TTL: Record<string, number> = {
   lastcommits: 10 * MINUTE,
   search: 5 * MINUTE,
   pulls: 2 * MINUTE,
+  checks: 1 * MINUTE,
 };
 
 /** How long the public route trusts a cached visibility answer. */
@@ -61,7 +62,8 @@ const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 /** How long a cached answer stays good. Content pinned to a sha never moves. */
 export function ttlFor(kind: string, ref: string, path = ""): number {
-  if (FULL_SHA.test(ref) && (kind !== "compare" || FULL_SHA.test(path))) return Number.POSITIVE_INFINITY;
+  // A commit's checks run on after it is pinned: they never count as settled by the sha alone.
+  if (kind !== "checks" && FULL_SHA.test(ref) && (kind !== "compare" || FULL_SHA.test(path))) return Number.POSITIVE_INFINITY;
   return TTL[kind] ?? 5 * MINUTE;
 }
 
@@ -979,6 +981,10 @@ function refreshSpec(ctx: any, repository: string, kind: string, params: SpecPar
         fetch: call("compare", { base: params.base, head: params.head }),
       };
 
+    case "checks":
+      // A commit's CI: every check run and status GitHub holds for it (the pull request reader's own call).
+      return { kind, ref, path: "", fetch: call("listPRChecks", { sha: ref }) };
+
     case "search":
       return {
         kind,
@@ -1171,6 +1177,7 @@ export const ensureLastCommits = ensureAction("lastcommits");
 export const ensureCompare = ensureAction("compare");
 export const ensureSearch = ensureAction("search");
 export const ensurePulls = ensureAction("pulls");
+export const ensureChecks = ensureAction("checks");
 
 /**
  * The same refresh, reached without a viewer.
@@ -1465,6 +1472,7 @@ export const getWorktrees = query({
 
 export const getCompare = readAction("compare");
 export const getSearch = readAction("search");
+export const getChecks = readAction("checks");
 
 /**
  * A page of history, with each commit already joined to what codecast knows

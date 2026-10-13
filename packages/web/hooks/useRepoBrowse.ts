@@ -678,6 +678,18 @@ export function useRepoCompare(
   });
 }
 
+/** A commit's CI as GitHub holds it: each check run and status (convex githubApi.listPRChecks). */
+export type RepoCheck = { name: string; status: string; conclusion?: string; url?: string; updated_at: number; external_id: string; app?: string };
+
+export function useRepoChecks(repository: string | undefined, sha: string | undefined): RepoRead<RepoCheck[]> {
+  return useEnsuredRead<RepoCheck[]>({
+    ensureRef: api.repos.ensureChecks,
+    queryRef: api.repos.getChecks,
+    args: repository && sha ? { repository, ref: sha } : null,
+    publicKind: "checks",
+  });
+}
+
 // ── Code search ──
 
 export type RepoSearch = {
