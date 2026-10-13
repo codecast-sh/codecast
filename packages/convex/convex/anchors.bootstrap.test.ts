@@ -26,7 +26,9 @@ describe("a role's opening message", () => {
     expect(m).toContain("a session you start under you");
     expect(opening(false)).toContain("You do not start work on your own");
     expect(m).toContain("The person sees only your last message of each turn, so make it stand on its own");
-    expect(m.split(/\s+/).length).toBeLessThan(300);
+    // The decision it presents is answered from the record (decisionDiscussion.ts).
+    expect(m).toContain("A person may ask you about a decision you present");
+    expect(m.split(/\s+/).length).toBeLessThan(360);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 

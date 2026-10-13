@@ -43,6 +43,7 @@ mock.module("../../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, u
 let openedDms: string[][] = [];
 mock.module("../../../hooks/useOpenDm", () => ({
   useOpenDm: () => (ids: string[]) => openedDms.push(ids),
+  useOpenChatPath: () => () => {},
 }));
 
 // The camera tiles and the walkie's status, as the engine publishes them:

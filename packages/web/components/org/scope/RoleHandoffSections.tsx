@@ -5,13 +5,15 @@
 // split are per view mutations (the role row carries the result; the tree
 // re-syncs it), so each shows the server's answer and nothing is mirrored.
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { OrgObjectLink } from "../company/OrgObjectLink";
 import { toast } from "sonner";
 import { ArrowRightLeft, GitMerge, Scissors } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import type { OrgRole, OrgTree } from "../orgTypes";
 import { useInboxStore } from "../../../store/inboxStore";
+import { SwitchReview } from "../../consequential/ConsequentialSwitch";
+import { mergeStepLedger } from "../../consequential/ledgers";
 
 
 const serverWords = (e: any, fallback: string) => String(e?.message ?? "").replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] || fallback;
@@ -31,6 +33,8 @@ export function mergeStepWords(m: MergeAllowanceRow | null | undefined): string 
 export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEdit: boolean; merge: MergeAllowanceRow | null | undefined }) {
   const setLineMerge = useInboxStore((s) => s.setOrgLineMerge);
   const [asking, setAsking] = useState(false);
+  // Turning it back on under the limit it already has: the review says what merges and how many a day.
+  const [reviewing, setReviewing] = useState(false);
   const [perDay, setPerDay] = useState("3");
   const [busy, setBusy] = useState(false);
   const on = merge?.on ?? !!role.line_merge;
@@ -55,7 +59,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
           aria-checked={on}
           aria-label="Merge step"
           disabled={!canEdit || busy}
-          onClick={() => (on ? flip(false) : merge && merge.limit !== null ? flip(true) : setAsking(true))}
+          onClick={() => (on ? flip(false) : merge && merge.limit !== null ? setReviewing(true) : setAsking(true))}
           className="inline-flex items-center gap-2 rounded-full pl-1 pr-3 h-7 border transition-colors disabled:cursor-default disabled:opacity-60"
           style={{ borderColor: on ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: on ? "color-mix(in srgb, var(--sol-green) 10%, transparent)" : undefined }}
         >
@@ -67,6 +71,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
         </button>
         <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-merge-words>{mergeStepWords(merge)}</span>
       </div>
+      {reviewing && merge && <SwitchReview ledger={mergeStepLedger({ name: role.name, limit: merge.limit, used: merge.used })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void flip(true); }} />}
       {asking && (
         <form className="mt-2.5 flex items-center gap-2 flex-wrap" onSubmit={(e) => { e.preventDefault(); const n = parseInt(perDay, 10); if (n >= 1) flip(true, n); }} data-merge-limit-form>
           <label className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>
@@ -98,7 +103,7 @@ const areaNames = (tree: OrgTree, role: OrgRole, ids: { project_ids?: string[]; 
 
 const roleLink = (tree: OrgTree, roleId: string, fallback: string) => {
   const r = tree.roles.find((x) => x._id === roleId);
-  return r ? <Link href={`/org/${r.short_id}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{r.name} <span style={{ color: "var(--sol-text-dim)" }}>@{r.handle}</span></Link> : <span style={{ color: "var(--sol-text)" }}>@{fallback}</span>;
+  return r ? <OrgObjectLink kind="role" objRef={r.short_id} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{r.name} <span style={{ color: "var(--sol-text-dim)" }}>@{r.handle}</span></OrgObjectLink> : <span style={{ color: "var(--sol-text)" }}>@{fallback}</span>;
 };
 
 const dayWords = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });

@@ -18,6 +18,13 @@ export const ORG_STATE_META: Record<WorkState, { label: string; color: string; c
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
 };
 
+/** A person's presence as a colour: the map's dot and a company line's state. */
+export const PRESENCE_COLOR: Record<"online" | "away" | "offline", string> = {
+  online: "var(--sol-green)",
+  away: "var(--sol-yellow)",
+  offline: "color-mix(in srgb, var(--sol-border) 50%, transparent)",
+};
+
 /** A card's sessions in words, the states a person acts on first ("4 need
  *  input · 2 working"), at most `max` parts; the rest is for a title. Empty
  *  when there is nothing to say. */
@@ -199,25 +206,6 @@ export function healthFlagsByNode(health: OrgHealth | null | undefined): Record<
 
 /** What pausing a role does (org-staffing.md S25), said one way everywhere. */
 export const rolePausedSentence = (name: string) => `${name} is paused: its triggers hold until you resume it. Messages still reach it.`;
-
-// ---------------------------------------------------------------- reset (S27)
-
-export type OrgResetPreview = { roles: Array<{ short_id: string; handle: string; name: string; sessions: number }>; proposals: number };
-
-const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-/** What a reset would change, as the sentences the confirm shows. */
-export function resetSentences(p: OrgResetPreview): string[] {
-  const sessions = p.roles.reduce((n, r) => n + r.sessions, 0);
-  if (p.roles.length === 0 && p.proposals === 0) return ["There is nothing to reset: this workspace has no roles and no proposals."];
-  return [
-    p.roles.length > 0 ? `${count(p.roles.length, "role is", "roles are")} retired, and ${p.roles.length === 1 ? "its" : "their"} triggers are cancelled.` : "",
-    sessions > 0 ? `${count(sessions, "session goes", "sessions go")} back to ${sessions === 1 ? "its owner" : "their owners"}.` : "",
-    p.proposals > 0 ? `${count(p.proposals, "proposal is", "proposals are")} archived, open ones included.` : "",
-    "Your projects, plans, tasks and sessions stay as they are. The next review starts from the work alone.",
-  ].filter(Boolean);
-}
-
 
 // The frame a proposed change draws in, by its status, and a ghost card's frame.
 export const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: string }> = {
