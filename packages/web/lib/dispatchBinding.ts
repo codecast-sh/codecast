@@ -11,9 +11,12 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
+import { offerRollbackToHost } from "../store/syncReplication";
 import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
 import { deadRecordingPress } from "./calls/recordingPress";
 import { storableActionArgs } from "./tabSafePath";
+import { getWriteLog, recordWrite } from "../store/writeLog";
+import { captureError } from "./analytics";
 
 /** The args of one `dispatch:dispatch` mutation call. */
 export type DispatchCallArgs = {
@@ -51,6 +54,14 @@ export function makeDispatchBinding(
     // delivering it into a room nobody is still asking to film.
     const dead = deadRecordingPress(action, args);
     if (dead) return Promise.reject(dead);
+    const settle = recordWrite(action, args, patches);
+    return send(action, args, patches, result).then(
+      (res) => { settle({ ok: true }); return res; },
+      (err) => { settle({ err }); throw err; },
+    );
+  };
+
+  function send(action: string, args: any, patches: any, result: any): Promise<any> {
     // Sync-log write acks (docs/architecture/sync-log-migration.md D8).
     // The flag is a binding concern added at call time, so outbox rows
     // persisted by older bundles get it on redrive too. The envelope is
@@ -98,7 +109,7 @@ export function makeDispatchBinding(
         }
         throw error;
       });
-  };
+  }
 }
 
 // Actions whose caller reverts the painted change and says why in its own
@@ -116,6 +127,15 @@ const CALLER_REPORTED_ACTIONS = new Set([
 /** The handler `_setDispatchError` takes: a dispatch gave up after its retries. */
 export function applyDispatchFailure(action: string, error: unknown, args?: unknown): void {
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
+  // The write the person (or an effect) asked for never landed. Report it with
+  // the window's recent write trail, so the report names what led up to it.
+  captureError(error instanceof Error ? error : new Error(String(error)), {
+    source: "dispatch",
+    action,
+    target: Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined,
+    permanent: isPermanentDispatchError(error),
+    recentWrites: getWriteLog().slice(-15).map((e) => `${new Date(e.ts).toISOString()} ${e.action} ${e.source}${e.key ? `(${e.key})` : ""} ${e.ids.join(",")}${e.err ? ` ERR ${e.err}` : ""}`),
+  });
   // COMMAND_ID_REUSED on a send means the server already holds a receipt
   // for this client id: the message was delivered; only a redrive that
   // rebuilt the payload with different bytes (e.g. a pending row persisted
@@ -144,6 +164,13 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
     // row to re-drive, so its intent stays open and the echo settles it;
     // reverting it would put a ghost back while the accept still lands.
     for (const text of dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)) toast.error(text);
+    // A refused wait has no echo coming and no lock to roll back. A follower
+    // teed the painted wait to the host, so the rollback goes there too.
+    if (action === "addWait" && Array.isArray(args) && typeof args[0] === "string" && typeof args[1]?.id === "string") {
+      const before = useInboxStore.getState().tasks;
+      useInboxStore.getState().rollbackWait(args[0], args[1].id);
+      offerRollbackToHost(action, "tasks", "waits", before);
+    }
     // A refused daemon command has no echo coming: its painted row ends failed.
     if (SESSION_COMMAND_ACTIONS.has(action) && Array.isArray(args) && typeof args[0] === "string") {
       recordSessionCommandDispatchError(args[0], error);

@@ -1,0 +1,87 @@
+"use client";
+// The acts under a decision no answer can reach any more (lapsed or withdrawn,
+// line-journeys.md LJ6.5): the card's own answers, as acts that still work.
+// Drop closes the problem here and now, with the decision it settles recorded
+// on it, and starts nothing. Ask again is a new run (Ship and Revise both need
+// one: a builder to revise, a run to land the branch), priced on its button and
+// reviewed before it starts. Whatever the card recommended comes first, so the
+// answer a person just read is the first thing they can press.
+import { useMemo, useState } from "react";
+import { RotateCcw } from "lucide-react";
+import { useInboxStore } from "../../../store/inboxStore";
+import { useTrialCards } from "../../../hooks/useSyncTrial";
+import { cardAsRead, proposalAsRead } from "../../../lib/trialEvidence";
+import { answerProblem } from "../workspace/views/problem/AskBlock";
+import { StartRunAct } from "./StartRunAct";
+
+type DecisionRow = { _id: string; short_id?: string | null; card?: { recommend?: { verdict?: string } | null } | null };
+
+/** A verdict that closes the problem: the change card's Drop, a proposal's Not now. */
+const CLOSES = new Set(["drop", "wait"]);
+
+/** What the decision recommended, read the way its page reads it: its trial card as it stands now, else its own card. */
+export function useClosedVerdict(ref: string | null): string | null {
+  const own = useInboxStore((s) => {
+    if (!ref) return null;
+    const st = s as unknown as { sessionDecisions?: Record<string, DecisionRow>; lineCards?: Record<string, DecisionRow> };
+    for (const rows of [st.sessionDecisions, st.lineCards]) {
+      for (const r of Object.values(rows ?? {})) if (r._id === ref || r.short_id === ref) return r.card?.recommend?.verdict ? `${r._id}|${r.card.recommend.verdict}` : `${r._id}|`;
+    }
+    return null;
+  });
+  const [rowId, ownVerdict] = own ? own.split("|") : [null, ""];
+  const trial = useTrialCards({ all: true }).find((c) => !!c.decision && (c.decision._id === rowId || c.decision._id === ref || (!!ref && c.decision.short_id === ref))) ?? null;
+  return useMemo(() => {
+    const read = trial ? (cardAsRead(trial)?.recommend ?? proposalAsRead(trial.proposal, trial.evidence)?.recommend)?.verdict : null;
+    return read || ownVerdict || null;
+  }, [trial, ownVerdict]);
+}
+
+export function ClosedDecisionActs({ decisionRef, state, taskId, taskRef, title, projectId, branch }: {
+  /** The decision's ref (sd-N) or row id. */
+  decisionRef: string | null;
+  state: "lapsed" | "withdrawn";
+  taskId: string;
+  /** The problem's ref (ct-N): Drop writes to it. */
+  taskRef: string | null;
+  title: string;
+  projectId: string | null;
+  /** A fix is saved on its branch for the new run. */
+  branch?: boolean;
+}) {
+  const verdict = useClosedVerdict(decisionRef);
+  const [dropped, setDropped] = useState(false);
+  if (dropped) return <span className="lw-oc" data-tone="none" data-line-closed-dropped>Dropped · problem closed</span>;
+  const dropFirst = !!verdict && CLOSES.has(verdict);
+  const drop = taskRef ? (
+    <button
+      key="drop"
+      type="button"
+      className="lw-act"
+      data-primary={dropFirst ? "" : undefined}
+      data-recommended={dropFirst ? "" : undefined}
+      onClick={() => {
+        const said = `Dropped on ${decisionRef ?? "its decision"}, ${state === "lapsed" ? "which lapsed" : "withdrawn"} before anyone answered${dropFirst ? "; the decision recommended dropping it" : ""}.`;
+        answerProblem(taskRef, "dropped", said);
+        setDropped(true);
+      }}
+      data-line-closed-drop={taskRef}
+    >
+      Drop: close the problem
+    </button>
+  ) : null;
+  const again = (
+    <StartRunAct
+      key="again"
+      label="Ask again"
+      priced
+      primary={!dropFirst}
+      icon={<RotateCcw className="w-3.5 h-3.5" aria-hidden />}
+      taskId={taskId}
+      problem={taskRef ? `${taskRef} · ${title}` : title}
+      projectId={projectId}
+      branch={branch}
+    />
+  );
+  return <span className="lw-closed-acts" data-line-closed-acts={verdict ?? "none"}>{dropFirst ? [drop, again] : [again, drop]}</span>;
+}

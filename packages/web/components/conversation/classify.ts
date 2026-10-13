@@ -1,11 +1,12 @@
-import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../../lib/conversationProcessor";
-import { isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
+import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
+import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
+import { parseLineChat } from "@codecast/shared/contracts/lineChat";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, parseDecisionDiscussion, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/richMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
@@ -67,6 +68,9 @@ export function cleanStickyContent(content: string): string {
     if (!spawned.prompt) return spawned.title;
     return spawned.prompt.startsWith(spawned.title) ? spawned.prompt : `${spawned.title} — ${spawned.prompt}`;
   }
+  // A person's words from a line workspace's chat: the frame, its brief, what they had open and the reply note are context for the agent.
+  const lineChat = parseLineChat(content);
+  if (lineChat) return lineChat.body;
   return stripSystemTags(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
@@ -345,6 +349,14 @@ export function classifyUserMessage(
   // works: their words under a quote naming the task, the same as above.
   const taskComment = parseTaskCommentMessage(t);
   if (taskComment) return { kind: 'direct_user', from: taskComment.from, body: taskComment.about ? `> ${taskComment.about}\n\n${taskComment.body}` : taskComment.body };
+  // A person discussing a decision with the session that presents it: their
+  // words under a quote naming the decision, the same as above.
+  const discussion = parseDecisionDiscussion(t);
+  if (discussion) return { kind: 'direct_user', from: discussion.from, body: discussion.about ? `> ${discussion.about}\n\n${discussion.body}` : discussion.body };
+  // A person talking with a project's line from its workspace's chat: their
+  // words, the brief and the reply note left out of the bubble.
+  const lineChat = parseLineChat(t);
+  if (lineChat) return { kind: 'direct_user', from: lineChat.from, body: lineChat.body };
   if (isSessionEscalationMessage(tNoReminders)) {
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };
@@ -423,7 +435,7 @@ export function classifyUserMessage(
   // Only Codex emits <turn_aborted>; classify by the message, not the conversation's
   // CURRENT agent_type, which changes when the conversation is switched to another agent.
   if (isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
-  if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
+  if (isInterruptNotice(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isAgentSwitchNotice(tNoReminders) || msg.subtype === "agent_switch") {
     const parsed = parseAgentSwitchNotice(tNoReminders);
     return { kind: "agent_switch", toLabel: parsed?.toLabel || "new agent", fromLabel: parsed?.fromLabel };
@@ -547,7 +559,7 @@ export function getFileExtension(filePath: string): string | undefined {
   return ext ? langMap[ext] : undefined;
 }
 
-export function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
+export function isAlwaysVisibleToolCall(tc: ToolCall, result?: { content?: string }): boolean {
   // Monitor, background Bash, Workflow, and ScheduleWakeup stay visible in
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
@@ -555,6 +567,9 @@ export function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // reason: it is addressed to the reader. Folding a delivery into a receipt
   // chip is how the file went unseen in the first place. `cast decide` is the
   // authored twin of AskUserQuestion — the card is the ask, not a command.
+  // A command whose output carries the setup marker holds a card the person
+  // must act on (AgentToolSetupCard), so it stays out of the receipt too.
+  if (hasAgentSetupMarker(result?.content)) return true;
   return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc));
 }
 
@@ -569,17 +584,26 @@ export function isToolReceiptRow(msg: Message, showThinking: boolean): boolean {
   return (msg.tool_calls?.length ?? 0) > 0;
 }
 
-// The id this row's own CLI output named. Verb-specific: a compound command
+// The decision this row's own CLI output named: its Convex id when printed,
+// else its short id (`sd-N`). Verb-specific: a compound command
 // (`cast decide cancel; cast decide "…"`) prints several ids, and the ask's
-// `id:` line must not be read as the cancel's target.
-export function decideOutputId(output: string, verb: DecideArgs["verb"]): string | null {
+// `id:` line must not be read as the cancel's target. An ask piped through
+// `tail` loses its `id:` line, so the listing line that pairs a short id with
+// the question (`● sd-12  <question>`) names it too.
+export function decideOutputId(output: string, verb: DecideArgs["verb"], question?: string | null): string | null {
   const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
-  const pattern = verb === "cancel"
-    ? /Decision withdrawn:\s*([a-z0-9]{20,})\b/
-    : verb === "edit"
-      ? /Decision updated:\s*([a-z0-9]{20,})\b/
-      : /^\s*id:\s*([a-z0-9]{20,})\b/m;
-  return clean.match(pattern)?.[1] ?? null;
+  const ID = "(sd-\\d+|[a-z0-9]{20,})\\b";
+  if (verb === "cancel") return clean.match(new RegExp(`Decision withdrawn:\\s*${ID}`))?.[1] ?? null;
+  if (verb === "edit") return clean.match(new RegExp(`Decision updated:\\s*${ID}`))?.[1] ?? null;
+  const line = clean.match(new RegExp(`^\\s*id:\\s*${ID}(?:\\s+\\(([a-z0-9]{20,})\\))?`, "m"));
+  if (line) return line[2] ?? line[1];
+  const head = question?.trim().slice(0, 40);
+  if (!head) return null;
+  for (const l of clean.split("\n")) {
+    const listed = l.match(/\b(sd-\d+)\s+(.*)$/);
+    if (listed && listed[2].startsWith(head)) return listed[1];
+  }
+  return null;
 }
 
 // A slash command shows up in the transcript as two consecutive user messages: the
@@ -625,11 +649,6 @@ export function cleanCommandExpansion(raw: string): string {
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
     .replace(/^Base directory for this skill:[^\n]*\n?/, "")
     .trim();
-}
-
-function isInterruptMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
 function isTaskNotification(content: string): boolean {
