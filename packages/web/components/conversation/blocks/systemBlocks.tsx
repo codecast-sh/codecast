@@ -32,6 +32,7 @@ import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
 import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
+import { HeldTerminalScreen } from "../HeldTerminalScreen";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
 import { agentBorderMap, agentColorMap, agentTextMap } from "../../../lib/conversationBlockStyles";
@@ -772,7 +773,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
     : "text-sol-cyan";
   return (
     <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+      <div className="flex items-center flex-wrap gap-x-2 gap-y-1 px-3 pt-2 pb-1">
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
         {namedSender ? (
@@ -853,18 +854,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
         )}
       </div>
       {screenOpen && pendingScreen && (
-        <div className="mx-3 mb-2 rounded border border-amber-500/25 bg-sol-bg-alt/60" data-testid="queued-message-screen">
-          <div className="flex items-center gap-2 px-2 py-1 border-b border-amber-500/20">
-            <span className="text-[10px] font-medium tracking-wide uppercase text-amber-400/80">Terminal</span>
-            {canAct && (
-              <button type="button" onClick={() => { void actOnQueued("send", true); }} disabled={!!acting} data-testid="queued-message-send-anyway"
-                className="ml-auto text-[11px] font-medium text-amber-400 border border-amber-500/40 hover:bg-amber-500/15 rounded px-1.5 py-0.5 transition-colors disabled:opacity-60">
-                {acting === "send" ? "Sending…" : "Send anyway"}
-              </button>
-            )}
-          </div>
-          <pre className="px-2 py-1.5 text-[11px] leading-snug text-sol-text-muted overflow-x-auto max-h-80 overflow-y-auto whitespace-pre">{pendingScreen}</pre>
-        </div>
+        <HeldTerminalScreen className="mx-3 mb-2" screen={pendingScreen} onSendAnyway={canAct ? () => { void actOnQueued("send", true); } : undefined} sending={acting === "send"} />
       )}
       {/* A message from another session is someone else's context, not this
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}

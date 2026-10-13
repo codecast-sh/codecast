@@ -51,8 +51,9 @@ import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRig
 import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
-import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
+import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
+import { HeldTerminalScreen } from "../HeldTerminalScreen";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { useIsHostedConversation } from "../../../hooks/useConversationAgentType";
 import { ghostRestartContextFor, deriveRestartStage } from "../../../hooks/useSessionRestart";
@@ -316,6 +317,23 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   );
   const messageReachedSession = pendingMessageReachedSession(messageId, conversationPending);
   const holdReason = pendingMessageHoldReason(messageId, conversationPending);
+  const holdScreen = pendingMessageHoldScreen(messageId, conversationPending);
+  const [holdScreenOpen, setHoldScreenOpen] = useState(false);
+  const [sendingAnyway, setSendingAnyway] = useState(false);
+  const handleSendAnyway = async () => {
+    if (!conversationId || sendingAnyway) return;
+    setSendingAnyway(true);
+    try {
+      const status = await useInboxStore.getState().retryPendingMessage(conversationId, { ...pendingCancelRef(messageId, conversationPending), force: true });
+      if (status === "pending") setHoldScreenOpen(false);
+      else toast.info(status === "delivered" || status === "injected" ? "This message has already reached the session" : "This message is no longer queued");
+    } catch (err) {
+      captureException(err);
+      toast.error(err instanceof Error ? err.message : "Failed to send message");
+    } finally {
+      setSendingAnyway(false);
+    }
+  };
   const bannerState = pendingBannerState(agentStatus, {
     retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
@@ -680,9 +698,18 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {isPending && holdReason && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-held">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 flex-shrink-0" />
-          <span>Held: {holdReason}</span>
+          {holdScreen ? (
+            <button type="button" onClick={(e) => { e.stopPropagation(); setHoldScreenOpen(!holdScreenOpen); }} aria-expanded={holdScreenOpen} className="underline underline-offset-2 decoration-dotted hover:decoration-solid" data-testid="pending-message-held-screen-toggle">
+              Held: {holdReason}
+            </button>
+          ) : (
+            <span>Held: {holdReason}</span>
+          )}
           <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
+      )}
+      {isPending && holdReason && holdScreen && holdScreenOpen && (
+        <HeldTerminalScreen className="mt-2 ml-8" screen={holdScreen} onSendAnyway={() => { void handleSendAnyway(); }} sending={sendingAnyway} />
       )}
       {isPending && !holdReason && bannerState !== "none" && (
       <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId} onCancel={handleCancelPending} cancelling={cancelState !== "idle"}>
