@@ -26,7 +26,7 @@ import { useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useDecisionDiscussion } from "../../../hooks/useDecisionDiscussion";
 import { useTrialCards, useTrialHref, useTrialProjects } from "../../../hooks/useSyncTrial";
-import { recommendedOption, trialWords } from "../../../lib/line/fixDecision";
+import { bareVerbAnswers, recommendedOption, trialWords } from "../../../lib/line/fixDecision";
 import { cardAsRead, cardProse, proposalAsRead } from "../../../lib/trialEvidence";
 import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
 import { SessionInlineThread } from "../../conversation/SessionInlineThread";
@@ -119,9 +119,10 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
   const trialHref = useTrialHref(projectId, trialCard?.short_id ?? null);
   // A trial answer records what you would have done: the question and options say "would", and Ship answers the
   // decision (never the live ship a run's card starts), so nothing ships from here.
-  // A trial decision carries no card of its own: the trial card's is lent to it, so its answers are the card's (Revise opens
-  // a note for the builder, Ship only records), and its run is left off so nothing can start a ship from here.
-  const asked = useMemo(() => (trial ? { ...trialWords(decision), workflow_run_id: undefined, card: decision.card ?? trialCard?.card ?? undefined } : decision), [trial, decision, trialCard]);
+  // A trial decision carries no card of its own. When its answers are bare verbs the trial card's is lent to it, so they are
+  // the card's (Revise opens a note for the builder, Ship only records); answers the session wrote in its own words stay
+  // its own rows. Its run is left off so nothing can start a ship from here.
+  const asked = useMemo(() => (trial ? { ...trialWords(decision), workflow_run_id: undefined, card: decision.card ?? (bareVerbAnswers(decision.options) ? trialCard?.card : undefined) ?? undefined } : decision), [trial, decision, trialCard]);
   const card = decision.card ?? null;
   const ref = task?.short_id ?? card?.cause.task ?? null;
   const title = task?.title ?? card?.cause.title ?? null;
@@ -176,9 +177,16 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
   // The sweet spot: a structured card's top, or the session's own words. A decision with no short context leads with its doc,
   // and one with neither leads with its published proposal (a trial station writes its case there).
   const lead = card ? null : context ?? doc;
-  // The page the session wrote, filed on the decision or on its trial card: with no short words of its own, it leads.
+  // The page the session wrote, filed on the decision or on its trial card. It reads in the open under the session's
+  // short words (it is where the session shows the problem and the fix), and leads when there are none.
   const reportSlug = decision.report_slug ?? trialCard?.decision?.report_slug ?? null;
-  const reportLeads = !card && !lead && !!reportSlug;
+  const report = reportSlug && !card ? reportSlug : null;
+  // What the run measured (checks, diff, cost, reach) is the record behind the session's words, not the decision: once
+  // the session has shown the case itself (a page, or words that quote a conversation) it waits in the fold. Words that
+  // show no case get the card's real message against what changes, and no words at all get the card's whole case.
+  const said = !!lead || !!report;
+  const shown = !!report || quotesConversation(context);
+  const band = trialCard && !card ? <TrialEvidenceBand card={trialCard} compact={said} quoted={shown} /> : null;
   const sweet = card ? (
     <ChangeCardDecision card={card} answer={inPlace} runId={decision.workflow_run_id ?? null} />
   ) : (
@@ -186,19 +194,16 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
       <h1 className="ld-question" data-long={asked.question.length > 140 ? "" : undefined} data-line-decision-question>{asked.question}</h1>
       {/* The session's words as it wrote them: a fenced product reference reads as a link, a quotation without doubled marks (cardProse). */}
       {lead && <div className="ld-prose" data-line-decision-context><MarkdownRenderer content={cardProse(lead, trialCard ?? undefined)} /></div>}
-      {/* Under the session's own words the card adds its numbers, and a real conversation before and after when those
-          words quote none; with no words of its own it tells the whole case. */}
-      {/* A page that leads tells the case and its numbers itself: no figure strip in front of it. */}
-      {trialCard && !reportLeads && <TrialEvidenceBand card={trialCard} compact={!!context} quoted={quotesConversation(context)} />}
-      {reportLeads && <div className="ld-lead-report" data-line-decision-report><PublishedPageEmbed slug={reportSlug!} height={560} /></div>}
+      {report && <div className="ld-lead-report" data-line-decision-report><PublishedPageEmbed slug={report} height={lead ? 640 : 560} /></div>}
+      {!shown && band}
       {inPlace}
     </>
   );
 
-  // The full proposal: what the sweet spot leaves out, folded.
+  // The fold: the record behind the decision. A card's full view, the doc the sweet spot left out, the run's figures.
   const fullDoc = card ? (doc && !restatesCard(doc, card) ? doc : null) : lead === doc ? null : doc;
-  const report = reportSlug && !card && !reportLeads ? reportSlug : null;
-  const hasFull = !!card || !!fullDoc || !!report;
+  const folded = shown ? band : null;
+  const hasFull = !!card || !!fullDoc || !!folded;
   // A decision taken back or dismissed has nobody left to talk it over with when its session is gone.
   const askingSession = useInboxStore((s) => s.sessions[decision.conversation_id] as InboxSession | undefined);
   const talkable = !((decision.status === "withdrawn" || decision.status === "dismissed") && (!askingSession || !!askingSession.inbox_killed_at || askingSession.status === "completed"));
@@ -244,11 +249,11 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
           )}
           {hasFull && (
             <details className="ld-full" data-line-decision-full>
-              <summary>Full proposal</summary>
+              <summary>{card ? "Full proposal" : "The run's record"}</summary>
               <div className="ld-full-body">
                 {card && <ChangeCardView card={card} density="full" change={false} recommend={false} summarized guide={guide} />}
                 {fullDoc && <div className="ld-prose" data-decision-doc><MarkdownRenderer content={fullDoc} /></div>}
-                {report && <div className="ld-full-report"><PublishedPageEmbed slug={report} height={720} /></div>}
+                {folded}
                 <DecisionFacts decision={decision} detail={detail} />
               </div>
             </details>

@@ -170,7 +170,9 @@ function scratchSandbox(run: string, readable: { guard: string; serve?: string }
   const scratch = path.join(run, "tmp");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   const real = (p: string) => (fs.existsSync(p) ? fs.realpathSync(p) : p);
-  const hidden = credentialDirs().map(real);
+  // DRY_RUN_HIDE: more paths (colon separated) the agent must not read, such as a
+  // checkout's real .env or a cloud login, when the replayed work runs project code.
+  const hidden = [...credentialDirs(), ...(process.env.DRY_RUN_HIDE ?? "").split(":").filter(Boolean)].map(real);
   const prefix = [
     "sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`,
     ...hidden.flatMap((dir, i) => ["-D", `HIDDEN_${i}=${dir}`]),
