@@ -38,6 +38,7 @@ export function recoveringWebSocket({
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
       this.addEventListener("message", (event) => {
+        if (this.activeMutations.size === 0) return;
         const message = JSON.parse(event.data);
         if (message.type !== "MutationResponse") return;
         this.activeMutations.delete(message.requestId);
