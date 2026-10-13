@@ -1,0 +1,68 @@
+/* The Ask block: the question, the answer box, the two outcomes. */
+.ask { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ask-q { margin: 0; max-width: 78ch; font-size: var(--lw-fs-md); font-weight: 650; line-height: 1.5; color: var(--lw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-why { margin: 0; max-width: 86ch; font-size: var(--lw-fs-sm); line-height: 1.55; color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.ask-box { display: block; width: 100%; max-width: 86ch; resize: vertical; min-height: 56px; margin-top: 4px; padding: 9px 11px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-base); line-height: 1.5; }
+.ask-box:focus { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+.ask-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* A confirm that weighs causes keeps its answers on one row: the cause's yes takes the room left and wraps inside. */
+.ask-acts[data-line-ask-causes] { flex-wrap: nowrap; align-items: stretch; }
+.ask-acts[data-line-ask-causes] > .ask-choice { flex: 1 1 auto; max-width: none; }
+.ask-acts[data-line-ask-causes] > .lw-act { flex: none; white-space: nowrap; }
+.ask-why summary { cursor: pointer; width: fit-content; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.ask-why[open] summary { margin-bottom: 4px; }
+.ask-why p { margin: 0; }
+.ask-fields { display: grid; grid-template-columns: max-content minmax(0, 60ch); gap: 6px 12px; align-items: center; margin-top: 4px; }
+.ask-field { display: contents; }
+.ask-field > span { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-field input { height: 30px; padding: 0 10px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-sm); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-base); }
+.ask-field input:focus { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+@container (max-width: 560px) { .ask-fields { grid-template-columns: minmax(0, 1fr); } }
+/* What grounding still does not know, beside "Is this a real problem?". */
+.ask-open { margin: 0; max-width: 78ch; display: flex; flex-direction: column; gap: 2px; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.ask-open > span { font-size: var(--lw-fs-xs, 11px); color: var(--lw-ink-3); }
+/* An ask that weighs alternatives: each is a one-press answer, with what it would mean. */
+.ask-choices { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-top: 4px; }
+.ask-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 40ch; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--lw-person) 38%, var(--lw-rule)); border-radius: var(--lw-r); background: var(--lw-card); color: var(--lw-ink); font: inherit; text-align: left; cursor: pointer; }
+.ask-choice b { font-size: var(--lw-fs-base); font-weight: 600; }
+.ask-choice span { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-choice:hover { background: var(--lw-person-soft); }
+.ask-choice:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+/* Beside the answer: what it sets off ("Starts now", "17 ahead"); a line that is off is turned on in its place. */
+.ask-next { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.ask-next b { font-weight: 650; color: var(--lw-ink-2); }
+/* A problem whose findings say nothing: how many of them. */
+.ask-empty { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-empty b { font-weight: 650; color: var(--lw-ink); }
+/* A worded finding about something else, in its own first sentence. */
+.ask-off { margin: 0; max-width: 78ch; padding-left: 8px; border-left: 2px solid var(--lw-rule); font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink); overflow-wrap: anywhere; }
+/* What the ask is about: the finding it names, in its own words, and where to look it up. */
+.ask-about { display: flex; flex-direction: column; gap: 6px; max-width: 86ch; padding: 8px 12px; border-left: 2px solid color-mix(in srgb, var(--lw-person) 45%, var(--lw-rule)); background: var(--lw-card); border-radius: 0 var(--lw-r-sm) var(--lw-r-sm) 0; }
+.ask-about-h { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.ask-about-f { display: flex; flex-direction: column; gap: 4px; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink-2); overflow-wrap: anywhere; }
+.ask-about-f p, .ask-about-f blockquote { margin: 0; }
+.ask-about-f blockquote { padding-left: 8px; border-left: 2px solid var(--lw-rule); color: var(--lw-ink); }
+.ask-about-f .lw-link { display: inline-flex; align-items: center; gap: 3px; width: fit-content; }
+.ask-cut { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+/* A line that is off: its switch follows the answers, set apart from them. */
+.ask-turn-on { font-size: inherit; }
+.ask-cut-cost { color: var(--lw-ink-4, var(--lw-ink-3)); }
+
+/* A person the question names, as the app's history last mentions them. */
+.ask-person { display: flex; flex-direction: column; gap: 4px; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.ask-person[data-state="loading"] { flex-direction: row; align-items: center; gap: 6px; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.ask-person-h b { color: var(--lw-ink); font-weight: 600; }
+.ask-person ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ask-person li { display: grid; grid-template-columns: 17ch minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.ask-person li > span:last-child { color: var(--lw-ink); overflow-wrap: anywhere; }
+.ask-person-at { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+/* A line that opens: the same columns behind a chevron; open, the whole activity under it. */
+.ask-person li[data-line-ask-person-hit] { display: block; }
+.ask-person-hit { display: grid; grid-template-columns: 12px 17ch minmax(0, 1fr); gap: 10px; align-items: baseline; width: 100%; padding: 2px 4px; margin-left: -4px; border: 0; border-radius: var(--lw-r); background: none; color: var(--lw-ink); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.ask-person-hit:hover { background: var(--lw-person-soft); }
+.ask-person-hit:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+.ask-person-chev { width: 12px; height: 12px; align-self: start; margin-top: 3px; color: var(--lw-ink-3); transition: transform 120ms ease-out; }
+.ask-person li[data-open] .ask-person-chev { transform: rotate(90deg); }
+.ask-person-item { margin: -2px 0 6px calc(12px + 17ch + 20px); padding: 8px 12px; border-left: 2px solid color-mix(in srgb, var(--lw-person) 40%, var(--lw-rule)); display: flex; flex-direction: column; gap: 6px; }
+.ask-person-item p { margin: 0; white-space: pre-wrap; color: var(--lw-ink); line-height: 1.5; max-width: 78ch; }
+.ask-person-where, .ask-person-fail { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }

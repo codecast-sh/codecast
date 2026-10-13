@@ -4,8 +4,10 @@ import {
   collectInboxSessionsPaginated,
   computeInboxSessions,
   computeSessionsLiveness,
+  splitInboxList,
   _resetChildAuqProbeCacheForTests,
 } from "./conversations";
+import { rebuildRows, rowHash } from "@codecast/shared/contracts/inboxSplit";
 import {
   INBOX_FACT_FIELDS,
   INBOX_PROJECTION_VERSION,
@@ -309,6 +311,21 @@ describe("one row, every feeder", () => {
       }
       expect(Object.entries(r).filter(([, v]) => v === undefined).map(([k]) => k)).toEqual([]);
     }
+  });
+  // The split list ships a busy row in full even though its stamps ride the
+  // overlay: judged on the stripped row, an hour-old session that is working
+  // now looked cold, and each of its changes sent every client to refetch the
+  // whole list (2026-10-11).
+  test("split: a row active now is hot although its stamps are stripped", async () => {
+    const w = world();
+    const busy = w.conversations.find((c: any) => c._id === own._id)!;
+    busy.updated_at = EPOCH - 60_000;
+    const list = await computeInboxSessions({ db: makeFakeDb(w) }, ME as any, { show_all: true, includeLiveness: false, fastFieldsInOverlay: true, splitHot: true });
+    const row = list.sessions.find((r: any) => String(r._id) === own._id);
+    expect(row.updated_at).toBeNull();
+    const split = splitInboxList(list);
+    expect(split.hot.map((r: any) => String(r._id))).toEqual([own._id]);
+    expect(rebuildRows({ ids: split.ids, hot: split.hot.map((r: any) => [String(r._id), r]), cold_hash: split.cold_hash }, new Map(list.sessions.filter((r: any) => String(r._id) !== own._id).map((r: any) => [String(r._id), { row: r, hash: rowHash(r) }])))).not.toBeNull();
   });
 });
 

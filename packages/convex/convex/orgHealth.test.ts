@@ -247,13 +247,13 @@ describe("org.health", () => {
     expect(growth.area.signals.map((x) => `${x.severity}:${x.code}`)).toEqual(["info:waiting_sessions", "warn:review_stall", "warn:blocked_sessions"]);
     expect(growth.area.goals).toEqual([{ project: { id: P, title: "Growth", short_id: "pr-1" }, goal: "Bring users in", open: 27, in_progress: 9, done_7d: 2 }]);
     // The company's budget today: the caps of every active role, summed once.
-    // Growth carries its own caps (6, 4, 400k); billing has none and takes the
-    // defaults (6, 40, 400k). Both are active.
-    expect(r.company.caps_total).toEqual({ hands_per_day: 12, wakes_per_day: 44, tokens_per_day: 800_000 });
+    // Growth carries its own caps (6, 4, 400k); billing has none, so it has no
+    // limit and neither does the total.
+    expect(r.company.caps_total).toEqual({ hands_per_day: null, wakes_per_day: null, tokens_per_day: null });
 
     const billing = r.roles.find((x) => x.handle === "billing")!;
     expect(billing.ledger).toEqual({ open_tasks: 0, in_flight: 0, active_plans: 0 });
-    expect(billing.load).toEqual({ items_per_day: 0, decisions_per_day: 1 / 7, live_hands: 0, hands_cap: 6, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 });
+    expect(billing.load).toEqual({ items_per_day: 0, decisions_per_day: 1 / 7, live_hands: 0, hands_cap: null, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 });
     expect(billing.flow).toMatchObject({ decisions_7d: 1, median_recommend_min: null, done_7d: 0 });
     // Health counts what S28 has: nothing named an escalation is left on a role's flow.
     expect(Object.keys(billing.flow).filter((k) => /escalat/i.test(k))).toEqual([]);

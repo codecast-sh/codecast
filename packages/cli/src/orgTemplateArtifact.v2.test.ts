@@ -163,7 +163,7 @@ describe("the shipped line template", () => {
     const artifact = readArtifact(root);
     const m = artifact.manifest;
     expect(m.role.line).toBe("line");
-    expect(m.role.caps.cards).toBeGreaterThan(0);
+    expect(m.role.caps!.cards).toBeGreaterThan(0);
     expect(m.routines.map((r) => [r.id, r.every])).toEqual([["lessons-weekly", "7d"], ["fix-loop-weekly", "7d"], ["finder-health", "1d"], ["expectations-daily", "1d"]]);
     for (const file of manifestFiles(m)) expect(artifact.files.has(file)).toBe(true);
   });
