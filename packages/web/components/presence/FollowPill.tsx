@@ -12,6 +12,7 @@ import { memberAvatarUrl } from "../../lib/liveEntities";
 import { followersLabel, followersSig, type FollowerRow } from "../../lib/follow";
 import { memberDisplayName } from "./memberPresence";
 import { firstName } from "../calls/speakers";
+import { objectHref, personRefOf } from "../../lib/entityLinks";
 
 // The follow state, in the top bar beside the faces. Following someone:
 // their face, "Following Ann", and a stop. Followed: only the followers'
@@ -152,7 +153,7 @@ function FollowersMenu({ followers }: { followers: FollowerRow[] }) {
             </DropdownMenuItem>
             <DropdownMenuItem
               data-sv-follow-action="profile"
-              onSelect={() => router.push(`/team/${member?.github_username || f.user_id}`)}
+              onSelect={() => router.push(objectHref("person", personRefOf({ _id: f.user_id, github_username: member?.github_username })))}
               className="gap-2 text-xs"
             >
               <UserRound className="h-3.5 w-3.5 text-sol-text-muted" />

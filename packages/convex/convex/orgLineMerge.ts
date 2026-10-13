@@ -14,6 +14,7 @@ import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { requireRole, userCanAccessRole } from "./lib/orgAccess";
 import { canReadRun } from "./workflow_runs";
+import { trialProjectOf } from "./lineTrial";
 import { countersFor } from "./lib/orgCaps";
 import { mergeReportLine } from "./lib/orgRoutine";
 import { MERGE_AUTHORITY_ID, MERGE_AUTHORITY_LABEL, mergeAllowance, mergeGrantOf } from "./lib/lineMerge";
@@ -123,7 +124,9 @@ export const check = query({
     const userId = await requireToken(ctx, args.api_token);
     const { run, role } = await runAndRole(ctx, userId, args.run_id);
     const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
-    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? mergeAllowance(role, Date.now()) : PERSON_ALLOWANCE) };
+    // A trial project's run never merges, whatever graph it runs (lineTrial.ts).
+    const trial = (await trialProjectOf(ctx, task)) ? { allowed: false, reason: "a trial project's run stops at the card: nothing merges" } : {};
+    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? mergeAllowance(role, Date.now()) : PERSON_ALLOWANCE), ...trial };
   },
 });
 

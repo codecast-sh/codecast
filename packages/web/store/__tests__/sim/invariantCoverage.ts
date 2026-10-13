@@ -41,7 +41,6 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   recentVisits: "local history, no server truth",
   recentProjects: "local history, no server truth",
   recentProjectsByDevice: "local history, no server truth",
-  callList: "fed by the recordings list page (useSyncCalls), a view the sim does not open",
   callDetails: "fed by a recording's own page (useSyncCalls), a view the sim does not open",
   collapsedSections: "local UI state, no server truth",
   sidebarNavExpanded: "local UI state, no server truth",
@@ -51,7 +50,10 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   tabs: "local tab layout, no server truth",
   activeTabId: "local tab layout, no server truth",
   sidePanelSessionId: "local panel state, no server truth",
-  callRecordings: "a call's video files, fed per view by useCallRecordings, which the sim does not mount (its feed also fills callRecordingCalls, the key REGISTERED_FEEDS maps it to)",
+  callRecordings: "a call's video files, fed per view by useCallRecordings, which the sim does not mount",
+  callRecordingCalls: "a call's recording state, fed per view by useCallRecordings (the same answer as callRecordings), which the sim does not mount",
+  opsSamples: "a group's samples, fed per view by useSyncOpsGroup, which the sim does not mount",
+  opsReplayTimelines: "a replay's timeline, fed per view by useSyncOpsReplay, which the sim does not mount",
 };
 
 /**
