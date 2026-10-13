@@ -139,7 +139,6 @@ export type ResourceActions = {
   onOpenSession?: (sessionId: string) => void;
   onPark?: (sessionIds: string[]) => void;
   onResume?: (sessionIds: string[]) => void;
-  onDismissPlan?: (deviceId: string, until: number) => void;
   onPreflight?: (selections: OffloadSelection[]) => void;
   /** Always the safe mode: waits for a turn boundary, never interrupts. */
   onStartOffload?: (selections: OffloadSelection[], opts: { waitForTurnMs: number }) => void;

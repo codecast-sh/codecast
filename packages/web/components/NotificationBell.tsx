@@ -30,10 +30,10 @@ export const NotificationBellButton = forwardRef<
       >
         <Bell />
         {unreadCount !== undefined && unreadCount > 0 && dot && (
-          <span aria-hidden className="absolute top-0.5 right-0.5 h-2 w-2 rounded-full bg-sol-orange ring-2 ring-sol-bg" />
+          <span aria-hidden className="absolute top-0.5 right-0.5 h-2 w-2 rounded-full bg-sol-cyan ring-2 ring-sol-bg" />
         )}
         {unreadCount !== undefined && unreadCount > 0 && !dot && (
-          <span className="absolute -top-0.5 -right-1 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sol-orange px-[3px] text-[9px] font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
+          <span className="absolute -top-0.5 -right-1 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sol-cyan px-[3px] text-[9px] font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
