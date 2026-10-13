@@ -35,10 +35,11 @@ test("the expanded editor box is bound by the same cap and is the field in that 
 });
 
 test("the modal is a fixed frame that hands the field a share of its height", () => {
-  // Hosted mode sets a smaller frame; both sizes share the fixed height and the field's share.
-  expect(composeView).toContain('"max-w-[640px] [--frame-h:min(80vh,460px)]"');
-  expect(composeView).toContain('"max-w-[960px] [--frame-h:min(88vh,680px)]"');
-  expect(composeView).toContain("} h-[var(--frame-h)] [--composer-max-h:calc(var(--frame-h)*0.45)]");
+  // The developer's modal holds a fixed height; hosted mode's smaller sheet
+  // sizes to its content up to its frame. Both hand the field the same share.
+  expect(composeView).toContain('"max-w-[640px] [--frame-h:min(80vh,460px)] max-h-[var(--frame-h)]"');
+  expect(composeView).toContain('"max-w-[960px] [--frame-h:min(88vh,680px)] h-[var(--frame-h)]"');
+  expect(composeView).toContain("} [--composer-max-h:calc(var(--frame-h)*0.45)]");
 });
 
 test("the dock grows to the viewport and measures the cap from what its max leaves", () => {
