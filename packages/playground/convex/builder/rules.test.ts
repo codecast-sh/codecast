@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { APP_DAILY_BUDGET_USD, GLOBAL_DAILY_BUDGET_USD, NARRATION_LINES_MAX, VISITOR_DAILY_BUDGET_USD } from "../lib/limits";
-import { Narration, Throttle, cleanIdeas, failureFor, nextInLine, openingLine, startRefusal, stepLine, thinkingLine, type QueueRow } from "./rules";
+import { Narration, Throttle, cleanIdeas, failureFor, nextInLine, openingLine, overBudget, startRefusal, stepLine, thinkingLine, type QueueRow } from "./rules";
 import { dayKey } from "../tallies";
 
 const row = (id: string, status: QueueRow<string>["status"], at: number): QueueRow<string> => ({ _id: id, status, _creationTime: at });
@@ -29,12 +29,14 @@ describe("budgets", () => {
   });
 
   test("a build starts only under every budget and while builds are on", () => {
-    const none = { paused: false, appSpent: 0, globalSpent: 0, visitorSpent: 0 };
-    expect(startRefusal(none)).toBeNull();
-    expect(startRefusal({ ...none, paused: true })?.error).toMatch(/paused/);
-    expect(startRefusal({ ...none, appSpent: APP_DAILY_BUDGET_USD })?.error).toMatch(/This app/);
-    expect(startRefusal({ ...none, globalSpent: GLOBAL_DAILY_BUDGET_USD })?.error).toMatch(/Clayground/);
-    expect(startRefusal({ ...none, visitorSpent: VISITOR_DAILY_BUDGET_USD })?.error).toMatch(/a lot of changes today/);
+    const spent = { global: 0, app: 0, visitor: 0 };
+    const refusal = (paused: boolean, more: Partial<typeof spent>) => startRefusal({ paused, over: overBudget({ ...spent, ...more }) });
+    expect(refusal(false, {})).toBeNull();
+    expect(refusal(true, {})?.error).toMatch(/paused/);
+    expect(refusal(false, { app: APP_DAILY_BUDGET_USD - 0.01 })).toBeNull();
+    expect(refusal(false, { app: APP_DAILY_BUDGET_USD })?.error).toMatch(/This app/);
+    expect(refusal(false, { global: GLOBAL_DAILY_BUDGET_USD })?.error).toMatch(/Clayground/);
+    expect(refusal(false, { visitor: VISITOR_DAILY_BUDGET_USD })?.error).toMatch(/a lot of changes today/);
   });
 });
 

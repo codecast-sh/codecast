@@ -1,14 +1,16 @@
 /**
- * A cloud host keeps its own disk: what sessions leave behind under ~/work is
- * released once nobody uses it and it holds no work only the host has.
+ * A cloud host keeps its own disk: what sessions leave behind in its checkouts
+ * is released once nobody uses it and it holds no work only the host has.
  *
  * Two kinds of leftovers. Codecast worktrees (`<repo>/.codecast/worktrees/*`)
  * whose session ended some way other than the kill path that already releases
- * them (worktreeGc.ts); they go through that same rule. And the clones a move
- * lands in when the host's checkout is busy (`<repo>-mv-<batch>`, see
- * migrate/io.ts): such a clone was seeded from the laptop, so it may go when
- * it is clean, has no stash, and no commit was made in it after it landed.
- * Anything else is kept and logged, for a person to decide.
+ * them (worktreeGc.ts); they go through that same rule, in every checkout: the
+ * ones under ~/work and the ones kept where the laptop keeps them (`checkouts`,
+ * remoteRepoPath). And the clones moves once landed in beside a busy checkout
+ * under ~/work (`<repo>-mv-<batch>`; moves merge into the checkout now): such
+ * a clone was seeded from the laptop, so it may go when it is clean, has no
+ * stash, and no commit was made in it after it landed. Anything else is kept
+ * and logged, for a person to decide.
  *
  * "In use" is the server's roster of live sessions this device runs
  * (cloud:hostSessions); a path any of them sits in is never touched.
@@ -17,10 +19,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
-import { LANDED_REF } from "./remote/session-move.js";
+import { LANDED_REF, MOVE_CLONE_RE } from "./remote/session-move.js";
 import { releaseSessionWorktree, type GcVerdict } from "./worktreeGc.js";
-
-export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -42,7 +42,7 @@ export async function moveCloneKeepReason(dir: string): Promise<string | null> {
 
 export type SweepResult = { released: string[]; kept: Array<{ path: string; reason: string }> };
 
-export async function sweepHostDisk(opts: { workDir: string; inUsePaths: readonly string[]; log: (m: string) => void }): Promise<SweepResult> {
+export async function sweepHostDisk(opts: { workDir: string; checkouts?: readonly string[]; inUsePaths: readonly string[]; log: (m: string) => void }): Promise<SweepResult> {
   const result: SweepResult = { released: [], kept: [] };
   let entries: string[] = [];
   try { entries = fs.readdirSync(opts.workDir); } catch { return result; }
@@ -62,6 +62,9 @@ export async function sweepHostDisk(opts: { workDir: string; inUsePaths: readonl
     fs.rmSync(dir, { recursive: true, force: true });
     opts.log(`[DISK] released move clone ${dir}`);
     result.released.push(dir);
+  }
+  for (const dir of opts.checkouts ?? []) {
+    if (path.dirname(dir) !== opts.workDir && isRepo(dir)) await sweepWorktrees(dir, opts, result);
   }
   return result;
 }
