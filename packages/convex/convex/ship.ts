@@ -10,6 +10,7 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canAccessConversation, canAccessPullRequest, canAccessTask } from "./lib/access";
 import { findTaskByRef } from "./taskEvidence";
+import { trialProjectOf } from "./lib/trialDecision";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { spawnSessionCore } from "./spawn";
@@ -233,6 +234,8 @@ export async function startShipCore(
 ): Promise<StartShipResult> {
   const got = await gatherShipFacts(ctx, userId, target, opts.decisionId);
   if ("error" in got) throw new Error(got.error);
+  // A trial's change never ships: its card's answer only records what the person would have done (learning-loop.md LL12).
+  if (got.gate?.trial || (await trialProjectOf(ctx, got.task))) throw new Error("This change is part of a trial: answering records the choice, and nothing ships");
   const plan = resolveShipPlan(got.facts);
   if (plan.blocked) throw new Error(plan.blocked);
   const key = shipTargetKey(got.facts.target);

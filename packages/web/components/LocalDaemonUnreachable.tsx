@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { WifiOff } from "lucide-react";
 import { isElectron } from "../lib/desktop";
 import type { LoopbackUnreachableReason } from "../lib/terminal/endpoint";
+import { Button } from "./ui/button";
 
 /** The daemon answered, but what it serves cannot: the evals' two reasons
  *  (the bridge found no checkout to run, or the process it ran crashed). */
@@ -161,13 +162,9 @@ export function LocalDaemonUnreachable({
           {stderr.join("\n")}
         </pre>
       )}
-      <button
-        type="button"
-        onClick={onRetry}
-        className="sol-btn text-xs px-3 py-1.5 mt-1"
-      >
+      <Button type="button" variant="outline" size="sm" className="mt-1" onClick={onRetry}>
         Retry connection
-      </button>
+      </Button>
       {children}
     </div>
   );
