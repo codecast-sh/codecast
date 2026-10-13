@@ -99,7 +99,7 @@ async function verifyHireFlow() {
   // The learning switch (H12) meets the person here too, off, with its one sentence; a flip is one write.
   assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
   assert.match(document.querySelector("[data-template-learning]")!.textContent!, /generalized lessons about the template: never transcripts, quotes, names, customer data or code/);
-  await act(async () => document.querySelector<HTMLInputElement>('[data-template-learning] input[role="switch"]')!.click());
+  await act(async () => document.querySelector<HTMLElement>('[data-template-form] [data-template-learning] [role="switch"]')!.click());
   assert.deepEqual(learningSet, [true]);
   // Back to the gallery and forward again keeps nothing half typed.
   await act(async () => document.querySelector<HTMLButtonElement>("[data-template-back]")!.click());
