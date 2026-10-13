@@ -1,0 +1,56 @@
+/* A finder's page and the Find table (FinderPage, FindTable; line-journeys.md
+   LJ8.5, LJ8.6) on the workspace's tokens. The page is one column of
+   findings under a head of three figures; the table is the Line page's list
+   of finders, a row each, numbers right-aligned. */
+
+.fp { min-height: 100%; background: var(--lw-paper); font-size: var(--lw-fs-base); }
+.fp-head { display: flex; flex-direction: column; gap: 8px; padding: 16px 28px 18px; border-bottom: 1px solid var(--lw-rule-2); background: var(--lw-card); }
+.fp-crumb { display: flex; align-items: center; gap: 7px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.fp-crumb-link { color: var(--lw-ink-2); text-decoration: none; border-radius: 4px; }
+.fp-crumb-link:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+.fp-crumb-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 1px; }
+.fp-title { margin: 0; font-size: var(--lw-fs-xl); font-weight: 650; letter-spacing: -.018em; line-height: 1.2; }
+.fp-titlerow { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.fp-purpose { margin: 0; color: var(--lw-ink-2); line-height: 1.5; max-width: 80ch; }
+.fp-figures { margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 10px 40px; }
+.fp-figures > div { display: flex; flex-direction: column-reverse; gap: 2px; }
+.fp-figures dt { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.fp-figures dd { margin: 0; font-size: var(--lw-fs-lg); font-weight: 650; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
+.fp-body { padding: 8px 28px 64px; max-width: 1100px; }
+.fp-group { margin-top: 18px; }
+.fp-h { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); }
+.fp-h-n { font-weight: 450; color: var(--lw-ink-3); }
+.fp-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--lw-rule-2); }
+.fp-problem-row { list-style: none; padding: 0 0 12px 28px; border-bottom: 1px solid var(--lw-rule-2); }
+.fp-problem { display: inline-flex; align-items: baseline; gap: 8px; color: var(--lw-ink); text-decoration: none; font-size: var(--lw-fs-base); line-height: 1.45; }
+.fp-problem:hover span:last-child { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--lw-rule); }
+.fp-problem-k { color: var(--lw-ink-3); }
+.fp-more { margin-top: 10px; }
+
+.ft { margin-top: 8px; }
+.ft-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-base); }
+.ft-table th, .ft-table td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--lw-rule-2); font-weight: 450; }
+.ft-table thead th { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); font-weight: 600; }
+.ft-table tbody tr { cursor: pointer; transition: background var(--lw-fast); }
+.ft-table tbody tr:hover { background: color-mix(in srgb, var(--lw-ink) 4%, transparent); }
+.ft-name { color: var(--lw-ink); font-weight: 600; text-decoration: none; }
+.ft-name:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
+.ft-cell { color: inherit; text-decoration: underline; text-decoration-color: var(--lw-rule); text-underline-offset: 3px; }
+.ft-cell:hover { color: var(--lw-ink); text-decoration-color: currentColor; }
+.ft-here { margin-left: 8px; font-size: var(--lw-fs-xs); font-weight: 400; color: var(--lw-ink-3); white-space: nowrap; }
+.ft-n { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ft-table td[data-zero] { color: var(--lw-ink-3); }
+
+/* Team asks: when, what (opens the agent's words in place), and the product's task. */
+.fp-ask { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) 9rem auto; gap: 0.75rem; align-items: baseline; padding: 0.4rem 0; }
+.fp-ask-for { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--lw-ink-2); white-space: nowrap; }
+.fp-ask-for [data-none] { color: var(--lw-ink-3); }
+.fp-cause { margin: 10px 0 6px; padding-left: 10px; border-left: 2px solid var(--lw-rule); }
+.fp-cause-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.fp-cause-about { font-weight: 600; color: var(--lw-ink); }
+.fp-cause-head .lw-act { margin-left: auto; }
+.fp-ask-due { font-size: 12px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; }
+.fp-ask-due[data-past] { color: var(--sol-text-dim); }
+.fp-ask-title { text-align: left; color: var(--sol-text); background: none; border: 0; padding: 0; cursor: pointer; }
+.fp-ask-title:hover, .fp-ask-title[aria-expanded="true"] { color: var(--sol-blue); }
+.fp-ask-open { font-size: 12px; white-space: nowrap; }

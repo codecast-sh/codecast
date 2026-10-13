@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { subtaskTally } from "./subtaskTally";
+import { subtaskTally, taskChildren } from "./subtaskTally";
 
 describe("subtaskTally", () => {
+  test("shares the child index with detail views and preserves row identity", () => {
+    const child = { _id: "c", parent_id: "p", status: "done", title: "Child" };
+    let reads = 0;
+    const tasks = { get c() { reads++; return child; } };
+    expect(subtaskTally("p", tasks)).toBe("1/1");
+    expect(taskChildren("p", tasks)[0]).toBe(child);
+    expect(taskChildren("absent", tasks)).toEqual([]);
+    expect(reads).toBe(1);
+    expect(taskChildren("p", { c: { ...child, parent_id: "other" } })).toEqual([]);
+  });
   test("reuses unchanged collections without enumerating them again", () => {
     let reads = 0;
     const tasks = { get child() { reads++; return { _id: "child", parent_id: "parent", status: "done" }; } };
@@ -18,6 +28,18 @@ describe("subtaskTally", () => {
     expect(subtaskTally("parent", { child: { ...child, status: "done" } })).toBe("1/1");
     expect(subtaskTally("parent", {})).toBe("");
     expect(subtaskTally("parent", tasks)).toBe("0/1");
+  });
+
+  test("indexes different parents in one collection scan", () => {
+    let reads = 0;
+    const tasks = {
+      get first() { reads++; return { _id: "first", parent_id: "a", status: "done" }; },
+      get second() { reads++; return { _id: "second", parent_id: "b", status: "open" }; },
+    };
+    expect(subtaskTally("a", tasks)).toBe("1/1");
+    expect(subtaskTally("b", tasks)).toBe("0/1");
+    expect(subtaskTally("absent", tasks)).toBe("");
+    expect(reads).toBe(2);
   });
 
   test("preserves deduplication and progress eligibility", () => {
