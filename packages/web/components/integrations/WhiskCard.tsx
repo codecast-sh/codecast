@@ -11,6 +11,7 @@ import type { WhiskReturnPath } from "@codecast/convex/convex/whisk";
 import { calendarAbility, disconnectNote, emailAbility, mailboxLine } from "../simple/connectionWords";
 import { LANE_COPY, connectionControls, plainConnectError } from "../simple/lane";
 import { useLaneMail } from "../simple/useLaneMail";
+import { UseWhiskNow } from "../simple/UseWhiskNow";
 import { settingsPathFor } from "../../lib/settingsSections";
 import { ConfirmButton, LedgerLine, QuietButton, StatusDot } from "./parts";
 
@@ -79,7 +80,7 @@ export function WhiskCard() {
 
       {connected ? <LedgerLine className="mt-1.5" parts={[mailboxLine(email, mailboxes), WORDS.through.toLowerCase()]} /> : null}
 
-      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{WORDS.whiskNote}</p>
+      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{known && controls.coming && !connected ? WORDS.whiskNoteComing : WORDS.whiskNote}</p>
 
       <ul className="mt-2 space-y-1">
         <Ability icon={Mail} title={WORDS.email} on={connected ? !!can?.read_mail : null}>{emailAbility(can)}</Ability>
@@ -103,6 +104,8 @@ export function WhiskCard() {
           {controls.connect ? <ConnectButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.connect}</ConnectButton> : null}
           {controls.reconnect ? <ConnectButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.reconnect}</ConnectButton> : null}
           {controls.allow ? <QuietButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.allow}</QuietButton> : null}
+          {/* While connecting is closed, the next step is Whisk on its own. */}
+          {controls.coming && !connected ? <UseWhiskNow /> : null}
           {connected ? (
             <a href={whiskUrl} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center gap-1.5 rounded-md border border-sol-border px-2.5 text-xs text-sol-text transition-colors hover:bg-sol-bg-highlight">
               {WORDS.openWhisk}
