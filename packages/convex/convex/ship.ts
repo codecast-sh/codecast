@@ -10,9 +10,11 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canAccessConversation, canAccessPullRequest, canAccessTask } from "./lib/access";
 import { findTaskByRef } from "./taskEvidence";
+import { trialProjectOf } from "./lib/trialDecision";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { spawnSessionCore } from "./spawn";
+import { resolveSessionLaunchDevice } from "./sessionLaunch";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { resolveTaskGitContext } from "./tasks";
 import { answerCore } from "./sessionDecisions";
@@ -73,14 +75,17 @@ async function readable(ctx: Ctx, userId: Id<"users">, id: any): Promise<any | n
   return c && (await canAccessConversation(ctx as any, userId, c)) ? c : null;
 }
 
-/** The session a task's change lives in: the newest linked session on a branch, else the newest linked one. */
-async function workSessionOfTask(ctx: Ctx, userId: Id<"users">, task: any): Promise<any | null> {
-  const ids = [...(task.conversation_ids ?? [])].reverse().slice(0, 12);
+/** The session a task's change lives in: the newest linked session on a branch of its own, else the newest linked one.
+ *  A session on the base branch is not where a change lives: a line task links a dozen sessions (ground, analyze,
+ *  review, a person's chat) that sit on main, and only the build session holds the fix, on its worktree branch. */
+export async function workSessionOfTask(ctx: Ctx, userId: Id<"users">, task: any, base = "main"): Promise<any | null> {
+  const ids = [...(task.conversation_ids ?? [])].reverse().slice(0, 16);
   let fallback: any = null;
   for (const id of ids) {
     const c = await readable(ctx, userId, id);
     if (!c || c.ship_target_key) continue;
-    if (branchOf(c)) return c;
+    const branch = branchOf(c);
+    if (branch && branch !== base) return c;
     fallback ??= c;
   }
   return fallback;
@@ -233,6 +238,8 @@ export async function startShipCore(
 ): Promise<StartShipResult> {
   const got = await gatherShipFacts(ctx, userId, target, opts.decisionId);
   if ("error" in got) throw new Error(got.error);
+  // A trial's change never ships: its card's answer only records what the person would have done (learning-loop.md LL12).
+  if (got.gate?.trial || (await trialProjectOf(ctx, got.task))) throw new Error("This change is part of a trial: answering records the choice, and nothing ships");
   const plan = resolveShipPlan(got.facts);
   if (plan.blocked) throw new Error(plan.blocked);
   const key = shipTargetKey(got.facts.target);
@@ -255,7 +262,12 @@ export async function startShipCore(
   }
 
   const parent = (await shipParent(ctx, userId, got.work)) ?? (await shipParent(ctx, userId, opts.requester));
+  // The ship session runs where the change is: a line run's branch lives in a worktree on the machine that built it
+  // (often a cloud host), and its path means nothing on any other. Only a machine this person may launch on.
+  const workDevice: string | null = got.work?.owner_device_id ?? null;
+  const targetDeviceId = workDevice && (await resolveSessionLaunchDevice(ctx, userId, workDevice).catch(() => null)) ? workDevice : null;
   const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
+    targetDeviceId,
     projectPath: got.facts.projectPath ?? undefined,
     gitRoot: got.work?.git_root ?? got.facts.projectPath ?? undefined,
     title: `Ship · ${plan.label}`.slice(0, 80),

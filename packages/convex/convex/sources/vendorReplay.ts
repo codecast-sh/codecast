@@ -8,7 +8,10 @@
 // The rrweb capture itself is kept too, masked (prepareDomCapture: no typed
 // value, nothing private), as DOM chunks beside the stream, so the player can
 // play the recording and agents can see frames of it
-// (contracts/replayPlayer.ts). It is uploaded here, in the adapter's action,
+// (contracts/replayPlayer.ts). A PostHog mobile recording, which holds
+// wireframes rather than a DOM, is converted to a plain page first
+// (shared/replay/mobile.ts); readVendorCapture does both reads. A capture
+// rrweb could not draw (no full snapshot of a page) is not kept. It is uploaded here, in the adapter's action,
 // because a capture of tens of MB cannot ride an action's arguments.
 //
 // Each adapter supplies only the read: PostHog's snapshots (sources/posthog.ts)
@@ -20,10 +23,10 @@ import { v } from "convex/values";
 import { action } from "../functions";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { domCapturePlayable, fromRrweb, prepareDomCapture, type RrwebEvent } from "@codecast/shared/replay";
+import { readVendorCapture, type RrwebEvent } from "@codecast/shared/replay";
 import { replaysBucketFromEnv } from "../lib/r2";
 import { storeReplayDom } from "../replays";
-import { needsVendorImport } from "@codecast/shared/contracts/replay";
+import { VENDOR_REFRESH_RETRY, needsVendorImport } from "@codecast/shared/contracts/replay";
 
 /** What an adapter read of one recording. */
 export interface VendorRecording {
@@ -80,9 +83,9 @@ export async function importVendorRecording(
   const user = rec.user && (rec.user.id || rec.user.email)
     ? { ...(rec.user.id ? { id: rec.user.id.slice(0, 200) } : {}), ...(rec.user.email ? { email: rec.user.email.slice(0, 200) } : {}) }
     : undefined;
-  // The stream is read first: the masking below rewrites the events in place.
-  const events = fromRrweb(rec.events);
-  const dom = await storeDomCapture(input, rec.events);
+  const capture = readVendorCapture(rec.events);
+  const events = capture.events;
+  const dom = capture.dom ? await storeDomCapture(input, capture.dom) : null;
   const imported = await ctx.runAction(internal.replays.importExternal, {
     source_id: input.source_id,
     provider: input.provider,
@@ -96,21 +99,35 @@ export async function importVendorRecording(
 }
 
 /**
- * The masked capture stored as DOM chunks, or null when there is nothing to
- * play (no full snapshot, as when a read stopped before one) or no bucket.
+ * The masked capture stored as DOM chunks, or null when there is no bucket.
  * A failed upload costs the player, not the import: the stream still lands.
  */
-async function storeDomCapture(input: { source_id: Id<"event_sources">; external_id: string }, raw: RrwebEvent[]) {
+async function storeDomCapture(input: { source_id: Id<"event_sources">; external_id: string }, events: RrwebEvent[]) {
   const bucket = replaysBucketFromEnv();
   if (!bucket) return null;
-  const events = prepareDomCapture(raw);
-  if (!domCapturePlayable(events)) return null;
   try {
     return await storeReplayDom(bucket, { source_id: String(input.source_id), external_id: input.external_id, events });
   } catch (err) {
     console.warn(`replay DOM capture for ${input.external_id} not stored: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+/** The adapter's words for a recording the vendor no longer has (past retention, deleted). */
+const VENDOR_GONE = /answered 4(?:04|10)\b|has nothing at|has no snapshots for recording/;
+
+/**
+ * When a failed refresh may ask the vendor again: a month once it says the
+ * recording is gone, else an hour or its Retry-After. The adapter runs as its
+ * own action, so its VendorCallError arrives as a plain Error and the gone
+ * case is read from the adapter's message as well as its status.
+ */
+export function vendorRefreshRetryAt(err: unknown, now: number): number {
+  const status = err instanceof VendorCallError ? err.status : undefined;
+  const message = err instanceof Error ? err.message : String(err);
+  if (status === 404 || status === 410 || VENDOR_GONE.test(message)) return now + VENDOR_REFRESH_RETRY.gone_ms;
+  const after = err instanceof VendorCallError ? (err.retry_after_ms ?? 0) : 0;
+  return now + Math.max(VENDOR_REFRESH_RETRY.failed_ms, after);
 }
 
 /**
@@ -130,10 +147,13 @@ export const importLinked = action({
     try {
       return await ctx.runAction(adapter, { source_id: r.source_id, external_id: r.external_id });
     } catch (err) {
-      // A copy made by an older converter still reads; refreshing it can wait
-      // for the vendor (a rate limit, an outage) and the next read retries.
-      if (r.imported_at) return done;
-      throw err;
+      // A copy made by an older converter still reads; refreshing it waits
+      // for the vendor (a rate limit, an outage, a recording past its
+      // retention), and the row says how long, so the reads in between do
+      // not each call the vendor again.
+      if (!r.imported_at) throw err;
+      await ctx.runMutation(internal.replays.deferVendorRefresh, { replay_id: r.replay_id, retry_at: vendorRefreshRetryAt(err, Date.now()) });
+      return done;
     }
   },
 });
