@@ -12,8 +12,9 @@ import { ChatModalLegend } from "./ChatModalLegend";
 import { highlightMatch } from "../GlobalSearch";
 import { isConvexId } from "../../lib/entityLinks";
 import { dmOtherIds, startOfDay } from "@codecast/shared/chat";
-import { authorFor, channelDisplayName, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
+import { authorFor, channelDisplayName, slackAuthorFor, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
 import type { ChatChannelView } from "./chatTypes";
+import type { ChatMessageRow } from "../../store/chatSlice";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -39,6 +40,8 @@ type SearchHit = {
   thread_root_id?: string;
   user_id: string;
   author_kind: "user" | "agent";
+  external_author?: ChatMessageRow["external_author"];
+  external?: ChatMessageRow["external"];
   created_at: number;
   snippet: string;
   permalink: string;
@@ -343,7 +346,7 @@ export function ChatSearch({
                 {g.hits.map((h) => {
                   flatIdx++;
                   const idx = flatIdx;
-                  const author = authorFor(h.user_id, h.author_kind, byId as any);
+                  const author = slackAuthorFor(h) ?? authorFor(h.user_id, h.author_kind, byId as any);
                   return (
                     <button
                       key={h._id}
