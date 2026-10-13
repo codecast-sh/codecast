@@ -8,11 +8,12 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireStartLock, probeLiveness, readState, strayPids, writeState, type InstanceState, chromeLaunchArgs, chromeLogTail} from "./instance.js";
+import { acquireStartLock, isHung, parsePsTime, probeLiveness, readState, strayPids, writeState, type InstanceState, chromeLaunchArgs, chromeLogTail} from "./instance.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 import { browserHome } from "./profile.js";
 
@@ -94,6 +95,45 @@ describe("probeLiveness", () => {
     expect(authorizesTeardown(await probeLiveness(fakeState({ pid: 2 ** 22 - 3 })))).toBe(true);
     expect(authorizesTeardown(await probeLiveness(fakeState({ port })))).toBe(false);
     expect(authorizesTeardown(await probeLiveness(fakeState({ port: 1 }), 600))).toBe(false);
+  });
+});
+
+describe("a hung browser", () => {
+  function child(cmd: string[]): ReturnType<typeof Bun.spawn> {
+    const proc = Bun.spawn(cmd, { stdio: ["ignore", "ignore", "ignore"] });
+    cleanups.push(() => proc.kill("SIGKILL"));
+    return proc;
+  }
+
+  test("asleep with no CPU through the whole silence is stopped, and the stop is the exit observed", async () => {
+    // Stands in for Chrome blocked on a helper the OOM killer took: alive,
+    // holding the port, never answering, never waking.
+    const proc = child(["sleep", "60"]);
+    await sleep(200);
+    expect(await probeLiveness(fakeState({ pid: proc.pid }), 1500)).toBe("exited");
+    await proc.exited;
+  });
+
+  test("a silent browser that is burning CPU is overloaded, not hung, and is left alone", async () => {
+    const proc = child(["bun", "-e", "for(;;){}"]);
+    await sleep(300);
+    expect(await probeLiveness(fakeState({ pid: proc.pid }), 1500)).toBe("unverifiable");
+    expect(proc.exitCode).toBeNull();
+  });
+
+  test("evidence rules", () => {
+    expect(isHung({ cpu: 100, asleep: true }, { cpu: 101, asleep: true })).toBe(true);
+    expect(isHung({ cpu: 100, asleep: true }, { cpu: 105, asleep: true })).toBe(false);
+    expect(isHung({ cpu: 100, asleep: false }, { cpu: 100, asleep: true })).toBe(false);
+    expect(isHung({ cpu: 100, asleep: true }, { cpu: 100, asleep: false })).toBe(false);
+    expect(isHung(null, { cpu: 100, asleep: true })).toBe(false);
+  });
+
+  test("ps cputime parses in hundredths", () => {
+    expect(parsePsTime("0:24.31")).toBe(2431);
+    expect(parsePsTime("1:02:03.45")).toBe(372345);
+    expect(parsePsTime("00:00:24")).toBe(2400);
+    expect(parsePsTime("2-01:00:00")).toBe((2 * 86400 + 3600) * 100);
   });
 });
 
