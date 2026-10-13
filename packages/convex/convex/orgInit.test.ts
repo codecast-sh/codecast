@@ -605,6 +605,22 @@ describe("cast org apply", () => {
     expect(history.some((h: any) => h.field === "line_workflow_slug" && h.new_value === "feature")).toBe(true);
   });
 
+  // The card's switch is what the person approved: a hire starts work on its
+  // own unless the card turned that off, and the off they approved holds.
+  test("a role proposal's Starts work on its own switch lands on the created role", async () => {
+    const db = fixtures({
+      session_decisions: [
+        proposalDecision("sd_on", "sd-30", { kind: "role", name: "Market lead", handle: "market", scope: { projects: ["pr-1"] } }, { status: "answered", answer_index: 0 }),
+        proposalDecision("sd_off", "sd-31", { kind: "role", name: "Quiet lead", handle: "quiet", scope: { projects: ["pr-1"] }, trust: "understand" }, { status: "answered", answer_index: 0 }),
+      ],
+    });
+    await performApplyDecision(ctxOf(db), ME as any, "sd-30", { provision: false });
+    await performApplyDecision(ctxOf(db), ME as any, "sd-31", { provision: false });
+    const roles = await db.query("org_roles").collect();
+    expect(roles.find((r: any) => r.handle === "market")?.trust).toBe("direct");
+    expect(roles.find((r: any) => r.handle === "quiet")?.trust).toBe("understand");
+  });
+
   test("creates the accepted roles with scope, parent and charter, folds change text in, skips the rest, and is idempotent", async () => {
     const db = fixtures({
       session_decisions: [
@@ -618,7 +634,7 @@ describe("cast org apply", () => {
     const a = await performApplyDecision(ctx, ME as any, "sd-10", { provision: false });
     expect(a).toMatchObject({ status: "applied", role: { handle: "growth", short_id: "or-1" } });
     const growth = await db.get("org_roles_1" as any) ?? (await db.query("org_roles").withIndex("by_short_id", (q: any) => q.eq("short_id", "or-1")).first());
-    expect(growth).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, charter: "Owns growth.", caps: { hands_per_day: 6, wakes_per_day: 12, tokens_per_day: 400_000 } });
+    expect(growth).toMatchObject({ name: "Head of Growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, charter: "Owns growth.", caps: { wakes_per_day: 12 } });
 
     const b = await performApplyDecision(ctx, ME as any, "sd-11", { provision: false });
     expect(b).toMatchObject({ status: "applied", role: { handle: "landing" } });

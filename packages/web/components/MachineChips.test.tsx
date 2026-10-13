@@ -54,7 +54,7 @@ test("a sleeping cloud host says it boots on start, not that it falls back", () 
   unmount();
 });
 
-test("same-named cloud hosts read apart: the dead one says gone, the sleeping one how long", () => {
+test("same-named cloud hosts read apart: the sleeping one says how long, the dead one stays out of the row", () => {
   const report = (at: number) => ({ managed_by: "laptop", instance_id: "i-1", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at });
   const now = Date.now();
   const live = { ...cloud, device_id: "live", online: true, last_seen: now, cloud_host: { ...report(now), state: "running" as const, region: "us-west-2" } };
@@ -66,10 +66,28 @@ test("same-named cloud hosts read apart: the dead one says gone, the sleeping on
   const labels = Array.from(host.querySelectorAll("button")).map((b) => b.textContent);
   expect(labels).toContain("Cloud Linux · us-west-2");
   expect(labels).toContain("Cloud Linux · asleep 3d");
-  expect(labels).toContain("Cloud Linux · gone");
-  const deadChip = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("gone"));
-  expect(deadChip?.getAttribute("title")).toContain("no longer exists");
+  expect(labels.some((l) => l?.includes("gone"))).toBe(false);
   unmount();
+
+  // A session already on the dead host still sees its chip, and why it cannot run.
+  const onDead = mount(
+    <MachineChips machines={[laptop, live, asleep, dead]} selectedDeviceId="dead" open onOpen={() => {}} onPick={() => {}} />,
+  );
+  const deadChip = Array.from(onDead.host.querySelectorAll("button")).find((b) => b.textContent?.includes("gone"));
+  expect(deadChip?.getAttribute("title")).toContain("no longer exists");
+  onDead.unmount();
+});
+
+test("a machine quiet for a day leaves the row unless the session runs there", () => {
+  const vm = { ...laptop, device_id: "vm", hostname: "grok-bot-vm", label: "Linux - grok-bot-vm", platform: "linux", online: false, last_seen: Date.now() - 9 * 86_400_000 };
+  const listed = (selected: string) => {
+    const { host, unmount } = mount(<MachineChips machines={[laptop, cloud, vm]} selectedDeviceId={selected} open onOpen={() => {}} onPick={() => {}} />);
+    const labels = Array.from(host.querySelectorAll("button")).map((b) => b.textContent ?? "");
+    unmount();
+    return labels;
+  };
+  expect(listed("laptop").some((l) => l.includes("grok-bot-vm"))).toBe(false);
+  expect(listed("vm").some((l) => l.includes("grok-bot-vm"))).toBe(true);
 });
 
 test("collapsed, the pill names the routed machine and opens on click", () => {
