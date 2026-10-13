@@ -36,7 +36,18 @@ describe("runVisits", () => {
       created_at: t, updated_at: t + 5 * F.HOUR,
     };
     const asked = (id: string, at: number, answer: number) => ({ _id: id, status: "answered", blocking: true, workflow_run_id: "run_plan", gate_node_id: "plan_gate", created_at: at, options: [{ label: "Approve" }, { label: "Revise" }, { label: "Drop" }], answer_index: answer });
-    const v = runVisits(run, SHIPPED_LINE, [asked("d1", t + HOUR, 1), asked("d2", t + 4 * F.HOUR, 0)]);
+    // The line as it was when a person approved the plan: this run is drawn on its own graph.
+    const gated: LineGraph = {
+      nodes: [...SHIPPED_LINE.nodes, { id: "plan_gate", label: "Plan gate", type: "human", shape: "hexagon" }],
+      edges: [
+        ...SHIPPED_LINE.edges.filter((e) => e.from !== "plan"),
+        { from: "plan", to: "plan_gate" },
+        { from: "plan_gate", to: "analyze", label: "[A] Approve" },
+        { from: "plan_gate", to: "plan", label: "[R] Revise" },
+        { from: "plan_gate", to: "drop", label: "[D] Drop" },
+      ],
+    };
+    const v = runVisits(run, gated, [asked("d1", t + HOUR, 1), asked("d2", t + 4 * F.HOUR, 0)]);
     expect(v.map((x) => `${x.node}${x.inferred ? "*" : ""}`)).toEqual(["ground", "plan", "plan_gate*", "plan*", "plan_gate", "analyze"]);
     expect(v[v.length - 1].state).toBe("live");
   });

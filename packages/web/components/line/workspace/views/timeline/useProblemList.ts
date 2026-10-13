@@ -117,7 +117,7 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
         return {
           need: need.get(id) ?? null, failed: failed.get(id) ?? null, silent: silent.get(id) ?? null, stage: stage.get(id) ?? null, task,
           awaitsFindings: task?.readiness === "needs_context" && waitsForFindings(task.readiness_note),
-          failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
+          failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), lead: task?.project_id ? workspace.admissions.get(task.project_id)?.role?.handle ?? null : null, idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
           notes: (task as { comments?: ProblemFacts["notes"] } | null)?.comments, trial: trial.has(id),
           aboutSteps: lineStepsOf(task?.cause?.fingerprints), prMerged: merges.get(id) ?? null,
           handoff: (task as { verification_evidence?: string | null } | null)?.verification_evidence ?? null,
