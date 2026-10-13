@@ -6,8 +6,7 @@ import { Box, Label, Sheet } from "../figureParts";
 
 /**
  * Figures for the orchestration guide. The review verdicts, round limits and
- * critic sweep are the /orchestrate skill's (packages/cli/orchestration);
- * the per-wave cap is `cast plan autopilot --max` (default 3).
+ * critic sweep are the /orchestrate skill's (packages/cli/orchestration).
  */
 
 // ─── Waves through a dependency graph ──────────────────────────────────────
@@ -71,7 +70,7 @@ export function WavesFigure() {
                 </g>
               );
             })}
-            <Label x={40} y={262} lines={["One implementer agent per running task, at most --max at a time (3 by default).", "A task starts the moment every task it depends on is done."]} ink="base01" size={10.5} className="bj-fade" style={t(5.6)} />
+            <Label x={40} y={262} lines={["One implementer agent per running task, a few at a time.", "A task starts the moment every task it depends on is done."]} ink="base01" size={10.5} className="bj-fade" style={t(5.6)} />
           </>
         )}
       </Sheet>
@@ -85,10 +84,10 @@ export function WavesFigure() {
 export function ReviewVerdictFigure() {
   return (
     <Stage minWidth={640}>
-      <Sheet w={760} h={260} label="An implementer works in its own worktree. A reviewer returns pass, needs changes, or reject. Pass merges to main, needs changes goes back with the review, reject goes to a person">
+      <Sheet w={760} h={260} label="An implementer works in its own copy of the repository. A reviewer returns pass, needs changes, or reject. Pass merges to main, needs changes goes back with the review, reject goes to a person">
         {(arrow) => (
           <>
-            <Box x={20} y={92} w={170} h={56} title="implementer" sub="own worktree + branch" ink="blue" className="bj-pop" style={t(0.1)} />
+            <Box x={20} y={92} w={170} h={56} title="implementer" sub="its own copy of the repo" ink="blue" className="bj-pop" style={t(0.1)} />
             <Box x={290} y={92} w={160} h={56} title="reviewer" sub="diff vs. the task" ink="violet" className="bj-pop" style={t(0.6)} />
             <Box x={570} y={36} w={170} h={46} title="merge to main" sub="next wave unlocks" ink="green" className="bj-pop" style={t(1.5)} />
             <Box x={570} y={170} w={170} h={46} title="you" sub="with the rationale" ink="red" className="bj-pop" style={t(2.9)} />
@@ -97,13 +96,13 @@ export function ReviewVerdictFigure() {
             <Label x={240} y={112} lines={["done"]} anchor="middle" className="bj-fade" style={t(0.5)} />
 
             <path d="M452 108Q520 60 566 59" pathLength={1} stroke={SOL.green} strokeWidth={1.6} fill="none" markerEnd={arrow("green")} className="bj-draw" style={t(1.2, 0.3)} />
-            <Label x={500} y={66} lines={["PASS"]} ink="green" weight={700} anchor="end" className="bj-fade" style={t(1.3)} />
+            <Label x={500} y={66} lines={["pass"]} ink="green" weight={700} anchor="end" className="bj-fade" style={t(1.3)} />
 
             <path d="M370 150C370 222 105 222 105 152" pathLength={1} stroke={SOL.orange} strokeWidth={1.6} fill="none" markerEnd={arrow("orange")} className="bj-draw" style={t(2.0, 0.5)} />
-            <Label x={238} y={228} lines={["NEEDS_CHANGES: the review goes back with it"]} ink="orange" anchor="middle" className="bj-fade" style={t(2.2)} />
+            <Label x={238} y={228} lines={["needs changes: the review goes back with it"]} ink="orange" anchor="middle" className="bj-fade" style={t(2.2)} />
 
             <path d="M452 132Q520 190 566 192" pathLength={1} stroke={SOL.red} strokeWidth={1.6} fill="none" markerEnd={arrow("red")} className="bj-draw" style={t(2.7, 0.3)} />
-            <Label x={500} y={192} lines={["REJECT"]} ink="red" weight={700} anchor="end" className="bj-fade" style={t(2.8)} />
+            <Label x={500} y={192} lines={["reject"]} ink="red" weight={700} anchor="end" className="bj-fade" style={t(2.8)} />
 
             <Label x={20} y={34} lines={["Escalate, don't loop:", "3 implementation attempts, 2 review rounds,", "then a person decides."]} ink="base01" size={10.5} className="bj-fade" style={t(3.3)} />
           </>

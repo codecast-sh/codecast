@@ -257,3 +257,32 @@
 .lset-declare-words { font-size: 11.5px; color: var(--sol-text-muted); line-height: 1.45; min-width: 0; flex: 1 1 220px; }
 .lset-declare-words b { color: var(--sol-text); font-weight: 600; }
 .lset-declare .lset-add { margin-left: 0; white-space: nowrap; }
+
+/* A source in words: its state first, then what it watches, then what it reported. */
+.lset-source-state { margin-left: auto; font-size: 11px; white-space: nowrap; padding: 0 6px; border-radius: 4px; }
+.lset-source-state[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
+.lset-source-state[data-tone="quiet"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.lset-source-state[data-tone="new"] { color: var(--sol-text-dim); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.lset-source-says { font-size: 12.5px; line-height: 1.5; color: var(--sol-text); margin-top: 4px; }
+.lset-source-count { font-size: 11.5px; color: var(--sol-text-muted); margin-top: 2px; }
+.lset-source-more { margin-top: 6px; }
+.lset-source-more > summary { cursor: pointer; font-size: 11px; color: var(--sol-text-dim); list-style: none; }
+.lset-source-more > summary::-webkit-details-marker { display: none; }
+.lset-source-more > summary::before { content: "▸ "; }
+.lset-source-more[open] > summary::before { content: "▾ "; }
+.lset-source-more > summary:hover { color: var(--sol-text); }
+
+/* No project named: the projects to pick from, as the auto-start list draws them, in place rather than as a popover. */
+.lset-pick.lw-pop { position: static; inset: auto; width: min(560px, 100%); max-height: none; margin-top: 8px; box-shadow: none; animation: none; }
+.lset-pick .lw-autostart-row { text-decoration: none; color: inherit; }
+.lset-pick .lw-autostart-row:hover { background: var(--lw-paper-2); }
+.lset-pick .lw-num[data-on] { color: var(--lw-ok); }
+
+/* Settings as a page of the /line app (LineSettingsStage): it fills the stage and scrolls its own body. */
+.lw-stage-fill { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; }
+.lset-head { display: flex; align-items: baseline; gap: 10px; padding: 14px 24px 6px; font-family: var(--font-mono), monospace; }
+.lset-head-t { font-size: 15px; font-weight: 600; color: var(--sol-text); }
+.lw-stage-fill.lset-pick { overflow-y: auto; }
+.lset-pick-list { list-style: none; margin: 4px 24px; padding: 0; max-width: 560px; border-top: 1px solid var(--sol-border); font-family: var(--font-mono), monospace; }
+.lset-pick-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 8px; border-bottom: 1px solid var(--sol-border); font-size: 13px; color: var(--sol-text); text-decoration: none; }
+.lset-pick-row:hover { background: var(--lw-paper-2); }

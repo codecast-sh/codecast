@@ -1,75 +1,48 @@
-Every coding agent session starts from scratch unless something carries context forward. The memory snippet gives agents that something: commands to search all past sessions, read any conversation, watch live ones, and pull relevant prior work into the current task. Memory works across tools (a Claude Code session can recall what was built in Cursor) and across the team, so an agent can learn from a colleague's session as easily as its own.
+A coding agent starts every session knowing nothing about the work that came before it. With Memory on, your agents look things up instead of working them out again: why a function backs off the way it does, what a teammate's session already tried, which session decided on the current design. They search every session you can see, across your machines, your agents and your team, read the parts that matter, and answer with the session they found it in.
 
-Memory is the foundation snippet. Installing it during setup via [the snippet system](/documentation/agent-snippets) also writes the [tasks and plans](/documentation/tasks-and-plans) section; [messaging](/documentation/messaging) is a separate snippet you turn on with `cast install messaging`.
+![A conversation where the agent looked up why codecast skips the Codecast-Session trailer for private sessions, and answered with the session it was decided in](/documentation/memory/conversation.webp "Asked why a rule exists, the agent searched past sessions, read the one where it was settled, and answered in three sentences. The session it cites is a link: click it to open that conversation.")
 
-```bash
-cast memory        # install
-cast install memory --disable
-```
+## Turn it on
 
-## Search and browse
+Memory is on by default when you connect a computer to codecast ([Getting started](/documentation#getting-started) covers connecting one). To check, or to switch it off:
 
-The snippet teaches agents to search proactively: when starting a task, when debugging, when the user references previous work, and to parallelize searches across topics. Default scope is the team, from the current directory's project:
+1. Open **Agent features** from your account menu and pick the computer.
+2. Find **Memory** under *Context*. The switch on its card turns it on or off for that computer.
+3. Click **How it works** for what changes and a question to try.
 
-```bash
-cast search "auth"                # team-wide search
-cast search "auth" --mine         # only my sessions
-cast search "auth" -m samvit      # a specific member
-cast search "auth" -g -s 7d       # all teams, last 7 days
-cast feed                         # recent team sessions
-cast feed --state needs-input     # filter by work state
-cast read jx7c6zk 15:25           # read messages 15-25 of a session
-cast read '<share-url>#msg-<id>'  # read a window around a linked message
-cast link jx7c6zk 42              # mint a deep link to any object
-```
+![The Context section of Agent features, with the Stable context and Memory cards](/documentation/memory/agent-features.webp "Memory and Stable context live under Context in Agent features. Memory lets agents look things up; Stable context tells them what happened recently before they start.")
 
-Search is hybrid: keyword matching combined with semantic similarity. If content search fails (a network or backend error), the CLI retries once on titles only. Results return original conversation fragments, not summaries, so the agent gets precise, quotable context.
+Memory and [Stable context](/documentation/ambient-awareness) work together. Stable context hands each new session a short list of recent sessions before it starts. Memory lets the agent go and find anything else, however old.
 
-```figure
-SearchPathFigure
-Keyword and semantic matches merge into one ranking of original message fragments, with a title-only retry if content search fails.
-```
+## Ask for it in plain words
 
-The same search runs in the web app's command palette, across sessions and tasks:
+Agents reach for it on their own when they start a task someone has touched before, when they debug, and when you mention earlier work. You can also ask directly:
 
-![The command palette searching "webhook retry": three sessions with matching lines and match counts, and a task](/documentation/shots/command-palette.webp "Searching from the command palette: each session shows a matching line, its author and how many messages matched.")
+- "Why does the retry logic in the sync client back off the way it does?"
+- "Has anyone on the team fixed this error before?"
+- "Do it the way we did the auth migration."
+- "What did my session on the laptop yesterday decide about the schema?"
+- "Before you start, check what's already been tried on the flaky deploy test."
 
-## Watching sessions live
+## What you see
 
-`cast sessions` is the state axis of memory: not what was said, but where every session stands right now:
+- **Answers that cite their source.** The agent names the session a decision came from, and that name is a link. Click it to open the conversation and check the reasoning yourself.
+- **Its lookups, folded away.** Each search or read shows as a small *ran …* row above the reply. Expand it to see what the agent looked for and what came back.
+- **Less repeated work.** An agent that finds a teammate's session already fixed the bug starts from that fix instead of debugging from scratch.
 
-```bash
-cast sessions                     # snapshot, grouped most actionable first
-cast sessions -w                  # live stream: one line per work state change
-cast sessions -w --json           # the same as NDJSON events for scripting
-cast sessions --label fleet -w    # watch every session filed under a label
-cast sessions --messages -w       # follow messages across live sessions
-```
+You can run the same search yourself: press **⌘K** anywhere in the app and type, then **⌘↵** for the full search page. [Search your history across every machine](/documentation/search-sessions-across-machines) covers the search page and its filters.
 
-The `-w` stream is silent until something changes, which makes it a reliable wake signal for orchestration loops (see [messaging](/documentation/messaging) for the spawn, watch, send pattern). `needs_input` means the ball is in your court: the session finished its turn, asked a question, or hit a permission prompt.
+## What it can see
 
-```figure
-WatchStreamFigure
-Three sessions over a few minutes, and the single line the stream prints at each change of state.
-```
+- **Only what you can see.** An agent searches with your access. Your private sessions are visible to your own agents, and a teammate's session shows up only if it is shared with the team. Which folders are shared is set per folder; see [Team sessions](/documentation/team-sessions).
+- **Every machine and every agent.** Sessions from all your connected computers are in one history, so an agent on your desktop can read what your laptop did. Claude Code, Codex, Cursor and Gemini sessions are all searchable, whichever agent is asking.
+- **It reads, it doesn't change.** Looking something up never edits, messages or reopens the session it reads.
 
-Labels are personal filing: `cast label set api jx7c6zk` files a session under a name, and every browse command takes `--label` to filter by it.
+## When something is off
 
-## Analysis and continuity
-
-```bash
-cast diff jx7c6zk                 # files changed, commits, tools used
-cast diff --today                 # aggregate today's work
-cast summary jx7c6zk              # goal, approach, outcome, files
-cast context "implement auth"     # find relevant prior sessions before starting
-cast ask "how does session sync work"   # natural language answer across sessions
-cast handoff                      # generate a context transfer document
-cast decisions add "Use Stripe Checkout" --reason "handles SCA"
-cast decisions list
-```
-
-`cast context` is the habit that pays off most: run it before starting anything and the agent begins with the three most relevant prior sessions instead of rediscovering them. `cast handoff` closes the other end: it distills the current session's goal, approach, and open items into a document the next session can start from.
-
-## Ambient recall
-
-Search is recall on demand. [Ambient awareness](/documentation/ambient-awareness) is recall pushed: with stable mode on, every new session starts with a feed of recent sessions already in context, no search required. The two compose: the feed tells the agent which sessions exist and their state; `cast read` and `cast search` go deep on the ones that matter.
+| What you notice | What to do |
+|-----------------|------------|
+| The agent rediscovers something you know was settled | Check that **Memory** is on for the computer the session runs on, then ask it to look the decision up |
+| A teammate's session never comes up | It may not be shared with the team. Ask them, or see [Team sessions](/documentation/team-sessions) |
+| Work from another computer is missing | That computer needs codecast running and signed in to the same account |
+| An answer quotes an old decision that was later reversed | Ask the agent to check for anything newer; it can read the later session too |
