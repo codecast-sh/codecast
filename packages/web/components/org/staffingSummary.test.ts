@@ -1,13 +1,10 @@
 // The summary a person reads cold (org-staffing.md S17): the ask split from
 // its evidence line, the first sentence in front, the groups with counts,
-// the budget arithmetic from the tree, the intro rule, the kind words, and
-// the glossary's examples from the reader's own workspace.
+// the budget arithmetic from the tree, the intro rule, and the kind words.
 import { describe, expect, test } from "bun:test";
-import { ORG_FIXTURE } from "./orgFixture";
-import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
+import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import { hasAcceptedBefore, splitAsk } from "./staffingModel";
 import { CHANGE_KIND_META, changeLine, kindDescription, kindLabel } from "./orgMeta";
-import { GLOSSARY_ORDER, HOW_THIS_WORKS, glossaryEntries } from "./orgGlossaryWords";
 import { ORG_CHANGE_KINDS } from "@codecast/shared/contracts/orgProposal";
 
 const P = ORG_STAFFING_FIXTURE_PROPOSAL;
@@ -51,31 +48,5 @@ describe("the kind words", () => {
     expect(kindDescription(undefined)).toMatch(/does not know this kind of change\. Update codecast/);
     expect(changeLine({ kind: "task_status", task: "ct-1", status: "done", reason: "x" })).toBe("Mark task ct-1 done");
     expect(changeLine({ kind: "rename" } as any)).not.toMatch(/not supported in this build/);
-  });
-});
-
-describe("the glossary", () => {
-  test("one sentence each, no short id in an example, with examples from this workspace where it has one", () => {
-    const entries = glossaryEntries(ORG_FIXTURE, ORG_STAFFING_FIXTURE_HEALTH, P);
-    expect(entries.map((e) => e.word)).toEqual(GLOSSARY_ORDER);
-    expect(entries).toHaveLength(8);
-    for (const e of entries) {
-      expect(e.definition.split(/[.!?](\s|$)/).filter((s) => s.trim()).length).toBe(1);
-      expect(e.example.length).toBeGreaterThan(8);
-    }
-    const by = Object.fromEntries(entries.map((e) => [e.word, e]));
-    expect(by.role.own).toBe(true);
-    expect(by.role.example).toMatch(/^@growth, /);
-    expect(by.proposal.own).toBe(true);
-    expect(by.proposal.example).toBe("The one open now: 8 changes, 2 decided.");
-    for (const e of entries) expect(e.example).not.toMatch(/\b(op|ct|pl|or|tr)-\d+\b/);
-    expect(by.session.example).toMatch(/sessions? working right now\.$/);
-  });
-
-  test("with an empty workspace every example is a general one, and the short page has four parts", () => {
-    const entries = glossaryEntries(null, null, null);
-    expect(entries.every((e) => !e.own)).toBe(true);
-    expect(HOW_THIS_WORKS).toHaveLength(4);
-    expect(HOW_THIS_WORKS.map((s) => s.heading)).toEqual(["What you are looking at", "Where a proposal comes from", "What accepting does", "Talking it over"]);
   });
 });

@@ -293,7 +293,7 @@ SUMMARY: <one sentence>
 
 How to decide — read the FINAL MESSAGE first and let it decide; earlier messages are context only (a wait or a plan mentioned earlier is superseded by whatever the final message says):
 - needs_input: the final message asks the human anything, offers options or a recommendation to choose from, defers a decision to a person or a meeting ("standup decides", "your call", "let me know"), hands the human an item to do — even as a plain statement, no question mark ("Yours: verify the domain", "what ships it: you commit and push", "on your side: sign in") — reports being blocked (missing access, credentials, a failing step it cannot resolve), or says it is waiting on someone. Any request, open question, or assigned item directed at the human = needs_input, however small, wherever it sits in the message.
-- done: the final message reports FINISHED work — the change built and verified, the question answered, the deliverable produced — and nothing remains for anyone: no ask, no options to pick, no item handed to the human, no unresolved blocker. A closing "next steps" list the AGENT will do itself, or a courtesy "shout if you want changes", is still done; a real question or an item for the human is not.
+- done: the final message reports FINISHED work — the change built and verified, the question answered, the deliverable produced — and nothing remains for anyone: no ask, no options to pick, no item handed to the human, no unresolved blocker. A closing "next steps" list the AGENT will do itself, or a courtesy "shout if you want changes", is still done; a real question or an item for the human is not. The deliverable can be as small as the request: when the human asked only for a reply, giving it is the finished work.
 - A plan is not a delivery: a final message that lays out an approach, proposal, design, diagnosis or estimate for work NOT yet executed ("here's how I'd fix it", a spec awaiting implementation, a proposed migration) is the start of the work, not its end — proceeding is the human's call, so needs_input even when it asks nothing.
 - A final message that stops mid-plan — it announces what it is about to do ("Now the native build:", "Let me check the logs") and a Note says the agent then halted mid-work — is NOT a delivery: the agent stopped with work unfinished, so needs_input (a human has to look).
 Findings are not asks: an audit or report that lists problems it found, gaps, risks or recommendations is a delivery (done) — the human reads it. It becomes needs_input only when the message hands the human a decision or an item ("three calls for you: whether to…", "confirm X before I continue", "which do you want").
@@ -309,7 +309,7 @@ ${messageText}`;
 
 /** The settle classifier request prod posts for a shaped tail. */
 export function settleRequest(tail: SettleTailMessage[]): SurfaceRequest {
-  return { model: CHEAP_MODEL, max_tokens: 200, temperature: 0, prompt: buildSettlePrompt(tail) };
+  return { model: CHEAP_MODEL, max_tokens: 200, prompt: buildSettlePrompt(tail) };
 }
 
 export const generateIdleSummary = internalAction({

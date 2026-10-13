@@ -18,6 +18,8 @@
 // bubble asks about that recording, which attachment it is and how long it
 // runs, are answered here rather than in the component.
 
+import { attachmentKind } from "../components/chat/chatTypes";
+
 export type VoicePlayback = {
   /** The message id currently loaded, or null when nothing is. */
   key: string | null;
@@ -127,7 +129,7 @@ export function voiceDuration(ms: number | undefined): string {
 export function voiceAttachment<T extends { mime?: string }>(
   attachments: T[] | undefined,
 ): T | undefined {
-  return attachments?.find((a) => a.mime?.startsWith("audio/"));
+  return attachments?.find((a) => attachmentKind(a) === "audio");
 }
 
 // Dev console / e2e access to the real module instance, exactly as the walkie
