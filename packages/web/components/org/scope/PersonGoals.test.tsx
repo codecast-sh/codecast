@@ -24,10 +24,13 @@ test("each goal shows what is matched to it, what moved and what stalled", () =>
   expect(html).toContain("nothing matched · stalled");
 });
 
-test("a person with no goal section is told where goals go, in their own voice or the reader's", () => {
+test("a person with no focus section is told how to give the role their focus, in their own voice or the reader's", () => {
   const own = renderToStaticMarkup(<PersonGoals own roleHandle="head" now={NOW} person={person({ has_section: false })} />);
   expect(own).toContain("You report to @head");
-  expect(own).toContain("## Goals: Ashot");
+  expect(own).toContain("it doesn&#x27;t know your focus yet");
+  // It says to tell the role, never to write a heading called "Goals" (a goal is an initiative row only).
+  expect(own).toContain("three to five priorities in the conversation");
+  expect(own).not.toContain("## Goals");
   const other = renderToStaticMarkup(<PersonGoals own={false} roleHandle="head" now={NOW} person={person({ has_section: false })} />);
   expect(other).toContain("Ashot reports to @head");
 });
