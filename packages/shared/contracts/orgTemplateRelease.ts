@@ -6,8 +6,10 @@
 // A release is classified by diffing its manifest against the release before
 // it, never by trusting its author: content (files only), structure
 // (routines, inputs, setup, evidence, ledgers, scoreboard, anything else in the
-// manifest) or authority (caps, authority, routine modes, the line, the role's
-// name and handle). The class sets the smallest version bump publish accepts.
+// manifest, including the default caps a new hire starts with) or authority
+// (authority, routine modes, the line, the role's name and handle). An upgrade
+// never applies caps to a live role, so they only shape new hires. The class
+// sets the smallest version bump publish accepts.
 
 import { compareVersions, type OrgTemplate } from "./orgTemplateManifest";
 
@@ -25,7 +27,7 @@ export type ReleaseChanges = {
   inputs_added: string[]; inputs_removed: string[];
   setup_added: string[]; setup_removed: string[];
   evidence_changed: string[]; ledgers_changed: string[]; scoreboard_changed: string[];
-  /** Human words, e.g. "caps.tokens_per_day 200000 -> 400000". */
+  /** Human words, e.g. "Line it runs: none to growth". */
   authority_changed: string[];
 };
 export type ReleaseClassification = { class: ReleaseClass; changes: ReleaseChanges };
@@ -51,7 +53,7 @@ function keyed<T extends Record<string, any>>(prev: T[] | undefined, next: T[] |
 }
 const union = (...lists: string[][]) => [...new Set(lists.flat())];
 
-const EMPTY: OrgTemplate = { schemaVersion: 2, id: "", version: "0.0.0", name: "", description: "", role: { name: "", handle: "", charter: "", caps: { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 } }, routines: [] };
+const EMPTY: OrgTemplate = { schemaVersion: 2, id: "", version: "0.0.0", name: "", description: "", role: { name: "", handle: "", charter: "" }, routines: [] };
 
 /**
  * The classification plus the plain words for each change that set its
@@ -67,9 +69,6 @@ export function explainRelease(prev: OrgTemplate | null, next: OrgTemplate): Rel
 
   // Each authority change in a person's words: the Update card shows these verbatim.
   const authority: string[] = [];
-  const amount = (n: number | undefined) => (n === undefined ? "none" : n.toLocaleString("en-US"));
-  const CAPS = { hands_per_day: "Daily hands limit", wakes_per_day: "Daily wake limit", tokens_per_day: "Daily token limit", cards: "Card limit" } as const;
-  for (const [k, label] of Object.entries(CAPS) as [keyof typeof CAPS, string][]) if (p.role.caps[k] !== next.role.caps[k]) authority.push(`${label}: ${amount(p.role.caps[k])} to ${amount(next.role.caps[k])}`);
   if (p.role.name !== next.role.name) authority.push(`Role name: ${p.role.name} to ${next.role.name}`);
   if (p.role.handle !== next.role.handle) authority.push(`Handle: ${p.role.handle} to ${next.role.handle}`);
   if (p.role.line !== next.role.line) authority.push(`Line it runs: ${p.role.line ?? "none"} to ${next.role.line ?? "none"}`);
@@ -102,6 +101,7 @@ export function explainRelease(prev: OrgTemplate | null, next: OrgTemplate): Rel
     ...inputs.added.map((k) => `input ${k} added`), ...inputs.removed.map((k) => `input ${k} removed`), ...inputs.changed.map((k) => `input ${k} changed`),
     ...setup.added.map((id) => `setup ${id} added`), ...setup.removed.map((id) => `setup ${id} removed`), ...setup.changed.map((id) => `setup ${id} changed`),
     ...changes.evidence_changed.map((id) => `evidence ${id} changed`), ...changes.ledgers_changed.map((id) => `ledger ${id} changed`), ...changes.scoreboard_changed.map((k) => `scoreboard ${k} changed`),
+    ...(["hands_per_day", "wakes_per_day", "tokens_per_day", "cards"] as const).filter((k) => p.role.caps?.[k] !== next.role.caps?.[k]).map((k) => `role.caps.${k} ${p.role.caps?.[k] ?? "none"} -> ${next.role.caps?.[k] ?? "none"}`),
     ...(["avatar", "tenure", "charter"] as const).filter((k) => !same(p.role[k], next.role[k])).map((k) => `role.${k} changed`),
     ...(["name", "description", "learn", "instance_file", "schemaVersion"] as const).filter((k) => !same(p[k], next[k])).map((k) => `${k} changed`),
   ];
@@ -240,8 +240,6 @@ const listed = (words: string[]) => (words.length <= 1 ? words.join("") : `${wor
 export function personSteps(c: ReleaseChanges, next: OrgTemplate): string[] {
   const routine = (id: string) => next.routines.find((r) => r.id === id);
   const steps: string[] = [];
-  for (const id of c.routines_added) steps.push(`Activate ${routine(id)?.title ?? id} (${routine(id)?.every}) from the role page: it arrived paused.`);
-  for (const r of c.routines_recadenced) steps.push(`Resume ${routine(r.id)?.title ?? r.id} from the role page: its cadence moved from ${r.from} to ${r.to}, so it is paused for review.`);
   for (const id of c.setup_added) { const s = next.setup?.find((x) => x.id === id); if (s?.who === "human") steps.push(`Complete the new setup step "${s.title}" from the role page.`); }
   for (const key of c.inputs_added) { const i = next.inputs?.find((x) => x.key === key); if (i) steps.push(i.kind === "secret" ? `Bind the new secret ${i.label} from the role page.` : `Answer the new input ${i.label} (${i.key})${i.required ? "" : " if its default does not fit"}.`); }
   if (c.authority_changed.length) steps.push(`Decide the authority changes (${listed(c.authority_changed)}): they arrive only as a separate authority change, never with an update.`);

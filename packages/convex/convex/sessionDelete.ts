@@ -4,6 +4,7 @@ import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { killConversation } from "./conversations";
+import { settleTaskWaits } from "./taskWaits";
 
 // Deleting a session removes it for everyone: the agent is torn down like a
 // kill, the conversation row goes at once (the change-tracked db emits the
@@ -65,6 +66,11 @@ export const purgeConversationRows = internalMutation({
         if (table === "conversation_images" && row.storage_id) {
           await ctx.storage.delete(row.storage_id).catch(() => {});
         }
+        // An open question that will never be answered fails the tasks
+        // waiting on it, so their owners re-plan (task-graph.md TG2).
+        if (table === "session_decisions" && row.status === "pending") {
+          await settleTaskWaits(ctx, row, { status: "withdrawn" });
+        }
         await ctx.db.delete(row._id);
       }
       budget -= rows.length;
@@ -84,7 +90,7 @@ export async function deleteSessionAsOwner(ctx: any, userId: Id<"users">, conver
   if (conv.user_id !== userId) throw new Error("Only the session's owner can delete it");
   if (conv.persistent) throw new Error("A role's standing session cannot be deleted");
 
-  await killConversation(ctx, userId, { conversation_id: conversationId, mark_completed: true });
+  await killConversation(ctx, userId, { conversation_id: conversationId, mark_completed: true }, { cause: "delete" });
 
   // Subagent transcripts are part of the session's content; spawned worker
   // sessions are their own conversations and stay.
