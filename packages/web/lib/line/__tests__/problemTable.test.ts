@@ -49,9 +49,11 @@ describe("problemStand: one status a problem, first match wins", () => {
   test("what the viewer can answer comes first, in the act's words", () => {
     const live = issue("a", { h: { attempts: [attempt({ live: true, end: null })] } });
     expect(stand(live, { need: { kind: "decision", mine: true } })).toEqual({ status: "you", phrase: "Fix to decide" });
-    expect(stand(issue("a"), { need: { kind: "confirm", mine: true } }).phrase).toBe("New: is this real?");
-    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).phrase).toBe("Question for you");
-    expect(stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { need: { kind: "question", mine: true } }).phrase).toBe("Question for you");
+    expect(stand(issue("a"), { need: { kind: "confirm", mine: true } }).phrase).toBe("New, not confirmed");
+    // What a station asked before its run reached a decision waits on nobody: the problem is not started.
+    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).status).toBe("notstarted");
+    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).phrase).toBe("Holds on an open question");
+    expect(stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { need: { kind: "question", mine: true } }).phrase).toBe("Holds on an open question");
   });
   test("a decision open on the newest run that is not the viewer's waits on someone else", () => {
     const card = { decisionId: "d", ref: "sd-615", headline: null, change: null, wrong: null, recommend: null, status: "pending", answer: null, note: null, answeredAt: null } as never;
@@ -68,7 +70,7 @@ describe("problemStand: one status a problem, first match wins", () => {
   });
   test("a need nobody can answer in place needs a new ask, and is never a failure", () => {
     expect(stand(issue("a"), { need: { kind: "lapsed", mine: true } })).toEqual({ status: "newask", phrase: "Fix asked, unanswered", act: "ask" });
-    expect(stand(issue("a"), { need: { kind: "stopped", mine: true, step: "Prove", ask: "Prove finished: go on to Build?" }, failed: { key: "deadend:prove", label: "x", step: "Prove" } })).toEqual({ status: "you", phrase: "Prove finished: go on to Build?" });
+    expect(stand(issue("a"), { need: { kind: "stopped", mine: true, step: "Prove", ask: "Prove finished: go on to Build?" }, failed: { key: "deadend:prove", label: "x", step: "Prove" } })).toEqual({ status: "newask", phrase: "Prove finished: go on to Build?", act: "ask" });
     // Its row says why a new ask is needed, never the group's own name; a card no session asked is asked again.
     expect(stand(issue("a"), { need: { kind: "reask", mine: true, why: "No session asked this card, so there is nobody to answer" } })).toMatchObject({ phrase: "Card has no session to answer", act: "ask" });
     expect(stand(issue("a"), { need: { kind: "reask", mine: true, why: "The step this run waits at was removed from the line" } }).phrase).toBe("Card's step was removed");
@@ -83,8 +85,8 @@ describe("problemStand: one status a problem, first match wins", () => {
     const handed = issue("a", { status: "in_review", h: { attempts: [attempt({ outcome: { tone: "waiting", end: null, text: "Handed to a person at Refine." } as never })] } });
     expect(stand(handed, { task: task({ status: "in_review" }), notes })).toEqual({ status: "failed", phrase: "Escalated at Refine: 107 of 246 findings reject the cause", cause: { key: "escalated:refine", label: "Refine handed it back" } });
   });
-  test("a build handed off for review waits on a person, never under Failed", () => {
-    expect(stand(issue("a"), { need: { kind: "review", mine: true, step: "Implement" } })).toEqual({ status: "you", phrase: "Built, waiting on a review at Implement" });
+  test("a build no session presented needs a new ask, never under Failed and never waiting on the viewer", () => {
+    expect(stand(issue("a"), { need: { kind: "review", mine: true, step: "Implement" } })).toEqual({ status: "newask", phrase: "Built, not presented", act: "ask" });
   });
   test("a failure no row names is headed by the station's handoff outcome when it gave one (ct-59445, ct-59385)", () => {
     const failed = issue("a", { h: { attempts: [attempt({ outcome: { tone: "failed", end: null, text: "Stopped: Build failed." } as never })] } });
