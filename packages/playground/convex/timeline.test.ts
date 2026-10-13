@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { mintVisitor } from "../src/lib/mint";
+import { LATEST_MESSAGES } from "./lib/limits";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -36,7 +37,7 @@ async function setup() {
   const files = (id: Id<"apps">, n: number) => t.query(internal.versions.draft, { app_id: id, number: n });
   const timeline = (id = app_id) => t.query(api.versions.list, { ...A, app_id: id });
   const room = async (id = app_id) => (await t.query(api.messages.list, { ...A, app_id: id, paginationOpts: { numItems: 50, cursor: null } })).page;
-  const view = (slug: string) => t.query(api.apps.get, { ...A, slug });
+  const view = (slug: string) => t.query(api.apps.get, { slug });
 
   // v2: a build's commit, so there is a past to go back to.
   const v1 = await files(app_id, 1);
@@ -159,15 +160,31 @@ describe("the room hears about runtime errors", () => {
   });
 });
 
-describe("the app view", () => {
+describe("the app page", () => {
   test("says when changes cannot build", async () => {
     const s = await setup();
-    expect((await s.view(s.slug))?.builds_paused).toBeNull();
+    const paused = () => s.t.query(api.apps.buildsPaused, { ...s.A, app_id: s.app_id });
+    expect(await paused()).toBeNull();
     process.env.PLAYGROUND_BUILDS_OFF = "1";
     try {
-      expect((await s.view(s.slug))?.builds_paused).toMatch(/paused/);
+      expect(await paused()).toMatch(/paused/);
     } finally {
       delete process.env.PLAYGROUND_BUILDS_OFF;
     }
+  });
+
+  test("follows the newest messages and every change still on its way while the room is closed", async () => {
+    const s = await setup();
+    const asked = await s.t.mutation(api.messages.send, { ...s.A, app_id: s.app_id, body: "make it green", mode: "change" });
+    for (let i = 0; i < LATEST_MESSAGES + 2; i++) await s.t.mutation(api.messages.send, { ...s.B, app_id: s.app_id, body: `hi ${i}`, mode: "chat" });
+    const latest = await s.t.query(api.messages.latest, { ...s.A, app_id: s.app_id });
+    expect(latest.map((m) => m.body)).toEqual([...Array.from({ length: LATEST_MESSAGES }, (_, i) => `hi ${LATEST_MESSAGES + 1 - i}`), "make it green"]);
+    expect(latest.at(-1)?.id).toBe(asked.message_id);
+    expect(latest.at(-1)?.build?.status).toBe("queued");
+  });
+
+  test("reads the app without knowing who is asking", async () => {
+    const s = await setup();
+    expect((await s.view(s.slug))?.live_version).toBe(2);
   });
 });
