@@ -3,6 +3,7 @@ import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inb
 import { useAssistantConversationIds, useAssistantScope } from "../lib/surfaces";
 import { makeCollectionSig } from "../store/wakeSig";
 import {
+  askedOfViewer,
   decisionQueueItems,
   isStackedAsk,
   sessionHasOpenQuestion,
@@ -113,7 +114,7 @@ export function buildDecisionQueue(
   meId: string | undefined,
 ): QueueItem[] {
   const mine = filterInboxScope(sessions, "mine", meId);
-  const items = decisionQueueItems(decisions, sessions, isStackedAsk);
+  const items = decisionQueueItems(decisions, sessions, (d) => isStackedAsk(d) && askedOfViewer(d, meId));
 
   // A session that has an authored decision open is already represented;
   // its AUQ row would be the same interruption counted twice.
