@@ -20,6 +20,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat } from "./lib/orgAccess";
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
 import { findDecision, findStack, finalizeAnswer, hostedAnswerRefusal, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
+import { currentDecisions } from "./lib/superseded";
 
 type Ctx = { db: any };
 type StackRow = Doc<"decision_stacks">;
@@ -80,7 +81,7 @@ async function membersOf(ctx: Ctx, stack: StackRow): Promise<Doc<"session_decisi
 // The list row: the stack plus its progress, so the queue groups and the
 // checklist header count without loading every member.
 async function listRow(ctx: Ctx, stack: StackRow) {
-  const members = await membersOf(ctx, stack);
+  const members = await currentDecisions(ctx, await membersOf(ctx, stack));
   const resolved = members.filter((m) => m.status !== "pending").length;
   const next = members.find((m) => m.status === "pending");
   return {
@@ -399,7 +400,7 @@ export const listStacksForCli = mutation({
 async function getStackCore(ctx: Ctx, userId: Id<"users">, ref: string) {
   const found = await accessibleStack(ctx, userId, ref);
   if ("error" in found) return found;
-  const members = await membersOf(ctx, found.stack);
+  const members = await currentDecisions(ctx, await membersOf(ctx, found.stack));
   const delegate = found.stack.policy.delegate_role_id ? await ctx.db.get(found.stack.policy.delegate_role_id) : null;
   return {
     stack: await listRow(ctx, found.stack),

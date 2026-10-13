@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarkdownBlocks } from "../tools/MarkdownRenderer";
 import { InlineDiff, MessageIdentityProvider } from "../InlineDiff";
+import { fileDiffRenders } from "../../test-helpers/pierreFileDiff";
 
 // End-to-end render of the message pipeline: markdown body → pre-override fence
-// dispatch → InlineDiff → DiffView, asserted on the emitted HTML. Covers what a
-// browser smoke test would eyeball, deterministically.
+// dispatch → InlineDiff → DiffView, asserted on the emitted HTML and on what
+// DiffView asked Pierre to draw (test-helpers/pierreFileDiff.tsx stands in for
+// Pierre's shadow DOM, which only a browser renders).
 
 const DIFF = [
   "diff --git a/New note.md b/New note.md",
@@ -33,8 +35,8 @@ describe("inline diff rendering", () => {
     const html = renderToStaticMarkup(<MarkdownBlocks content={MEMO} />);
     expect(html).toContain("New note.md");
     expect(html).toContain("Old note.md");
-    expect(html).toContain("diff-line-added");
-    expect(html).toContain("diff-line-removed");
+    expect(html).toContain('data-line-type="change-addition"');
+    expect(html).toContain('data-line-type="change-deletion"');
     // Status badges: A for the new file, M for the modified one
     expect(html).toContain(">A</span>");
     expect(html).toContain(">M</span>");
@@ -44,34 +46,36 @@ describe("inline diff rendering", () => {
     expect(html).not.toContain("language-cast-diff");
   });
 
-  test("modified file collapses to context: far-away filler is hidden, separator shown", () => {
+  test("modified file collapses to context: far-away filler is hidden", () => {
     const html = renderToStaticMarkup(<InlineDiff raw={DIFF} />);
     expect(html).toContain("filler line 9"); // within 3 lines of the change
     expect(html).not.toContain("filler line 20"); // far from the change — collapsed
     expect(html).toContain("expand all");
-    expect(html).toContain("⋯");
   });
 
-  test("without MessageIdentity the diff is inert; with it, each block gets ONE comment handle", () => {
-    const inert = renderToStaticMarkup(<InlineDiff raw={DIFF} />);
-    expect(inert).not.toContain("Comment on this line");
-    const live = renderToStaticMarkup(
+  test("without MessageIdentity the diff is inert; with it, every file offers line comments", () => {
+    fileDiffRenders.length = 0;
+    renderToStaticMarkup(<InlineDiff raw={DIFF} />);
+    expect(fileDiffRenders.map((r) => !!r.options?.enableGutterUtility)).toEqual([false, false]);
+    fileDiffRenders.length = 0;
+    renderToStaticMarkup(
       <MessageIdentityProvider conversationId="conv1" messageId="msg1">
         <InlineDiff raw={DIFF} />
       </MessageIdentityProvider>,
     );
-    expect(live).toContain("Comment on this line");
-    // One handle per file diff, NOT one per line — the handle glides to the
-    // hovered row. DIFF covers two files, and each has many lines, so a
-    // per-line affordance would show up here as a much larger count.
-    const handles = live.match(/aria-label="Comment on this line"/g)?.length ?? 0;
-    expect(handles).toBe(2);
-    // Rows carry the anchor the handle tracks.
-    expect(live).toContain("data-diff-row=");
+    expect(fileDiffRenders.map((r) => !!r.options?.enableGutterUtility)).toEqual([true, true]);
+  });
+
+  test("a whole-file diff can open its unchanged lines; the header expands them all", () => {
+    fileDiffRenders.length = 0;
+    renderToStaticMarkup(<InlineDiff raw={DIFF} />);
+    const modified = fileDiffRenders.find((r) => !r.fileDiff.isPartial && r.fileDiff.type === "change")!;
+    expect(modified.options?.hunkSeparators).toBe("line-info");
+    expect(modified.options?.expandUnchanged).toBe(false);
   });
 
   test("non-diff fence content falls back to a plain code block", () => {
     const html = renderToStaticMarkup(<InlineDiff raw={"not a diff at all"} />);
-    expect(html).not.toContain("diff-line-added");
+    expect(html).not.toContain("diffs-container");
   });
 });

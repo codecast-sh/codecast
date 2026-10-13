@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProposalChanges, extractOrgProposal, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
+import { applyProposalChanges, capsWords, extractOrgProposal, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
 
 describe("org proposal block", () => {
   test("round trips through a decision context", () => {
@@ -149,7 +149,7 @@ describe("parseOrgProposalSpec", () => {
       "summary_md is required: the summary a founder reads on a phone",
       "mode is one of init, review, request",
       "changes[0] (role): rationale is required",
-      "changes[1] (budget): budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number",
+      "changes[1] (budget): budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number, or null for no limit",
       "changes[1] (budget): evidence is a list of { label, href? }",
       "changes[2]: an object with change and rationale",
     ]);
@@ -1209,4 +1209,10 @@ describe("a role's charter edited in place", () => {
     const long = applyCharterEdits("y".repeat(600), [{ op: "add", line: "x".repeat(250) }]);
     expect(long.error).toBe("the charter would be 852 characters after this edit; a charter is the job in a few sentences, at most 800 characters: what the role watches, what it does on its own, and what it brings to a person; cut examples, procedures, and anything its routine or its scope already says");
   });
+});
+
+test("a budget change can remove a daily limit: null is no limit, and reads that way", () => {
+  expect(orgChangeError({ kind: "budget", handle: "growth", caps: { hands_per_day: null, tokens_per_day: null } })).toBeNull();
+  expect(orgChangeError({ kind: "budget", handle: "growth", caps: {} })).not.toBeNull();
+  expect(capsWords({ hands_per_day: null, wakes_per_day: 12 })).toBe("no limit on hands and 12 wakes");
 });

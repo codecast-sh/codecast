@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { allowAllLedger } from "./consequential/ledgers";
 import { useInboxStore } from "../store/inboxStore";
 import { formatToolName } from "@codecast/shared/render";
 
@@ -204,8 +206,13 @@ export function PermissionStackView<PId extends string>({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  // Allow all switches the session's prompts off for good, so its button opens the review of that and the review's own button does it.
+  const [allowReview, setAllowReview] = useState(false);
 
   if (pending.length === 0) return null;
+  const allowAllReview = allowReview && onAllowAll && (
+    <SwitchReview ledger={allowAllLedger({ pending: pending.length })} onClose={() => setAllowReview(false)} onConfirm={() => { setAllowReview(false); onAllowAll(); }} />
+  );
 
   const allSameTool = pending.every((p) => p.tool_name === pending[0].tool_name);
 
@@ -251,13 +258,16 @@ export function PermissionStackView<PId extends string>({
             </button>
             {onAllowAll && (
               <button
-                onClick={onAllowAll}
+                onClick={() => setAllowReview(true)}
+                aria-haspopup="dialog"
+                data-allow-all
                 title="Approve this and bypass all future permission prompts in this session"
                 className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
               >
                 Allow all
               </button>
             )}
+            {allowAllReview}
             <button
               onClick={() => onDeny(p._id)}
               disabled={inflight.has(p._id)}
@@ -302,13 +312,16 @@ export function PermissionStackView<PId extends string>({
           </button>
           {onAllowAll && (
             <button
-              onClick={onAllowAll}
+              onClick={() => setAllowReview(true)}
+              aria-haspopup="dialog"
+              data-allow-all
               title="Approve all and bypass future permission prompts in this session"
               className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
             >
               Allow all tool calls
             </button>
           )}
+          {allowAllReview}
           <button
             onClick={onDenyAll}
             className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-sol-border/40 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"

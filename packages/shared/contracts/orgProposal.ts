@@ -12,7 +12,8 @@ import { proposalChangeRefId } from "../entities";
 export const ORG_PROPOSAL_FENCE = "org-proposal";
 
 /** `cards` is the line's admission cap (line-profile.md LP6): open change cards per person. */
-export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number; cards?: number };
+/** A daily limit set to null is removed: the role has no limit on it. */
+export type OrgProposalCaps = { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null; cards?: number };
 
 // The line a role's tasks run on (the-line.md L2): a workflow slug, absent
 // meaning the shipped "line" template.
@@ -368,8 +369,8 @@ const strings = (x: any): boolean => Array.isArray(x) && x.every(nonEmpty);
 const optStrings = (x: any): boolean => x === undefined || strings(x);
 const optString = (x: any): boolean => x === undefined || typeof x === "string";
 const capsOk = (x: any): boolean => !!x && typeof x === "object" && !Array.isArray(x) &&
-  ["hands_per_day", "wakes_per_day", "tokens_per_day"].every((k) => x[k] === undefined || (typeof x[k] === "number" && x[k] >= 0)) &&
-  ["hands_per_day", "wakes_per_day", "tokens_per_day"].some((k) => typeof x[k] === "number");
+  ["hands_per_day", "wakes_per_day", "tokens_per_day"].every((k) => x[k] === undefined || x[k] === null || (typeof x[k] === "number" && x[k] >= 0)) &&
+  ["hands_per_day", "wakes_per_day", "tokens_per_day"].some((k) => typeof x[k] === "number" || x[k] === null);
 
 /** Why a change is not one, or null when it is. One message, the first fault. */
 export function orgChangeError(raw: any): string | null {
@@ -409,7 +410,7 @@ export function orgChangeError(raw: any): string | null {
     }
     case "budget": {
       const h = handle(); if (h) return h;
-      return capsOk(raw.caps) ? null : "budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number";
+      return capsOk(raw.caps) ? null : "budget caps needs at least one of hands_per_day, wakes_per_day, tokens_per_day as a non-negative number, or null for no limit";
     }
     case "trust": {
       const h = handle(); if (h) return h;
@@ -855,11 +856,12 @@ const clausesAbout = (subject: string, clauses: ReadonlyArray<(s: string) => str
 const isClause = (x: unknown): x is (s: string) => string => typeof x === "function";
 const number =(n: number) => n.toLocaleString("en-US");
 /** The three limits in words, in one order: "2 hands, 8 wakes and 800,000 tokens". */
-export function capsWords(caps: { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number }): string {
+export function capsWords(caps: { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null }): string {
   const parts: string[] = [];
-  if (caps.hands_per_day !== undefined) parts.push(`${number(caps.hands_per_day)} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
-  if (caps.wakes_per_day !== undefined) parts.push(`${number(caps.wakes_per_day)} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
-  if (caps.tokens_per_day !== undefined) parts.push(`${number(caps.tokens_per_day)} tokens`);
+  const one = (n: number | null | undefined, unit: string, units: string) => { if (n !== undefined) parts.push(n === null ? `no limit on ${units}` : `${number(n)} ${n === 1 ? unit : units}`); };
+  one(caps.hands_per_day, "hand", "hands");
+  one(caps.wakes_per_day, "wake", "wakes");
+  one(caps.tokens_per_day, "token", "tokens");
   return andList(parts);
 }
 /** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
@@ -1445,7 +1447,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${c.reports_to}` : ""}${c.scope_add?.length ? ` +${list(c.scope_add)}` : ""}${c.scope_remove?.length ? ` -${list(c.scope_remove)}` : ""}`;
     case "retire": return `retire ${at(c.handle)}`;
     case "scope": return `scope ${at(c.handle)}${c.add?.length ? ` +${list(c.add)}` : ""}${c.remove?.length ? ` -${list(c.remove)}` : ""}`;
-    case "budget": return `budget ${at(c.handle)} ${Object.entries(c.caps).filter(([, v]) => v !== undefined).map(([k, v]) => `${k.replace("_per_day", "")} ${v}/day`).join(", ")}`;
+    case "budget": return `budget ${at(c.handle)} ${Object.entries(c.caps).filter(([, v]) => v !== undefined).map(([k, v]) => `${k.replace("_per_day", "")} ${v === null ? "no limit" : `${v}/day`}`).join(", ")}`;
     case "trust": return `autonomy ${at(c.handle)} ${autonomyOn(c.trust) ? "on" : "off"}`;
     case "routine": return `routine on ${at(c.handle)}: ${c.title} every ${c.every}`;
     case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
