@@ -1,12 +1,11 @@
 // The local half's SDK: what `import ... from "codecast-mod/local"` resolves to.
 // The CLI bundles it into the local module, and the codecast daemon runs the
-// bundle in a Bun Worker on a machine where a person approved this exact
-// version. The module has the machine's full access already (it can import
-// node:fs and spawn processes itself); `$` adds the codecast side: publishing
-// values the mod's UI reads, answering the UI's calls, filing objects, and
-// running `cast`.
+// bundle in a Bun Worker on each of the author's machines. The module has the
+// machine's full access already (it can import node:fs and spawn processes
+// itself); `$` adds the codecast side: publishing values the mod's UI reads,
+// answering the UI's calls, filing objects, and running `cast`.
 
-type Init = { type: "init"; name: string; manifest: any; siteUrl: string; apiToken: string; deviceName: string; castBin: string };
+type Init = { type: "init"; name: string; manifest: any; siteUrl: string; apiToken: string; deviceName: string; castBin: string; castArgv?: string[] };
 type CallMsg = { type: "call"; id: string; method: string; args: unknown };
 type EventMsg = { type: "event"; event: string; payload: Record<string, unknown> };
 
@@ -86,7 +85,9 @@ function makeApi(): LocalApi {
       create: async (obj) => api("/cli/objects/create", obj as any),
       update: async (shortId, patch) => { await api("/cli/objects/update", { short_id: shortId, ...patch }); },
     },
-    cast: (argv, opts) => run([init!.castBin, ...argv], opts),
+    // castArgv is how the daemon itself invokes cast (a compiled binary, or bun
+    // and the CLI entry from a checkout): a daemon's PATH often has no `cast`.
+    cast: (argv, opts) => run([...(init!.castArgv ?? [init!.castBin]), ...argv], opts),
     sh: (command, opts) => run([process.env.SHELL || "/bin/sh", "-lc", command], opts),
     every(ms, fn) {
       const t = setInterval(() => { Promise.resolve().then(fn).catch((err) => console.error(`every(${ms}): ${errorText(err)}`)); }, Math.max(ms, 1000));
