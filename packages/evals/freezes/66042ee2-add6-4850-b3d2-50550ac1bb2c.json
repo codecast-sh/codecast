@@ -1,0 +1,26 @@
+{
+  "name": "card-write failing-check",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:failing-check"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "card-write:failing-check",
+    "title": "card-write failing-check"
+  },
+  "asOf": "2026-09-22T12:00:00.000Z",
+  "trigger": {
+    "type": "card-write"
+  },
+  "meta": {
+    "surface": "card-write",
+    "visibility": "public",
+    "snapshot": "fixtures/card-write/failing-check.json"
+  },
+  "judge": "a person who never saw the work can judge Ship, Revise or Drop from the six fields alone, and every claim in them matches what the card records (its checks, proof, examples and diff), with no result stated stronger than the card shows",
+  "notes": null,
+  "tags": [],
+  "id": "66042ee2-add6-4850-b3d2-50550ac1bb2c",
+  "createdAt": "2026-10-07T17:30:45.754Z"
+}
