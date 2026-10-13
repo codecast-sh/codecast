@@ -55,7 +55,7 @@ describe("the seen record", () => {
 
   test("the preview flag suppresses writes", () => {
     expect(toursWriteSuppressed("?preview=1")).toBe(true);
-    expect(toursWriteSuppressed("?view=health&preview=1")).toBe(true);
+    expect(toursWriteSuppressed("?proposal=op-3&preview=1")).toBe(true);
     expect(toursWriteSuppressed("?preview=10")).toBe(false);
     expect(toursWriteSuppressed("")).toBe(false);
     expect(toursWriteSuppressed("?tour=org-page")).toBe(false);

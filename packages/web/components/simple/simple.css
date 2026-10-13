@@ -215,24 +215,28 @@
 .sl-composer textarea::placeholder { color: var(--sl-faint); }
 .sl-composer textarea:focus-visible { outline: none; }
 
-/* The app's hosted send (globals.css [data-cc-send]): an ink disc with a
-   paper arrow, the accent only under the pointer or the press, and the same
-   disc at a quarter strength while there is nothing to send. */
+/* The app's hosted send (globals.css [data-cc-send]), state for state: an
+   ink disc with a paper arrow once there is something to send, the accent
+   only under the pointer or the press, and while empty a hairline ring with
+   the arrow in muted ink at full strength. The home and the conversation
+   then draw one button. */
 .sl-send {
   flex: none;
   display: grid;
   place-items: center;
-  width: 2.6rem;
-  height: 2.6rem;
+  width: 40px;
+  height: 40px;
   border: 0;
   border-radius: 999px;
   background: var(--sl-ink);
   color: var(--sl-sheet);
   cursor: pointer;
-  transition: transform 180ms var(--sl-ease), opacity 180ms var(--sl-ease), background-color 180ms var(--sl-ease);
+  transition: transform 120ms var(--sl-ease), background-color 120ms var(--sl-ease), color 120ms var(--sl-ease), box-shadow 120ms var(--sl-ease);
 }
 .sl-send:disabled {
-  opacity: 0.25;
+  background: transparent;
+  color: var(--sl-soft);
+  box-shadow: inset 0 0 0 1px var(--sl-line-strong);
   cursor: default;
 }
 .sl-send:not(:disabled):hover { transform: translateY(-1px); background: var(--sl-accent); color: var(--sl-on-solid); }

@@ -1,0 +1,28 @@
+{
+  "asOf": "2026-09-22T12:00:00.000Z",
+  "notes": "a code fix with a red-then-green proof, every check green and a reviewer's approval: the words should recommend ship and name the proof",
+  "snapshot": {
+    "task": { "short_id": "ct-9101", "title": "Checkout total ignores the discount code after the shipping step" },
+    "card": {
+      "cause": { "task": "ct-9101", "title": "Checkout total ignores the discount code after the shipping step", "signals": 3, "first_seen": 1789732800000, "sources": ["support", "sdk:shop-web"] },
+      "goal": { "ref": "pj-12", "name": "Shop: checkout", "why": "Every shopper who reaches the cart can pay in under a minute and is charged exactly the total the cart shows." },
+      "wrong": "",
+      "change": "",
+      "proof": {
+        "before": [{ "name": "Test: discount survives a shipping change", "ok": false, "detail": "fails before the change: charged 84.00, expected 71.40" }],
+        "after": [{ "name": "Test: discount survives a shipping change", "ok": true, "detail": "passes after the change" }]
+      },
+      "examples": [],
+      "checks": [
+        { "name": "Verify", "ok": true, "detail": "The builder handed it over as done" },
+        { "name": "Typecheck", "ok": true, "detail": "0 errors" },
+        { "name": "Tests", "ok": true, "detail": "412 passed, 0 failed" },
+        { "name": "Review", "ok": true, "detail": "An independent reviewer approved it" }
+      ],
+      "diff": { "files": 3, "added": 41, "removed": 9 },
+      "risk": { "class": "review", "reason": "It touches how the amount charged is computed, so it gets a careful look." },
+      "recommend": { "verdict": "", "why": "" },
+      "cost": { "tokens": 0, "usd": 1.12, "minutes": 38 }
+    }
+  }
+}

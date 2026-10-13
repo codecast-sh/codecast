@@ -48,6 +48,7 @@ project = "Infrastructure"
 function tmpRepo(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "line-profile-"));
   fs.mkdirSync(path.join(dir, ".git"));
+  fs.writeFileSync(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
   for (const [rel, body] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     fs.writeFileSync(path.join(dir, rel), body);
@@ -131,6 +132,13 @@ describe("line profile (LP2)", () => {
     expect(sentence.warnings).toEqual(['[[line.finders]] "a" kind = "prompt_miss, bug or request" is a sentence; write the list: kind = ["prompt_miss", "bug", "request"]']);
   });
 
+  test("opens_causes is the finder's explicit conversion step: true keeps it, false drops it, anything else is refused", () => {
+    const parse = (v: string) => parseLineProfileText(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nopens_causes = ${v}`, ".codecast/line.toml");
+    expect(parse("true").values.finders![0].opens_causes).toBe(true);
+    expect("opens_causes" in parse("false").values.finders![0]).toBe(false);
+    expect(() => parse(`"yes"`)).toThrow('[[line.finders]] "a" opens_causes must be true or false');
+  });
+
   test("the loader walks up from a subdirectory to the profile, and stops at the repository root", () => {
     const repo = tmpRepo({ ".codecast/line.toml": `[line]\nproject = "Agent Quality"\n`, "outreach/backend/x.ts": "" });
     const r = loadLineProfile(path.join(repo, "outreach", "backend"));
@@ -140,6 +148,13 @@ describe("line profile (LP2)", () => {
     const bare = tmpRepo({ "src/a.ts": "" });
     expect(findLineProfile(path.join(bare, "src"))).toEqual({ file: null, root: bare });
     expect(loadLineProfile(bare).profile.commands.check).toBe("cast ws check");
+  });
+
+  test("a .git directory that is no repository (a leftover of hooks) does not stop the walk", () => {
+    const repo = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Union"\n`, "outreach/.git/hooks/pre-commit": "", "outreach/x.ts": "" });
+    expect(loadLineProfile(path.join(repo, "outreach")).profile.team).toBe("Union");
+    const worktree = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Union"\n`, "wt/.git": "gitdir: /elsewhere\n", "wt/x.ts": "" });
+    expect(findLineProfile(path.join(worktree, "wt"))).toEqual({ file: null, root: path.join(worktree, "wt") });
   });
 
   test("Union's committed profile loads, and only its sentence kinds warn", () => {
