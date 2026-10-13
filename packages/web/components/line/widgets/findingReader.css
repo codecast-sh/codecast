@@ -1,0 +1,79 @@
+/* One finding, opened in place (FindingReader). The row is three facts on one
+   baseline: who, when, the objection, which wraps and is never cut. */
+.fr { list-style: none; border-top: 1px solid var(--lw-rule-2); }
+.fr:first-child { border-top: 0; }
+.fr-row {
+  display: grid; grid-template-columns: 12px minmax(7ch, 13ch) 13ch minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px;
+  width: 100%; padding: 9px 14px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: background var(--lw-fast);
+}
+button.fr-row:hover { background: color-mix(in srgb, var(--lw-ink) 3.5%, transparent); }
+button.fr-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
+.fr-row .lw-chev { align-self: center; }
+.fr[data-open] > .fr-row .lw-chev { transform: rotate(45deg) translate(-1px, -1px); }
+.fr-who { font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink); overflow-wrap: anywhere; }
+.fr-at { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fr-words { font-size: var(--lw-fs-base); line-height: 1.45; color: var(--lw-ink); overflow-wrap: anywhere; }
+.fr[data-open] .fr-words { font-weight: 600; }
+.fr-off { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.fr[data-since] > .fr-row { box-shadow: inset 2px 0 0 var(--lw-bad); }
+/* A paragraph reads at the row's full width, on its own line under who and when. */
+.fr[data-long] .fr-words { grid-column: 2 / -1; }
+.fr[data-long] > .fr-row .lw-chev { align-self: baseline; }
+
+.fr-open { padding: 2px 14px 16px 38px; display: flex; flex-direction: column; gap: 12px; min-width: 0; animation: lw-fade var(--lw-med) both; }
+.fr-title { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); line-height: 1.5; max-width: 86ch; }
+.fr-text { display: flex; flex-direction: column; gap: 10px; max-width: 86ch; font-size: var(--lw-fs-base); line-height: 1.6; color: var(--lw-ink); }
+.fr-text p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fr-text blockquote { margin: 0; padding: 6px 12px; border-left: 3px solid color-mix(in srgb, var(--lw-warn) 70%, var(--lw-rule)); background: color-mix(in srgb, var(--lw-warn) 9%, transparent); border-radius: 0 var(--lw-r-sm) var(--lw-r-sm) 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fr-text pre { margin: 0; padding: 10px 12px; border-radius: var(--lw-r-sm); background: var(--lw-sunk); font-family: var(--lw-mono); font-size: var(--lw-fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fr-none { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.fr-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.fr-link { display: inline-flex; align-items: center; gap: 4px; }
+.fr-wrong { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fr-wrong input { width: min(44ch, 60vw); height: 28px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-sm); background: var(--lw-card); color: var(--lw-ink); font: inherit; font-size: var(--lw-fs-sm); }
+.fr-wrong input:focus { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: 0; }
+
+/* A row the feed has not brought yet: the same height as a real one. */
+.fr-wait .fr-row { cursor: default; grid-template-columns: 12px 13ch 13ch minmax(0, 1fr); }
+.fr-wait .fr-row::before { content: ""; }
+.fr-ph { display: block; height: 10px; margin: 5px 0; border-radius: 5px; background: color-mix(in srgb, var(--lw-ink) 8%, transparent); animation: fr-wait 1.4s ease-in-out infinite alternate; }
+@keyframes fr-wait { from { opacity: .45; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .fr-ph, .fr-open { animation: none; } }
+
+@container (max-width: 640px) {
+  .fr-row { grid-template-columns: 12px minmax(0, 1fr) auto; }
+  .fr-words { grid-column: 2 / -1; }
+}
+
+/* A row that is the whole finding: no chevron, no pointer. */
+.fr[data-whole] > .fr-row { cursor: default; }
+.fr-link { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+
+/* An event source's finding opened: the error group, as its source reported it. */
+.eg { display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 110ch; }
+.eg-facts { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; }
+.eg-facts > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.eg-facts dt { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.eg-facts dd { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink); overflow-wrap: anywhere; }
+.eg-facts dd[data-tone="bad"] { color: var(--lw-bad); }
+.eg-facts code, .eg-samples code { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); }
+.eg-ref { display: inline-flex; align-items: center; gap: 3px; font-family: var(--lw-mono); }
+.eg-stack { padding: 8px 0; border-radius: var(--lw-r-sm); background: var(--lw-sunk); font-family: var(--lw-mono); font-size: var(--lw-fs-xs); line-height: 1.6; overflow-x: auto; }
+.eg-stack > div { padding: 0 12px; white-space: pre; color: var(--lw-ink-3); }
+.eg-stack > div:not([data-frame]) { color: var(--lw-ink); font-weight: 600; white-space: pre-wrap; }
+.eg-stack > div[data-inapp] { color: var(--lw-ink); background: color-mix(in srgb, var(--lw-bad) 8%, transparent); box-shadow: inset 2px 0 0 var(--lw-bad); }
+.eg-more { margin: 4px 12px 0; font-family: inherit; }
+.eg-samples { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.eg-samples li { display: grid; grid-template-columns: 13ch minmax(0, 1fr) auto auto; gap: 12px; align-items: baseline; font-size: var(--lw-fs-sm); }
+.eg-msg { overflow-wrap: anywhere; color: var(--lw-ink); }
+.eg-dim { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fr-call { max-width: 860px; }
+
+/* A finding that says nothing: its row is dim, it is no evidence. */
+.fr[data-empty] .fr-words { color: var(--lw-ink-3); font-style: italic; }
+.fr-quote { margin: 0; display: grid; gap: 3px; }
+.fr-quote figcaption { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fr-times { color: var(--lw-ink-2); font-weight: 650; }
+.fr-cut { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: var(--lw-fs-xs); color: var(--sol-orange); }
+.fr-cut[data-line-finding-cut="loading"] { color: var(--lw-ink-3); }
