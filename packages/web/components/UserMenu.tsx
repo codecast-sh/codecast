@@ -13,11 +13,12 @@ import { useSurfaceMode } from "../lib/surfaces";
 import { useTheme } from "./ThemeProvider";
 import {
   Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
-  FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
+  FileText, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
   Blocks, Library, Sun, Moon, SquareTerminal, Gauge,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { objectHref, personRefOf } from "../lib/entityLinks";
 
 function MenuItem({
   icon: Icon,
@@ -154,6 +155,7 @@ export function UserMenu() {
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
 
   const go = (path: string) => { setOpen(false); router.push(path); };
+  const profileHref = user ? objectHref("person", personRefOf(user)) : "/org";
   // One rule with the palette and the rail: a page whose surface hosted mode
   // hides is not offered here either, and the developer-only verbs (tours of
   // the agent inbox, the changelog, admin tools) go with them.
@@ -163,12 +165,11 @@ export function UserMenu() {
     mode.showsPage(path) ? <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} /> : null;
   // In hosted mode the rail already holds every page this group would repeat.
   const pages = hosted ? [] : [
-    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />,
+    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(profileHref)} />,
     page(Rss, "Feed", "/feed"),
     page(Radio, "Crosstalk", "/crosstalk"),
     page(ListChecks, "Tasks", "/tasks"),
     page(FileText, "Documents", "/docs"),
-    page(FolderGit2, "Projects", "/projects"),
     page(SquareTerminal, "Sessions", "/sessions"),
     page(CalendarClock, "Workflows", "/routines"),
     page(Waypoints, "Line", "/line"),
@@ -199,7 +200,7 @@ export function UserMenu() {
       {open && (
         <div className="cc-topbar-menu absolute right-0 mt-2 w-60 max-h-[calc(100vh-4rem)] overflow-y-auto overscroll-contain bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
-            onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)}
+            onClick={() => go(profileHref)}
             className="w-full px-3 py-2.5 border-b border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
           >
             <div className="flex items-center gap-2">
