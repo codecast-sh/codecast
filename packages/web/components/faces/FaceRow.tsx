@@ -31,12 +31,13 @@ import { ChevronLeft, EyeOff, GripHorizontal, Link2, Maximize2, MicOff, Minus, P
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { AVATAR_URLS } from "../../lib/orgAvatars";
 import { useInboxStore } from "../../store/inboxStore";
-import { callRoomOf, type FaceEntry, type FaceRow as FaceRowModel, type FaceState, type LinkKind } from "../../lib/faces/faceRow";
+import { callRoomOf, markFaceRead, type FaceEntry, type FaceRow as FaceRowModel, type FaceState, type LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
 import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../lib/calls/callManager";
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
 import { useOpenDm } from "../../hooks/useOpenDm";
+import { closeFacePanel, getFaceChat, openFacePanel, useFaceChatBadge, useFaceChatPanelId } from "../../lib/chat/faceChat";
 import { FaceCard, GuestFaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
 import { useVideoFrame } from "../../lib/calls/videoFrames";
@@ -223,6 +224,9 @@ function FaceSeat({
   const presence = PRESENCE_OF[entry.state];
   const canOpen = callsEnabled || !entry.me;
   const openDm = useOpenDm();
+  // Red is messages: what they said that this window showed and you have
+  // not opened, plus DM unread beyond it (lib/chat/faceChat).
+  const unread = useFaceChatBadge(entry.id, entry.unread);
 
   return (
     <div
@@ -264,8 +268,9 @@ function FaceSeat({
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (stacked) onExpand();
-          else if (canOpen) onToggle(entry.id);
+          if (stacked) return onExpand();
+          if (unread > 0) markFaceRead(entry.id);
+          if (canOpen) onToggle(entry.id);
         }}
         onPointerDown={onPress}
       >
@@ -295,22 +300,26 @@ function FaceSeat({
       ) : (
         presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />
       )}
-      {/* The count is a door: one click goes straight to the conversation.
-          The card under the face says the same thing in words. */}
-      {entry.unread > 0 && !stacked && (
+      {/* The count is a door: one click opens what they have been saying,
+          under the face, with a reply box. Off the header (the float, the
+          stage) there is no panel to open, so it goes to the conversation. */}
+      {unread > 0 && !stacked && (
         <button
+          key={unread}
           type="button"
           className="face-unread"
-          aria-label={`${entry.unread} unread from ${entry.name}: open the conversation`}
-          title={`${entry.unread} unread: open the conversation`}
+          aria-label={`${unread} unread from ${entry.name}: show their messages`}
+          title={`${unread} unread: show their messages`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            openDm([entry.id]);
+            if (density === "bar") openFacePanel(entry.id);
+            else openDm([entry.id]);
+            markFaceRead(entry.id);
           }}
         >
-          {entry.unread > 99 ? "99+" : entry.unread}
+          {unread > 99 ? "99+" : unread}
         </button>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
@@ -487,6 +496,28 @@ export function FaceRow({
     setOpenId(id);
     setPinned(true);
   };
+  // Chat from the face (lib/chat/faceChat): a click on a count or a bubble
+  // asks for that person's card, pinned, with their messages in it. Any card
+  // the header opens is where they are read, so their next lines land in it
+  // rather than drop over it, and their count clears.
+  const facePanel = useFaceChatPanelId();
+  useLayoutEffect(() => {
+    if (density !== "bar" || !facePanel) return;
+    // Already open on a hover: a click on their count pins it.
+    if (facePanel === openId) return void (getFaceChat().panel?.focus && setPinned(true));
+    if (!row.entries.some((e) => e.id === facePanel)) return;
+    clearTimers();
+    setOpenId(facePanel);
+    setPinned(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the request's edge only
+  }, [facePanel]);
+  useLayoutEffect(() => {
+    if (density !== "bar") return;
+    if (!openId) closeFacePanel();
+    else if (getFaceChat().panel?.authorId !== openId) openFacePanel(openId, false);
+  }, [openId, density]);
+  // The row going away takes its card with it.
+  useLayoutEffect(() => () => void (density === "bar" && closeFacePanel()), [density]);
   // A pinned card closes on a press anywhere else, and on Escape. Listening
   // only while there is a card to close keeps a resting row off the window.
   useEventListener("pointerdown", (e: Event) => {

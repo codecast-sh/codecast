@@ -142,19 +142,24 @@ describe("auth recovery through the backend handler", () => {
     expect(f.tables.daemon_commands).toHaveLength(0);
   });
 
-  test("a credential push revives only remote auth parks, once per incident bucket", async () => {
+  test("a credential push restarts only auth parks on online remotes, on the remote itself", async () => {
     const f = fixture();
-    f.tables.devices.push({ _id: "devices_remote", user_id: "users_owner", device_id: "remote", is_remote: true });
+    f.tables.devices.push(
+      { _id: "devices_remote", user_id: "users_owner", device_id: "remote", is_remote: true, last_seen: f.now },
+      { _id: "devices_asleep", user_id: "users_owner", device_id: "asleep", is_remote: true, last_seen: f.now - 86_400_000 },
+    );
     f.tables.conversations.push(f.conversation("conversations_local"),
       f.conversation("conversations_remote", "auth", { owner_device_id: "remote" }),
+      f.conversation("conversations_asleep", "auth", { owner_device_id: "asleep" }),
       f.conversation("conversations_limit", "limit", { owner_device_id: "remote" }));
     const auth = { async getUserIdentity() { return { subject: "users_owner|session" }; } };
-    const run = () => (reviveAuthBlockedOnRemotes as any)._handler({ db: f.db, auth }, {});
-    expect(await run()).toEqual({ continued: 1 });
-    expect(await run()).toEqual({ continued: 1 });
-    expect(f.tables.pending_messages).toHaveLength(1);
-    expect(f.tables.pending_messages[0]).toMatchObject({ conversation_id: "conversations_remote", content: "continue" });
-    expect(f.tables.daemon_commands).toHaveLength(0);
+    expect(await (reviveAuthBlockedOnRemotes as any)._handler({ db: f.db, auth }, {})).toEqual({ continued: 1 });
+    // A process that read a signed-out login answers a bare continue with
+    // "Not logged in" again, so the session is restarted, not messaged.
+    expect(f.tables.pending_messages).toHaveLength(0);
+    expect(f.tables.daemon_commands).toHaveLength(1);
+    expect(f.tables.daemon_commands[0]).toMatchObject({ command: "switch_account", target_device_id: "remote" });
+    expect(JSON.parse(f.tables.daemon_commands[0].args)).toMatchObject({ conversation_ids: ["conversations_remote"], continue_blocked: true });
   });
 });
 

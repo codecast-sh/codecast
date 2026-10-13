@@ -1,6 +1,7 @@
 "use client";
 
 import { useHostedMode, useModeWords } from "../../lib/surfaces";
+import { Button } from "../ui/button";
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
@@ -27,11 +28,12 @@ import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeC
 // A decision about a change card (LE11) answers Ship, Revise or Drop through
 // the card's own controls (ChangeCardAnswer), whatever surface renders it.
 /** `record` is a card's answer on record in words (cardOutcome's pill); other kinds show theirs on the rows. */
-type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0] & { record?: string };
+/** `caption: false` leaves out the card's "X recommended: why" line where the surface already leads with the recommendation. */
+type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0] & { record?: string; describe?: boolean; caption?: boolean };
 export function DecisionAnswerControls(props: AnswerControlsProps) {
   const indexes = cardAnswerIndexes(props.decision);
-  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} keyScope={props.keyScope} size={props.size} record={props.record} />;
-  const { record: _record, ...rest } = props;
+  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} keyScope={props.keyScope} size={props.size} record={props.record} describe={props.describe} caption={props.caption} />;
+  const { record: _record, describe: _describe, caption: _caption, ...rest } = props;
   return <GenericAnswerControls {...rest} />;
 }
 
@@ -132,10 +134,10 @@ function GenericAnswerControls({
 
   const compact = size !== "full";
   const submitBtn = (
-    <button onClick={submit} className={`flex items-center gap-2 rounded border border-sol-green/40 text-sol-text transition-colors hover:bg-sol-green hover:text-sol-bg ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"}`}>
+    <Button variant="green" size={compact ? "xs" : "default"} onClick={submit}>
       {keys && <KeyCap size="xs">return</KeyCap>}
       <span>{ANSWER_WORDS.send}</span>
-    </button>
+    </Button>
   );
   // The marks after a label: a lead's recommendation, the default the agent
   // is already proceeding with on an advisory ask.

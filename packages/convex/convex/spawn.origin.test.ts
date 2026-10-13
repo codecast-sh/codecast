@@ -93,3 +93,30 @@ describe("a shared cloud park from the CLI", () => {
     await expect(park([host], "not-a-device")).rejects.toThrow("Not a cloud host you own");
   });
 });
+
+describe("a handoff starts on the source's machine", () => {
+  test("even when another online machine claims the same path", async () => {
+    const now = Date.now();
+    const path = "/home/ubuntu/src/union-mobile";
+    const db = makeFakeDb({
+      users: [{ _id: OWNER }],
+      conversations: [{ ...PARENT, project_path: path, owner_device_id: "source-box" }],
+      devices: [
+        { _id: "d1", user_id: OWNER, device_id: "source-box", platform: "linux", last_seen: now - 10 * 60_000, local_project_roots: [path] },
+        { _id: "d2", user_id: OWNER, device_id: "other-vm", platform: "linux", last_seen: now, local_project_roots: ["/home/ubuntu/src"] },
+      ],
+    });
+    const ctx = { db, scheduler: { runAfter: async () => {} }, auth: { getUserIdentity: async () => ({ subject: `${OWNER}|session` }) } };
+    const result = await (createSessionFromCli as any)._handler(ctx, {
+      agent_type: "claude_code",
+      prompt: "continue",
+      project_path: path,
+      spawner_session: PARENT._id,
+      handoff_from_session: PARENT._id,
+    });
+    const child = await db.get(result.conversation_id);
+    const start = db._inserted.find((e: any) => e.table === "daemon_commands")?.doc;
+    expect(child.owner_device_id).toBe("source-box");
+    expect(start?.target_device_id).toBe("source-box");
+  });
+});

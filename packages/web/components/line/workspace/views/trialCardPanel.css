@@ -1,0 +1,10 @@
+/* The card's full proposal is read, never answered: its answers sit once, under the evidence (TrialCardPanel). */
+.lwt-readonly [data-card-answer],
+.lwt-readonly div:has(> [data-option-list]),
+.lwt-readonly [data-trial-record] { display: none; }
+/* The Trial tag opens the trial. */
+a.ld-trial { text-decoration: none; transition: border-color var(--lw-fast, .12s); }
+a.ld-trial:hover { border-color: var(--sol-magenta); }
+
+/* The answers of a card its run asks at its own gate, under the evidence they decide on. */
+.ld-gate-answer { margin-top: 20px; }
