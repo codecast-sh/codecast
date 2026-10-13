@@ -26,11 +26,20 @@
 export const CLAIM_GRACE_MS = 120_000;
 
 export interface ClaimableCommand {
+  command?: string;
   executed_at?: number;
   claimed_by?: string;
   claimed_at?: number;
   claimed_device?: string;
 }
+
+/** Commands that start one piece of work which must run exactly once, on any one
+ *  machine. An untargeted run_workflow (the line's sweep starts a run on no
+ *  device in particular) broadcast to every machine, and each machine's lease
+ *  granted it: the laptop and the cloud host both ran the same run, both wrote
+ *  its stations, and the loser's stale timeout failed the winner's live run
+ *  (ct-57972, 2026-10-13). For these, a hold anywhere is a hold. */
+export const EXCLUSIVE_COMMANDS: ReadonlySet<string> = new Set(["run_workflow"]);
 
 /** Who is asking. The boot id names the process, the device names the machine.
  *  Either can be missing during a rollout, and both missing values fail toward
@@ -56,7 +65,7 @@ export function decideCommandClaim(row: ClaimableCommand, claimer: Claimer, now:
   // comparison have to be known: a hold written before the device rode along
   // has no device, and treating that as "elsewhere" would drop the lease for
   // the two minutes it takes such rows to age out.
-  if (row.claimed_device && claimer.deviceId && row.claimed_device !== claimer.deviceId) return "grant";
+  if (row.claimed_device && claimer.deviceId && row.claimed_device !== claimer.deviceId && !EXCLUSIVE_COMMANDS.has(row.command ?? "")) return "grant";
   if (now - (row.claimed_at ?? 0) >= CLAIM_GRACE_MS) return "grant";
   return "held_by_other";
 }

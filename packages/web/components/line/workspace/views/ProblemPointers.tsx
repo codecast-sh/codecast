@@ -1,0 +1,34 @@
+"use client";
+// Where the problems no answer can reach live (line-journeys.md LJ8.1, LJ8.5):
+// one quiet line per Problems chip, each opening that chip. The counts are the
+// Problems list's own (every process, no chip or search), so the chip opened
+// shows the same number. For you lists them under its list; Line names the
+// idle ones above its steps.
+import { useMemo } from "react";
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
+import { STATUS_LABELS, type StatusKey } from "../../../../lib/line/problemStatus";
+import { useProblemList } from "./timeline/useProblemList";
+import type { LineViewProps } from "./types";
+import "./pointers.css";
+
+/** The Problems list's count per chip, over every process with no chip or search. */
+export function useProblemCounts({ model, workspace, selection }: Pick<LineViewProps, "model" | "workspace" | "selection">): Record<StatusKey, number> {
+  const unfiltered = useMemo(() => ({ ...selection, status: null, process: null, q: null, sort: null }), [selection]);
+  return useProblemList(model, workspace, unfiltered).counts.by;
+}
+
+/** The pointers for `keys` that hold something, in that order. */
+export function ProblemPointers({ keys, counts, href, className, label }: Pick<LineViewProps, "href"> & { keys: ReadonlyArray<StatusKey>; counts: Record<StatusKey, number>; className?: string; label: string }) {
+  const shown = keys.filter((k) => counts[k] > 0);
+  if (!shown.length) return null;
+  return (
+    <nav className={className} aria-label={label}>
+      {shown.map((k) => (
+        <Link key={k} className="lw-pointer" href={href({ view: "problems", status: k, need: null, decision: null, card: null })} data-line-pointer={k}>
+          <span>{STATUS_LABELS[k]}</span><span className="lw-num">{counts[k]}</span><ChevronRight className="lw-pointer-go" aria-hidden />
+        </Link>
+      ))}
+    </nav>
+  );
+}
