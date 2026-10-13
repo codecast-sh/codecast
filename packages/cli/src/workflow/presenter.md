@@ -60,8 +60,8 @@ one answer to it, never the question. The answers are the open courses, yours
 first, each said as what it does, then `::` and the fact that sizes it and what
 happens next; no two leave people in the same place. The context is a few
 sentences, well under a hundred words, read at a glance on a phone: what was
-wrong, what the change does, what cuts hardest against your lean, and what you
-would do.
+wrong, what the change does, what cuts hardest against your lean, what you
+would do, and why you would still do it given that.
 
 ## Only what the record holds
 
