@@ -10,6 +10,7 @@ import {
   relevanceTier,
   termSpans,
   snippetAround,
+  stripWrapperTags,
   contentMatchesAnyTerm,
 } from "./terms";
 
@@ -158,5 +159,29 @@ describe("marks and snippets", () => {
   test("no hit: the opening of the text", () => {
     expect(snippetAround("nothing here", parseQueryTerms("zebra"))).toBe("nothing here");
     expect(contentMatchesAnyTerm("nothing here", parseQueryTerms("zebra"))).toBe(false);
+  });
+});
+
+describe("stripWrapperTags", () => {
+  test("a wrapper goes, its words and line breaks stay", () => {
+    expect(stripWrapperTags('<session-message from="jx7">Run tr-1 finished.\n\n**First thing today:** call</session-message>'))
+      .toBe("Run tr-1 finished.\n\n**First thing today:** call");
+  });
+
+  test("a snippet cut from the stripped text never opens inside an attribute", () => {
+    const raw = `${"x ".repeat(200)}<task-notification id="sp0vqx8v4s598fq7bh">Run jx71be5 needs attention: [call cards] Your call</task-notification>`;
+    const snippet = snippetAround(stripWrapperTags(raw), parseQueryTerms("call"), 120);
+    expect(snippet).not.toContain("sp0vqx8v4s598fq7bh");
+    expect(snippet).toContain("Run jx71be5");
+  });
+
+  test("the cut tail of a stored snippet goes too", () => {
+    expect(stripWrapperTags('...sp0vqx8v4s598fq7bh">Run jx71be5 finished')).toBe("Run jx71be5 finished");
+  });
+
+  test("prose and code with angle brackets stay", () => {
+    expect(stripWrapperTags("if a < b and b > c")).toBe("if a < b and b > c");
+    expect(stripWrapperTags("use <div> here")).toBe("use <div> here");
+    expect(stripWrapperTags('say "hi" > out')).toBe('say "hi" > out');
   });
 });

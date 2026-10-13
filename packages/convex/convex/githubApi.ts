@@ -1535,6 +1535,16 @@ export const listPRChecks = internalAction({
   },
 });
 
+/** The jobs of one GitHub Actions run, by name, with how each ended (null while running). */
+export const listRunJobs = internalAction({
+  args: { repository: v.string(), run_id: v.string(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<Array<{ name: string; conclusion: string | null }>> => {
+    const [owner, repo] = repoParts(args.repository);
+    const data = await ghFetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/actions/runs/${encodeURIComponent(args.run_id)}/jobs?per_page=100`, args.github_access_token);
+    return (data.jobs ?? []).map((j: any) => ({ name: String(j.name), conclusion: j.conclusion ?? null }));
+  },
+});
+
 export type PRCommit = {
   sha: string;
   message: string;

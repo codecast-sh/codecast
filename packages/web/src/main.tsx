@@ -1,5 +1,6 @@
 import { bootAfterHandoffGate, isStandaloneSharePath } from "../lib/desktopHandoff";
 import "../app/globals.css";
+import { startRouteModule } from "./earlyRoutes";
 
 /**
  * The app entry is deliberately almost empty. Everything real lives in
@@ -20,5 +21,8 @@ import "../app/globals.css";
 bootAfterHandoffGate(() => {
   // Share pages boot standalone: they hydrate server-rendered markup and never
   // need the store, the inbox, or auth. Everything else is the app.
-  void (isStandaloneSharePath(window.location.pathname) ? import("./shareBoot") : import("./boot"));
+  if (isStandaloneSharePath(window.location.pathname)) return void import("./shareBoot");
+  // The route's own modules load beside boot's, not after the shell reaches it.
+  startRouteModule(window.location.pathname);
+  void import("./boot");
 });

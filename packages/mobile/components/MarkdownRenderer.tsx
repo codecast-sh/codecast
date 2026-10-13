@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useContext, useState, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -20,7 +20,8 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { EntityPill, isEntityId } from './EntityPill';
-import { parseEntityUrl, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
+import { SearchHighlightContext, markInlineNodes } from './search/highlight';
+import { parseEntityUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -151,7 +152,8 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
   const pattern = new RegExp(
     '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
     + `|(${URL_SOURCE})|@\\[([^\\]]+)\\]|@(\\w+)`
-    + `|\\b(${BARE_ID_SOURCE})\\b`
+    // Bounded as the shared scanner is, so "5-in-1" stays prose.
+    + `|${BARE_ID_BEFORE}(${BARE_ID_SOURCE})${BARE_ID_AFTER}`
     // A backslash escape (CommonMark): `\.` or `\*` is the character itself.
     // Last, so no group number above moves; matched by its leading backslash.
     + '|\\\\[!-/:-@\\[-`{-~])',
@@ -424,6 +426,10 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
 
 export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, knownMentionHandles, selectable = true }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean }) {
   const Theme = useTheme();
+  // Under a search (components/search/highlight), every text run marks the
+  // words found; pills and links pass through.
+  const found = useContext(SearchHighlightContext);
+  const inline: typeof renderInlineMarkdown = (...args) => (found ? markInlineNodes(renderInlineMarkdown(...args), found) : renderInlineMarkdown(...args));
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -438,10 +444,13 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
     const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
     if (headerMatch) {
       const level = headerMatch[1].length;
-      const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
+      // A heading never sets smaller than the text around it: a reply set at
+      // a reading size (hosted mode's 17px letter) keeps its headings at body
+      // size, as the web's hosted replies do.
+      const fontSize = Math.max([18, 16, 15, 14, 13, 13][level - 1], StyleSheet.flatten(baseStyle)?.fontSize ?? 0);
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, knownMentionHandles)}
+          {inline(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, knownMentionHandles)}
         </RNText>
       );
       i++;
@@ -504,7 +513,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
                 {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, knownMentionHandles)}
+                {inline(item.text, baseStyle, `${blockKey}li${j}`, isUser, knownMentionHandles)}
               </RNText>
             </RNView>
           ))}
@@ -534,7 +543,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
       elements.push(
         <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
           <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, knownMentionHandles)}
+            {inline(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, knownMentionHandles)}
           </RNText>
         </RNView>
       );
@@ -569,7 +578,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
                 {row.map((cell, ci) => (
                   <RNView key={ci} style={mdStyles.tableCell}>
                     <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, knownMentionHandles)}
+                      {inline(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, knownMentionHandles)}
                     </RNText>
                   </RNView>
                 ))}
@@ -590,15 +599,23 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
     }
     if (paraLines.length > 0) {
       elements.push(
-        <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable={selectable}>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, knownMentionHandles)}
+        <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, PARAGRAPH_GAP]} selectable={selectable}>
+          {inline(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, knownMentionHandles)}
         </RNText>
       );
     }
   }
 
+  // Paragraph spacing sits between paragraphs; after the last one the
+  // container's own padding decides, or a bubble ends with a gap under its text.
+  const last = elements[elements.length - 1];
+  if (React.isValidElement<{ style?: unknown }>(last) && Array.isArray(last.props.style) && last.props.style[1] === PARAGRAPH_GAP) {
+    elements[elements.length - 1] = React.cloneElement(last, { style: baseStyle });
+  }
   return <>{elements}</>;
 }
+
+const PARAGRAPH_GAP = { marginBottom: 6 };
 
 // The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
 // CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
