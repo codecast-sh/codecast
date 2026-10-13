@@ -12,6 +12,7 @@
 //   cast line station set <id> [--prompt-file] [--script-file] [--timeout] | reset <id>
 //   cast line profile --starter --project <name> [--team <name>] [--write]
 //   cast line eval-result --reps <reps.json> --out <eval-result.json> [--json]
+//   cast line proof-check <line-proof.json> [--json]
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
@@ -23,6 +24,7 @@ import { removeLineFile, runLineProfileEdit, type LineProfileEditReply, type Pub
 import { atomicWriteFile } from "./atomicWrite.js";
 import { publishedRepoLine } from "./repoLine.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
+import { checkLineProof, type RecordedRun } from "./lineProof.js";
 import { LINE_VALUE_KINDS, parseLineValue, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineProfileFacts, type LineStationPatch } from "@codecast/shared/contracts/lineProfile";
 
 function fail(message: string, code = 2): never {
@@ -221,7 +223,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
       await run([{ op: "remove", key }], options, [key]);
     });
 
-  const finder = line.command("finder").description("Add, change or remove a finder (a source that files signals into this line) in this repo's .codecast/line.toml");
+  const finder = line.command("finder").description("Add, change or remove a finder (a source that files findings into this line) in this repo's .codecast/line.toml");
   finder
     .command("set <id>")
     .description("Add a finder, or change the one with this id; only the parts given change")
@@ -229,7 +231,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     .option("--kind <kinds>", "What it reports: bug, regression, prompt_miss, ux, cohesion, request, comma separated, or any")
     .option("--fingerprint <pattern>", "How its reports group into one problem")
     .option("--runs <what>", "What runs it, if anything here does (empty clears it)")
-    .option("--project <name>", "The project its signals go to, when not the profile's (empty clears it)")
+    .option("--project <name>", "The project its findings go to, when not the profile's (empty clears it)")
     .option("--no-publish", "Write the file only")
     .option("--json", "Machine-readable output")
     .action(async (id: string, options: { source?: string; kind?: string; fingerprint?: string; runs?: string; project?: string; publish?: boolean; json?: boolean }) => {
@@ -291,7 +293,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     .option("--json", "Machine-readable output")
     .option("--publish", "Publish this profile onto the projects its finders file into, so the app shows the whole line and /line says when a finder goes silent")
     .option("--starter", "Print a starter .codecast/line.toml for a repository that has none: the defaults written out, the project filled in")
-    .option("--project <name>", "With --starter: the project its signals and line belong to")
+    .option("--project <name>", "With --starter: the project its findings and line belong to")
     .option("--team <name>", "With --starter: the workspace for writes from this repo")
     .option("--write", "With --starter: write it at the repository root; refused when a profile already exists")
     .action(async (options: { json?: boolean; publish?: boolean; starter?: boolean; project?: string; team?: string; write?: boolean }) => {
@@ -333,6 +335,28 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
         console.log(`${p.short_id ?? p.project}  ${p.title}  ${p.finders} finder${p.finders === 1 ? "" : "s"}  ${p.changed ? "published" : "unchanged"}`);
       }
       if (unprojected.length) console.log(fmt.warning(`not published, no project: ${unprojected.join(", ")} (give each a project, or set [line] project)`));
+    });
+
+  line
+    .command("proof-check <file>")
+    .description("Check the proof for a problem in the line itself (line-proof.json, written by the prove station) against the runs it names: each run must be recorded, and the station's status, outcome and fail reason must be what the proof says; exits 0 when every claim holds, 1 when one does not")
+    .option("--json", "Print { ok, why, checks }")
+    .action(async (file: string, options: { json?: boolean }) => {
+      let raw: unknown = null;
+      // A missing or unreadable proof is a proof that does not hold, said in words the red station passes on.
+      let unreadable: string | null = null;
+      try {
+        raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch (err) {
+        unreadable = fs.existsSync(file) ? `cannot read ${file}: ${err instanceof Error ? err.message : String(err)}` : `no ${file}: the prove station names the recorded runs that show the line's own problem there`;
+      }
+      const result = unreadable ? { ok: false, why: unreadable, checks: [] } : await checkLineProof(raw, async (task) => {
+        const listed = await apiPost(deps, "/cli/workflow-runs/list", { task_id: task, limit: 200 }, { read: true, exitOnError: false }).catch(() => null);
+        return (Array.isArray(listed?.runs) ? listed.runs : []) as RecordedRun[];
+      });
+      if (options.json) console.log(JSON.stringify(result));
+      else console.log(`${result.ok ? "holds" : "does not hold"}: ${result.why}`);
+      process.exitCode = result.ok ? 0 : 1;
     });
 
   line
