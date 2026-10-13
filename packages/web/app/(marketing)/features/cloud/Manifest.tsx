@@ -32,8 +32,8 @@ const ROWS: { what: string; items: string; how: string; never: string }[] = [
   {
     what: "CLIs",
     items: "claude, codex, gemini, grok, opencode, pi, plus vercel, railway, cf, supabase, stripe, fly, aws, gcloud, kubectl if your shell has them",
-    how: "Installed on every wake if missing, at your laptop's versions, local to the user.",
-    never: "No sudo, no system packages. Those go in the [host] table.",
+    how: "Installed when missing, at your laptop's versions and local to the user, while a session is prepared, at setup, and when you press Wake in Settings, Devices. A wake for queued work only checks them.",
+    never: "No sudo, no system packages: those go in the [host] table. What is missing shows on the host's Tools row.",
   },
   {
     what: "Agent memory",
@@ -77,7 +77,7 @@ export function ManifestSection() {
       </div>
       <Caption dark>
         <span style={{ color: SOL.base1 }}>
-          Preview with <C dark>cast hosts sync --dry-run</C>. Turn the mirror off with <C dark>cast config cloud_mirror_enabled false</C>. A running agent keeps the instructions it read at startup.
+          The host&apos;s card in Settings, Devices shows whether your setup, logins and tools are in step. From a terminal: <C dark>cast hosts sync --dry-run</C> previews the mirror, <C dark>cast hosts tools</C> installs missing tools now, and <C dark>cast config cloud_mirror_enabled false</C> turns the mirror off. A running agent keeps the instructions it read at startup.
         </span>
       </Caption>
     </>

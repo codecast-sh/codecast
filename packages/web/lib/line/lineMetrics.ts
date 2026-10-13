@@ -11,7 +11,7 @@
  * Pure: the rows come from the store, the window from the caller, so the map,
  * /line and a test all read the same numbers.
  */
-import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard";
+import { isLineRun, lineRunOutcome, type AnsweredGate } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { DAY, quietWatchEnd, type LineCauseTask, type LineSignal } from "../lineFlow";
 
@@ -21,7 +21,7 @@ export type MetricsWindow = { from: number; to: number };
 export type MetricsRun = {
   task_id?: string | null;
   node_statuses?: ReadonlyArray<{ node_id: string; status: string; started_at?: number; completed_at?: number; result_preview?: string }>;
-};
+} & AnsweredGate;
 
 export type ExplainedShare = { explained: number; opened: number; share: number | null };
 export type FixesThatHold = { held: number; reopened: number; share: number | null };
@@ -37,12 +37,15 @@ const ratio = (part: number, whole: number) => (whole > 0 ? part / whole : null)
  * new one. A signal a person placed by hand says nothing about what the line
  * understands, so it counts on neither side.
  */
+/** How a finding joins a problem the line already knows: by key, by a judge, by reading the same, or by being the same written message. */
+const EXPLAINED = new Set(["fingerprint", "judge", "similar", "message"]);
+
 export function explainedShare(signals: ReadonlyArray<Pick<LineSignal, "created_at" | "attach">>, w: MetricsWindow): ExplainedShare {
   let explained = 0;
   let opened = 0;
   for (const s of signals) {
     if (!inWindow(s.created_at, w)) continue;
-    if (s.attach === "fingerprint" || s.attach === "judge") explained++;
+    if (s.attach && EXPLAINED.has(s.attach)) explained++;
     else if (s.attach === "new") opened++;
   }
   return { explained, opened, share: ratio(explained, explained + opened) };
@@ -89,7 +92,7 @@ export function judgeDefectCauses(runs: ReadonlyArray<MetricsRun>): Set<string> 
   const latest = new Map<string, { at: number; judge: boolean }>();
   for (const r of runs) {
     if (!r.task_id || !isLineRun(r.node_statuses)) continue;
-    const end = lineRunOutcome(r.node_statuses);
+    const end = lineRunOutcome(r.node_statuses, r);
     if (!end) continue;
     const prev = latest.get(r.task_id);
     if (prev && prev.at > end.at) continue;

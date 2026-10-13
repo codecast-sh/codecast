@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkoutInUseMessage, isHttpOrigin, normalizeCloudWorkspace, sharedCheckoutOccupant, type CheckoutOccupantRow } from "./cloudWorkspace";
+import { checkoutInUseMessage, isHttpOrigin, normalizeCloudWorkspace, otherSessionInCheckout, sharedCheckoutOccupant, type CheckoutOccupantRow } from "./cloudWorkspace";
 
 const ROOT = "/home/ubuntu/work/app";
 const row = (over: Partial<CheckoutOccupantRow> = {}): CheckoutOccupantRow => ({
@@ -45,6 +45,12 @@ describe("sharedCheckoutOccupant", () => {
     expect(sharedCheckoutOccupant([row({ session_error: "crashed" })], { projectPath: ROOT })).not.toBeNull();
   });
 
+  test("a merging claimer shares the checkout with moved sessions, never with a shared row on its own branch", () => {
+    const moved = row({ conversation_id: "conv_m", cloud_workspace: null, cloud_checkout_path: null, project_path: ROOT });
+    expect(sharedCheckoutOccupant([moved], { projectPath: ROOT, merging: true })).toBeNull();
+    expect(sharedCheckoutOccupant([row()], { projectPath: ROOT, merging: true })?.conversation_id).toBe("conv_a");
+  });
+
   test("legacy: any alive row whose project_path is the root (a moved session) occupies it", () => {
     const moved = row({ conversation_id: "conv_m", cloud_workspace: null, cloud_checkout_path: null, project_path: ROOT });
     expect(sharedCheckoutOccupant([moved], { projectPath: ROOT })?.conversation_id).toBe("conv_m");
@@ -80,5 +86,17 @@ describe("isHttpOrigin", () => {
     expect(isHttpOrigin("ftp://example.com")).toBe(false);
     expect(isHttpOrigin("github.com")).toBe(false);
     expect(isHttpOrigin(undefined)).toBe(false);
+  });
+});
+
+describe("otherSessionInCheckout", () => {
+  const at = (id: string, p: string, over: Partial<CheckoutOccupantRow> = {}) => row({ conversation_id: id, cloud_workspace: null, cloud_checkout_path: null, project_path: p, ...over });
+  test("a session in the checkout or a folder of it counts; the departing one, its own worktrees and ended rows do not", () => {
+    expect(otherSessionInCheckout([at("me", ROOT)], ROOT, "me")).toBeNull();
+    expect(otherSessionInCheckout([at("b", `${ROOT}/packages/web`)], ROOT, "me")?.conversation_id).toBe("b");
+    expect(otherSessionInCheckout([at("b", `${ROOT}/.codecast/worktrees/x`)], ROOT, "me")).toBeNull();
+    expect(otherSessionInCheckout([at("b", `${ROOT}-other`)], ROOT, "me")).toBeNull();
+    expect(otherSessionInCheckout([at("b", ROOT, { inbox_killed_at: 1 })], ROOT, "me")).toBeNull();
+    expect(otherSessionInCheckout([row()], ROOT, "me")?.conversation_id).toBe("conv_a");
   });
 });

@@ -1,7 +1,10 @@
-// The queue's grouping (docs/architecture/decisions-as-documents.md D5): a
-// stack first (an ordered checklist one person clears in one sitting), then
-// the rows a role holds under a grant ("with a lead", collapsed: a person
-// need not read them unless they want to), then everything else by scope.
+// The queue's grouping (docs/architecture/decisions-as-documents.md D5): ONE
+// queue of single decisions. A stack is only a named group inside it, drawn
+// when it gathers two or more of the viewer's open asks (a batch to clear in
+// one sitting); a stack holding one is that one card, filed like any other.
+// Then everything else by scope, then the advisory asks whose agent is
+// already going ahead on its default, then the rows a role holds under a
+// grant ("with a lead", collapsed: a person need not read them).
 //
 // Pure so the order is testable: the queue's order silently becomes the
 // reader's priorities, and a grouping that shifts under them is unusable.
@@ -10,7 +13,11 @@ import type { SessionDecisionItem, DecisionStackItem } from "../store/inboxStore
 export type DecisionGroup =
   | { kind: "stack"; key: string; stack: DecisionStackItem; items: SessionDecisionItem[] }
   | { kind: "role"; key: string; roleId: string; items: SessionDecisionItem[] }
-  | { kind: "scope"; key: string; scopeKey: string; items: SessionDecisionItem[] };
+  | { kind: "scope"; key: string; scopeKey: string; items: SessionDecisionItem[] }
+  | { kind: "default"; key: string; items: SessionDecisionItem[] };
+
+/** How many of the viewer's open asks make a stack a group of its own. */
+export const STACK_GROUP_MIN = 2;
 
 // The scope a decision files under when it is in no stack and no role holds
 // it: the task's project, else its plan, else the asking role, else the
@@ -63,15 +70,22 @@ export function groupDecisions(
   const stackById = new Map<string, DecisionStackItem>();
   for (const s of sortStacksByDue(Array.isArray(stacks) ? stacks : Object.values(stacks), now)) stackById.set(s._id, s);
 
+  const open = pending.filter((d) => d.status === "pending");
   const inStack = new Map<string, SessionDecisionItem[]>();
+  for (const d of open) {
+    if (d.stack_id && stackById.has(d.stack_id)) inStack.set(d.stack_id, [...(inStack.get(d.stack_id) ?? []), d]);
+  }
+  for (const [id, items] of inStack) if (items.length < STACK_GROUP_MIN) inStack.delete(id);
+
   const byRole = new Map<string, SessionDecisionItem[]>();
   const byScope = new Map<string, SessionDecisionItem[]>();
-  for (const d of pending) {
-    if (d.status !== "pending") continue;
-    if (d.stack_id && stackById.has(d.stack_id)) {
-      inStack.set(d.stack_id, [...(inStack.get(d.stack_id) ?? []), d]);
-    } else if (d.holder?.kind === "role") {
+  const onDefault: SessionDecisionItem[] = [];
+  for (const d of open) {
+    if (d.stack_id && inStack.has(d.stack_id)) continue;
+    if (d.holder?.kind === "role") {
       byRole.set(d.holder.id, [...(byRole.get(d.holder.id) ?? []), d]);
+    } else if (!d.blocking) {
+      onDefault.push(d);
     } else {
       const key = decisionScopeKey(d);
       byScope.set(key, [...(byScope.get(key) ?? []), d]);
@@ -96,6 +110,8 @@ export function groupDecisions(
   });
   scopeGroups.sort((a, b) => oldestFirst(a.items[0], b.items[0]));
   out.push(...scopeGroups);
+  // Advisory asks: nothing is parked on them, so they follow what is.
+  if (onDefault.length) out.push({ kind: "default", key: "default", items: onDefault.sort(oldestFirst) });
   // Role-held rows last and collapsed: a lead will answer them.
   for (const [roleId, items] of byRole) {
     items.sort(oldestFirst);

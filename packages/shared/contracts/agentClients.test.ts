@@ -160,7 +160,7 @@ describe("new-session launch options", () => {
   it("launch rail prepends the default effort stop", () => {
     const claude = launchRailOptions(AGENT_CLIENTS.claude.modelConfig!);
     expect(claude.models.some((m) => m.key === "opus")).toBe(true);
-    expect(claude.efforts).toEqual(["default", "low", "medium", "high", "max"]);
+    expect(claude.efforts).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
 
     // No-effort clients still get the default stop (opencode's effort list is empty).
     const opencode = launchRailOptions(AGENT_CLIENTS.opencode.modelConfig!);
