@@ -3,7 +3,7 @@
 // (shared/contracts/shipPlan.test.ts); this pins what feeds it.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { gatherShipFacts, shipParent } from "./ship";
+import { gatherShipFacts, shipParent, startShipCore } from "./ship";
 import { resolveShipPlan } from "@codecast/shared/contracts/shipPlan";
 
 const OWNER = "users_owner" as any;
@@ -44,6 +44,19 @@ describe("gatherShipFacts", () => {
       profile: { check: "bun test", ship: null, merge: { auto: false, method: "rebase" } },
     });
     expect(got.work._id).toBe("conversations_work");
+  });
+
+  test("a line task ships its build session's branch, never a newer linked session sitting on main (ct-57509)", async () => {
+    const onMain = { _id: "conversations_chat", user_id: OWNER, team_id: TEAM, is_private: false, status: "active", short_id: "jxchat0", title: "Daily trigger status", git_root: "/src/app", git_branch: "main", updated_at: NOW, created_at: 2, message_count: 9 };
+    const build = { _id: "conversations_work", user_id: OWNER, team_id: TEAM, is_private: false, status: "completed", short_id: "jxbld00", title: "Implement · ct-7", git_root: "/src/app", worktree_path: "/src/app/.codecast/worktrees/line-ct-7", worktree_branch: "codecast/line-ct-7", git_branch: "codecast/line-ct-7", updated_at: NOW, created_at: 1, message_count: 4 };
+    const ctx = world({
+      conversations: [build, onMain],
+      tasks: [{ _id: "tasks_t1", user_id: OWNER, team_id: TEAM, workspace: WS, project_id: "projects_p1", short_id: "ct-7", title: "Fix login", status: "in_review", conversation_ids: ["conversations_work", "conversations_chat"], created_at: 1, updated_at: NOW }],
+    });
+    const got: any = await gatherShipFacts(ctx, OWNER, { kind: "task", id: "ct-7" });
+    expect(got.work._id).toBe("conversations_work");
+    expect(got.facts).toMatchObject({ branch: "codecast/line-ct-7", projectPath: "/src/app/.codecast/worktrees/line-ct-7", sessionShortId: "jxbld00" });
+    expect(resolveShipPlan(got.facts)).toMatchObject({ newBranch: false, branch: "codecast/line-ct-7" });
   });
 
   test("a session reaches the PR it already opened, and a PR press merges", async () => {
@@ -88,6 +101,14 @@ describe("gatherShipFacts", () => {
   test("someone else's task is not found", async () => {
     const got: any = await gatherShipFacts(world(), "users_stranger" as any, { kind: "task", id: "ct-7" });
     expect(got.error).toBe("Task not found");
+  });
+});
+
+describe("startShipCore", () => {
+  test("a trial project's change never ships: the press is refused before anything starts", async () => {
+    const ctx = world();
+    await ctx.db.patch("projects_p1", { line_trial: { by: OWNER, at: 1 } });
+    await expect(startShipCore(ctx, OWNER, { kind: "task", id: "ct-7" })).rejects.toThrow(/trial/);
   });
 });
 
