@@ -6,6 +6,7 @@ import { isSessionStashed, isSessionKilled, isSessionDismissed } from "../../web
 import {
   isNoiseTitle,
   isOrphanOrSubagent,
+  isRunLog,
   shouldShowInInbox,
   isViableInboxParent,
   isSessionIdle,
@@ -103,6 +104,21 @@ describe("isOrphanOrSubagent", () => {
   });
   test("is_subagent false is not orphan", () => {
     expect(isOrphanOrSubagent(conv({ is_subagent: false }))).toBe(false);
+  });
+});
+
+describe("isRunLog", () => {
+  test("the run's own log is a run log, whatever its session id", () => {
+    expect(isRunLog({ is_workflow_primary: true, workflow_run_id: "run1" })).toBe(true);
+    expect(shouldShowInInbox(conv({ is_workflow_primary: true, workflow_run_id: "run1" as any, session_id: "wf-run1" }))).toBe(false);
+    expect(shouldShowInInbox(conv({ is_workflow_primary: true, workflow_run_id: "run1" as any, session_id: "3f2a9c1e-rebound" }))).toBe(false);
+  });
+  test("a session hosting a run (the pointer only) stays in the inbox", () => {
+    expect(isRunLog({ workflow_run_id: "run1" })).toBe(false);
+    expect(shouldShowInInbox(conv({ workflow_run_id: "run1" as any }))).toBe(true);
+  });
+  test("a stale flag without a run is not a run log", () => {
+    expect(isRunLog({ is_workflow_primary: true })).toBe(false);
   });
 });
 

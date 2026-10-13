@@ -15,6 +15,7 @@ import {
   type IngestItem,
   type IngestUser,
   type Transition,
+  errorTitle,
 } from "@codecast/shared/contracts/ingest";
 import {
   checkFingerprint,
@@ -479,7 +480,8 @@ export type ItemPlan =
   | { type: "count" };
 
 function titleOf(text: string): string {
-  return (text.split("\n")[0].trim() || text.trim()).slice(0, INGEST_LIMITS.title_chars);
+  // An error that says itself twice ("X failed: msg: msg") is titled once, so every surface the group reaches reads it once.
+  return errorTitle(text.split("\n")[0].trim() || text.trim()).title.slice(0, INGEST_LIMITS.title_chars);
 }
 
 function json(value: Record<string, unknown> | undefined): string | undefined {
@@ -542,6 +544,8 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
       return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at };
     case "event":
     case "replay":
+    // A moment event is kept as a moment (moments.ts recordMomentEvents, learning-loop.md LL7), not grouped.
+    case "moment":
       return { type: "count" };
   }
 }

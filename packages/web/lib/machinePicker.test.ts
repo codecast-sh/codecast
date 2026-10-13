@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { dedupeProjectsByRepoName, defaultMachineId, pathOnMyMachines, resolveMachineSelection, resolveScopedProjects, type MachineCandidate } from "./machinePicker";
+import { dedupeProjectsByRepoName, defaultMachineId, listedMachines, pathOnMyMachines, resolveMachineSelection, resolveScopedProjects, type MachineCandidate } from "./machinePicker";
 
 const dev = (id: string, over: Partial<MachineCandidate> = {}): MachineCandidate => ({
   device_id: id,
@@ -328,5 +328,30 @@ describe("resolveScopedProjects (folder-chip flicker)", () => {
     expect(resolveScopedProjects({
       scopedDeviceId: null, scoped: undefined, cached: undefined, union, routedDevice: mac,
     })).toBe(union);
+  });
+});
+
+describe("defaultMachineId — dead VMs and sleeping cloud hosts (jx7bt5n)", () => {
+  const NOW = 10 * 86_400_000;
+  const path = "/home/ubuntu/src/union-mobile";
+  const laptop = dev("laptop", { platform: "darwin", last_seen: NOW, local_project_roots: ["/Users/ashot/src/union-mobile"] });
+  const vm = dev("vm", { platform: "linux", online: false, last_seen: NOW - 9 * 86_400_000, local_project_roots: ["/home/box/.claude"] });
+  const host = dev("host", {
+    is_remote: true, platform: "linux", online: false, last_seen: NOW - 3_600_000,
+    local_project_roots: ["/home/ubuntu/src/union-mobile"],
+    cloud_host: { managed_by: "laptop", instance_id: "i-1", provider: "aws", state: "stopped", images: [], logins_held: [], at: NOW - 600_000 },
+  });
+
+  it("a sleeping cloud host holding the folder beats a dead VM of the same platform", () => {
+    expect(defaultMachineId([laptop, vm, host], { projectPath: path, now: NOW })).toBe("host");
+  });
+
+  it("a dead VM does not narrow the pool to itself", () => {
+    expect(defaultMachineId([laptop, vm], { projectPath: path, now: NOW })).toBe("laptop");
+  });
+
+  it("listedMachines leaves a dead VM out unless it is the one already chosen", () => {
+    expect(listedMachines([laptop, vm, host], null, NOW).map((d) => d.device_id)).toEqual(["laptop", "host"]);
+    expect(listedMachines([laptop, vm, host], "vm", NOW).map((d) => d.device_id)).toEqual(["laptop", "vm", "host"]);
   });
 });
