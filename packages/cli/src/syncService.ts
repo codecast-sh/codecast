@@ -2011,11 +2011,12 @@ export class SyncService {
 
   // With holdReason the row is re-pended WITHOUT spending a retry: the paste was
   // refused because the terminal waits for a human, not because it failed.
-  async retryMessage(messageId: string, opts?: { holdReason?: string }): Promise<void> {
+  async retryMessage(messageId: string, opts?: { holdReason?: string; holdScreen?: string }): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("pendingMessages:retryMessage" as any, {
         message_id: messageId,
         ...(opts?.holdReason ? { hold_reason: opts.holdReason } : {}),
+        ...(opts?.holdReason && opts.holdScreen ? { hold_screen: opts.holdScreen } : {}),
         api_token: this.apiToken,
         device_id: deviceId(),
       });
