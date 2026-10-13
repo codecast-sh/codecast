@@ -38,6 +38,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { usePressOutside } from "../../hooks/usePressOutside";
 import { useRoomTranscribeOff, useRoomWordsPublic } from "../../hooks/useRoomTranscribeOff";
+import { stageTiles } from "../../lib/calls/callMedia";
 import { TRANSCRIPT_SHARED_WORDS } from "../../lib/calls/roomRecordingEnd";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
@@ -56,6 +57,8 @@ import { FollowChip } from "./FollowInCall";
 import { AutoStage, GridStage, SpeakerStage } from "./StageViews";
 import { STAGE_CTL, STAGE_CTL_IDLE, STAGE_VIEWS, StageHostProvider, type StageHost, type StageView } from "./stageHost";
 import { GuestInvite, GuestRemoveButton } from "./GuestDoor";
+import { StagePersonMenu, type StagePerson } from "./StagePersonMenu";
+import { useContextMenu } from "../ui/context-menu";
 import { guestsJoining } from "../../lib/calls/roomGuests";
 import { useStageRoster } from "../../hooks/useStageRoster";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
@@ -148,10 +151,11 @@ const MEMBER_STAGE_HOST: StageHost = {
   FollowChip,
   useFollowLeader: () => useInboxStore((s) => s.followLeaderId),
 };
-function memberStageHost(roomKey: string | null): StageHost {
+function memberStageHost(roomKey: string | null, openPersonMenu: StageHost["openPersonMenu"]): StageHost {
   if (!roomKey) return MEMBER_STAGE_HOST;
   return {
     ...MEMBER_STAGE_HOST,
+    openPersonMenu,
     personActions: ({ identity, name, variant }) => <GuestRemoveButton roomKey={roomKey} identity={identity} name={name} variant={variant} />,
   };
 }
@@ -235,14 +239,19 @@ export function CallStage({
       }
     | null
     | undefined;
-  // An agent in the room gets its face the moment it is added: this client
-  // asks for it directly, because the scheduler that would otherwise send
-  // it can run minutes behind (callFace.ensureFaces). The server skips a
-  // face already on its way, so every client in the room may ask.
+  // An agent in the room gets its face the moment it is added, and loses it
+  // the moment it is removed: this client asks directly, because the
+  // scheduler that would otherwise do it can run minutes behind
+  // (callFace.ensureFaces). The server matches the room's faces to its feeds,
+  // so every client in the room may ask. A room that never had an agent
+  // has nothing to ask about.
   const ensureFaces = useAction(api.callFace.ensureFaces);
   const liveAgents = (live?.routes ?? []).filter((r) => r.kind === "session" && r.mode === "live").map((r) => r.target).sort().join(",");
+  const hadAgents = useRef(false);
   useWatchEffect(() => {
-    if (call.roomKey && liveAgents) void ensureFaces({ room_key: call.roomKey }).catch(() => {});
+    if (!call.roomKey || (!liveAgents && !hadAgents.current)) return;
+    hadAgents.current = !!liveAgents;
+    void ensureFaces({ room_key: call.roomKey }).catch(() => {});
   }, [call.roomKey, liveAgents]);
   // The record outlives a switch to off (off is a gap in the huddle), so the
   // words are flowing only while it is live and the room has not opted out.
@@ -251,7 +260,12 @@ export function CallStage({
   // renders crashed the whole stage.
   const transcribeOff = useRoomTranscribeOff(call.roomKey);
   const wordsPublic = useRoomWordsPublic(call.roomKey);
-  const stageHost = useMemo(() => memberStageHost(call.roomKey), [call.roomKey]);
+  const personMenu = useContextMenu<StagePerson>();
+  const openPersonMenu = personMenu.open;
+  const stageHost = useMemo(
+    () => memberStageHost(call.roomKey, (e, p) => openPersonMenu(e, p, { force: true })),
+    [call.roomKey, openPersonMenu],
+  );
   // A record Record made with nobody scribing it yet holds no words: it is
   // transcribing once a client claims the scribe seat.
   const transcribing = !!live && !!live.started_by && !transcribeOff;
@@ -325,8 +339,7 @@ export function CallStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [collapse, panel]);
 
-  const screens = tiles.filter((t) => t.kind === "screen");
-  const cameras = tiles.filter((t) => t.kind === "camera");
+  const { screens, cameras } = stageTiles(tiles);
 
   const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
   const { label } = useRoomDescription(call.roomKey);
@@ -612,6 +625,7 @@ export function CallStage({
           )}
         </div>
         </StageHostProvider>
+        {call.roomKey && <StagePersonMenu roomKey={call.roomKey} state={personMenu} selfId={myUserId ?? null} />}
         {(threadOpen || railClosing) && call.roomKey && (
           <ThreadRail
             roomKey={call.roomKey}
