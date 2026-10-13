@@ -13,6 +13,7 @@
 #   scripts/vendor-platform.sh --write-manifest  # regenerate the manifest from the mirror
 #   scripts/vendor-platform.sh --list            # print the mirrored package names
 #   scripts/vendor-platform.sh --list-with-tests # print the ones that have a test suite
+#   scripts/vendor-platform.sh --test            # install the mirror as one workspace and run every package's tests
 #
 # The work is done by platform's own scripts/vendor-platform.sh, which every app
 # with a mirror shares; this wrapper names codecast's mirror and consumers and

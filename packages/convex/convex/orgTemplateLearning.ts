@@ -18,6 +18,7 @@ import { parseWorkspaceKey, requireTeamAdmin, requireTeamMembership } from "./li
 import { callModel, parseJsonBlock } from "./lib/anthropic";
 import { isUserMessageNoise, stripMessageTags } from "./lib/userSend";
 import { noteOrgChange, roleSubject, whereOfRole } from "./lib/orgChangeLog";
+import { trustOf } from "./lib/orgCaps";
 import { isToolResultCarrier, parseUserMessage } from "@codecast/shared/contracts";
 import { compareVersions, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { readiness } from "@codecast/shared/contracts/orgTemplateState";
@@ -152,7 +153,7 @@ export async function performDigest(ctx: Ctx, args: { instance_id: Id<"org_templ
   const since = row.learning?.at ?? Math.max(row.created_at, args.now - LEARNING.first_window_ms);
   const state = stateOf(row, role);
   const routines = await routineRows(ctx, row, manifest);
-  const signals = structuralSignals(manifest, { state, readiness: readiness(manifest, state, role.trust ?? "understand", args.now), routines, hired_at: row.created_at, seen: row.learning?.seen }, args.now);
+  const signals = structuralSignals(manifest, { state, readiness: readiness(manifest, state, trustOf(role), args.now), routines, hired_at: row.created_at, seen: row.learning?.seen }, args.now);
   for (const signal of signals) {
     // A failed run's own summary is the role's words about it: the model reads it, the lesson never carries it.
     const routine = signal.key.includes(":failed:") ? routines.find((r) => r.id === signal.about) : null;

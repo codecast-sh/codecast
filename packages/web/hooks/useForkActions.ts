@@ -120,27 +120,34 @@ export function useForkActions({ conversation, currentUser, hasMoreAbove, convCo
     doForkFrom(branchId, messageUuid);
   }, [conversation?._id, handleForkFromMessage, doForkFrom]);
 
-  const handleForkReply = useCallback(async (content: string) => {
-    if (!conversation) return;
+  // Branch from the latest message; the caller sends into the fork.
+  const forkFromTail = useCallback(async (): Promise<LocalFork | null> => {
+    if (!conversation) return null;
     const msgs = conversation.messages || [];
     const lastMsg = [...msgs].reverse().find((m: any) => canAnchorForkChips(m));
     if (!lastMsg?.message_uuid) {
       toast.error("No messages to fork from");
-      return;
+      return null;
     }
-    const forkResult = await doFork(lastMsg.message_uuid);
-    if (!forkResult) return;
+    return doFork(lastMsg.message_uuid);
+  }, [conversation, doFork]);
+
+  const handleForkReply = useCallback(async (content: string) => {
+    const fork = await forkFromTail();
+    if (!fork) return;
     // Optimistic bubble lands on the stub instantly (rekeyId carries pending
     // messages to the real id); the durable send waits for the real Convex id
     // since the dispatch pipeline can't address a stub.
-    const clientId = addOptimisticMsg(forkResult.conversationId, content);
-    forkResult.ready
+    const clientId = addOptimisticMsg(fork.conversationId, content);
+    fork.ready
       .then((realId) => sendInlineMessage(realId, content, undefined, clientId))
       .catch(() => {}); // fork failure already surfaced by doFork
-  }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
+  }, [forkFromTail, addOptimisticMsg, sendInlineMessage]);
 
   // Same capability gate as forkHandler: hide fork-and-send where forks can't run.
-  const forkSendHandler = agentSupportsFork(conversation?.agent_type) ? handleForkReply : undefined;
+  // The composer sends into the fork's stub id itself, so its images ride along.
+  const forkTailId = useCallback(async () => (await forkFromTail())?.conversationId ?? null, [forkFromTail]);
+  const forkTailHandler = agentSupportsFork(conversation?.agent_type) ? forkTailId : undefined;
 
-  return { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkSendHandler };
+  return { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkTailHandler };
 }

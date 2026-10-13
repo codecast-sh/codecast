@@ -120,8 +120,8 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
           type="button"
           onClick={(e) => { e.preventDefault(); setHireOpen(true); }}
           title="A standing role that leads this project: it reads the project's plans, tasks and sessions and reports to you"
-          className={cn("inline-flex items-center gap-1 rounded-md border font-medium whitespace-nowrap transition-colors hover:bg-sol-bg-highlight/60", size === "xs" ? "h-[18px] px-1.5 text-[10px]" : "h-[22px] px-2 text-[11px]")}
-          style={{ color: "var(--sol-violet)", borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)" }}
+          className={cn("inline-flex items-center gap-1 rounded-md whitespace-nowrap transition-colors hover:bg-sol-bg-highlight/60 hover:text-[var(--sol-text-secondary)]", size === "xs" ? "h-[18px] px-1 text-[11px]" : "h-[22px] px-1.5 text-[11.5px]")}
+          style={{ color: "var(--sol-text-muted)" }}
           data-add-lead
         >
           <UserPlus className="w-3 h-3 shrink-0" /> Add a lead
@@ -158,7 +158,7 @@ export function ProjectLeadMark({ projectId, roleId }: { projectId: string; role
     );
   }
   if (lead.role._id === roleId) {
-    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-violet)" }} title={lead.by === "owner" ? "The project names this role as its lead" : lead.by === "workspace" ? "This role looks after the whole workspace and no narrower role covers this project, so it leads it" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">· lead</span>;
+    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-text-secondary)" }} title={lead.by === "owner" ? "The project names this role as its lead" : lead.by === "workspace" ? "This role looks after the whole workspace and no narrower role covers this project, so it leads it" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">· lead</span>;
   }
   return (
     <RoleHoverCard role={lead.role} side="top" triggerClassName="inline-flex shrink-0">

@@ -12,6 +12,8 @@ import { Input } from "../../../components/ui/input";
 import { SelectBox } from "../../../components/ui/select-box";
 import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
+import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
+import { agentFullAccessLedger } from "../../../components/consequential/ledgers";
 
 type ClaudeMode = "default" | "bypass";
 type CodexMode = "default" | "full_auto" | "bypass";
@@ -228,13 +230,24 @@ function AgentSection({
   disabled?: boolean;
   note?: string;
 }) {
+  // Skipping every prompt opens the review first; any other mode is one press, since it asks more, not less.
+  const [asking, setAsking] = useState<string | null>(null);
+  const pick = (value: string) => (value === "bypass" && current !== "bypass" ? setAsking(value) : onChange(value));
+  const target = options.find((o) => o.value === asking);
   return (
-    <div className="px-4 py-3.5 sm:px-5">
+    <div className="px-4 py-3.5 sm:px-5" data-agent-mode={name}>
       <h3 className="text-sm font-semibold text-sol-text mb-2">{name}</h3>
+      {target && (
+        <SwitchReview
+          ledger={agentFullAccessLedger({ agent: name, label: target.label, from: options.find((o) => o.value === current)?.label ?? "Default", sandbox: false, flag: target.flag })}
+          onClose={() => setAsking(null)}
+          onConfirm={() => { setAsking(null); onChange(target.value); }}
+        />
+      )}
       <SettingsOptionGroup
         label={`${name} permission mode`}
         value={current}
-        onChange={onChange}
+        onChange={pick}
         disabled={disabled}
         options={options.map((o) => ({ value: o.value, label: o.label, description: o.description, mono: o.flag }))}
       />

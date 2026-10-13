@@ -50,7 +50,7 @@ import { enqueueTargetedResume, findPullableConversation, performMoveSessionToDe
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
   const sessionUserId = await getAuthUserId(ctx as any);
@@ -122,6 +122,9 @@ export type PlannedRow = {
   from_device_id?: string;
   to_device_id: string;
   executor_device_id: string;
+  /** The executor is offline: the row waits in its queue and starts when that
+   *  machine's daemon checks in (reissueWaitingMigrations). Its label. */
+  waits_for?: string;
 };
 
 export type SkippedRow = { conversation_id: string; short_id?: string; title?: string; reason: string };
@@ -160,21 +163,25 @@ export function planMigration(opts: {
     if (c.owner_device_id === opts.targetDeviceId) { skip(`already on ${target.label ?? "that device"}`); continue; }
     if (target.is_remote) {
       if (owner?.is_remote) { skip("moving between two cloud hosts is not supported"); continue; }
-      // The transcript and worktree live on the OWNER: only it can push them.
-      // An unowned row (legacy) is a best-effort push from the freshest laptop.
-      if (owner && !online(owner)) { skip(`${owner.label ?? "its machine"} is offline — it holds the session's files`); continue; }
-      const executor = owner ? owner.device_id : mostRecentOnlineLocal?.device_id;
+      // The transcript and worktree live on the OWNER: only it can push them,
+      // so an offline owner's row waits for it. An unowned row (legacy) is a
+      // best-effort push from the freshest laptop.
+      const executor = owner ?? mostRecentOnlineLocal;
       if (!executor) { skip("no online local machine can run the transfer (start the codecast daemon on your laptop)"); continue; }
       rows.push({
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
-        direction: "to_cloud", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: executor,
+        direction: "to_cloud", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: executor.device_id,
+        ...(online(executor) ? {} : { waits_for: executor.label ?? "its machine" }),
       });
     } else {
       if (!owner?.is_remote) { skip("only sessions on a cloud host can be brought back (use Run on this device for a laptop-to-laptop move)"); continue; }
-      if (!online(target)) { skip(`${target.label ?? "the destination"} is offline`); continue; }
+      // The destination runs the transfer, so an offline destination's row
+      // waits for it rather than being refused: a laptop whose heartbeat is
+      // late under load is still the machine that will pull it.
       rows.push({
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
         direction: "to_local", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: target.device_id,
+        ...(online(target) ? {} : { waits_for: target.label ?? "the destination" }),
       });
     }
   }
@@ -230,6 +237,49 @@ function newBatchId(): string {
 }
 
 // ── Batch creation ───────────────────────────────────────────────────────────
+
+/** Wake one executor to run its rows of a batch (`cast migrate run`). */
+async function enqueueRunner(ctx: { db: any }, userId: Id<"users">, batchId: string, executor: string, now: number): Promise<string> {
+  const id = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "migrate_sessions" as const,
+    args: JSON.stringify({ batch_id: batchId }),
+    created_at: now,
+    target_device_id: executor,
+  });
+  return id.toString();
+}
+
+/** How far back a machine coming online looks for rows still waiting for it. */
+export const WAITING_MIGRATION_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * A machine's offline→online transition (users.heartbeat): its queued rows
+ * whose runner command expired while it was away get a fresh one. Rows are
+ * planned onto an offline executor on purpose (planMigration `waits_for`), so
+ * this is what makes them run, however long the machine was gone.
+ */
+export async function reissueWaitingMigrations(ctx: { db: any }, userId: Id<"users">, deviceId: string, now = Date.now()): Promise<string[]> {
+  const batches = await ctx.db
+    .query("migration_batches")
+    .withIndex("by_user_created", (q: any) => q.eq("user_id", userId).gte("created_at", now - WAITING_MIGRATION_LOOKBACK_MS))
+    .collect();
+  const pending = await ctx.db
+    .query("daemon_commands")
+    .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+    .collect();
+  const queuedFor = new Set(pending
+    .filter((c: any) => c.command === "migrate_sessions" && c.target_device_id === deviceId && now - (c.created_at ?? c._creationTime) < DAEMON_COMMAND_TTL_MS)
+    .map((c: any) => { try { return JSON.parse(c.args).batch_id; } catch { return null; } }));
+  const issued: string[] = [];
+  for (const batch of batches) {
+    if (batch.cancelled_at || !batch.executor_device_ids?.includes(deviceId) || queuedFor.has(batch.batch_id)) continue;
+    const rows = await batchRowsOf(ctx, batch.batch_id);
+    if (!rows.some((r: any) => r.status === "queued" && r.executor_device_id === deviceId)) continue;
+    issued.push(await enqueueRunner(ctx, userId, batch.batch_id, deviceId, now));
+  }
+  return issued;
+}
 
 /**
  * The live, movable-in-principle sessions of a user, by owner device: every
@@ -402,16 +452,7 @@ export async function performCreateBatch(
     rows.push({ ...r, migration_id: migrationId.toString() });
   }
   const commandIds: string[] = [];
-  for (const executor of executors) {
-    const id = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "migrate_sessions" as const,
-      args: JSON.stringify({ batch_id: batchId }),
-      created_at: now,
-      target_device_id: executor,
-    });
-    commandIds.push(id.toString());
-  }
+  for (const executor of executors) commandIds.push(await enqueueRunner(ctx, userId, batchId, executor, now));
   return { batch_id: batchId, rows, skipped, command_ids: commandIds, dry_run: false };
 }
 
@@ -510,16 +551,7 @@ export async function performRetryFailed(ctx: { db: any }, userId: Id<"users">, 
   const commandIds: string[] = [];
   if (requeued > 0) {
     await ctx.db.patch(batch._id, { cancelled_at: undefined, updated_at: now });
-    for (const executor of executors) {
-      const id = await ctx.db.insert("daemon_commands", {
-        user_id: userId,
-        command: "migrate_sessions" as const,
-        args: JSON.stringify({ batch_id: batchId }),
-        created_at: now,
-        target_device_id: executor,
-      });
-      commandIds.push(id.toString());
-    }
+    for (const executor of executors) commandIds.push(await enqueueRunner(ctx, userId, batchId, executor, now));
   }
   return { requeued, command_ids: commandIds };
 }
@@ -886,10 +918,11 @@ export async function performFinishSession(
 }
 
 /**
- * Who holds the host checkout a move would land in, asked BEFORE the push:
- * the push resets that checkout, so a holder's uncommitted work would be lost
- * if the check waited for the handoff. Rows of this batch are the runner's to
- * coordinate (one push per laptop folder) and never count.
+ * Who holds the host checkout a move would land in, asked BEFORE the push by
+ * CLIs released before moves merged into the checkout: their push resets it,
+ * so a holder's uncommitted work would be lost if the check waited for the
+ * handoff, and they land beside it instead. Rows of this batch are the
+ * runner's to coordinate (one push per laptop folder) and never count.
  */
 export async function performCheckoutHolder(ctx: { db: any }, userId: Id<"users">, args: { migration_id: Id<"session_migrations">; project_path: string }) {
   const row = await ctx.db.get(args.migration_id);
