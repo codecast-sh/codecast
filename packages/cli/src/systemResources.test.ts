@@ -52,23 +52,31 @@ describe("machine resource attribution", () => {
 test("pressure suggestions require sustained fresh evidence", () => {
   const point = (at: number): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 100, memoryAvailable: 50, memoryAvailableIsEstimate: false, logicalCpus: 8, load1: 2, pressure: "normal", processCount: 30 });
   expect(sustainedResourcePressure([point(0)], 0)).toBeNull();
-  expect(sustainedResourcePressure([point(0), point(30_000), point(60_000)], 60_000)?.reason).toContain("CPU");
-  expect(sustainedResourcePressure([point(0), point(30_000), point(60_000)], 240_000)).toBeNull();
-  expect(sustainedResourcePressure([point(0), point(30_000), { ...point(60_000), cpuPercent: 20 }], 60_000)).toBeNull();
+  const minutes = (n: number) => Array.from({ length: n * 2 + 1 }, (_, i) => point(i * 30_000));
+  expect(sustainedResourcePressure(minutes(1), 60_000)).toBeNull();
+  expect(sustainedResourcePressure(minutes(3), 180_000)?.reason).toContain("CPU");
+  expect(sustainedResourcePressure(minutes(3), 360_000)).toBeNull();
+  expect(sustainedResourcePressure([...minutes(3).slice(0, -1), { ...point(180_000), cpuPercent: 20 }], 180_000)).toBeNull();
+});
+
+test("a high load average with idle CPU and free memory is not pressure", () => {
+  const point = (at: number): ResourcePoint => ({ at, cpuPercent: 45, memoryTotal: 100, memoryAvailable: 50, memoryAvailableIsEstimate: false, logicalCpus: 16, load1: 48, pressure: "normal", processCount: 900 });
+  const points = Array.from({ length: 11 }, (_, i) => point(i * 30_000));
+  expect(sustainedResourcePressure(points, 300_000)).toBeNull();
 });
 
 test("pressure recovery has hysteresis and sampling gaps break an incident", () => {
   const p = (at: number, cpuPercent: number): ResourcePoint => ({ at, cpuPercent, memoryTotal: 100, memoryAvailable: 50, memoryAvailableIsEstimate: false, logicalCpus: 8, load1: 2, pressure: "normal", processCount: 30 });
-  const high = [p(0, 95), p(30000, 95), p(60000, 95)];
-  expect(sustainedResourcePressure([...high, p(90000, 70)], 90000)).not.toBeNull();
-  expect(sustainedResourcePressure([...high, p(90000, 70), p(120000, 70), p(150000, 70)], 150000)).toBeNull();
-  expect(sustainedResourcePressure([...high, p(170000, 95)], 170000)).toBeNull();
+  const high = Array.from({ length: 7 }, (_, i) => p(i * 30000, 95));
+  expect(sustainedResourcePressure([...high, p(210000, 70)], 210000)).not.toBeNull();
+  expect(sustainedResourcePressure([...high, p(210000, 70), p(240000, 70), p(270000, 70)], 270000)).toBeNull();
+  expect(sustainedResourcePressure([...high, p(290000, 95)], 290000)).toBeNull();
 });
 
 test("a sustained incident escalates when critical memory pressure persists", () => {
   const p = (at: number, pressure: ResourcePoint["pressure"]): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 100, memoryAvailable: 50, memoryAvailableIsEstimate: true, logicalCpus: 8, load1: 2, pressure, processCount: 30 });
-  const points = [p(0, "normal"), p(30000, "normal"), p(60000, "normal"), p(90000, "critical"), p(120000, "critical"), p(150000, "critical")];
-  expect(sustainedResourcePressure(points, 150000)?.level).toBe("critical");
+  const points = [...Array.from({ length: 7 }, (_, i) => p(i * 30000, "normal")), p(210000, "critical"), p(240000, "critical"), p(270000, "critical")];
+  expect(sustainedResourcePressure(points, 270000)?.level).toBe("critical");
 });
 
 
@@ -86,8 +94,8 @@ test("missing memory pressure probes do not falsely recover an incident", () => 
   const now = 1_000_000;
   const point = (at: number, pressure: "critical" | "unknown" | "normal") => ({ at, pressure,
     cpuPercent: 10, load1: 1, logicalCpus: 8, memoryTotal: 100, memoryAvailable: 50, memoryAvailableIsEstimate: true });
-  const history = [point(now - 150000, "critical"), point(now - 120000, "critical"), point(now - 90000, "critical"),
-    point(now - 60000, "unknown"), point(now - 30000, "unknown"), point(now, "unknown")];
+  const history = [...Array.from({ length: 7 }, (_, i) => point(now - 330000 + i * 30000, "critical")),
+    point(now - 120000, "unknown"), point(now - 90000, "unknown"), point(now - 60000, "unknown"), point(now - 30000, "unknown"), point(now, "unknown")];
   expect(sustainedResourcePressure(history, now)?.level).toBe("critical");
   expect(sustainedResourcePressure([...history, point(now + 30000, "normal"), point(now + 60000, "normal"), point(now + 90000, "normal")], now + 90000)).toBeNull();
 });

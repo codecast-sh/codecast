@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { ENTRY_PATH } from "./files";
 import { livePath, runRoute, versionPath } from "./runPaths";
-import { SDK_PATH } from "./runtime";
+import { SDK_PATH, sdkPathFor } from "./runtime";
 
 describe("runRoute", () => {
   test("the SDK", () => {
     expect(runRoute(SDK_PATH)).toEqual({ kind: "sdk" });
+    expect(runRoute(sdkPathFor("d57766a48f"))).toEqual({ kind: "sdk", hash: "d57766a48f" });
+    expect(runRoute(`${SDK_PATH}/../x`)).toBeNull();
   });
 
   test("a version folder serves its index.html", () => {
