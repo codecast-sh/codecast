@@ -175,8 +175,8 @@ export function SwitchMock() {
       <div className="grid grid-cols-1 gap-3 px-3.5 py-3.5">
         <Msg who="claude">Backoff doubles up to 60s now. Load test passes.</Msg>
         <Msg who="you">Get a second pair of eyes on it before I merge.</Msg>
-        <div className="rounded-md px-2.5 py-1.5 font-mono text-[11.5px]" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
-          <span style={{ color: SOL.green }}>$ </span>cast switch --agent codex
+        <div className="self-start rounded-md px-2.5 py-1.5 font-mono text-[11.5px]" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
+          model menu <span style={{ color: SOL.base1 }}>→</span> Switch agent <span style={{ color: SOL.base1 }}>→</span> <span style={{ color: AGENT_COLOR.codex }}>Codex</span>
         </div>
         <div className="flex items-center gap-2 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>
           <span className="h-px flex-1" style={{ backgroundColor: SOL.base2 }} />
@@ -189,7 +189,7 @@ export function SwitchMock() {
   );
 }
 
-/** cast handoff --to: the brief the server writes, and where it goes. */
+/** Hand off to: the brief the server writes, and where it goes. */
 export function HandoffMock() {
   const sections: [string, string][] = [
     ["Goal", "Stop webhook retries from piling up under load."],
@@ -201,7 +201,7 @@ export function HandoffMock() {
   return (
     <div className="rounded-xl overflow-hidden" style={frame} role="img" aria-label="A handoff brief with goal, decisions, verified, open questions and next steps, starting a linked Codex session">
       <div className="flex items-center gap-2 px-3.5 py-2 font-mono text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
-        <span style={{ color: SOL.base02 }}>cast handoff --to codex</span>
+        <span style={{ color: SOL.base02 }}>Hand off to Codex</span>
       </div>
       <div className="grid grid-cols-1 gap-2.5 px-3.5 py-3.5">
         {sections.map(([k, v]) => (

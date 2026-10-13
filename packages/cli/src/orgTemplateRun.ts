@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSAL_OPTIONS, type OrgRoleProposal } from "@codecast/shared/contracts/orgProposal";
+import { autonomyOn, autonomySentence, defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
@@ -35,7 +36,13 @@ export type TemplateReceipt = InstanceState & {
   /** The server's instance row (org_template_instances), once the host step registered it. */
   instanceId?: string;
   role?: { id: string; handle: string; sessionId?: string };
-  routines: Record<string, { triggerId?: string; attempted?: boolean; external?: boolean; paused?: boolean; retired?: boolean; actualIntervalMs?: number; every: string }>;
+  /** `rearm`: an upgrade paused a live routine for its new cadence, and the next arm pass turns it back on.
+   *  `held`: paused when it was cut over, as its adopted trigger was; the arm pass leaves it to a person. */
+  routines: Record<string, { triggerId?: string; attempted?: boolean; external?: boolean; paused?: boolean; retired?: boolean; actualIntervalMs?: number; every: string; rearm?: boolean; held?: boolean }>;
+  /** A cutover in progress, per routine (cutoverTemplate): the adopted trigger, its live cadence and state when the cutover began, and the managed routine being created. */
+  cutover?: Record<string, { adopted: string; intervalMs: number; wasLive: boolean; triggerId?: string; attempted?: boolean }>;
+  /** Adopted triggers a cutover replaced, per routine: paused, kept, never run again beside the managed routine. */
+  retiredByCutover?: Record<string, string>;
 };
 type TemplateUpgrade = {
   from: TemplateReceipt["template"];
@@ -176,7 +183,7 @@ async function recoverStack(deps: OrgInitDeps, receipt: TemplateReceipt): Promis
     receipt.stack.decisionAttempted = true;
     save(receipt);
     const artifact = verifiedArtifact(receipt);
-    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${fill(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), receipt, artifact.manifest)}`;
+    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; its recurring jobs are not extra managers. ${autonomySentence(autonomyOn(receipt.proposal.trust))} Its recurring jobs are created paused after you approve; you turn each on from the role page.\n\nProposed shared charter:\n${fill(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), receipt, artifact.manifest)}`;
     const created = await request(deps, "/cli/decide", { session_id: receipt.sourceSession, stack: receipt.stack.id, question: `Create ${receipt.proposal.name} for ${receipt.project.name}? (${receipt.instance})`, kind: "single", category: "access", blocking: true, options: ORG_PROPOSAL_OPTIONS.role.map((label) => ({ label })), context_md: context });
     receipt.stack.decisionId = created.short_id || created.id;
     if (!receipt.stack.decisionId) throw new Error("Decision creation returned no id");
@@ -238,7 +245,7 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
     if (!(tree.roles ?? []).some((r: any) => r.status !== "retired" && `@${r.handle}` === reportsTo)) throw new Error(`No active role ${reportsTo} in this workspace`);
   }
   if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) throw new Error(`Project ${project.ref} already has a lead, @${leads[0].handle}. Hire under it with --reports-to @${leads[0].handle}, or name that role as the seat; a second role beside a project's lead is refused.`);
-  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: "understand", charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
+  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: defaultTrustFor({ handle }), charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
 }
@@ -294,37 +301,50 @@ async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
   for (const routine of artifact.manifest.routines) {
     const state = receipt.routines[routine.id];
     if (state.external || state.retired) continue;
-    let rows = await triggerRows(deps);
-    let row = state.triggerId ? triggerFor(rows, state.triggerId) : rows.find((r: any) => r.context_summary === marker(receipt, routine.id));
-    if (!row) {
-      if (state.attempted) throw new Error(`Routine ${routine.id} creation outcome unknown; refusing a duplicate request`);
-      state.attempted = true;
-      save(receipt);
-      const created = await request(deps, "/cli/tasks/create", { title: fill(routine.title, receipt, artifact.manifest), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), status: "paused", mode: "propose" });
-      state.triggerId = created.task_id;
-      if (!state.triggerId) throw new Error("Trigger creation returned no id");
-      save(receipt);
-      rows = await triggerRows(deps);
-      row = triggerFor(rows, state.triggerId);
-    }
-    if (rows.filter((r: any) => r.context_summary === marker(receipt, routine.id)).length !== 1) throw new Error(`Multiple triggers for routine ${routine.id}`);
-    managedTrigger(row, receipt, routine.id);
-    state.triggerId = row._id;
-    if (state.attempted) {
-      // Created paused (org-hire.md H8): no run_at, so nothing fires until a
-      // person activates it. A row from an older install carries the year
-      // ahead date and the exit 1 gate instead; both forms are inert.
-      // A backend that ignores the status is paused at once instead.
-      if (row.run_count !== 0 || row.status === "running" || row.schedule_type !== "recurring" || row.interval_ms !== intervalMs(routine.every)) throw new Error(`Routine ${routine.id} was not safely gated; manual review required`);
-      if (row.status !== "paused") await request(deps, "/cli/tasks/pause", { task_id: row._id });
-      row = triggerFor(await triggerRows(deps), row._id);
-      if (row.status !== "paused" || row.run_count !== 0) throw new Error(`Pause verification failed for ${routine.id}`);
-      state.attempted = false;
-    }
+    const row = await createManagedRoutine(deps, receipt, artifact, routine, state, intervalMs(routine.every));
     state.paused = row.status === "paused";
     state.actualIntervalMs = row.interval_ms;
     save(receipt);
   }
+}
+/**
+ * One managed routine, found by its marker or created paused (org-hire.md
+ * H8): the loader prompt, bound to the standing session, run in the project
+ * directory. `slot` journals the creation on the receipt (`attempted` before
+ * the request, the id after), so a rerun after a lost answer finds the row it
+ * made and never asks twice. Reconcile and upgrade create at the release's
+ * cadence; a cutover at the cadence the adopted trigger runs at.
+ */
+async function createManagedRoutine(deps: OrgInitDeps, receipt: TemplateReceipt, artifact: TemplateArtifact, routine: OrgTemplate["routines"][number], slot: { triggerId?: string; attempted?: boolean }, every: number): Promise<any> {
+  let rows = await triggerRows(deps);
+  let row = slot.triggerId ? triggerFor(rows, slot.triggerId) : rows.find((r: any) => r.context_summary === marker(receipt, routine.id));
+  if (!row) {
+    if (slot.attempted) throw new Error(`Routine ${routine.id} creation outcome unknown; refusing a duplicate request`);
+    slot.attempted = true;
+    save(receipt);
+    const created = await request(deps, "/cli/tasks/create", { title: fill(routine.title, receipt, artifact.manifest), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: every, status: "paused", mode: "propose" });
+    slot.triggerId = created.task_id;
+    if (!slot.triggerId) throw new Error("Trigger creation returned no id");
+    save(receipt);
+    rows = await triggerRows(deps);
+    row = triggerFor(rows, slot.triggerId);
+  }
+  if (rows.filter((r: any) => r.context_summary === marker(receipt, routine.id)).length !== 1) throw new Error(`Multiple triggers for routine ${routine.id}`);
+  managedTrigger(row, receipt, routine.id);
+  slot.triggerId = row._id;
+  if (slot.attempted) {
+    // Created paused: no run_at, so nothing fires until it is turned on
+    // (armReadyRoutines). A row from an older install carries the year
+    // ahead date and the exit 1 gate instead; both forms are inert.
+    // A backend that ignores the status is paused at once instead.
+    if (row.run_count !== 0 || row.status === "running" || row.schedule_type !== "recurring" || row.interval_ms !== every) throw new Error(`Routine ${routine.id} was not safely gated; manual review required`);
+    if (row.status !== "paused") await request(deps, "/cli/tasks/pause", { task_id: row._id });
+    row = triggerFor(await triggerRows(deps), row._id);
+    if (row.status !== "paused" || row.run_count !== 0) throw new Error(`Pause verification failed for ${routine.id}`);
+    slot.attempted = false;
+    save(receipt);
+  }
+  return row;
 }
 
 /** The marker a ledger task carries as a label, so a re-hire adopts it (H7). */
@@ -388,20 +408,91 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const config: Record<string, string> = { ...(receipt.config ?? {}), ...paths };
     const ledgerInputs = Object.fromEntries(Object.entries(receipt.ledgers).map(([id, l]) => [`ledgers.${id}`, l.shortId]));
     const file = writeInstanceFile(dir, instance, { inputs: [...(manifest.inputs ?? []), ...Object.keys(ledgerInputs).map((key) => ({ key, label: key, kind: "string" as const }))], instance_file: manifest.instance_file }, { ...config, ...ledgerInputs });
-    // The server row is the record the web reads (org-hire.md H1); the receipt
-    // keeps the pin. Registered by the receipt's key, so a rerun updates it.
-    const row = await request(deps, "/cli/org/template/instance", {
-      instance_key: receipt.key, instance, template_id: receipt.template.id, version: receipt.template.version, digest: receipt.template.hash,
-      project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
-      config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, setup_text: setupText(artifact, receipt, true), from_session: options.session || sessionIdFromEnv() || undefined, ...boundary(receipt),
-      routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => [id, { triggerId: r.triggerId, external: r.external, retired: r.retired }])),
-    });
-    receipt.instanceId = String(row._id ?? row.id);
-    save(receipt);
+    await registerInstance(deps, receipt, artifact, options);
+    await armReadyRoutines(deps, receipt, tree);
     return { ...receipt, instanceFile: file } as TemplateReceipt & { instanceFile: string };
   });
 }
 
+
+/**
+ * The server row is the record the web reads (org-hire.md H1); the receipt
+ * keeps the pin. Registered by the receipt's key, so a rerun updates it.
+ */
+async function registerInstance(deps: OrgInitDeps, receipt: TemplateReceipt, artifact: TemplateArtifact, options: TemplateOptions): Promise<void> {
+  const row = await request(deps, "/cli/org/template/instance", {
+    instance_key: receipt.key, instance: receipt.instance, template_id: receipt.template.id, version: receipt.template.version, digest: receipt.template.hash,
+    project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
+    config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, setup_text: setupText(artifact, receipt, true), from_session: options.session || sessionIdFromEnv() || undefined, ...boundary(receipt),
+    routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => [id, { triggerId: r.triggerId, external: r.external, retired: r.retired }])),
+  });
+  receipt.instanceId = String(row._id ?? row.id);
+  save(receipt);
+}
+
+/**
+ * Moves adopted routines onto the template's own (org-hire.md H3, cutover).
+ * For each: the managed routine reconcile creates for a missing one, at the
+ * cadence the adopted trigger runs at now; the adopted trigger paused and
+ * kept, its id recorded under `retiredByCutover`; the receipt and the server
+ * row then name the managed routine, which turns on when it is ready. The
+ * adopted trigger is paused before the managed one can turn on, so one
+ * routine never has two live triggers, and an adopted trigger that was paused
+ * leaves its managed routine paused (`held`) for a person. Journaled per
+ * routine in `receipt.cutover`: a rerun after an interruption finishes what
+ * the last run started and creates nothing twice.
+ */
+export async function cutoverTemplate(deps: OrgInitDeps, instance: string, names: string[], options: TemplateOptions): Promise<{ cutover: Record<string, { from: string; to: string; intervalMs: number; on: boolean }>; skipped: string[]; receipt: TemplateReceipt }> {
+  const dir = canonicalDirectory(options.dir);
+  return locked(dir, instance, async () => {
+    const receipt = readReceipt(dir, instance);
+    const tree = await checkContext(deps, receipt, options);
+    if (receipt.phase !== "ready" || receipt.upgrade) throw new Error(`Instance is ${receipt.upgrade ? "mid-upgrade" : receipt.phase}; cutover runs on a ready instance`);
+    if (verifyRole(tree, receipt).status === "retired") throw new Error("The role is retired");
+    await verifyStanding(deps, tree, receipt);
+    const artifact = verifiedArtifact(receipt);
+    const adopted = (id: string) => !!receipt.routines[id]?.external && !receipt.routines[id]?.retired;
+    const chosen = names.length ? [...new Set(names)] : [...new Set([...Object.keys(receipt.cutover ?? {}), ...Object.keys(receipt.routines).filter(adopted)])];
+    const skipped: string[] = [];
+    for (const id of chosen) {
+      if (!artifact.manifest.routines.some((r) => r.id === id)) throw new Error(`Not a routine of this template: ${id}`);
+      if (receipt.cutover?.[id] || adopted(id)) continue;
+      if (!receipt.retiredByCutover?.[id]) throw new Error(`Routine ${id} is not adopted; nothing to cut over`);
+      skipped.push(id);
+    }
+    const work = chosen.filter((id) => !skipped.includes(id));
+    for (const id of work) {
+      const state = receipt.routines[id];
+      const routine = artifact.manifest.routines.find((r) => r.id === id)!;
+      let journal = receipt.cutover?.[id];
+      if (!journal) {
+        const row = triggerFor(await triggerRows(deps), state.triggerId!);
+        if (row.project_path !== receipt.project.dir) throw new Error(`Adopted trigger ${row.short_id ?? row._id} for ${id} runs in another directory`);
+        if (!Number.isSafeInteger(row.interval_ms) || row.interval_ms <= 0) throw new Error(`Adopted trigger ${row.short_id ?? row._id} for ${id} has no recurring cadence to carry`);
+        journal = (receipt.cutover ??= {})[id] = { adopted: row._id, intervalMs: row.interval_ms, wasLive: row.status !== "paused" };
+        save(receipt);
+      }
+      if (!state.external) continue;
+      await createManagedRoutine(deps, receipt, artifact, routine, journal, journal.intervalMs);
+      const old = triggerFor(await triggerRows(deps), journal.adopted);
+      if (old.status !== "paused" && old.status !== "completed") {
+        await request(deps, "/cli/tasks/pause", { task_id: old._id });
+        if (triggerFor(await triggerRows(deps), old._id).status !== "paused") throw new Error(`Pause verification failed for ${old.short_id ?? old._id}; the managed routine for ${id} stays paused`);
+      }
+      receipt.routines[id] = { every: state.every, triggerId: journal.triggerId, paused: true, actualIntervalMs: journal.intervalMs, ...(journal.wasLive ? {} : { held: true }) };
+      (receipt.retiredByCutover ??= {})[id] = journal.adopted;
+      save(receipt);
+    }
+    if (receipt.instanceId) await registerInstance(deps, receipt, artifact, options);
+    const done = Object.fromEntries(work.map((id) => [id, { from: receipt.cutover![id].adopted, to: receipt.routines[id].triggerId!, intervalMs: receipt.cutover![id].intervalMs }]));
+    for (const id of work) delete receipt.cutover![id];
+    if (receipt.cutover && !Object.keys(receipt.cutover).length) delete receipt.cutover;
+    save(receipt);
+    await armReadyRoutines(deps, receipt, tree);
+    const rows = await triggerRows(deps);
+    return { cutover: Object.fromEntries(Object.entries(done).map(([id, d]) => [id, { ...d, on: ["scheduled", "running"].includes(triggerFor(rows, d.to).status) }])), skipped, receipt };
+  });
+}
 
 /** A published release as an artifact on this host (H1, install from the record): downloaded and verified against the release's digest. */
 async function releaseArtifact(deps: OrgInitDeps, release: { template_id: string; version: string; digest: string }, workspace: { team_id?: string }): Promise<TemplateArtifact> {
@@ -484,14 +575,13 @@ async function pullSetupMarks(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
 }
 export const setupTemplate = (deps: OrgInitDeps, instance: string, id: string | undefined, options: TemplateOptions) => {
   const chosen = [options.done && "done", options.skip && "skipped", options.open && "open"].filter(Boolean) as string[];
-  const fromAgent = !!(options.session || sessionIdFromEnv());
   return withState(deps, options, instance,
     (manifest, receipt, artifact) => {
       if (!id) return setupRows(manifest, receipt, setupText(artifact, receipt, false));
       if (chosen.length !== 1) throw new Error("Give exactly one of --done, --skip or --open");
-      return markSetup(manifest, receipt, id, { status: chosen[0]!, evidence: options.evidence, fromAgent });
+      return markSetup(manifest, receipt, id, { status: chosen[0]!, evidence: options.evidence });
     },
-    (receipt) => (id ? request(deps, "/cli/org/template/setup", { instance_key: receipt.key, id, status: chosen[0], evidence: options.evidence, from_agent: fromAgent }) : undefined),
+    (receipt) => (id ? request(deps, "/cli/org/template/setup", { instance_key: receipt.key, id, status: chosen[0], evidence: options.evidence }) : undefined),
     pullSetupMarks);
 };
 
@@ -639,7 +729,6 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
     if (![0, 1].includes(decision.answer_index)) throw new Error("Unrecognized template decision answer");
     const proposed = decision.answer_index === 1 ? applyProposalChanges(receipt.proposal, decision.answer_text).proposal : receipt.proposal;
     if (proposed.scope?.projects?.length !== 1 || ![receipt.project.ref, receipt.project.id].includes(proposed.scope.projects[0]) || (proposed.scope.plans?.length ?? 0) !== 0) throw new Error("Approved scope differs from the explicit instance project; refusing provisioning");
-    if (proposed.trust !== "understand") throw new Error("Template roles must start at understand");
     if (!receipt.role) {
       const applied = await request(deps, "/cli/org/apply-decision", { decision: receipt.stack.decisionId, provision: false });
       if (applied.status !== "applied" && !(applied.status === "skipped" && applied.note?.startsWith("already applied:"))) throw new Error(`Role was not applied: ${applied.note || applied.status}`);
@@ -651,7 +740,7 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
         if (!recoveredRef || role.short_id !== recoveredRef) throw new Error("Previously applied role identity cannot be recovered safely");
       }
       if (applied.role && applied.role.id !== role._id) throw new Error("Applied role identity mismatch");
-      if ((role.trust ?? "understand") !== "understand") throw new Error("New role is not at understand; manual review required");
+      if (autonomyOn(role.trust ?? defaultTrustFor(role)) !== autonomyOn(proposed.trust ?? defaultTrustFor(role))) throw new Error("New role's Starts work on its own differs from what was approved; manual review required");
       // The line it owns (line-profile.md LP7) is part of what the person approved.
       if (proposed.line && role.line_workflow_slug !== proposed.line) throw new Error(`New role does not run the approved line ${proposed.line}; manual review required`);
       if (proposed.caps?.cards !== undefined && role.caps?.cards !== proposed.caps.cards) throw new Error(`New role's cards cap is not the approved ${proposed.caps.cards}; manual review required`);
@@ -681,6 +770,48 @@ async function provisionAndArm(deps: OrgInitDeps, receipt: TemplateReceipt, tree
   await ensureRoutines(deps, receipt);
   receipt.phase = "ready";
   save(receipt);
+  await armReadyRoutines(deps, receipt, tree);
+}
+/**
+ * Turns on every managed routine that is ready and waiting (org-hire.md H8),
+ * the way activation does: its first run one cadence out. Waiting means
+ * created paused and never turned on, or paused by an upgrade for its new
+ * cadence. A routine a person paused after it was on stays paused, as does
+ * one behind a precheck a person set. One that is not ready stays paused and
+ * is turned on by the next bind, reconcile or status once it is.
+ */
+async function armReadyRoutines(deps: OrgInitDeps, receipt: TemplateReceipt, tree: any): Promise<string[]> {
+  if (receipt.phase !== "ready" || receipt.upgrade || !receipt.role?.sessionId) return [];
+  const role = verifyRole(tree, receipt);
+  if (role.status !== "active") return [];
+  const ready = readiness(verifiedArtifact(receipt).manifest, { ...receipt, authority: (role.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, role.trust ?? defaultTrustFor(role));
+  const armed: string[] = [];
+  for (const [id, state] of Object.entries(receipt.routines)) {
+    if (!state.triggerId || state.external || state.retired || state.attempted || state.held || !ready[id]?.ready) continue;
+    let row = triggerFor(await triggerRows(deps), state.triggerId);
+    managedTrigger(row, receipt, id);
+    const gate = !row.precheck || row.precheck === "exit 1";
+    const neverOn = row.run_count === 0 && (!row.run_at || row.precheck === "exit 1");
+    if (row.status !== "paused" || !gate || !(neverOn || state.rearm)) continue;
+    await pauseRetiredAdopted(deps, receipt, id);
+    await request(deps, "/cli/org/template/activate", { task_id: row._id });
+    row = triggerFor(await triggerRows(deps), row._id);
+    if (row.status !== "scheduled") throw new Error(`Turning on ${id} did not take; it is ${row.status}`);
+    state.paused = false;
+    delete state.rearm;
+    save(receipt);
+    armed.push(id);
+  }
+  return armed;
+}
+/** An adopted trigger a cutover replaced is kept paused: a person who resumed it would run the routine twice. */
+async function pauseRetiredAdopted(deps: OrgInitDeps, receipt: TemplateReceipt, id: string): Promise<void> {
+  const adopted = receipt.retiredByCutover?.[id];
+  if (!adopted) return;
+  const row = (await triggerRows(deps)).find((r) => r._id === adopted);
+  if (!row || row.status === "paused" || row.status === "completed") return;
+  await request(deps, "/cli/tasks/pause", { task_id: row._id });
+  if (triggerFor(await triggerRows(deps), row._id).status !== "paused") throw new Error(`The trigger ${row.short_id ?? row._id} that ${id} replaced is live again and would not pause; refusing to run the routine twice`);
 }
 /**
  * A hire accepted on the web (org-hire.md H3) has a server row awaiting its
@@ -708,7 +839,7 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
     schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: "web", phase: "provisioning",
     template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root: releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash }) },
     stack: { title: `Org template ${instance} for ${project.ref} [${key}]` },
-    proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: "understand" },
+    proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: role.trust ?? defaultTrustFor(role) },
     config: row.config ?? {}, role: { id: role._id, handle: role.handle }, instanceId: String(row._id),
     routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every, ...(row.routines?.[r.id]?.external ? { triggerId: row.routines[r.id].triggerId, external: true } : {}) }])),
   };
@@ -718,13 +849,18 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
   return receipt;
 }
 export async function templateStatus(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<any> {
+  return locked(options.dir, instance, () => readStatus(deps, instance, options));
+}
+async function readStatus(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<any> {
   const receipt = readReceipt(options.dir, instance);
   const tree = await checkContext(deps, receipt, options);
   if (receipt.role) { verifyRole(tree, receipt); if (receipt.role.sessionId) await verifyStanding(deps, tree, receipt); }
+  // A routine that became ready since the last host step turns on here.
+  await armReadyRoutines(deps, receipt, tree);
   const rows = await triggerRows(deps);
   const artifact = verifiedArtifact(receipt);
   const roleRow = receipt.role ? verifyRole(tree, receipt) : undefined;
-  const trust = roleRow?.trust ?? "understand";
+  const trust = roleRow ? roleRow.trust ?? defaultTrustFor(roleRow) : "understand";
   const held = { ...receipt, authority: (roleRow?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) };
   await pullSetupMarks(deps, receipt);
   const words = setupText(artifact, receipt, false);
@@ -733,7 +869,7 @@ export async function templateStatus(deps: OrgInitDeps, instance: string, option
     if (row && !r.external) managedTrigger(row, receipt, id);
     if (row && r.external && row.project_path !== receipt.project.dir) throw new Error(`External routine ${id} changed project`);
     return [id, { ...r, status: row?.status ?? "not-created", gated: !!row?.precheck, shortId: row?.short_id, runAt: row?.run_at, intervalMs: row?.interval_ms, activation: receipt.phase === "ready" && !r.external && !r.retired && !r.attempted && row?.status === "paused" ? activationInstructions(receipt, row) : undefined }];
-  })), next: receipt.phase === "upgrading" ? "Upgrade incomplete: rerun its target release to finish, or its original release to roll back; routines cannot run until recovery finishes." : receipt.phase === "proposal" ? `Answer ${receipt.stack.decisionId}, then reconcile` : "Review paused/gated routines before explicitly enabling them. External routines remain untouched." };
+  })), next: receipt.phase === "upgrading" ? "Upgrade incomplete: rerun its target release to finish, or its original release to roll back; routines cannot run until recovery finishes." : receipt.phase === "proposal" ? `Answer ${receipt.stack.decisionId}, then reconcile` : receipt.cutover && Object.keys(receipt.cutover).length ? `A cutover is incomplete for ${Object.keys(receipt.cutover).join(", ")}; rerun cast org template cutover to finish it.` : "Ready routines are on; a paused one waits on what its readiness names, or on a person who paused it. External routines remain untouched." };
 }
 export async function templateInstructions(deps: OrgInitDeps, instance: string, routine: string, options: TemplateOptions): Promise<string> {
   const receipt = readReceipt(options.dir, instance);
@@ -748,7 +884,7 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     const item = (artifact.manifest.setup ?? []).find((s) => s.id === routine.slice("setup:".length));
     if (!item) throw new Error(`Not a setup item of this template: ${routine.slice("setup:".length)}`);
     const words = setupWords(artifact, receipt, item, true);
-    const whose = item.who === "human" ? `A person's step: they mark it done or skipped on the role page, or with cast org template setup ${quoteTemplateArg(instance)} ${quoteTemplateArg(item.id)} --done from their own terminal.` : "The role's own step.";
+    const whose = item.who === "human" ? `A person's step: once it is done, mark it with cast org template setup ${quoteTemplateArg(instance)} ${quoteTemplateArg(item.id)} --done, or the person marks it on the role page.` : "The role's own step.";
     return `${pinned}\nSetup step ${item.id}: ${words.title}${words.price ? ` (${words.price})` : ""}\n${whose}\n\n${words.guide ?? "This step has no written guide in the release."}`;
   }
   let file = artifact.manifest.role.charter;
@@ -764,7 +900,7 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     if (!["scheduled", "running"].includes(row.status) || row.precheck === "exit 1") throw new Error("Routine remains paused or gated for review");
     file = entry.prompt;
     const roleRow = verifyRole(tree, receipt);
-    header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? "understand")[routine]);
+    header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? defaultTrustFor(roleRow))[routine]);
   }
   return `${pinned}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${fill(artifact.files.get(file)!.toString("utf8"), receipt, artifact.manifest)}`;
 }
@@ -775,7 +911,7 @@ export function activationInstructions(receipt: TemplateReceipt, row: { short_id
   const ref = quoteTemplateArg(row.short_id || row._id);
   const gate = row.precheck === "exit 1" ? " --precheck ''" : "";
   return {
-    note: "A person activates this routine, from the role page (one control) or with these commands after review: keep it paused, set its first run one cadence out with --every (resume alone would run it at once, or a year out on an older install), verify paused state, no gate and the new runAt, then resume.",
+    note: "It turns on by itself at the next bind or status once it is ready. To turn it on by hand: cast org template activate, the role page's control, or these commands: keep it paused, set its first run one cadence out with --every (resume alone would run it at once, or a year out on an older install), verify paused state, no gate and the new runAt, then resume.",
     commands: [
       `cast trigger update ${ref} --every ${quoteTemplateArg(`${seconds}s`)}${gate}`,
       `cast org template status ${quoteTemplateArg(receipt.instance)} --dir ${quoteTemplateArg(receipt.project.dir)}`,
@@ -783,12 +919,12 @@ export function activationInstructions(receipt: TemplateReceipt, row: { short_id
     ],
   };
 }
-/** The role page's control, from the shell: refused for an agent session by the server, with the reason. */
+/** The role page's control, from the shell, for a person or the role. */
 export async function activateTemplateRoutine(deps: OrgInitDeps, instance: string, routine: string, options: TemplateOptions): Promise<unknown> {
   const receipt = readReceipt(options.dir, instance);
   const state = receipt.routines[routine];
   if (!state?.triggerId || state.external || state.retired) throw new Error("Routine is unverified, external or retired");
-  return request(deps, "/cli/org/template/activate", { task_id: state.triggerId, from_session: options.session || sessionIdFromEnv() || undefined });
+  return request(deps, "/cli/org/template/activate", { task_id: state.triggerId });
 }
 function verifyRelease(receipt: TemplateReceipt, release: TemplateReceipt["template"]): TemplateArtifact {
   if (release.root !== releaseRoot(receipt.project.dir, release)) throw new Error("Upgrade release points outside its pinned directory");
@@ -825,6 +961,8 @@ async function finishUpgrade(deps: OrgInitDeps, receipt: TemplateReceipt): Promi
     }
     receipt.routines[id].paused = true;
     receipt.routines[id].actualIntervalMs = wanted;
+    // On before the upgrade: back on at its new cadence once the upgrade lands.
+    if (intent.originalRoutines[id] && !intent.originalRoutines[id].paused) receipt.routines[id].rearm = true;
     save(receipt);
   }
   const retiring = intent.direction === "forward" ? intent.removed : intent.added;
@@ -850,7 +988,7 @@ async function finishUpgrade(deps: OrgInitDeps, receipt: TemplateReceipt): Promi
     save(receipt);
   }
   if (intent.direction === "rollback") {
-    for (const [id, original] of Object.entries(intent.originalRoutines)) receipt.routines[id] = { ...original, paused: receipt.routines[id]?.paused ?? original.paused, actualIntervalMs: receipt.routines[id]?.actualIntervalMs ?? original.actualIntervalMs };
+    for (const [id, original] of Object.entries(intent.originalRoutines)) receipt.routines[id] = { ...original, paused: receipt.routines[id]?.paused ?? original.paused, actualIntervalMs: receipt.routines[id]?.actualIntervalMs ?? original.actualIntervalMs, ...(receipt.routines[id]?.rearm ? { rearm: true } : {}) };
   } else {
     for (const r of target.manifest.routines) receipt.routines[r.id] = { ...receipt.routines[r.id], every: r.every, retired: false };
   }
@@ -879,6 +1017,7 @@ export async function upgradeTemplate(deps: OrgInitDeps, instance: string, sourc
       receipt.warnings = tree.templateWarnings;
       save(receipt);
       await finishUpgrade(deps, receipt);
+      await armReadyRoutines(deps, receipt, tree);
       return { ...recovery, applied: true, receipt };
     }
     if (receipt.phase !== "ready") throw new Error("Finish reconciling the approved instance before upgrading");
@@ -923,6 +1062,7 @@ export async function upgradeTemplate(deps: OrgInitDeps, instance: string, sourc
     receipt.warnings = tree.templateWarnings;
     save(receipt);
     await finishUpgrade(deps, receipt);
+    await armReadyRoutines(deps, receipt, tree);
     return { ...preview, applied: true, receipt };
   };
   return options.apply ? locked(options.dir, instance, execute) : execute();
