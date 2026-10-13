@@ -29,9 +29,14 @@ export const LIVE_ACTIVITY_DISPLAYED_SESSIONS = 4;
 export const LIVE_ACTIVITY_TITLE_LIMIT = 70;
 export const LIVE_ACTIVITY_DETAIL_LIMIT = 90;
 
-// A finished session lingers so the strip reads "just finished" before the
-// row leaves; a failure stays longer because it is the one thing worth a look.
+// Every row but a working one is news only for a while after its status
+// changed, then it leaves. A finished session lingers so the strip reads "just
+// finished"; a failure stays longer because it is the one thing worth a look.
+// A wait is news while it is fresh: someone almost always has sessions parked
+// on a reply, and a backlog of them belongs in the inbox, not on the Lock
+// Screen, where it would keep the strip up forever.
 export const LIVE_ACTIVITY_DONE_LINGER_MS = 90_000;
+export const LIVE_ACTIVITY_WAITING_LINGER_MS = 10 * 60_000;
 export const LIVE_ACTIVITY_FAILED_LINGER_MS = 10 * 60_000;
 
 // staleDate is always set so a dead server greys the strip out instead of
@@ -126,14 +131,25 @@ export function liveActivityStatusOf(
   }
 }
 
-// A finished or failed row leaves once its linger has run out.
+const LINGER_MS: Record<LiveActivityStatus, number | null> = {
+  working: null,
+  waiting: LIVE_ACTIVITY_WAITING_LINGER_MS,
+  done: LIVE_ACTIVITY_DONE_LINGER_MS,
+  failed: LIVE_ACTIVITY_FAILED_LINGER_MS,
+};
+
+// When a row leaves the strip, or null while it stays (a working row).
+function liveActivityExpiresAt(session: Pick<LiveActivitySessionInput, "status" | "updatedAt">): number | null {
+  const linger = LINGER_MS[session.status];
+  return linger === null ? null : session.updatedAt + linger;
+}
+
 export function isLiveActivitySessionExpired(
   session: Pick<LiveActivitySessionInput, "status" | "updatedAt">,
   now: number,
 ): boolean {
-  if (session.status === "done") return now - session.updatedAt >= LIVE_ACTIVITY_DONE_LINGER_MS;
-  if (session.status === "failed") return now - session.updatedAt >= LIVE_ACTIVITY_FAILED_LINGER_MS;
-  return false;
+  const at = liveActivityExpiresAt(session);
+  return at !== null && now >= at;
 }
 
 // When the next linger expiry lands, so the sweep can wake exactly then.
@@ -143,12 +159,7 @@ export function nextLiveActivityExpiry(
 ): number | null {
   let next: number | null = null;
   for (const s of sessions) {
-    const at =
-      s.status === "done"
-        ? s.updatedAt + LIVE_ACTIVITY_DONE_LINGER_MS
-        : s.status === "failed"
-          ? s.updatedAt + LIVE_ACTIVITY_FAILED_LINGER_MS
-          : null;
+    const at = liveActivityExpiresAt(s);
     if (at === null || at <= now) continue;
     if (next === null || at < next) next = at;
   }
