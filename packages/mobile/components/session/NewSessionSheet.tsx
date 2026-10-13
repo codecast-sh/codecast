@@ -1,0 +1,783 @@
+// The new session sheet, one per app (ComposeHost mounts it at the root, and
+// lib/compose opens it from any screen). It is prompt first for every agent:
+// the box has the keyboard as the sheet rises, and send starts the session
+// with those words as its first message. Machine, folder, model and the rest
+// are pre-filled rows that only need a tap when the default is wrong.
+import { StyleSheet, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActionSheetIOS } from 'react-native';
+import { TextInput, Text as RNText } from '@/components/Themed';
+import { useState, useRef, useMemo } from 'react';
+import { router as appRouter, useRouter } from 'expo-router';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Ionicons } from '@expo/vector-icons';
+import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { useInboxStore, type BucketItem, sortLabels } from '@codecast/web/store/inboxStore';
+import {
+  AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
+  type AgentClientId, type DeviceModelInventory,
+} from '@codecast/shared/contracts';
+import { defaultMachineId } from '@codecast/web/lib/machinePicker';
+import { ModelEffortSheet } from '@/components/ModelEffortSheet';
+import { OptionSheet } from '@/components/OptionSheet';
+import { SettingsSwitch } from '@/components/settings/SettingsUI';
+import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
+import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
+import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
+import { AssistantStart } from '@/components/hosted/AssistantStart';
+import { Composer } from '@/components/hosted/Composer';
+import { LANE_COPY } from '@codecast/web/components/simple/lane';
+import { Serif } from '@/constants/fonts';
+import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
+import { labelHexColor } from '@/lib/labelColors';
+import { type Device, deviceDisplayName } from '@/components/DevicesSection';
+import { AgentLogoSvg } from '@/components/AgentLogo';
+import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
+import { closeCompose, useCompose } from '@/lib/compose';
+
+/** Mounted once at the root: the sheet, and where a started session opens.
+ *  The session is pushed without a transition while the sheet slides away,
+ *  so it is already in place when the sheet clears it. */
+export function ComposeHost() {
+  const open = useCompose((s) => s.open);
+  const seed = useCompose((s) => s.seed);
+  const router = useRouter();
+  return (
+    <NewSessionSheet
+      visible={open}
+      seed={seed}
+      onClose={closeCompose}
+      onSessionCreated={(conversationId, focus) => {
+        // reveal=1: no push animation (app/_layout). focus=1: an empty start
+        // opens ready to type.
+        router.push(`/session/${conversationId}?reveal=1${focus ? '&focus=1' : ''}` as never);
+      }}
+    />
+  );
+}
+
+// Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
+// has one. Tints the selected pill's border/background/label; the logo tile
+// itself is the shared AgentLogoSvg (same marks as web's AgentTypeIcon).
+const agentAccents: Record<AgentClientId, string> = {
+  claude: Theme.orange,
+  codex: Theme.green,
+  cursor: Theme.violet,
+  gemini: Theme.blue,
+  opencode: Theme.accentAmber,
+  pi: Theme.cyan,
+  grok: Theme.text,
+  muse: Theme.greenBright,
+  codecast: Theme.cyan,
+};
+
+// Web's MODE_ITEMS (StableContextCards), verbatim: same four stops, same
+// wording, so the phone and desktop describe the injection identically. "auto"
+// stamps nothing — the machine's own `cast stable` setting decides.
+const STABLE_MODES = [
+  { key: "auto", label: "Auto", title: "Use this machine's default (cast stable)" },
+  { key: "team", label: "Team", title: "Team's recent sessions (14d)" },
+  { key: "solo", label: "Solo", title: "Your recent sessions (7d)" },
+  { key: "off", label: "Off", title: "Don't inject session history" },
+] as const;
+type StableModePick = (typeof STABLE_MODES)[number]["key"];
+
+// listDevices reports each machine's model inventory; the shared mobile Device
+// shape (DevicesSection) predates the field.
+type MachineDevice = Device & { model_inventory?: DeviceModelInventory };
+
+// Display-only "~" collapse for the folder browser. web/lib/utils' inferHomeDir
+// sits beside window/document helpers, so the one-line version lives here
+// rather than dragging that module into the Hermes bundle.
+const displayPath = (p: string) => p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?=\/|$)/, "~");
+
+// The sheet has already closed and the stub is on screen by the time a create
+// can fail, so a failure is raised over whatever is showing. A parked create is
+// durable and delivers on its own; anything else offers a retry under the same
+// session_id (idempotent server side). Left alone, the stub still self-heals on
+// its first send (awaitConvexId → ensureSessionCreated).
+function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stubId: string) => Promise<string>) {
+  ready.catch((error) => {
+    const store = useInboxStore.getState();
+    if (store.getConvexId(stubId) || mobileCreateFailureDisposition(error) === "accepted-pending") return;
+    console.warn("[session] create refused", error);
+    Alert.alert("Session didn't start", "The server didn't confirm the new session. Retrying is safe.", [
+      { text: "Not now", style: "cancel" },
+      {
+        text: "Retry",
+        onPress: () => {
+          const retry = create(stubId).then((convexId) => {
+            if (convexId) store.resolveSessionId(stubId, convexId);
+            return convexId;
+          });
+          store.trackSessionCreate(stubId, retry);
+          watchSessionCreate(stubId, retry, create);
+        },
+      },
+    ]);
+  });
+}
+
+// One launch choice in the sheet's settings card: label left, the current
+// value right, tapping opens its picker.
+function SettingRow({ label, value, dot, onPress }: {
+  label: string;
+  value: string;
+  dot?: string;
+  onPress: () => void;
+}) {
+  const Theme = useTheme();
+  return (
+    <TouchableOpacity style={modalStyles.settingRow} onPress={onPress} activeOpacity={0.6}>
+      <RNText style={modalStyles.settingLabel}>{label}</RNText>
+      <RNView style={modalStyles.settingValueWrap}>
+        {dot ? <RNView style={[modalStyles.machineDot, { backgroundColor: dot }]} /> : null}
+        <RNText style={modalStyles.settingValue} numberOfLines={1}>{value}</RNText>
+      </RNView>
+      <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
+    </TouchableOpacity>
+  );
+}
+
+function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
+  const Theme = useTheme();
+  const words = useModeWords();
+  // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
+  // in hosted mode or with no machine) until they pick one here. Where only
+  // the hosted assistant can answer, the agent row is not offered at all.
+  const defaultAgent = fromConvexAgentType(useDefaultAgentType());
+  const onlyHosted = useOnlyHostedAgent();
+  const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
+  const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
+  const hosted = isHostedAgentType(agentId);
+  // Hosted mode's sheet is one question, the web's compose heading, and
+  // files no label (surface inbox.labelStrip).
+  const hostedSheet = useHostedMode() && hosted;
+  const labelStrip = useSurface('inbox.labelStrip');
+  // The pinned agents, and always the hosted assistant: the phone has no
+  // palette to reach it from, and it is the one agent that needs no machine.
+  const pinnedOptions = usePinnedPickerOptions(agentId);
+  const agentOptions = useMemo(
+    () => (pinnedOptions.some((o) => o.hosted) ? pinnedOptions : [...pinnedOptions, ...AGENT_PICKER_OPTIONS.filter((o) => o.hosted)]),
+    [pinnedOptions],
+  );
+  // An explicit folder pick only; null = untouched, so the field shows the
+  // top recent folder from the store on the very first frame.
+  const [pathPick, setProjectPath] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  // Launch options. Each holds an EXPLICIT pick only — "default"/"auto"/false
+  // mean "say nothing and let the agent's or machine's own default win".
+  const [model, setModel] = useState("default");
+  const [effort, setEffort] = useState("default");
+  const [stableMode, setStableMode] = useState<StableModePick>("auto");
+  const [isolated, setIsolated] = useState(false);
+  // Tri-state label pick: undefined = untouched (inherit the focused chip's
+  // bucket, which beginOptimisticSession stamps on its own); null = explicitly
+  // "no label" (defeats the inheritance); string = an explicit bucket.
+  const [bucketPick, setBucketPick] = useState<string | null | undefined>(undefined);
+  const buckets = useInboxStore((s) => s.buckets);
+  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
+  const effectiveBucketId = bucketPick === undefined ? (activeBucketFilter ?? null) : bucketPick;
+  const [modelSheetVisible, setModelSheetVisible] = useState(false);
+  // Every pre-filled choice is one row that opens its own picker sheet, so the
+  // common launch (agent + go) fits on one screen.
+  const [openSheet, setOpenSheet] = useState<"machine" | "context" | null>(null);
+  // The folder search: filters the chip row as it is typed, and a path that
+  // names no listed folder is offered as a chip of its own.
+  const [folderQuery, setFolderQuery] = useState("");
+  const folderRowRef = useRef<ScrollView>(null);
+  const agentRowRef = useRef<ScrollView>(null);
+  // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
+  // picks the machine (deviceRouting) and the folder list stays the union across
+  // online devices — the behaviour before this row existed.
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  // Store-fed (StoreSyncBridge mounts useSyncDevices), so the row paints at open.
+  const rawDevices = useInboxStore((s) => s.machineRoster) as MachineDevice[];
+  // listDevices is last_seen-sorted; chips hold still instead.
+  const devices = useMemo(() => [...rawDevices].sort(compareMachineChips), [rawDevices]);
+  // What auto-routing would choose, so the highlighted chip matches where the
+  // session actually lands. One ladder with the web picker (machinePicker), fed
+  // the folder being typed so a machine holding that checkout wins — the same
+  // rung routing uses. The ladder is deterministic (stable tie-breaks), so no
+  // feedback loop is needed to pin the highlight against heartbeats.
+  // The folder list for the picked machine (or the union with no pick), from
+  // the store: the same ladder web's ProjectSwitcher uses.
+  const pickedDevice = useMemo(() => (deviceId ? devices.find((d) => d.device_id === deviceId) ?? null : null), [devices, deviceId]);
+  const recentProjects = useScopedRecentProjects({ scopedDeviceId: deviceId, routedDevice: pickedDevice, active: visible });
+  const projectPath = pathPick ?? recentProjects[0]?.path ?? "";
+  const defaultDeviceId = defaultMachineId(rawDevices, {
+    ownerDeviceId: null,
+    projectPath: projectPath.trim() || null,
+  });
+  const selectedDeviceId = deviceId ?? defaultDeviceId;
+
+  // Deliver every launch choice to the session the sheet creates. They must ride
+  // the CREATE itself, never a follow-up reconfigure: the create's server side
+  // already enqueues a start_session at whatever routing chose, so retargeting
+  // afterwards races a second spawn against the first — two machines can each
+  // claim the same conversation (review finding, pl-224).
+  // Only picks that DIFFER from the default are stamped. Undefined lets the
+  // default win, which is not the same as pinning it: stamping the machine
+  // routing would have chosen anyway short-circuits at rung 1, skipping the rung
+  // that prefers whichever online machine actually holds the checkout, and
+  // stamping stable_mode "auto" would override the machine's `cast stable`
+  // setting. Read at submit time because heartbeats can reorder the devices
+  // between the pick and the send.
+  const launchStampsForCreate = () => ({
+    target_device_id: deviceId && deviceId !== defaultDeviceId ? deviceId : undefined,
+    model: model !== "default" ? model : undefined,
+    effort: effort !== "default" ? effort : undefined,
+    stable_mode: stableMode !== "auto" ? stableMode : undefined,
+    isolated: isolated || undefined,
+  });
+
+  // The label rides the store's post-create marker: _postCreateBucketId is in
+  // the sessions/conversations preserveFields whitelist, survives the stub→real
+  // rekey, and resumePostCreateBucketIntentFor replays it once the id lands —
+  // including for a create that parks offline and resolves much later. (Awaiting
+  // the tracked create promise here instead is a race lost by design:
+  // trackSessionCreate reaps pendingSessionCreates before any later
+  // continuation could read it.) An untouched pill writes nothing — the store
+  // already stamped the focused chip's bucket at beginOptimisticSession.
+  const stampLabelIntent = (stubId: string) => {
+    if (bucketPick === undefined) return;
+    const store = useInboxStore.getState();
+    for (const table of ["sessions", "conversations"] as const) {
+      const row = (store as any)[table][stubId];
+      if (!row) continue;
+      const next = { ...row };
+      if (bucketPick) next._postCreateBucketId = bucketPick;
+      else delete next._postCreateBucketId;
+      store.syncRecord(table, stubId, next);
+    }
+  };
+
+  // The session opens under the sheet first, then the sheet slides away over
+  // it. `focus` asks the session's composer for the keyboard: only an empty
+  // start wants it, a sent first message is there to watch.
+  const finishSessionCreate = (conversationId: string, focus: boolean) => {
+    setSubmitError(null);
+    setAgentId(null);
+    setProjectPath("");
+    setDeviceId(null);
+    setModel("default");
+    setEffort("default");
+    setStableMode("auto");
+    setIsolated(false);
+    setBucketPick(undefined);
+    setOpenSheet(null);
+    setFolderQuery("");
+    onSessionCreated(conversationId, focus);
+    onClose();
+  };
+
+  // Instant start, the same shape as web's compose popup: seed the local stub,
+  // fire the create, then open the stub and close the sheet in the same tick.
+  // The create's native outbox row is written synchronously before the network
+  // call, so nothing here waits on the server. The session screen renders the
+  // stub, a first message typed meanwhile queues locally, and the store rekeys
+  // stub → real id when the create lands. A create the server refuses surfaces
+  // through watchSessionCreate with a retry under the same session_id.
+  // The hosted assistant's start: its first message rides the create
+  // (startHostedConversation), so the sheet sends the words with it.
+  const startHosted = (text: string) => {
+    const stubId = startHostedConversation(text);
+    stampLabelIntent(stubId);
+    finishSessionCreate(stubId, false);
+  };
+
+  // The words, when there are any, are the session's first message: queued on
+  // the stub now and sent once the create has a real id (sendMessageWhenReady),
+  // as a message typed into the stub's own composer would be.
+  const handleSubmit = (text: string) => {
+    setSubmitError(null);
+    const store = useInboxStore.getState();
+    const agent_type = toConvexAgentType(agentId);
+    const path = projectPath.trim() || undefined;
+    // Bound to this render's picks, so a retry after the sheet has reset still
+    // re-sends exactly what the user launched with.
+    const create = (stubId: string) =>
+      store.createSession({
+        agent_type,
+        project_path: path,
+        git_root: path,
+        session_id: stubId,
+        ...launchStampsForCreate(),
+      });
+    let stubId: string;
+    try {
+      const started = store.beginOptimisticSession({
+        agentType: agent_type,
+        projectPath: path,
+        gitRoot: path,
+        deferCreate: true,
+        create,
+      });
+      stubId = started.stubId;
+      // Before materialize, so the marker is on the stub rows before any rekey.
+      stampLabelIntent(stubId);
+      watchSessionCreate(stubId, started.materialize(), create);
+    } catch (error) {
+      setSubmitError(mobileCreateErrorMessage("session", error));
+      return;
+    }
+    if (text) {
+      const clientId = store.addOptimisticMessage(stubId, text);
+      store.sendMessageWhenReady(stubId, text, undefined, clientId);
+    }
+    finishSessionCreate(stubId, !text);
+  };
+
+  // The launch model/effort rail for the selected agent — absent for clients
+  // with no model UI (cursor, gemini), which hides the chip entirely.
+  const modelCfg = hosted ? undefined : AGENT_MODEL_CONFIG[agentId];
+  const selectedDevice = devices.find((d) => d.device_id === selectedDeviceId);
+  // model_inventory is the {hash, collected_at, clients} record the daemon
+  // heartbeats (DeviceModelInventory), keyed by client id inside `clients` —
+  // never a flat id list. The literal narrowing matches the keys the contract
+  // declares; a future dynamic client extends both together.
+  const inventoryIds = agentId === "opencode" || agentId === "pi"
+    ? selectedDevice?.model_inventory?.clients?.[agentId]
+    : undefined;
+  const rail = useMemo(() => {
+    if (!modelCfg) return null;
+    const base = launchRailOptions(modelCfg);
+    if (!modelCfg.dynamic) return base;
+    // Dynamic clients (opencode, pi) address an open provider/model namespace,
+    // so the picked machine's heartbeat-reported inventory is the only list that
+    // reflects what will actually launch. Default + the live featured head,
+    // mirroring web's ModelEffortMenu — the curated aliases are dropped so the
+    // same model can't appear twice under two keys.
+    const featured = featuredModelOptions(inventoryIds ?? []);
+    if (featured.length === 0) return base;
+    return {
+      models: [...base.models.filter((m) => m.key === "default"), ...featured],
+      efforts: base.efforts,
+    };
+  }, [modelCfg, inventoryIds]);
+  const modelLabel = rail?.models.find((m) => m.key === model)?.label ?? "Default";
+
+  // Pre-create filing. The pill shows where the session will actually land —
+  // the explicit pick when there is one, else the focused chip's bucket the
+  // store inherits on its own — so it never reads "+ label" while the create
+  // quietly files elsewhere.
+  const labels = useMemo(() => sortLabels(buckets), [buckets]);
+  const chosenLabel = effectiveBucketId ? buckets[effectiveBucketId] : null;
+  const openBucketPicker = () => {
+    const clear = () => setBucketPick(null);
+    const pick = (b: BucketItem) => setBucketPick(b._id === effectiveBucketId ? null : b._id);
+    if (Platform.OS === 'ios') {
+      const names = labels.map((b) => (b._id === effectiveBucketId ? `✓ ${b.name}` : b.name));
+      const options = [...names, 'No label', 'Cancel'];
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: options.length - 1, title: 'Label' },
+        (index) => {
+          if (index < labels.length) pick(labels[index]);
+          else if (index === labels.length) clear();
+        },
+      );
+    } else {
+      Alert.alert('Label', undefined, [
+        ...labels.map((b) => ({ text: b._id === effectiveBucketId ? `✓ ${b.name}` : b.name, onPress: () => pick(b) })),
+        { text: 'No label', onPress: clear },
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  };
+
+  // The folder chips, web's ProjectSwitcher on a phone: the picked folder
+  // first so it is always in view, then the recents. A query narrows them
+  // (rows match on the ~-collapsed spelling too, and a name that starts with
+  // the query ranks first); a typed path no chip names becomes an "open" chip.
+  const folderName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+  const query = folderQuery.trim().toLowerCase();
+  const folderChips = useMemo(() => {
+    type Chip = { path: string; label: string; custom?: boolean; dim?: boolean };
+    const typedPath = folderQuery.trim();
+    if (query) {
+      const chips: Chip[] = recentProjects
+        .filter((p) => p.path.toLowerCase().includes(query) || displayPath(p.path).toLowerCase().includes(query))
+        .sort((x, y) => Number(!folderName(x.path).toLowerCase().startsWith(query)) - Number(!folderName(y.path).toLowerCase().startsWith(query)))
+        .map((p) => ({ path: p.path, label: folderName(p.path), dim: p.suggested }));
+      if (/^[~/]/.test(typedPath) && !recentProjects.some((p) => p.path === typedPath || displayPath(p.path) === typedPath)) {
+        chips.unshift({ path: typedPath, label: `open ${typedPath}`, custom: true });
+      }
+      return chips;
+    }
+    const current = projectPath.trim();
+    const rest: Chip[] = recentProjects
+      .filter((p) => p.path !== current)
+      .map((p) => ({ path: p.path, label: folderName(p.path), dim: p.suggested }));
+    return current ? [{ path: current, label: folderName(current) }, ...rest] : rest;
+  }, [recentProjects, query, folderQuery, projectPath]);
+  const pickFolder = (path: string) => {
+    setProjectPath(path);
+    setFolderQuery("");
+    setSubmitError(null);
+    folderRowRef.current?.scrollTo({ x: 0, animated: false });
+  };
+
+  const stableModeItem = STABLE_MODES.find((m) => m.key === stableMode) ?? STABLE_MODES[0];
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <RNView style={modalStyles.header}>
+          <RNText style={[modalStyles.title, hostedSheet && modalStyles.hostedSheetTitle]}>{hostedSheet ? LANE_COPY.intro.sheetTitle : words.newConversation}</RNText>
+          <TouchableOpacity
+            onPress={onClose}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+            accessibilityLabel="Close"
+          >
+            {/* The hosted sheet's close is a thin stroke, as its starters' arrows are. */}
+            {hostedSheet
+              ? <Ionicons name="close" size={24} color={Theme.textMuted} />
+              : <FontAwesome name="times" size={20} color={Theme.textMuted} />}
+          </TouchableOpacity>
+        </RNView>
+
+        <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
+          {/* The hosted assistant needs no machine, folder, model or context:
+              its sheet is the first ask. */}
+          {hosted ? (
+            <RNView style={{ marginTop: onlyHosted ? Spacing.sm : Spacing.lg }}>
+              <AssistantStart
+                key={seed ?? ''}
+                seed={seed}
+                onStart={startHosted}
+                // The sheet is a native modal: close it first, so the Plan
+                // page opens in front rather than under it.
+                onOpenPlan={() => { onClose(); appRouter.push('/settings/plan' as never); }}
+              />
+            </RNView>
+          ) : (<>
+          <RNView style={modalStyles.prompt}>
+            <Composer
+              autoFocus
+              allowEmpty
+              placeholder={`Ask ${agentOptions.find((a) => a.id === agentId)?.label ?? 'the agent'}`}
+              seed={seed ? { text: seed, at: 0 } : null}
+              onSend={handleSubmit}
+            />
+          </RNView>
+          <RNView style={modalStyles.folderSearch}>
+            <FontAwesome name="folder-o" size={14} color={Theme.textMuted0} />
+            <TextInput
+              style={modalStyles.folderInput}
+              value={folderQuery}
+              onChangeText={setFolderQuery}
+              placeholder="Search folders or paste a path"
+              placeholderTextColor={Theme.textMuted0}
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="done"
+              onSubmitEditing={() => { if (folderChips[0]) pickFolder(folderChips[0].path); }}
+            />
+            {folderQuery ? (
+              <TouchableOpacity onPress={() => setFolderQuery("")} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityLabel="Clear search">
+                <FontAwesome name="times-circle" size={15} color={Theme.textMuted0} />
+              </TouchableOpacity>
+            ) : null}
+          </RNView>
+          {folderChips.length > 0 ? (
+            <ScrollView
+              ref={folderRowRef}
+              horizontal
+              style={modalStyles.chipScroller}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={modalStyles.chipRow}
+              keyboardShouldPersistTaps="handled"
+            >
+              {folderChips.map((c) => {
+                const active = !c.custom && c.path === projectPath;
+                return (
+                  <TouchableOpacity
+                    key={c.path}
+                    style={[
+                      modalStyles.folderChip,
+                      c.custom && modalStyles.folderChipCustom,
+                      c.dim && !active && modalStyles.dim,
+                      active && modalStyles.folderChipActive,
+                    ]}
+                    onPress={() => pickFolder(c.path)}
+                    activeOpacity={0.7}
+                  >
+                    <FontAwesome name={c.custom ? "folder-open-o" : "folder-o"} size={12} color={active || c.custom ? Theme.cyan : Theme.textMuted0} />
+                    <RNText style={[modalStyles.folderChipText, (active || c.custom) && { color: Theme.cyan }, active && { fontWeight: "700" }]} numberOfLines={1}>
+                      {c.label}
+                    </RNText>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <RNText style={modalStyles.hintText}>
+              {query ? `No folders match "${folderQuery.trim()}"` : "No recent folders. Paste a path to start in one."}
+            </RNText>
+          )}
+
+          {/* The rest folds into one card: a row per choice, each opening its
+              own picker. The machine row appears only with two or more
+              machines: one machine is no choice at all. */}
+          <RNView style={modalStyles.card}>
+            {devices.length > 1 && (
+              <SettingRow
+                label="Machine"
+                value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
+                dot={selectedDevice ? (selectedDevice.online ? Theme.green : Theme.textMuted0) : undefined}
+                onPress={() => setOpenSheet("machine")}
+              />
+            )}
+            {rail && (
+              <SettingRow
+                label="Model"
+                value={effort === "default" ? modelLabel : `${modelLabel} · ${effort}`}
+                onPress={() => setModelSheetVisible(true)}
+              />
+            )}
+            <SettingRow label="Context" value={stableModeItem.label} onPress={() => setOpenSheet("context")} />
+            <RNView style={[modalStyles.settingRow, modalStyles.settingRowLast]}>
+              <RNText style={modalStyles.settingLabel}>Isolated worktree</RNText>
+              <RNView style={modalStyles.switchSlot}>
+                <SettingsSwitch value={isolated} onValueChange={setIsolated} />
+              </RNView>
+            </RNView>
+          </RNView>
+          </>)}
+
+          {labels.length > 0 && labelStrip && (
+            <RNView style={modalStyles.labelPillRow}>
+              <TouchableOpacity
+                style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
+                onPress={openBucketPicker}
+                activeOpacity={0.7}
+              >
+                {chosenLabel ? (
+                  <>
+                    <RNView style={[modalStyles.labelPillDot, { backgroundColor: labelHexColor(chosenLabel.name) }]} />
+                    <RNText style={[modalStyles.labelPillText, { color: labelHexColor(chosenLabel.name) }]} numberOfLines={1}>
+                      {chosenLabel.name}
+                    </RNText>
+                  </>
+                ) : (
+                  <RNText style={modalStyles.labelPillText}>{hosted ? 'Add a label' : '+ label'}</RNText>
+                )}
+              </TouchableOpacity>
+            </RNView>
+          )}
+
+          {submitError ? (
+            <RNText style={modalStyles.errorText}>{submitError}</RNText>
+          ) : null}
+        </ScrollView>
+
+        {/* The agent row pins to the bottom as web's compose does, one
+            scrolling line of the viewer's pinned agents (users.pinned_agents,
+            registry order) with the hosted assistant among them. It stays when
+            the assistant is picked, so the pick can be undone. */}
+        {onlyHosted && hosted ? null : (
+        <RNView style={modalStyles.footer}>
+          {onlyHosted ? null : (
+            <ScrollView
+              ref={agentRowRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={modalStyles.chipRow}
+              style={modalStyles.chipScroller}
+              keyboardShouldPersistTaps="handled"
+            >
+              {agentOptions.map((a) => {
+                const active = agentId === a.id;
+                const accent = agentAccents[a.id];
+                return (
+                  <TouchableOpacity
+                    key={a.id}
+                    // The active agent can sit past the edge: its first layout
+                    // scrolls the row to it.
+                    onLayout={(e) => { if (active) agentRowRef.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - Spacing.lg), animated: false }); }}
+                    style={[modalStyles.agentChip, active && { borderColor: accent + "90", backgroundColor: accent + "1c" }]}
+                    onPress={() => {
+                      setSubmitError(null);
+                      // Re-tapping the active agent must not wipe a model/effort
+                      // pick; the reset below is for actual switches only (the
+                      // rails differ per client, so a pick can't carry over).
+                      if (a.id === agentId) return;
+                      setAgentId(a.id);
+                      setModel("default");
+                      setEffort("default");
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <RNView style={{ opacity: active ? 1 : 0.55 }}>
+                      <AgentLogoSvg agentType={a.id} size={18} />
+                    </RNView>
+                    <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
+                      {a.label}
+                    </RNText>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+        </RNView>
+        )}
+
+        {rail && (
+          <ModelEffortSheet
+            visible={modelSheetVisible}
+            onClose={() => setModelSheetVisible(false)}
+            models={rail.models}
+            efforts={rail.efforts}
+            modelKey={model}
+            effortKey={effort === "default" ? null : effort}
+            onSelect={(sel) => {
+              if (sel.model !== undefined) setModel(sel.model);
+              if (sel.effort !== undefined) setEffort(sel.effort);
+            }}
+          />
+        )}
+        <OptionSheet
+          visible={openSheet === "machine"}
+          onClose={() => setOpenSheet(null)}
+          title="Machine"
+          options={devices.map((d) => ({
+            key: d.device_id,
+            label: deviceDisplayName(d),
+            hint: d.online ? undefined : "Offline",
+            dim: !d.online,
+            leading: <RNView style={[modalStyles.machineDot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />,
+          }))}
+          selectedKey={selectedDeviceId ?? null}
+          onSelect={(id) => {
+            // Scoping the folder list to another machine can drop the current
+            // path (it may have no such checkout), so clear it and let the
+            // field fall back to the new list's top folder.
+            setDeviceId(id === defaultDeviceId ? null : id);
+            setProjectPath(null);
+            setSubmitError(null);
+          }}
+        />
+        <OptionSheet
+          visible={openSheet === "context"}
+          onClose={() => setOpenSheet(null)}
+          title="Context"
+          options={STABLE_MODES.map((m) => ({ key: m.key, label: m.label, hint: m.title }))}
+          selectedKey={stableMode}
+          onSelect={(k) => setStableMode(k as StableModePick)}
+        />
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const modalStyles = themedStyles((Theme) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: Theme.bg },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  // The hosted sheet's question, in the reading face.
+  hostedSheetTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
+  body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  bodyContent: { paddingBottom: Spacing.lg },
+  prompt: { marginTop: Spacing.sm, marginBottom: Spacing.md },
+  // Chip rows scroll edge to edge, past the sheet's side padding.
+  chipScroller: { marginHorizontal: -Spacing.lg, flexGrow: 0 },
+  chipRow: { flexDirection: "row", gap: 8, paddingHorizontal: Spacing.lg },
+  folderSearch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: Spacing.sm,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  folderInput: { flex: 1, fontSize: 14, paddingVertical: 10, color: Theme.text },
+  folderChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    maxWidth: 220,
+  },
+  folderChipActive: { borderColor: Theme.cyan + "99", backgroundColor: Theme.cyan + "18" },
+  folderChipCustom: { borderStyle: "dashed", borderColor: Theme.cyan + "66" },
+  folderChipText: { fontSize: 13, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
+  dim: { opacity: 0.55 },
+  hintText: { fontSize: 12, color: Theme.textMuted0, lineHeight: 16 },
+  agentChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt + "55",
+  },
+  agentChipText: { fontSize: 13, fontWeight: "500", color: Theme.textMuted },
+  // The launch choices as one grouped card, iOS-settings style.
+  card: {
+    marginTop: Spacing.lg,
+    borderRadius: 12,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    overflow: "hidden",
+  },
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minHeight: 48,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  settingRowLast: { borderBottomWidth: 0, justifyContent: "space-between" },
+  switchSlot: { height: 48, justifyContent: "center" },
+  settingLabel: { fontSize: 14, color: Theme.textMuted, fontWeight: "500" },
+  settingValueWrap: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 0 },
+  settingValue: { fontSize: 14, color: Theme.text, fontWeight: "600", flexShrink: 1 },
+  machineDot: { width: 7, height: 7, borderRadius: 4 },
+  labelPillRow: { flexDirection: "row", marginTop: Spacing.md },
+  labelPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+  },
+  labelPillEmpty: { borderStyle: "dashed" },
+  labelPillDot: { width: 6, height: 6, borderRadius: 2 },
+  labelPillText: { fontSize: 12, color: Theme.textMuted0, fontWeight: "500" },
+  errorText: {
+    color: Theme.red,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: Spacing.md,
+  },
+  footer: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
+}));

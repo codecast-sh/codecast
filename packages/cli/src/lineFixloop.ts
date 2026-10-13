@@ -9,7 +9,7 @@
 // `fix(`; the subject rule is a cheap convention, named as such in the output.
 
 import path from "path";
-import { execFile } from "child_process";
+import { execFile } from "./proc.js";
 import { promisify } from "util";
 import { parseBlamePorcelain, resolveFromParsed, type BlameResolution, type SessionRef } from "./blame.js";
 

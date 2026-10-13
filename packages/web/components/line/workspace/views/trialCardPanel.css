@@ -1,0 +1,4 @@
+/* A card with no session behind it is read here, never answered (TrialCardPanel): its answer rows stay hidden. */
+.lwt-readonly [data-card-answer],
+.lwt-readonly div:has(> [data-option-list]),
+.lwt-readonly [data-trial-record] { display: none; }
