@@ -56,6 +56,9 @@ export type ProblemFacts = {
   notes?: ReadonlyArray<BandNote>;
   /** Grounding parked it until more findings come (lineInbox waitsForFindings): no answer unblocks it. */
   awaitsFindings?: boolean;
+  /** The handle of the role whose area holds its project (the lead its line runs as): a fact grounding needs is asked of
+   *  that role, never of the viewer. Null when no role holds the project. */
+  lead?: string | null;
   /** Its project's line is on: a ready problem is queued, not merely ready. */
   lineOn?: boolean | null;
   /** What a ready one says in place of "Queued" while its trial's dispatcher holds it. */
@@ -90,14 +93,14 @@ export type ProblemStand = {
   /** Not started: the sweep would start it (the rest are blocked, and the phrase says why). */
   ready?: boolean;
   /** Its act, there on its row. Needs a new ask: `ask` starts a run that asks again; `reopen` reopens a close that
-   *  findings kept coming after; `close` closes one grounding or a parked run found nothing to change in; `noevidence` closes one opened
+   *  findings kept coming after; `fixed` closes one whose fix main already carries; `close` closes one grounding or a parked run found nothing to change in; `noevidence` closes one opened
    *  on a finding that says nothing, as the reader does ("Close: no evidence"). Not started: `start` starts
    *  one whose last run ended (the sweep passes it by), through the paced review. Approved, not merged: `merge` lands
    *  the fix (its pull request, opened or merged, through Ship's review). `nogoal`: closes one grounding parks every run
    *  for serving no goal. `mergeinto`: a twin folded under its older problem merges into it (problemTable foldTwins).
    *  `opengate`: a question its newest run holds open for someone else, opened where it can still be answered.
    *  `shipbuilt`: Failed, with a fix an earlier run built and nobody answered (problemPage builtUnanswered): it lands. */
-  act?: "ask" | "reopen" | "close" | "noevidence" | "start" | "merge" | "nogoal" | "mergeinto" | "opengate" | "shipbuilt";
+  act?: "ask" | "reopen" | "close" | "fixed" | "noevidence" | "start" | "merge" | "nogoal" | "mergeinto" | "opengate" | "shipbuilt";
   /** `opengate`: the person's step its run waits at, by id. */
   gate?: string;
 };
@@ -158,6 +161,9 @@ export function problemStand(issue: Pick<LineIssue, "history" | "status"> & Part
     row, failedStep: f.failedStep ?? null, task: (f.task ?? null) as BandTask | null, lineOn: f.lineOn ?? null, idle: f.idle, trial: f.trial, holderName: f.assigneeName, stage: f.stage ?? null, notStarted: why, notes: f.notes, now, prMerged: f.prMerged ?? null, shipOutput: f.shipOutput ?? null,
   });
   const { status, phrase } = problemNow(band);
+  // A fact grounding needs (a question, or whether a new problem is real) is the project's lead role's to answer, in
+  // that role's queue: Someone else, named, never the viewer's.
+  if (f.lead && !f.trial && (band.kind === "need" ? band.need === "question" || band.need === "confirm" : band.kind === "ask" && !band.unsupported)) return { status: "others", phrase: `${phrase} · @${f.lead}` };
   if (gate && band.kind === "decision") return { status, phrase: [gateWords(gate.node), gate.holder ?? f.assigneeName].filter(Boolean).join(" · "), act: "opengate", gate: gate.node };
   if (band.kind === "failed") {
     // No failure row names a cause: the station's own handoff, when it opens with an outcome, is the cause
@@ -181,6 +187,7 @@ export function problemStand(issue: Pick<LineIssue, "history" | "status"> & Part
   if (band.kind === "production") return { status, phrase, quiet: band.since === 0 };
   if (band.kind === "notstarted" && band.nothing != null) return { status, phrase, act: "close" };
   if (band.kind === "notstarted") return { status, phrase, ready: why.ready, ...(why.byHand ? { act: "start" as const } : {}) };
+  if (band.kind === "parked" && band.fixedSha) return { status, phrase, ready: false, act: "fixed" };
   // A run paused with nothing asked is still live: a new run is refused while it holds the problem, so it has no act here.
   if (status === "newask") return { status, phrase, ...(band.kind === "need" && band.need === "reask" && !band.why ? {} : { act: band.kind === "returned" ? "reopen" as const : band.kind === "ask" ? "noevidence" as const : "ask" as const }) };
   if (band.kind === "parked" && !band.fixedSha && band.readiness === "not_actionable") return { status, phrase, ready: false, act: "close" };

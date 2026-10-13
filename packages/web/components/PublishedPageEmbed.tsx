@@ -174,7 +174,8 @@ function usePageMeta(slug: string) {
 }
 
 /** The page's agent, as a quiet chip: a dot and a word, the dot breathing
- *  while the agent is on the page. The same chip the page's own bar shows. */
+ *  while the agent is on the page. The same chip the page's own bar shows.
+ *  An idle agent says nothing the reader can use, so the frame shows no chip then. */
 function PageAgentStatus({ agent }: { agent: PageAgent }) {
   const tone =
     agent.chip === "needs_input" ? "text-sol-yellow" :
@@ -301,10 +302,12 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
  *  floating over its top corner, the resize edge under it, the caption
  *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
  *  stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, children }: {
+export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, bare = false, children }: {
   title: string;
   href: string;
   actions: ReactNode;
+  /** The page is part of the surface around it (a decision's own page): no toolbar, no fold, no resize edge. */
+  bare?: boolean;
   /** A quiet status beside the title in the toolbar. */
   status?: ReactNode;
   /** Also hold the status on the page's top edge while the toolbar is away:
@@ -359,9 +362,9 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
         <span className="page-embed__edge" aria-hidden />
         <span ref={stageRef} className="page-embed__stage relative block overflow-hidden rounded-[10px]" style={{ height }}>
           {children}
-          {!loaded && <span className="page-embed__shimmer" aria-hidden />}
+          {!loaded && <span className="page-embed__shimmer" role="status"><span className="page-embed__loading">Loading the page</span></span>}
         </span>
-        <TooltipProvider delayDuration={350} skipDelayDuration={150}>
+        {!bare && <TooltipProvider delayDuration={350} skipDelayDuration={150}>
           <span className="page-embed__bar" role="toolbar" aria-label={`${title} actions`}>
             {titleLink}
             {status}
@@ -373,9 +376,9 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
               </Tool>
             )}
           </span>
-        </TooltipProvider>
+        </TooltipProvider>}
         {statusPinned && status && <span className="page-embed__status" aria-hidden>{status}</span>}
-        {grip}
+        {!bare && grip}
       </span>
       {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
@@ -423,23 +426,40 @@ type PublishedPageEmbedProps = {
   /** A shorter frame where the page is a slice of something else (a decision
    *  card in a list), not the page's own surface. */
   height?: number;
+  /** The decision this page was filed on (its report or an option's page): whoever may read that decision opens a gated
+   *  page here as its owner does. */
+  decision?: string | null;
+  /** The page is the surface's subject: the frame grows to the page's whole height once it reports it, so it reads in
+   *  the host's own scroll instead of a box that scrolls inside it, and carries no chrome of its own (the surface has
+   *  its own ways to open and share it). `height` holds its place until then. */
+  whole?: boolean;
 };
+
+/** The signed-in viewer's way through a gated page's gates (artifacts.ownerUnlock): `keys` is the "&k=..&e=.." to add to
+ *  a frame or pane URL, empty when the page is open or the viewer has no way in; `locked` once the viewer is known to
+ *  have none. `decision` is the decision the page was filed on, whose readers pass as its owner does. */
+export function usePageUnlock(slug: string, gated: boolean, decision?: string | null) {
+  const q = useQueryNoThrow(api.artifacts.ownerUnlock, gated ? (decision ? { slug, decision } : { slug }) : "skip");
+  const unlock = q.data as { k: string | null; e: string | null; title: string; version: number } | null | undefined;
+  const locked = gated && (unlock === null || (unlock === undefined && !!q.error));
+  const keys = gated && unlock ? `${unlock.k ? `&k=${unlock.k}` : ""}${unlock.e ? `&e=${unlock.e}` : ""}` : "";
+  return { unlock, locked, keys };
+}
 
 export function PublishedPageEmbed(props: PublishedPageEmbedProps) {
   const asLink = useContext(PublishedPagesAsLinks);
   return asLink ? <PublishedPagePill slug={props.slug} href={pageShareUrl(props.slug)} /> : <PublishedPageFrame {...props} />;
 }
 
-function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) {
-  const shared = usePageMeta(slug);
-  // A gated page hides itself from getShared. Its owner, signed in here, gets their own unlock tokens and the real
-  // metadata (artifacts.ownerUnlock), so their page frames open; anyone else gets a link, never a password form.
+function PublishedPageFrame({ slug, caption, height, decision, whole = false }: PublishedPageEmbedProps) {
+  const sharedQ = useQueryNoThrow(api.artifacts.getShared, { slug });
+  const shared = sharedQ.data as ReturnType<typeof usePageMeta>;
+  // A gated page hides itself from getShared. Its owner, or a reader of the decision it was filed on, signed in here,
+  // gets the unlock tokens and the real metadata (artifacts.ownerUnlock), so the page frames open; anyone else gets a
+  // link, never a password form.
   const gated = !!shared?.gated;
-  const unlockQ = useQueryNoThrow(api.artifacts.ownerUnlock, gated ? { slug } : "skip");
-  const unlock = unlockQ.data as { k: string | null; e: string | null; title: string; version: number } | null | undefined;
-  const locked = gated && (unlock === null || (unlock === undefined && !!unlockQ.error));
+  const { unlock, locked, keys } = usePageUnlock(slug, gated, decision);
   const meta = gated && unlock ? { ...shared!, title: unlock.title, version: unlock.version, gated: false } : shared;
-  const keys = gated && unlock ? `${unlock.k ? `&k=${unlock.k}` : ""}${unlock.e ? `&e=${unlock.e}` : ""}` : "";
   const [expanded, setExpanded] = useState(false);
   // Folded, the frame unmounts: a page out of sight should not keep running.
   const [collapsed, setCollapsed] = useState(false);
@@ -459,7 +479,7 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
   const base = dragged ?? fallback;
   const content = reported ?? Infinity;
   const canExpand = content > base;
-  const frameHeight = Math.min(content, expanded && canExpand ? base * EMBED_EXPAND_FACTOR : base);
+  const frameHeight = whole && reported && dragged == null ? reported : Math.min(content, expanded && canExpand ? base * EMBED_EXPAND_FACTOR : base);
   const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef, { blend: true });
   const notes = usePageNotes(frameRef, slug, meta?.title || "Published page");
   // The page paints the server's default palette until the theme message
@@ -502,7 +522,9 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
   }
 
   const title = meta?.title || "Published page";
-  const waitingUnlock = gated && unlock === undefined;
+  // No frame until the viewer's way in is known: framed early, a gated page shows its password form even to its owner.
+  // A metadata read that failed frames the page as it is.
+  const waitingUnlock = (shared === undefined && !sharedQ.error) || (gated && unlock === undefined);
   return (
     <FramelessPage
       title={title}
@@ -512,14 +534,15 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
       stageRef={stageRef}
       loaded={loaded}
       pinning={notes?.pinMode}
-      status={agent ? <PageAgentStatus agent={agent} /> : undefined}
+      status={agent && agent.chip !== "idle" ? <PageAgentStatus agent={agent} /> : undefined}
       statusPinned={!!agent && agent.chip !== "idle"}
+      bare={whole}
       collapsed={collapsed}
       onToggleCollapsed={() => {
         setLoaded(false);
         setCollapsed((v) => !v);
       }}
-      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={canExpand ? () => setExpanded((v) => !v) : undefined} notes={notes} />}
+      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={canExpand && !(whole && reported) ? () => setExpanded((v) => !v) : undefined} notes={notes} />}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
           <HeightGrip target={stageRef} storageKey={EMBED_HEIGHT_KEY} min={EMBED_MIN_HEIGHT} onResized={onResized} />
