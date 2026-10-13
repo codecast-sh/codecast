@@ -1,0 +1,43 @@
+/* WaitingItem (line-journeys.md LJ6.2): the one reader for something that
+   waits on a person. The root fills the box its host gives it; a decision
+   (LineDecision) is a full-height pane of its own, the other kinds scroll a
+   reading column and dock their one act at the foot. */
+.lwn { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.lwn > .ld { flex: 1; min-height: 0; }
+.lwn-thing { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.lwn-thing > .ld { flex: 1; min-height: 0; }
+.lwn-scroll { flex: 1; min-height: 0; overflow: auto; }
+.lwn-col { max-width: 78ch; margin: 0 auto; padding: var(--lw-s5) var(--lw-s5) 56px; }
+
+.lwn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 var(--lw-s4); }
+.lwn-ref { padding: 0; border: 0; background: none; cursor: pointer; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: color var(--lw-fast), text-decoration-color var(--lw-fast); }
+.lwn-ref:hover { color: var(--lw-person-deep); text-decoration-color: currentColor; }
+.lwn-project { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwn-title { flex: 1 0 100%; margin: 0; font-size: var(--lw-fs-lg); line-height: 1.35; font-weight: 600; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere; }
+
+.lwn-h { display: flex; align-items: baseline; gap: 8px; margin: var(--lw-s5) 0 6px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+.lwn-h .lw-num { color: var(--lw-ink-3); font-weight: 500; }
+.lwn-findings { list-style: none; margin: 0; padding: 0; }
+.lwn-said { margin: 0; font-size: var(--lw-fs-md); line-height: 1.6; color: var(--lw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.lwn-stopped .lwn-h { margin-top: 0; }
+.lwn-ask { margin: 0 0 var(--lw-s5); font-size: var(--lw-fs-md); font-weight: 650; line-height: 1.5; color: var(--lw-ink); }
+.lwn-ask { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.lwn-advice { font-size: var(--lw-fs-xs); font-weight: 600; padding: 1px 7px; border-radius: 4px; white-space: nowrap; background: var(--lw-warn-soft); color: var(--lw-warn); }
+.lwn-advice[data-act="go"] { background: var(--lw-ok-soft); color: var(--lw-ok); }
+.lwn-md { white-space: normal; }
+.lwn-link { margin-top: var(--lw-s3); padding: 0; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-person-deep); text-decoration: underline; text-underline-offset: 3px; }
+
+/* The dock: the facts on the left, the one act on the right, always in view under the thing. */
+.lwn-dock { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 20px; border-top: 1px solid var(--lw-rule); background: var(--lw-paper); }
+.lwn-facts { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0 auto 0 0; font-size: var(--lw-fs-sm); }
+.lwn-facts > div { display: flex; gap: 8px; }
+.lwn-facts dt { color: var(--lw-ink-3); }
+.lwn-facts dd { margin: 0; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
+.lwn[data-headless] .lwn-head { display: none; }
+.lwn-dock .lw-act { height: 30px; padding: 0 14px; white-space: nowrap; }
+.lwn-h-note { font-weight: 500; color: var(--lw-ink-3); }
+
+/* An agent's ask of a person (kind ask): who it is about over the agent's reason; a late Due reads as late. */
+.lwn-ask-who { margin: -6px 0 var(--lw-s3); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lwn-facts > div[data-late] dd { color: var(--lw-bad); font-weight: 600; }
+.lwn-dock a.lw-act { display: inline-flex; align-items: center; text-decoration: none; }

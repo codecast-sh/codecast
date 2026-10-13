@@ -52,6 +52,32 @@ export function persistedMessageTail<T>(
 export const SESSION_CACHE_TTL_MS = WORKING_SET_RECENCY_MS; // the shared recency horizon (server scan, selection, reconcile window)
 export const MAX_CACHED_SESSIONS = 1200;
 
+const sessionStampedAt = (row: any): number =>
+  Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0);
+
+/**
+ * The session rows a change stream may add to a replica that does not hold
+ * them: the ones hydration would keep if they were already in the cache beside
+ * the rows it holds (in the live inbox, pinned, or inside the TTL and among the
+ * newest MAX_CACHED_SESSIONS). The in-memory map never prunes, so whatever a
+ * feeder adds stays until the next boot; asking the hydration policy here is
+ * what keeps a feeder from adding what that boot would drop. A row that
+ * carries no stamp at all cannot be judged old, and is let in.
+ */
+export function admitUnheldSessions<T extends { _id: string }>(
+  candidates: T[],
+  held: any[],
+  liveInboxIdList: string[] | undefined,
+  lastFocusedId: string | null | undefined,
+  now: number,
+): T[] {
+  if (!candidates.length) return candidates;
+  const kept = new Set(
+    partitionSessionRetention([...held, ...candidates], liveInboxIdList, lastFocusedId, now).keep.map((r) => r._id),
+  );
+  return candidates.filter((r) => sessionStampedAt(r) === 0 || kept.has(r._id));
+}
+
 export function partitionSessionRetention(
   rows: any[],
   liveInboxIdList: string[] | undefined,
@@ -64,8 +90,7 @@ export function partitionSessionRetention(
     maxRows: MAX_CACHED_SESSIONS,
     alwaysKeep: (row) =>
       liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || !!row.is_pinned,
-    stampedAt: (row) =>
-      Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0),
+    stampedAt: sessionStampedAt,
     sortStamp: (row) => row.updated_at ?? 0,
   });
 }

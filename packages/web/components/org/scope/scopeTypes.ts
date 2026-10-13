@@ -58,9 +58,9 @@ export type ScopeSummary = {
 /** The switch as stored (org-staffing.md S23.1); read it through roleAutonomy.autonomyOn, never by the word. */
 export type TrustStage = "understand" | "decide" | "direct";
 
-export type RoleCaps = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
+/** Daily limits; an absent or null one is no limit. */
+export type RoleCaps = { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null };
 export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number };
-export const DEFAULT_CAPS: RoleCaps = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 };
 
 export type BriefHand = {
   _id: string;

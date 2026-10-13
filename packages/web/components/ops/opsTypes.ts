@@ -30,6 +30,11 @@ export type OpsSource = {
   groups_open?: number;
   /** A PostHog or Sentry source's bulk import of its recordings (convex sources/replayBackfill.ts). */
   replay_backfill?: ReplayBackfill;
+  /** What agents may do through it (Apps tab). Expired entries stay until the next write; read with activeGrant. */
+  grants?: OpsGrant[];
+  /** An app connector's watches: when each last polled and how it went. */
+  watch_state?: WatchState[];
+  manifest_fetched_at?: number;
   created_at: number;
   updated_at: number;
 };
@@ -130,6 +135,7 @@ export type OpsReplay = {
   has_timeline: boolean;
   imported_at: number | null;
   converter_version?: number | null;
+  vendor_refresh_after?: number | null;
   updated_at: number;
 };
 
@@ -166,14 +172,20 @@ export type OpsWatch = {
 
 export type OpsGrant = { action: string; granted_by: string; granted_at: number; until?: number; via?: "session" | "api_token" };
 
-/** sources/app.capabilities, keyed by the source _id. */
+export type WatchState = { key: string; polled_at: number; last_error?: string };
+
+/**
+ * sources/app.capabilities, keyed by the source _id. The page reads the
+ * manifest from here and nothing else: grants, watch state and status live on
+ * the source's own row (OpsSource), which every window keeps current.
+ */
 export type OpsApp = {
   _id: string;
   source: { _id: string; short_id: string; name: string; provider?: SourceProvider; status: SourceStatus; last_error?: string };
   manifest_json: string | null;
   manifest_fetched_at: number | null;
   grants: OpsGrant[];
-  watch_state: { key: string; polled_at: number; last_error?: string }[];
+  watch_state: WatchState[];
 };
 
 export type OpsAppCall = {
