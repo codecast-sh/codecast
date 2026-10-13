@@ -9,16 +9,17 @@
 //
 //   face      Each reply the session posts to the call's chat arrives on the
 //             codecast.face data topic, and the face says it.
-//   realtime  A live model hears the people in the room, sees the active
-//             speaker's camera or a shared screen when it answers, and talks
+//   realtime  A live model hears the people in the room, sees every shared
+//             screen and camera that is on when it answers (vision.mjs), and talks
 //             through the face, or as a plain voice when no face can be
 //             seated (Tavus out of minutes or down). It answers when named, when it is the only
 //             one the person can be talking to, or when someone follows up
 //             on what it just said. It hands real work to the session
 //             (ask_agent) and tells the room what the session found.
 //
-// It leaves when the face leaves, when the face never comes, or once every
-// person has gone, so an agent never outlives its call.
+// It leaves when it is removed from the call, when the face leaves, when the
+// face never comes, or once every person has gone, so an agent never outlives
+// its call.
 //
 // Env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, TAVUS_API_KEY,
 // TAVUS_PAL_ID (an echo PAL on LiveKit transport), and for realtime
@@ -27,8 +28,9 @@
 import { fileURLToPath } from "node:url";
 import { AutoSubscribe, cli, defineAgent, llm, voice, WorkerOptions } from "@livekit/agents";
 import * as openai from "@livekit/agents-plugin-openai";
-import { AudioMixer, AudioStream, RoomEvent, TrackKind, TrackSource, VideoStream } from "@livekit/rtc-node";
+import { AudioMixer, AudioStream, RoomEvent, TrackKind } from "@livekit/rtc-node";
 import { AccessToken } from "livekit-server-sdk";
+import { eachTrack, isPerson, people, watchVideo } from "./vision.mjs";
 
 const AGENT_NAME = process.env.FACE_AGENT_NAME || "codecast-face";
 const FACE_TOPIC = "codecast.face";
@@ -44,20 +46,6 @@ const SPOKEN_MAX = 600;
 // A person's next words this soon after the voice spoke are likely for it.
 const FOLLOW_UP_MS = 15_000;
 const SAMPLE_RATE = 24_000;
-
-// Faces are `agent:<id>` and LiveKit names agent jobs `agent-<id>`; everyone
-// else in a huddle is a person.
-const isPerson = (p) => !p.identity.startsWith("agent");
-const people = (room) => [...room.remoteParticipants.values()].filter(isPerson);
-
-/** Call `fn` for every track this job subscribes to, the ones it already
- *  holds included: the room's people are usually there before the job is. */
-function eachTrack(room, fn) {
-  for (const p of room.remoteParticipants.values()) {
-    for (const pub of p.trackPublications.values()) if (pub.track) fn(pub.track, pub, p);
-  }
-  room.on(RoomEvent.TrackSubscribed, fn);
-}
 
 async function tavus(method, path, body) {
   const res = await fetch(`https://tavusapi.com/v2/${path}`, {
@@ -102,20 +90,22 @@ function speakable(text) {
   return end > SPOKEN_MAX / 3 ? head.slice(0, end + 1) : `${head.slice(0, head.lastIndexOf(" "))}…`;
 }
 
-/** The session's replies, as Convex sends them on the room's data channel. */
-function onReply(room, conversationId, fn) {
+/** What Convex sends this agent on the room's data channel: "reply" (a reply
+ *  the session posted, with its text) or "leave" (it was removed from the call). */
+function onFaceMessage(room, conversationId, kind, fn) {
   room.on(RoomEvent.DataReceived, (data, _p, _kind, topic) => {
     if (topic !== FACE_TOPIC) return;
     try {
       const msg = JSON.parse(new TextDecoder().decode(data));
-      if (msg.conversation_id === conversationId && msg.kind === "reply" && msg.text) fn(msg.text);
+      if (msg.conversation_id === conversationId && msg.kind === kind) fn(msg.text ?? "");
     } catch {}
   });
 }
 
 /** Face mode: say each reply word for word. */
 function runFace(room, meta, identity, tavusId) {
-  onReply(room, meta.conversation_id, (text) => {
+  onFaceMessage(room, meta.conversation_id, "reply", (text) => {
+    if (!text) return;
     const echo = {
       message_type: "conversation",
       event_type: "conversation.echo",
@@ -160,25 +150,6 @@ class RoomMix extends voice.AudioInput {
   }
 }
 
-/** The newest frame of every person's camera and screen share. */
-function watchVideo(room) {
-  const latest = new Map();
-  const key = (p, source) => `${p.identity}:${source}`;
-  eachTrack(room, async (track, pub, p) => {
-    if (track.kind !== TrackKind.KIND_VIDEO || !isPerson(p)) return;
-    for await (const ev of new VideoStream(track)) latest.set(key(p, pub.source), ev.frame);
-    latest.delete(key(p, pub.source));
-  });
-  return (speaker) => {
-    for (const p of people(room)) {
-      const screen = latest.get(key(p, TrackSource.SOURCE_SCREENSHARE));
-      if (screen) return { frame: screen, what: `${p.name || "someone"}'s shared screen` };
-    }
-    const cam = speaker && latest.get(key(speaker, TrackSource.SOURCE_CAMERA));
-    return cam ? { frame: cam, what: `${speaker.name || "the speaker"}'s camera` } : null;
-  };
-}
-
 /** Real-time mode: a live model that hears and sees the room, speaking
  *  through the face, or as this job's own audio track when `face` is null. */
 async function runRealtime(ctx, meta, face) {
@@ -194,7 +165,7 @@ async function runRealtime(ctx, meta, face) {
     if (track.kind === TrackKind.KIND_AUDIO && isPerson(p)) mix.add(pub.sid, track);
   });
   room.on(RoomEvent.TrackUnsubscribed, (_t, pub) => mix.remove(pub.sid));
-  const frameFor = watchVideo(room);
+  const look = watchVideo(room);
   let speaker = null;
   room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
     speaker = speakers.find(isPerson) ?? speaker;
@@ -219,9 +190,21 @@ async function runRealtime(ctx, meta, face) {
       waitRemoteTrack: TrackKind.KIND_VIDEO,
     });
   }
+  // Quiet holds from the moment the model asks for it until someone names it
+  // again: no follow-ups, no lone-listener turns, no telling the session's
+  // results (they are in the call's chat already).
+  let quiet = false;
   const agent = new voice.Agent({
     instructions: brief.instructions,
     tools: {
+      go_quiet: llm.tool({
+        description: "Stay silent until someone says your name again. Call it instead of speaking when you are asked to be quiet, stop, or hold off, or when what was just said was not for you.",
+        parameters: { type: "object", properties: {} },
+        // No output, so no reply follows the call.
+        execute: async () => {
+          quiet = true;
+        },
+      }),
       ask_agent: llm.tool({
         description: "Hand your working session something that needs real work: a lookup in code or data, a change, anything you are not sure of. Returns at once; its answer comes back to you later.",
         parameters: { type: "object", properties: { request: { type: "string", description: "What to do or find out, with the context it needs." } }, required: ["request"] },
@@ -232,20 +215,26 @@ async function runRealtime(ctx, meta, face) {
       }),
     },
   });
-  await session.start({ agent, room, inputOptions: { textEnabled: false }, outputOptions: { transcriptionEnabled: false } });
+  // The session hears the whole room through the mix, so no one person
+  // leaving may close it (RoomIO links the first person and, by default,
+  // ends the session when they go).
+  await session.start({ agent, room, inputOptions: { textEnabled: false, closeOnDisconnect: false }, outputOptions: { transcriptionEnabled: false } });
 
   let lastSpokeAt = 0;
   let shownImage = null;
   const answer = async (opts = {}) => {
-    const seen = frameFor(speaker);
+    const views = look(speaker);
     const ctxCopy = agent.chatCtx.copy();
     if (shownImage) ctxCopy.items = ctxCopy.items.filter((i) => i.id !== shownImage);
-    if (seen) {
-      shownImage = ctxCopy.addMessage({
-        role: "user",
-        content: [`(What you can see right now: ${seen.what}.)`, llm.createImageContent({ image: seen.frame, inferenceWidth: 1024, inferenceHeight: 1024 })],
-      }).id;
-    } else shownImage = null;
+    shownImage = ctxCopy.addMessage({
+      role: "user",
+      content: views.length
+        ? [
+            "(What you can see right now. Earlier frames are gone; only these are current.)",
+            ...views.flatMap((v) => [`${v.what}:`, llm.createImageContent({ image: v.frame, inferenceWidth: v.size, inferenceHeight: v.size })]),
+          ]
+        : ["(You see nothing right now: nobody is sharing a screen and no camera is on.)"],
+    }).id;
     await agent.updateChatCtx(ctxCopy).catch((e) => console.error("vision update failed", e));
     session.generateReply(opts);
   };
@@ -260,13 +249,16 @@ async function runRealtime(ctx, meta, face) {
   };
   session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
     if (ev.newState === "speaking") answered = false;
-    else if (ev.oldState === "speaking" && !answered && people(room).length <= 1) answerTurn();
+    else if (ev.oldState === "speaking" && !answered && !quiet && people(room).length <= 1) answerTurn();
   });
   session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
     if (!ev.isFinal || answered || !ev.transcript.trim()) return;
-    const addressed = named.some((re) => re.test(ev.transcript));
+    if (named.some((re) => re.test(ev.transcript))) {
+      quiet = false;
+      return answerTurn();
+    }
     const followUp = Date.now() - lastSpokeAt < FOLLOW_UP_MS;
-    if (addressed || followUp || people(room).length <= 1) answerTurn();
+    if (!quiet && (followUp || people(room).length <= 1)) answerTurn();
   });
   session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
     if (ev.item.type !== "message" || ev.item.role !== "assistant") return;
@@ -274,7 +266,8 @@ async function runRealtime(ctx, meta, face) {
     const text = ev.item.textContent?.trim();
     if (text) convex("said", meta, room, { text }).catch((e) => console.error("said failed", e));
   });
-  onReply(room, meta.conversation_id, (text) => {
+  onFaceMessage(room, meta.conversation_id, "reply", (text) => {
+    if (!text || quiet) return;
     answer({
       instructions: `Your working session just finished a turn. What it said, already in the call's chat: "${text}". Tell the room the gist in a sentence or two, in your own words.`,
     }).catch((e) => console.error("tell failed", e));
@@ -323,6 +316,9 @@ export default defineAgent({
         else checkPeople();
       });
       room.on(RoomEvent.Disconnected, () => resolve("room closed"));
+      // Removed from the call: the voice-only agent has no face for Convex to
+      // put out, so it is told and goes.
+      onFaceMessage(room, meta.conversation_id, "leave", () => resolve("removed from the call"));
       checkPeople();
     });
     console.log(`[${room.name}] ${identity}${face ? "" : " (voice only)"}: ${reason}`);

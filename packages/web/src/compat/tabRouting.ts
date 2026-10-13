@@ -1,5 +1,5 @@
 import { useInboxStore } from "../../store/inboxStore";
-import { inboxTabSessionId, pathLabel } from "../../lib/pathLabel";
+import { pathLabel } from "../../lib/pathLabel";
 import { borrowsTabShell } from "../../lib/desktop";
 import { settingsSectionForPath } from "../../lib/settingsSections";
 import { isNonTabRoute, routerNavigate } from "../../lib/tabRoutes";
@@ -63,14 +63,14 @@ export function shouldUseTabRouting(
  * entries. The history `state` is tagged so the global popstate handler can tell a
  * tab navigation apart from an inbox session selection (`{ inboxId }`).
  */
-export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromTabId?: string) {
+export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromTabId?: string, userState?: unknown) {
   // The tab, its title, the recents rail and the history entry all take the storable spelling (lib/tabSafePath).
   const path = tabSafePath(to);
   // No tab here is this document's to move (borrowsTabShell). Callers that
   // reach this directly — a pane gesture whose stage could not take the page —
   // still mean "go there", so it goes there for real.
   if (borrowsTabShell()) {
-    routerNavigate(path, mode);
+    routerNavigate(path, mode, userState === undefined ? null : { usr: userState });
     return;
   }
   const store = useInboxStore.getState();
@@ -81,19 +81,12 @@ export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromT
   // browser URL and history belong to the tab the user is looking at.
   if (fromTabId && fromTabId !== store.activeTabId) return;
   const current = window.location.pathname + window.location.search;
-  const state = { tabNav: true, tabId };
+  // A caller's own state rides where react-router keeps it (`usr`), so
+  // `location.state` reads it the same with tabs or without.
+  const state = { tabNav: true, tabId, ...(userState === undefined ? {} : { usr: userState }) };
   if (mode === "push" && path !== current) {
     window.history.pushState(state, "", path);
-    // Real (pushed) page navigations feed the recently-visited rail. A path
-    // that names a session — /conversation/<id>, or the inbox carrying one as
-    // /inbox?s=<id> (how a session opened from another surface lands there,
-    // useOpenSession) — is that session's visit, recorded by recordSessionView;
-    // filing it as a page put an "Inbox" entry on top of the session's own.
-    // A bare /inbox is the Inbox page itself (the sidebar click) and counts.
-    const clean = path.split("#")[0];
-    if (!clean.startsWith("/conversation/") && !inboxTabSessionId(clean)) {
-      store.recordRecentVisit({ kind: "page", key: `page:${clean}`, path: clean, label: pathLabel(clean) });
-    }
+    // Recents follow what the tab shows (lib/visitRecorder), not this call.
   } else {
     window.history.replaceState(state, "", path);
   }

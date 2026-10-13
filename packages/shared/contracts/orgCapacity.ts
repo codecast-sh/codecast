@@ -1,7 +1,7 @@
 // The capacity model (docs/architecture/org-staffing.md S2): what loads one
 // role, what its scope merely holds, when a person's span is too wide, and
 // how often the chart may move. ONE module, read by the server health query
-// (org.health flags), by the role cap defaults, and rendered into the
+// (org.health flags) and rendered into the
 // analyzer prompt, so the product never argues with itself about a threshold.
 //
 // Every number is a default with a reason. The analyzer reasons with them and
@@ -20,8 +20,13 @@
 // is ever a seat problem. The overloaded flag reads the load; the ledger gets
 // its own information flag and never drives a split.
 
-/** Daily caps a role starts with (org-roles-standing.md T1). */
-export const DEFAULT_ROLE_CAPS = { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 } as const;
+/** A role's daily limits (org-roles-standing.md T1). A role starts with none:
+ *  an absent field is no limit, and a limit exists only once a person sets it. */
+export type RoleDailyCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number };
+export const DAILY_CAP_KEYS = ["hands_per_day", "wakes_per_day", "tokens_per_day"] as const;
+
+/** Whether `used` has reached a daily limit; an absent limit is never reached. */
+export function atCap(used: number, cap: number | null | undefined): boolean { return cap != null && used >= cap; }
 
 /** Open card decisions a role's line may hold before it admits another cause
  *  (the-line-end-to-end.md LE6): work starts at the rate a person answers. */
@@ -37,7 +42,7 @@ export type CapacityThreshold = { value: number; unit: string; reason: string };
 export const ROLE_CAPACITY = {
   items_per_day: { value: 30, unit: "distinct work items that reached the role's frames (rows of its wake outbox), per day over 7 days", reason: "each changed item is one line the role reads at its next wake and holds until the item settles; the frame carries about thirty lines of facts, so past thirty a day the role reads counts, not items, and stops following any one thread" },
   decisions_per_day: { value: 4, unit: "decisions routed to the role, per day over 7 days", reason: "every routed decision is an immediate wake with a 5 minute hop deadline; past four a day the seat spends its attention on recommendations rather than direction and each new ask queues behind the last" },
-  live_hands: { value: DEFAULT_ROLE_CAPS.hands_per_day, unit: "live hands, against the role's own hands cap (this default when it has none)", reason: "equals the role's hands cap; every hand reports a state line into the frame and asks for direction when it settles, and a person who raised a seat's cap has already said it may hold more" },
+  live_hands: { value: 6, unit: "live hands, against the role's own hands cap (this line when it has none)", reason: "the role's hands cap when a person set one; every hand reports a state line into the frame and asks for direction when it settles, and a person who raised a seat's cap has already said it may hold more" },
   open_stalls: { value: 3, unit: "stalls the role must unstick: tasks stuck in review, hands that reported blocked or needs context this week, sessions of the role that have waited past the session wait window without the role answering or raising it, and goals of the people who report to it that have stalled", reason: "a stall is a thread the role chases at every wake until it moves; past three at once one of them waits a day, and a day is the review stall window" },
   cap_hit_days: { value: 1, unit: "days in the last 7 the role hit its wake or token cap", reason: "one day at the cap is a spike; more than one in a week means the flow into the seat exceeds what its wakes let it read, and immediate wakes start being held" },
   direct_reports: { value: 5, unit: "child roles", reason: "each report's brief line is read every wake; past this the role manages managers, and that is a layer" },
@@ -106,8 +111,8 @@ export type RoleLoad = {
   /** Decisions routed to the role, per day (7 day average). */
   decisions_per_day: number;
   live_hands: number;
-  /** The role's own hands cap (capsFor); the default cap when absent. */
-  hands_cap?: number;
+  /** The role's own hands cap (capsFor); absent when it has none, and live hands read against the load line. */
+  hands_cap?: number | null;
   direct_reports: number;
   /** Tasks stuck in review past the stall window, hands that reported blocked or needs context this week,
    *  and the role's sessions that waited past the session wait window without the role answering or raising it. */
@@ -126,8 +131,9 @@ export type RoleSignals = {
   load: RoleLoad;
   ledger: RoleLedger;
   spend: {
-    wakes_today: number; wakes_7d_avg: number; wakes_cap: number;
-    tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number;
+    /** Null when the role has no limit on it. */
+    wakes_today: number; wakes_7d_avg: number; wakes_cap: number | null;
+    tokens_today: number; tokens_7d_avg: number | null; tokens_cap: number | null;
     cap_hits_7d: number;
   };
   flow: {
@@ -194,8 +200,8 @@ export type StaleWork = { plans: StalePlan[]; tasks: StaleTask[]; projects: Stal
 
 export type CapacitySignals = RoleSignals | PersonSignals | CompanySignals;
 
-const pct = (n: number, cap: number): number => (cap > 0 ? n / cap : 0);
-const pctText = (n: number, cap: number): string => `${Math.round(pct(n, cap) * 100)}%`;
+const pct = (n: number, cap: number | null): number => (cap != null && cap > 0 ? n / cap : 0);
+const pctText = (n: number, cap: number | null): string => `${Math.round(pct(n, cap) * 100)}%`;
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 const perDay = (n: number): string => `${Math.round(n * 10) / 10}`;
 

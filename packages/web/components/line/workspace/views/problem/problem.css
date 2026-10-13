@@ -1,0 +1,99 @@
+/* One problem's page (ProblemPage, line-journeys.md LJ8.3), on the workspace's
+   tokens. A single column: the title, the stage track, the act band, the
+   findings, the work. State is carried by the track and by color on a fact,
+   never by a pill. */
+.pp { container: pp / inline-size; display: flex; flex-direction: column; gap: var(--lw-s4); padding: var(--lw-s4) var(--lw-s6) 96px; max-width: 1180px; margin: 0 auto; min-width: 0; animation: lw-rise var(--lw-med) var(--lw-ease) both; }
+.lwp-detail .pp { padding: var(--lw-s4) var(--lw-s5) 80px; max-width: none; margin: 0; }
+
+.pp-crumbs { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pp-back { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.pp-ref { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.pp-project { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); min-width: 0; overflow-wrap: anywhere; }
+.pp-project::before { content: "·"; margin-right: 10px; color: var(--lw-rule); }
+.pp-title { margin: 0; max-width: 34ch; font-size: var(--lw-fs-xl); font-weight: 750; letter-spacing: -.025em; line-height: 1.22; color: var(--lw-ink); text-wrap: balance; overflow-wrap: anywhere; }
+@container pp (min-width: 720px) { .pp-title { max-width: 46ch; } }
+
+/* ── the act band ── */
+.pb { border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-card); min-width: 0; overflow: hidden; }
+.pb-pad { padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+.pb[data-line-band="ask"] { border-color: color-mix(in srgb, var(--lw-person) 42%, var(--lw-rule)); box-shadow: inset 3px 0 0 var(--lw-person); }
+.pb[data-line-band="failed"], .pb[data-line-band="stalled"] { box-shadow: inset 3px 0 0 var(--lw-bad); }
+/* What waits on a person, through the one reader. A decision is a full pane with its answers docked at its foot:
+   it gets a box of fixed height and no other scroll inside it. */
+.pb-need { box-shadow: inset 3px 0 0 var(--lw-person); border-color: color-mix(in srgb, var(--lw-person) 42%, var(--lw-rule)); }
+.pb-need[data-boxed] { height: min(80vh, 880px); min-height: 420px; display: flex; flex-direction: column; }
+.pb-need[data-boxed] > * { flex: 1; min-height: 0; }
+.pb-need:not([data-boxed]) > .lwn { height: auto; }
+.pb-need:not([data-boxed]) .lwn-scroll { overflow: visible; }
+.pb-need:not([data-boxed]) .lwn-col { max-width: none; margin: 0; padding: 14px 18px 16px; }
+/* The page's own head already says the problem's ref, project and title. */
+.pb-need .lwn-head { display: none; }
+
+.pb-row { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+.pb-facts { display: flex; flex-wrap: wrap; gap: 10px 32px; margin: 0; min-width: 0; }
+.pb-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 78ch; }
+.pb-fact dt { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.pb-fact dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--lw-fs-md); font-weight: 650; color: var(--lw-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pb-fact[data-tone="bad"] dd { color: var(--lw-bad); }
+.pb-fact[data-tone="warn"] dd { color: color-mix(in srgb, var(--lw-warn) 78%, var(--lw-ink)); }
+.pb-fact[data-tone="ok"] dd { color: var(--lw-ok); }
+.pb-out { display: inline-flex; align-items: center; gap: 3px; font-weight: 500; }
+.pb-sha { font-family: var(--lw-mono); font-size: var(--lw-fs-sm); font-weight: 500; color: var(--lw-ink-2); }
+.pb-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.pb-acts .lw-act { height: 30px; padding: 0 14px; white-space: nowrap; display: inline-flex; align-items: center; text-decoration: none; }
+.pb-thing { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pb-reason { margin: 0; max-width: 86ch; font-size: var(--lw-fs-md); font-weight: 650; line-height: 1.45; color: var(--lw-ink); overflow-wrap: anywhere; }
+.pb-output { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; border-radius: var(--lw-r-sm); background: var(--lw-sunk); font-family: var(--lw-mono); font-size: var(--lw-fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--lw-ink); }
+.pb-under { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lw-act-error { font-size: var(--lw-fs-sm); color: var(--lw-bad); }
+
+/* ── sections ── */
+.pp-sec-h { display: flex; align-items: center; gap: 16px; margin: var(--lw-s3) 0 6px; min-width: 0; }
+.pp-sec-h h3 { margin: 0; font-size: var(--lw-fs-base); font-weight: 750; color: var(--lw-ink); white-space: nowrap; }
+.pp-sec-h h3 .lw-num { margin-left: 4px; font-weight: 500; color: var(--lw-ink-3); }
+.pp-none { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.pp-more { margin-top: 8px; align-self: flex-start; }
+
+/* The strip: findings per bucket over the problem's life, 64px tall at most; a rule where a fix landed. */
+.pf-strip { display: flex; align-items: flex-end; gap: 1px; height: 28px; flex: 0 1 320px; min-width: 80px; border-bottom: 1px solid var(--lw-rule); }
+.pf-strip i { flex: 1; min-width: 1px; height: 0; border-radius: 1px 1px 0 0; background: color-mix(in srgb, var(--lw-plum) 72%, var(--lw-ink-3)); }
+.pf-strip i[data-after][data-n] { background: var(--lw-bad); }
+.pf-strip i[data-fix] { position: relative; overflow: visible; }
+.pf-strip i[data-fix]::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 2px; height: 28px; margin-left: -1px; background: var(--lw-ok); border-radius: 1px; }
+.pf-span { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pf-list, .pw-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-card); overflow: hidden; container-type: inline-size; }
+.pf-divider { display: flex; align-items: center; gap: 12px; padding: 5px 14px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ok); background: color-mix(in srgb, var(--lw-ok) 8%, transparent); border-top: 1px solid var(--lw-rule-2); }
+.pf-divider:first-child { border-top: 0; }
+.pf-divider::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--lw-ok) 35%, transparent); }
+
+/* ── work ── */
+.pw-run + .pw-run { border-top: 1px solid var(--lw-rule-2); }
+.pw-head { display: grid; grid-template-columns: 12px 6ch 7ch 5ch minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px; width: 100%; padding: 10px 14px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; transition: background var(--lw-fast); }
+.pw-head:hover { background: color-mix(in srgb, var(--lw-ink) 3.5%, transparent); }
+.pw-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
+.pw-head .lw-chev { align-self: center; }
+.pw-run[data-open] .pw-head .lw-chev { transform: rotate(45deg) translate(-1px, -1px); }
+.pw-n { font-size: var(--lw-fs-sm); font-weight: 650; white-space: nowrap; }
+.pw-at, .pw-dur { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pw-what { font-size: var(--lw-fs-base); line-height: 1.45; overflow-wrap: anywhere; }
+.pw-run[data-open] .pw-what { font-weight: 600; }
+.pw-out { font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink-2); text-align: right; max-width: 34ch; }
+.pw-out[data-tone="ok"] { color: var(--lw-ok); }
+.pw-out[data-tone="bad"] { color: var(--lw-bad); }
+.pw-out[data-tone="warn"] { color: color-mix(in srgb, var(--lw-warn) 78%, var(--lw-ink)); }
+.pw-out[data-tone="live"] { color: var(--lw-live); }
+.pw-out[data-tone="you"] { color: var(--lw-person-deep); }
+.pw-body { margin: 0; padding: 2px 14px 14px 38px; display: flex; flex-direction: column; gap: 8px; animation: lw-fade var(--lw-med) both; }
+.pw-body > div { display: grid; grid-template-columns: 9ch minmax(0, 1fr); gap: 12px; }
+.pw-body dt { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); padding-top: 1px; }
+.pw-body dd { margin: 0; max-width: 86ch; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: var(--lw-fs-base); line-height: 1.55; color: var(--lw-ink); overflow-wrap: anywhere; }
+.pw-body code { font-family: var(--lw-mono); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.pw-stat { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pw-stat b[data-k="add"] { color: var(--lw-ins); font-weight: 650; }
+.pw-stat b[data-k="del"] { color: var(--lw-del); font-weight: 650; }
+@container (max-width: 620px) {
+  .pw-head { grid-template-columns: 12px auto auto auto minmax(0, 1fr); }
+  .pw-what { grid-column: 2 / -1; }
+  .pw-out { grid-column: 2 / -1; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .pp, .pw-body { animation: none; } }

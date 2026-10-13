@@ -95,10 +95,6 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
         if (c) useInboxStore.getState().resumeSession(c).catch(report("resources.resume"));
       }
     },
-    onDismissPlan: (deviceId, until) => {
-      const st = useInboxStore.getState();
-      st.updateClientUI({ resource_plan_dismissed: { ...(st.clientState.ui?.resource_plan_dismissed ?? {}), [deviceId]: until } });
-    },
     onPreflight: (sel) => {
       const source = sourceOf(sel);
       if (!source) return;
