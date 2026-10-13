@@ -21,6 +21,7 @@ import { browserHome } from "../profile.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
+import { agentSetupLines } from "@codecast/shared/contracts";
 import { fmt } from "../../colors.js";
 import {
   bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
@@ -208,7 +209,7 @@ export function splitTargetFlags(args: string[]): TargetFlags & { args: string[]
 export function requireBridgeConfigured(): BridgeState {
   const state = readBridgeState();
   if (!state?.token) {
-    throw new Error(`the extension bridge is not set up — install Codecast from ${BRIDGE_STORE_URL}, then run \`cast browser extension setup\` in a terminal on the same computer. No separate browser was started.`);
+    throw new Error(`the extension bridge is not set up — install Codecast from ${BRIDGE_STORE_URL}, then run \`cast browser extension setup\` in a terminal on the same computer. No separate browser was started.\n${agentSetupLines("browser").join("\n")}`);
   }
   return state;
 }
@@ -408,7 +409,8 @@ export async function requireRealBridge(start?: BridgeHostStarter, deps?: RealCh
         : "the cast bridge extension has not been paired with this machine's bridge host.\n") +
         `  If the extension is not installed, install Codecast from ${BRIDGE_STORE_URL}.\n` +
         "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
-        "  Tell the human if it remains disconnected. No separate browser was started.",
+        "  Tell the human if it remains disconnected. No separate browser was started.\n" +
+        agentSetupLines("browser").join("\n"),
     );
   }
   return bridge;

@@ -1,11 +1,11 @@
-// The health page's numbers (orgFlow.ts): each role's week as a series keyed
+// This week's numbers (orgFlow.ts): each role's week as a series keyed
 // the way org.health keys it, the company's week as their sum, the map's edge
 // weights and handoffs, and the two what-ifs, including what they refuse to
 // claim.
 import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_HEALTH } from "./orgStaffingFixture";
-import { companyFlow, flowDays, flowMap, moveAsk, projectCap, projectMove, roleFlows } from "./orgFlow";
+import { flowDays, flowMap, moveAsk, projectCap, projectMove, roleFlows } from "./orgFlow";
 import { roleNodeId } from "./orgLayout";
 
 const tree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", reports_to: { kind: "user" as const, user_id: ORG_FIXTURE.people[0].user_id }, standing: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" } }] };
@@ -39,12 +39,6 @@ describe("the week", () => {
     const none = roleFlows(tree, null, now);
     expect(none).toHaveLength(2);
     expect(none.every((f) => f.wakesTotal === 0 && f.health === null)).toBe(true);
-  });
-
-  test("the company's week is the roles' days added", () => {
-    const c = companyFlow(roleFlows(tree, ORG_STAFFING_FIXTURE_HEALTH, now));
-    expect(c.wakes).toEqual([45, 45, 15, 24, 48, 43, 25]);
-    expect(c.atCap).toBe(1);
   });
 });
 

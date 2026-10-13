@@ -71,7 +71,7 @@ export function useBuildTicker(m: MessageView | null): BuildTicker | null {
       building: `Building v${version}`,
       landing: `v${version} going live`,
       live: `v${version} is live`,
-      failed: "Didn't make it",
+      failed: b.failure === "declined" ? "Clay left it as is" : "Didn't make it",
     }[phase],
     line: phase === "failed" ? (b.error ?? "Clay couldn't finish this one.") : ((phase === "building" || phase === "landing") && narration.at(-1)?.text) || m.body,
     lineKey: (phase === "building" || phase === "landing") && narration.length ? narration[narration.length - 1].at : phase,

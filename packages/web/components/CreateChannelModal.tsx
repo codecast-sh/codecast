@@ -4,8 +4,10 @@ import { SlackLogo } from "./SlackLogo";
 import { SlackChannelBrowser } from "./chat/SlackChannelBrowser";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Hash, Lock } from "lucide-react";
+import { Bot, Hash, Lock } from "lucide-react";
 import { MemberPicker } from "./chat/ChannelPeople";
+import { AgentPicker } from "./chat/ChannelAgents";
+import { chatAgentId, type ChatChannelAgentRef } from "../store/chatSlice";
 import { Switch } from "./ui/switch";
 import { CreateDialog, CreateDialogSubtitle, CreateDialogTitle } from "./CreateDialog";
 import { useInboxStore } from "../store/inboxStore";
@@ -47,6 +49,12 @@ export function CreateChannelModal({
   const [topic, setTopic] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [agents, setAgents] = useState<ChatChannelAgentRef[]>([]);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const toggleAgent = (agent: ChatChannelAgentRef) =>
+    setAgents((prev) => prev.some((a) => chatAgentId(a) === chatAgentId(agent))
+      ? prev.filter((a) => chatAgentId(a) !== chatAgentId(agent))
+      : [...prev, agent]);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   // A team with Slack connected can also bring channels over instead of
   // typing a name: the same gesture, from the other side.
@@ -71,6 +79,7 @@ export function CreateChannelModal({
       topic: topic.trim() || undefined,
       teamId,
       ...(isPrivate ? { kind: "private" as const, memberIds } : {}),
+      ...(agents.length ? { agents } : {}),
     });
     toast.success(isPrivate ? `Created private channel #${slug}` : `Created #${slug}`);
     onCreated?.(id);
@@ -155,6 +164,21 @@ export function CreateChannelModal({
               autoFocus={false}
               onChange={(ids) => setMemberIds(ids)}
             />
+          </div>
+        )}
+        <button
+          type="button"
+          className="flex w-full select-none items-center gap-3 border-t border-sol-border/40 px-3 py-2.5 text-left"
+          aria-expanded={agentsOpen}
+          onClick={() => setAgentsOpen((v) => !v)}
+        >
+          <Bot className={`h-3.5 w-3.5 shrink-0 ${agents.length ? "text-sol-violet" : "text-sol-text-dim"}`} />
+          <span className="min-w-0 flex-1 text-xs font-medium text-sol-text">Agents</span>
+          <span className="text-[11px] text-sol-text-dim">{agents.length ? agents.length : "Add roles or sessions"}</span>
+        </button>
+        {agentsOpen && (
+          <div className="border-t border-sol-border/40 px-3 py-2.5">
+            <AgentPicker picked={agents} onToggle={toggleAgent} autoFocus={false} />
           </div>
         )}
       </div>

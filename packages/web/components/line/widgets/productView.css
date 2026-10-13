@@ -1,0 +1,35 @@
+/* A connected app's own screen framed in place (ProductView), and its pill in running text. */
+.pv { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r, 10px); background: var(--lw-card); font-size: var(--lw-fs-sm); }
+.pv[data-state="fallback"] { gap: 4px; background: var(--lw-card-2); }
+.pv-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.pv-icon { width: 13px; height: 13px; flex: none; color: var(--lw-plum); }
+.pv-title { font-weight: 650; color: var(--lw-ink); text-transform: none; }
+.pv-id, .pv-at { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.pv-sp { flex: 1; }
+.pv-why { font-family: var(--lw-mono); font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-why a { color: var(--lw-plum); text-decoration: underline; text-underline-offset: 2px; }
+.pv-open { display: inline-flex; align-items: center; gap: 3px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); text-decoration: none; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--lw-rule-2); }
+.pv-open:hover { color: var(--lw-ink); border-color: var(--lw-rule); }
+.pv-open svg { width: 11px; height: 11px; }
+
+.pv-frame-wrap { position: relative; border-radius: var(--lw-r-sm, 6px); overflow: hidden; background: var(--lw-paper); }
+.pv-frame { display: block; width: 100%; border: 0; transition: height var(--lw-fast), opacity var(--lw-fast); }
+.pv-frame-wrap[data-folded] .pv-frame { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent); }
+.pv-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.pv-wait-box { position: static; height: 120px; background: var(--lw-paper-2); border-radius: var(--lw-r-sm, 6px); }
+.pv-more { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.pv-frame-wrap:not([data-folded]) .pv-more { position: static; transform: none; margin: 6px auto; display: flex; width: fit-content; }
+.pv-more svg { width: 12px; height: 12px; transition: transform var(--lw-fast); }
+.pv-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+.pv-play { display: flex; align-items: center; justify-content: center; gap: 6px; height: 72px; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); background: var(--lw-paper-2); border: 1px dashed var(--lw-rule); border-radius: var(--lw-r-sm, 6px); cursor: pointer; }
+.pv-play:hover { color: var(--lw-ink); border-style: solid; }
+.pv-play svg { width: 13px; height: 13px; }
+.pv-fallback { min-width: 0; }
+.pv-ref-text { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-2); overflow-wrap: anywhere; }
+
+/* The pill sits in prose anywhere markdown renders, outside the line's tokens: the app theme's own. */
+.pv-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; vertical-align: baseline; padding: 0 6px; font: inherit; font-size: 11.5px; line-height: 1.5; color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 9%, transparent); border: 1px solid color-mix(in srgb, var(--sol-magenta) 22%, transparent); border-radius: 5px; cursor: pointer; }
+.pv-pill:hover { background: color-mix(in srgb, var(--sol-magenta) 15%, transparent); }
+.pv-pill[data-failed] { color: var(--sol-text-dim); background: none; border-style: dashed; border-color: var(--sol-border); }
+.pv-pill svg { width: 11px; height: 11px; flex: none; }
+.pv-pill-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; }

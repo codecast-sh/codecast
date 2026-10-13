@@ -532,7 +532,7 @@ const coalescedRuns = new WeakMap<UndoEntry, CoalescedRun>();
 // on the wire. Keyed by each call's outbox id until one is refused (or the
 // cap pushes it out), so the refusal can bring the entry back.
 // `below` is the history entry it sat on, so it comes back at its own place.
-const vanishedRuns = new Map<string, { entry: UndoEntry; run: CoalescedRun; below: UndoEntry | undefined }>();
+let vanishedRuns = new Map<string, { entry: UndoEntry; run: CoalescedRun; below: UndoEntry | undefined }>();
 const VANISHED_RUNS_LIMIT = 200;
 
 // First before, last after; a cell the run took back to where it began is no change.
@@ -787,7 +787,7 @@ function pruneExpiredManual(now: number): void {
 // animation). Until it runs nothing records it, yet it is the newest thing the
 // user did: a walk that arrived in the wait would take back an older entry,
 // and the gesture landing afterwards would drop that entry's redo.
-const pendingGestures = new Set<() => void>();
+let pendingGestures = new Set<() => void>();
 
 /**
  * Register a gesture whose write runs later. Returns `commit`, which runs it
@@ -1052,7 +1052,7 @@ export function subscribeUndoHistory(fn: () => void): () => void {
 // Children a refusal took out of their group while a replay they overtook was
 // still findable (supersededReplay): a refusal of that replay can still bring
 // them back, so the refusal walk keeps reaching them. `at` is where they sat.
-const detachedChildren = new Map<UndoEntry, { parent: UndoEntry; at: number }>();
+let detachedChildren = new Map<UndoEntry, { parent: UndoEntry; at: number }>();
 const DETACHED_CHILDREN_LIMIT = 200;
 
 function* allEntries(): Generator<{ entry: UndoEntry; parent: UndoEntry | null }> {
@@ -1544,18 +1544,22 @@ type UndoWindowSlots = {
   groupToast: boolean;
   groupExternals: UndoEntry[] | null;
   recordingHolds: number;
+  vanishedRuns: typeof vanishedRuns;
+  pendingGestures: typeof pendingGestures;
+  detachedChildren: typeof detachedChildren;
 };
 
 /**
  * Test seam for a harness that runs several windows in one process (the
  * codecast multiplayer sim): each browser window keeps its own history, so the
  * harness saves this state after a window's turn and loads it before the
- * next. Arrays are copied, so a saved slot never aliases the live stacks.
+ * next. Arrays, maps and sets are copied, so a saved slot never aliases the
+ * live stacks.
  * Configuration, the notifier, listeners and the id counter stay one per
  * process (set once at load; ids only need to be unique).
  */
 export function __undoStackWindowSlots(): { get(): object; set(s: object): void; fresh(): object } {
-  // Lists are copied; anything else a harness hands in passes as it is.
+  // Collections are copied; anything else a harness hands in passes as it is.
   const list = <T>(x: T): T => (Array.isArray(x) ? ([...x] as T) : x);
   const copy = (s: UndoWindowSlots): UndoWindowSlots => ({
     ...s,
@@ -1564,6 +1568,9 @@ export function __undoStackWindowSlots(): { get(): object; set(s: object): void;
     history: list(s.history),
     groupChildren: list(s.groupChildren),
     groupExternals: list(s.groupExternals),
+    vanishedRuns: new Map(s.vanishedRuns),
+    pendingGestures: new Set(s.pendingGestures),
+    detachedChildren: new Map(s.detachedChildren),
   });
   return {
     fresh: (): UndoWindowSlots => ({
@@ -1579,12 +1586,15 @@ export function __undoStackWindowSlots(): { get(): object; set(s: object): void;
       groupToast: false,
       groupExternals: null,
       recordingHolds: 0,
+      vanishedRuns: new Map(),
+      pendingGestures: new Set(),
+      detachedChildren: new Map(),
     }),
     get: (): UndoWindowSlots =>
-      copy({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds }),
+      copy({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds, vanishedRuns, pendingGestures, detachedChildren }),
     set: (raw: object) => {
       const s = copy(raw as UndoWindowSlots);
-      ({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds } = s);
+      ({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds, vanishedRuns, pendingGestures, detachedChildren } = s);
     },
   };
 }
@@ -1593,6 +1603,7 @@ export function __undoStackWindowSlots(): { get(): object; set(s: object): void;
 export function _resetUndoStacks(): void {
   pendingGestures.clear();
   vanishedRuns.clear();
+  detachedChildren.clear();
   undoStack = [];
   redoStack = [];
   history = [];

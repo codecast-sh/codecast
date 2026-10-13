@@ -23,6 +23,7 @@ export const CODECAST_HOOK_SCRIPTS = [
   "session-register.sh",
   "thread-state.sh",
   "task-pulse.sh",
+  "task-context.sh",
   "stable-feed.sh",
   "codecast-session-trailer.sh",
 ] as const;
@@ -69,6 +70,8 @@ export const CODECAST_SKILL_NAMES = [
   "cast-rethink",
   "cast-org",
   "cast-mod",
+  "cast-motion",
+  "cast-dashboard",
 ] as const;
 
 /** The agent definitions the orchestration snippet installs under ~/.claude/agents/. */
