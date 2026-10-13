@@ -67,7 +67,7 @@ export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K]
 };
 
 export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "finders"] as const;
-export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "project"] as const;
+export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 
@@ -182,6 +182,10 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
           fingerprint: text(f.fingerprint, `${at} fingerprint`),
         };
         if (f.runs !== undefined) finder.runs = text(f.runs, `${at} runs`);
+        if (f.opens_causes !== undefined) {
+          if (typeof f.opens_causes !== "boolean") throw new LineProfileError(`${at} opens_causes must be true or false`);
+          if (f.opens_causes) finder.opens_causes = true;
+        }
         if (f.project !== undefined) finder.project = text(f.project, `${at} project`);
         return finder;
       });
@@ -226,12 +230,24 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
 }
 
 /** The nearest `.codecast/line.toml` from `cwd` up, stopping at the repository root (the first directory holding `.git`). */
+/** A repository's root: its `.git` is a worktree's pointer file or a git dir
+ *  holding HEAD. A bare `.git` directory without one (a tool's leftover hooks,
+ *  say) is no repository, and the search goes on past it. */
+function isRepoRoot(dir: string): boolean {
+  const git = path.join(dir, ".git");
+  try {
+    return fs.statSync(git).isFile() || fs.existsSync(path.join(git, "HEAD"));
+  } catch {
+    return false;
+  }
+}
+
 export function findLineProfile(cwd: string): { file: string | null; root: string | null } {
   let dir = path.resolve(cwd);
   for (;;) {
     const file = path.join(dir, LINE_PROFILE_REL_PATH);
     if (fs.existsSync(file)) return { file, root: dir };
-    if (fs.existsSync(path.join(dir, ".git"))) return { file: null, root: dir };
+    if (isRepoRoot(dir)) return { file: null, root: dir };
     const up = path.dirname(dir);
     if (up === dir) return { file: null, root: null };
     dir = up;
@@ -298,7 +314,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   out.push("", `finders (${p.finders.length}, ${r.sources.finders})`);
   for (const f of p.finders) {
     const kinds = f.kind === "any" ? "any" : f.kind.join(", ");
-    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
+    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens problems" : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
   }
   if (r.notes.length) out.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.warnings.length) out.push("", ...r.warnings.map((w) => `warning: ${w}`));
@@ -345,6 +361,7 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `# kind = "cohesion"`,
     `# fingerprint = "lesson:<rule>"`,
     `# runs = "the weekly lessons routine"`,
+    `# opens_causes = true             # a finding no problem holds opens one; otherwise it stays a finding`,
     ``,
   ].join("\n");
 }
