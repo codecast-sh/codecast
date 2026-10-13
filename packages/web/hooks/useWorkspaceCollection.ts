@@ -21,6 +21,7 @@ import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { activeWorkspaceKeyOf, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
 import { collectionRowListed, type WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
+import { useWorkspaceScope } from "./useWorkspaceScope";
 
 // Derived from the registry: a collection declares `workspaceScoped: true`
 // and this hook accepts it — no second list to keep in step.
@@ -31,7 +32,10 @@ export { activeWorkspaceKeyOf };
 /** The viewer's active workspace key, from the canonical pointers. Null while
  *  the viewer is unknown — everything reads empty (fail closed), never all. */
 export function useActiveWorkspaceKey(): WorkspaceKey | null {
-  return useInboxStore(activeWorkspaceKeyOf);
+  // A surface with a workspace of its own (WorkspaceScopeProvider) reads that one.
+  const scope = useWorkspaceScope();
+  const active = useInboxStore(activeWorkspaceKeyOf);
+  return scope ?? active;
 }
 
 // Membership signature: which row ids are in the workspace. Memoized on
@@ -39,8 +43,8 @@ export function useActiveWorkspaceKey(): WorkspaceKey | null {
 // The store reuses a collection's identity when nothing in it changed, so this
 // scan (10k+ rows for tasks/docs) runs once per real change, not once per
 // store notification per subscriber.
-type SigEntry = { key: WorkspaceKey | null; table?: WorkspaceScopedTable; sig: string };
-const sigCache = new WeakMap<object, Map<((row: any) => string) | null, SigEntry>>();
+type SigEntry = { table?: WorkspaceScopedTable; sig: string };
+const sigCache = new WeakMap<object, Map<((row: any) => string) | null, Map<WorkspaceKey | null, SigEntry>>>();
 // `table` names the collection, whose registry `listed` rule (a soft-deleted
 // row stays held but leaves lists) applies here too.
 export function membershipSig(
@@ -50,8 +54,9 @@ export function membershipSig(
   table?: WorkspaceScopedTable,
 ): string {
   let perFn = sigCache.get(collection);
-  const hit = perFn?.get(fieldSig);
-  if (hit && hit.key === key && hit.table === table) return hit.sig;
+  let perKey = perFn?.get(fieldSig);
+  const hit = perKey?.get(key);
+  if (hit && hit.table === table) return hit.sig;
   const listed = table ? collectionRowListed(table) : undefined;
   const ids: string[] = [];
   let extra = "";
@@ -66,7 +71,8 @@ export function membershipSig(
   }
   const sig = fieldSig ? ids.join("\n") + "\u0000" + extra : ids.join("\n");
   if (!perFn) { perFn = new Map(); sigCache.set(collection, perFn); }
-  perFn.set(fieldSig, { key, table, sig });
+  if (!perKey) { perKey = new Map(); perFn.set(fieldSig, perKey); }
+  perKey.set(key, { table, sig });
   return sig;
 }
 
@@ -89,7 +95,14 @@ export function defaultFieldSig(row: any): string {
  * updates — rendered, it's a phantom frozen at stale field values beside (or
  * instead of) the live row. Stubs pass: keyed by their temp _id.
  */
+const workspaceRowsCache = new WeakMap<object, Map<string, unknown[]>>();
+
 export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record<string, T>, key: WorkspaceKey | null): T[] {
+  if (!key) return [];
+  let cached = workspaceRowsCache.get(coll);
+  const cacheKey = `${table}\0${key}`;
+  const hit = cached?.get(cacheKey);
+  if (hit) return hit.slice() as T[];
   const listed = collectionRowListed(table);
   const rows: T[] = [];
   for (const id in coll) {
@@ -98,7 +111,9 @@ export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record
     if (id !== String((row as any)?._id) || (listed && !listed(row))) continue;
     if (inWorkspace(row as any, key)) rows.push(row);
   }
-  return rows;
+  if (!cached) { cached = new Map(); workspaceRowsCache.set(coll, cached); }
+  cached.set(cacheKey, rows);
+  return rows.slice();
 }
 
 /**
@@ -115,7 +130,8 @@ export function useWorkspaceCollection<T = any>(
   workspace?: WorkspaceKey | null,
 ): T[] {
   const fieldSig = sig === null ? null : (sig ?? (defaultFieldSig as (row: T) => string));
-  const keyOf = (st: Parameters<typeof activeWorkspaceKeyOf>[0]) => workspace || activeWorkspaceKeyOf(st);
+  const scope = useWorkspaceScope();
+  const keyOf = (st: Parameters<typeof activeWorkspaceKeyOf>[0]) => workspace || scope || activeWorkspaceKeyOf(st);
   const s = useTrackedStore([
     (st) => keyOf(st),
     (st) => membershipSig((st as any)[table], keyOf(st), fieldSig, table),

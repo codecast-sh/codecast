@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { briefCharterLines, briefHandLine, briefInitiativeLines, standingSessionLine, wakeLine } from "./briefLines";
+import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, standingSessionLine, wakeLine } from "./briefLines";
 import { stripAnsi } from "@platform/cli-kit/render";
 
 // The brief's hand line reads the server's BriefHand shape: `state`, not
@@ -67,5 +67,15 @@ describe("wakeLine", () => {
   test("a routine read from an older server still prints its cadence; a role with no trigger prints nothing", () => {
     expect(stripAnsi(wakeLine({ interval_ms: 86_400_000 })[0])).toContain("its check runs every day");
     expect(wakeLine(null)).toEqual([]);
+  });
+});
+
+// A grant's expiry is in the future; the past-only relative form printed every
+// one as "until just now".
+describe("authorityLine", () => {
+  test("prints a held grant's expiry as its date and leaves expired grants out", () => {
+    const now = new Date(2026, 9, 12).getTime(), day = 86_400_000;
+    const line = stripAnsi(authorityLine({ authority: [{ kind: "spend", label: "Ads", expires_at: now + 90 * day }, { kind: "write", label: "Old", expires_at: now - day }] }, now));
+    expect(line).toBe("  authority outside codecast: spend (Ads, until Jan 10, 2027)");
   });
 });
