@@ -1,9 +1,9 @@
-// How work flows through the org (the health page): each role's week as a
+// How work flows through the org (the map's This week): each role's week as a
 // daily series, the weight of every edge on the map, and what a change to a
 // limit or a share of load would have done to the same week. Pure: it reads
 // org.tree and org.health and nothing else, so the map, the volume table and
 // the what-if read one set of numbers.
-import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
+import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { areaRows, type AreaRow } from "./staffingModel";
 import type { OrgHealth, OrgRoleHealth } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
@@ -29,8 +29,8 @@ export type RoleFlow = AreaRow & {
   wakesTotal: number;
   doneTotal: number;
   decisionsTotal: number;
-  /** Its daily wake limit, and the days this week it reached it. */
-  cap: number;
+  /** Its daily wake limit (null: none), and the days this week it reached it. */
+  cap: number | null;
   daysAtCap: number;
   /** Its average day against its limit: 1 = every day at the limit. */
   loadRatio: number;
@@ -51,7 +51,7 @@ export function roleFlows(tree: OrgTree | null, health: OrgHealth | null, now: n
     const wakes = series(h?.spend.wakes_by_day, days);
     const done = series(h?.flow.done_by_day, days);
     const decisions = series(h?.flow.decisions_by_day, days);
-    const cap = h?.spend.wakes_cap ?? row.role.caps?.wakes_per_day ?? DEFAULT_ROLE_CAPS.wakes_per_day;
+    const cap = h ? h.spend.wakes_cap ?? null : row.role.caps?.wakes_per_day ?? null;
     const wakesTotal = h?.spend.wakes_by_day ? sum(wakes) : Math.round((h?.load.items_per_day ?? 0) * FLOW_DAYS);
     return {
       ...row,
@@ -61,27 +61,12 @@ export function roleFlows(tree: OrgTree | null, health: OrgHealth | null, now: n
       doneTotal: h?.flow.done_7d ?? sum(done),
       decisionsTotal: h?.flow.decisions_7d ?? sum(decisions),
       cap,
-      daysAtCap: h?.spend.cap_hits_7d ?? wakes.filter((w) => w >= cap).length,
-      loadRatio: cap > 0 ? wakesTotal / FLOW_DAYS / cap : 0,
+      daysAtCap: h?.spend.cap_hits_7d ?? wakes.filter((w) => atCap(w, cap)).length,
+      loadRatio: cap ? wakesTotal / FLOW_DAYS / cap : 0,
       liveHands: h?.load.live_hands ?? 0,
       stalls: h?.load.open_stalls ?? 0,
     };
   }).sort((a, b) => b.wakesTotal - a.wakesTotal || b.doneTotal - a.doneTotal || a.role.name.localeCompare(b.role.name));
-}
-
-export type CompanyFlow = { wakes: number[]; done: number[]; decisions: number[]; stalls: number; liveHands: number; atCap: number };
-
-/** The company's week: the roles' series added day by day. */
-export function companyFlow(flows: RoleFlow[]): CompanyFlow {
-  const add = (pick: (f: RoleFlow) => number[]) => Array.from({ length: FLOW_DAYS }, (_, i) => sum(flows.map((f) => pick(f)[i] ?? 0)));
-  return {
-    wakes: add((f) => f.wakes),
-    done: add((f) => f.done),
-    decisions: add((f) => f.decisions),
-    stalls: sum(flows.map((f) => f.stalls)),
-    liveHands: sum(flows.map((f) => f.liveHands)),
-    atCap: flows.filter((f) => f.daysAtCap > 0).length,
-  };
 }
 
 /** A line of work between two cards on the map, with the week's count. */
@@ -122,8 +107,8 @@ export type CapProjection = { cap: number; daysAtCap: number; unknownDays: numbe
  * apart, never folded into a count that would flatter the change.
  */
 export function projectCap(f: RoleFlow, cap: number): CapProjection {
-  const raised = cap > f.cap;
-  const unknownDays = raised ? f.wakes.filter((w) => w >= f.cap).length : 0;
+  const raised = f.cap === null || cap > f.cap;
+  const unknownDays = raised ? f.wakes.filter((w) => atCap(w, f.cap)).length : 0;
   return {
     cap,
     daysAtCap: f.wakes.filter((w) => w >= cap).length,
@@ -152,8 +137,8 @@ export function projectMove(from: RoleFlow, to: RoleFlow, share: number): MovePr
     share: s,
     from: a,
     to: b,
-    fromDaysAtCap: a.filter((w) => w >= from.cap).length,
-    toDaysAtCap: b.filter((w) => w >= to.cap).length,
+    fromDaysAtCap: a.filter((w) => atCap(w, from.cap)).length,
+    toDaysAtCap: b.filter((w) => atCap(w, to.cap)).length,
     moved: sum(from.wakes) - sum(a),
   };
 }

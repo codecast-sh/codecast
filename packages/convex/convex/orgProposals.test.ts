@@ -38,7 +38,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
     teams: [{ _id: TEAM, name: "Acme" }],
     counters: [],
     org_roles: [
-      { _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_growth", created_by: ME, created_at: 1, updated_at: 1 },
+      { _id: GROWTH, short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", trust: "understand", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_growth", created_by: ME, created_at: 1, updated_at: 1 },
     ],
     org_role_history: [],
     anchors: [{ _id: "anchors_growth", name: "Growth lead", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: MATE, org_role_id: GROWTH, conversation_id: S_GROWTH, status: "active" }],
@@ -146,8 +146,8 @@ describe("orgProposals.decide", () => {
     expect(await decide(2)).toMatchObject({ status: "applied", note: "@growth: scope +pr-2" });
     expect((await db.get(GROWTH as any)).scope.project_ids).toEqual([P, Q]);
     // Edits ride over the proposed change: 9 wakes, not 12.
-    expect(await decide(3, "accept", { caps: { wakes_per_day: 9 } })).toMatchObject({ status: "applied", note: "@growth: wakes 40 → 9/day" });
-    expect((await db.get(GROWTH as any)).caps).toEqual({ hands_per_day: 6, wakes_per_day: 9, tokens_per_day: 400_000 });
+    expect(await decide(3, "accept", { caps: { wakes_per_day: 9 } })).toMatchObject({ status: "applied", note: "@growth: wakes no limit → 9/day" });
+    expect((await db.get(GROWTH as any)).caps).toEqual({ wakes_per_day: 9 });
     expect((await db.get(p.ids[3] as any)).edits).toEqual({ caps: { wakes_per_day: 9 } });
     expect(await decide(4)).toMatchObject({ status: "applied", note: "@growth: turned on starting work on its own" });
     expect((await db.get(GROWTH as any)).trust).toBe("direct"); // decide reads as on and is written as direct (S23.1)
@@ -1252,7 +1252,7 @@ describe("the stamp of what an accept moved (S39)", () => {
     ]);
     const ctx = ctxOf(db);
     expect(await accept(ctx, p.ids[0])).toMatchObject({ status: "applied" });
-    expect(await accept(ctx, p.ids[1])).toMatchObject({ status: "applied", note: "@growth: wakes 40 → 12/day" });
+    expect(await accept(ctx, p.ids[1])).toMatchObject({ status: "applied", note: "@growth: wakes no limit → 12/day" });
     // The limit did land in the log; it is the stamp that never holds one (S23.2).
     expect(db._tables.org_changes.map((c: any) => [c.kind, c.after.caps?.wakes_per_day])).toEqual([["budget", 12]]);
     expect(await accept(ctx, p.ids[2])).toMatchObject({ status: "failed" });

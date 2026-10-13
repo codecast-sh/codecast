@@ -95,6 +95,15 @@ describe("findEntityInStore", () => {
     expect(findEntityInStore(state, "task", "CT-38940")?.title).toBe("Engine-tick timeouts");
   });
 
+  it("short-id indexing ignores inherited rows and keeps the last own duplicate", () => {
+    const first = { ...TASK, _id: "first" };
+    const last = { ...TASK, _id: "last" };
+    const inherited = { _id: "inherited", short_id: "ct-999" };
+    const tasks = Object.assign(Object.create({ inherited }), { first, last });
+    expect(findEntityInStore({ tasks }, "task", TASK.short_id)).toBe(last);
+    expect(findEntityInStore({ tasks }, "task", inherited.short_id)).toBeUndefined();
+  });
+
   it("falls back to the cross-team mention index", () => {
     // ct-777 belongs to another workspace, so it is not in `tasks` — but the
     // mention index carries it, which is exactly what that index is for.
@@ -150,9 +159,9 @@ describe("derivePeople", () => {
 
   it("gives the bot its own pill and keeps the host's name and count", () => {
     expect(derivePeople(rows)).toEqual([
-      { id: HOST, name: "Alexander Green", image: "a.png", sessions: 2 },
-      { id: BOT, name: "Head of People", image: null, sessions: 1 },
-      { id: "users_david", name: "David Lu", image: null, sessions: 1 },
+      { id: HOST, name: "Alexander Green", image: "a.png", sessions: 2, isRole: false },
+      { id: BOT, name: "Head of People", image: null, sessions: 1, isRole: true },
+      { id: "users_david", name: "David Lu", image: null, sessions: 1, isRole: false },
     ]);
   });
 
