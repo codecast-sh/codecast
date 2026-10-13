@@ -153,6 +153,9 @@
 .ld-ev-pr { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--sol-blue); }
 
 /* A trial's answers record what you would do: one mark says so, on the answers themselves. */
+.ld-answers-row { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
+.ld-answers-row > .ld-answers-h { margin: 0; }
+.ld-answers-row > .ld-talk-fold { margin: 0 0 0 auto; }
 .ld-answers-h { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--sol-text-muted); }
 .ld-answers-sub { font-weight: 400; color: var(--sol-text-dim); }
 
@@ -244,3 +247,6 @@
 .ld-grid[data-talk="folded"] { grid-template-columns: minmax(0, 74ch); }
 .ld-talk-fold { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 18px; padding: 4px 10px; border-radius: 8px; font-size: 12.5px; color: var(--sol-text-muted); border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); transition: color 120ms ease, background-color 120ms ease; }
 .ld-talk-fold:hover { color: var(--sol-text); background: var(--sol-bg-alt); }
+
+/* The one real case an older card leads with, under its words. */
+.ld-case { margin: 4px 0 18px; }

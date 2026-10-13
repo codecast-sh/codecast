@@ -186,12 +186,13 @@ test("an example input shows only when its Before does not already quote it", ()
 test("a settled card says what happened in place of the recommendation", async () => {
   const answered = { ...decision, status: "answered", answer_index: 0, resolved_at: Date.now() - 47 * 60_000 };
   const outcome = cardOutcome(answered, "Ashot", Date.now())!;
-  expect(outcome.pill).toBe("Shipped by Ashot · 47m ago");
-  expect(outcome.verdict).toBe("Shipped");
+  // A Ship answer approves the change: whether it landed is the run's to say.
+  expect(outcome.pill).toBe("Approved to ship by Ashot · 47m ago");
+  expect(outcome.verdict).toBe("Approved to ship");
   expect(outcome.tone).toBe("green");
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={outcome.line} />);
   expect(container.querySelector("article [data-cc-recommended]")).toBeNull();
-  expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Shipped");
+  expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Approved to ship");
   await unmount();
   const revised = cardOutcome({ ...answered, answer_index: 1, answer_text: "Revise: keep the greeting" }, "Ashot", Date.now())!;
   expect(revised.pill.startsWith("Sent back to revise by Ashot")).toBe(true);
