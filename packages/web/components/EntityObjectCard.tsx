@@ -16,6 +16,8 @@ import {
   Radio,
   Target,
   Zap,
+  Hexagon,
+  UserRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
@@ -58,8 +60,9 @@ import { TranscriptTurnList } from "./calls/TranscriptTurns";
 import { groupTurns } from "./calls/transcriptTurnModel";
 import { firstName, fmtCallLength } from "./calls/speakers";
 import { CallMomentFrame } from "./calls/CallMomentFrame";
-import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, replayFacts, sourceFacts } from "./ops/parts";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
+import { replayFacts } from "./ops/opsModel";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -88,7 +91,24 @@ const TYPE_ICON: Record<EntityType, any> = {
   call: Phone,
   replay: Film,
   source: Radio,
+  role: Hexagon,
+  person: UserRound,
 };
+
+/** An object's mark as its card and every list of it draw it: a task's
+ *  status disc, a session's author, a pull request's state, else the kind's
+ *  glyph in its accent. */
+export function EntityKindIcon({ type, entity, className = "h-3.5 w-3.5" }: { type: EntityType; entity: any; className?: string }) {
+  if (type === "session" && (entity?.author_name || entity?.author_avatar)) {
+    return <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={16} />;
+  }
+  if (type === "task") {
+    const v = taskVisual(entity?.status);
+    return <v.icon className={`${className} ${v.color}`} />;
+  }
+  const Icon = TYPE_ICON[type];
+  return <Icon className={`${className} ${type === "pr" ? prState(entity?.state).color : ACCENT[type].text}`} />;
+}
 
 /** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
 export function CallTurns({ call, limit }: { call: any; limit?: number }) {
@@ -827,8 +847,8 @@ function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: str
         meta: entity ? <ProposalMeta proposal={entity} changes={changes} /> : undefined,
         // No age: what waits is the meta line's, and a narrow pane needs the width for the title.
       }}
-      snippet={entity ? <ProposalBody proposal={entity} changes={changes} compact={count > 1} summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : undefined} /> : undefined}
-      detail={entity ? <ProposalBody proposal={entity} changes={changes} open summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : undefined} /> : null}
+      snippet={entity ? <ProposalBody proposal={entity} changes={changes} compact={count > 1} /> : undefined}
+      detail={entity ? <ProposalBody proposal={entity} changes={changes} /> : null}
     />
   );
 }
@@ -884,8 +904,6 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   }
 
   const isSession = type === "session";
-  const Icon = TYPE_ICON[type];
-  const taskV = type === "task" ? taskVisual(entity?.status) : null;
   const openLabel = `Open ${TYPE_LABEL[type].toLowerCase()}`;
   const title = entity
     ? (type === "trigger" ? entity.display_title : undefined) || (isRepoObject ? repoObjectTitle(type, entity) : undefined) || entity.title || entity.display_title || entity.name || label
@@ -905,14 +923,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
       // A session reads as its inbox card — flat, no header strip.
       flatBody={isSession ? (expanded) => <SessionCardBody session={entity} expanded={expanded} /> : undefined}
       header={{
-        icon:
-          isSession && (entity?.author_name || entity?.author_avatar) ? (
-            <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={16} />
-          ) : taskV ? (
-            <taskV.icon className={`h-3.5 w-3.5 ${taskV.color}`} />
-          ) : (
-            <Icon className={`h-3.5 w-3.5 ${type === "pr" ? prState(entity?.state).color : ACCENT[type].text}`} />
-          ),
+        icon: <EntityKindIcon type={type} entity={entity} />,
         title: title ?? <span className="font-mono text-sol-text-dim">{rawId}</span>,
         meta: entity ? <CardMetaLine type={type} entity={entity} /> : undefined,
         timeAgo: relativeTime(entity?.updated_at ?? entity?.timestamp ?? entity?.started_at),

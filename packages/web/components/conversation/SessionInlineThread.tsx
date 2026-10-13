@@ -131,7 +131,7 @@ function SessionRows({ rows, agentType, conversationId }: { rows: SessionRow[]; 
   );
 }
 
-export function SessionInlineThread({ session, seen, focusComposer = false, maxRows = 20, placeholder = "Reply to this session", foot = true, className = "" }: {
+export function SessionInlineThread({ session, seen, focusComposer = false, maxRows = 20, placeholder = "Reply to this session", foot = true, composer = true, before, className = "" }: {
   /** The session's store row (or the row a surface already holds). */
   session: InboxSession;
   /** The reader has this thread in view: its messages are marked seen. */
@@ -143,6 +143,10 @@ export function SessionInlineThread({ session, seen, focusComposer = false, maxR
   /** The state line and "Open beside" under the composer. A surface that
    *  draws its own head (the task page's session row) leaves it off. */
   foot?: boolean;
+  /** False where the surface sends its own way (a decision's discussion): the session's messages are read here, not answered. */
+  composer?: boolean;
+  /** Only what the session said before this moment: a surface that continues the talk itself shows the rest. */
+  before?: number;
   className?: string;
 }) {
   const sessionId = session._id;
@@ -153,9 +157,9 @@ export function SessionInlineThread({ session, seen, focusComposer = false, maxR
   const { conversation } = useConversationMessages(sessionId);
   const all: Message[] = conversation?.messages ?? [];
   const rows = useMemo(() => {
-    const r = toRows(all, session.agent_type);
+    const r = toRows(before ? all.filter((m) => (m.timestamp ?? 0) < before) : all, session.agent_type);
     return r.length > maxRows ? r.slice(-maxRows) : r;
-  }, [all, maxRows]);
+  }, [all, maxRows, before]);
   const newestId = all.length ? all[all.length - 1]._id : undefined;
 
   // The DM law: the row is open and the reader is here (`seen`). Re-marks as
@@ -187,7 +191,7 @@ export function SessionInlineThread({ session, seen, focusComposer = false, maxR
       ) : (
         <SessionRows rows={rows} agentType={session.agent_type} conversationId={sessionId} />
       )}
-      <div className="th-session-composer">
+      {composer && <div className="th-session-composer">
         <MessageInput
           key={sessionId}
           conversationId={sessionId}
@@ -207,7 +211,7 @@ export function SessionInlineThread({ session, seen, focusComposer = false, maxR
           composerPlaceholder={placeholder}
           autoFocusInput={focusComposer}
         />
-      </div>
+      </div>}
       {foot && <div className="th-session-foot">
         {state?.cardLine && <span className="th-session-state">{state.cardLine}</span>}
         <button

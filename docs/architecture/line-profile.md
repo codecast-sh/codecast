@@ -92,6 +92,12 @@ finder is silent. A finder types its own signals (LE3) and computes a
 fingerprint that is stable across rewording. The profile entry is a
 declaration; the finder itself lives where its data lives.
 
+`opens_causes = true` on a finder is the line's explicit conversion step: a
+signal of that source that no open cause holds opens a new cause (LE4).
+Without it the finder's signals are held as signals, attaching only to a cause
+that already holds their fingerprint. A person's signals open causes without
+a declaration.
+
 ## LP4. Project commands, one contract each
 
 - **check** exits 0 when the branch is sound. It is the verify station.

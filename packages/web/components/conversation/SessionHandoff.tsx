@@ -111,8 +111,9 @@ export function SessionHandoffNotice({ details, ...navigation }: HandoffNavigati
     <div data-session-handoff="outgoing" className="my-4 flex min-w-0 items-center gap-2 text-xs text-sol-text-dim">
       <ArrowRight className="h-3.5 w-3.5 shrink-0 text-sol-cyan" />
       <span className="shrink-0">Handed off to</span>
-      <HandoffSessionLink details={details} compact {...navigation} className="min-w-0 truncate font-medium text-sol-cyan hover:underline" />
-      <ArrowUpRight className="h-3 w-3 shrink-0 text-sol-cyan/60" />
+      <HandoffSessionLink details={details} compact {...navigation} className="group/handoff flex min-w-0 flex-row-reverse items-center justify-end gap-2 font-medium text-sol-cyan">
+        <ArrowUpRight className="h-3 w-3 shrink-0 text-sol-cyan/60 group-hover/handoff:text-sol-cyan" />
+      </HandoffSessionLink>
       <span className="h-px min-w-3 flex-1 bg-sol-border/50" />
     </div>
   );
