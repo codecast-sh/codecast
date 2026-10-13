@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
-import { DECLINE_HINT_MS, answeredLabel, answerSaid, hostedDeclinedSince, questionAsStatement } from "../decisionQueue";
+import { DECLINE_HINT_MS, answeredLabel, answeredLine, answerSaid, hostedDeclinedSince, questionAsStatement } from "../decisionQueue";
 
 const row = (over: Record<string, unknown> = {}) => ({
   _id: "d1",
@@ -16,7 +16,11 @@ const row = (over: Record<string, unknown> = {}) => ({
 describe("an answered approval said back", () => {
   test("leads with the answer and reads the question as a statement", () => {
     const d = row();
-    expect(`${answerSaid(answeredLabel(d)!)}: ${questionAsStatement(d.question)}`).toBe("You said no: set up the routine \u201cTake vitamins\u201d");
+    expect(answeredLine(answeredLabel(d)!, d.question)).toBe("You said no to the routine \u201cTake vitamins\u201d");
+    expect(answeredLine(APPROVAL_ANSWERS.approve, 'Save the note "Packing list"?')).toBe("You said yes to the note \u201cPacking list\u201d");
+    expect(answeredLine(APPROVAL_ANSWERS.approve, "Open a page on simplyprint.io?")).toBe("You said yes: open a page on simplyprint.io");
+    // Nothing named after the verb: the answer and the question, one colon.
+    expect(answeredLine(APPROVAL_ANSWERS.decline, "Delete 3 emails?")).toBe("You said no: delete 3 emails");
     expect(answerSaid(APPROVAL_ANSWERS.approve)).toBe("You said yes");
   });
 
