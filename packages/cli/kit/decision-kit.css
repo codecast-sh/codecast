@@ -1,0 +1,362 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+/* The decision page kit (docs/line/decision-kit/README.md).
+   One page per decision: a headline, the real thing that went wrong, the
+   exact change, what it does, and the question. Colours come from codecast's
+   --sol-* tokens, which the publish route injects and keeps on the reader's
+   palette; the fallbacks below are the same palette for a page opened alone. */
+
+:root {
+  --dk-bg: var(--sol-bg, #fbf5e2);
+  --dk-surface: var(--sol-card, #ffffff);
+  --dk-sunk: var(--sol-bg-alt, #eee8d5);
+  --dk-ink: var(--sol-text, #002b36);
+  --dk-ink-2: var(--sol-text-muted, #586e75);
+  --dk-ink-3: var(--sol-text-dim, #657b83);
+  --dk-line: color-mix(in srgb, var(--sol-border, #93a1a1) 42%, transparent);
+  --dk-line-strong: color-mix(in srgb, var(--sol-border, #93a1a1) 80%, transparent);
+  --dk-red: var(--sol-red, #dc322f);
+  --dk-green: var(--sol-green, #859900);
+  --dk-blue: var(--sol-blue, #268bd2);
+  --dk-yellow: var(--sol-yellow, #b58900);
+
+  --dk-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --dk-text: "Instrument Sans", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --dk-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --dk-measure: 41rem;
+  --dk-wide: 66rem;
+  --dk-gap: clamp(2.75rem, 2rem + 3vw, 4.5rem);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dk-bg: var(--sol-bg, #002b36);
+    --dk-surface: var(--sol-card, #08404e);
+    --dk-sunk: var(--sol-bg-alt, #073642);
+    --dk-ink: var(--sol-text, #fdf6e3);
+    --dk-ink-2: var(--sol-text-muted, #93a1a1);
+    --dk-ink-3: var(--sol-text-dim, #839496);
+    --dk-line: color-mix(in srgb, var(--sol-border, #586e75) 55%, transparent);
+    --dk-line-strong: var(--sol-border, #586e75);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--dk-bg);
+  color: var(--dk-ink);
+  font: 400 1.0625rem/1.6 var(--dk-text);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+
+/* ── The page: one reading column; artifacts may run wider ── */
+main {
+  max-width: var(--dk-wide);
+  margin: 0 auto;
+  padding: clamp(1.75rem, 1rem + 3vw, 3.5rem) clamp(1.1rem, 0.4rem + 3vw, 2.5rem) 5rem;
+}
+main > *, section > * { max-width: var(--dk-measure); }
+main > section { max-width: none; margin-top: var(--dk-gap); }
+main > section + section { padding-top: var(--dk-gap); border-top: 1px solid var(--dk-line); }
+section > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers),
+main > :is(dk-pair, dk-diff, dk-examples, dk-facts, dk-answers) { max-width: none; }
+section > dk-thread, main > dk-thread { max-width: 50rem; }
+
+h1, h2 {
+  font-family: var(--dk-display);
+  font-weight: 560;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+  margin: 0;
+}
+/* The h1 is the decision's question, a sentence: set it to be read, not displayed. */
+h1 { font-size: clamp(1.5rem, 1.3rem + 0.9vw, 2rem); line-height: 1.2; max-width: 34ch; }
+h2 { font-size: clamp(1.3rem, 1.15rem + 0.6vw, 1.6rem); line-height: 1.2; max-width: 34ch; }
+h3 { font: 620 1.02rem/1.35 var(--dk-text); margin: 0; }
+p { margin: 0.85em 0 0; text-wrap: pretty; }
+h2 + p { margin-top: 0.7em; }
+/* The sentence under the headline: what is being decided, said once. */
+h1 + p { font-size: 1.22rem; line-height: 1.5; color: var(--dk-ink-2); margin-top: 1.1rem; max-width: 36rem; }
+h1 + p strong, h1 + p b { color: var(--dk-ink); font-weight: 560; }
+a { color: var(--dk-blue); text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+a:hover { text-decoration-thickness: 2px; }
+strong, b { font-weight: 640; }
+code { font: 0.86em var(--dk-mono); background: var(--dk-sunk); padding: 0.1em 0.34em; border-radius: 4px; }
+small { font-size: 0.86rem; color: var(--dk-ink-2); }
+/* Text as it stands in a file: a prompt, a rule, a template, code. */
+pre { margin: 1.75rem 0 0; padding: 0.9rem 1.1rem; background: var(--dk-sunk); border-radius: 8px; font: 0.82rem/1.6 var(--dk-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dk-ink); }
+pre mark { background: color-mix(in srgb, var(--dk-red) 18%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
+p > small:only-child { display: block; line-height: 1.5; }
+:focus-visible { outline: 2px solid var(--dk-blue); outline-offset: 2px; border-radius: 4px; }
+section > :is(dk-thread, dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-gap, dl, blockquote, pre) { margin-top: 1.75rem; }
+section > details { max-width: none; }
+section > dk-view { margin-top: 1rem; }
+
+/* Material kept below for whoever wants it: the source behind a readable diff, the full method. */
+details { margin-top: 1.25rem; }
+details > summary { cursor: pointer; font-size: 0.93rem; color: var(--dk-ink-2); width: fit-content; }
+details > summary:hover { color: var(--dk-ink); }
+details[open] > summary { margin-bottom: 0.25rem; }
+details > :is(dk-diff, pre) { margin-top: 0.75rem; }
+
+/* Words someone actually said, set apart from ours. */
+blockquote {
+  margin: 1.75rem 0 0;
+  padding: 0;
+  font: 400 1.18rem/1.45 var(--dk-display);
+  letter-spacing: -0.005em;
+  text-wrap: pretty;
+}
+blockquote::before { content: "\201C"; display: block; height: 0.5em; font-size: 2.6em; line-height: 0.9; color: var(--dk-ink-3); }
+blockquote cite, blockquote footer { display: block; margin-top: 0.7rem; font: 400 0.9rem/1.4 var(--dk-text); color: var(--dk-ink-2); }
+
+/* A few numbers with what they count. */
+dk-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1.5rem 2rem;
+  margin-top: 2.25rem;
+  padding: 1.35rem 0 0;
+  border-top: 1px solid var(--dk-line-strong);
+}
+dk-fact { display: block; font-size: 0.93rem; line-height: 1.38; color: var(--dk-ink-2); max-width: 15rem; }
+dk-fact > :is(b, strong):first-child {
+  display: block;
+  margin-bottom: 0.3rem;
+  font: 560 2.05rem/1 var(--dk-display);
+  letter-spacing: -0.02em;
+  font-variant-numeric: lining-nums tabular-nums;
+  color: var(--dk-ink);
+}
+dk-fact[tone="bad"] > :is(b, strong):first-child { color: var(--dk-red); }
+dk-fact[tone="good"] > :is(b, strong):first-child { color: var(--dk-green); }
+
+/* One line each: a term and what the record says about it. */
+dl { display: grid; grid-template-columns: minmax(5.5rem, max-content) 1fr; gap: 0; margin-bottom: 0; }
+dt, dd { margin: 0; padding: 0.8rem 0; border-top: 1px solid var(--dk-line); }
+dt { font-weight: 640; padding-right: 1.75rem; }
+dd { color: var(--dk-ink); }
+dd small { display: block; margin-top: 0.15rem; font-size: inherit; color: inherit; }
+
+/* ── A real conversation ── */
+dk-thread { display: flex; flex-direction: column; gap: 1.15rem; }
+dk-thread[who]::before {
+  content: attr(who);
+  font: 620 1.02rem/1.3 var(--dk-text);
+}
+dk-thread > .dk-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.7rem; }
+dk-thread > .dk-who b { font-weight: 640; }
+dk-thread > .dk-who span { color: var(--dk-ink-2); font-size: 0.93rem; }
+dk-thread[data-dk]::before { content: none; }
+
+dk-msg { display: block; max-width: min(100%, 37rem); align-self: flex-start; }
+dk-msg[us] { align-self: flex-end; }
+dk-msg:not([data-dk])::before {
+  content: attr(from) "   " attr(channel) "   " attr(time);
+  display: block;
+  font-size: 0.86rem;
+  color: var(--dk-ink-2);
+  margin-bottom: 0.3rem;
+}
+dk-msg:not([data-dk]) { white-space: pre-line; }
+.dk-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.7rem; margin: 0 0.15rem 0.32rem; font-size: 0.86rem; line-height: 1.4; color: var(--dk-ink-2); }
+dk-msg[us] > .dk-meta { justify-content: flex-end; }
+.dk-meta b { font-weight: 620; color: var(--dk-ink); }
+.dk-bubble {
+  background: color-mix(in srgb, var(--dk-surface) 60%, var(--dk-bg));
+  border: 1px solid var(--dk-line-strong);
+  border-radius: 4px 16px 16px 16px;
+  padding: 0.85rem 1.05rem 0.95rem;
+  font-size: 1rem;
+  line-height: 1.52;
+}
+dk-msg[us] > .dk-bubble { border-radius: 16px 4px 16px 16px; background: color-mix(in srgb, var(--dk-blue) 12%, var(--dk-surface)); border-color: color-mix(in srgb, var(--dk-blue) 30%, var(--dk-line)); }
+.dk-subject { font-weight: 640; margin-bottom: 0.4rem; text-wrap: balance; }
+.dk-body { white-space: pre-line; }
+.dk-body[data-clamped] { max-height: 13.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 62%, transparent); mask-image: linear-gradient(#000 62%, transparent); }
+mark { background: color-mix(in srgb, var(--dk-red) 18%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-red) 78%, transparent); color: inherit; padding: 0.08em 0.1em; margin: 0 -0.1em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+
+/* The message the page is about. */
+dk-msg[miss] > .dk-bubble { border: 1.5px solid var(--dk-red); box-shadow: 0 0 0 5px color-mix(in srgb, var(--dk-red) 9%, transparent); }
+.dk-note { display: flex; gap: 0.6rem; margin: 0.7rem 0.15rem 0; font-size: 0.93rem; line-height: 1.42; color: var(--dk-ink); }
+.dk-note::before { content: ""; flex: none; width: 0.55rem; height: 0.55rem; margin-top: 0.42em; border-radius: 50%; background: var(--dk-red); }
+dk-msg[us] > .dk-note { justify-content: flex-end; text-align: left; }
+
+/* Something that happened between messages: a call, a gap, a decision.
+   A short one is a marker between rules; a long one is a fact, read at full size. */
+dk-event { display: flex; align-items: center; gap: 0.9rem; font-size: 0.86rem; color: var(--dk-ink-2); text-align: center; }
+dk-event::before, dk-event::after { content: ""; flex: 1; height: 1px; background: var(--dk-line); }
+dk-event > .dk-event-body { flex: 0 1 auto; min-width: 0; }
+dk-event time, dk-event .dk-time { color: var(--dk-ink-3); margin-left: 0.5rem; white-space: nowrap; }
+dk-event[long] { display: block; text-align: left; font-size: 0.97rem; line-height: 1.5; color: var(--dk-ink); padding: 0.1rem 0 0.1rem 0.9rem; border-left: 2px solid var(--dk-line-strong); }
+dk-event[long]::before, dk-event[long]::after { content: none; }
+dk-event[long] time, dk-event[long] .dk-time { margin-left: 0; }
+
+/* Framed in a decision, the card above already asks the question the page's
+   headline carries, so the page opens on the thing itself. */
+html.dk-framed main > :is(h1, header) { display: none; }
+html.dk-framed main > :is(h1, header) + * { margin-top: 0; }
+/* A page read on its own opens on its header: the question and the bottom line. */
+main > header { max-width: var(--dk-measure); }
+header > h1 + p { margin-top: 1.1rem; }
+
+/* Folds: the rest is one click away, never cut. */
+.dk-more {
+  appearance: none;
+  align-self: center;
+  background: none;
+  border: 1px solid var(--dk-line-strong);
+  border-radius: 999px;
+  padding: 0.3rem 0.95rem;
+  font: 500 0.86rem/1.4 var(--dk-text);
+  color: var(--dk-ink-2);
+  cursor: pointer;
+}
+.dk-more:hover { color: var(--dk-ink); border-color: var(--dk-ink-3); }
+.dk-bubble > .dk-more { display: block; margin: 0.6rem 0 0; }
+[hidden] { display: none !important; }
+
+/* ── Before and after ── */
+dk-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16.5rem), 1fr)); gap: 1.5rem 2rem; align-items: start; }
+dk-side { display: block; min-width: 0; }
+dk-side[label]::before { content: attr(label); display: block; margin-bottom: 0.75rem; font: 620 0.93rem/1.3 var(--dk-text); color: var(--dk-ink-2); }
+dk-side > dk-msg, dk-example dk-msg { max-width: none; align-self: stretch; }
+dk-side > * + * { margin-top: 0.9rem; }
+dk-side > p { font-size: 0.97rem; line-height: 1.5; }
+dk-side > p:first-child { margin-top: 0; }
+/* In a side, an outcome that is not a message (nothing sent, a booking) is a
+   slot of its own, framed like the messages around it, not a divider. */
+dk-side > dk-event, dk-side > dk-event[long] { display: block; text-align: left; padding: 0.75rem 1.05rem; border: 1px dashed var(--dk-line-strong); border-radius: 4px 16px 16px 16px; color: var(--dk-ink-2); font-size: 0.95rem; }
+dk-side > dk-event::before, dk-side > dk-event::after { content: none; }
+/* A brief message: its marked paragraphs, the rest one click away. */
+.dk-body > .dk-para + .dk-para, .dk-body > .dk-para-skip + .dk-para, .dk-body > .dk-para + .dk-para-skip { margin-top: 0.75em; }
+.dk-body > .dk-para-skip { display: inline-block; }
+
+/* Nothing on record for this slot: say so in the slot. */
+dk-gap {
+  display: block;
+  border: 1.5px dashed var(--dk-line-strong);
+  border-radius: 14px;
+  padding: 0.95rem 1.1rem 1.05rem;
+  font-size: 0.97rem;
+  line-height: 1.5;
+  color: var(--dk-ink-2);
+}
+dk-gap > :is(b, strong):first-child { display: block; margin-bottom: 0.25rem; color: var(--dk-ink); }
+dk-gap p { margin-top: 0.5em; }
+
+/* ── Cases: side by side when there is room, a row each when there is not ── */
+dk-examples { display: block; container-type: inline-size; }
+.dk-cases { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2.25rem 2rem; align-items: start; }
+dk-example { display: block; min-width: 0; padding-top: 1rem; border-top: 2px solid var(--dk-ink); }
+dk-example h3 + p { margin-top: 0.15rem; color: var(--dk-ink-2); font-size: 0.93rem; line-height: 1.42; }
+dk-example p { font-size: 0.97rem; line-height: 1.5; }
+dk-example :is(dk-msg, dk-pair, dk-gap) { margin-top: 1rem; }
+.dk-shows > :first-child { margin-top: 0; }
+.dk-says + .dk-shows { margin-top: 1rem; }
+@container (min-width: 38rem) {
+  dk-example[data-dk] { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr); gap: 0 2rem; align-items: start; }
+  dk-example[data-dk] > .dk-shows { margin-top: 0.2rem; }
+}
+@container (min-width: 58rem) {
+  .dk-cases:has(> dk-example:nth-child(2)) { grid-template-columns: repeat(auto-fit, minmax(17.5rem, 1fr)); }
+  .dk-cases:has(> dk-example:nth-child(4):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dk-cases:has(> dk-example:nth-child(2)) > dk-example[data-dk] { display: block; }
+  .dk-cases:has(> dk-example:nth-child(2)) > dk-example[data-dk] > .dk-shows { margin-top: 1rem; }
+}
+
+/* ── The change itself ── */
+dk-diff { display: block; }
+dk-diff:not([data-dk]) { white-space: pre-wrap; font: 0.8rem/1.55 var(--dk-mono); color: var(--dk-ink-2); }
+.dk-file { border: 1px solid var(--dk-line-strong); border-radius: 12px; background: var(--dk-surface); overflow: hidden; }
+.dk-file + .dk-file { margin-top: 1.25rem; }
+.dk-file-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 1rem; padding: 0.7rem 1.1rem; border-bottom: 1px solid var(--dk-line); font: 0.8rem/1.5 var(--dk-mono); color: var(--dk-ink-2); background: color-mix(in srgb, var(--dk-sunk) 45%, transparent); }
+.dk-file-head b { font-weight: 600; color: var(--dk-ink); }
+.dk-file-head.dk-caption { font: 0.9rem/1.45 var(--dk-text); }
+.dk-file-head.dk-caption b { font-weight: 560; color: var(--dk-ink-2); }
+.dk-file-head > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+/* Prose: a prompt or copy change, read as running text with the words that changed. */
+.dk-change { padding: 1.05rem 1.1rem 1.15rem; border-top: 1px solid var(--dk-line); }
+.dk-change:first-of-type { border-top: 0; }
+.dk-prose { margin: 0; max-width: 46rem; font-size: 0.98rem; line-height: 1.62; color: var(--dk-ink-2); white-space: pre-wrap; }
+.dk-prose + .dk-prose { margin-top: 0.75rem; }
+.dk-prose del, .dk-row del { text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, var(--dk-red) 70%, transparent); background: color-mix(in srgb, var(--dk-red) 20%, transparent); color: var(--dk-ink); border-radius: 2px; padding: 0.06em 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.dk-prose ins, .dk-row ins { text-decoration: none; background: color-mix(in srgb, var(--dk-green) 24%, transparent); color: var(--dk-ink); border-radius: 2px; padding: 0.06em 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.dk-prose del + ins { margin-left: 0.3em; }
+/* Template logic inside a prompt steps back so the words read. */
+.dk-tpl { font: 0.78em var(--dk-mono); color: var(--dk-ink-3); background: none; }
+.dk-prose del .dk-tpl, .dk-prose ins .dk-tpl { color: var(--dk-ink-2); }
+.dk-prose.dk-anchor { margin-bottom: 0.4rem; color: var(--dk-ink-3); }
+.dk-prose.dk-anchor + .dk-prose { margin-top: 0; }
+.dk-skip { appearance: none; border: 0; border-radius: 4px; background: var(--dk-sunk); padding: 0 0.45rem; margin: 0 0.15rem; font: 0.76rem/1.6 var(--dk-mono); color: var(--dk-ink-2); cursor: pointer; white-space: nowrap; }
+.dk-skip:hover { color: var(--dk-ink); }
+
+/* Code: lines, with the words that changed inside a changed line. */
+.dk-code { font: 0.8rem/1.6 var(--dk-mono); overflow-x: auto; padding: 0.4rem 0; }
+.dk-row { display: grid; grid-template-columns: 3.1rem 1.1rem minmax(0, 1fr); min-width: max-content; }
+.dk-row > * { padding: 0 0.1rem; white-space: pre; }
+.dk-ln { text-align: right; padding-right: 0.7rem; color: var(--dk-ink-3); user-select: none; font-variant-numeric: tabular-nums; }
+.dk-sign { color: var(--dk-ink-3); user-select: none; text-align: center; }
+.dk-row.dk-minus { background: color-mix(in srgb, var(--dk-red) 9%, transparent); }
+.dk-row.dk-plus { background: color-mix(in srgb, var(--dk-green) 13%, transparent); }
+.dk-row.dk-minus .dk-sign { color: var(--dk-red); }
+.dk-row.dk-plus .dk-sign { color: var(--dk-green); }
+.dk-row ins, .dk-row del { padding: 0; }
+.dk-row del { text-decoration: none; background: color-mix(in srgb, var(--dk-red) 26%, transparent); }
+.dk-hunk { display: block; padding: 0.25rem 1.1rem; color: var(--dk-ink-3); background: color-mix(in srgb, var(--dk-sunk) 40%, transparent); }
+.dk-code .dk-skip { display: block; width: 100%; margin: 0.15rem 0; padding: 0.15rem 1.1rem; text-align: left; border-radius: 0; }
+
+/* ── The thing itself, in the product: one link that opens it whole ── */
+dk-view { display: block; font-size: 0.93rem; line-height: 1.4; }
+dk-view:not([data-dk])::after { content: " (" attr(ref) ")"; color: var(--dk-ink-3); }
+dk-view a { display: inline-flex; align-items: baseline; gap: 0.4em; font-weight: 560; }
+dk-view a::after { content: ""; flex: none; align-self: center; width: 0.72em; height: 0.72em; background: currentColor; -webkit-mask: var(--dk-out) center / contain no-repeat; mask: var(--dk-out) center / contain no-repeat; }
+:root { --dk-out: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 9l6-6M4.2 3H9v4.8'/%3E%3C/svg%3E"); }
+dk-example > dk-view, dk-msg + dk-view, dk-thread + dk-view { margin-top: 0.75rem; }
+
+/* ── The question, and the answers a colleague would offer ── */
+dk-answers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr)); gap: 0 2rem; counter-reset: dk-answer; }
+dk-answers:has(> dk-answer:nth-child(4):last-child) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+dk-answer { display: block; counter-increment: dk-answer; padding: 1.05rem 0 1.2rem 2.05rem; border-top: 1px solid var(--dk-line-strong); font-size: 0.97rem; line-height: 1.5; color: var(--dk-ink-2); }
+dk-answer > h3 { position: relative; margin-left: -2.05rem; padding-left: 2.05rem; color: var(--dk-ink); margin-bottom: 0.3rem; }
+dk-answer > h3::before { content: counter(dk-answer); position: absolute; left: 0; top: -0.02rem; display: grid; place-items: center; width: 1.45rem; height: 1.45rem; border: 1px solid var(--dk-line-strong); border-radius: 6px; font: 500 0.78rem/1 var(--dk-mono); color: var(--dk-ink-2); }
+dk-answer > p:first-of-type { margin-top: 0; }
+dk-answer[lean] > h3::after { content: "my lean"; margin-left: 0.6rem; font: 500 0.8rem/1 var(--dk-text); color: var(--dk-green); white-space: nowrap; }
+
+/* A caveat the reader must not miss. */
+dk-caveat { display: block; margin-top: 1.5rem; padding: 0.95rem 1.1rem 1.05rem; border-radius: 12px; background: color-mix(in srgb, var(--dk-yellow) 13%, transparent); font-size: 0.99rem; line-height: 1.5; }
+dk-caveat > :is(b, strong):first-child { font-weight: 640; }
+dk-caveat p:first-child { margin-top: 0; }
+
+@media (max-width: 44rem) {
+  body { font-size: 1rem; }
+  dk-msg { max-width: 94%; }
+  dl { grid-template-columns: 1fr; }
+  dt { padding-bottom: 0; }
+  dd { border-top: 0; padding-top: 0.15rem; }
+  h1 + p { font-size: 1.1rem; }
+  blockquote { font-size: 1.1rem; }
+  .dk-change { padding-inline: 0.85rem; }
+  .dk-file-head { padding-inline: 0.85rem; }
+}
+@media print {
+  .dk-more, .dk-skip { display: none; }
+  [hidden] { display: revert !important; }
+  .dk-body[data-clamped] { max-height: none; mask-image: none; -webkit-mask-image: none; }
+}
+
+/* A plain table: a few rows of counts read across. */
+table { border-collapse: collapse; font-size: 0.93rem; line-height: 1.4; margin: 1rem 0; max-width: 100%; }
+th, td { padding: 0.45rem 1rem 0.45rem 0; text-align: left; vertical-align: baseline; border-bottom: 1px solid var(--dk-line); }
+th { font-weight: 600; font-size: 0.82rem; color: var(--dk-ink-2); border-bottom-color: var(--dk-ink-3); }
+th:last-child, td:last-child { padding-right: 0; }
+td { font-variant-numeric: tabular-nums; }
+:is(th, td):not(:first-child) { text-align: right; }
+td:first-child { overflow-wrap: anywhere; }

@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
   "id": "line",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "name": "Line lead",
   "description": "Owns one project's line: grounds the causes its finders raise in the project's goals, lets work start only as fast as a person answers cards, keeps every declared finder honest and filing, keeps the project's expectations current with what the team says, and runs the project's weekly lessons. It answers no protected decision.",
   "role": {
     "name": "Line lead",
     "handle": "{{instance}}-line",
     "charter": "org/charter.md",
-    "caps": { "hands_per_day": 6, "wakes_per_day": 24, "tokens_per_day": 400000, "cards": 5 },
+    "caps": { "cards": 5 },
     "avatar": "crane",
     "tenure": { "kind": "standing" },
     "line": "line"
