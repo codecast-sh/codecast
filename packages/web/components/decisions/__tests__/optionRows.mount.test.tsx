@@ -7,7 +7,9 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 
 // An option's meaning renders under its label, inside the row that answers
 // it: the reader never matches a pill to a description printed elsewhere.
-mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
+// Wraps the real renderer rather than replacing it: bun shares this mock with every later file in a run, and those read real markdown.
+const RealMarkdown = (await import("../../tools/MarkdownRenderer")).MarkdownRenderer;
+mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: (props: any) => <div data-md><RealMarkdown {...props} /></div> }));
 
 import { DecisionAnswerControls } from "../DecisionAnswerControls";
 import { DecisionOptionList } from "../DecisionOptionList";

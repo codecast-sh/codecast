@@ -1,84 +1,76 @@
-A trigger is follow-up work that runs autonomously after the current session ends: check CI in thirty minutes, review PRs every four hours, respond when a review comment lands. The triggers snippet teaches agents to queue this work themselves: an agent finishes a PR and sets its own "check CI in 30m" trigger, so sessions stop needing a human to remember the follow-through.
+A trigger is work an agent does later, on its own: check CI half an hour after a push, summarize the open pull requests every morning, answer review comments when they land. Agents set triggers themselves when they have a reason to, so the follow-through that used to depend on you remembering it just happens. You can also set one yourself from the Triggers page.
 
-Installed via [the snippet system](/documentation/agent-snippets):
+![A recurring trigger's page with its next run, history and briefing](/documentation/triggers/trigger.webp "A trigger that runs every day. The page shows when it fires next, every run so far, the briefing each run starts from, and the conversation that set it.")
 
-```bash
-cast trigger install
-```
+## Turn it on
 
-## Three ways to fire
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Triggers**. Runs happen on that computer, so it needs to be on and connected when a trigger fires.
 
-```bash
-cast trigger add "Check if CI is green on main" --in 30m        # once, after a delay
-cast trigger add "Review open PRs and summarize" --every 4h     # recurring
-cast trigger add "Respond to new review comments" --on pr_comment  # GitHub event
-```
+![The Triggers detail in Agent features](/documentation/triggers/feature.webp "Click How it works on the card to see what it adds and a request to try.")
 
-Event triggers need the GitHub or Linear integration. Pull request events cover the whole life of a review: `pr_opened`, `pr_review`, `pr_changes_requested`, `pr_check_failed`, `pr_checks_green`, `pr_behind`, `pr_conflict`, `pr_comment`, `pr_merged` and more, plus `push`. The `issue_*` events (`issue_opened`, `issue_assigned`, `issue_labeled`, `issue_closed`, `issue_commented`) fire for Linear and GitHub issues alike. `--repo` and `--pr` narrow an event trigger to one repository or one pull request. `cast trigger add --help` prints the full list.
+## Three kinds of trigger
 
 ```figure
 FiringModesFigure
-Twelve hours of three triggers: one delayed firing, one schedule, and one that fires on every review comment.
+Twelve hours of three triggers: one that fires once after a delay, one on a schedule, and one that fires on every review comment.
 ```
 
-## A gate before each run
+- **Once, later.** "In 30 minutes", "tomorrow at 9". Good for following through on something just shipped.
+- **On a schedule.** "Every 4 hours", "every day". Good for standing duties: a digest, a sweep, a monitor.
+- **On an event.** A pull request opened, reviewed, approved, merged or failing its checks, a review comment, a push, an issue opened or assigned, and errors or failed jobs from the product's own monitoring. Events need GitHub or Linear connected under **Settings**, **Integrations**.
 
-```bash
-cast trigger add "Review what landed on main" --every 1h --spawn \
-  --precheck 'test "$(git rev-parse origin/main)" != "$(cat .last-reviewed)"'
-```
+## Ask for it in plain words
 
-Most repeating triggers ask a question whose usual answer is no: has main moved, is the queue non-empty. Without a gate, a whole agent run is spent to find that out. `--precheck <command>` runs a shell command in the project directory before each scheduled or repeating firing. Exit 0 runs the trigger. Any other exit, or 60 seconds without an answer, records a skipped run and spends no session. The skip appears in the run history, so a quiet trigger reads as quiet and not as broken. Event triggers and `cast trigger run` ignore the gate, because the event or the person is already the reason to run.
+- "After you push, check CI in 30 minutes and fix anything red."
+- "Every morning at 9, summarize what merged yesterday and what's still open."
+- "When someone comments on this pull request, answer the comment and fix what it asks."
+- "Check back on the migration tomorrow and tell me if the backfill finished."
+- "Pause the nightly sweep."
 
-```figure
-PrecheckGateFigure
-The gate costs a shell command; only a firing that passes it costs a session.
-```
+Agents set a trigger only when there is a concrete follow-up or an event worth reacting to, not as a reflex.
 
-## Where a run happens
+## Set one yourself
 
-The choice turns on what the run needs and where its result belongs.
+On the **Triggers** page, click **New trigger**. Write what the agent should do under **Prompt**, then choose **When**: now, in a while, every so often, or on an event. Pick the agent and, if you like, the project folder it should work in. Tick **read-only: report, don't change anything** when the run should only look and tell you. Click **Set trigger**.
 
-A follow-up that continues the session's own work, needs what that conversation knows, and fires once or a few times runs inline. That is the default for a trigger created inside a session: each run arrives there as a new turn with the full history behind it, and the result lands in the thread.
+## What you see
 
-A standing duty that repeats on a schedule runs in a fresh session: pass `--spawn`. An inline run reloads its session's whole history every time it fires, because the prompt cache has expired by then, and each firing grows the thread. A repeating job run inline therefore costs more each time and buries the conversation it lives in. A fresh run arrives with none of that context, so the snippet insists the prompt carry everything: goal, numbered steps, constraints, written as structured markdown. Each run is also handed the previous run's summary, which is the continuity most repeating jobs need. Humans read these prompts in the dashboard, rendered as markdown, so a good brief serves both audiences. Pass `-` as the prompt to feed a heredoc.
+### Where a run's result lands
 
-Fresh runs stay out of the inbox. A run that completes cleanly is read under its trigger, where the run history lists every firing. A `--spawn` trigger that fires once is the arming session's worker: the run nests under that session the way a subagent does, a clean result posts back into it as a message that does not wake it, and the session is woken to act when the run fails, ends without reporting, or completes with `--needs-attention`. `--wake` wakes it on a clean result too. A run that hits a usage limit parks and resumes its own session when the window resets, without spending a retry. `--thread` posts every run of a repeating trigger into the conversation, without a wake.
+A follow-up on a conversation's own work runs **in that conversation**: it arrives as the next turn, with the whole thread behind it, and the answer appears where the question was asked.
 
-```figure
-InlineVsSpawnFigure
-Inline runs grow the thread they live in; spawned runs start clean and wake the arming session only when something needs it.
-```
+A standing duty runs **in a fresh session each time**, nested under the conversation that set it, so a daily job doesn't keep growing one thread. Each fresh run gets its briefing plus the previous run's summary. A clean run doesn't knock on your inbox; you read it under its trigger. You hear about it when a run fails, stops without reporting, or finishes with something you need to read or decide.
 
-`--for <session>` binds a specific session from any shell, and `--safe` makes a spawned run read-only: write tools removed, state-changing commands blocked. The default is permissive; a run injecting into an existing session inherits that session's rules either way.
+![A trigger run's conversation, ending in its summary](/documentation/triggers/run.webp "One run of the daily trigger, opened from its run history. The bar at the top names the trigger and links back to the conversation that set it; the summary at the bottom is what shows in the run history.")
 
-## The trigger lifecycle
+### The Triggers page
 
-```bash
-cast trigger ls              # active triggers, each with a short ID (tr-42)
-cast trigger ls --all        # include completed and failed
-cast trigger run tr-42       # fire immediately
-cast trigger pause tr-42     # and: cast trigger resume tr-42
-cast trigger update tr-42 --every 8h   # edit in place: --prompt, --title, --in, --every, --on
-cast trigger history tr-42   # every version, who changed what, and from where
-cast trigger cancel tr-42
-cast trigger log tr-42       # last run's conversation
-```
+**Triggers** in the sidebar (or the command palette) lists every trigger with its schedule, when it fires next and how its last run went. A strip across the top plots the last and next 24 hours of firings. Filter by recurring, one-time or event, and group by session or project. A trigger that has a cheap way to tell nothing changed can skip a run; that shows as **skipped** in its history and costs nothing.
 
-An edit does not replace the trigger. `cast trigger update` writes a new version and keeps the old one, so the run history stays attached and `cast trigger history` can show what the prompt said when a given run fired. Every trigger also has a detail page on the web, visible to everyone who can see the session it belongs to; the verbs follow the same access, and only the owner may delete.
+### One trigger's page
 
-Triggers are first-class in the inbox: they appear alongside sessions, each run links to the conversation it produced, and run history is browseable on every surface. Killing a session cancels its triggers; restoring the session re-arms them, so cleanup and resurrection stay symmetric.
+Click a trigger to open its page. **Run now**, **Pause**, **Cancel** and **Edit** sit at the top. Below them: when it fires next, its cadence, how many runs so far, how the last one went, and which computer and folder it runs in. **Run history** lists each run; click one to open its conversation. **Briefing** is exactly what each run is told. Editing a trigger keeps its history, so you can still see what an older run was asked.
 
-![Triggers listed with their schedule and last run, beside a workflow paused at a gate](/documentation/shots/automations.webp "Two triggers with their schedule, last result and run count, next to a workflow run paused at its review gate.")
+Anyone who can see the conversation that owns a trigger can see the trigger's page.
 
-When a run finishes, it reports back:
+### In the inbox and on your phone
 
-```bash
-cast trigger complete tr-42 --summary "CI green; merged the backport"
-```
+The sidebar shows a small triggers strip with the next firing and anything that needs attention. A conversation tied to a trigger shows it in a bar at its top, with the time to the next firing. Runs that need you reach your phone like any other conversation that needs input.
 
-The summary lands in the trigger's history, so the human scanning the dashboard sees outcomes, not just schedules. The completion is also the run's declaration of who acts next. A clean one says nobody, and the run rests under its trigger. `--needs-attention` says the human must read or act: the run declares itself blocked and stays in the inbox until they have.
+## What it will and won't do
 
-## Judgment
+- **Triggers follow their conversation.** Killing a conversation cancels its triggers; restoring it arms them again.
+- **A usage limit pauses a run, it doesn't fail it.** The run picks up where it stopped when the limit resets.
+- **Read-only runs stay read-only.** A trigger set to report only can look, but can't edit files or change anything.
+- **Only the owner deletes.** Teammates who can see a trigger can't remove it.
 
-The snippet's core instruction is restraint: set a trigger when there is a reason for one (a concrete follow-up, an event worth reacting to), not as a reflex. Recurring triggers with `--spawn --safe` make good standing watchers (funnels, error rates, open PRs); one-shot `--in` triggers make good follow-through on freshly shipped work.
+## When something is off
+
+| What you notice | What to do |
+|-----------------|------------|
+| A trigger didn't fire on time | Check that the computer it runs on is awake and connected, then click **Run now** |
+| An event trigger never fires | Connect GitHub or Linear under **Settings**, **Integrations**, and check the trigger names the right repository |
+| A recurring trigger keeps showing **skipped** | Nothing changed since its last run, so it saved the run. Click **Run now** to force one |
+| Runs are filling a conversation | Ask the agent to move the duty to a fresh session per run |
+
+For a fixed sequence of steps with approval gates, see [Workflows](/documentation/workflows). To run a whole plan across many agents, see [Orchestration](/documentation/orchestration).
