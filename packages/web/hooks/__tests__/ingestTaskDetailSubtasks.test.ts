@@ -31,4 +31,20 @@ describe("ingestTaskDetail with subtasks", () => {
     expect(a.status).toBe("in_progress");
     expect(a.assignee_info).toEqual({ name: "Ada" });
   });
+
+  it("files the tasks its graph names, so a finished blocker the list never held reads as done", () => {
+    ingestTaskDetail({ ...task("p", { blocked_by: ["ct-b"] }), graph_tasks: [task("b", { status: "done" })] });
+    const tasks = useInboxStore.getState().tasks as any;
+    expect(tasks[id("p")].graph_tasks).toBeUndefined();
+    expect(tasks[id("b")].status).toBe("done");
+  });
+
+  it("keeps the refs the detail found missing on the row, through a list delta that lacks them", () => {
+    ingestTaskDetail({ ...task("p", { blocked_by: ["ct-gone"] }), graph_missing: ["ct-gone"] });
+    expect((useInboxStore.getState().tasks as any)[id("p")].graph_missing).toEqual(["ct-gone"]);
+    useInboxStore.getState().syncTable("tasks", [task("p", { blocked_by: ["ct-gone"], title: "renamed" })] as any);
+    const p = (useInboxStore.getState().tasks as any)[id("p")];
+    expect(p.title).toBe("renamed");
+    expect(p.graph_missing).toEqual(["ct-gone"]);
+  });
 });

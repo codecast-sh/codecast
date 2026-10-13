@@ -95,6 +95,36 @@ server's `skipped` and falling back to the counts when they disagree; nothing
 when the line woke nobody. A session-typed line keeps its origin pill as
 before.
 
+## C5. Roles and sessions inside a room
+
+Any room but a DM or a community room can hold roles and sessions as members
+(`chat_channel_agents`: one row per member, `role_id` or `conversation_id`,
+with the short id copied at add time). Following (C1) is a role reading a
+channel on its own clock; membership is delivery.
+
+- Delivery. Every line a PERSON posts in the room reaches every member as one
+  pending line in the mention envelope (`deliverToChannelAgents`, chat.ts),
+  keyed on the mention's client id so a member named in the same line hears it
+  once. A member named in a person's line skips the mention rail and spends no
+  hourly cap. Lines typed by agents (`origin: agent`, bot authors) reach
+  members only through mentions, so members cannot wake each other in a loop.
+  A line in a thread is answered in the thread, a line at channel level at
+  channel level.
+- Who adds. Anyone who can post in the room adds or removes agents
+  (`chatAgents.addChannelAgents` / `removeChannelAgent`). A role must belong
+  to the room's team or be the caller's own; a session must be one the caller
+  may send messages to (`canSendProductMessage`), run by someone on the team.
+- Private rooms. The person who runs a member agent (a session's owner, a
+  role's host or personal owner) may read and post in the room, the same
+  stand-in an anchor's host has for its DM rooms (`chatAccess.runsAgentIn`).
+  The room still stays out of that person's rail.
+- Surfaces. The rail row carries `agents` (ids and short ids only, never the
+  churning conversation rows); the member panel lists them under Agents with
+  an "Add agents" picker over the workspace's roles and the viewer's sessions,
+  and the new channel modal takes agents on either kind. CLI:
+  `cast chat new <name> --private`, `cast chat add <channel> <@role|or-N|short
+  id|this>...`, `cast chat remove <channel> <agent>`.
+
 ## Shapes (as shipped)
 
 `chat_messages.mentions` is one array with three entry shapes

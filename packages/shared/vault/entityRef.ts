@@ -44,9 +44,9 @@ import {
   type EntityType,
 } from "../entities";
 
-/** Object types a note may reference. People are not an `EntityType` (they have
- *  no id-addressed page), so the union widens by exactly one member. */
-export type EntityRefType = EntityType | "person";
+/** Object types a note may reference: every registered type, people included
+ *  (a person is addressed by handle, `/org/@name`). */
+export type EntityRefType = EntityType;
 
 export interface VaultEntityRef {
   type: EntityRefType;
@@ -92,9 +92,12 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   plan: /^pl-[a-z0-9]+$/i,
   trigger: /^tr-[a-z0-9]+$/i,
   session: /^jx[a-z0-9]{5,}$/i,
-  // Docs and projects have no short id; only a Convex id addresses them.
+  // A doc has no short id; only a Convex id addresses it. A project's is
+  // `pj-` and base 36.
   doc: null,
-  project: null,
+  project: /^pj-[a-z0-9]+$/i,
+  // `or` is an English word, so a role takes digits only (or-7, never or-else).
+  role: /^or-\d+$/i,
   // `in` is an English word, so initiatives take digits only (in-7, never
   // in-app) — the same rule as inferEntityTypeFromShortId's DIGITS_ONLY_PREFIX.
   initiative: /^in-\d+$/i,
@@ -189,16 +192,11 @@ export function parseEntityRefHref(href: string | null | undefined): VaultEntity
 
 /** The in-app route that opens a reference. */
 export function entityRefRoute(ref: VaultEntityRef): string | null {
-  if (ref.type === "person") return `/team/${encodeURIComponent(ref.id)}`;
   return entityRoute(ref.type, ref.id);
 }
 
 /** The public URL that addresses a reference — the inverse of the parse. */
 export function entityRefUrl(ref: VaultEntityRef, base?: string): string | null {
-  if (ref.type === "person") {
-    const origin = (base ?? "https://codecast.sh").replace(/\/+$/, "");
-    return `${origin}/team/${encodeURIComponent(ref.id)}`;
-  }
   return base ? buildEntityUrl(ref.type, ref.id, base) : buildEntityUrl(ref.type, ref.id);
 }
 
@@ -310,7 +308,8 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   trigger: "--sol-orange",
   pr: "--sol-green",
   commit: "--sol-yellow",
-  person: "--sol-blue",
+  person: "--sol-green",
+  role: "--sol-violet",
   initiative: "--sol-magenta",
   proposal: "--sol-violet",
   decision: "--sol-yellow",
