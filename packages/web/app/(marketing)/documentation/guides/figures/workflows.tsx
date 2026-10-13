@@ -1,15 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { SOL } from "../../../blog/blogChrome";
-import { PanelHead, Stage, t } from "../../../blog/figureKit";
+import { Stage, t } from "../../../blog/figureKit";
 import { Label, Sheet, type Ink } from "../figureParts";
 
 /**
- * Figures for the workflows guide. Shapes and node types are the ones in
- * packages/cli/src/workflow/types.ts and parser.ts; the gate reply rules are
- * runner.ts's (a reply that starts with an option's key picks it, the rest is
- * handed to the next node).
+ * Figures for the workflows guide: one run of a build, check and approve
+ * workflow, drawn with the node shapes the run page's graph uses.
  */
 
 // ─── Shape outlines, centered on (cx, cy) ──────────────────────────────────
@@ -99,9 +96,9 @@ export function WorkflowRunFigure() {
               <Shape kind="parallelogram" cx={N.verify.cx} cy={N.verify.cy} w={140} h={46} ink="base1" />
               <Shape kind="hexagon" cx={N.review.cx} cy={N.review.cy} w={130} h={46} ink="base1" />
               <Shape kind="Msquare" cx={N.exit.cx} cy={N.exit.cy} w={46} h={46} ink="base01" />
-              <Name x={N.implement.cx} y={N.implement.cy} title="Implement" sub="backend=claude" />
-              <Name x={N.verify.cx} y={N.verify.cy} title="Verify" sub="script=tsc" />
-              <Name x={N.review.cx} y={N.review.cy} title="Review" sub="human gate" />
+              <Name x={N.implement.cx} y={N.implement.cy} title="Implement" sub="an agent" />
+              <Name x={N.verify.cx} y={N.verify.cy} title="Verify" sub="typecheck" />
+              <Name x={N.review.cx} y={N.review.cy} title="Review" sub="you approve" />
             </g>
 
             {/* structure */}
@@ -113,8 +110,8 @@ export function WorkflowRunFigure() {
               <path d="M340 154C334 214 160 214 152 157" markerEnd={arrow()} strokeDasharray="4 3" />
               <path d="M550 106C540 30 162 30 152 103" markerEnd={arrow()} strokeDasharray="4 3" />
             </g>
-            <Label x={448} y={170} lines={["outcome = success"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
-            <Label x={246} y={222} lines={["outcome = failure"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
+            <Label x={448} y={170} lines={["passes"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
+            <Label x={246} y={222} lines={["fails"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
             <Label x={646} y={170} lines={["[A] Approve"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
             <Label x={350} y={44} lines={["[R] Revise, with your note"]} anchor="middle" ink="base01" size={10} className="bj-fade" style={t(0.3)} />
 
@@ -138,99 +135,10 @@ export function WorkflowRunFigure() {
               <path d="M699 130l3.5 3.5 6.5-7" stroke={SOL.base3} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </g>
 
-            <Label x={20} y={248} lines={["max_visits on a node aborts the run when a loop passes through it more times than that."]} ink="base1" size={10} className="bj-fade" style={t(5.8)} />
+            <Label x={20} y={248} lines={["A loop can carry a limit, so a run that keeps failing stops instead of looping forever."]} ink="base1" size={10} className="bj-fade" style={t(5.8)} />
           </>
         )}
       </Sheet>
-    </Stage>
-  );
-}
-
-// ─── Every node shape ──────────────────────────────────────────────────────
-
-const SHAPES: { kind: string; name: string; type: string; lines: string[]; ink: Ink }[] = [
-  { kind: "Mdiamond", name: "Mdiamond", type: "start", lines: ["where the run begins;", "exactly one"], ink: "base01" },
-  { kind: "box", name: "box", type: "agent", lines: ["a session with a prompt;", "backend=claude, codex …"], ink: "blue" },
-  { kind: "tab", name: "tab", type: "prompt", lines: ["one model call,", "no tools"], ink: "violet" },
-  { kind: "parallelogram", name: "parallelogram", type: "command", lines: ["script=; the exit status", "routes, 120s default"], ink: "cyan" },
-  { kind: "hexagon", name: "hexagon", type: "human gate", lines: ["waits for a person; its", "edges are the choices"], ink: "yellow" },
-  { kind: "diamond", name: "diamond", type: "conditional", lines: ["routes on the", "condition= of its edges"], ink: "orange" },
-  { kind: "component", name: "component", type: "fan-out", lines: ["starts its branches", "in parallel"], ink: "green" },
-  { kind: "tripleoctagon", name: "tripleoctagon", type: "fan-in", lines: ["waits for the", "branches to join"], ink: "green" },
-  { kind: "Msquare", name: "Msquare", type: "exit", lines: ["where the run ends;", "at least one"], ink: "base01" },
-];
-
-/** A node's shape is its type. */
-export function NodeShapesFigure() {
-  return (
-    <Stage minWidth={620}>
-      <Sheet w={760} h={276} label="The nine node shapes and the node type each one declares">
-        {() => (
-          <>
-            {SHAPES.map((s, i) => {
-              const col = i % 3;
-              const row = Math.floor(i / 3);
-              const x = 20 + col * 250;
-              const y = 20 + row * 84;
-              const w = s.kind === "Msquare" || s.kind === "Mdiamond" || s.kind === "diamond" ? 44 : 62;
-              return (
-                <g key={s.kind} className="bj-rise" style={t(0.1 + i * 0.12)}>
-                  <Shape kind={s.kind} cx={x + 40} cy={y + 30} w={w} h={s.kind === "Mdiamond" || s.kind === "diamond" ? 44 : 38} ink={s.ink} fill={`${SOL[s.ink]}14`} width={1.5} />
-                  <text x={x + 86} y={y + 14} fontSize="12" fontWeight={700} fill={SOL[s.ink]}>{s.type}</text>
-                  <text x={x + 86} y={y + 28} fontSize="10" fill={SOL.base1}>shape={s.name}</text>
-                  <Label x={x + 86} y={y + 44} lines={s.lines} ink="base01" size={10} />
-                </g>
-              );
-            })}
-          </>
-        )}
-      </Sheet>
-    </Stage>
-  );
-}
-
-// ─── Answering a gate ──────────────────────────────────────────────────────
-
-function Btn({ children, ink, at }: { children: ReactNode; ink: string; at: number }) {
-  return (
-    <span className="inline-block font-mono text-[12px] px-2.5 py-1 rounded-md bj-pop" style={{ ...t(at), border: `1px solid ${ink}`, color: ink, backgroundColor: `${ink}12` }}>{children}</span>
-  );
-}
-
-/** A gate's options are its out edges; a reply that starts with a key picks one and carries the rest forward. */
-export function GateReplyFigure() {
-  return (
-    <Stage>
-      <div className="grid grid-cols-1 *:min-w-0 md:grid-cols-[1.1fr_1fr]">
-        <div className="border-b md:border-b-0 md:border-r" style={{ borderColor: SOL.base2 }}>
-          <PanelHead title="The gate, wherever you are" sub="Dashboard buttons, a push notification, or a plain reply in the conversation." color={SOL.yellow} />
-          <div className="m-4 rounded-lg p-3 font-mono text-[12px] bj-rise" style={{ ...t(0.1), backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}`, borderLeft: `3px solid ${SOL.yellow}` }}>
-            <div style={{ color: SOL.base02 }}><b>ship</b> <span style={{ color: SOL.yellow }}>paused at Review</span></div>
-            <div className="mt-1 text-[11px]" style={{ color: SOL.base01 }}>implement and verify passed · 2/3</div>
-            <div className="mt-3 flex gap-2">
-              <Btn ink={SOL.green} at={0.5}>[A] Approve</Btn>
-              <Btn ink={SOL.orange} at={0.65}>[R] Revise</Btn>
-            </div>
-          </div>
-          <div className="mx-4 mb-4 rounded-lg px-3 py-2 font-mono text-[12px] bj-rise" style={{ ...t(1.1), backgroundColor: SOL.base03, color: SOL.base2 }}>
-            <span style={{ color: SOL.base01 }}>reply ›</span> R: guard the empty list before retrying
-          </div>
-        </div>
-        <div className="p-4 font-mono text-[12px] space-y-3">
-          <div className="bj-rise" style={t(1.6)}>
-            <div className="text-[11px]" style={{ color: SOL.base1 }}>the key picks the edge</div>
-            <div style={{ color: SOL.orange }}><b>R</b> → [R] Revise → Implement</div>
-          </div>
-          <div className="bj-rise" style={t(2.0)}>
-            <div className="text-[11px]" style={{ color: SOL.base1 }}>the rest reaches the next node</div>
-            <div style={{ color: SOL.base02 }}>human.message = “guard the empty list before retrying”</div>
-          </div>
-          <div className="bj-rise" style={t(2.4)}>
-            <div className="text-[11px]" style={{ color: SOL.base1 }}>a reply naming no option</div>
-            <div style={{ color: SOL.base02 }}>counts as success: unconditional edges</div>
-          </div>
-        </div>
-      </div>
     </Stage>
   );
 }
