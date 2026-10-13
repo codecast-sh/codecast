@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, Cpu, Ellipsis, List } from "lucide-react";
 import { agentDisplayName } from "@codecast/shared/contracts";
 import {
@@ -156,39 +156,42 @@ export function PhoneStatusDot({ color, opacity = 1, glow }: { color: string; op
   return <span className="shrink-0" style={css({ ...S.dot, display: "block", background: color, opacity, boxShadow: glow ? `0 0 4px color-mix(in srgb, ${color} 80%, transparent)` : undefined })} />;
 }
 
-/** One message as the screen's MessageBubble draws it: the header (avatar or agent dot, role, model, time) when it opens a turn, then its body. */
-export function PhoneMessage({ role, name, agentType, model, time, showHeader = true, children }: {
+/** Whether text sits in the person's bubble, which pads it on every side. */
+const InUserBubble = createContext(false);
+
+/**
+ * One message as the screen's MessageBubble draws it. The person's turn is a
+ * bubble on the right, named above only when `sender` (someone other than the
+ * session's owner) sent it; the agent's opens a turn with its header (agent
+ * dot, name, model, time), then its body.
+ */
+export function PhoneMessage({ role, sender, agentType, model, time, showHeader = true, children }: {
   role: "user" | "assistant";
-  /** The user's name; the assistant is named for its agent. */
-  name?: string;
+  /** Who sent a person's turn, when it was not the session's owner. */
+  sender?: string;
   agentType: string;
   model?: string;
   time: string;
   showHeader?: boolean;
   children: ReactNode;
 }) {
-  const user = role === "user";
-  const label = user ? name || "You" : agentDisplayName(agentType);
+  if (role === "user") {
+    return (
+      <>
+        {sender && <span className="truncate text-sol-text-dim" style={css(S.userBubbleSender)}>{sender}</span>}
+        <div style={css({ ...col, ...S.messageBubble, ...S.userBubble, background: tint("var(--sol-blue)", 19) })}>
+          <InUserBubble.Provider value>{children}</InUserBubble.Provider>
+        </div>
+      </>
+    );
+  }
   return (
-    <div
-      style={css({
-        ...col,
-        ...S.messageBubble,
-        ...(user ? { ...S.userBubble, borderStyle: "solid", borderColor: tint("var(--sol-blue)", 40), background: tint("var(--sol-blue)", 15) } : S.assistantBubble),
-        ...(showHeader && !user ? S.assistantBubbleFirst : null),
-      })}
-    >
+    <div style={css({ ...col, ...S.messageBubble, ...S.assistantBubble, ...(showHeader ? S.assistantBubbleFirst : null) })}>
       {showHeader && (
         <div style={css({ ...S.bubbleHeader, display: "flex" })}>
-          {user ? (
-            <span style={css({ ...S.userAvatar, display: "flex", background: tint("var(--sol-blue)", 25) })}>
-              <span className="text-sol-blue" style={css(S.userAvatarText)}>{label[0].toUpperCase()}</span>
-            </span>
-          ) : (
-            <span style={css({ ...S.agentDot, display: "block", background: agentTint(agentType) })} />
-          )}
-          <span className={user ? "text-sol-blue" : undefined} style={css({ ...S.bubbleRole, color: user ? undefined : "var(--sol-text-muted0)" })}>{label}</span>
-          {!user && model && <span className="text-sol-text-dim" style={css(S.modelBadge)}>{formatModel(model)}</span>}
+          <span style={css({ ...S.agentDot, display: "block", background: agentTint(agentType) })} />
+          <span style={css({ ...S.bubbleRole, color: "var(--sol-text-muted0)" })}>{agentDisplayName(agentType)}</span>
+          {model && <span className="text-sol-text-dim" style={css(S.modelBadge)}>{formatModel(model)}</span>}
           <span className="text-sol-text-dim" style={css(S.bubbleTime)}>{time}</span>
         </div>
       )}
@@ -200,7 +203,7 @@ export function PhoneMessage({ role, name, agentType, model, time, showHeader = 
 /** A message's text, at the screen's body size. */
 export function PhoneMessageText({ children }: { children: ReactNode }) {
   return (
-    <div style={css(S.bubbleContent)}>
+    <div style={css(useContext(InUserBubble) ? S.userBubbleContent : S.bubbleContent)}>
       <p className="m-0 text-sol-text" style={css(S.bubbleText)}>{children}</p>
     </div>
   );
