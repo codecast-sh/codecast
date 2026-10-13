@@ -19,6 +19,8 @@ const restoreGlobals = replaceGlobals({
   Node: dom.window.Node,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   matchMedia,
+  // The tab embeds the line workspace, whose panes measure themselves.
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 dom.window.HTMLElement.prototype.scrollTo = () => {};
@@ -42,6 +44,9 @@ mock.module("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams("tab=line"),
 }));
 mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: null }) }));
+// A review row reads its fix branch through an action (useFixBranch); no app answers in a test.
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({ ...convexReact, useAction: () => async () => ({ ok: false, error: "no app in a test" }) }));
 
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { ProjectLineTab } = await import("../ProjectLineTab");
