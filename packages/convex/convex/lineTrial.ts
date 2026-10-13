@@ -35,7 +35,7 @@ import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, 
 export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
-import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, stationSession, type GateChoice } from "./workflow_runs";
+import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
 import { alignGateChoices } from "./lib/gateChoices";
 import { trialProjectOf, trialStackOf } from "./lib/trialDecision";
@@ -1038,7 +1038,7 @@ export function stopOf(run: Pick<Doc<"workflow_runs">, "status" | "node_statuses
  * A run that died while it waited at one of its own cards: its gate ended with
  * no answer (a gate poll that failed, read as a withdrawn gate), so the runner
  * found no edge out of it. Its evidence and its proposal are all written; the
- * run picks up at that gate again (resumeAtGate). The card it left names it.
+ * run picks up at that gate again (resumeRunAt). The card it left names it.
  */
 export type GateLoss = { node: string; card: string; kind: "gate" | "card" };
 
@@ -1049,19 +1049,6 @@ export async function gateLossOf(ctx: Ctx, run: Pick<Doc<"workflow_runs">, "_id"
   const cards: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
   const last = cards.filter((c) => c.node_id === node).sort((a, b) => b.created_at - a.created_at)[0];
   return last ? { node, card: last.short_id, kind: last.kind } : null;
-}
-
-/**
- * The run continues at the gate it lost, on its own machine, from its
- * checkpoint (cli runResume.ts): the gate is asked again from the values the
- * run had made (its proposal, its proof), so a new card stands where the lost
- * one stood. fresh_branch makes the daemon read the graph file again, so the
- * stations after the gate are the current ones; a resume never resets the branch.
- */
-async function resumeAtGate(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
-  if (task.execution_status === "blocked") await ctx.db.patch(task._id, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device!, now });
 }
 
 /**
@@ -1161,7 +1148,7 @@ export const runs = query({
  * its daemon, which sets the earlier run's branch aside and starts from
  * origin/main (cli lineTrialBranch.ts), so the proof runs against unfixed code.
  * A run that died waiting at its own card picks up at that gate instead
- * (resumeAtGate): its evidence and proposal are already made. Both go through
+ * (resumeRunAt): its evidence and proposal are already made. Both go through
  * the same machine, spend and run-count check as the dispatcher (trialRoom);
  * a gate resume is the same run, so it spends no run of max_runs.
  */
@@ -1281,7 +1268,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
     const node = route.to === "investigate" ? entry!.trim() : at?.trim() || asker?.trim() || run.gate_node_id;
     for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
-    await resumeAtGate(ctx, userId, task, run, node, now);
+    await resumeRunAt(ctx as any, userId, run, node, now);
     // Taken back once the run no longer waits on it, so the withdrawal cannot fail the run.
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
@@ -1293,7 +1280,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   const refused = rerunRefusal(await trialRoom(ctx, project, now), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
-    await resumeAtGate(ctx, userId, task, run, lost.node, now);
+    await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
   const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
@@ -1489,7 +1476,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   const r = Math.min(slots, lost.length, affordable);
   const resumed: string[] = [];
   if (!dry) for (const l of lost.slice(0, r)) {
-    await resumeAtGate(ctx, project.line_trial!.by, l.task, l.run, l.loss.node, now);
+    await resumeRunAt(ctx as any, project.line_trial!.by, l.run, l.loss.node, now);
     resumed.push(l.task.short_id);
   }
   // A proposal that recommends waiting goes back for the evidence the pipeline can gather first; each takes a slot like a start.
@@ -1527,7 +1514,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
     running,
     cap: TRIAL_RUNNING_CAP,
     started,
-    /** Runs that died waiting at their own card, picked up at that gate (resumeAtGate), or due to be on a dry pass. */
+    /** Runs that died waiting at their own card, picked up at that gate (resumeRunAt), or due to be on a dry pass. */
     resumed: dry ? lost.slice(0, r).map((l) => l.task.short_id) : resumed,
     /** Proposal cards sent back to gather their own evidence (gatherDue), or due to be on a dry pass. */
     gathering: dry ? waits.slice(0, g).map((w) => w.short_id) : gathering,

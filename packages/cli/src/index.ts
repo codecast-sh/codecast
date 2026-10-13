@@ -21051,6 +21051,24 @@ workflow
   });
 
 workflow
+  .command("reask <task>")
+  .description("Ask a line run's decision again on the stations as they are now: the run picks up at the station that presents the decision (the one its gate names as asker), which posts its own question, and the old decision is withdrawn. For a run waiting on a decision, or one that failed while standing at it. Run it on the machine that holds the run")
+  .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph)")
+  .option("--json", "Machine-readable output")
+  .action(async (task: string, options: { at?: string; json?: boolean }) => {
+    const fail = (message: string): never => { console.error(message); process.exit(2); };
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
+    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
+    if (!row) fail(`${task} has no run`);
+    if (row.runner_device && row.runner_device !== deviceId()) fail(`${task}'s run lives on another machine (${row.runner_device}): ask it again there, so its runner is stopped and its station reads that machine's work`);
+    const { prepareReask } = await import("./workflow/reask.js");
+    const plan = await prepareReask({ getCliEndpoint, detectCurrentSessionId }, row._id, task, options.at).catch((e: Error) => fail(e.message));
+    const r = await cliPost("/cli/workflow-runs/reask", { run_id: row._id, ...(options.at ? { at: options.at } : {}), ...(plan.asker ? { asker: plan.asker } : {}) });
+    if (options.json) { printJson(r); return; }
+    console.log(`${task}: asked again from ${r.resumed_at}${r.replaced ? `; ${r.replaced} is withdrawn` : ""} (run ${r.run_id}).`);
+  });
+
+workflow
   .command("validate <file>")
   .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
