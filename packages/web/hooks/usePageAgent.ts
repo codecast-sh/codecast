@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { PageAgentChip } from "@codecast/shared/contracts";
 import { useWatchEffect } from "./useWatchEffect";
-import { pageFrameSrc } from "../lib/publishedPageUrls";
+import { pageMetaUrl } from "../lib/publishedPageUrls";
 
 export type PageAgent = { state: string; since: number; awaiting_since: number | null; chip: PageAgentChip };
 
@@ -30,7 +30,7 @@ export function usePageAgent(slug: string, enabled: boolean): PageAgent | null {
       if (first || document.visibilityState === "visible") {
         first = false;
         try {
-          const res = await fetch(`${pageFrameSrc(slug)}?meta=1`, { cache: "no-store" });
+          const res = await fetch(pageMetaUrl(slug), { cache: "no-store" });
           const meta = res.ok ? ((await res.json()) as { agent?: PageAgent | null }) : null;
           if (stopped) return;
           const next = meta?.agent ?? null;

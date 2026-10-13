@@ -114,6 +114,9 @@ test("leads with the session's words, answers pinned at the foot, the session be
   expect(container.querySelector("[data-line-decision-talk]")).toBeNull();
   const openTalk = container.querySelector("[data-line-decision-talk-open]") as HTMLButtonElement;
   expect(openTalk.textContent).toContain("the session presenting this fix");
+  // Asking sits with the answers in the dock, in view at every scroll, never only at the end of the words.
+  expect(openTalk.closest("[data-line-decision-dock]")).not.toBeNull();
+  expect(sweet.querySelector("[data-line-decision-talk-open]")).toBeNull();
   await act(async () => { openTalk.click(); });
   const talk = container.querySelector("[data-line-decision-talk]")!;
   expect(talk.querySelector("[data-line-decision-talk-head]")!.textContent).toContain("The session presenting this fix");
@@ -192,6 +195,7 @@ test("a decision with no short context leads with its doc, and has nothing left 
 });
 
 test("a decision with neither context nor doc leads with its published proposal, above the answers", async () => {
+  useInboxStore.setState({ trialCards: {} } as any);
   const decision = decisionRow({ context_md: undefined, report_slug: "rep1" });
   const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, null)} answerable />);
   const sweet = container.querySelector("[data-line-decision-sweet]")!;
@@ -202,12 +206,48 @@ test("a decision with neither context nor doc leads with its published proposal,
   unmount();
 });
 
-test("a structured card leads with the card's top; the whole card folds into the full proposal", async () => {
+test("a session that wrote its own answers and page reads in its own words: the page in the open, the run's figures folded", async () => {
+  const own = [
+    { label: "Rework it so the email leads with what is waiting on them", description: "Three wordings opened with the call in 24 of 26 reruns." },
+    { label: "Ship the rewrite as built", description: "It changes about 127 emails a week." },
+    { label: "Drop the rewrite and keep today's email", description: "Replies run about one in five either way." },
+  ];
+  const decision = decisionRow({ trial: true, question: "After an unanswered call, what should the email lead with?", options: own, context_md: "248 of 252 recent emails open with the call.", report_slug: "rep1" });
+  const trialCard = {
+    _id: "tc7", workspace: "user:u1", short_id: "tc-77", project_id: "p1", project_title: "AgentWatch", task_id: "t100", task_short_id: "ct-100", task_title: "Rep promises replies", task_status: "open",
+    run_id: "run1", run_status: "paused", node_id: "decide", kind: "card", question: decision.question, options: [{ key: "", label: own[0].label }, { key: "S", label: own[1].label }, { key: "D", label: own[2].label }],
+    card: { ...card, recommend: { verdict: "revise", why: "Most still open with the call." } }, decision: { _id: "d9", short_id: "sd-9", status: "pending", report_slug: "rep1", session: null }, status: "waiting", created_at: 1, updated_at: 1,
+  };
+  useInboxStore.setState({ trialCards: { tc7: trialCard }, sessionDecisions: {}, decisionDetails: {} } as any);
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, null)} answerable />);
+  const sweet = container.querySelector("[data-line-decision-sweet]")!;
+  // The session's words, then its page; nothing the run measured stands in front of them.
+  expect(sweet.querySelector("[data-line-decision-context]")!.textContent).toContain("248 of 252");
+  expect(sweet.querySelector("[data-line-decision-report]")).not.toBeNull();
+  expect(sweet.querySelector("[data-line-decision-evidence]")).toBeNull();
+  expect(container.querySelector("details[data-line-decision-full] [data-line-decision-evidence]")).not.toBeNull();
+  // Its answers are its own rows, each with what it wrote under it: never the fixed three verbs.
+  const answers = container.querySelector("[data-line-decision-dock] [data-line-decision-answers]")!;
+  expect(answers.querySelector("[data-verdict]")).toBeNull();
+  for (const o of own) { expect(answers.textContent).toContain(o.label); expect(answers.textContent).toContain(o.description); }
+  unmount();
+  useInboxStore.setState({ trialCards: {} } as any);
+});
+
+test("a structured card leads with its words; its tiles, checks and replayed cases fold into the run's record", async () => {
   const decision = decisionRow({ card, context_md: undefined, options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), gate_node_id: "card" });
   const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision, null)} answerable />);
   const sweet = container.querySelector("[data-line-decision-sweet]")!;
   expect(sweet.querySelector("[data-card-headline]")!.textContent!.length).toBeGreaterThan(10);
-  expect(sweet.querySelector(".ccd-today")!.textContent).toContain(card.wrong);
+  expect(sweet.querySelector("[data-line-decision-today]")!.textContent).toBe(card.wrong);
+  expect(sweet.querySelector("[data-line-decision-change]")!.textContent).toBe(card.change);
+  // Nothing the run measured stands before the words: no tile strip, and its one real case shows what was sent before
+  // and after without the prompt input it was replayed from.
+  expect(sweet.querySelector(".ccd-tiles, .ccd-tile, .cc-example-input")).toBeNull();
+  expect(sweet.querySelectorAll("[data-line-decision-case] .cc-example").length).toBe(1);
+  const full = container.querySelector<HTMLDetailsElement>("[data-line-decision-full]")!;
+  expect(full.open).toBe(false);
+  expect(full.querySelector("summary")!.textContent).toBe("The run's record");
   expect(container.querySelector("[data-line-decision-dock] [data-line-decision-answers]")).not.toBeNull();
   expect(container.querySelector("[data-line-decision-full]")).not.toBeNull();
   unmount();
@@ -370,3 +410,13 @@ test("a gate doc written before the runner stripped its bookkeeping line never s
   await unmount();
 });
 
+
+test("a trial's presenting session reads as what it is, never by its station title, even with no run on the row", async () => {
+  const decision = decisionRow({ trial: true, workflow_run_id: undefined, session_title: "Card words · ct-100" });
+  useInboxStore.setState({ trialCards: {}, sessionDecisions: {}, decisionDetails: {} } as any);
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detailOf(decision)} answerable />);
+  const asker = container.querySelector("[data-line-decision-asker]")!;
+  expect(asker.textContent).toContain("The session presenting this fix");
+  expect(container.innerHTML).not.toContain("Card words");
+  unmount();
+});
