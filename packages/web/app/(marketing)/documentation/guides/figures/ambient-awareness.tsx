@@ -2,69 +2,9 @@
 
 import { SOL } from "../../../blog/blogChrome";
 import { Stage, t } from "../../../blog/figureKit";
-import { Arrow, Box, Sheet } from "../figureParts";
+import { Sheet } from "../figureParts";
 
-/**
- * Figures for the ambient awareness guide: how the feed reaches a new
- * session (and what happens when it can't), and which sessions it holds.
- */
-
-// ─── One builder, several doors in ─────────────────────────────────────────
-
-/** One builder fetches the feed and renders the block; each agent receives it
- *  its own way, and the block is recorded so the web can show it. */
-export function InjectionPathsFigure() {
-  const W = 760;
-  const H = 320;
-  return (
-    <Stage minWidth={680}>
-      <Sheet w={W} h={H} label="The stable context builder fetches the feed with a 15 second timeout; Claude Code receives it through a SessionStart hook, Codex through developer instructions at thread start; the block is recorded and shown as cards; on failure the session starts without it">
-        {(arrow) => (
-          <>
-
-            <Box x={20} y={40} w={150} title="a session starts" sub="in ~/src/billing" at={0.15} bold={1} size={11.5} />
-            <Arrow head={arrow()} d="M172 65H212" at={0.4} />
-            <g className="bj-pop" style={t(0.6)}>
-              <rect x={218} y={30} width={170} height={70} rx={8} fill={SOL.base03} />
-              <text x={303} y={52} textAnchor="middle" fontSize="11.5" fontWeight={700} fill={SOL.base3}>the feed builder</text>
-              <text x={303} y={70} textAnchor="middle" fontSize="9.5" fill={SOL.base1}>this project, window, cap</text>
-              <text x={303} y={85} textAnchor="middle" fontSize="9.5" fill={SOL.base1}>15 s timeout</text>
-            </g>
-            <Arrow head={arrow()} d="M390 52C420 52 420 54 450 54" at={1.0} color={SOL.cyan} />
-            <Arrow head={arrow()} d="M390 78C420 78 420 118 450 118" at={1.0} color={SOL.cyan} />
-            <g className="bj-rise" style={t(1.3)}>
-              <rect x={456} y={32} width={284} height={46} rx={7} fill={SOL.base3} stroke={SOL.cyan} />
-              <text x={468} y={51} fontSize="11" fontWeight={700} fill={SOL.base02}>Claude Code</text>
-              <text x={468} y={67} fontSize="9.5" fill={SOL.base01}>SessionStart hook runs cast stable-context</text>
-            </g>
-            <g className="bj-rise" style={t(1.45)}>
-              <rect x={456} y={96} width={284} height={46} rx={7} fill={SOL.base3} stroke={SOL.cyan} />
-              <text x={468} y={115} fontSize="11" fontWeight={700} fill={SOL.base02}>Codex</text>
-              <text x={468} y={131} fontSize="9.5" fill={SOL.base01}>developer instructions when its thread starts</text>
-            </g>
-            <text x={598} y={162} textAnchor="middle" fontSize="9.5" fill={SOL.base1} className="bj-fade" style={t(1.6)}>Cursor, opencode and Grok have paths of their own</text>
-
-            <Arrow head={arrow()} d="M303 102V186" at={1.8} color={SOL.green} />
-            <text x={311} y={150} fontSize="10" fill={SOL.green} className="bj-fade" style={t(1.9)}>recorded</text>
-            <g className="bj-rise" style={t(2.1)}>
-              <rect x={218} y={192} width={300} height={44} rx={7} fill={`${SOL.green}14`} stroke={SOL.green} />
-              <text x={230} y={210} fontSize="11" fontWeight={700} fill={SOL.base02}>cards at the top of the transcript</text>
-              <text x={230} y={226} fontSize="9.5" fill={SOL.base01}>what the agent saw, for a person reading later</text>
-            </g>
-
-            <g className="bj-fade" style={t(2.5)}>
-              <path d="M240 102C240 180 110 180 110 259" stroke={SOL.red} strokeWidth={1.3} strokeDasharray="4 3" fill="none" />
-              <circle cx={110} cy={268} r={9} fill={SOL.red} />
-              <path d="M106 264l8 8M114 264l-8 8" stroke={SOL.base3} strokeWidth={1.8} strokeLinecap="round" />
-              <text x={128} y={266} fontSize="10.5" fontWeight={700} fill={SOL.red}>timeout, offline, signed out</text>
-              <text x={128} y={282} fontSize="10" fill={SOL.base01}>no block: the session starts as it would have without stable mode</text>
-            </g>
-          </>
-        )}
-      </Sheet>
-    </Stage>
-  );
-}
+/** Figure for the ambient awareness guide: which sessions a new session starts knowing about. */
 
 // ─── Which sessions make the feed ──────────────────────────────────────────
 
