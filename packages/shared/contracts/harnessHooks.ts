@@ -61,6 +61,29 @@ export function isMachineSetting(name: unknown): name is MachineSetting {
   return typeof name === "string" && Object.prototype.hasOwnProperty.call(MACHINE_SETTINGS, name);
 }
 
+/** One apply_snippet change from the web: a snippet, a machine setting, or
+ *  stable injection with its mode and reach. */
+export interface DeviceSnippetChange {
+  snippet: string;
+  enabled: boolean;
+  mode?: "solo" | "team" | "off";
+  global?: boolean;
+}
+
+/** Stable injection's mode for a change: the one asked for, else on or off. */
+export function stableModeOf(change: DeviceSnippetChange): "solo" | "team" | "off" {
+  return change.mode ?? (change.enabled ? "solo" : "off");
+}
+
+/** A device's reported settings with one change applied: what the server
+ *  mirrors onto the device row and the web paints before the daemon reports. */
+export function settingsAfterSnippet(prev: Record<string, any> | null | undefined, change: DeviceSnippetChange): Record<string, any> {
+  const base = prev ?? {};
+  if (change.snippet === "stable") return { ...base, stable_mode: stableModeOf(change), stable_global: change.global === true };
+  if (isMachineSetting(change.snippet)) return { ...base, [MACHINE_SETTINGS[change.snippet]]: change.enabled };
+  return { ...base, snippets: { ...(base.snippets ?? {}), [change.snippet]: change.enabled } };
+}
+
 export const HARNESS_HOOKS: readonly HarnessHook[] = [
   {
     file: "codecast-status.sh",
@@ -105,6 +128,16 @@ export const HARNESS_HOOKS: readonly HarnessHook[] = [
     name: "Task reminder",
     purpose: "Every 8 prompts, reminds an agent bound to a task or plan which one it is on. It runs inside the prompt hook.",
     withoutIt: "Agents bound to a task forget to post progress on it.",
+  },
+  {
+    file: "task-context.sh",
+    events: ["SessionStart"],
+    kind: "hook",
+    feature: "tasks",
+    affectsAgent: true,
+    name: "Task context after compaction",
+    purpose: "When an agent bound to a task compacts or resumes, puts the task back in front of it: its status, what still blocks it, the last progress note and the plan's next ready step. Codex gets the same through its own hooks file.",
+    withoutIt: "After compaction an agent loses which task it was on and what was left, until it thinks to run cast task context.",
   },
   {
     file: "stable-feed.sh",

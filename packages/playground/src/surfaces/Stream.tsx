@@ -16,6 +16,7 @@ import { Dots } from "../ui/Dots";
 import { Face } from "../ui/Face";
 import { appUrl } from "../lib/router";
 import { Link } from "../ui/Link";
+import { useTyping } from "../data/presence";
 import { useAppState, useHereState, useStream } from "./appState";
 import { BuildCard, RestoreCard, WaitingCard } from "./BuildCard";
 import { IdeaChips } from "./IdeaChips";
@@ -173,6 +174,7 @@ function BuildStatus() {
     : b.status === "queued" ? "A change is in line"
     : b.status === "building" ? `Clay is building v${b.result_version ?? app.version_count + 1}`
     : b.status === "live" ? `v${b.result_version} is live`
+    : b.failure === "declined" ? `Clay answered: ${b.error ?? ""}`
     : `Didn't make it. ${b.error ?? ""}`;
   return <p className="sr-only" role="status">{text}</p>;
 }
@@ -193,7 +195,9 @@ function renderItem(m: MessageView, p: MessageView | undefined, now: number, meI
 
 function TypingRow() {
   const here = useHereState();
-  const t = here.typers;
+  const { app } = useAppState();
+  const typing = useTyping(app.id);
+  const t = here.people.slice(1).filter((p) => typing.has(p.id));
   if (t.length === 0) return null;
   const text =
     t.length === 1 ? `${t[0].name} is typing` : t.length === 2 ? `${t[0].name} and ${t[1].name} are typing` : `${t.length} people are typing`;
@@ -234,9 +238,12 @@ function OriginRow() {
   // A made app's first words are its maker's first request, in their words;
   // the starter under it is only scaffolding, so it never speaks for them.
   // While Clay makes it, the card below already says what they asked.
-  const firstAsk = timeline?.find((v) => v.kind === "build")?.request_message_id;
+  // Only the maker's own words: on an app made from a starter, the first
+  // change is someone else's and says nothing about who made it.
+  const first = timeline?.find((v) => v.kind !== "seed");
+  const firstShown = first && first.author?.id === by?.id ? first : undefined;
+  const firstAsk = firstShown?.kind === "build" ? firstShown.request_message_id : undefined;
   const said = from ? null : (firstAsk && messages.find((m) => m.id === firstAsk)?.body);
-  const firstShown = timeline?.find((v) => v.kind !== "seed");
   const detail = from ? "Same code, a copy of the data. Change anything." : (said ?? firstShown?.summary);
   return (
     <div className={s.origin}>

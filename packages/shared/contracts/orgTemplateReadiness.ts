@@ -51,7 +51,7 @@ export function routineReadiness(manifest: ReadinessManifest, routine: Readiness
   const ready = missing.length === 0;
   let mode: "propose" | "apply" = wantsApply && ready ? "apply" : "propose";
   // The trust note lowers the mode and never stops activation being offered (H4).
-  if (wantsApply && acts && state.trust === "understand") { mode = "propose"; missing.push("runs as propose: trust is understand"); }
+  if (wantsApply && acts && state.trust === "understand") { mode = "propose"; missing.push("only recommends: Starts work on its own is off"); }
   return { ready, mode, missing };
 }
 
