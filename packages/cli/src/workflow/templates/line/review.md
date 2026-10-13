@@ -23,4 +23,4 @@ State every finding that names a place in the code on its own line, in this form
 
 severity is blocker, high, medium, low or nit. A finding the implementer already fixed in this round ends with `-> fixed`; one you do not hold against the branch ends with `-> rejected`. When the implementer asks to leave a finding for later and you accept that, the finding ends with `-> deferred owner=<@role or person> due=<date or 7d>`: a deferral is a promise, and a promise with nobody to keep it or no day to keep it by is refused, so an accepted deferral names both. A finding about security or about losing data is never deferred: it is fixed in this round or the verdict is changes. Prose around the finding lines stays as it is.
 
-approve sends the branch on to the change card; changes sends it back to the implementer; reject reopens it as blocked for a person to decide.
+approve sends the branch on to the change card; changes sends it back to the implementer; reject ends the run with your note on the problem, which stays open.
