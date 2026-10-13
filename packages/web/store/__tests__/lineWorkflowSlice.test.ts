@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
-import { lineWorkflowStubId } from "../lineWorkflowSlice";
+import { isViewersWorkflow, lineWorkflowStubId } from "../lineWorkflowSlice";
 import { SHIPPED_LINE } from "../../lib/line/shippedLine.generated";
 import { editStation, forkShippedLine, stationDiffs } from "../../lib/line/lineStations";
 
@@ -68,5 +68,37 @@ describe("saveLineWorkflow", () => {
     expect(s().workflows[SERVER]).toBeUndefined();
     await settle();
     expect(calls[0]).toEqual(["removeLineWorkflow", ["line-pj-1"]]);
+  });
+});
+
+// workflow_runs.graphOfRun feeds the graph a teammate's run ran into the same
+// collection, so a row of the same slug may be someone else's (ct-58329).
+describe("a teammate's workflow row in the collection", () => {
+  const ME = "users_me";
+  const FOREIGN = "f".repeat(32);
+  const theirs = (fork: any) => ({ _id: FOREIGN, ...fork, user_id: "users_teammate", created_at: 1, updated_at: 1 });
+  beforeEach(() => useInboxStore.setState({ currentUser: { _id: ME } } as any));
+  afterAll(() => useInboxStore.setState({ currentUser: null } as any));
+
+  it("an edit never lands on it: the viewer's own fork is created", async () => {
+    const fork = forkShippedLine(SHIPPED_LINE, project);
+    s().syncTable("workflows", [theirs(fork)], { isDelta: true });
+    s().saveLineWorkflow({ ...fork, nodes: editStation(fork.nodes, "ground", { prompt: "Mine." }) });
+    expect(stationDiffs(s().workflows[FOREIGN].nodes, SHIPPED_LINE)).toEqual({});
+    expect(s().workflows[lineWorkflowStubId("line-pj-1")]?.user_id).toBe(ME);
+  });
+
+  it("stop customizing never removes it", async () => {
+    const fork = forkShippedLine(SHIPPED_LINE, project);
+    s().syncTable("workflows", [theirs(fork)], { isDelta: true });
+    s().removeLineWorkflow("line-pj-1");
+    expect(s().workflows[FOREIGN]).toBeDefined();
+  });
+
+  it("is not the viewer's", () => {
+    expect(isViewersWorkflow({ user_id: "users_teammate" }, ME)).toBe(false);
+    expect(isViewersWorkflow({ user_id: ME }, ME)).toBe(true);
+    expect(isViewersWorkflow({ user_id: "" }, ME)).toBe(true);
+    expect(isViewersWorkflow({ user_id: "users_teammate" }, null)).toBe(true);
   });
 });

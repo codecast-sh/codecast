@@ -192,9 +192,10 @@ export type DecisionStepper = {
 
 export const DecisionStepperContext = createContext<DecisionStepper | null>(null);
 
-// The oldest pending `cast decide` row for a conversation, as a queue item.
-// Signature-gated: rows change only on ask/answer.
-export function usePendingDecisionItem(conversationId: string | null | undefined): QueueItem | null {
+// A conversation's pending `cast decide` rows as queue items, in the order
+// they are answered: the first is the one its card shows, the rest follow as
+// each is answered. Signature-gated: rows change only on ask/answer.
+export function usePendingDecisionItems(conversationId: string | null | undefined): QueueItem[] {
   const s = useTrackedStore([
     (st: any) => {
       if (!conversationId) return "";
@@ -210,16 +211,15 @@ export function usePendingDecisionItem(conversationId: string | null | undefined
     },
   ]);
   return useMemo(() => {
-    if (!conversationId) return null;
+    if (!conversationId) return [];
     const mine: Record<string, any> = {};
     for (const d of Object.values(s.sessionDecisions) as any[]) {
       if (d.conversation_id === conversationId) mine[d._id] = d;
     }
     // A blocking ask parks the session, so it outranks an advisory one that
     // happened to be posted earlier; otherwise oldest first, as in the queue.
-    const items = decisionQueueItems(mine, s.sessions).sort(
+    return decisionQueueItems(mine, s.sessions).sort(
       (a, b) => Number(b.blocking) - Number(a.blocking) || a.createdAt - b.createdAt
     );
-    return items[0] ?? null;
   }, [conversationId, s.sessionDecisions, s.sessions]);
 }
