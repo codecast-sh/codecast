@@ -5,6 +5,7 @@ import {
   LIVE_ACTIVITY_FAILED_LINGER_MS,
   LIVE_ACTIVITY_SCHEMA_VERSION,
   LIVE_ACTIVITY_TITLE_LIMIT,
+  LIVE_ACTIVITY_WAITING_LINGER_MS,
   clipLiveActivityText,
   deriveLiveActivityState,
   isLiveActivityQuiet,
@@ -133,6 +134,26 @@ describe("deriveLiveActivityState", () => {
     expect(deriveLiveActivityState(rows, NOW + LIVE_ACTIVITY_FAILED_LINGER_MS).sessions).toHaveLength(0);
   });
 
+  test("a fresh wait is on the strip; a long parked one is inbox material and leaves", () => {
+    const state = deriveLiveActivityState(
+      [
+        session({ id: "fresh", status: "waiting", updatedAt: NOW - 60_000 }),
+        ...Array.from({ length: 11 }, (_, i) =>
+          session({ id: `parked${i}`, status: "waiting", updatedAt: NOW - LIVE_ACTIVITY_WAITING_LINGER_MS - i * 60_000 }),
+        ),
+      ],
+      NOW,
+    );
+    expect(state.sessions.map((s) => s.id)).toEqual(["fresh"]);
+    expect(state.overflow).toBe(0);
+    expect(state.waiting).toBe(1);
+  });
+
+  test("only parked waits leave the strip quiet, so the activity ends", () => {
+    const rows = [session({ id: "w", status: "waiting", updatedAt: NOW - LIVE_ACTIVITY_WAITING_LINGER_MS })];
+    expect(isLiveActivityQuiet(deriveLiveActivityState(rows, NOW))).toBe(true);
+  });
+
   test("rows past the display cap fold into overflow", () => {
     const rows = Array.from({ length: LIVE_ACTIVITY_DISPLAYED_SESSIONS + 3 }, (_, i) =>
       session({ id: `s${i}`, startedAt: NOW - i * 1000 }),
@@ -196,6 +217,9 @@ describe("nextLiveActivityExpiry", () => {
       NOW,
     );
     expect(at).toBe(NOW - 10_000 + LIVE_ACTIVITY_DONE_LINGER_MS);
+  });
+  test("a wait wakes the sweep when it goes stale", () => {
+    expect(nextLiveActivityExpiry([{ status: "waiting", updatedAt: NOW }], NOW)).toBe(NOW + LIVE_ACTIVITY_WAITING_LINGER_MS);
   });
   test("nothing lingering means no wake", () => {
     expect(nextLiveActivityExpiry([{ status: "working", updatedAt: NOW }], NOW)).toBeNull();
