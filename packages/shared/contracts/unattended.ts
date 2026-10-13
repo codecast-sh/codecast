@@ -1,14 +1,17 @@
-// The mandate every unattended run opens with: the CLI's `cast task start
-// --spawn` and the line's nodes prefix it (packages/cli/src/unattended.ts),
-// and the server prefixes it on a hand a role starts (convex/spawn.ts). One
-// copy, so a hand and a spawned run read the same rules.
-export const UNATTENDED_MANDATE =
-  "This is an UNATTENDED run: no person is watching this session. Reversible actions run without asking. " +
-  "Anything in a protected decision category goes through `cast decide` and waits for the answer. " +
-  "Your own task branch is yours: committing and pushing it is part of the work. " +
-  "Never ask an inline question; nobody will answer it. End your turn with the structured command your briefing names, " +
-  "never with a bare summary.";
+// How every unattended session opens: a workflow station's hand
+// (packages/cli/src/workflow/runner.ts stationBrief), a `cast spawn
+// --unattended` run, and a hand a role starts (convex/spawn.ts handBriefing).
+// It says only what is true of all of them. What one kind of run may do (its
+// branch, its ending command) belongs to that run's own brief.
+export function unattendedOpening(startedBy = "an automated codecast run"): string {
+  return [
+    `You are running unattended: ${startedBy} started this session, and no person is watching it.`,
+    "It reads only how your turn ends, so end with the command your brief names. If it names none, pin the outcome with `cast state --status done`, or `--status blocked` if you could not finish.",
+    "Nobody answers a question asked here. A decision that is a person's to make (hard to undo, or touching production, money, stored data, access or people outside the team) goes through `cast decide`, and you wait for the answer.",
+  ].join("\n");
+}
 
-export function applyUnattended(prompt: string): string {
-  return `${UNATTENDED_MANDATE}\n\n${prompt}`;
+/** The opening, then the brief. `startedBy` names the run when the caller knows it. */
+export function applyUnattended(prompt: string, startedBy?: string): string {
+  return `${unattendedOpening(startedBy)}\n\n${prompt}`;
 }

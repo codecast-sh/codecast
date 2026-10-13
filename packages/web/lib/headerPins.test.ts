@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveHeaderPins } from "./headerPins";
+import { defaultPinOf, resolveHeaderPins } from "./headerPins";
 import type { AnchorRow } from "../hooks/useSyncAnchors";
 
 // S30: with no pins chosen, the header shows the person's global Executive
@@ -19,5 +19,12 @@ describe("resolveHeaderPins", () => {
     for (const anchors of [[head], [head, assistant("retired")]]) {
       expect(resolveHeaderPins(null, anchors, {}, "t1").map((p) => [p.key, p.subtitle])).toEqual([["anchor:head", "Head of People"]]);
     }
+  });
+
+  // An emptied list draws no face, but the panel still has the assistant to
+  // open on: it offered "Hire your Executive Assistant" to a person who had one.
+  test("an emptied list resolves nothing, and the default still names the assistant", () => {
+    expect(resolveHeaderPins([], [head, assistant("active")], {}, "t1")).toEqual([]);
+    expect(defaultPinOf([head, assistant("active")], "t1")?.key).toBe("anchor:ea");
   });
 });
