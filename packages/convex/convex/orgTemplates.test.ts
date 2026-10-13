@@ -91,6 +91,9 @@ describe("the instance row, its record and lessons", () => {
     await expect(performUpsertInstance(ctx(db), ME, { ...hire, digest: D2 })).rejects.toThrow(/not published/);
     await expect(performUpsertInstance(ctx(db), ME, { ...hire, config: { "accounts.ads": "/x" } })).rejects.toThrow(/bound on the host/);
     await expect(performUpsertInstance(ctx(db), OUT, hire)).rejects.toThrow(/Project not found/);
+    // The host step pins its team (the CLI sends it for every team hire); the project's own team passes, another is refused.
+    await expect(performUpsertInstance(ctx(db), MATE, { ...hire, team_id: OTHER as any })).rejects.toThrow(/not in that team/);
+    await performUpsertInstance(ctx(db), MATE, { ...hire, team_id: ACME as any });
     const row = await performUpsertInstance(ctx(db), MATE, { ...hire, phase: "awaiting_host", config: { "product.domain": "acme.io" } });
     expect(row).toMatchObject({ workspace: WS, phase: "awaiting_host", update_policy: "manual", config: { "product.domain": "acme.io" } });
     const bound = await performUpsertInstance(ctx(db), MATE, { ...hire, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready", bindings: { "accounts.ads": { host: "mbp", path_hash: D3, bound_at: 5 } }, ledgers: { cmo: { taskId: "t1", shortId: "ct-1" } } });
@@ -107,12 +110,12 @@ describe("the instance row, its record and lessons", () => {
     let status = await performInstanceStatus(ctx(db), MATE, key);
     expect(status.ask).toMatchObject({ id: "search-console", who: "human" });
     expect(status.readiness.seo).toEqual({ ready: false, mode: "propose", missing: ["evidence technical has no pass"] });
-    expect(status.readiness.ads.missing).toEqual(["authority ads-spend not granted", "runs as propose: trust is understand"]);
+    expect(status.readiness.ads.missing).toEqual(["authority ads-spend not granted", "only recommends: Starts work on its own is off"]);
     await performRecordEvidence(ctx(db), MATE, { ...key, check: "technical", status: "pass", source: "https://codecast.sh/t/ct-1", detail: ["routes=38"] });
     await performRecordScores(ctx(db), MATE, { ...key, entries: ["primary_events_7d=7"], source: "ct-2" });
-    await expect(performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "done", from_agent: true })).rejects.toThrow(/person's step/);
-    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "done", from_agent: false });
-    await performMarkSetup(ctx(db), MATE, { ...key, id: "measurement", status: "done", evidence: "ct-3", from_agent: true });
+    // A person's step is marked by whoever sees it done, the role included.
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "done" });
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "measurement", status: "done", evidence: "ct-3" });
     status = await performInstanceStatus(ctx(db), MATE, key);
     expect(status.readiness.seo).toEqual({ ready: true, mode: "apply", missing: [] });
     expect(status.scoreboard.primary_events_7d).toMatchObject({ value: "7", source: "ct-2" });
@@ -164,7 +167,7 @@ describe("the hire and upgrade changes through the org apply core (org-hire.md H
     // Authority through the same core lands on the role.
     const granted = await applyOrgChange(humanCtx(db), ME, boundary, { kind: "authority", handle: "acme-growth-cmo", authority: [{ id: "ads-spend", kind: "spend", label: "Paid search", limit: { usd_per_month: 300 } }] }, human);
     expect((granted as any).note).toBe("@acme-growth-cmo may spend (Paid search, up to $300 a month)");
-    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "receipt-uuid" })).readiness.ads.missing).toEqual(["runs as propose: trust is understand"]);
+    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "receipt-uuid" })).readiness.ads.missing).toEqual(["only recommends: Starts work on its own is off"]);
     // An accepted upgrade waits on the row for the host.
     await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest("2.1.0"), digest: D2, status: "stable" });
     await expect(applyOrgChange(humanCtx(db), ME, boundary, { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: D3 }, human)).rejects.toThrow(/not published/);
@@ -278,7 +281,7 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     ...extra,
   });
   const said = (row: any) => row.content.replace(/^<session-message from="unknown" name="codecast">\n|\n<\/session-message>$/g, "").split("\n");
-  const ROUTINES = ["Routines:", "- SEO weekly for acme.io (tr-7): paused, not ready; evidence technical has no pass", "- Ads (tr-8): active; authority ads-spend not granted; runs as propose: trust is understand"];
+  const ROUTINES = ["Routines:", "- SEO weekly for acme.io (tr-7): paused, not ready; evidence technical has no pass", "- Ads (tr-8): active; authority ads-spend not granted; only recommends: Starts work on its own is off"];
 
   test("the standing session is told once what a bind changed: the host step, each new secret, what is missing and where each routine stands", async () => {
     const { db, pending } = seated();
@@ -292,7 +295,7 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect(pending[0]).toMatchObject({ conversation_id: STANDING, from_user_id: ME });
     expect(pending[0].content.startsWith('<session-message from="unknown" name="codecast">\n')).toBe(true);
     expect(said(pending[0])).toEqual([
-      "The host step for acme-growth finished on mbp: the template is installed, the instance file is written and your routines exist, paused until a person activates each from the role page.",
+      "The host step for acme-growth finished on mbp: the template is installed, the instance file is written and your routines exist; each turns on as soon as it is ready.",
       "Ads credentials is now bound for acme-growth on mbp: the value is in a file there and its path is in the instance file. ads needed it.",
       "Still missing: Publora key.",
       ...ROUTINES,
@@ -342,10 +345,9 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect(page.ask).toMatchObject({ id: "search-console", title: "Verify acme.io" });
     // Each routine carries its trigger's short id and the title filled for this instance.
     expect(page.routines.map((r: any) => [r.id, r.title, r.trigger.short_id])).toEqual([["seo", "SEO weekly for acme.io", "tr-7"], ["ads", "Ads", "tr-8"]]);
-    // Skip is a person's mark, as with `cast org template setup <instance> <id> --skip`: the ask moves to the next open step.
+    // Skip, from the page or `cast org template setup <instance> <id> --skip`: the ask moves to the next open step.
     const key = { instance_key: "key-1" };
-    await expect(performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "skipped", from_agent: true })).rejects.toThrow(/person's step/);
-    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "skipped", from_agent: false });
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "skipped" });
     page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
     expect(page.ask).toMatchObject({ id: "publora" });
     expect(page.setup[0]).toMatchObject({ id: "search-console", status: "skipped" });
@@ -395,9 +397,8 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
       "Changelog:",
       "### 2.1.0",
       "- Adds the social post.",
-      "A person must:",
+      "Nobody needs to do anything for this change.",
     ]);
-    expect(lines).toContain("- Activate Social post (1d) from the role page: it arrived paused.");
     expect(lines).toContain("Routines:");
     await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }, { version: "2.1.0", digest: D2 }));
     expect(pending).toHaveLength(2);
