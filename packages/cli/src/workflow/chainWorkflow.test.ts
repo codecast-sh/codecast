@@ -5,6 +5,7 @@ import {
   compileParallelWorkflow,
   renderDotSource,
   resultPreview,
+  agentResultPreview,
   unrecordedRun,
   workflowUpsertPayload,
 } from "./chainWorkflow.js";
@@ -102,7 +103,19 @@ describe("resultPreview", () => {
   test("is the trimmed head of the output, 800 chars at most, and undefined when empty", () => {
     expect(resultPreview("  hi \n")).toBe("hi");
     expect(resultPreview("x".repeat(1000))).toHaveLength(800);
+    // A station script's closing JSON result is what its node shows.
+    expect(resultPreview('bun test v1\n(pass) one\n 1 pass\n{"green": true, "why": "repro.sh passes with the change"}\n')).toBe('{"green": true, "why": "repro.sh passes with the change"}');
+    expect(resultPreview('{"dissolved": "no_repro"}\nok Completed ct-1')).toBe('{"dissolved": "no_repro"}\nok Completed ct-1');
+    expect(resultPreview('log\n{"green": true}')).toBe('log\n{"green": true}');
     expect(resultPreview("   ")).toBeUndefined();
+  });
+
+  test("a long JSON object stays JSON, so a later step's $<id>.json.<field> reads from the record", () => {
+    const bind = JSON.stringify({ task: "ct-59334", title: "Profile-pitch emails", attempt_id: "at-42", findings: "sg-1845 ".repeat(200) });
+    const shown = resultPreview(bind)!;
+    expect(shown.length).toBeLessThanOrEqual(800);
+    expect(JSON.parse(shown)).toMatchObject({ task: "ct-59334", attempt_id: "at-42" });
+    expect(JSON.parse(shown).findings.endsWith("…")).toBe(true);
   });
 });
 
@@ -114,5 +127,20 @@ describe("unrecordedRun", () => {
     await run.finish("exit", "completed");
     expect(run.runId).toBeUndefined();
     expect(notes).toEqual(["cast exec: run not recorded (not signed in)"]);
+  });
+});
+
+describe("agentResultPreview", () => {
+  test("keeps what the agent concluded, without the runner's state line or its json report", () => {
+    const out = 'work_state: done\nProved C117 is live: a held card dials at 6:45 AM.\n\n```json\n{"outcome": "proved"}\n```\n';
+    expect(agentResultPreview(out)).toBe("Proved C117 is live: a held card dials at 6:45 AM.");
+  });
+  test("a builtin agent's reply is kept as is, capped", () => {
+    expect(agentResultPreview("Looks right.")).toBe("Looks right.");
+    expect(agentResultPreview("x".repeat(1000))).toHaveLength(800);
+  });
+  test("nothing said is no preview", () => {
+    expect(agentResultPreview("work_state: done\n")).toBeUndefined();
+    expect(agentResultPreview('work_state: done\n```json\n{"outcome": "x"}\n```')).toBeUndefined();
   });
 });
