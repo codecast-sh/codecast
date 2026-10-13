@@ -5,9 +5,13 @@
 // reader (WaitingItem), and when it leaves the list the next one opens. No row
 // carries a button: every act is in the reader, next to the whole text.
 //
-// The list is what the viewer can answer now, and nothing else: fixes to
-// decide, questions, new problems to confirm, and runs that finished a step and wait
-// on a yes to go on, across every process. The nav's
+// The list is what a line puts in front of a person, and nothing else: the
+// decision a session presents at the end of its run (one per problem), and the
+// acts only a person takes on a problem no run holds (an approved fix to land,
+// a problem main already fixes, one assigned to them, a twin to merge), across
+// every process. What a station asked before its run got that far (a question,
+// a new problem to confirm, a step that finished mid-run) is never here: it is
+// the problem's state on Problems. The nav's
 // count, the list and the reader's "N of M" are the same rows. What no answer
 // can reach (a run that must ask again, a problem behind a line that is off)
 // lives on Problems; under the list one quiet line each points there, counted
