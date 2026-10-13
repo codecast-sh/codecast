@@ -1,0 +1,28 @@
+{
+  "asOf": "2026-09-22T12:00:00.000Z",
+  "notes": "the proof went green but the test suite has two new failures in a neighbouring feature: the words must not recommend ship, and should say what is failing in plain terms",
+  "snapshot": {
+    "task": { "short_id": "ct-9140", "title": "Saved carts lose their items after the shopper signs in on a second device" },
+    "card": {
+      "cause": { "task": "ct-9140", "title": "Saved carts lose their items after the shopper signs in on a second device", "signals": 5, "first_seen": 1789300000000, "sources": ["support"] },
+      "goal": { "ref": "pj-12", "name": "Shop: checkout", "why": "Every shopper who reaches the cart can pay in under a minute and is charged exactly the total the cart shows." },
+      "wrong": "",
+      "change": "",
+      "proof": {
+        "before": [{ "name": "Test: cart merges on a second sign-in", "ok": false, "detail": "fails before the change: cart had 0 items, expected 3" }],
+        "after": [{ "name": "Test: cart merges on a second sign-in", "ok": true, "detail": "passes after the change" }]
+      },
+      "examples": [],
+      "checks": [
+        { "name": "Verify", "ok": true, "detail": "The builder handed it over as done" },
+        { "name": "Typecheck", "ok": true, "detail": "0 errors" },
+        { "name": "Tests", "ok": false, "detail": "408 passed, 2 failed: wishlist keeps items after sign-out; wishlist count badge updates on merge" },
+        { "name": "Review", "ok": true, "detail": "An independent reviewer approved it" }
+      ],
+      "diff": { "files": 4, "added": 66, "removed": 21 },
+      "risk": { "class": "review", "reason": "Ground rated it review." },
+      "recommend": { "verdict": "", "why": "" },
+      "cost": { "tokens": 0, "usd": 1.87, "minutes": 52 }
+    }
+  }
+}

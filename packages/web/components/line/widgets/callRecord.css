@@ -1,0 +1,16 @@
+/* A call read in place: head, transcript by speaker with the finding's quoted lines marked, summary on demand. */
+.cr { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--lw-r-sm); background: var(--lw-sunk); font-size: var(--lw-fs-sm); }
+.cr-wait { flex-direction: row; align-items: center; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.cr-head { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); font-variant-numeric: tabular-nums; }
+.cr-head b { font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink); }
+.cr-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cr-lines li { display: grid; grid-template-columns: 5ch 12ch minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 2px 6px; border-radius: 4px; }
+.cr-lines li[data-marked] { background: color-mix(in srgb, var(--lw-warn) 18%, transparent); box-shadow: inset 2px 0 0 var(--lw-warn); }
+.cr-at { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.cr-who { font-weight: 600; color: var(--lw-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-lines li[data-who="caller"] .cr-who { color: var(--lw-ink-3); }
+.cr-text { color: var(--lw-ink); overflow-wrap: anywhere; }
+.cr-summary summary { cursor: pointer; color: var(--lw-ink-2); font-size: var(--lw-fs-xs); }
+.cr-scroll { position: relative; max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
+.cr-gap { display: block !important; padding: 0 6px !important; color: var(--lw-ink-3); font-size: var(--lw-fs-xs); line-height: 1; }
+.cr-whole { align-self: flex-start; font-size: var(--lw-fs-xs); }

@@ -377,6 +377,16 @@ function runIsLimitParked(runConv: Doc<"conversations"> | null): boolean {
   return runConv?.pending_api_error_kind === "limit";
 }
 
+// The conversation a run's notification opens: the schedule's home for an
+// inject run, else the spawned run itself. A notice without one has no click
+// target, so the banner and the bell open nothing.
+function runNoticeConversationId(
+  task: Doc<"agent_tasks">,
+  runConv: Doc<"conversations"> | null,
+): Id<"conversations"> | undefined {
+  return task.originating_conversation_id ?? runConv?._id;
+}
+
 // How long a limit-parked run waits when no account reports a reset time, and
 // the margin past a reported reset so the first request lands after the
 // window rolled rather than on its last second.
@@ -1511,13 +1521,12 @@ export const completeTaskRun = mutation({
     // into the active inbox — the just-finished turn then triages as
     // needs-input. One-shot at completion: re-stashing silences the loop again
     // until the NEXT flagged run.
+    const attentionConvId =
+      runNoticeConversationId(task, runConv) ??
+      (args.conversation_id
+        ? (args.conversation_id as Id<"conversations">)
+        : undefined);
     if (args.needs_attention) {
-      const attentionConvId =
-        task.originating_conversation_id ??
-        runConv?._id ??
-        (args.conversation_id
-          ? (args.conversation_id as Id<"conversations">)
-          : undefined);
       const conv =
         runConv && runConv._id === attentionConvId
           ? runConv
@@ -1541,6 +1550,7 @@ export const completeTaskRun = mutation({
         recipient_user_id: auth.userId,
         type: "task_completed",
         message: `Task "${task.title}" completed${args.summary ? `: ${args.summary.slice(0, 100)}` : ""}`,
+        conversation_id: attentionConvId,
         read: false,
         created_at: now,
       });
@@ -1550,7 +1560,7 @@ export const completeTaskRun = mutation({
         type: "task_completed",
         title: "Task completed",
         body: task.title,
-        data: { type: "task_completed", taskId: args.task_id },
+        data: { type: "task_completed", taskId: args.task_id, conversationId: attentionConvId },
       });
     }
 
@@ -1631,10 +1641,12 @@ export const failTaskRun = mutation({
 
       const user = await ctx.db.get(auth.userId);
       if (user?.push_token && user.notifications_enabled) {
+        const failedConvId = runNoticeConversationId(task, runConv);
         const notifId = await ctx.db.insert("notifications", {
           recipient_user_id: auth.userId,
           type: "task_failed",
           message: `Task "${task.title}" failed: ${args.error || "max retries exceeded"}`,
+          conversation_id: failedConvId,
           read: false,
           created_at: Date.now(),
         });
@@ -1644,7 +1656,7 @@ export const failTaskRun = mutation({
           type: "task_failed",
           title: "Task failed",
           body: `${task.title}: ${args.error || "max retries exceeded"}`,
-          data: { type: "task_failed", taskId: args.task_id },
+          data: { type: "task_failed", taskId: args.task_id, conversationId: failedConvId },
         });
       }
     }
@@ -2850,6 +2862,7 @@ export const reclaimStaleTasks = internalMutation({
               recipient_user_id: task.user_id,
               type: "task_failed",
               message: `Task "${task.title}" failed: lease expired after ${task.retry_count} retries`,
+              conversation_id: task.originating_conversation_id,
               read: false,
               created_at: now,
             });
@@ -2868,7 +2881,7 @@ export const reclaimStaleTasks = internalMutation({
 // surface was showing a truncated wall of prompt text. These functions turn
 // the prompt into a short display_title (2-5 words) and a display_summary (one
 // plain sentence: what the agent does each run). Same idiom as
-// titleGeneration.ts: an internalAction calls Haiku at temperature 0 and an
+// titleGeneration.ts: an internalAction calls the cheap model and an
 // internalMutation patches the result; extractTitleJson is reused for the
 // {"title","subtitle"} parse. Triggered from insertTask and from webUpdate on
 // prompt change; backfillDisplaySummaries sweeps pre-existing schedules.
@@ -2979,8 +2992,6 @@ export const generateDisplaySummary = internalAction({
           : "once";
 
     try {
-      // The cheap model, at temperature 0: the same prompt must yield the
-      // same summary.
       // A hosted routine's summary is said to its person (Routines shows it
       // as the description); any other schedule's is a developer's gist.
       const reply = await callModel({
