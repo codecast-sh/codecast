@@ -14,6 +14,7 @@ import { GUIDES, formatGuideDate, getGuide, type Guide } from "./guides";
 import { getGuideContent } from "./guideContent";
 import { GuideCard } from "./GuideCard";
 import { guideFigure } from "./figures";
+import { agentFeatureHref } from "@/lib/agentFeatureHref";
 
 /** Words a reader gets through in a minute of technical prose. */
 const WORDS_PER_MINUTE = 220;
@@ -229,7 +230,7 @@ export default function GuidePage() {
 
   usePageMeta(
     guide ? `${guide.title} — Codecast docs` : "Guide not found — Codecast docs",
-    guide?.dek ?? "Deep technical guides to codecast's agent features.",
+    guide?.dek ?? "Guides to codecast's features.",
   );
 
   if (!guide) {
@@ -276,14 +277,14 @@ export default function GuidePage() {
             <span aria-hidden>&middot;</span>
             <span>{readingMinutes(content)} min read</span>
           </div>
-          {guide.installSlug && (
-            <div
-              className="mt-5 inline-flex items-center gap-2 rounded-lg px-3 py-2 font-mono text-[13px]"
+          {guide.feature && (
+            <Link
+              href={agentFeatureHref(guide.feature)}
+              className="mt-5 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-[13px] font-medium"
               style={{ backgroundColor: SOL.base2, color: SOL.base02 }}
             >
-              <span style={{ color: SOL.green }}>$</span>
-              cast install {guide.installSlug}
-            </div>
+              Turn it on in Agent features <span aria-hidden style={{ color: SOL.yellow }}>&rarr;</span>
+            </Link>
           )}
         </header>
 

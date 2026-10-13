@@ -266,10 +266,17 @@ field.
 
 ## L11. Limits
 
-Hands started by a run are unattended principals: reversible actions run;
-anything in a protected category goes through `cast decide`, which pins the
-holder to a person. A stalled hand is killed by the runner's timeout and the
-task returns to open with a comment. Two implement cycles, then the task goes
+Hands started by a run are unattended principals. Each opens with three
+lines (`unattendedOpening`, `packages/shared/contracts/unattended.ts`) that
+say only what is true of every unattended session: which step started it and
+that nobody is watching, that the run reads the outcome from the command the
+brief ends with (a pin when it names none), and that a decision which is a
+person's goes through `cast decide`, which pins the holder to a person. What one
+station may do, such as committing and pushing its branch, is in that
+station's own prompt. A hand that settles with no message and no result
+never ran a turn, and one that outlives the runner's timeout is killed: either
+fails its station, routes only on an edge that asks about the outcome, and
+otherwise returns the task to open with a comment. Two implement cycles, then the task goes
 to `in_review` blocked with a decision to the person (L4, failure gates).
 
 ## L12. The merge step

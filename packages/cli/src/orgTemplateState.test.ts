@@ -36,18 +36,17 @@ describe("instance state", () => {
     recordScores(manifest, state, ["primary_events_7d=7"], { source: "ct-48702", observedAt: 5 });
     expect(state.scoreboard).toEqual({ primary_events_7d: { value: "7", observed_at: 5, source: "ct-48702" } });
   });
-  test("setup: a role marks its own items with evidence; an agent cannot mark a person's step; the one ask is the first open human item", () => {
+  test("setup: the role's own items need evidence; anyone marks a person's step; the one ask is the first open human item", () => {
     const state: InstanceState = {};
     expect(nextHumanAsk(manifest, state)?.id).toBe("search-console");
-    expect(() => markSetup(manifest, state, "search-console", { status: "done", fromAgent: true })).toThrow(/person's step/);
-    expect(() => markSetup(manifest, state, "measurement", { status: "done", fromAgent: true })).toThrow(/a person can open/);
-    markSetup(manifest, state, "measurement", { status: "done", evidence: "ct-48703", fromAgent: true, now: 3 });
-    markSetup(manifest, state, "search-console", { status: "done", fromAgent: false, now: 4 });
+    expect(() => markSetup(manifest, state, "measurement", { status: "done" })).toThrow(/a person can open/);
+    markSetup(manifest, state, "measurement", { status: "done", evidence: "ct-48703", now: 3 });
+    markSetup(manifest, state, "search-console", { status: "done", now: 4 });
     expect(nextHumanAsk(manifest, state)?.id).toBe("publora");
-    markSetup(manifest, state, "publora", { status: "skipped", fromAgent: false });
+    markSetup(manifest, state, "publora", { status: "skipped" });
     expect(nextHumanAsk(manifest, state)).toBeUndefined();
     expect(setupRows(manifest, state).map((r) => [r.id, r.status])).toEqual([["search-console", "done"], ["measurement", "done"], ["publora", "skipped"]]);
-    markSetup(manifest, state, "measurement", { status: "open", fromAgent: true });
+    markSetup(manifest, state, "measurement", { status: "open" });
     expect(state.setup!.measurement).toEqual({ status: "open" });
   });
   test("readiness reads the receipt's evidence and authority with the manifest's ages; the header states mode and cause", () => {

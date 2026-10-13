@@ -4,7 +4,7 @@
 // line sent here is the wake, the same as web; the header's board button opens
 // everything in the role's scope. "workspace" is the root: the workspace agent.
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -17,6 +17,8 @@ import { useSyncOrgTree } from '@/hooks/useSyncOrgTree';
 import { SessionScreen } from '../../session/[id]';
 import { parentName } from '@codecast/web/components/org/orgMeta';
 import { canEditRole, scopeSeatOf } from '@codecast/web/lib/scopePage';
+import { ledgerLines, roleOnlineLedger } from '@codecast/web/components/consequential/roleOnline';
+import { autonomyOn } from '@codecast/shared/contracts/roleAutonomy';
 
 export default function RoleScreen() {
   const Theme = useTheme();
@@ -119,7 +121,7 @@ export default function RoleScreen() {
         ) : canEditRole(tree, role, meId) ? (
           <>
             <RNText style={styles.note}>Bring it online and this page becomes a conversation with it: ask for something here and it answers or starts a session for the work.</RNText>
-            <TouchableOpacity style={[styles.primary, busy && { opacity: 0.6 }]} disabled={busy} onPress={provision}>
+            <TouchableOpacity style={[styles.primary, busy && { opacity: 0.6 }]} disabled={busy} onPress={() => confirmOnline(role, hostName, provision)} testID="role-bring-online">
               <RNText style={styles.primaryText}>{busy ? 'Bringing it online…' : `Bring @${role.handle} online`}</RNText>
             </TouchableOpacity>
             {problem && <RNText style={[styles.note, { color: Theme.red }]}>{problem}</RNText>}
@@ -142,3 +144,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   primaryText: { fontSize: 13, fontWeight: '700', color: Theme.bg },
   link: { fontSize: 12.5, color: Theme.violet },
 }));
+
+/** Bringing a role online starts its standing session, and with its own switch on, paid work unasked: the press asks first, with the numbers. */
+function confirmOnline(role: { handle: string; name: string; trust?: string | null; caps?: { hands_per_day?: number | null } | null }, host: string, go: () => void) {
+  const l = roleOnlineLedger({ handle: role.handle, name: role.name, host, startsOnItsOwn: autonomyOn(role.trust), sessionsPerDay: role.caps?.hands_per_day ?? 6 });
+  Alert.alert(l.name, ledgerLines(l).join('\n'), [{ text: 'Keep offline', style: 'cancel' }, { text: l.confirm, style: 'destructive', onPress: go }]);
+}
