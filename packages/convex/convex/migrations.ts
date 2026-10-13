@@ -670,6 +670,21 @@ export const clearEscalationStamps = internalMutation({
   },
 });
 
+// A seat's folder is its standing session's (lib/seatPlace): nothing reads
+// anchors.project_path any more, and the copy went stale whenever the session
+// moved machines. This clears it from every anchor so the schema can drop the
+// field. Dry by default.
+//   npx convex run migrations:clearAnchorProjectPaths '{"dryRun":false}'
+export const clearAnchorProjectPaths = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const stamped = (await ctx.db.query("anchors").collect()).filter((a: any) => a.project_path !== undefined);
+    if (!dryRun) for (const a of stamped) await ctx.db.patch(a._id, { project_path: undefined } as any);
+    return { dryRun, cleared: stamped.length };
+  },
+});
+
 // One-time backfill (org-staffing.md S28): a role's standing session carries
 // its parent role in `org_role_id` so it rides the parent lead's card. Roles
 // seated before the rule have it unset; roles that report to a person must

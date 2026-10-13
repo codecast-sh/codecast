@@ -21,6 +21,16 @@ const COUNT = { type: "number" } as const;
 /** A UI location label: a hand-written constant at the call site, never user text. */
 const LOCATION = { type: "string", max: 64 } as const;
 
+/** Keyboard shortcuts that change data or move work. Clicks reach PostHog by
+ *  autocapture, keys never do, so without this a session killed by a chord left
+ *  no trace of who killed it (jx7970z, 2026-10-06). Navigation keys stay out:
+ *  they are most of the volume and none of the forensics. */
+export const TRACKED_SHORTCUTS = [
+  "session.kill", "session.stash", "session.stashHide", "session.deferAdvance", "session.dormantAdvance",
+  "session.snooze", "session.pin", "session.markUnread", "session.moveToBucket", "session.rename",
+  "ui.undo", "ui.redo", "msg.fork", "conv.favorite",
+] as const;
+
 export const CODECAST_EVENTS = defineCatalog({
   // Install and activation funnel (client).
   install_command_copied: {
@@ -79,6 +89,9 @@ export const CODECAST_EVENTS = defineCatalog({
   tour_started: { tour: { type: "string", max: 32 }, replay: { type: "boolean" } },
   tour_finished: { tour: { type: "string", max: 32 }, step: COUNT },
   tour_skipped: { tour: { type: "string", max: 32 }, step: COUNT },
+
+  // A tracked keyboard shortcut ran its action (TRACKED_SHORTCUTS).
+  shortcut_used: { action: { type: "string", values: TRACKED_SHORTCUTS } },
 
   // Tips.
   tip_seen: { tip_id: { type: "string", max: 64 }, type: { type: "string", max: 16, optional: true } },
