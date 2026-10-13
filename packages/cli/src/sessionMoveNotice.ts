@@ -92,7 +92,7 @@ export function reorientationNotice(f: ReorientationFacts): string | null {
 
   if (f.verification) {
     lines.push(
-      `Code transfer: any uncommitted changes were committed as a wip snapshot on the branch, then pushed. Verification: ${f.verification}.`,
+      `Code transfer: the working tree came across directly from the previous machine (nothing went through the git remote), and uncommitted or untracked changes are still uncommitted here, as they were there. Verification: ${f.verification}.`,
     );
   }
 
