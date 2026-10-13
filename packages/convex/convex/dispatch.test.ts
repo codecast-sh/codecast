@@ -127,6 +127,30 @@ describe("applyPatches conversation owner gate", () => {
   });
 });
 
+// A gesture on a lead patches its whole group; 175 rows of hide teardown in
+// one transaction passed Convex's 4096-read cap (2026-10-08).
+describe("applyPatches batches a big patch set", () => {
+  test("the first rows land now and the rest are scheduled with the same intent", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `conversations_${i}`);
+    const db = makeFakeDb({
+      conversations: ids.map((_id) => ({ _id, user_id: "users_me", status: "active", message_count: 5 })),
+      session_owners: [],
+      messages: [],
+      pending_messages: [],
+    });
+    const scheduled: any[] = [];
+    const scheduler = { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } };
+    const patches = { conversations: Object.fromEntries(ids.map((id) => [id, { inbox_stashed_at: 555 }])) };
+
+    await applyPatches({ db, scheduler } as any, "users_me" as any, patches, { cause: "web:stashSession" });
+
+    expect(db._tables.conversations.filter((r: any) => r.inbox_stashed_at === 555)).toHaveLength(25);
+    expect(scheduled).toHaveLength(1);
+    expect(Object.keys(scheduled[0].patches.conversations)).toEqual(ids.slice(25));
+    expect(scheduled[0]).toMatchObject({ user_id: "users_me", cause: "web:stashSession" });
+  });
+});
+
 // Kill is a DESIRED STATE, not an event. A kill patch is indistinguishable at
 // the FIELD level from a quiet re-assert of the same flag (a stub-rekey flush,
 // an undo replay), so the dispatched ACTION NAME is the only signal of intent
@@ -718,6 +742,34 @@ describe("receipt-backed create side effects", () => {
       });
       expect(replay).toEqual(first);
     }
+  });
+
+  test("a project created under a goal is attached in the create's own command, once", async () => {
+    const userId = "users_owner";
+    const db = makeFakeDb({ local_command_receipts: [], local_view_heads: [] });
+    const calls: any[] = [];
+    const ctx = {
+      auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) },
+      db,
+      runMutation: async (_mutation: unknown, args: any) => {
+        calls.push(args);
+        return calls.length === 1 ? { id: "projects_created", short_id: "pj-created" } : { ok: true };
+      },
+    };
+    const continuation = { version: 1, kind: "attachToInitiative", initiativeId: "initiatives_goal" };
+    const input = {
+      action: "createProject",
+      args: [{ title: "Launch", client_key: "projstub-1" }, continuation],
+      result: { receiptActionVersion: 1, commandId: "create-project-under-goal", localResult: { stubId: "projstub-1", continuation } },
+    };
+    const first = await (dispatch as any)._handler(ctx, input);
+    const replay = await (dispatch as any)._handler(ctx, input);
+    expect(calls).toEqual([
+      { title: "Launch", client_key: "projstub-1" },
+      { id: "initiatives_goal", project_id: "projects_created" },
+    ]);
+    expect(first).toMatchObject({ status: "acknowledged", result: { id: "projects_created" } });
+    expect(replay).toEqual(first);
   });
 
   test("createBucket delegates to the existing V2 receipt surface and preserves its canonical id", async () => {

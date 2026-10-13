@@ -8,7 +8,7 @@
 //   agent_faces     The face says each reply the session posts to the call's
 //                   chat, word for word.
 //   agent_realtime  The worker also runs a fast live model that hears the
-//                   room, sees the speaker's camera and any shared screen,
+//                   room, sees every shared screen and camera that is on,
 //                   and answers at once; the session stays the agent's
 //                   working half, handed real work through `ask`, and its
 //                   replies reach the model to tell the room in its own
@@ -23,7 +23,10 @@
 //          on its way for the session wins.
 //   tell   Each reply the room's chat shows reaches the worker on the room's
 //          data channel.
-//   leave  The face is removed from the room and the worker leaves with it.
+//   leave  The worker is told to go, the face is removed from the room, and
+//          its dispatch is cleared. Like join, a client in the call does it
+//          at once (removeAgent, ensureFaces) and the feed's scheduled leave
+//          is the fallback.
 //   brief, ask, said (real-time only, over /calls/face): who the voice is,
 //          work it hands the session, and what it said, which becomes the
 //          transcript's so the record and the session both know it.
@@ -266,21 +269,32 @@ function dispatchAlive(d: { state?: { jobs?: { state?: { status?: string | numbe
   return jobs.length === 0 || jobs.some((j) => live(j.state?.status));
 }
 
-/** Send the worker in for this session's face, unless a dispatch for it is
- *  already on its way or running. A finished one (the face left, or never
- *  came) is cleared so a new one can go. True when it dispatched. */
-export async function dispatchFace(cfg: FaceConfig, feed: FaceFeed, realtime: boolean): Promise<boolean> {
-  const listed = await livekit(cfg, feed.room_key, "AgentDispatchService/ListDispatch", { room: feed.room_key }, [404]);
+type FaceDispatch = { id: string; conversation_id: string | undefined; alive: boolean };
+
+/** The face worker's dispatches in a room, each with the session it speaks for. */
+async function faceDispatches(cfg: FaceConfig, room: string): Promise<FaceDispatch[]> {
+  const listed = await livekit(cfg, room, "AgentDispatchService/ListDispatch", { room }, [404]);
   // LiveKit answers in snake_case; the camelCase reading keeps a server that
   // answers in protobuf's other JSON spelling from going unseen.
+  const out: FaceDispatch[] = [];
   for (const d of listed?.agent_dispatches ?? listed?.agentDispatches ?? []) {
     if ((d.agent_name ?? d.agentName) !== FACE_HOST_AGENT) continue;
     let meta: { conversation_id?: string } = {};
     try {
       meta = JSON.parse(d.metadata || "{}");
     } catch {}
-    if (meta.conversation_id !== feed.conversation_id) continue;
-    if (dispatchAlive(d)) return false;
+    out.push({ id: d.id, conversation_id: meta.conversation_id, alive: dispatchAlive(d) });
+  }
+  return out;
+}
+
+/** Send the worker in for this session's face, unless a dispatch for it is
+ *  already on its way or running. A finished one (the face left, or never
+ *  came) is cleared so a new one can go. True when it dispatched. */
+export async function dispatchFace(cfg: FaceConfig, feed: FaceFeed, realtime: boolean, listed?: FaceDispatch[]): Promise<boolean> {
+  for (const d of listed ?? (await faceDispatches(cfg, feed.room_key))) {
+    if (d.conversation_id !== feed.conversation_id) continue;
+    if (d.alive) return false;
     await livekit(cfg, feed.room_key, "AgentDispatchService/DeleteDispatch", { dispatchId: d.id, room: feed.room_key }, [404]);
   }
   await livekit(cfg, feed.room_key, "AgentDispatchService/CreateDispatch", {
@@ -289,6 +303,27 @@ export async function dispatchFace(cfg: FaceConfig, feed: FaceFeed, realtime: bo
     metadata: JSON.stringify({ conversation_id: feed.conversation_id, name: feed.name, ...faceForAvatar(feed.avatar), realtime }),
   });
   return true;
+}
+
+/** Take an agent out of the room now: its worker is told to leave (the only
+ *  way out for a voice with no face), its face is put out, and its dispatches
+ *  are cleared so nothing seats it again. Already gone is the outcome wanted. */
+async function removeFace(cfg: FaceConfig, room: string, conversationId: string, listed?: FaceDispatch[]): Promise<void> {
+  await sendFaceData(cfg, room, { conversation_id: conversationId, kind: "leave" });
+  await livekit(cfg, room, "RoomService/RemoveParticipant", { room, identity: agentFaceIdentity(conversationId) }, [404]);
+  for (const d of listed ?? (await faceDispatches(cfg, room))) {
+    if (d.conversation_id === conversationId) {
+      await livekit(cfg, room, "AgentDispatchService/DeleteDispatch", { dispatchId: d.id, room }, [404]);
+    }
+  }
+}
+
+/** A message for the face worker on the room's data channel (worker.mjs onFaceMessage). */
+async function sendFaceData(cfg: FaceConfig, room: string, msg: { conversation_id: string; kind: "reply" | "leave"; text?: string }): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(msg));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  await livekit(cfg, room, "RoomService/SendData", { room, data: btoa(bin), kind: "RELIABLE", topic: FACE_TOPIC }, [404]);
 }
 
 export const join = internalAction({
@@ -303,13 +338,14 @@ export const join = internalAction({
 });
 
 /** The faces this caller's call should have: every live feed of the room
- *  they may be in, when their team has faces on. */
+ *  they may be in, when their team has faces on. Null for a caller who may
+ *  not act on the room at all. */
 export const facesForRoom = internalQuery({
   args: { room_key: v.string() },
-  handler: async (ctx, args): Promise<(FaceFeed & { realtime: boolean })[]> => {
+  handler: async (ctx, args): Promise<(FaceFeed & { realtime: boolean })[] | null> => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    if (!(await authorizeRoom(ctx, userId, args.room_key)).ok) return [];
+    if (!userId) return null;
+    if (!(await authorizeRoom(ctx, userId, args.room_key)).ok) return null;
     const t = await liveTranscriptFor(ctx, args.room_key);
     const mode = t ? await faceMode(ctx, t.team_id) : "off";
     if (!t || mode === "off") return [];
@@ -326,17 +362,37 @@ export const facesForRoom = internalQuery({
   },
 });
 
-/** From a client in the call, whenever the agents in the room change: seat
- *  each one's face now rather than when the scheduler gets to it. */
+/** From a client in the call, whenever the agents in the room change: make
+ *  the room's faces match its feeds now rather than when the scheduler gets
+ *  to it, seating each fed agent and taking out each one no longer fed. */
 export const ensureFaces = action({
   args: { room_key: v.string() },
   handler: async (ctx, args): Promise<number> => {
     const cfg = faceConfig();
     if (!cfg) return 0;
     const feeds = await ctx.runQuery(internal.callFace.facesForRoom, { room_key: args.room_key });
+    if (!feeds) return 0;
+    const listed = await faceDispatches(cfg, args.room_key);
+    const fed = new Set(feeds.map((f) => f.conversation_id));
+    for (const d of listed) {
+      if (d.alive && d.conversation_id && !fed.has(d.conversation_id)) await removeFace(cfg, args.room_key, d.conversation_id, listed);
+    }
     let sent = 0;
-    for (const feed of feeds) if (await dispatchFace(cfg, feed, feed.realtime)) sent++;
+    for (const feed of feeds) if (await dispatchFace(cfg, feed, feed.realtime, listed)) sent++;
     return sent;
+  },
+});
+
+/** Put an agent out of the call, from anyone in it: its feed ends (the
+ *  thread says it left) and its face and voice leave in this same request. */
+export const removeAgent = action({
+  args: { room_key: v.string(), conversation_id: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await ctx.runMutation(internal.transcripts.removeAgentFromRoom, { user_id: userId, room_key: args.room_key, conversation_id: args.conversation_id });
+    const cfg = faceConfig();
+    if (cfg) await removeFace(cfg, args.room_key, args.conversation_id);
   },
 });
 
@@ -345,15 +401,7 @@ export const tell = internalAction({
   handler: async (_ctx, args): Promise<void> => {
     const cfg = faceConfig();
     if (!cfg) return;
-    const bytes = new TextEncoder().encode(JSON.stringify({ conversation_id: args.conversation_id, kind: "reply", text: args.text }));
-    let bin = "";
-    for (const b of bytes) bin += String.fromCharCode(b);
-    await livekit(cfg, args.room_key, "RoomService/SendData", {
-      room: args.room_key,
-      data: btoa(bin),
-      kind: "RELIABLE",
-      topic: FACE_TOPIC,
-    });
+    await sendFaceData(cfg, args.room_key, { conversation_id: args.conversation_id, kind: "reply", text: args.text });
   },
 });
 
@@ -377,10 +425,6 @@ export const leave = internalAction({
     // A room is reused call after call: a leave for the last call's feed that
     // runs after the next call fed the session again must not take its face.
     if (await ctx.runQuery(internal.callFace.fedNow, args)) return;
-    // A face already gone (or never seated) is the outcome we wanted.
-    await livekit(cfg, args.room_key, "RoomService/RemoveParticipant", {
-      room: args.room_key,
-      identity: agentFaceIdentity(String(args.conversation_id)),
-    }, [404]);
+    await removeFace(cfg, args.room_key, String(args.conversation_id));
   },
 });
