@@ -12,9 +12,10 @@ import type { ReactNode } from "react";
 import { identityLine, sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
 import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 import { RoleHoverCard } from "./RoleHoverCard";
+import { highlightMatch } from "../../lib/searchHighlight";
 
 export function SessionIdentityLine({
-  row, title, className, nameClassName, titleClassName, after, personifyAll: inheritedPersonifyAll,
+  row, title, className, nameClassName, titleClassName, after, highlight, personifyAll: inheritedPersonifyAll,
 }: {
   row: IdentityRow;
   personifyAll?: boolean;
@@ -25,6 +26,8 @@ export function SessionIdentityLine({
   titleClassName?: string;
   /** Chips that follow the title on the same line. */
   after?: ReactNode;
+  /** A search's words, marked in the name and the title. */
+  highlight?: string;
 }) {
   const personifyAll = usePersonifyAll(inheritedPersonifyAll);
   const line = identityLine(row, title, personifyAll);
@@ -32,7 +35,7 @@ export function SessionIdentityLine({
   const who = (
     <>
       {line.name && (
-        <span data-sv-name className={`max-w-full flex-shrink-0 truncate font-medium text-sol-text ${nameClassName ?? ""}`}>{line.name}</span>
+        <span data-sv-name className={`max-w-full flex-shrink-0 truncate font-medium text-sol-text ${nameClassName ?? ""}`}>{highlight ? highlightMatch(line.name, highlight) : line.name}</span>
       )}
       {line.handle && <span className="min-w-0 truncate text-sol-text-dim font-mono text-[0.85em]">@{line.handle}</span>}
     </>
@@ -53,7 +56,7 @@ export function SessionIdentityLine({
       {line.name && line.title && <span aria-hidden className="flex-shrink-0 text-sol-text-dim/60">·</span>}
       {line.title && (
         <span className={`min-w-0 truncate ${line.name ? "text-sol-text-dim" : "text-sol-text"} ${titleClassName ?? ""}`}>
-          {line.title}
+          {highlight ? highlightMatch(line.title, highlight) : line.title}
         </span>
       )}
       {after}

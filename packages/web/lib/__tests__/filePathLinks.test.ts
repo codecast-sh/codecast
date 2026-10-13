@@ -52,6 +52,9 @@ describe("file path mentions in prose", () => {
       "import from @codecast/shared/render",
       "the /inbox route, w/ the team",
       "ratio 1/2 or 3/4",
+      // A word list and a git branch read like three-segment paths and are neither (tc-22's proposal).
+      "(email/SMS × booked/unbooked/missed meeting × fault side)",
+      "branch origin/codecast/agentwatch-ct-57467 holds it",
     ]) {
       expect(scan(text)).toEqual([]);
     }

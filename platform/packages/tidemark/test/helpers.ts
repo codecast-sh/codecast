@@ -17,20 +17,23 @@ export const club: Scope = { type: 'group', id: 'club' };
 export const SCOPES: ScopeTypeDef[] = [{ type: 'person' }, { type: 'group' }, { type: 'global', writesGlobalMemory: true }, { type: 'ticket', compress: false, inGlobalFeed: false }];
 
 /** A summarizer that records its calls and writes content a test can read back. */
-export function countingSummarizer(): Summarizer & { leafCalls: number; mergeCalls: number; failOn?: (scope: Scope) => boolean; delayMs?: number } {
+export function countingSummarizer(): Summarizer & { leafCalls: number; mergeCalls: number; failOn?: (scope: Scope) => boolean; delayMs?: number; contexts: Array<{ what: 'leaf' | 'merge'; firstDay: string; context: string[] }> } {
   const self = {
     leafCalls: 0,
     mergeCalls: 0,
+    contexts: [] as Array<{ what: 'leaf' | 'merge'; firstDay: string; context: string[] }>,
     failOn: undefined as ((scope: Scope) => boolean) | undefined,
     delayMs: undefined as number | undefined,
-    async leaf({ scope, lines }: { scope: Scope; lines: string[] }) {
+    async leaf({ scope, lines, context }: { scope: Scope; lines: string[]; context: string[] }) {
       self.leafCalls++;
+      self.contexts.push({ what: 'leaf', firstDay: lines[0].slice(1, 11), context });
       if (self.delayMs) await new Promise((r) => setTimeout(r, self.delayMs));
       if (self.failOn?.(scope)) throw new Error('model unavailable');
       return `${lines.length} entries from "${lines[0].slice(19)}" to "${lines[lines.length - 1].slice(19)}"`;
     },
-    async merge({ earlier, later }: { earlier: { range: string }; later: { range: string } }) {
+    async merge({ earlier, later, context }: { earlier: { range: string }; later: { range: string }; context: string[] }) {
       self.mergeCalls++;
+      self.contexts.push({ what: 'merge', firstDay: earlier.range.slice(0, 10), context });
       if (self.delayMs) await new Promise((r) => setTimeout(r, self.delayMs));
       return `merged [${earlier.range}] + [${later.range}]`;
     },

@@ -247,9 +247,10 @@ export function ConversationDiffLayout({
     }
   });
 
+  const groupElRef = useRef<HTMLDivElement | null>(null);
   const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
-  });
+  }, groupElRef);
 
   // Element props handed to the memoized ConversationView must keep identity
   // across this component's own re-renders, or the memo never holds.
@@ -347,11 +348,12 @@ export function ConversationDiffLayout({
       <Group
         orientation="horizontal"
         onLayoutChange={handleLayoutChange}
+        elementRef={groupElRef}
         defaultLayout={layout}
         className="h-full"
       >
         {/* Conversation Panel */}
-        <Panel id="content-panel" minSize={15}>
+        <Panel id="content-panel" minSize="15%">
           <div className="h-full relative overflow-y-auto">
 
             <ConversationView {...conversationViewProps} />
@@ -362,7 +364,7 @@ export function ConversationDiffLayout({
         <Separator className="cc-split" />
 
         {/* Timeline + Diff Panel */}
-        <Panel id="diff-panel" minSize={20}>
+        <Panel id="diff-panel" minSize="20%">
           <div className="h-full flex">
             {/* Timeline Strip */}
             <div className="w-10 h-full border-r border-sol-border bg-sol-bg-alt/30 relative flex-shrink-0">
