@@ -26,6 +26,9 @@ export type ChatAuthor = {
    *  is the workspace's bridge identity and this is the snapshot of who really
    *  wrote it. Renders their face, never the bridge's, plus the Slack mark. */
   slack?: { isBot?: boolean; /** Their Slack user id — the grouping identity (shared authorGroupKey). */ userId?: string };
+  /** Present when the author is a role's standing agent: `name` is the role's
+   *  person like name, and this is its face, its title and its page. */
+  role?: { shortId: string; handle: string; avatar?: string | null; title: string };
 };
 
 export type ChatReaction = {
@@ -53,6 +56,16 @@ export type ChatAttachmentView = {
   height?: number;
   preview_url?: string;
 };
+
+/** What an attachment is, from its mime: every surface that draws, plays or
+ *  prefetches attachments branches on this one answer. No mime is an image,
+ *  which is what every upload was before mimes were recorded. */
+export type ChatAttachmentKind = "image" | "video" | "audio";
+export function attachmentKind(att: { mime?: string }): ChatAttachmentKind {
+  if (att.mime?.startsWith("audio/")) return "audio";
+  if (att.mime?.startsWith("video/")) return "video";
+  return "image";
+}
 
 export type ChatMessageView = {
   id: string;
@@ -85,7 +98,7 @@ export type ChatMessageView = {
   /** Thread rollup, present only on a root message that has replies. */
   replyCount?: number;
   lastReplyAt?: number;
-  replyFaces?: { id: string; name: string; avatarUrl?: string; isAgent?: boolean }[];
+  replyFaces?: { id: string; name: string; avatarUrl?: string; isAgent?: boolean; role?: ChatAuthor["role"] }[];
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";
@@ -120,6 +133,11 @@ export type ChatMessageView = {
   failReason?: string;
 };
 
+/** A role or session inside a room (convex chat.ts ChannelAgentRef). */
+export type ChatChannelAgentRef =
+  | { kind: "role"; role_id: string; short_id: string }
+  | { kind: "session"; conversation_id: string; short_id: string };
+
 export type ChatChannelView = {
   id: string;
   name: string;
@@ -131,6 +149,8 @@ export type ChatChannelView = {
   dmMemberIds?: string[];
   /** Roster of a restricted room, viewer included (the members panel). */
   memberIds?: string[];
+  /** Roles and sessions inside the room (any kind but a DM). */
+  agents?: ChatChannelAgentRef[];
   topic?: string;
   unreadCount?: number;
   /** Mentions of you specifically. This is the count allowed to shout. */
