@@ -256,7 +256,7 @@ export function DeliveryTimeline() {
         <div className="relative h-[120px]">
           {/* hold window */}
           <div className="absolute top-0 bottom-0 rounded-md" style={{ left: `${holdFrom * 100}%`, width: `${(holdTo - holdFrom) * 100}%`, background: `repeating-linear-gradient(135deg, rgba(42,161,152,0.10) 0 6px, transparent 6px 12px)`, border: `1px dashed rgba(42,161,152,0.5)` }}>
-            <span className="absolute -top-0 left-2 translate-y-1 text-[10.5px] rounded px-1.5" style={{ color: SOL.cyan, backgroundColor: "#fffaf0" }}>cast call hold 10m</span>
+            <span className="absolute -top-0 left-2 translate-y-1 text-[10.5px] rounded px-1.5" style={{ color: SOL.cyan, backgroundColor: "#fffaf0" }}>the agent asks for 10m of quiet</span>
           </div>
           {/* room speech */}
           <div className="absolute left-0 right-0 top-[34px] h-[22px]">

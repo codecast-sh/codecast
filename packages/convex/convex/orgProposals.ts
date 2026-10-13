@@ -17,6 +17,7 @@ import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
 import { setInboxStatus } from "./sessionDecisions";
+import { scheduleDecisionSettle } from "./taskWaits";
 import {
   andList,
   changeSentence,
@@ -386,6 +387,8 @@ async function clearDecision(ctx: Ctx, proposal: ProposalRow, now: number): Prom
   if (d?.status !== "pending") return;
   await ctx.db.patch(d._id, { status: "withdrawn", resolved_at: now });
   await setInboxStatus(ctx as any, d._id, "done");
+  // Tasks waiting on the card fail their wait (task-graph.md TG2).
+  await scheduleDecisionSettle(ctx as any, d);
 }
 
 /** Merge a person's edits into a change (the shared editedOrgChange: object

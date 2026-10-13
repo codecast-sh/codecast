@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Users, X } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 
 const DISMISS_FOR_MS = 7 * 24 * 60 * 60 * 1000;
@@ -30,7 +31,7 @@ export function TeamDomainBanner() {
   const open = found.teams.filter((t) => t.request !== "declined");
   if (!found.needs_proof && open.length === 0) return null;
 
-  const fail = (err: unknown) => setError(err instanceof Error ? err.message : "Something went wrong");
+  const fail = (err: unknown) => setError(humanizeConvexError(err));
   const startProof = () => {
     setError("");
     setPhase("sending");
