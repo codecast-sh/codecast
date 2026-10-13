@@ -53,8 +53,8 @@ describe("the line's inbox", () => {
     expect(by.confirm[0]).toMatchObject({ ref: "ct-2", detail: null, ask: "Which tenant saw it?" });
     expect(by.failed[0]).toMatchObject({ ref: "ct-4", runId: "r4", detail: "prove timed out" });
     expect(by.stuck[0]).toMatchObject({ title: "Codecast", detail: "Line off", waiting: 3, switchOff: true });
-    // For you counts what asks for the viewer's answer; a failed run (the pipeline's to retry) and the project that cannot start are listed, never counted.
-    expect(inboxCount(groups)).toBe(2);
+    // For you counts the decision a session presents; a new problem to confirm, a failed run and the project that cannot start are listed, never counted.
+    expect(inboxCount(groups)).toBe(1);
   });
 
   test("a row asks the question grounding wrote, said as what to do", () => {
@@ -145,14 +145,14 @@ describe("the line's inbox", () => {
   test("a project's counts are the same picked or not: for you never exceeds open, and the projects sum to the whole", () => {
     const groups = buildLineInbox({
       signals: [],
-      tasks: [cause("1", { readiness: "needs_context" }), cause("2", { project_id: "p2", readiness: "needs_context" }), cause("3")] as never,
-      runs: [], decisions: [], projects: [{ _id: "p1", title: "P1" }, { _id: "p2", title: "P2" }],
+      tasks: [cause("1"), cause("2", { project_id: "p2" }), cause("3")] as never,
+      runs: [], decisions: [{ _id: "d1", short_id: "sd-1", status: "pending", blocking: true, task_id: "1", workflow_run_id: "r1", created_at: now - H }, { _id: "d2", short_id: "sd-2", status: "pending", blocking: true, task_id: "2", workflow_run_id: "r2", created_at: now - H }], projects: [{ _id: "p1", title: "P1" }, { _id: "p2", title: "P2" }],
       rollups: [rollup({ causes: 1, hold: "off", startingOff: true })], admissions: new Map([["p1", off]]), now,
     });
     const of = inboxProcessOf([], [{ _id: "1", project_id: "p1" }, { _id: "2", project_id: "p2" }, { _id: "3", project_id: "p1" }]);
     const drawn = of.task({ _id: "1", project_id: "p1" });
     const projectOf = (id: string) => (id === "2" ? "p2" : "p1");
-    // Issue 3 is open and waits on no one; the two asking for a confirm wait on the viewer.
+    // Issue 3 is open and waits on no one; the two with a fix to decide wait on the viewer.
     const issue = (id: string, status: string) => ({ id, status, history: { attempts: [], closes: [], watches: [], occurrences: [], regressions: [], recurrences: [], ships: [], regressed: false, cameBack: false } } as unknown as LineIssue);
     const counts = lineProjectCounts(groups, of, drawn, [issue("1", "in_review"), issue("2", "in_review"), issue("3", "open")], projectOf);
     expect(counts.get("p1")).toEqual({ forYou: 1, open: 2 });
@@ -191,7 +191,7 @@ describe("the line's inbox", () => {
     expect("options" in trial.rows[1]).toBe(false);
     // A problem out of view still names itself from the card.
     expect(trial.rows[0]).toMatchObject({ ref: "ct-9", title: "Problem 9", ask: "Let close notes ask who else" });
-    expect(inboxCount(groups)).toBe(1);
+    expect(inboxCount(groups)).toBe(0);
     expect(trialAsk({ kind: "card", question: "Ship it?", card: null })).toBe("Ship it?");
   });
 });
@@ -296,7 +296,7 @@ test("a note ending on a bare request asks what nobody knows instead (ct-57501)"
 
 describe("what else waits on the viewer: a fix main already carries, a problem assigned to them", () => {
   const base = { signals: [], decisions: [], projects: [], rollups: [], admissions: new Map(), now } as const;
-  test("a run that parked a problem because main carries its fix asks the viewer to close it (ct-59687)", async () => {
+  test("a run that parked a problem because main carries its fix is a need on Problems, never For you's (ct-59687)", async () => {
     const { lineNeeds } = await import("../lineNeeds");
     const groups = buildLineInbox({
       ...base,
@@ -305,11 +305,20 @@ describe("what else waits on the viewer: a fix main already carries, a problem a
     });
     const fixed = groups.find((g) => g.kind === "fixed")!;
     expect(fixed.rows[0]).toMatchObject({ ref: "ct-1", sha: "fc0d85ba65" });
-    expect(lineNeeds(groups).map((n) => [n.kind, n.counted, n.sha])).toEqual([["fixed", true, "fc0d85ba65"]]);
+    expect(lineNeeds(groups).map((n) => [n.kind, n.counted, n.sha])).toEqual([["fixed", false, "fc0d85ba65"]]);
+    expect(inboxCount(groups)).toBe(0);
   });
   test("a problem assigned to the viewer that nothing runs on is theirs; one assigned to someone else is not (ct-59557)", async () => {
     const { lineNeeds } = await import("../lineNeeds");
     const groups = buildLineInbox({ ...base, viewer: "u1", runs: [], tasks: [cause("1", { assignee: "u1" }), cause("2", { assignee: "u2" }), cause("3", { assignee: "u1", status: "done" })] as never });
     expect(lineNeeds(groups).filter((n) => n.kind === "assigned").map((n) => n.problemRef)).toEqual(["ct-1"]);
+  });
+  test("a run's decision about a task that is not a line problem names that task, not its own question", () => {
+    const d = { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, workflow_run_id: "r1", task_id: "t9", question: "Should the grid pool each day's runs?", created_at: 5 };
+    const rows = (otherTasks?: Map<string, { title: string; short_id: string | null; project_id: string | null }>) =>
+      buildLineInbox({ tasks: [], runs: [], signals: [], projects: [], rollups: [], admissions: new Map(), now: 10, decisions: [d], otherTasks } as never).flatMap((g) => g.rows);
+    expect(rows().map((r) => [r.title, r.ref])).toEqual([["Should the grid pool each day's runs?", "sd-9"]]);
+    const named = rows(new Map([["t9", { title: "Evals grid empty at sparse batch density", short_id: "ct-9", project_id: "p1" }]]));
+    expect(named.map((r) => [r.title, r.ref, r.projectId, r.ask])).toEqual([["Evals grid empty at sparse batch density", "ct-9", "p1", "Should the grid pool each day's runs?"]]);
   });
 });

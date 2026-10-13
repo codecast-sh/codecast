@@ -19,6 +19,7 @@ import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTabActive } from "../../../hooks/usePagePresence";
+import { useStageWide } from "../../../hooks/useStageWide";
 import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import { lineSettingsHref } from "../../../lib/lineSettings";
@@ -127,6 +128,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     caseHref: (caseId) => href({ case: caseId, run: null, view: "problems" }),
     projectId: ws.home?._id,
     openPath: (path) => router.push(path),
+    replacePath: (path) => router.replace(path),
   }), [select, href, ws.home?._id, router]);
 
   const search = useSearchParams();
@@ -235,6 +237,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     return () => window.removeEventListener("keydown", onKey);
   }, [active, setView, drawerOpen, select, model, selection.step, runDetail, selection.decision]);
 
+  // The line app takes its tab's width on every page: the session rail folds to a strip, so nothing unrelated to the
+  // line sits beside it. Inside a project's page it claims the width only on For you, where a decision is read.
+  useStageWide(!embedded || selection.view === "foryou");
   const { forYou, processes: picks } = ws;
   const here = useMemo(() => new Set(model?.graphs.map((g) => g.key) ?? []), [model]);
   const View = pageFor(selection);
@@ -254,8 +259,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
       <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view}>
         <header className="lw-head">
           {!embedded && <h1 className="lw-title lw-app-title">Line</h1>}
-          {/* The workspace every page here reads: named on every page, switched in place. */}
-          {!embedded && space && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
+          {/* The workspace Problems and Line read, switched in place. For you lists decisions from every workspace, so
+              it names none (each row's product says where it is from). */}
+          {!embedded && space && scoped && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
           {scoped && model && picks.length > 0 && (listing
             ? <ProcessPicker all picks={picks} drawn={listed.has(selection.process ?? "") ? selection.process! : null} here={listed} projectTitle={project?.title ?? null} onPick={(k) => select({ process: k })} />
             : <ProcessPicker picks={picks} drawn={model.graphKey} here={here} projectTitle={project?.title ?? null} onPick={(k) => k && pickProcess(k, !!projectId && !pinned && !here.has(k))} />)}
@@ -330,8 +336,8 @@ function ProcessPicker({ picks, drawn, here, projectTitle, onPick, all = false }
             title={none ? `No runs in ${projectTitle ?? "this project"}: opens it over every project` : shown.fixes ? `${shown.title}: fixes ${shown.fixes}` : shown.title} data-line-graph-pick={top.g.key}>
             {top.title}
             {on && on !== top && <span className="lw-pick-sub">{on.title}</span>}
-            {/* The selected process says what it fixes in place: the one thing that tells two processes apart. */}
-            {on && on.fixes && <span className="lw-pick-fixes" data-line-graph-fixes>fixes {on.fixes}</span>}
+            {/* The selected process says what it fixes in place, unless its name already says it ("Codecast's line"). */}
+            {on && fixesWords(on) && <span className="lw-pick-fixes" data-line-graph-fixes>{fixesWords(on)}</span>}
             {live > 0 && <span className="lw-dot" data-pulse="" style={{ color: "var(--lw-live)" }} aria-label={`${live} running`} />}
           </button>
         );
@@ -341,6 +347,9 @@ function ProcessPicker({ picks, drawn, here, projectTitle, onPick, all = false }
     </div>
   );
 }
+
+/** What a process fixes, as its chip says it, or null when its name already says it ("Codecast's line" fixes codecast). */
+const fixesWords = (x: { title: string; fixes: string | null }) => (x.fixes && !x.title.toLowerCase().includes(x.fixes.toLowerCase()) ? `fixes ${x.fixes}` : null);
 
 /** A product's chip with its tooling folded behind a caret: the menu lists the product and each tool, with what it fixes. */
 function ProcessFamily({ chip, family, drawn, here, onPick }: { chip: ReactNode; family: Array<{ g: ProjectGraph; title: string; fixes: string | null }>; drawn: string | null; here: ReadonlySet<string>; onPick: (key: string) => void }) {
@@ -357,7 +366,7 @@ function ProcessFamily({ chip, family, drawn, here, onPick }: { chip: ReactNode;
             <button key={x.g.key} type="button" role="menuitemradio" aria-checked={x.g.key === drawn} data-elsewhere={!here.has(x.g.key) && x.g.key !== drawn ? "" : undefined} data-sub={i > 0 ? "" : undefined}
               onClick={() => { onPick(x.g.key); setOpen(false); }} data-line-graph-option={x.g.key}>
               <span className="lw-filter-check">{x.g.key === drawn && <Check className="w-3.5 h-3.5" />}</span>
-              <span className="lw-pick-name"><b>{x.title}</b>{x.fixes && <small>fixes {x.fixes}</small>}</span>
+              <span className="lw-pick-name"><b>{x.title}</b>{fixesWords(x) && <small>{fixesWords(x)}</small>}</span>
             </button>
           ))}
         </div>
@@ -381,7 +390,7 @@ function SpaceSwitcher({ space, onPick }: { space: LineSpaceState; onPick: (key:
       </button>
       {open && (
         <div className="lw-pop lw-filter-pop" role="listbox" aria-label="Workspace">
-          <div className="lw-pop-h"><span className="lw-filter-check" /><span className="lw-filter-name">Workspace</span><span>Open</span></div>
+          <div className="lw-pop-h"><span className="lw-filter-check" /><span className="lw-filter-name">Workspace</span><span>Open problems</span></div>
           {space.spaces.map((x) => (
             <button key={x.key} type="button" role="option" aria-selected={x.key === space.key} data-empty={x.open ? undefined : ""} onClick={() => { if (x.key !== space.key) onPick(x.key); setOpen(false); }} data-line-space-option={x.key}>
               <span className="lw-filter-check">{x.key === space.key && <Check className="w-3.5 h-3.5" />}</span>
