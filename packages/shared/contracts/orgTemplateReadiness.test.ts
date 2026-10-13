@@ -19,12 +19,12 @@ describe("routine readiness", () => {
     expect(routineReadiness(manifest, manifest.routines[0]!, state(), now)).toEqual({ ready: true, mode: "propose", missing: [] });
   });
   test("missing authority and evidence block, in order", () => {
-    expect(routineReadiness(manifest, manifest.routines[1]!, state(), now)).toEqual({ ready: false, mode: "propose", missing: ["authority ads-spend not granted", "evidence ads_read has no pass", "runs as propose: trust is understand"] });
+    expect(routineReadiness(manifest, manifest.routines[1]!, state(), now)).toEqual({ ready: false, mode: "propose", missing: ["authority ads-spend not granted", "evidence ads_read has no pass", "only recommends: Starts work on its own is off"] });
     expect(routineReadiness(manifest, manifest.routines[2]!, state({ trust: "direct" }), now)).toEqual({ ready: false, mode: "propose", missing: ["authority site-write not granted", "evidence technical has no pass"] });
   });
   test("apply on spend at understand is offered, as propose (H4)", () => {
     const s = state({ authority: [{ id: "ads-spend" }], evidence: [{ check: "ads_read", status: "pass", observed_at: now - H }] });
-    expect(routineReadiness(manifest, manifest.routines[1]!, s, now)).toEqual({ ready: true, mode: "propose", missing: ["runs as propose: trust is understand"] });
+    expect(routineReadiness(manifest, manifest.routines[1]!, s, now)).toEqual({ ready: true, mode: "propose", missing: ["only recommends: Starts work on its own is off"] });
     expect(routineReadiness(manifest, manifest.routines[1]!, { ...s, trust: "decide" }, now)).toEqual({ ready: true, mode: "apply", missing: [] });
   });
   test("write authority at understand keeps apply: it acts on the working tree, not money or the public", () => {

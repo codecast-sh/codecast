@@ -24,6 +24,8 @@ import { useIssueSyncSources } from "../../hooks/useSyncIssueSyncSources";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { formatRelative } from "../../lib/utils";
 import { Switch } from "../ui/switch";
+import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
+import { issuePushLedger, issueSpawnLedger } from "../consequential/ledgers";
 import { ConfirmButton, LedgerLine, QuietButton, StatusDot, type DotTone } from "./parts";
 
 const api = _api as any;
@@ -56,6 +58,7 @@ function sourceTone(source: any): { tone: DotTone; label: string } {
 function DelegationSettings({ source }: { source: any }) {
   const update = useInboxStore((s) => s.updateIssueSyncSource);
   const set = (fields: Record<string, any>) => update(source._id, fields);
+  const provider = source.provider === "github" ? "GitHub" : "Linear";
 
   return (
     <div className="mt-2 space-y-2 rounded-md bg-sol-bg-highlight/30 px-3 py-2.5">
@@ -91,20 +94,24 @@ function DelegationSettings({ source }: { source: any }) {
         <span className="text-xs text-sol-text-muted">
           Spawn a session when an issue takes the label or assignee above
         </span>
-        <Switch
-          checked={!!source.auto_spawn}
-          onCheckedChange={(v: boolean) => set({ auto_spawn: v })}
-          aria-label="Spawn a session on delegation"
+        <ConsequentialSwitch
+          on={!!source.auto_spawn}
+          ledger={issueSpawnLedger({ provider, source: source.name, label: source.delegate_label ?? "agent", assignee: source.delegate_assignee || undefined })}
+          onTurnOn={() => set({ auto_spawn: true })}
+          onTurnOff={() => set({ auto_spawn: false })}
+          trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label="Spawn a session on delegation" />}
         />
       </div>
       <div className="flex items-center justify-between gap-4">
         <span className="text-xs text-sol-text-muted">
-          Create the issue on {source.provider === "github" ? "GitHub" : "Linear"} for tasks born here
+          Create the issue on {provider} for tasks born here
         </span>
-        <Switch
-          checked={!!source.push_new_tasks}
-          onCheckedChange={(v: boolean) => set({ push_new_tasks: v })}
-          aria-label="Push new tasks to the provider"
+        <ConsequentialSwitch
+          on={!!source.push_new_tasks}
+          ledger={issuePushLedger({ provider, source: source.name })}
+          onTurnOn={() => set({ push_new_tasks: true })}
+          onTurnOff={() => set({ push_new_tasks: false })}
+          trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label="Push new tasks to the provider" />}
         />
       </div>
     </div>
