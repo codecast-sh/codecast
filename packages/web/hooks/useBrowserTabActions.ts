@@ -65,7 +65,7 @@ export function useBrowserTabActions(
   tab: { tabId: string | null; url: string | null; gone?: boolean },
   session: BrowserSessionRef,
   onReopened?: (tabId: string) => void,
-): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; dismiss: () => void; check: () => void } {
+): { state: BrowserTabActionState; tabId: string | null; focus: () => void; reopen: () => void; check: () => void } {
   const convex = useConvex();
   const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
   const goneOffer: BrowserTabActionState | null = tab.gone && canReopen ? { kind: "offer", reason: "tab-gone" } : null;
@@ -133,10 +133,5 @@ export function useBrowserTabActions(
     });
   };
 
-  // Declining the offer also stops the hover probe from making it again.
-  const dismiss = () => {
-    probedAt.current = Infinity;
-    setState({ kind: "idle" });
-  };
-  return { state, tabId, focus, reopen, dismiss, check };
+  return { state, tabId, focus, reopen, check };
 }

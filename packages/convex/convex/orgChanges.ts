@@ -293,7 +293,9 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   const { owner_user_ids: owners, owner_rows: ownerRows, ...patch } = patchOf(w.before);
   if (w.table === "org_roles" && current.status !== "retired" && patch.status !== "retired") {
     if (patch.reports_to) await performReparentRole(ctx, userId, { role_id: w.id, reports_to: patch.reports_to });
-    if (patch.caps) await performSetCaps(ctx, userId, { role_id: w.id, hands: patch.caps.hands_per_day, wakes: patch.caps.wakes_per_day, tokens: patch.caps.tokens_per_day });
+    // The whole caps object as it was, the line's slots and start switch included
+    // (LL5): a line switched on after the change goes back to off.
+    if (patch.caps) await performSetCaps(ctx, userId, { role_id: w.id, hands: patch.caps.hands_per_day, wakes: patch.caps.wakes_per_day, tokens: patch.caps.tokens_per_day, cards: patch.caps.cards, line_on: patch.caps.line_on ?? (current.caps?.line_on ? false : undefined) });
     if (patch.trust) await performSetTrust(ctx, userId, { role_id: w.id, trust: patch.trust });
     const fields = Object.fromEntries(Object.entries(patch).filter(([k, value]) => ["name", "handle", "scope", "charter", "avatar", "status"].includes(k) && value !== undefined));
     if (Object.keys(fields).length) await performUpdateRole(ctx, userId, { role_id: w.id, ...fields, leave_sessions: true });
@@ -306,7 +308,7 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
       await syncPrimaryOwnerCache(ctx, current._id);
     }
   }
-  if (w.table === "tasks" && patch.status) await setTaskStatus(ctx, { team_id: current.team_id }, current, patch.status, Date.now());
+  if (w.table === "tasks" && patch.status) await setTaskStatus(ctx, { team_id: current.team_id }, current, patch.status, Date.now(), { actorUserId: userId });
   if (w.table === "anchors" && "status" in patch && current.team_id) {
     const memberships = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", current.bot_user_id).eq("team_id", current.team_id)).collect();
     if (patch.status === "decommissioned") { for (const m of memberships) await ctx.db.delete(m._id); }
