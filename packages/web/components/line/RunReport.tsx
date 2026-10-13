@@ -63,26 +63,28 @@ export function StepMark({ state, className }: { state: StepState; className?: s
 }
 
 /** The path a run took, phase by phase: each station's result in one line and
- *  the session that did it; the stations it did not reach fold per phase. */
+ *  the session that did it; the stations it did not reach fold per phase.
+ *  A run with no phases (one group of steps) is just its steps. */
 export function RunPathView({ phases, ended }: { phases: ReportPhase[]; ended: boolean }) {
+  const bare = phases.length === 1 && phases[0].key === "steps";
   return (
     <ol className="space-y-3" data-run-path>
-      {phases.map((p) => <PhaseRow key={p.key} phase={p} ended={ended} />)}
+      {phases.map((p) => <PhaseRow key={p.key} phase={p} ended={ended} bare={bare} />)}
     </ol>
   );
 }
 
-function PhaseRow({ phase, ended }: { phase: ReportPhase; ended: boolean }) {
+function PhaseRow({ phase, ended, bare }: { phase: ReportPhase; ended: boolean; bare?: boolean }) {
   const [open, setOpen] = useState(false);
   const skipped = phase.steps.length === 0;
   const notReached = ended ? "skipped" : "not reached yet";
   // Below sm the phase sits above its steps, so a result gets the row's width.
   return (
-    <li className="grid grid-cols-1 sm:grid-cols-[6.5rem_1fr] gap-x-4 gap-y-0.5" data-run-phase={phase.key} data-phase-state={phase.state}>
-      <div className={cn("text-[11px] font-semibold uppercase tracking-wider sm:pt-0.5", skipped ? "text-sol-text-dim/60" : phase.state === "failed" ? "text-sol-red" : phase.state === "waiting" ? "text-sol-yellow" : phase.state === "live" ? "text-sol-cyan" : "text-sol-text-dim")}>
+    <li className={cn("grid grid-cols-1 gap-x-4 gap-y-0.5", !bare && "sm:grid-cols-[6.5rem_1fr]")} data-run-phase={phase.key} data-phase-state={phase.state}>
+      {!bare && <div className={cn("text-[11px] font-semibold uppercase tracking-wider sm:pt-0.5", skipped ? "text-sol-text-dim/60" : phase.state === "failed" ? "text-sol-red" : phase.state === "waiting" ? "text-sol-yellow" : phase.state === "live" ? "text-sol-cyan" : "text-sol-text-dim")}>
         {phase.label}
         {skipped && <span className="sm:hidden ml-2 normal-case tracking-normal font-normal">{notReached}</span>}
-      </div>
+      </div>}
       <div className="min-w-0">
         {skipped && <div className="hidden sm:block text-[12px] text-sol-text-dim/70 pt-0.5">{notReached}</div>}
         <ul className="space-y-1">
@@ -117,7 +119,8 @@ function StepRow({ step: s }: { step: ReportStep }) {
   return (
     <li className="flex items-baseline gap-2 text-[12.5px] min-w-0" data-run-step={s.id} data-step-state={s.state}>
       <Icon className={cn("w-3.5 h-3.5 shrink-0 self-center", mark.cls)} />
-      <span className="hidden sm:inline-block w-20 shrink-0 truncate text-[11px] text-sol-text-dim/60" data-step-label>{s.label}</span>
+      {/* Wide enough for a step's whole plain name; a longer one wraps rather than cuts. */}
+      <span className="hidden sm:inline-block w-32 shrink-0 break-words leading-snug text-[11px] text-sol-text-dim/60" data-step-label>{s.label}</span>
       {s.href ? (
         <Link href={s.href} className={cn("group min-w-0 truncate hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2", tone)} title={s.hrefTitle} data-step-link>
           {s.result}

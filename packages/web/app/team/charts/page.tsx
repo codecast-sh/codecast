@@ -163,8 +163,8 @@ function TeamChartsContent() {
               ))}
             </select>
           )}
-          <Link href="/team" className="text-[10px] text-sol-cyan/60 hover:text-sol-cyan transition-colors">
-            Members
+          <Link href="/org" className="text-[10px] text-sol-cyan/60 hover:text-sol-cyan transition-colors">
+            Org
           </Link>
         </div>
       </div>
