@@ -116,10 +116,11 @@ export function createOpsSlice(): OpsSliceActions {
       for (const [id, x] of Object.entries(this.opsSamples ?? {})) if (x?.source_id === sourceId) delete this.opsSamples[id];
     }),
 
-    // Grants are not locked (opsApps is not localFirst): the server stamps
-    // who and when, so the echo replaces this entry rather than matching it.
+    // Grants live on the source's row and are not locked (`grants` is an
+    // unprotected field): the server stamps who and when, so the echo
+    // replaces this entry rather than matching it.
     grantOpsAction: action(function (this: OpsDraft, sourceId: string, actionName: string) {
-      const row = this.opsApps[sourceId];
+      const row = this.opsSources[sourceId];
       if (!row) return;
       const me = String(this.currentUser?._id ?? "");
       const kept = (row.grants ?? []).filter((g: any) => g.action !== actionName);
@@ -127,7 +128,7 @@ export function createOpsSlice(): OpsSliceActions {
     }),
 
     revokeOpsAction: action(function (this: OpsDraft, sourceId: string, actionName: string) {
-      const row = this.opsApps[sourceId];
+      const row = this.opsSources[sourceId];
       if (row) row.grants = (row.grants ?? []).filter((g: any) => g.action !== actionName);
     }),
 
