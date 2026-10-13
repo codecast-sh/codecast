@@ -24,10 +24,13 @@ const CSS_NAMED: string[] = Object.keys(req("tailwindcss/lib/util/colorNames").d
 // a color added to it is judged without editing this.
 const palette: Record<string, unknown> = flattenColorPalette(resolveConfig(tailwindConfig).theme.colors);
 
-/** The sol variable a palette entry paints: `var(--sol-x)`, or a themed() function that returns it. */
+/** The sol variable a palette entry paints: `var(--sol-x)`, or a themed() function that returns it.
+ *  The accent classes read `--sol-class-*`, which hold the same Solarized hex
+ *  in every theme (only hosted mode remaps them, globals.css), so they are no
+ *  theme variable here. */
 function solVar(value: unknown): string | null {
   const v = typeof value === "function" ? value({}) : value;
-  return typeof v === "string" ? (/^var\((--sol-[\w-]+)\)$/.exec(v)?.[1] ?? null) : null;
+  return typeof v === "string" ? (/^var\((--sol-(?!class-)[\w-]+)\)$/.exec(v)?.[1] ?? null) : null;
 }
 
 /** Color names that follow the theme, to the variable each paints. */
