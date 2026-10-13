@@ -18,6 +18,7 @@
 // Events are changed in place: a capture is tens of MB, and a copy would
 // double what an import holds in memory.
 import { cleanUrl } from "../contracts/replay";
+import { replayCaptureProblem } from "../contracts/replayPlayer";
 import type { RrwebEvent } from "./rrweb";
 
 const EventType = { FullSnapshot: 2, IncrementalSnapshot: 3, Meta: 4 } as const;
@@ -121,7 +122,7 @@ export function prepareDomCapture(input: readonly RrwebEvent[]): RrwebEvent[] {
   return events;
 }
 
-/** Whether a capture can be played at all: rrweb needs a full snapshot to draw anything. */
+/** Whether a capture can be played at all: rrweb needs a full snapshot of a document to draw anything. */
 export function domCapturePlayable(events: readonly RrwebEvent[]): boolean {
-  return events.some((e) => e?.type === EventType.FullSnapshot);
+  return replayCaptureProblem(events) === null;
 }
