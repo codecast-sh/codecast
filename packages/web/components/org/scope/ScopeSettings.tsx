@@ -18,6 +18,7 @@ import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useWorkflows } from "../../../hooks/useSyncWorkflows";
 import { lineOptions } from "./lineBoard";
 import { lineSlugOf } from "@codecast/shared/contracts/orgProposal";
+import { DAILY_CAP_KEYS } from "@codecast/shared/contracts/orgCapacity";
 import { useLineForks } from "../../../hooks/useLineForks";
 import { lineSettingsHref } from "../../../lib/lineSettings";
 import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
@@ -25,10 +26,14 @@ import { SelectBox } from "../../ui/select-box";
 import { GatedScopeEditor, InlineEdit } from "./ScopeEditors";
 import { parentName } from "../orgMeta";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
-import { DEFAULT_CAPS, type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
+import { type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 import { isHeadOfPeopleRole } from "../orgStaffingTypes";
 import { SlackConnect } from "../../anchor/SlackConnect";
+import { OrgObjectLink } from "../company/OrgObjectLink";
+import { ConsequentialSwitch } from "../../consequential/ConsequentialSwitch";
+import { roleAutonomyLedger } from "../../consequential/ledgers";
+import { useRunCost } from "../../consequential/useRunCost";
 import { HandingOverSection, MergeStepSwitch, SplitRoleSection, SuccessionSection } from "./RoleHandoffSections";
 
 const NO_INTENTS: OrgIntent[] = [];
@@ -53,7 +58,7 @@ export function OverlapWarning({ overlaps, projectName, planName }: { overlaps: 
       <div className="text-[12px] min-w-0" style={{ color: "var(--sol-text-secondary)" }}>
         {overlaps.map((o) => (
           <p key={o.role_id} className="truncate">
-            <Link href={`/org/${o.short_id}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{o.name}</Link>
+            <OrgObjectLink kind="role" objRef={o.short_id} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{o.name}</OrgObjectLink>
             <span style={{ color: "var(--sol-text-dim)" }}> @{o.handle}</span> also looks after {[...o.project_ids.map(projectName), ...o.plan_ids.map(planName)].join(", ")}.
           </p>
         ))}
@@ -98,21 +103,21 @@ function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; rol
   const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id)) : [];
   const set = (next: string[]) => onUpdate({ reports_user_ids: next });
   return (
-    <Section title="People whose goals it keeps" hint="The role keeps each person's goals in its notes, reads their sessions against those goals every time it runs, and tells them when an important goal stalls. It has no say over their work.">
-      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's goals yet.</p>}
+    <Section title="People whose focus it keeps" hint="The role keeps each person's priorities in its notes, reads their sessions against them every time it runs, and tells them when an important one stalls. It has no say over their work.">
+      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's focus yet.</p>}
       <ul className="flex flex-wrap gap-1.5" data-reporting-people={people.length}>
         {people.map((p) => (
           <li key={p.user_id} className="inline-flex items-center gap-1.5 h-7 pl-1 pr-1.5 rounded-full border text-[12px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" }}>
             <Avatar name={p.name} image={p.image} size="sm" />{p.name}
             {(canEdit || p.is_me) && (
-              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s goals`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
+              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s focus`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
             )}
           </li>
         ))}
       </ul>
       <div className="mt-2.5 flex items-center gap-2 flex-wrap">
         {me && !ids.includes(me.user_id) && (
-          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my goals</button>
+          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my focus</button>
         )}
         {addable.filter((p) => !p.is_me).length > 0 && (
           <SelectBox value="" onChange={(e) => { if (e.target.value) set([...ids, e.target.value]); }} className="text-[12px]" aria-label="Add a person">
@@ -145,15 +150,16 @@ export type ScopeSettingsProps = {
 };
 
 export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, history, onUpdate, onReparent }: ScopeSettingsProps) {
-  const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
+  const caps: RoleCaps = role.caps ?? {};
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
   // The server value moves under the tab (the CLI, another window,
   // the echo after Save): the draft follows it, so Save never offers to write
   // stale numbers back over the change that just landed.
   useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
-  const capsDirty = capsDraft.hands_per_day !== caps.hands_per_day || capsDraft.wakes_per_day !== caps.wakes_per_day || capsDraft.tokens_per_day !== caps.tokens_per_day;
+  const capsDirty = DAILY_CAP_KEYS.some((k) => (capsDraft[k] ?? null) !== (caps[k] ?? null));
   // The switch (S23.1): on is direct, off is understand; the root stays off.
   const startsOnItsOwn = autonomyOn(role.trust);
+  const runCost = useRunCost(role.scope.project_ids[0] ?? null);
   const isRoot = isHeadOfPeopleRole(role);
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? "a channel" })), [role.follow_channel_ids, channels]);
@@ -276,13 +282,22 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
       <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Head of People proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+        {/* Off, a press opens the review of what the role may then do on its own; on, a press turns it off. */}
+        <ConsequentialSwitch
+          on={startsOnItsOwn}
+          ledger={roleAutonomyLedger({ name: role.name, handle: role.handle, caps, projects: role.scope.project_ids.map((id) => (useInboxStore.getState().projects as Record<string, { title?: string }>)[id]?.title ?? "a project"), cost: runCost, usedToday: counters?.hands ?? null, merges: lineRow?.merge?.on ?? !!role.line_merge })}
+          onTurnOn={() => onUpdate({ trust: trustForSwitch(true) })}
+          onTurnOff={() => onUpdate({ trust: trustForSwitch(false) })}
+          trigger={({ press, reviewing }) => (
         <button
           type="button"
           role="switch"
           aria-checked={startsOnItsOwn}
           aria-label={AUTONOMY_LABEL}
+          aria-haspopup={startsOnItsOwn ? undefined : "dialog"}
+          aria-expanded={startsOnItsOwn ? undefined : reviewing}
           disabled={!canEdit || isRoot}
-          onClick={() => onUpdate({ trust: trustForSwitch(!startsOnItsOwn) })}
+          onClick={press}
           data-autonomy-switch={startsOnItsOwn ? "on" : "off"}
           className="inline-flex items-center gap-2.5 rounded-full pl-1 pr-3 h-8 border transition-colors disabled:cursor-default disabled:opacity-60"
           style={{ borderColor: startsOnItsOwn ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: startsOnItsOwn ? "color-mix(in srgb, var(--sol-green) 10%, transparent)" : undefined }}
@@ -292,9 +307,11 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
           </span>
           <span className="text-[12.5px] font-semibold" style={{ color: startsOnItsOwn ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{startsOnItsOwn ? "On" : "Off"}</span>
         </button>
+          )}
+        />
       </Section>
 
-      <Section title="Limits" hint="A safety net with the defaults filled in: the most it may do in one day. When it reaches one it waits for tomorrow and says so in its notes; nothing reaches you.">
+      <Section title="Limits" hint="The most it may do in one day; none unless you set one. When it reaches one it waits for tomorrow and says so in its notes; nothing reaches you.">
         <details data-role-limits>
         <summary className="cursor-pointer text-[12px] select-none" style={{ color: "var(--sol-text-muted)" }}>Show the limits</summary>
         <div className="mt-2.5 grid grid-cols-3 gap-2">
@@ -305,8 +322,9 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
                 type="number"
                 min={0}
                 disabled={!canEdit}
-                value={capsDraft[k]}
-                onChange={(e) => setCapsDraft((c) => ({ ...c, [k]: Math.max(0, Math.floor(Number(e.target.value) || 0)) }))}
+                value={capsDraft[k] ?? ""}
+                placeholder="no limit"
+                onChange={(e) => setCapsDraft((c) => ({ ...c, [k]: e.target.value === "" ? null : Math.max(0, Math.floor(Number(e.target.value) || 0)) }))}
                 className="w-full h-8 rounded-md px-2 border text-[13px] tabular-nums outline-none bg-sol-bg-alt disabled:opacity-60"
                 style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}
               />
