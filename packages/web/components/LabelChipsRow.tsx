@@ -15,8 +15,8 @@ import {
   chipBucketFilters,
   chipProjectFilters,
   type BucketItem,
-  type BucketFilterTerm,
 } from "../store/inboxStore";
+import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
@@ -86,47 +86,6 @@ export function LabelChipsRow({
     [s.activeProjectFilter, s.activeProjectPath, s.chipFilterExclude, s.extraProjectFilters],
   );
 
-  // Click is a pure toggle: include the chip, click again to clear. Exclude
-  // ("everything but this") is a deliberate gesture — ⌥/Alt-click, or the
-  // right-click menu — never a state the plain click cycles through. Clicking
-  // a chip that is THE filter in either mode clears it, so a click's result
-  // never surprises: same chip = off, different chip = on (a plain click on a
-  // multi-term filter collapses it to just the clicked chip). ⇧ makes the
-  // gesture ADDITIVE instead: toggle this chip in the include list, ⇧⌥ in
-  // the negative list. ONE gesture table for both axes — a label and a
-  // project chip differ only in which store setters they reach.
-  const clickTerm = (
-    filters: readonly BucketFilterTerm[],
-    id: string,
-    alt: boolean | undefined,
-    shift: boolean | undefined,
-    set: (id: string | null, exclude?: boolean) => void,
-    toggle: (id: string, exclude: boolean) => void,
-  ) => {
-    if (shift) {
-      toggle(id, !!alt);
-      return;
-    }
-    const sole = filters.length === 1 && filters[0].id === id;
-    if (alt) {
-      if (sole && filters[0].exclude) set(null);
-      else set(id, true);
-    } else {
-      set(sole ? null : id);
-    }
-  };
-  const toggleBucket = useCallback((bucketId: string, alt?: boolean, shift?: boolean) => {
-    const store = useInboxStore.getState();
-    clickTerm(chipBucketFilters(store), bucketId, alt, shift,
-      (id, exclude) => store.setActiveBucketFilter(id, exclude),
-      (id, exclude) => store.toggleBucketFilterTerm(id, exclude));
-  }, []);
-  const toggleProject = useCallback((name: string, path: string | null, alt?: boolean, shift?: boolean) => {
-    const store = useInboxStore.getState();
-    clickTerm(chipProjectFilters(store), name, alt, shift,
-      (id, exclude) => store.setActiveProjectFilter(id, id ? path : null, exclude),
-      (id, exclude) => store.toggleProjectFilterTerm(id, path, exclude));
-  }, []);
   // Modifier-click hints, rendered as real keycaps (never bare glyphs in text).
   const clickHint = (...mods: string[]) => (
     <span className="flex items-center gap-[3px]">
@@ -502,7 +461,7 @@ export function LabelChipsRow({
           setDraggingLabelId(bucket._id);
         }}
         onDragEnd={clearDragState}
-        onClick={(e) => toggleBucket(bucket._id, e.altKey, e.shiftKey)}
+        onClick={(e) => clickBucketChip(bucket._id, e.altKey, e.shiftKey)}
         onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
         onDragOver={(e) => {
           // Session-card drops target the chip itself; label reorders are
@@ -637,7 +596,7 @@ export function LabelChipsRow({
               key={name}
               ref={chipRef(key)}
               aria-pressed={active}
-              onClick={(e) => toggleProject(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
+              onClick={(e) => clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
               className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
@@ -682,7 +641,7 @@ export function LabelChipsRow({
         return (
           <button
             key={`pin:${bucket._id}`}
-            onClick={(e) => toggleBucket(bucket._id, e.altKey, e.shiftKey)}
+            onClick={(e) => clickBucketChip(bucket._id, e.altKey, e.shiftKey)}
             onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
             title={filterChipTitle(bucket.name, excluded, labelFilters.length === 1)}
             // Pins share the shell: a long name caps, and at widths too narrow
@@ -710,7 +669,7 @@ export function LabelChipsRow({
         return (
           <button
             key={`pin:project:${name}`}
-            onClick={(e) => toggleProject(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
+            onClick={(e) => clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
             onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
             title={filterChipTitle(name, excluded, projectFilters.length === 1)}
             className={`min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
@@ -798,7 +757,7 @@ export function LabelChipsRow({
                   }}
                   onDragEnd={clearDragState}
                   onClick={(e) => {
-                    toggleBucket(bucket._id, e.altKey, e.shiftKey);
+                    clickBucketChip(bucket._id, e.altKey, e.shiftKey);
                     if (!e.shiftKey) setPopoverOpen(false);
                   }}
                   // The popover sits at z-9999 and would paint over the menu —
@@ -910,7 +869,7 @@ export function LabelChipsRow({
                   <div
                     key={name}
                     onClick={(e) => {
-                      toggleProject(name, projectPathByName[name] || null, e.altKey, e.shiftKey);
+                      clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey);
                       if (!e.shiftKey) setPopoverOpen(false);
                     }}
                     onContextMenu={(e) => {
