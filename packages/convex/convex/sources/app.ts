@@ -91,7 +91,7 @@ function manifestStale(row: Pick<Doc<"event_sources">, "manifest_fetched_at">, n
   return !row.manifest_fetched_at || now - row.manifest_fetched_at > APP_LIMITS.manifest_max_age_ms;
 }
 
-async function appSource(ctx: any, args: ScopeArgs & { source: string }) {
+async function appSource(ctx: any, args: ScopeArgs & { source: string; user_id?: Id<"users"> }) {
   const { userId, workspaceKey } = await scopeOf(ctx, args);
   const row = await sourceByRef(ctx, userId, workspaceKey, args.source);
   if (row.provider !== "app") invalidScope(`${row.short_id} is a ${row.provider} source, not an app connector`);
@@ -302,7 +302,7 @@ async function freshManifest(ctx: RunCtx, source: Doc<"event_sources">, connecti
  * other source function makes. Returns the connection id, never a secret.
  */
 export const callContext = internalQuery({
-  args: { ...scopeArgs, source: v.string() },
+  args: { ...scopeArgs, source: v.string(), user_id: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
     const { userId, row } = await appSource(ctx, args);
     const conversation = args.conversation_id ? await resolveSessionConversation(ctx, userId, args.conversation_id) : null;
@@ -394,9 +394,13 @@ export interface AppCallResult {
   ms?: number;
   error?: string;
   denied?: boolean;
+  /** The connection's base url the call went to, when it went out: a caller that frames an answer checks its host against it. */
+  base_url?: string;
 }
 
 export interface AppCallInput extends ScopeArgs {
+  /** Run as this person (a published page's publisher). Server code only: no public args carry it. */
+  user_id?: Id<"users">;
   source: string;
   name: string;
   args_json?: string;
@@ -475,6 +479,7 @@ export async function appCall(ctx: RunCtx, kind: "read" | "do", input: AppCallIn
     bytes: res.bytes,
     ms: res.ms,
     ...(res.error ? { error: res.error } : {}),
+    base_url: cred.base_url,
   };
 }
 

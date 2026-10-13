@@ -504,8 +504,8 @@ describe("workflow/runner (gate payload)", () => {
     }`);
     const outcome = await runWorkflow(g, { dryRun: true, cwd: tmpDir, taskId: "ct-1", planId: "pl-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
     expect(outcome).toBe("failed");
-    // Reading the task and the plan is fine; nothing may write to either.
-    expect(calls.map((c) => c.route).filter((r) => !r.endsWith("/get"))).toEqual([]);
+    // Reading the task, the plan and the problem's history is fine; nothing may write to any of them.
+    expect(calls.map((c) => c.route).filter((r) => !r.endsWith("/get") && r !== "/cli/work/history")).toEqual([]);
   });
 
   test("an edge label parses into key, label and description", () => {
@@ -759,8 +759,10 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   let pinned: { state: string; status: string; result?: string | null };
   let workState: string;
   let inboxReads: Array<{ id: string; work_state: string; is_live: boolean }>;
+  let gateReply: { status: string; gate_response: string | null };
 
   beforeEach(() => {
+    gateReply = { status: "running", gate_response: "S" };
     tmpDir = makeTmpDir();
     cap = captureConsole();
     origFetch = globalThis.fetch;
@@ -779,7 +781,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
         return reply({ sessions: [next ?? { id: "conv_hand", work_state: workState, is_live: false }] });
       }
       if (route === "/cli/sessions/state/get") return reply(pinned);
-      if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
+      if (route === "/cli/workflow-runs/poll-gate") return reply(gateReply);
       return reply({ ok: true });
     }) as typeof fetch;
   });
@@ -829,6 +831,21 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
+  test("a hand whose session holds no message and no result fails the station and is killed", async () => {
+    // The agentwatch Propose step, 2026-10-12: the hand's transcript went to
+    // another conversation, the watched one stayed empty, and the run moved on.
+    pinned = { state: "", status: "" };
+    inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 0 } as any];
+    expect(await run()).toBe("failed");
+    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(calls.some(c => c.route === "/cli/workflow-runs/poll-gate")).toBe(false);
+  }, 30000);
+
+  test("a hand that pinned its result passes even before its transcript has synced", async () => {
+    inboxReads = [{ id: "conv_hand", work_state: "done", is_live: false, message_count: 0 } as any];
+    expect(await run()).toBe("completed");
+  }, 30000);
+
   const stopOpts = { runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" } as RunOptions;
 
   test("a runner stopped by a signal records its run as failed at the node it last reported", async () => {
@@ -857,6 +874,98 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/sessions/kill").map(c => c.body.session)).toEqual(["conv_hand"]);
   }, 30000);
 
+  test("a gate waits past any clock: thousands of unanswered polls, then the person's answer routes it", async () => {
+    let polls = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/workflow-runs/poll-gate")) {
+        polls++;
+        return new Response(JSON.stringify(polls < 4000 ? { status: "paused", gate_response: null } : { status: "paused", gate_response: "S" }), { status: 200 });
+      }
+      return inner(url, init);
+    }) as typeof fetch;
+    expect(await run()).toBe("completed");
+    expect(polls).toBe(4000);
+    expect(calls.some(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "ship")).toBe(true);
+  }, 60000);
+
+  test("a poll the backend refuses is a failed poll, not a withdrawn gate: the gate waits on", async () => {
+    let polls = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/workflow-runs/poll-gate")) {
+        polls++;
+        if (polls === 1) return new Response(JSON.stringify({ error: "Overloaded", code: "Overloaded" }), { status: 503 });
+        if (polls === 2) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 200 });
+        return new Response(JSON.stringify(polls < 4 ? { status: "paused", gate_response: null } : { status: "paused", gate_response: "S" }), { status: 200 });
+      }
+      return inner(url, init);
+    }) as typeof fetch;
+    expect(await run()).toBe("completed");
+    expect(polls).toBe(4);
+  }, 30000);
+
+  test("a run that left paused without an answer still ends the wait", async () => {
+    gateReply = { status: "cancelled", gate_response: null };
+    expect(await run()).toBe("failed");
+  }, 30000);
+
+  test("a station that pinned blocked stops the run there, even when its json names an edge", async () => {
+    const g = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      investigate [label="Investigate", backend=session, agent=claude, prompt="look", max_visits=2]
+      refine [label="Refine", backend=session, agent=claude, prompt="refine"]
+      exit [shape=Msquare]
+      start -> investigate -> refine
+      refine -> investigate [condition="refine.json.outcome = wrong_cause"]
+      refine -> exit [condition="refine.json.outcome = refined"]
+    }`);
+    pinned = { state: "Investigated", status: "done" };
+    let spawns = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/spawn") && ++spawns === 2) {
+        pinned = { state: "Waiting on sd-486", status: "blocked", result: JSON.stringify({ outcome: "wrong_cause" }) };
+      }
+      return inner(url, init);
+    }) as typeof fetch;
+    const outcome = await runWorkflow(g, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+    expect(outcome).toBe("failed");
+    expect(spawns).toBe(2);
+    const park = calls.find(c => c.route === "/cli/work/update")!;
+    expect(park.body).toMatchObject({ short_id: "ct-9", status: "in_review", execution_status: "blocked" });
+  }, 30000);
+
+  test("a builder that pinned blocked routes to the line's ask gate with its own words, and the answer goes back to it", async () => {
+    const g = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      implement [label="Implement", backend=session, agent=claude, prompt="build it", max_visits=2]
+      ask [label="Builder asks", shape=hexagon, prompt="The builder stopped ($handoff).", doc="$handoff_note"]
+      reopen [shape=parallelogram, script="true"]
+      exit [shape=Msquare]
+      start -> implement
+      implement -> exit [condition="outcome = success"]
+      implement -> ask [condition="handoff = blocked"]
+      ask -> reopen [label="[A] Answer :: back to the builder"]
+      reopen -> implement
+    }`);
+    let spawns = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      if (route === "/cli/spawn") pinned = ++spawns === 1 ? { state: "Which schema version should the migration target?", status: "blocked" } : { state: "Built", status: "done" };
+      if (route === "/cli/workflow-runs/poll-gate") return new Response(JSON.stringify({ status: "running", gate_response: "A: version 3" }), { status: 200 });
+      return inner(url, init);
+    }) as typeof fetch;
+    const outcome = await runWorkflow(g, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+    expect(outcome).toBe("completed");
+    expect(spawns).toBe(2);
+    const gate = calls.find(c => c.route === "/cli/workflow-runs/gate")!.body;
+    expect(gate).toMatchObject({ node_id: "ask", prompt: "The builder stopped (blocked).", doc_md: "Which schema version should the migration target?" });
+    const second = calls.filter(c => c.route === "/cli/spawn")[1].body;
+    expect(second.prompt).toContain("# Human Instructions\nversion 3");
+  }, 30000);
+
   test("a station that ended on a question is left standing for the person", async () => {
     pinned = { state: "Which base should prove run on?", status: "working" };
     await run();
@@ -878,6 +987,16 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
       ship -> exit
     }`);
     expect(await runWorkflow(routed, { cwd: tmpDir, runId: "run-2", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions)).toBe("completed");
+  }, 30000);
+
+  test("a gate taken back without an answer follows none of its choices", async () => {
+    // Union 2026-10-08: a card withdrawn (sd-512) left the gate with no answer,
+    // and the run went down its first choice, Ship, recording an approval no
+    // person gave.
+    gateReply = { status: "running", gate_response: null };
+    expect(await run()).toBe("failed");
+    const reached = calls.filter((c) => c.route === "/cli/workflow-runs/progress").map((c) => c.body.node_id);
+    expect(reached).not.toContain("ship");
   }, 30000);
 
   test("a gate answered with its key reports the node completed, not failed", async () => {
@@ -919,5 +1038,17 @@ describe("workflow/runner (LE1.4: a refused or failed registration stops a cause
   });
   test("an unbound local run carries on unregistered", () => {
     expect(runRegistrationIsFatal({})).toBe(false);
+  });
+});
+
+describe("gatePayload asker", () => {
+  const src = `digraph g { start [shape=Mdiamond]; card_write [label="Card words", backend=session, prompt="write"]; decide [shape=hexagon, prompt="Ship?", asker=card_write]; exit [shape=Msquare]; start -> card_write -> decide; decide -> exit [label="[S] Ship"]; }`;
+  test("names the session of the station the gate asks from, once that station ran", () => {
+    const g = parseWorkflowSource(src);
+    const node = g.nodes.get("decide")!;
+    expect(node.asker).toBe("card_write");
+    expect(graphToPushPayload(g).nodes.find((n) => n.id === "decide")).toMatchObject({ asker: "card_write" });
+    expect(gatePayload(node, g, { "card_write.session_id": "sess-card" })).toMatchObject({ asker_session_id: "sess-card" });
+    expect(gatePayload(node, g, {})).not.toHaveProperty("asker_session_id");
   });
 });
