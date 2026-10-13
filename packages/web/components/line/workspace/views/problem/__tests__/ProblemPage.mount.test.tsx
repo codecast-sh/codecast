@@ -128,11 +128,13 @@ describe("ProblemPage", () => {
     root.unmount();
   });
 
-  test("findings open in place, whole: the newest first; a judge's opens its moment; a person's shows all its words and the link it points to", async () => {
+  test("findings open in place, whole: one line each on arrival; a judge's opens its moment; a person's shows all its words and the link it points to", async () => {
     const { host, root } = await mount(props(build([second, base])));
     const rows = [...host.querySelectorAll(".fr")];
     expect(rows.map((r) => r.getAttribute("data-line-finding"))).toEqual(["sg-12", "sg-11", "sg-10"]);
-    // The newest is open on arrival: a judge finding opens the moment it read, and can be marked wrong.
+    // Nothing is open on arrival (a finding can hold a whole call). Opened, a judge finding shows the moment it read, and can be marked wrong.
+    expect(host.querySelector(".fr[data-open]")).toBeNull();
+    await click(rows[0].querySelector(".fr-row"));
     expect(rows[0].querySelector('[data-line-finding-open="moment"]')).not.toBeNull();
     expect(rows[0].querySelector("[data-line-moment]")).not.toBeNull();
     expect(text(rows[0].querySelector('[data-line-judge-wrong="open"]'))).toBe("Judge is wrong");

@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
+import { audienceOf } from "./lineTrial";
 
 const OWNER = "users_owner" as any;
 const LEAD_PERSON = "users_lead_person" as any;
@@ -117,5 +118,33 @@ describe("a judge fix is the decider role's, never the trial owner's", () => {
       expect(tables.session_decisions[0].asked_user_ids.map(String)).toEqual([String(OWNER)]);
       expect(tables.decision_inbox).toHaveLength(0);
     }
+  });
+});
+
+describe("who a trial card waits on (the card's audience, read by For you)", () => {
+  const card = (tables: Record<string, any[]>, extra: Record<string, unknown> = {}) => ({ _id: "trial_cards_1", short_id: "tc-1", run_id: RUN, task_id: TASK, project_id: TRIAL, node_id: "review", kind: "card", status: "waiting", created_at: NOW, updated_at: NOW, ...extra }) as any;
+
+  test("a judge fix asked through the rail waits on the people its ladder reached", async () => {
+    const { ctx, tables } = seed({ route: "judge", decides: true });
+    await pauseAtGateCore(ctx, { userId: OWNER }, { run_id: RUN as any, node_id: "review", prompt: "Publish?", choices: judgeChoices });
+    const row = tables.trial_cards[0];
+    const audience = await audienceOf(ctx, row, tables.projects[0], tables.workflow_runs[0]);
+    expect(audience?.role.handle).toBe("agent-quality");
+    expect(audience?.asked).toEqual([String(LEAD_PERSON)]);
+  });
+
+  test("a judge-route card no decision carries (written before the trial named its decider) is the decider's too", async () => {
+    const { ctx, tables } = seed({ route: "judge", decides: true });
+    const audience = await audienceOf(ctx, card(tables), tables.projects[0], tables.workflow_runs[0]);
+    expect(audience?.role.short_id).toBe("or-39");
+    expect(audience?.asked).toEqual([String(LEAD_PERSON)]);
+    expect(audience?.asked).not.toContain(String(OWNER));
+  });
+
+  test("a product card, or a judge card on a trial naming no decider, has no audience: the owner's practice answer", async () => {
+    const product = seed({ route: "product", decides: true });
+    expect(await audienceOf(product.ctx, card(product.tables), product.tables.projects[0], product.tables.workflow_runs[0])).toBeNull();
+    const none = seed({ route: "judge" });
+    expect(await audienceOf(none.ctx, card(none.tables), none.tables.projects[0], none.tables.workflow_runs[0])).toBeNull();
   });
 });

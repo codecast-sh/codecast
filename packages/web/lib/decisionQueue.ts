@@ -77,6 +77,8 @@ export type QueueItem = {
   // documents.md D2): the lead's to clear, so the badge and "waiting on you"
   // leave it out while the queue still lists it under "With a lead".
   heldByRole?: boolean;
+  // Asked by a trial run: answering records what the person would do and ships nothing.
+  trial?: boolean;
   // AskUserQuestion answers ride poll keys; a confirmation dialog maps its
   // two options to Enter/Escape rather than 1/2.
   toolUseId?: string;
@@ -300,6 +302,7 @@ export function decisionQueueItems(
       askedMessageCount: d.asked_message_count,
       decisionId: d._id,
       heldByRole: d.holder?.kind === "role",
+      ...(d.trial ? { trial: true } : {}),
     });
   }
   return out;

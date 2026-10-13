@@ -7,7 +7,8 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, type QueueItem } from "../lib/decisionQueue";
+import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
@@ -84,7 +85,21 @@ type Size = "full" | "line";
 let settledFromSheet: { conversationId: string; at: number } | null = null;
 const CONTINUE_MS = 5_000;
 
-export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueItem; stepper: DecisionStepper | null; more?: number }) {
+// A jump to a message in this thread (targetNonce is when it was asked for)
+// is a request to read the thread, so the sheet stays out of its way. An old
+// target says nothing about an ask that arrives later.
+const JUMP_FRESH_MS = 10_000;
+const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
+
+export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scrollToMessage }: {
+  item: QueueItem;
+  stepper: DecisionStepper | null;
+  more?: number;
+  /** When the pane was last asked to open at a message, if it was. */
+  targetNonce?: number;
+  /** Scrolls this pane's thread to a loaded message. */
+  scrollToMessage?: (messageId: string) => void;
+}) {
   const {
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
     answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
@@ -98,8 +113,12 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
 
   const [size, setSize] = useState<Size>(() => {
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
+    if (!stepper && jumpedHere(targetNonce)) return "line";
     return item.blocking || stepper || continuing ? "full" : "line";
   });
+  useWatchEffect(() => {
+    if (!stepper && jumpedHere(targetNonce)) setSize("line");
+  }, [targetNonce]);
   const full = size === "full";
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
@@ -212,7 +231,16 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   // thread hands it back. A fold by a button or a key stays folded.
   const foldedByScroll = useRef(false);
   const shrink = useCallback(() => { foldedByScroll.current = false; setSize("line"); }, []);
-  const shrinkByScroll = useCallback(() => { foldedByScroll.current = true; setSize("line"); }, []);
+  // Scrolling away from the question is asking what led to it: the thread
+  // opens at the ask, not at its tail.
+  const shrinkByScroll = useCallback(() => {
+    foldedByScroll.current = true;
+    setSize("line");
+    if (!canJumpToAsk) return;
+    const ask = findDecisionAnchorMessage(messages as any[], item.decisionId, item.question);
+    if (ask && scrollToMessage) scrollToMessage(ask._id);
+    else if (isOnThreadRoute()) void jumpToDecisionAsk();
+  }, [canJumpToAsk, messages, item.decisionId, item.question, scrollToMessage, jumpToDecisionAsk]);
   const grow = useCallback(() => setSize("full"), []);
 
   // Folding swaps the sheet for the pill in one frame, and the eye loses it.
@@ -355,6 +383,9 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
 
   const badges = (
     <>
+      {item.trial && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
+      )}
       {tier === 3 && (
         <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
       )}
@@ -482,7 +513,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       )}
       {body}
       {card && facts}
-      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} />}
+      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} decision={decideId} />}
       {detail && detailDecision && (
         <div>
           <div className="decision-kicker">The ladder</div>
