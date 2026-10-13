@@ -10,6 +10,7 @@ import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
+import type { Superseded } from "@codecast/shared/contracts/superseded";
 
 const api = _api as any;
 
@@ -60,13 +61,15 @@ export type LineRun = {
   primary_conversation_id?: string;
   primary_session_id?: string;
   fail_reason?: string;
+  /** Why a live run no longer stands (line-versions.md LV1); null while current. */
+  superseded?: Superseded;
   node_statuses?: Array<{ node_id: string; status: string; outcome?: string; label?: string; session_id?: string; started_at?: number; completed_at?: number; result_preview?: string; session?: any }>;
   created_at: number;
   updated_at: number;
 };
 
 const lineRunSig = (r: LineRun) =>
-  `${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_cost_usd ?? ""}`;
+  `${r.superseded?.why ?? ""}|${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_cost_usd ?? ""}`;
 const newestFirst = (a: LineRun, b: LineRun) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0);
 
 /** A run belongs to the active workspace by its stored access key (L8). A
@@ -79,10 +82,12 @@ export function runInWorkspace(run: { workspace?: string }, key: string | null):
 }
 
 /** Reader: a workspace's runs from the store, newest first: the active
- *  workspace's unless `workspace` names another. */
-export function useWorkspaceRuns(workspace?: string | null): LineRun[] {
+ *  workspace's unless `workspace` names another. Superseded runs
+ *  (line-versions.md LV1) are left out unless `all`. */
+export function useWorkspaceRuns(workspace?: string | null, opts: { all?: boolean } = {}): LineRun[] {
   const active = useActiveWorkspaceKey();
   const key = workspace || active;
-  const where = useMemo(() => (r: LineRun) => runInWorkspace(r, key), [key]);
+  const all = !!opts.all;
+  const where = useMemo(() => (r: LineRun) => runInWorkspace(r, key) && (all || !r.superseded), [key, all]);
   return useCollectionRows<LineRun>("workflowRuns", { where, sig: lineRunSig, sort: newestFirst });
 }

@@ -99,8 +99,10 @@ export type OrgRole = {
   charter_doc_id?: string;
   brief_doc_id?: string;
   trust?: "understand" | "decide" | "direct";
-  /** cards: the line's admission slots (LE6), open cards per answering person. */
-  caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number; cards?: number };
+  /** cards: the line's admission slots (LE6), open cards per answering person.
+   *  line_on: the line's start switch (learning-loop.md LL5), off when unset.
+   *  A daily limit absent (or null, on the way to the server) is no limit. */
+  caps?: { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null; cards?: number; line_on?: boolean };
   counters?: { day: string; hands: number; wakes: number; tokens: number };
   coalesce_ms?: number;
   review_backend?: string;

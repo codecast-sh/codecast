@@ -17,8 +17,11 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type CastBodyPart, type ChatSendArgs, type DecideArgs } from "../../castCommand";
 import { useInboxStore, useTrackedStore, type SessionDecisionItem } from "../../../store/inboxStore";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { DocDates } from "../../DocDates";
-import { DecisionAnswerControls } from "../../decisions/DecisionAnswerControls";
+import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
+import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
 import { FileText, CornerUpRight, BookOpen, Check, Split, Pin } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
 import { CastBrowserRowContext, ChatWakeContext } from "../../../lib/conversationBlockContexts";
@@ -358,13 +361,14 @@ function CastStateBlock({ subcommand, args, rawCmd, output, isError }: { subcomm
   );
 }
 
-// `cast decide` — the agent handing its human a decision. The queue and the
-// docked SessionDecisionCard are where it gets ANSWERED; this row is the
-// record of it in the transcript, rendered as the same card so the agent never
-// has to restate the question in prose. The live row (store, fed by
-// listForUser) is the truth when present: an edit changes the text here, an
-// answer shows up as the chosen option, a withdrawal greys it out. Rows older
-// than the subscription window fall back to the recorded argv.
+// `cast decide` — the agent handing its human a decision. An open ask is the
+// queue's own card (DecisionCompactCard), answered right here; once settled
+// the row is the record of it: the chosen option, a withdrawal greyed out, an
+// edit as the fields it changed. The live row is the truth: the viewer's queue
+// (store, fed by listForUser) when it holds it, else the decision read by the
+// id the command printed, which is how an ask addressed to somebody else still
+// renders and answers for anyone who can read the session. Only a row with no
+// readable id falls back to the recorded argv.
 const DECIDE_STATUS_META: Record<string, { label: string; chip: string; accent: string }> = {
   waiting: { label: "waiting on you", chip: "border-sol-yellow/40 text-sol-yellow", accent: "border-sol-yellow/50" },
   advisory: { label: "advisory", chip: "border-sol-blue/40 text-sol-blue", accent: "border-sol-blue/40" },
@@ -374,10 +378,57 @@ const DECIDE_STATUS_META: Record<string, { label: string; chip: string; accent: 
   posted: { label: "posted", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-yellow/30" },
 };
 
+// `cast decide show|answer|recommend sd-N`: one decision named by reference.
+// The row is the decision's live pill; an answer or a recommendation adds the
+// option it chose, read off the decision's own options.
+const DECIDE_REF_VERB: Record<string, string> = { show: "read decision", answer: "answered decision", recommend: "recommended on decision" };
+
+function choiceLabel(choice: string | undefined, options: Array<{ label: string }> | undefined): string | null {
+  if (!choice) return null;
+  if (choice === "form") return "form answer";
+  const parts = choice.split(/[,>]/).map((n) => options?.[parseInt(n, 10) - 1]?.label ?? (n.trim() ? `option ${n.trim()}` : ""));
+  return parts.filter(Boolean).join(choice.includes(">") ? " > " : ", ") || null;
+}
+
+function CastDecideRefBlock({ decide, rawCmd, output, isError }: { decide: DecideArgs; rawCmd: string; output: string; isError: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const ref = decide.ref!;
+  const stored = useInboxStore((st) => {
+    for (const d of Object.values(st.sessionDecisions)) if (d._id === ref || d.short_id === ref) return d;
+    return undefined;
+  });
+  const { data: fetched } = useQueryNoThrow(api.sessionDecisions.get, !stored && decide.verb !== "show" ? { decision_id: ref } : "skip");
+  const options = (stored ?? fetched)?.options;
+  const chosen = decide.verb === "show" ? null : choiceLabel(decide.choice, options);
+  return (
+    <div data-cc-decide className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" onClick={() => setExpanded(!expanded)}>
+        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
+          <Split className="w-3 h-3" strokeWidth={2.2} />
+          <span className="group-hover:underline">{DECIDE_REF_VERB[decide.verb]}</span>
+        </span>
+        <span onClick={(e) => e.stopPropagation()} className="min-w-0"><EntityIdPill shortId={ref} type="decision" /></span>
+        {chosen && !isError && (
+          <span className="inline-flex items-center gap-1 text-sol-green min-w-0 truncate">
+            <CornerUpRight className="w-3 h-3 shrink-0" />{chosen}
+          </span>
+        )}
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+      </div>
+      {expanded && (
+        <pre className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-[11px] text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
+          $ {rawCmd}
+          {output && <>{"\n\n"}{renderAnsi(output)}</>}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { decide: DecideArgs; rawCmd: string; output: string; isError: boolean; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convKey = conversationId?.toString();
-  const targetId = decide.decisionId ?? (output ? decideOutputId(output, decide.verb) : null);
+  const targetRef = decide.decisionId ?? (output ? decideOutputId(output, decide.verb, decide.question) : null);
 
   // Wake on this conversation's decision rows only — they change on ask,
   // edit and answer, never on heartbeat.
@@ -391,12 +442,13 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
       return sig;
     },
   ]);
-  const row = useMemo((): SessionDecisionItem | null => {
-    if (targetId) return s.sessionDecisions[targetId] ?? null;
+  const queued = useMemo((): SessionDecisionItem | null => {
+    if (targetRef && s.sessionDecisions[targetRef]) return s.sessionDecisions[targetRef];
     if (!convKey) return null;
     const mine = Object.values(s.sessionDecisions)
       .filter((d) => d.conversation_id === convKey)
       .sort((a, b) => b.created_at - a.created_at);
+    if (targetRef) return mine.find((d) => d.short_id === targetRef) ?? null;
     if (decide.verb === "ask") return mine.find((d) => d.question === decide.question) ?? null;
     // edit/cancel with no id acted on the session's open decision at the time.
     // A cancel left a withdrawn row behind; an edit most likely touched the row
@@ -404,7 +456,12 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
     const wanted = decide.verb === "cancel" ? "withdrawn" : "pending";
     return mine.find((d) => d.status === wanted) ?? mine[0] ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.sessionDecisions, targetId, convKey, decide.verb, decide.question]);
+  }, [s.sessionDecisions, targetRef, convKey, decide.verb, decide.question]);
+  useSyncDecisionDetail(!queued && targetRef ? targetRef : undefined);
+  const detail = useDecisionDetail(targetRef ?? undefined);
+  const row = queued ?? detail?.decision ?? null;
+  const meId = String(s.currentUser?._id ?? "");
+  const askedOf = detail && !detail.asked_users.some((u) => u._id === meId) ? detail.asked_users.map((u) => u.name).join(", ") : "";
 
   // An edit row is a diff, not a second copy of the card: it shows the fields
   // the command changed (from the recorded argv; the live row fills in a field
@@ -430,9 +487,6 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
     : undefined;
   const muted = statusKey === "dismissed" || statusKey === "withdrawn";
   const verbLabel = decide.verb === "edit" ? "decision edited" : decide.verb === "cancel" ? "decision withdrawn" : "decision";
-  // An open ask is answerable right here, through the same controls the
-  // queue card uses; every other state is the record of what happened.
-  const answerDecision = useInboxStore((st) => st.answerDecision);
   const answerable = !isEdit && !withdrawnHere && row?.status === "pending";
 
   return (
@@ -446,7 +500,7 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
           <span className="group-hover:underline">{verbLabel}</span>
         </span>
         {isEdit && <span className="text-sol-text-dim">{editChanges || "no readable change"}</span>}
-        {!isError && row && (
+        {!isError && row && !answerable && (
           <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${meta.chip}`}>
             {statusKey === "waiting" && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
             {meta.label}
@@ -456,7 +510,9 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
         {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
       </div>
 
-      {!isError && (question || context || options.length > 0 || reportSlug || decide.report) && (
+      {answerable && row && <div className="mt-1.5"><DecisionCompactCard decision={row} askedOf={askedOf} /></div>}
+
+      {!isError && !answerable && (question || context || options.length > 0 || reportSlug || decide.report) && (
         <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${meta.accent} ${muted ? "opacity-60" : ""}`}>
           {question && (
             <div className={`text-[13px] text-sol-text leading-snug ${withdrawnHere || statusKey === "withdrawn" ? "line-through" : ""}`}>
@@ -475,15 +531,7 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
               )}
             </CollapsibleBody>
           )}
-          {answerable && row && (
-            <DecisionAnswerControls
-              decision={row}
-              size="compact"
-              onAnswer={(input) => answerDecision(row._id, input)}
-              onDismiss={() => answerDecision(row._id, { dismiss: true })}
-            />
-          )}
-          {!answerable && !withdrawnHere && options.length > 0 && (
+          {!withdrawnHere && options.length > 0 && (
             <div className="flex flex-col gap-1">
               {options.map((o, i) => {
                 const chosen = row?.status === "answered" && row.answer_index === i;
@@ -787,6 +835,9 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   // `cast decide` — the decision card, live from the store row when it exists.
   // `ls` is a plain read and keeps the generic row.
   const decide = cat === "decide" ? extractDecideArgs(subcommand, args) : null;
+  if (decide && (decide.verb === "show" || decide.verb === "answer" || decide.verb === "recommend") && decide.ref) {
+    return <CastDecideRefBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} />;
+  }
   if (decide && decide.verb !== "ls") {
     return <CastDecideBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} conversationId={conversationId} />;
   }
