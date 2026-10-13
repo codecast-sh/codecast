@@ -24,6 +24,7 @@ import { DiffStat, MetaDot } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
 import { ImageGalleryProvider } from "../ImageGallery";
+import { MarkdownImageSize } from "../tools/MarkdownImages";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
@@ -191,7 +192,9 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
       {story.body && (
         // The article's screenshots open full size in the lightbox, one gallery per story.
         <ImageGalleryProvider key={story.story_key}>
+          <MarkdownImageSize.Provider value="whole">
           <MarkdownRenderer content={story.body} className="chg-article max-w-[46rem] text-[13.5px] leading-[1.7] text-sol-text/80 prose-p:my-2 prose-p:text-sol-text/80 prose-li:my-0.5 prose-li:text-sol-text/80 prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-sol-text prose-h3:mb-2 prose-h3:mt-7 prose-h3:text-[17px] prose-h3:leading-snug prose-h4:mb-1 prose-h4:mt-4 prose-h4:text-[14.5px] [&>p:first-child]:mt-0 [&>p:first-child]:text-[14.5px] [&>p:first-child]:leading-[1.65] [&>p:first-child]:text-sol-text prose-code:rounded prose-code:bg-sol-bg-alt prose-code:px-1 prose-code:py-px prose-code:text-[12.5px] prose-code:font-medium prose-code:text-sol-text prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-3 prose-blockquote:rounded-r-md prose-blockquote:border-l-2 prose-blockquote:border-sol-border/60 prose-blockquote:bg-sol-bg-alt/60 prose-blockquote:py-1 prose-blockquote:pl-4 prose-blockquote:pr-3 prose-blockquote:font-normal prose-blockquote:not-italic prose-blockquote:text-sol-text/75 [&_blockquote_p:before]:content-none [&_blockquote_p:after]:content-none" />
+          </MarkdownImageSize.Provider>
         </ImageGalleryProvider>
       )}
       <RiskLine story={story} full />

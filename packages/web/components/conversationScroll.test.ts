@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, shouldResumeFollow } from "./conversationScroll";
 
 describe("shouldFollowStreaming", () => {
   test("follows normally before the user scrolls away", () => {
@@ -297,5 +297,21 @@ describe("unsigned share-link wiring", () => {
     const guestView = page.slice(page.indexOf("function GuestConversationView"), page.indexOf("function ConversationLoadingSkeleton"));
     expect(guestView).toMatch(/^\s*guest$/m);
     expect(page).toContain("if (!treatAsAuthed)");
+  });
+});
+
+describe("shouldResumeFollow", () => {
+  test("resumes when the reader scrolls down to the bottom", () => {
+    expect(shouldResumeFollow({ nearBottom: true, scrolledDown: true, readerMovingDown: true })).toBe(true);
+  });
+
+  test("does not resume when the virtualizer shifts the view down near the bottom", () => {
+    // A streamed chunk grows the tall last row; the view shifts by the growth
+    // and the reader who scrolled up a little stays scrolled up.
+    expect(shouldResumeFollow({ nearBottom: true, scrolledDown: true, readerMovingDown: false })).toBe(false);
+  });
+
+  test("does not resume away from the bottom", () => {
+    expect(shouldResumeFollow({ nearBottom: false, scrolledDown: true, readerMovingDown: true })).toBe(false);
   });
 });
