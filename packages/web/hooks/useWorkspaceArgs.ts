@@ -1,5 +1,6 @@
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useWorkspaceScope } from "./useWorkspaceScope";
 
 export type WorkspaceArgs =
   | { team_id: Id<"teams">; workspace: "team"; project_path?: string }
@@ -23,9 +24,12 @@ export function workspaceStamp(
 }
 
 export function useWorkspaceArgs(): WorkspaceArgs {
-  const activeTeamId = useInboxStore(
+  // A surface with a workspace of its own (WorkspaceScopeProvider) queries that one.
+  const scope = useWorkspaceScope();
+  const pointer = useInboxStore(
     (s) => s.clientState.ui?.active_team_id
   ) as Id<"teams"> | undefined;
+  const activeTeamId = scope ? (scope.startsWith("team:") ? (scope.slice(5) as Id<"teams">) : undefined) : pointer;
   // An exclude-mode chip ("everything but this project") must not scope
   // Tasks/Plans/Docs queries — only an include filter expresses "I'm working
   // in this project". Without this guard, excluding a project would narrow

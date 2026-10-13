@@ -234,7 +234,11 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   }, [close, goNext, goPrev, zoom.reset]), isOpen ? document : null);
 
   const quoteTo = canPin ? conversationId : undefined;
-  const ctx = useMemo(() => ({ register, open, openList, quoteTo }), [register, open, openList, quoteTo]);
+  // A new context per conversation: every registrant's effect depends on it,
+  // so images still mounted across an id change (cached messages painting
+  // before the conversation row) register again into the fresh registry.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const ctx = useMemo(() => ({ register, open, openList, quoteTo }), [register, open, openList, quoteTo, conversationId]);
 
   // Keep the active thumb visible as arrow keys / clicks move the selection.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);

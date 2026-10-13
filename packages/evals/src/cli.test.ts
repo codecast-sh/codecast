@@ -8,6 +8,7 @@ import { auditPublicTree } from './adapters/freezes';
 import { EVALS_SNIPPET, REPO_NOTES } from './snippet';
 import { sourceHashes, writeState } from './state';
 import { echoMeta } from './testSurface';
+import { CALL_MODEL } from './models';
 import { freezeIdOf, runDirs, world, type World } from './testWorld';
 
 // The CLI end to end, as a subprocess, with no auth, no network and no model,
@@ -149,6 +150,21 @@ describe('./evals', () => {
     expect(r.out).toContain('never reached: echo');
     expect(runDirs(w)).toHaveLength(1);
     expect(w.run('stale', 'echo').code).toBe(0);
+  });
+
+  test('check skips a call surface whose model prod posts with thinking off, since the replay cannot send that request', () => {
+    process.env.CODECAST_EVALS_TEST_ECHO_MODEL = CALL_MODEL;
+    try {
+      const w = world();
+      w.run('freeze', 'create', 'echo@fixture:a');
+      const r = w.run('check', 'echo');
+      expect(r.out).toContain(`skipped echo: prod posts ${CALL_MODEL} with thinking off`);
+      expect(runDirs(w)).toEqual([]);
+      // A dry check proves wiring on canned output, so it still runs.
+      expect(w.run('check', 'echo', '--dry').out).not.toContain('skipped echo');
+    } finally {
+      delete process.env.CODECAST_EVALS_TEST_ECHO_MODEL;
+    }
   });
 
   test('check refuses before running when the estimate is over --budget', () => {

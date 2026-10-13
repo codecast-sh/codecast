@@ -29,7 +29,7 @@ import { ghostScopeNames, ORG_SIZES, personNodeId, quietChipLines, roleNodeId, w
 import { proposalChangeRows, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";
 
 /** What the lens reads off a project row. */
-export type GoalProject = { _id: string; title: string; short_id?: string; status?: string; owner_role_id?: string };
+export type GoalProject = { _id: string; title: string; short_id?: string; client_key?: string; status?: string; owner_role_id?: string };
 
 /** A change as a goal or project card wears it: the tag it leads with, and
  *  whether it is accepted (drawn solid until the store carries it). */
@@ -223,6 +223,8 @@ export const GOALS_SIZES = {
   farRow: 25,
   farPad: 18,
   project: { w: 282, h: 34 },
+  /** The row of goals a project serves, on the Everything chart's project card. */
+  projectGoalsRow: 22,
   owner: { w: 248, h: 46 },
   /** Close level extras: the rule under a goal's header, its description
    *  (two lines), its next milestone, its latest update and its running
@@ -334,11 +336,11 @@ export type GoalsLayout = {
 export const titleLines = (title: string) => wrappedLines(title, GOALS_SIZES.titleChars);
 /** The far card's height: its title alone. */
 export const goalFarHeight = (title: string, mission = false) => GOALS_SIZES.farPad + (mission ? GOALS_SIZES.missionRow : 0) + wrappedLines(title, GOALS_SIZES.farChars) * GOALS_SIZES.farRow;
-const goalHeight = (g: PlanGoal, metric: boolean, refs: number, mission: boolean) =>
+export const goalHeight = (g: PlanGoal, metric: boolean, refs: number, mission: boolean) =>
   GOALS_SIZES.goal.h + (mission ? GOALS_SIZES.missionRow : 0) + (titleLines(g.title) - 1) * GOALS_SIZES.titleRow + (metric ? GOALS_SIZES.metricRow : 0) + quietChipLines(g.chips.length) * GOALS_SIZES.chipRow + (g.was ? GOALS_SIZES.wasRow : 0) + (refs ? GOALS_SIZES.refRow : 0);
 /** What the close card adds under the middle one: the description, the
  *  metrics past the first, the latest update, the running sessions. */
-const goalCloseExtra = (g: PlanGoal, metrics: number, running: number) => {
+export const goalCloseExtra = (g: PlanGoal, metrics: number, running: number) => {
   const rows = (g.description?.trim() ? GOALS_SIZES.descRow : 0) + Math.max(0, metrics - 1) * GOALS_SIZES.metricRow + (g.row && nextMilestone(g.row) ? GOALS_SIZES.milestoneRow : 0) + (g.row && g.row.health !== "none" ? GOALS_SIZES.updateRow : 0) + (running ? GOALS_SIZES.runningRow : 0);
   return rows ? rows + GOALS_SIZES.closeRule : 0;
 };
@@ -477,9 +479,13 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
     };
     for (const p of loose) projectRow({ id: p._id, title: p.title, short_id: p.short_id, status: p.status, lead: leadOf(p) }, LOOSE_NODE_ID, lx + S.indent);
   }
+  // The company's tally counts every project it holds, under a goal or under
+  // none, the way the document's state line does: the loose card says the
+  // split. A proposed project is not held yet, and a done one is not counted.
+  const held = input.projects.filter((p) => drawnProjects.has(p._id) && p.status !== "done").length;
   const top = nodes[0];
-  if (top.kind === "company") top.projects = drawnProjects.size - loose.length;
-  else if (top.kind === "goal" && top.root) top.root.projects = drawnProjects.size - loose.length;
+  if (top.kind === "company") top.projects = held;
+  else if (top.kind === "goal" && top.root) top.root.projects = held;
 
   // The column: one card per person or role. The Goals lens draws the owners,
   // each level with the first thing it owns. The map's Everything draws the
@@ -500,21 +506,37 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   }
   const ox = outlineRight + S.ownerGap;
   let floor = 0;
-  type Col = { id: string; owner: GoalOwner; owns: number; at: number };
-  let column: Col[] = people === "none" ? [] : [...owners.entries()].map(([id, e]) => ({ id, owner: e.owner, owns: e.owns, at: Math.min(...e.ys) })).sort((a, b) => a.at - b.at);
+  type Col = { id: string; owner: GoalOwner; owns: number; at: number; depth: number; parent?: string };
+  let column: Col[] = people === "none" ? [] : [...owners.entries()].map(([id, e]) => ({ id, owner: e.owner, owns: e.owns, at: Math.min(...e.ys), depth: 0 })).sort((a, b) => a.at - b.at);
   const ghosts = people === "everyone" ? input.ghosts : undefined;
   const orgTree = ghosts?.merged ?? input.tree;
   if (people === "everyone") {
+    // The people chart: each person, then the roles that report to them,
+    // then the roles under those, indented and joined like the goals outline.
     const botIds = new Set(orgTree.anchors.map((a) => a.bot_user_id));
-    const all: GoalOwner[] = [
-      ...orgTree.people.filter((p) => !botIds.has(p.user_id)).sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.name.localeCompare(b.name)).map<GoalOwner>((p) => ({ kind: "person", id: p.user_id, name: p.name, image: p.image, me: p.is_me })),
-      ...orgTree.roles.filter((r) => r.status !== "retired").sort((a, b) => a.name.localeCompare(b.name)).map<GoalOwner>((r) => ({ kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar })),
-    ];
+    const roles = orgTree.roles.filter((r) => r.status !== "retired").sort((a, b) => a.name.localeCompare(b.name));
     const owns = new Map(column.map((c) => [c.id, c.owns]));
+    const tree: Col[] = [];
+    const placed = new Set<string>();
+    const place = (o: GoalOwner, depth: number, parent?: string) => {
+      const id = ownerNodeId(o);
+      if (placed.has(id)) return;
+      placed.add(id);
+      tree.push({ id, owner: o, owns: owns.get(id) ?? 0, at: 0, depth, ...(parent ? { parent } : {}) });
+      const under = roles.filter((r) => (o.kind === "person" ? r.reports_to.kind === "user" && r.reports_to.user_id === o.id : r.reports_to.kind === "role" && r.reports_to.role_id === o.id));
+      for (const r of under) place({ kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar }, depth + 1, id);
+    };
+    for (const p of orgTree.people.filter((p) => !botIds.has(p.user_id)).sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.name.localeCompare(b.name))) {
+      place({ kind: "person", id: p.user_id, name: p.name, image: p.image, me: p.is_me }, 0);
+    }
+    // A role whose manager is not drawn (retired, another workspace's) starts its own branch.
+    for (const r of roles) place({ kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar }, 0);
     // An owner the tree does not hold (a name nothing answers to) keeps its card, at the foot.
-    const strangers = column.filter((c) => !all.some((o) => ownerNodeId(o) === c.id));
-    column = [...all.map<Col>((o) => ({ id: ownerNodeId(o), owner: o, owns: owns.get(ownerNodeId(o)) ?? 0, at: 0 })), ...strangers];
+    const strangers = column.filter((c) => !placed.has(c.id));
+    column = [...tree, ...strangers];
   }
+  const spineEdge = (source: string, target: string) => edges.push({ id: `s:${source}->${target}`, source, target, kind: "spine" });
+  const deepest = column.reduce((d, c) => Math.max(d, c.depth), 0);
   const nameOf = (ref: { kind: "user"; user_id: string } | { kind: "role"; role_id: string }): string | undefined =>
     ref.kind === "user" ? orgTree.people.find((p) => p.user_id === ref.user_id)?.name : orgTree.roles.find((r) => r._id === ref.role_id && r.status !== "retired")?.name;
   const moveOf = new Map((ghosts?.moves ?? []).map((m) => [m.nodeId, m]));
@@ -527,11 +549,13 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
     // A goal change is drawn on its goal, so the chip ghostsFor puts on the owner's card would say it twice.
     const ghost = ghosts?.stubs[o.id], retire = ghosts?.retires[o.id], move = moveOf.get(o.id), chips = ghosts?.chips[o.id]?.filter((c) => !GOAL_KINDS.has(c.kind));
     // A proposed move: the card says where the role goes and, under it, where it was.
-    const reportsTo = people === "everyone" && role ? nameOf(move?.to ?? role.reports_to) : undefined;
+    // The tree shows whom a role reports to; the card names it only for a proposed move.
+    const reportsTo = people === "everyone" && role && move ? nameOf(move.to) : undefined;
     const was = move ? nameOf(move.from) : undefined;
     const h = S.owner.h + (counts ? S.ownerStateRow : 0) + (was ? S.ownerWasRow : 0) + quietChipLines(chips?.length ?? 0) * S.chipRow + (line && level === "close" ? S.ownerClose : 0);
+    if (o.parent) spineEdge(o.parent, o.id);
     nodes.push({
-      id: o.id, kind: "owner", x: ox, y: oy, w: S.owner.w, h, owner: o.owner, owns: o.owns,
+      id: o.id, kind: "owner", x: ox + o.depth * S.indent, y: oy, w: S.owner.w, h, owner: o.owner, owns: o.owns,
       ...(line ? { line } : {}), ...(counts ? { counts } : {}), ...(reportsTo ? { reportsTo } : {}),
       ...(ghost ? { ghost } : {}), ...(retire ? { retire } : {}), ...(move ? { move } : {}), ...(was ? { was } : {}), ...(chips?.length ? { chips } : {}),
     });
@@ -550,7 +574,7 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   }
   return {
     nodes, edges, changeNode, ownerLane: outlineRight + S.ownerLead,
-    width: column.length ? ox + S.owner.w : outlineRight,
+    width: column.length ? ox + deepest * S.indent + S.owner.w : outlineRight,
     height: Math.max(y, floor - S.ownerRowGap),
   };
 }
