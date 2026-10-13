@@ -1,73 +1,63 @@
-Workflows are execution graphs: multi-step processes written in DOT syntax where each node is an agent session, a shell command, a condition, or a human approval gate. Where a single agent prompt describes intent and hopes, a workflow encodes the actual control flow: retry loops, verification steps, and the points where a human must sign off before anything proceeds.
+A workflow is a process you want run the same way every time: build the change, run the checks, loop back if they fail, then stop and wait for you to approve before anything ships. Each step is an agent, a command, or a point where a person decides. Where a single prompt describes what you want and hopes the agent follows it, a workflow fixes the order, the checks and the sign off.
 
-The workflow snippet is installed via [the snippet system](/documentation/agent-snippets):
+Workflows only run when you start one. Agents never start one on their own.
 
-```bash
-cast workflow install
-```
+![A workflow run paused at its approval gate](/documentation/workflows/gate.webp "A run waiting at its Approve step. The choices are the gate's way out; you can also answer in your own words.")
 
-## The shape of a workflow
+## Turn it on
 
-Workflows are `.cast` files in DOT graph syntax, the same language Graphviz reads, so any DOT tool can render one:
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Workflows**.
 
-```dot
-digraph my_flow {
-  graph [goal="$task_title"]
-  start [shape=Mdiamond]
-  implement [label="Implement", backend=claude, prompt="..."]
-  verify [label="Verify", shape=parallelogram, script="npx tsc --noEmit"]
-  review [label="Review", shape=hexagon]
-  exit [shape=Msquare]
-  start -> implement -> verify
-  verify -> review [condition="outcome = success"]
-  verify -> implement [condition="outcome = failure"]
-  review -> exit [label="[A] Approve"]
-  review -> implement [label="[R] Revise"]
-}
-```
+![The Workflows detail in Agent features](/documentation/workflows/feature.webp "Click How it works on the card to see what it adds and a request to try.")
 
-This graph loops: implementation runs, a typecheck verifies it, failure routes back to implementation, success routes to a human review gate, and the reviewer's choice either exits or sends the work back with feedback. Node shapes carry meaning (a parallelogram is a shell command, a hexagon is a human gate), and edge conditions route on each node's outcome.
+## Make one by asking
+
+You describe the process; the agent writes the workflow and checks that it is valid. It lives in your project as a small file, so it can be reviewed and changed like code.
+
+- "Write a workflow that implements a task, typechecks, and waits for my approval before merging."
+- "Add a step to the release workflow that runs the end to end tests before the approval."
+- "Make the review loop give up after three failed attempts."
+
+A workflow can hold these kinds of steps:
+
+- **An agent step**: a session with its own instructions, on Claude, Codex or another agent.
+- **A command**: tests, a typecheck, a build. Whether it passes decides where the run goes next.
+- **An approval gate**: the run stops until a person picks one of its choices.
+- **A branch**: route on the result of the step before it, or run several steps side by side and wait for them all.
+
+## Run it
+
+Ask the agent: "Run the review workflow on the theme switch task." A run is always tied to a [task or plan](/documentation/tasks-and-plans), which is where it gets its goal and context.
+
+You can also start one from the app. Open **Workflows** from the command palette, pick a workflow, click **Run**, and give it the project folder and, if you like, a goal. A plan that has a workflow attached shows a **Run workflow** button on its page.
 
 ```figure
 WorkflowRunFigure
-One run of the graph above: the first typecheck fails and loops back, the second passes, and the run waits at the gate until someone approves.
+One run: the first typecheck fails and loops back to the agent, the second passes, and the run waits at the gate until someone approves.
 ```
 
-Node types:
+## What you see
 
-- **Agent** (`backend=claude`, `backend=codex`, …): spin up an agent session with a prompt; the plan or task context rides along.
-- **Command** (`script="…"`): run a shell command; its exit status and output drive downstream conditions.
-- **Human gate**: pause the run and wait. The gate shows up in the dashboard with its choices as buttons, and a push notification reaches you on mobile and desktop.
-- **Conditional edges**: `condition="outcome = success"` routes on the previous node's result.
-- **Parallel branches**: a `component` node fans out to branches that run at once, and a `tripleoctagon` node waits for them to join. A `tab` node is a single model call with no tools.
+### The run page
 
-A loop needs a bound: `max_visits` on a node aborts the run when the loop passes through it more times than that.
+Each run has a page. The top line says where the run stands, such as *Waiting for an answer at Approve*, with the task it belongs to. **The path** lists each step that ran and what it produced. **Show the graph** draws the whole workflow with the current step highlighted, and below it every step with how long it took. Each agent step is a real conversation you can open and read.
 
-```figure
-NodeShapesFigure
-Every node shape the parser knows, and the node type each one declares.
-```
+![The workflow's graph and its steps](/documentation/workflows/graph.webp "The graph under Show the graph: the check passed, the run sits at Approve, and Revise would send it back to the check.")
 
-## Running
+### Answering a gate
 
-Workflows bind to [tasks and plans](/documentation/tasks-and-plans), which is where they get their goal and context:
+When a run reaches a gate, it waits. The question appears on the run page, in your decision queue, and as a notification on your phone and desktop. Pick a choice, or write a reply in your own words: your words travel to the next step as its instructions, so "Revise: keep the old setting as the default" sends the work back with that note. **Dismiss** ends the run there.
 
-```bash
-cast workflow run flow.cast --task ct-4102
-cast workflow run flow.cast --plan pl-88
-cast workflow list             # available templates
-cast workflow push             # publish the definition to the web UI
-```
+While a run is waiting, its task shows as in review on the task and plan pages.
 
-A run creates a primary conversation in the inbox; each agent node gets its own session, streamed live to the dashboard with the graph's progress alongside. Human gates hold the run until you answer: reply through the normal message composer or click the gate button, and the workflow resumes with your input passed to the next node.
+## Workflows, orchestration or triggers
 
-```figure
-GateReplyFigure
-A reply that starts with an option's key picks that edge, and the rest of the reply becomes the next node's instructions.
-```
+Use a **workflow** when you know the steps and they must run the same way every time: a release checklist, a verify loop, anything with a required sign off. Use [orchestration](/documentation/orchestration) when the shape of the work isn't known up front and a lead agent should work it out and spread it across many agents. Use a [trigger](/documentation/triggers) for a single follow-up later or on an event, with no graph at all.
 
-![A workflow graph, two triggers, and a run paused at its review gate](/documentation/shots/automations.webp "The ship workflow's graph with its failure loop, and the run paused at Review after implement and verify passed.")
+## When something is off
 
-## When to use which
-
-Workflows overlap with [orchestration](/documentation/orchestration), and the split is determinism. A workflow executes a graph you wrote: same steps, same gates, every run, right for release checklists, verify loops, anything with a compliance step. Orchestration hands a plan to a conductor agent that decides decomposition and scheduling itself, right for open-ended builds where the structure isn't known up front. [Triggers](/documentation/triggers) cover the third case: a single follow-up on a timer or an event, no graph needed.
+| What you notice | What to do |
+|-----------------|------------|
+| A run failed right after a gate | It was dismissed, or the gate had no matching way out for the answer. Start it again and pick one of the listed choices |
+| A run keeps looping | Ask the agent to give the loop a limit, so it stops after a few failed attempts |
+| **Workflows** isn't in the command palette | It appears with the developer views of the app. Asking an agent to run a workflow works either way |
