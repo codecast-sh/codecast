@@ -258,6 +258,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   projectUpdates:
     "Written by editProjectUpdate, whose spec carries an inverse with the prior body; posts, comments and deletes are never undoable.",
   sessionReads: "Read state; never undoable.",
+  trialCards: "Written only by trialAnswer, which moves a paused trial run on, and trialReask, which has its machine ask it again; like answerDecision, never undoable.",
+  trialRuns: "Written only by trialRerun, which starts a new run; never undoable.",
   mods: "Written only by setModEnabled, a setting; never undoable.",
   modObjects:
     "Written by createModObject, a create and never undoable, and updateModObject, whose spec carries an inverse naming the prior fields.",

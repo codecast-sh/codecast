@@ -65,6 +65,33 @@ export function cloudHostRetired(d: RetiredProbe, roster: RetiredProbe[]): boole
   return newest - (own?.at ?? 0) > CLOUD_HOST_REPORT_GAP_MS;
 }
 
+/**
+ * Quiet this long, a machine that nothing can wake has gone, as opposed to
+ * slept: the clutter in a real roster is short lived VMs and containers that
+ * each mint a device id and die within hours, while a laptop closed overnight
+ * is back inside the window.
+ */
+export const STALE_MACHINE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Gone quiet: no report for a day from a machine that does not boot itself on
+ * use. A cloud host's long silence means "unused", never "gone"; whether one
+ * is gone is cloudHostRetired's call.
+ */
+export function machineGoneQuiet(d: { is_remote?: boolean; platform?: string; last_seen: number }, now: number): boolean {
+  return !deviceWakesOnUse(d) && now - d.last_seen >= STALE_MACHINE_MS;
+}
+
+/**
+ * Out of service: gone quiet, or a cloud host that no longer exists. Nothing
+ * routes work to such a machine on its own and the machine pickers leave it
+ * out; it stays reachable by an explicit pick, and Settings → Devices removes
+ * it.
+ */
+export function machineOutOfService<T extends RetiredProbe & { last_seen: number }>(d: T, roster: T[], now: number): boolean {
+  return machineGoneQuiet(d, now) || cloudHostRetired(d, roster);
+}
+
 /** True if `p` is at or below a known project root (`root` or a child of it). */
 export function pathUnderRoot(p: string, root: string): boolean {
   return p === root || p.startsWith(root.endsWith("/") ? root : root + "/");
@@ -83,6 +110,30 @@ export function platformCanOpenPath(platform: string | undefined, p: string): bo
   if (platform === "darwin") return !p.startsWith("/home/") && !p.startsWith("/root/");
   if (platform === "linux") return !p.startsWith("/Users/");
   return true;
+}
+
+/** The home a path lives in (`/Users/<name>` or `/home/<name>`), or null. */
+export function pathHome(p: string): string | null {
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts[0] !== "Users" && parts[0] !== "home") return null;
+  return `/${parts[0]}/${parts[1]}`;
+}
+
+/**
+ * Does this machine have the files behind one of these paths: a project root
+ * covering it, or the same home as one of its projects (a worktree under
+ * ~/.intern-data while the machine reports ~/src/<repo>)? A machine that runs
+ * the same platform under another home has none of them.
+ */
+export function deviceServesPath(d: { local_project_roots?: string[] }, paths: string[]): boolean {
+  const roots = d.local_project_roots ?? [];
+  if (paths.some((p) => roots.some((r) => pathUnderRoot(p, r)))) return true;
+  const homes = new Set(roots.map(pathHome).filter((h): h is string => !!h));
+  return paths.some((p) => {
+    const home = pathHome(p);
+    return !!home && homes.has(home);
+  });
 }
 
 export type PlacementDevice = { platform?: string; local_project_roots?: string[] };

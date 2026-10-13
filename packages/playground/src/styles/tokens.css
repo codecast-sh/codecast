@@ -30,18 +30,15 @@
   --shadow-tint: 70, 45, 20;
   --edge: rgba(var(--shadow-tint), .08);
 
-  /* type (4.2) */
+  /* type (4.2, fonts.css) */
   --ui: "Commissioner", system-ui, sans-serif;
-  --voice: "Recursive", var(--ui);
-  --mono: "Recursive", ui-monospace, monospace;
-  --voice-axes: "CASL" 1, "MONO" 0;
-  --mono-axes: "CASL" 0, "MONO" 1;
+  --mono: "Recursive Mono", ui-monospace, monospace;
 
-  --t-hero: 700 46px/1.05 var(--voice);
-  --t-h1: 700 24px/1.1 var(--voice);
-  --t-h2: 700 20px/1.1 var(--voice);
-  --t-h3: 700 18px/1.2 var(--voice);
-  --t-card: 650 14.5px/1.2 var(--voice);
+  --t-hero: 700 46px/1.05 var(--ui);
+  --t-h1: 700 24px/1.1 var(--ui);
+  --t-h2: 700 20px/1.1 var(--ui);
+  --t-h3: 700 18px/1.2 var(--ui);
+  --t-card: 650 14.5px/1.2 var(--ui);
   --t-input-lg: 500 21px/1.3 var(--ui);
   --t-lede: 400 18px/1.5 var(--ui);
   --t-body: 400 14px/1.45 var(--ui);
