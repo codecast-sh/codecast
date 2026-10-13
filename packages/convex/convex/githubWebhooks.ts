@@ -34,6 +34,7 @@ import {
   recomputeReviewDecision,
   wakeShepherd,
   ensureShepherdTask,
+  scheduleMergeStateRefreshes,
 } from "./prShepherd";
 import {
   type CheckEntry,
@@ -46,6 +47,7 @@ import {
   prUrl,
   resolveTaskLinks,
   normalizeRepository,
+  prByNumber,
   resolveTaskLinksFromText,
   shortSha,
 } from "./lib/gitRefs";
@@ -152,13 +154,6 @@ export async function resolveTeamForRepository(
     if (team) return team;
   }
   return null;
-}
-
-async function prByNumber(ctx: { db: any }, repository: string, number: number) {
-  return await ctx.db
-    .query("pull_requests")
-    .withIndex("by_repository_number", (q: any) => q.eq("repository", repository).eq("number", number))
-    .first();
 }
 
 /**
@@ -1582,13 +1577,8 @@ export const processPushEvent = internalMutation({
 
     // A push to a base branch leaves every PR aimed at it a little further
     // behind, and GitHub says nothing about that. Ask again shortly.
-    for (const pr of await openPRsInRepository(ctx, repository)) {
-      if (pr.base_ref !== branch) continue;
-      await ctx.scheduler.runAfter(MERGE_STATE_DELAY_MS, internal.prShepherd.refreshMergeState, {
-        pr_id: pr._id,
-        attempt: 0,
-      });
-    }
+    const behind = (await openPRsInRepository(ctx, repository)).filter((pr) => pr.base_ref === branch);
+    await scheduleMergeStateRefreshes(ctx, behind.map((pr) => pr._id), MERGE_STATE_DELAY_MS);
 
     return { success: true, commits_created: created };
   },
