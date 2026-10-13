@@ -14,10 +14,10 @@ import { PR_NUMBER, PR_TITLE, REPO } from "./data";
 const SHIP: { title: string; cmd?: string; body: ReactNode; loop?: boolean }[] = [
   { title: "Check", body: <>Runs the checks the repository defines and fixes what they find. Leaves out changes that belong to other sessions.</> },
   { title: "Commit", body: <>Topical commits with short messages that say what changed and why. Never one commit for unrelated work.</> },
-  { title: "Open", cmd: "gh pr create", body: <>The description: the goal, what changed and why, how it was verified, what to read first, and the session link from <C>cast link</C>.</> },
-  { title: "Shepherd", cmd: "cast pr shepherd on", body: <>Binds the session, then pins it dormant: &ldquo;Shepherding PR #n; wakes on review, checks and merge&rdquo;.</> },
+  { title: "Open", body: <>The description: the goal, what changed and why, how it was verified, what to read first, and a link to the session.</> },
+  { title: "Shepherd", body: <>Takes the Shepherd line, then rests: &ldquo;Shepherding PR #n; wakes on review, checks and merge&rdquo;.</> },
   { title: "On each wake", loop: true, body: <>Fix or answer each thread, push, resolve the settled ones. A thread it disagreed with gets a reply and stays open. A red check: read the failing log, fix, push.</> },
-  { title: "Merged", cmd: "cast pr shepherd off", body: <>Closes the task with <C>cast task done</C> and pins the session done. Approved and green but nobody asked it to merge? It says the merge is yours and waits.</> },
+  { title: "Merged", body: <>Marks the task done and the session done. Approved and green but nobody asked it to merge? It says the merge is yours and waits.</> },
 ];
 
 export function Ship() {
@@ -38,7 +38,7 @@ export function Ship() {
       </ol>
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Callout title="Say it in the session">
-          Type <C>/cast-ship</C> when the work is done. It takes the work from a finished change to a shepherded pull request and stays with it until the merge.
+          Ask in plain words (&ldquo;open a pull request for this and look after it until it merges&rdquo;), or type <C>/cast-ship</C> when the work is done. It takes the work from a finished change to a shepherded pull request and stays with it until the merge.
         </Callout>
         <Callout title="Only the feedback">
           <C>/cast-ship feedback</C> skips committing and opening: it works the open threads on the current pull request once and reports which were fixed, answered, or left open and why.
@@ -94,7 +94,7 @@ export function PublicRepo() {
           requests and the sessions behind them, readable by someone who has never signed in.
         </p>
         <p>
-          A session shows up there by title, with its transcript, only after its owner runs <C>cast share &lt;id&gt; --public</C>.
+          A session shows up there by title, with its transcript, only after its owner shares it with <b style={{ color: SOL.base02 }}>Anyone</b>.
           Every other session is named as somebody&apos;s session on a date, with no link.
         </p>
         <p>
@@ -130,7 +130,7 @@ export function Names() {
         ))}
       </div>
       <ul className="space-y-4 text-[15px] leading-[1.65]" style={{ color: SOL.base01 }}>
-        <Rule title="A verdict is a judgement.">It goes out under the GitHub account of the person the agent runs as. Without a connected account the command stops and says so; there is no fallback to the app.</Rule>
+        <Rule title="A verdict is a judgement.">It goes out under the GitHub account of the person the agent runs as. Without a connected account codecast stops and says so; there is no fallback to the app.</Rule>
         <Rule title="GitHub decides, in its own words.">It refuses an approval of your own pull request, and a merge on a branch that is behind, conflicted or blocked. The refusal comes back verbatim.</Rule>
         <Rule title="Held notes stay held.">Nobody else sees them, nothing reaches GitHub, and no session wakes until you send the review.</Rule>
         <Rule title="The agent does not merge.">The briefing forbids it unless a human asked. Approved and green, it tells you the merge is yours.</Rule>
@@ -222,7 +222,7 @@ export function Reference() {
 
 const LIMITS: [string, ReactNode][] = [
   ["Which hosts?", <>GitHub only. Pull requests arrive through the codecast GitHub app, so the repository needs it installed. Installing it on a repository backfills the pull requests already open there.</>],
-  ["Does the shepherd turn itself on?", <>No. A shepherd candidate is picked when the pull request opens, but it stays paused until you run <C>cast pr shepherd on</C>, switch the header&apos;s &ldquo;Paused&rdquo; toggle to &ldquo;Wakes on changes&rdquo;, or ship with <C>/cast-ship</C>.</>],
+  ["Does the shepherd turn itself on?", <>No. A shepherd candidate is picked when the pull request opens, but it stays paused until you switch the header&apos;s &ldquo;Paused&rdquo; toggle to &ldquo;Wakes on changes&rdquo;, an agent takes it on (as <C>/cast-ship</C> does), or someone turns it on from the command line.</>],
   ["Will it rebase every time main moves?", <>No. Falling behind is recorded, not a wake, and the briefing says being behind alone is not a reason to rebase. A real conflict does wake it.</>],
   ["What if the session is busy?", <>The wake retries every 20 seconds, up to 5 times, and the reasons pile into one briefing. A review delivered as a message is best effort; a session that cannot take it never fails a review GitHub already holds, and the CLI says it was not delivered.</>],
   ["Can my review approve my own PR?", <>No. GitHub refuses that by rule, and codecast passes the refusal through. A request for changes and a comment-only review both need a body.</>],
@@ -247,7 +247,7 @@ export function Limits() {
 
 const RELATED: [string, ReactNode][] = [
   ["triggers", "The shepherd is a standing trigger that only a pull request event sets to run."],
-  ["memory", <><C>cast search pr:</C> and <C>cast blame</C> lead from a pull request back to the sessions that made it.</>],
+  ["memory", "Search and blame lead from a pull request back to the sessions that made it."],
   ["decisions", "When the merge is a call only a person can make, queue it instead of interrupting."],
   ["agents", "Spawn workers under the session that owns the PR and fold their results in."],
 ];
@@ -282,7 +282,7 @@ export function Closing() {
             Ship it, then stop watching it.
           </h2>
           <p className="mt-4 text-[16.5px] leading-[1.7]" style={{ color: SOL.base1 }}>
-            Install the CLI, connect GitHub, and the next pull request an agent opens arrives with its sessions attached.
+            Install codecast, connect GitHub under Settings, Integrations, and switch on Pull requests in Agent features. The next pull request an agent opens arrives with its sessions attached.
             Shepherd it and go do something else.
           </p>
           <div className="mt-6 flex flex-wrap gap-3 font-mono text-[13px]">

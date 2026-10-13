@@ -103,9 +103,9 @@ export function describeVerification(v: SyncVerification | undefined): string {
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
   }
-  const tree = v.remoteDirty === 0 ? "clean working tree"
+  const tree = v.remoteDirty === 0 ? "working tree identical to the source's"
     : v.remoteDirty == null ? "working-tree state unknown"
-    : `WARNING: ${v.remoteDirty} uncommitted change(s) already in the destination tree`;
+    : `WARNING: ${v.remoteDirty} file(s) in the destination tree differ from the source's`;
   return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, destination HEAD matches, ${tree}`;
 }
 
@@ -146,9 +146,11 @@ export function moveNotice(opts: {
  * edited it, or committed, meanwhile), so the branches are not expected to
  * match; what the line proves is what came back and whether it overlapped.
  */
-export function describeBackSync(r: { appliedWork?: boolean; conflicts?: string[] }): string {
+export function describeBackSync(r: { appliedWork?: boolean; conflicts?: string[]; hostCleared?: boolean; hostKept?: string }): string {
   if (r.conflicts?.length) return `WARNING: the host's changes overlap edits made here meanwhile in ${r.conflicts.join(", ")}; conflict markers are left in place`;
-  return r.appliedWork ? "the host's changes are applied here as uncommitted work, on top of this folder's current state" : "the host made no changes to bring back";
+  const work = r.appliedWork ? "the host's changes are applied here as uncommitted work, on top of this folder's current state" : "the host made no changes to bring back";
+  if (r.hostCleared) return `${work}; the host checkout is clean again`;
+  return r.hostKept ? `${work}; the host checkout keeps its copy (${r.hostKept})` : work;
 }
 
 /** Queue the notice onto the conversation's normal delivery rail (it arrives
@@ -311,15 +313,15 @@ export function registerRemoteCommand(program: Command): void {
         process.exit(1);
       }
 
-      // The move lands in the host's main checkout of this repo. A shared
-      // cloud session there would be re-pointed at the moved snapshot by the
-      // push, so ask first (the server's ownership flip re-checks).
+      // The move merges into the host's main checkout of this repo. A shared
+      // cloud session holds that checkout on a branch of its own, so ask first
+      // (the server's ownership flip re-checks).
       {
-        const { remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
+        const { gitRootOf, remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
         const { fetchRootOccupant } = await import("../cloud/prepare.js");
         const { checkoutInUseMessage } = await import("@codecast/shared/contracts");
-        const remoteCwd = remoteRepoPath(host, resolveLocalSession(sessionId).cwd);
-        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id);
+        const remoteCwd = remoteRepoPath(host, gitRootOf(resolveLocalSession(sessionId).cwd));
+        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id, { merging: true });
         if (occupant) {
           console.error(checkoutInUseMessage(remoteCwd, occupant));
           process.exit(1);
@@ -357,7 +359,7 @@ export function registerRemoteCommand(program: Command): void {
     .description("Bring a session back from the Mac to this machine")
     .option("--host <id>", "Target a specific host id")
     .action(async (sessionId: string, opts: { host?: string }) => {
-      const { host } = await resolveTransferHost(opts.host);
+      const { host, deviceId: hostDeviceId } = await resolveTransferHost(opts.host);
       const moves = readMoves();
       const move = moves[sessionId];
       if (!move) { console.error(`No recorded move for ${sessionId}.`); process.exit(1); }
@@ -367,7 +369,8 @@ export function registerRemoteCommand(program: Command): void {
 
       console.log(`bringing ${sessionId} back to local (${move.localCwd})`);
       console.log("  [1/2] pull transcript + the host's changes");
-      const pr = await pullSession(sessionId, host, move);
+      const { checkoutAloneProbe } = await import("../cloud/prepare.js");
+      const pr = await pullSession(sessionId, host, move, hostDeviceId ? { aloneInCheckout: checkoutAloneProbe(client, api, token, hostDeviceId, conv._id) } : {});
       if (!pr.ff) { console.error(`CONFLICT: ${pr.reason}`); process.exit(2); }
       const backLine = describeBackSync(pr);
       console.log(`        ${backLine}`);

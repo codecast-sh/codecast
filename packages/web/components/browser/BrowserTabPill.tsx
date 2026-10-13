@@ -35,7 +35,7 @@ export function BrowserTabActionLabel({ state, idle }: { state: BrowserTabAction
     case "busy":
       return <span className="animate-pulse motion-reduce:animate-none">{state.verb}…</span>;
     case "offer":
-      return <span>{state.reason === "tab-gone" ? "tab gone · reopen?" : "browser stopped · reopen?"}</span>;
+      return <span>reopen tab</span>;
     case "note":
       return <span>{state.text}</span>;
     default:
@@ -45,8 +45,6 @@ export function BrowserTabActionLabel({ state, idle }: { state: BrowserTabAction
 
 function toneClass(state: BrowserTabActionState): string {
   switch (state.kind) {
-    case "offer":
-      return "text-sol-yellow border-sol-yellow/50 hover:text-sol-yellow hover:border-sol-yellow";
     case "note":
       return "text-sol-red/80 border-sol-red/30 hover:text-sol-red";
     case "busy":
@@ -60,7 +58,7 @@ function toneClass(state: BrowserTabActionState): string {
  * "open tab" for the driven browser tab behind a tool call (browserTabOf). A
  * Claude-in-Chrome tab opens through its clau.de link. A `cast browser` tab
  * is raised in the driven Chrome; when the daemon reports it gone, the pill
- * becomes the reopen offer, and a small × declines it. Discovery of the
+ * becomes the reopen offer, in the same quiet style. Discovery of the
  * daemon's loopback endpoint starts as soon as the pill renders, so by the
  * time the human clicks the endpoint is cached.
  */
@@ -94,7 +92,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
   const { state } = actions;
   const title =
     state.kind === "offer"
-      ? `The agent's tab is gone. Reopen ${tab.url} in the cast browser, as this session, and raise it.`
+      ? `${state.reason === "tab-gone" ? "The agent's tab is gone" : "The agent's browser is stopped"}. Reopen ${tab.url} in the cast browser, as this session, and raise it.`
       : state.kind === "note"
         ? state.text
         : `focus ${actions.tabId ? `tab ${actions.tabId}` : "the tab this agent is driving"} in the agent's browser${tab.url ? `\n${tab.url}` : ""}`;
@@ -117,7 +115,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
         aria-busy={state.kind === "busy"}
         onContextMenu={(e) => tab.url && menu.open(e, tab.url, { force: true })}
       >
-        {state.kind === "idle" && OPEN_TAB_ICON}
+        {(state.kind === "idle" || state.kind === "offer") && OPEN_TAB_ICON}
         <BrowserTabActionLabel state={state} idle={<span>open tab</span>} />
       </a>
       {tab.url && (
@@ -141,20 +139,6 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
       <ContextMenu state={menu}>
         {(url) => browserPaneMenuItems(url, { paneLabel: "Preview this page in a pane" })}
       </ContextMenu>
-      {state.kind === "offer" && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            actions.dismiss();
-          }}
-          className="text-[10px] leading-4 px-1 rounded-full text-sol-text-dim hover:text-sol-text-muted"
-          title="Leave it closed"
-          aria-label="Do not reopen"
-        >
-          ×
-        </button>
-      )}
     </span>
   );
 }

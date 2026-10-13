@@ -21,12 +21,10 @@ import { TopbarButton } from "@/components/TopbarButton";
 import { InboxViewMenu } from "@/components/InboxViewMenu";
 import { SectionHeader } from "@/components/inbox/SectionHeader";
 import { SessionCardView, type SessionCardChrome } from "@/components/inbox/SessionCardView";
-import { InboxNavRow, NeedsInputCount, type SectionRowSpec } from "@/components/sidebar/navPrimitives";
+import { InboxNavRow, NeedsInputCount } from "@/components/sidebar/navPrimitives";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "@/components/sidebar/SidebarNav";
 import { AnchorAvatar } from "@/components/anchor/AnchorIdentity";
 import { agentName } from "@/hooks/useSyncAnchors";
-import { projectDotClass } from "@/lib/projectColors";
-import { useLabelColor } from "@/lib/labelColors";
 import { FilmGrow } from "../film";
 import { fly, useFilmTime } from "../filmClock";
 import { clamp, fade, SEAM_GHOST } from "../timeline";
@@ -43,7 +41,6 @@ const noop = () => {};
 /** How long before a spawned worker's row lands its room starts to open (s): the room is open by the time the row drops into it, so it never draws over the row under it. */
 const ROW_ROOM = 0.5;
 
-const PROJECTS = ["billing", "gateway", "web", "infra"];
 const PREV_ID = PREV.id;
 
 /** The window's top bar: the team, who is online, session search, and the bell with the ask that is waiting. */
@@ -71,20 +68,11 @@ export function DeskTopBar(_: PartProps) {
 export function DeskRail(_: PartProps) {
   // The cursor e2e asks from the start; the API worker waits on its question until it is answered.
   const needsInput = useFilmTime((t) => (apiWorkerPhase(t) === "asking" ? 2 : 1));
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const colorOf = useLabelColor();
-  const projects: SectionRowSpec[] = PROJECTS.map((name) => ({
-    id: `hero-p-${name}`,
-    name,
-    icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass({ title: name }, colorOf)}`} />,
-    active: false,
-    onSelect: noop,
-  }));
   const shut = { items: [], expanded: false, onToggle: noop };
   return (
     <nav data-sv-nav className="h-full w-full flex flex-col bg-sol-bg-alt select-none text-sol-text">
-      {/* Live for the Projects chevron: the rows are links, which the sandbox keeps inert. */}
-      <div data-sidebar-scroll data-hero-live className="flex-1 overflow-hidden pt-4">
+      {/* Inert: the rows are links and buttons, which the sandbox keeps from navigating. */}
+      <div data-sidebar-scroll className="flex-1 overflow-hidden pt-4">
         <SidebarNavView
           isNarrow={false}
           inbox={<InboxNavRow active isNarrow={false} badge={<NeedsInputCount n={needsInput} />} />}
@@ -98,7 +86,6 @@ export function DeskRail(_: PartProps) {
           }
           chat={<ChatNavSectionView isActive={false} isNarrow={false} channels={RAIL.chatUnread} mentions={0} expanded={false} onToggle={noop} />}
           active={RAIL_ACTIVE}
-          projects={{ items: projects, expanded: projectsOpen, onToggle: () => setProjectsOpen((v) => !v) }}
           tasks={shut}
           docs={shut}
           orgOn

@@ -32,4 +32,38 @@ describe("injectPageTheme", () => {
       for (const decl of rule.slice(1, -1).split(";").filter(Boolean)) expect(decl.startsWith("--")).toBe(true);
     }
   });
+
+  test("never measures a frame that is not laid out yet", () => {
+    const script = /<script>([\s\S]*?)<\/script>/.exec(injectPageTheme("<head></head>"))![1]!;
+    const posted: number[] = [];
+    const listeners: Record<string, () => void> = {};
+    const size = { w: 0, h: 0, content: 0 };
+    const win = {
+      get innerWidth() { return size.w; },
+      get innerHeight() { return size.h; },
+      scrollY: 0,
+      self: 1, top: 2,
+      location: { search: "" },
+      parent: { postMessage: (m: { height: number }) => posted.push(m.height) },
+      addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; },
+    };
+    const body = { getBoundingClientRect: () => ({ bottom: size.content }) };
+    const doc = {
+      body,
+      documentElement: { setAttribute() {}, get scrollHeight() { return Math.max(size.content, size.h); } },
+      getElementById: () => ({ textContent: "" }),
+      addEventListener() {},
+    };
+    class RO { observe() {} constructor(_fn: () => void) {} }
+    new Function("window", "document", "innerWidth", "innerHeight", "ResizeObserver", "getComputedStyle", "location",
+      `with (window) { ${script} }`)(win, doc, 0, 0, RO, () => ({ marginBottom: "0" }), win.location);
+    // Loaded at 0x0, its text wrapped at zero width: nothing is posted.
+    size.content = 160000;
+    listeners.load!();
+    expect(posted).toEqual([]);
+    // Laid out: the real height arrives with the resize.
+    Object.assign(size, { w: 1000, h: 600, content: 4000 });
+    listeners.resize!();
+    expect(posted).toEqual([4000]);
+  });
 });
