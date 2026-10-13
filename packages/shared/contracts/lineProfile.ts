@@ -15,6 +15,12 @@ export interface LineFinder {
   kind: SignalKind[] | "any";
   fingerprint: string;
   runs?: string;
+  /**
+   * The explicit step that turns this finder's signals into work: a signal no
+   * open cause holds opens a new cause only when its finder says so (LE4).
+   * Absent or false, its signals stay signals until a cause holds their key.
+   */
+  opens_causes?: boolean;
   /** The project its signals go to, when not the profile's. */
   project?: string;
 }
@@ -171,7 +177,7 @@ export function lineProfileNotes(profile: Pick<LineProfile, "commands" | "projec
   if (!profile.commands.prove) notes.push("no prove command: the prove station passes with a note");
   if (!profile.commands.eval) notes.push("no eval command: the eval station passes with a note");
   if (!profile.commands.ship) notes.push("no ship command: the ship station runs Ship, which opens a pull request and merges only under [line.merge] auto or the line's role's merge grant");
-  if (!profile.project) notes.push("no project: signals filed here go to the workspace, not a project, unless --project names one");
+  if (!profile.project) notes.push("no project: findings filed here go to the workspace, not a project, unless --project names one");
   return notes;
 }
 
@@ -216,6 +222,18 @@ export const REPO_LINE_REL_PATH = ".codecast/line/line.cast";
  * row, so it never overwrites the `line` row a role's sweep runs read.
  */
 export const REPO_LINE_SLUG = "line-repo";
+
+/** The slug of one repository's own line: `line-repo-<repo>`, so two repos'
+ *  lines are two rows and an edit can never land in the other repo. `repo`
+ *  is the checkout's origin remote (or its folder name when it has none). */
+export function repoLineSlug(repo: string): string {
+  const key = repo.trim().replace(/\.git$/, "").split(/[/:]/).filter(Boolean).slice(-2).join("-")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return key ? `${REPO_LINE_SLUG}-${key}` : REPO_LINE_SLUG;
+}
+
+/** Whether a workflow slug names a repository's own line (any repo). */
+export const isRepoLineSlug = (slug: string): boolean => slug === REPO_LINE_SLUG || slug.startsWith(`${REPO_LINE_SLUG}-`);
 /** A file the repo's line may hold: a plain name in REPO_LINE_REL_DIR, never a path. */
 export const REPO_LINE_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\.(cast|md|sh|txt)$/;
 

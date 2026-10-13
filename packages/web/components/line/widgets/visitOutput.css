@@ -1,0 +1,13 @@
+/* What a visit produced (VisitOutputView): chips on one line, or the step's own words. */
+.vo { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; overflow: hidden; vertical-align: middle; }
+.vo[data-kind="text"] { display: inline; color: var(--lw-ink-2); }
+.vo-f { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; max-width: 26ch; flex: 0 0 auto; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); padding: 1px 6px; border-radius: 5px; background: var(--lw-paper-2); color: var(--lw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vo-f > b { font-weight: 400; color: var(--lw-ink-3); flex: none; }
+.vo-f > b::after { content: ":"; }
+.vo-f > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vo-more { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); flex: none; }
+.vo-choice { flex: none; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); padding: 1px 7px; border-radius: 5px; background: var(--lw-person-soft); color: var(--lw-person-deep); white-space: nowrap; }
+.vo-note { min-width: 0; color: var(--lw-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vo-session { display: inline-flex; align-items: center; gap: 2px; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-agent); text-decoration: none; }
+.vo-session:hover { text-decoration: underline; text-underline-offset: 2px; }
+.vo-session svg { width: 11px; height: 11px; }
