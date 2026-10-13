@@ -500,14 +500,14 @@ export function bandLine(b: ProblemBand): { text: string; tone: "you" | "bad" | 
   switch (b.kind) {
     case "need":
       if (b.need === "decision") return { text: `Fix to decide${b.since ? `, since ${dayWords(b.since)}` : ""}`, tone: "you" };
-      if (b.need === "question") return { text: "Question for you", tone: "you" };
-      if (b.need === "confirm") return { text: "New: is this real?", tone: "you" };
+      if (b.need === "question") return { text: "Holds on an open question", tone: "warn" };
+      if (b.need === "confirm") return { text: "New, not confirmed", tone: "warn" };
       // A card taken back unanswered is "Withdrawn", the word the decision itself and For you use.
       if (b.need === "lapsed") return { text: unansweredWords(b.withdrawn ?? false, b.askedAt), tone: "warn" };
-      if (b.need === "stopped") return { text: b.ask ?? `Stopped${b.step ? ` at ${b.step}` : ""}: go on?`, tone: "you" };
-      if (b.need === "review") return { text: `Built, waiting on a review${b.step ? ` at ${b.step}` : ""}`, tone: "you" };
-      if (b.need === "assigned") return { text: "Assigned to you", tone: "you" };
-      if (b.need === "duplicate") return { text: b.ask ?? "Same as another problem", tone: "you" };
+      if (b.need === "stopped") return { text: b.ask ?? `Stopped${b.step ? ` at ${b.step}` : ""}: go on?`, tone: "warn" };
+      if (b.need === "review") return { text: "Built, not presented", tone: "warn" };
+      if (b.need === "assigned") return { text: "Assigned to you", tone: "none" };
+      if (b.need === "duplicate") return { text: b.ask ?? "Same as another problem", tone: "none" };
       // Why a new ask is needed, never the group's own name: the card it holds can take no answer.
       if (b.why) return { text: /removed/.test(b.why) ? "Card's step was removed" : "Card has no session to answer", tone: "warn" };
       return { text: "Paused, nothing asked", tone: "warn" };
@@ -515,7 +515,7 @@ export function bandLine(b: ProblemBand): { text: string; tone: "you" | "bad" | 
     case "decision":
       if (b.mine) return { text: `Fix to decide${b.since ? `, since ${dayWords(b.since)}` : ""}`, tone: "you" };
       return b.mine === false ? { text: "Waiting on someone else", tone: "none" } : { text: "Waiting on an answer", tone: "none" };
-    case "ask": return b.unsupported ? { text: "No supporting finding", tone: "warn" } : { text: b.required ? "Question for you" : "New: is this real?", tone: "you" };
+    case "ask": return b.unsupported ? { text: "No supporting finding", tone: "warn" } : { text: b.required ? "Holds on an open question" : "New, not confirmed", tone: "warn" };
     case "failed": return { text: b.silent ? `${b.step} ended without a report` : b.stop ? `${b.stop.charAt(0).toUpperCase()}${b.stop.slice(1)} at ${b.step}` : b.step === NO_STEP ? (b.ended ? b.ended.replace(/\.$/, "") : "Failed before any step ran") : `Failed at ${b.step}`, tone: b.stop ? "warn" : "bad" };
     case "stalled": return { text: `No progress for ${spanShort(b.silentMs)}${b.step ? ` at ${b.step}` : ""}`, tone: "bad" };
     case "running": return { text: b.doing, tone: "live" };
@@ -612,10 +612,12 @@ export function problemNow(b: ProblemBand): { status: StatusKey; phrase: string 
   const status: StatusKey = (() => {
     switch (b.kind) {
       // A trial's practice answer is filed with the trial, never with what waits on the viewer to change the product.
-      case "need": return b.trial ? "trial" : b.need === "decision" || b.need === "question" || b.need === "confirm" || b.need === "stopped" || b.need === "review" || b.need === "assigned" || b.need === "duplicate" ? "you" : "newask";
+      // Only the end decision waits on the viewer (lineNeeds COUNTED). The rest holds the problem where it is: a fact
+      // it waits on, a person holding it or a twin to merge is not started, a run that ended short needs a new one.
+      case "need": return b.trial ? "trial" : b.need === "decision" ? "you" : b.need === "question" || b.need === "confirm" || b.need === "assigned" || b.need === "duplicate" ? "notstarted" : "newask";
       case "decision": return b.mine ? "you" : "others";
       // A problem that rests on no finding asks nobody: a person closes it (Needs a new ask).
-      case "ask": return b.unsupported ? "newask" : "you";
+      case "ask": return b.unsupported ? "newask" : "notstarted";
       case "failed": case "stalled": case "escalated": return "failed";
       case "running": return "running";
       case "approved": return "approved";
@@ -628,8 +630,8 @@ export function problemNow(b: ProblemBand): { status: StatusKey; phrase: string 
       // The close is in doubt and nothing is asked: a person reopens it, moves the findings out, or closes it again.
       case "returned": return "newask";
       case "review": return b.holder ? "others" : "newask";
-      // Main already carries its fix: the one act is a person's, closing it (For you lists it too).
-      case "parked": return b.fixedSha ? "you" : "notstarted";
+      // Main already carries its fix: the line closes it (park.sh); one parked before that is closed from its row.
+      case "parked": return b.fixedSha ? "newask" : "notstarted";
       case "morefindings": return "notstarted";
       // Grounding found nothing to change: it ended, nothing will start it, and closing it is a person's act no answer reaches.
       case "notstarted": return b.nothing != null ? "newask" : "notstarted";

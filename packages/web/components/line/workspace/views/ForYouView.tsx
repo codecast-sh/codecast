@@ -3,17 +3,19 @@
 // waits on the viewer, so it is a list with a reader beside it from the first
 // paint: the first item is open on arrival, it is read and answered in the
 // reader (WaitingItem), and when it leaves the list the next one opens. No row
-// carries a button: every act is in the reader, next to the whole text.
+// carries a button: every act is in the reader, next to the whole text. While
+// an item is open the page takes its tab's width (useStageWide): the app's
+// session rail folds to a strip, so nothing unrelated sits beside a decision.
 //
-// The list is what the viewer can answer now, and nothing else: fixes to
-// decide, questions, new problems to confirm, and runs that finished a step and wait
-// on a yes to go on, across every process. The nav's
-// count, the list and the reader's "N of M" are the same rows. What no answer
-// can reach (a run that must ask again, a problem behind a line that is off)
-// lives on Problems; under the list one quiet line each points there, counted
-// by the Problems list itself so the two numbers cannot differ. A row is the
-// problem's title; the reader's head names the problem once (ref, title, age)
-// and the body opens on what is asked. The open item is `need` in the URL; an older link's `decision` or
+// The list is what a line puts in front of a person, and nothing else: the
+// decision a session presents at the end of its run, one per problem, across
+// every process, and a trial's practice decisions apart, last. Everything else
+// a problem waits on (a fix to land, a fact for the lead, a run to ask again)
+// is the line's, filed on Problems and the line's own page, never here. The
+// nav's count, the list and the reader's "N of M" are the same rows. A row is
+// the problem's title; the reader's body opens on what is asked, which names
+// it, so the head holds only its product, its age, a link to the problem and
+// the pager (when there is more than one). The open item is `need` in the URL; an older link's `decision` or
 // `card` settles on it. A need the address names that is not in the list is
 // said to be so, never swapped for another item. J and K walk the list while
 // focus is in it; nothing here moves focus into the reader, where a decision
@@ -22,28 +24,26 @@ import { useMemo, useRef } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
+import { useInboxStore } from "../../../../store/inboxStore";
 import { ageShort } from "../../../../lib/lineFlow";
 import { processName } from "../../../../lib/line/lineGraphs";
 import { isPractice, needForRef, needGroups, needOrder, needsOfLine, type LineNeed } from "../../../../lib/line/lineNeeds";
 import { problemHeadName, problemListName } from "../../../../lib/line/problemTable";
 import { leftWhy } from "../../../../lib/line/leftList";
-import { type StatusKey } from "../../../../lib/line/problemStatus";
 import { KeyCap } from "../../../KeyCap";
 import { LineDecision, LineDecisionPrefetch } from "../../widgets/LineDecision";
 import { WaitingItem } from "../../widgets/WaitingItem";
 import { useTrialHref } from "../../../../hooks/useSyncTrial";
-import { ProblemPointers, useAllProblems } from "./ProblemPointers";
+import { useStageWide } from "../../../../hooks/useStageWide";
+import { useAllProblems } from "./ProblemPointers";
 import type { LineViewProps } from "./types";
 import "./foryou.css";
-
-/** The Problems chips For you points at, under its list: what waits on a new run or on a line that is off. */
-const ELSEWHERE: ReadonlyArray<StatusKey> = ["newask", "notstarted"];
 
 const SCROLL_KEY = "line:foryou:scroll";
 
 export function ForYouView({ model, workspace, selection, select, href, pinned }: LineViewProps) {
   const { now, ready } = workspace;
-  // Only what an answer can reach; the rest is Problems' (the pointers below the list).
+  // Only the decisions (lineNeeds COUNTED): the rest is the line's, on Problems, and an address naming one says so.
   // `process` in the address (the Line page's "N waiting on you") narrows the list to that line, and to the project
   // picked there; the chip over the list lifts it.
   const line = selection.process;
@@ -52,7 +52,15 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const groups = useMemo(() => needGroups(needs), [needs]);
   const order = useMemo(() => needOrder(groups), [groups]);
   const processTitle = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title).title])), [workspace.processes]);
-  const projectTitle = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title])), [workspace.projects]);
+  // A row's product by name. For you lists decisions from every workspace, and the page's projects are its own
+  // workspace's: another's are named from the store.
+  const projectIds = useMemo(() => [...new Set(needs.map((n) => n.projectId).filter((p): p is string => !!p))], [needs]);
+  const storeTitles = useInboxStore((s) => projectIds.map((id) => (s.projects as Record<string, { title?: string } | undefined> | undefined)?.[id]?.title ?? "").join("\u0001"));
+  const projectTitle = useMemo(() => {
+    const m = new Map(workspace.projects.map((p) => [p._id, p.title]));
+    storeTitles.split("\u0001").forEach((t, i) => { if (t && !m.get(projectIds[i])) m.set(projectIds[i], t); });
+    return m;
+  }, [workspace.projects, storeTitles, projectIds]);
 
   // The open item: the one the address names (an older link names its decision or card), else the first.
   const asked = selection.need ?? selection.decision ?? selection.card;
@@ -125,9 +133,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const toRun = (n: LineNeed | null) => (runId: string, taskId: string | null, step?: string) => select({ view: "problems", run: runId, graph: n?.process ?? selection.graph, ...(step ? { step } : {}) }, taskId);
   // `status` is the Problems page's own key: it rides on the address the selection writes.
   const problemsHref = href({ view: "problems", need: null, decision: null, card: null });
-  // The pointers' counts are the Problems list's own (every process, no chip or search), so its chips say the same.
   const allProblems = useAllProblems({ model, workspace, selection, process: line });
-  const problemCounts = allProblems.counts.by;
   // A problem the address names that waits on the viewer no more: its name, where it stands, and what moved it.
   const left = useMemo(() => {
     if (!missing) return null;
@@ -136,9 +142,10 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
     const row = allProblems.all.find((r) => r.id === issue.id) ?? null;
     return { issue, phrase: row?.stand.phrase ?? null, ...leftWhy(issue.history, workspace.names, now) };
   }, [missing, workspace.problems, workspace.names, allProblems.all, now]);
-  const elsewhere = ELSEWHERE.filter((k) => problemCounts[k] > 0);
-  // One item and nothing else to list: the reader takes the whole width (its header still says 1 of 1).
-  const single = order.length === 1 && !!current && elsewhere.length === 0;
+  // One item: the reader takes the whole width, and the head has no pager.
+  const single = order.length === 1 && !!current;
+  // While a decision is open the page takes its tab's width: the app's session rail folds to a strip beside it.
+  useStageWide(!!current || !!orphan);
 
   return (
     <div className="fy" data-line-foryou={real} data-line-foryou-open={current?.ref ?? orphan ?? undefined} data-single={single ? "" : undefined}>
@@ -161,7 +168,8 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
             <ul className="fy-rows">
               {g.needs.map((n) => {
                 // The row is what the item is about (the problem, by the one name every list gives it); what is asked is the reader's.
-                const meta = [n.process ? processTitle.get(n.process) : null, pinned ? null : n.projectId ? projectTitle.get(n.projectId) : null, n.dups?.length ? `also ${n.dups.map((d) => d.ref).filter(Boolean).join(", ")}` : n.dupOf?.ref ? `same as ${n.dupOf.ref}` : null, n.since ? `waiting ${ageShort(now - n.since)}` : null].filter(Boolean);
+                // Under it, the product it is about: which line runs it is the line's business, not the reader's.
+                const meta = [pinned ? null : n.projectId ? projectTitle.get(n.projectId) : null, n.dups?.length ? `also ${n.dups.map((d) => d.ref).filter(Boolean).join(", ")}` : n.dupOf?.ref ? `same as ${n.dupOf.ref}` : null, n.since ? `waiting ${ageShort(now - n.since)}` : null].filter(Boolean);
                 return (
                   <li key={n.key}>
                     <button type="button" className="fy-row" aria-current={n === current ? "true" : undefined} onClick={() => open(n)} data-need-key={n.key} data-line-need-row={n.kind} data-line-need-ref={n.ref}>
@@ -175,7 +183,6 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
             </ul>
           </section>
         ))}
-        <ProblemPointers keys={ELSEWHERE} counts={problemCounts} href={href} process={line} className="fy-elsewhere" label="On Problems" />
         {order.length > 1 && <p className="fy-keys" aria-hidden><KeyCap size="xs">J</KeyCap><KeyCap size="xs">K</KeyCap></p>}
       </div>
 
@@ -183,17 +190,23 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
         {current ? (
           <>
             <div className="fy-reader-h" data-line-foryou-head>
-              {current.caseId ? (
-                <Link className="fy-head" href={href({ view: "problems", case: current.caseId, run: null, graph: current.process ?? selection.graph })} data-line-foryou-problem={current.problemRef ?? current.caseId}>
-                  {current.problemRef && <span className="fy-ref">{current.problemRef}</span>}
-                  <span className="fy-title">{problemHeadName(current)}</span>
+              {/* The decision's own question names what it is about, so the head carries no second name: the product it
+                  is for, how long it has waited, the problem to open, and the pager while there is more than one. */}
+              <span className="fy-head">
+                {!pinned && current.projectId && projectTitle.get(current.projectId) && <span className="fy-proj">{projectTitle.get(current.projectId)}</span>}
+                {current.since && <span className="fy-age lw-num" title={`Waiting since ${new Date(current.since).toLocaleString()}`}>waiting {ageShort(now - current.since)}</span>}
+                {current.trial && <TrialTag projectId={current.projectId ?? null} card={current.cardRef ?? null} />}
+              </span>
+              {current.caseId && (
+                <Link className="fy-problem" href={href({ view: "problems", case: current.caseId, run: null, graph: current.process ?? selection.graph })} title={[current.problemRef, problemHeadName(current)].filter(Boolean).join(" ")} data-line-foryou-problem={current.problemRef ?? current.caseId}>
+                  Open the problem
                 </Link>
-              ) : <span className="fy-head"><span className="fy-title">{problemHeadName(current)}</span></span>}
-              {current.since && <span className="fy-age lw-num" title={`Waiting since ${new Date(current.since).toLocaleString()}`}>waiting {ageShort(now - current.since)}</span>}
-              {current.trial && <TrialTag projectId={current.projectId ?? null} card={current.cardRef ?? null} />}
-              <span className="fy-pos lw-num">{pos}</span>
-              <button type="button" className="lw-iconbtn" disabled={at <= 0} onClick={() => move(-1, false)} aria-label="Previous"><ChevronLeft className="w-4 h-4" /></button>
-              <button type="button" className="lw-iconbtn" disabled={at >= order.length - 1} onClick={() => move(1, false)} aria-label="Next"><ChevronRight className="w-4 h-4" /></button>
+              )}
+              {order.length > 1 && <>
+                <span className="fy-pos lw-num">{pos}</span>
+                <button type="button" className="lw-iconbtn" disabled={at <= 0} onClick={() => move(-1, false)} aria-label="Previous"><ChevronLeft className="w-4 h-4" /></button>
+                <button type="button" className="lw-iconbtn" disabled={at >= order.length - 1} onClick={() => move(1, false)} aria-label="Next"><ChevronRight className="w-4 h-4" /></button>
+              </>}
             </div>
             <div className="fy-reader-b">
               <WaitingItem key={current.key} need={current} now={now} onProblem={toProblem(current)} onRun={toRun(current)} head={false} asked={false} />

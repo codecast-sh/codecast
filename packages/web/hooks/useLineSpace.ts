@@ -94,9 +94,12 @@ export function useLineSpace(sel: LineSelection): LineSpaceState {
   useSyncTaskDetail(sel.case && !heldCase ? sel.case : undefined);
   const sig = useInboxStore(spacesSig);
   const spaces = useMemo(() => JSON.parse(sig) as LineSpace[], [sig]);
-  const linked = useInboxStore((s) => linkedWorkspace(s, sel));
-  const active = useInboxStore(activeWorkspaceKeyOf);
   const [remembered, setRemembered] = useState(readLastLineSpace);
+  // A decision For you opens (`need` sd-N) reads in any workspace, and For you lists decisions from every one: it never
+  // overrides a workspace the person picked, or the item For you opens on its own would snap every pick back.
+  const own = !!remembered && !!sel.need?.startsWith("sd-");
+  const linked = useInboxStore((s) => linkedWorkspace(s, own ? { ...sel, need: null } : sel));
+  const active = useInboxStore(activeWorkspaceKeyOf);
   const key = pickLineSpace(spaces, [linked], remembered) ?? active;
   const pick = useCallback((k: WorkspaceKey) => { rememberLineSpace(k); setRemembered(k); }, []);
   return useMemo(() => ({ key, spaces, pick }), [key, spaces, pick]);
