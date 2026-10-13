@@ -260,6 +260,11 @@ const AGENT_FACE_PREFIX = "agent:";
 export function agentFaceIdentity(conversationId: string): string {
   return `${AGENT_FACE_PREFIX}${conversationId}`;
 }
+/** The conversation an agent's face speaks for; null for anyone else,
+ *  the worker's own `agent-<job>` included. */
+export function agentFaceConversationId(identity: string): string | null {
+  return identity.startsWith(AGENT_FACE_PREFIX) ? identity.slice(AGENT_FACE_PREFIX.length) || null : null;
+}
 export function isAgentFaceIdentity(identity: string): boolean {
   return /^agent[:-]/.test(identity);
 }
