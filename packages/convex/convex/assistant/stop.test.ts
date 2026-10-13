@@ -15,7 +15,7 @@ setDefaultTimeout(60_000);
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const user = await t.run((ctx) => ctx.db.insert("users", { name: "Dana" } as any));
+  const user = await t.run((ctx) => ctx.db.insert("users", { name: "Dana", emailVerificationTime: 1 } as any));
   const authed = t.withIdentity({ subject: user });
   const conversationId = (await authed.mutation(api.assistant.entry.startConversation, {})).conversation_id as Id<"conversations">;
   // A turn leased for a message, not yet run: the scheduled run is left pending.

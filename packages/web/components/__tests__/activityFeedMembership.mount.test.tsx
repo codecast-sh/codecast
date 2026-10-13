@@ -11,6 +11,7 @@ const restore = replaceGlobals({
   HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node,
   MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
+  ResizeObserver: class { observe() {} disconnect() {} },
   indexedDB: new IDBFactory(), IDBKeyRange,
 });
 afterAll(() => { closeDomWindow(dom); restore(); });
@@ -96,6 +97,26 @@ test("current membership and org settings govern old cached feed cards, people a
 
     await act(async () => useInboxStore.setState({ clientState: { ui: { active_team_id: "another-team" } } } as any));
     expect(el.textContent).not.toContain("Alexander session");
+  } finally {
+    await act(async () => root.unmount()); el.remove();
+  }
+}, 30_000);
+
+test("a role seat the viewer hosts gets its bot's pill, never a second one of the viewer", async () => {
+  useInboxStore.setState({
+    currentUser: { _id: ME, name: "Alexander" }, clientStateInitialized: true,
+    clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, features: { org: true } }],
+    settingsData: { [ROSTER]: { _id: ROSTER, value: [{ _id: ME, name: "Alexander" }, { _id: "deals", name: "Deals lead" }] } },
+    externalEvents: {},
+    feedConversations: { [`${TEAM}|`]: [row("mine", ME, "Alexander")] }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
+    sessions: { seat: { ...row("seat", ME, "Deals lead"), team_id: TEAM, acting_user_id: "deals", is_private: true } },
+  } as any);
+  const el = document.createElement("div"); document.body.appendChild(el);
+  const root = createRoot(el);
+  try {
+    await act(async () => root.render(<MemoryRouter><ActivityFeed mode="team" /></MemoryRouter>));
+    const pills = [...el.querySelectorAll("button")].filter((b) => b.querySelector(".ring-2")).map((b) => b.querySelector(".font-medium")?.textContent);
+    expect(pills).toEqual(["Alexander", "Deals lead"]);
   } finally {
     await act(async () => root.unmount()); el.remove();
   }

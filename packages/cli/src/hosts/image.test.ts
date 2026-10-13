@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cloneResetUserData, createImageArgs, imageName } from "./image";
+import { baseImageName, cloneResetUserData, createBaseImageArgs, createImageArgs, imageName, macBaseScrubScript } from "./image";
 
 test("a clone makes itself its own machine once, before the daemon: new machine id, no source token, no source worktrees", () => {
   const data = cloneResetUserData("ubuntu");
@@ -24,4 +24,20 @@ test("an image is tagged as codecast's, for its platform and source, and capture
   expect(tags.map((t: any) => t.ResourceType)).toEqual(["image", "snapshot"]);
   expect(tags[0].Tags).toContainEqual({ Key: "managed-by", Value: "codecast" });
   expect(tags[0].Tags).toContainEqual({ Key: "codecast-source", Value: "i-084309c56a91e15ff" });
+});
+
+test("a base image is never mistaken for a clone of someone's host", () => {
+  expect(baseImageName("darwin", new Date("2026-10-09T20:00:00Z"))).toBe("codecast-base-darwin-2026-10-09");
+  const args = createBaseImageArgs("i-0abc", "darwin", "codecast-base-darwin-2026-10-09");
+  expect(args.join(" ")).not.toContain("managed-by");
+  // A consistent snapshot: the base build lets AWS restart the machine.
+  expect(args).not.toContain("--no-reboot");
+});
+
+test("the base scrub removes every key and password and keeps the granted helper", () => {
+  const script = macBaseScrubScript();
+  expect(spawnSync("bash", ["-n"], { input: script }).status).toBe(0);
+  expect(script).toContain('rm -rf "$home/.ssh"');
+  expect(script).toContain("/etc/ssh/ssh_host_*");
+  expect(script).toContain("! -name computer");
 });
