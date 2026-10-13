@@ -1,7 +1,8 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
-import Prism from "prismjs";
+import * as diffModel from "../../lib/diffModel";
+import { fileDiffRenders } from "../../test-helpers/pierreFileDiff";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { FileDiffLayout } from "../FileDiffLayout";
@@ -30,13 +31,13 @@ const {createRoot} = await import("react-dom/client");
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 for (const mode of ["unified", "split"] as const) {
-  test(`${mode} diff keeps highlighting until patch or language changes`, async () => {
+  test(`${mode} diff keeps its parsed diff until patch or language changes`, async () => {
     const initial = useInboxStore.getState().clientState;
     useInboxStore.setState({ clientState: { ...initial, ui: { ...initial.ui, file_diff_view_mode: mode } } });
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const highlight = spyOn(Prism, "highlight");
+    const highlight = spyOn(diffModel, "buildDiffModel");
     const file = { filename: "sample.ts", status: "modified", additions: 1, deletions: 1, changes: 2,
       patch: "@@ -1,1 +1,1 @@\n-const value = 1;\n+const value = 2;" };
     try {
@@ -57,10 +58,8 @@ for (const mode of ["unified", "split"] as const) {
       await act(() => root.render(<FileDiffLayout files={[changed]} />));
       expect(highlight.mock.calls.length > first).toBe(true);
       expect(container.textContent).toContain("value = 3");
-      const beforeLanguage = highlight.mock.calls.length;
       await act(() => root.render(<FileDiffLayout files={[{ ...changed, filename: "sample.py" }]} focusFile="sample.py" />));
-      expect(highlight.mock.calls.length > beforeLanguage).toBe(true);
-      expect(highlight.mock.calls.at(-1)?.[2]).toBe("python");
+      expect(fileDiffRenders.at(-1)?.fileDiff.lang).toBe("python");
       await act(() => root.render(<FileDiffLayout files={[{ ...file, filename: "sample.py", patch: undefined }]} focusFile="sample.py" />));
       expect(container.textContent).toContain("No changes to display");
     } finally {
