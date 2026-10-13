@@ -15,9 +15,10 @@
 //   failIncomingCallConnected (CallKit dismisses cleanly, no zombie call).
 // - Decline / system end → declineInvite or leaveCall.
 // - Ring settled elsewhere (answered on web, caller hung up, TTL) → we
-//   reportCallEnded so the lock-screen UI goes away. The signal is the
-//   getMyCalls subscription dropping the invite (JS must be up for that; the
-//   module's own incomingCallTimeout — set to the invite TTL — is the
+//   reportCallEnded so the lock-screen UI goes away. The signal is the bridge's
+//   own getMyCalls watch dropping the invite, held for as long as the ring is
+//   up and independent of any screen being mounted (JS must be up for that;
+//   the module's own incomingCallTimeout — set to the invite TTL — is the
 //   killed-app backstop).
 // - Mute from the system UI (lock screen / CarPlay) → setMuted. Ours → CallKit
 //   setMuted, so the system UI never lies.
@@ -110,23 +111,67 @@ type Active = { ckId: string; inviteId: string; roomKey: string; answered: boole
 // A CallKit ring reported from a VoIP push can precede the getMyCalls
 // subscription reflecting the invite (PushKit → CallKit is faster than Convex
 // propagation). Inside this window, absence from the subscription is not
-// evidence the ring settled.
+// evidence the ring settled, so the verdict waits for the window to close and
+// is then taken on the latest result: an answer on the desktop inside the
+// first seconds is the common case, and the push that carried it never comes
+// again.
 const RING_SETTLE_GRACE_MS = 5_000;
 let active: Active | null = null;
 let subs: EventSubscription[] = [];
 let unsubCall: (() => void) | null = null;
 let started = false;
 
+// The ring's settle watch: invites live at me per the latest getMyCalls result
+// (null until the first authenticated result lands, which proves nothing).
+let liveInviteIds: Set<string> | null = null;
+let stopRingWatch: (() => void) | null = null;
+
+function setActive(next: Active | null): void {
+  if (next?.ckId !== active?.ckId) {
+    stopRingWatch?.();
+    stopRingWatch = null;
+    liveInviteIds = null;
+  }
+  active = next;
+  if (next) void watchRing(next.ckId);
+}
+
+// Watch getMyCalls for as long as this ring is up. Only after auth: signed out,
+// the query answers "no invites", which would end every cold-start ring.
+async function watchRing(ckId: string): Promise<void> {
+  if (!(await waitForAuth(ANSWER_AUTH_WAIT_MS)) || active?.ckId !== ckId || stopRingWatch) return;
+  const watch = convex.watchQuery(api.calls.getMyCalls, {});
+  const read = () => {
+    let res;
+    try {
+      res = watch.localQueryResult();
+    } catch {
+      return;
+    }
+    if (!res) return;
+    liveInviteIds = new Set(res.incoming.map((r) => String(r._id)));
+    void endCallKitRingIfStale();
+  };
+  const unsub = watch.onUpdate(read);
+  const graceLeft = active.reportedAt + RING_SETTLE_GRACE_MS - Date.now();
+  const timer = setTimeout(() => void endCallKitRingIfStale(), Math.max(0, graceLeft));
+  stopRingWatch = () => {
+    unsub();
+    clearTimeout(timer);
+  };
+  read();
+}
+
 // ── outbound: our state → CallKit ─────────────────────────────────────────
 
 /** Tell CallKit the ring settled (answered elsewhere / cancelled / expired). */
-export async function endCallKitRingIfStale(liveInviteIds: Set<string>): Promise<void> {
+async function endCallKitRingIfStale(): Promise<void> {
   const k = getCallKit();
-  if (!k || !active || active.answered) return;
+  if (!k || !active || active.answered || !liveInviteIds) return;
   if (liveInviteIds.has(active.inviteId)) return;
   if (Date.now() - active.reportedAt < RING_SETTLE_GRACE_MS) return;
   const { ckId } = active;
-  active = null;
+  setActive(null);
   if (__DEV__) (global as any).__ckEvents?.push({ name: "bridge:endRingIfStale", e: { ckId } });
   try {
     await k.reportCallEnded(ckId, "remoteEnded");
@@ -138,7 +183,7 @@ async function endCallKitCall(reason: "local" | "remoteEnded" | "failed"): Promi
   const k = getCallKit();
   if (!k || !active) return;
   const { ckId } = active;
-  active = null;
+  setActive(null);
   if (__DEV__) (global as any).__ckEvents?.push({ name: "bridge:endCall:" + reason, e: { ckId } });
   try {
     if (reason === "local") await k.endCall(ckId);
@@ -157,13 +202,16 @@ function onSessionAdded(session: any) {
   const inviteId = meta?.invite_id ?? ev?.serverCallId;
   const roomKey = meta?.room_key;
   if (!inviteId || !roomKey) return;
-  active = { ckId: session.id, inviteId, roomKey, answered: false, reportedAt: Date.now() };
+  setActive({ ckId: session.id, inviteId, roomKey, answered: false, reportedAt: Date.now() });
 }
 
 async function onAnswered(ev: { id: string; requestId: string }) {
   const k = getCallKit();
   if (!k || !active || active.ckId !== ev.id) return;
   active.answered = true;
+  // Answered here: nothing elsewhere can settle this ring any more.
+  stopRingWatch?.();
+  stopRingWatch = null;
   const { ckId, inviteId, roomKey } = active;
   const fail = async (reason: string) => {
     // A failed answer is silent on device (CallKit just says "Call failed"),
@@ -176,7 +224,7 @@ async function onAnswered(ev: { id: string; requestId: string }) {
     try {
       await k.failIncomingCallConnected(ckId, ev.requestId);
     } catch {}
-    active = null;
+    setActive(null);
   };
   try {
     if (!(await waitForAuth(ANSWER_AUTH_WAIT_MS))) {
@@ -199,7 +247,7 @@ async function onAnswered(ev: { id: string; requestId: string }) {
 async function onEnded(ev: { id: string }) {
   if (!active || active.ckId !== ev.id) return;
   const { inviteId, answered } = active;
-  active = null;
+  setActive(null);
   if (answered) {
     // Ended from the system UI mid-call.
     await leaveCall();

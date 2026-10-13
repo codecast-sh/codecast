@@ -163,7 +163,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,
     ...f.changed.map((ch: any) => `    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`),
-    `  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
+    `  today: ${usedOf(u.wakes, u.caps.wakes_per_day)} wakes · ${usedOf(u.hands, u.caps.hands_per_day)} sessions started · ${usedOf(u.tokens, u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
     ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
     ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
     ...briefCharterLines(String(brief.charter ?? "")),
