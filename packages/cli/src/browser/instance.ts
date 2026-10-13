@@ -168,17 +168,73 @@ export function clearState(): void {
  * verdict `authorizesTeardown`. `unverifiable` means the process EXISTS but CDP
  * did not answer within `patienceMs`; the browser is probably just overloaded,
  * and killing or replacing it would destroy every other agent's tabs.
+ *
+ * Unless the silence comes with proof of a hang: the browser process sat
+ * asleep for the whole wait and spent no CPU (`isHung`). An overloaded browser
+ * is runnable, in disk wait or burning CPU, so it stays protected. A hung one
+ * (its main thread blocked on a helper the OOM killer took, or on an X server
+ * that died) never answers again and holds every later command hostage, so it
+ * is stopped here and the verdict is the exit this probe then observed.
  */
 export async function probeLiveness(state: InstanceState | null, patienceMs = 4000): Promise<LivenessVerdict> {
   if (!state || !isPidAlive(state.pid)) return "exited";
+  const before = processActivity(state.pid);
   const deadline = Date.now() + patienceMs;
   for (;;) {
     const left = deadline - Date.now();
-    if (left <= 0) return "unverifiable";
+    if (left <= 0) break;
     if (await isCdpAlive(state.port, Math.min(Math.max(left, 250), 2000))) return "live";
     if (!isPidAlive(state.pid)) return "exited";
     if (deadline - Date.now() > 0) await sleep(Math.min(400, deadline - Date.now()));
   }
+  // The process asking is never the one hung.
+  if (state.pid === process.pid || !isHung(before, processActivity(state.pid))) return "unverifiable";
+  await stopInstance(state);
+  return isPidAlive(state.pid) ? "unverifiable" : "exited";
+}
+
+/** CPU time a process has used (in hundredths of a second) and whether every
+ *  thread is asleep. Null when the process cannot be read. */
+export interface ProcessActivity {
+  cpu: number;
+  asleep: boolean;
+}
+
+export function processActivity(pid: number): ProcessActivity | null {
+  try {
+    if (process.platform === "linux") {
+      // Fields after the parenthesised command name: state, ..., utime (12th), stime (13th), in clock ticks.
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const states = fs.readdirSync(`/proc/${pid}/task`).map((t) => {
+        const s = fs.readFileSync(`/proc/${pid}/task/${t}/stat`, "utf-8");
+        return s.slice(s.lastIndexOf(")") + 2, s.lastIndexOf(")") + 3);
+      });
+      return { cpu: Number(fields[11]) + Number(fields[12]), asleep: states.every((s) => s === "S" || s === "I") };
+    }
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+    const [stat, time] = execFileSync("ps", ["-o", "stat=,time=", "-p", String(pid)], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim().split(/\s+/);
+    return { cpu: parsePsTime(time), asleep: /^[SI]/.test(stat) };
+  } catch {
+    return null;
+  }
+}
+
+/** `ps` cputime ([[dd-]hh:]mm:ss[.cc]) in hundredths of a second. */
+export function parsePsTime(time: string): number {
+  const [days, rest] = time.includes("-") ? time.split("-") : ["0", time];
+  const secs = rest.split(":").reduce((acc, part) => acc * 60 + Number(part), 0);
+  return Math.round((Number(days) * 86400 + secs) * 100);
+}
+
+/**
+ * Positive evidence of a hang across a wait in which CDP never answered: the
+ * process was asleep at both ends and its CPU time did not move (one tick of
+ * slack for a timer wakeup). Anything unreadable is not evidence.
+ */
+export function isHung(before: ProcessActivity | null, after: ProcessActivity | null): boolean {
+  if (!before || !after) return false;
+  return before.asleep && after.asleep && after.cpu - before.cpu <= 1;
 }
 
 /** Is the recorded instance actually alive and answering CDP? */

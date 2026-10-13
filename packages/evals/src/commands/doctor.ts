@@ -8,10 +8,11 @@ import { fmt } from '@platform/cli-kit/colors';
 import { formatCheckLine, runDoctor, type DoctorCheck } from '@platform/cli-kit/doctor';
 
 import { readLocalCredential } from '../../../cli/src/ccKeychain';
+import { evalsApiKey } from '../adapters/apiCall';
 import { apiConfig } from '../adapters/convo';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
-import { CALL_MODEL, PROSE_MODEL } from '../models';
+import { CALL_MODEL, PROSE_MODEL, sendsThinkingOff } from '../models';
 import { DRY_RUN_SCRIPT, homePaths, LABELS_REMOTE, REPO_ROOT } from '../paths';
 import { surfaces } from '../registry';
 import { labelsRemoteProblem, labelsRepoVisibility } from '../labels';
@@ -103,6 +104,16 @@ export const CHECKS: DoctorCheck[] = [
       const off = calls.filter((s) => s.model !== want(s.id));
       const by = [CALL_MODEL, PROSE_MODEL].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
       return !off.length ? { ok: true, detail: `call surfaces pin the models prod calls: ${by}` } : { ok: false, detail: `off their prod model: ${off.map((s) => `${s.id}=${s.model}, prod calls ${want(s.id)}`).join('; ')}` };
+    },
+  },
+  {
+    name: 'evals API key',
+    run: () => {
+      // Call reps post prod's exact request with this key; without it, check skips the models prod posts with thinking off.
+      const skipped = surfaces().filter((s) => s.route === 'call' && sendsThinkingOff(s.model)).map((s) => s.id);
+      return evalsApiKey()
+        ? { ok: true, detail: 'call reps post straight to the Messages API' }
+        : { ok: false, warn: true, detail: `no key: check skips ${skipped.join(', ') || 'no surface'}`, fix: 'security add-generic-password -s codecast-evals-anthropic-key -a evals -w <key>' };
     },
   },
   { name: 'agent snippet', run: () => (snippetInstalled() === 'current' ? { ok: true, detail: 'AGENTS.md carries the current reference' } : { ok: false, warn: true, detail: `AGENTS.md section ${snippetInstalled()}`, fix: './evals snippet install' }) },
