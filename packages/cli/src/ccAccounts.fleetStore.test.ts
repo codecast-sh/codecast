@@ -16,8 +16,11 @@ import {
   launchProfileName,
   putFleetOn,
   readFleetState,
+  listProfiles,
   writeAccountToken,
 } from "./ccAccounts.js";
+import { refreshUsageSnapshots } from "./ccUsagePoll.js";
+import { fallbackProfiles } from "@codecast/shared/contracts";
 
 // The fleet store (see "Fleet store" in ccAccounts.ts) against a sandboxed
 // $HOME with the file-backed store, so nothing touches the real keychain.
@@ -31,6 +34,9 @@ describe("fleet store (sandboxed $HOME)", () => {
   const login = (accessToken: string, expiresAt: number) => ({
     claudeAiOauth: { accessToken, refreshToken: "refresh-secret", expiresAt, scopes: ["user:inference", "user:profile"], subscriptionType: "max" },
   });
+
+  const save = (name: string, cred: unknown) =>
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts", `${name}.json`), JSON.stringify({ credentials: cred, oauthAccount: {}, saved_at: 1 }));
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-fleet-test-"));
@@ -51,8 +57,6 @@ describe("fleet store (sandboxed $HOME)", () => {
         dead: { email: "dead@x.com", uuid: "u-dead", saved_at: 1, login_expired_at: 1 },
       },
     }));
-    const save = (name: string, cred: unknown) =>
-      fs.writeFileSync(path.join(cfg, "cc-accounts", `${name}.json`), JSON.stringify({ credentials: cred, oauthAccount: {}, saved_at: 1 }));
     save("live", login("access-live", now + 6 * 3_600_000));
     save("lapsing", login("access-lapsing", now + FLEET_MIN_ACCESS_MS / 2));
     save("dead", login("access-dead", now + 6 * 3_600_000));
@@ -128,6 +132,34 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(launchProfileName(now)).toBe("live");
   });
 
+  // 2026-10-08: the fleet sat on an account whose organization had turned off
+  // subscription OAuth. Its setup-token still minted a store, so the fleet
+  // never moved, and every session launched on it answered "Your organization
+  // has disabled Claude subscription access". The usage poll sees the 403,
+  // stamps the account, and the next tick moves the fleet.
+  it("moves the fleet off an account its organization refuses, setup-token or not", async () => {
+    save("tok", login("access-tok", now + 6 * 3_600_000));
+    await putFleetOn("tok", now);
+    const refusal = JSON.stringify({ type: "error", error: { type: "permission_error", message: "OAuth authentication is currently not allowed for this organization.", details: { error_code: "oauth_not_allowed_for_organization" } } });
+    const fetchImpl = (async (_url: string, init: RequestInit) =>
+      new Headers(init.headers).get("authorization") === "Bearer access-tok"
+        ? new Response(refusal, { status: 403, headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify({ five_hour: { utilization: 1 }, seven_day: { utilization: 1 } }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const summary = await refreshUsageSnapshots({ fetchImpl, now, minIntervalMs: 0 });
+    expect(summary.failed.map((f) => f.name)).toContain("tok");
+    expect(fleetLoginDead("tok", null, now)).toBe(true);
+
+    const did = await maintainFleetStore(now);
+    expect(did).toContain(`"tok"'s organization refuses subscription access`);
+    expect(readFleetState()?.profile).toBe("live");
+    expect(fallbackProfiles(listProfiles().map((p) => ({ ...p, setup_token: { expires_at: now + 86_400_000 } })), undefined, now).map((p) => p.name)).not.toContain("tok");
+
+    // A good probe later clears the stamp.
+    const ok = (async () => new Response(JSON.stringify({ five_hour: { utilization: 1 }, seven_day: { utilization: 1 } }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    await refreshUsageSnapshots({ fetchImpl: ok, now: now + 1, minIntervalMs: 0 });
+    expect(fleetLoginDead("tok", null, now)).toBe(false);
+  });
+
   it("stays put on an account whose login is only about to lapse", async () => {
     // No refresh token, so the tick's refresh fails without reaching the network.
     const lapsingLogin = { claudeAiOauth: { accessToken: "access-lapsing", expiresAt: now + FLEET_MIN_ACCESS_MS / 2 } };
@@ -143,6 +175,18 @@ describe("fleet store (sandboxed $HOME)", () => {
     const stub = JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "", expiresAt: 0 } });
     expect(fleetLoginDead("live", stub, now)).toBe(true);
     expect(fleetLoginDead("tok", stub, now)).toBe(false);
+  });
+
+  // 2026-10-13: the machine's keychain held the logged-out stub while the
+  // account's sessions kept its saved login live, and a switch onto it failed
+  // with "no live login" beside a card showing a healthy machine login.
+  it("carries the machine's account from its saved login when the keychain is a logged-out stub", async () => {
+    fs.writeFileSync(path.join(home, ".codecast", "cc-active.json"), JSON.stringify({ key: "u-live", since: 1 }));
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "", expiresAt: 0 } }));
+    const state = await putFleetOn("live", now);
+    expect(state.via).toBe("login");
+    expect(fs.readFileSync(path.join(fleetStoreDir(), ".credentials.json"), "utf-8")).toContain("access-live");
   });
 
   it("runs a shell-less launch on the fleet store", async () => {
