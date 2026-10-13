@@ -45,6 +45,21 @@ describe("buildBlankLaunchArgs", () => {
     expect(args.join(" ")).toContain("--permission-mode bypassPermissions");
   });
 
+  // Regression: a restart with nothing to resume launched a blank claude with
+  // no --session-id. Claude writes no transcript before its first turn, so
+  // discovery timed out and the pane never linked (jx7970z, 2026-10-06).
+  test("claude carries the assigned session id", () => {
+    const args = buildBlankLaunchArgs("claude", null, "0b6c1d52-0000-4000-8000-000000000001");
+    expect(args.join(" ")).toContain("--session-id 0b6c1d52-0000-4000-8000-000000000001");
+    expect(args.join(" ")).toContain("--permission-mode bypassPermissions");
+  });
+
+  test("a session id pinned in claude_args is not overridden", () => {
+    const cfg = { claude_args: "--session-id pinned" } as unknown as Config;
+    const args = buildBlankLaunchArgs("claude", cfg, "0b6c1d52-0000-4000-8000-000000000001");
+    expect(args.filter((a) => a === "--session-id")).toHaveLength(1);
+  });
+
   test("codex defaults to its bypass flag", () => {
     expect(buildBlankLaunchArgs("codex", null)).toContain("--dangerously-bypass-approvals-and-sandbox");
   });

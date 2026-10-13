@@ -6,6 +6,7 @@ import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 import { isObjectRef, objectRefScanRegex } from "./mods/objects";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
+import { VIEW_REF_PREFIX, viewRefScanRegex } from "./productViewRefs";
 
 // Both shapes come from the shared mention vocabulary (@codecast/shared/
 // entities), so registering a new object type there lights it up in prose
@@ -28,6 +29,10 @@ const OBJECT_REF_RE = objectRefScanRegex();
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
 // they're the entity whose body IS markdown meant to be read in place.
 const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
+// A connected app's view (`union:conversation/<id>@<iso>`, lib/productViewRefs):
+// an embed alone on its line, a pill in prose, the doc embed's rule. Scanned
+// ahead of file paths, which `conversation/<id>` would otherwise read as.
+const VIEW_REF_RE = viewRefScanRegex();
 
 function isEmbedLink(node: any): boolean {
   return node?.type === "link" && typeof node.url === "string" && node.url.startsWith("embed://");
@@ -291,6 +296,10 @@ export function remarkEntityIds() {
           // with entity:// below — the text node is the real payload carrier.
           children: [{ type: "text", value: `embed:${docRef}` }],
         }),
+      ],
+      [
+        VIEW_REF_RE,
+        (match: string) => ({ type: "link", url: `embed://${VIEW_REF_PREFIX}${match}`, children: [{ type: "text", value: `embed:${VIEW_REF_PREFIX}${match}` }] }),
       ],
       [
         MENTION_RE,
