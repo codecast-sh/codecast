@@ -7,6 +7,7 @@
 // and what the line did about it, run by run. Nothing else.
 import { useCallback, useMemo } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { useCollectionRows } from "../../../../../hooks/useCollectionRows";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useOpenFixDecision } from "../../../../../hooks/useFixDecision";
@@ -32,6 +33,7 @@ import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import type { ReaderSignal } from "../../../widgets/FindingReader";
 import { StageTrack } from "../../../widgets/StageTrack";
+import { useLineNav } from "../../../widgets/parts";
 import { LineDecisionPrefetch } from "../../../widgets/LineDecision";
 import type { LineViewProps } from "../types";
 import { ProblemBand } from "./ProblemBand";
@@ -64,6 +66,12 @@ export function ProblemPage({ model, workspace, selection, select, href, order }
     return t && !t.cause ? t : null;
   });
 
+  // A task the store holds that no finding raised (filed by hand, then run on the line) has no problem page: the
+  // address hands over to the task itself, whole, and Back skips this hop.
+  const { replacePath } = useLineNav();
+  const taskPage = plainTask && workspace.ready ? `/tasks/${plainTask.short_id ?? plainTask._id}` : null;
+  useWatchEffect(() => { if (taskPage) replacePath?.(taskPage); }, [taskPage, replacePath]);
+
   // Esc returns to the list; j and k walk it. None of them reaches into a decision or an answer box.
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (!active || !issue || selection.run || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || hasOpenModal() || keyBelongsElsewhere(e.target) || inReader(e.target)) return;
@@ -77,8 +85,8 @@ export function ProblemPage({ model, workspace, selection, select, href, order }
   // cold, not missing. Once it has, a name nothing here holds is not found, with the way back.
   if (!issue) {
     if (!workspace.ready) return <div className="lw-skeleton" aria-busy data-line-view="problem">{[70, 92, 54].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
-    // A task the store holds that no finding raised is not a problem here: name it by its ref and open the task itself.
-    if (plainTask) return <div className="lw-empty" data-line-view="problem" data-line-problem-missing={selection.case ?? ""} data-line-problem-task=""><b>Not a problem on the line</b><span className="pp-ref">{plainTask.short_id ?? plainTask._id}</span><a className="lw-act" data-primary="" href={`/tasks/${plainTask.short_id ?? plainTask._id}`}>Open the task</a><button type="button" className="lw-act" onClick={() => open(null)}>All problems</button></div>;
+    // A task no finding raised is opening on its own page (above).
+    if (plainTask) return <div className="lw-skeleton" aria-busy data-line-view="problem" data-line-problem-task={plainTask.short_id ?? plainTask._id}>{[70, 92, 54].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
     return <div className="lw-empty" data-line-view="problem" data-line-problem-missing={selection.case ?? ""}><b>Not found</b><span className="pp-ref">{selection.case}</span><button type="button" className="lw-act" onClick={() => open(null)}>All problems</button></div>;
   }
   return <ProblemBody key={issue.id} issue={issue} model={model} workspace={workspace} selection={selection} select={select} href={href} prev={prev} next={next} open={open} />;

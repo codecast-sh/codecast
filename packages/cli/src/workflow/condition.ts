@@ -222,6 +222,17 @@ export function extractJsonOutput(text: string): unknown | undefined {
   };
   const whole = tryParse(text.trim());
   if (whole !== undefined) return whole;
-  const fences = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
-  return fences.length ? tryParse(fences[fences.length - 1][1].trim()) : undefined;
+  // A json block can quote code fences inside its strings (a proposal quoting a
+  // prompt), so a block ends at the first closing fence after which it parses.
+  // The last block that parses is the result.
+  const opens = [...text.matchAll(/```json[^\S\n]*\n/g)].map((m) => m.index! + m[0].length);
+  for (let i = opens.length - 1; i >= 0; i--) {
+    const start = opens[i];
+    const end = i + 1 < opens.length ? opens[i + 1] : text.length;
+    for (let close = text.indexOf("```", start); close !== -1 && close < end; close = text.indexOf("```", close + 3)) {
+      const v = tryParse(text.slice(start, close).trim());
+      if (v !== undefined) return v;
+    }
+  }
+  return undefined;
 }
