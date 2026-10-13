@@ -1,0 +1,64 @@
+/* The Line page's Steps table (ProcessView; line-journeys.md LJ8.5): one
+   column at the step page's width, a bar with the page's one switch, the
+   steps, then the finders. Counts are links into the step page. */
+
+.lst { max-width: 1080px; margin: 0 auto; padding: var(--lw-s5) var(--lw-s6) 96px; }
+.lst-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.lst-h { margin: 0; font-size: var(--lw-fs-lg); font-weight: 750; letter-spacing: -.02em; color: var(--lw-ink); }
+.lst-fact { display: inline-flex; align-items: center; gap: 6px; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lst-fact b { color: var(--lw-ink); font-weight: 650; }
+.lst-bar-r { margin-left: auto; }
+.lst-facts { display: inline-flex; align-items: center; gap: 16px; }
+.lst-fact[data-tone="you"] b { color: var(--lw-person-deep); }
+.lst-fact[data-tone="bad"] b { color: var(--lw-bad); }
+
+.lst-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-base); table-layout: fixed; }
+.lst-table col[data-c="step"] { width: 28%; }
+.lst-table col[data-c="wait"] { width: 20%; }
+.lst-table col[data-c="n"] { width: 9%; }
+/* A phase heads its steps: the line read top to bottom in the order it runs. */
+.lst-table tbody tr.lst-phase-row { cursor: default; }
+.lst-table tbody tr.lst-phase-row:hover { background: none; }
+.lst-phase-row th { padding: 18px 12px 6px; font-size: var(--lw-fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--lw-ink-3); border-bottom-color: var(--lw-rule); }
+.lst-table tbody:first-of-type .lst-phase-row th { padding-top: 12px; }
+.lst-table th, .lst-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--lw-rule-2); font-weight: 450; vertical-align: baseline; }
+.lst-table thead th { font-size: var(--lw-fs-sm); color: var(--lw-ink-3); font-weight: 600; border-bottom-color: var(--lw-rule); }
+.lst-table tbody tr { cursor: pointer; transition: background var(--lw-fast); }
+.lst-table tbody tr:hover { background: color-mix(in srgb, var(--lw-ink) 4%, transparent); }
+
+.lst-name { display: inline-flex; align-items: center; gap: 9px; color: var(--lw-ink); font-weight: 650; text-decoration: none; border-radius: 4px; }
+.lst-name:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--lw-rule); }
+.lst-mark { flex: none; width: 12px; height: 8px; border-radius: 3px; box-shadow: inset 0 0 0 1.3px color-mix(in srgb, var(--lw-agent) 60%, var(--lw-rule)); }
+.lst-mark[data-kind="person"] { border-radius: 4px; background: var(--lw-person); box-shadow: none; }
+.lst-mark[data-kind="script"] { border-radius: 2px; box-shadow: inset 0 0 0 1.3px var(--lw-ink-2); }
+
+.lst-n { text-align: right !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lst-n[data-col="failed"] { text-align: left !important; padding-left: 28px; }
+.lst-count { display: inline-flex; align-items: baseline; gap: 10px; color: var(--lw-ink); text-decoration: none; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.lst-count b { font-weight: 700; }
+.lst-count:hover { background: color-mix(in srgb, var(--lw-ink) 7%, transparent); }
+.lst-n[data-col="waiting"], .lst-n[data-col="failed"] { text-align: left !important; }
+.lst-n[data-col="waiting"] .lst-count b { color: var(--lw-ink-2); }
+.lst-n[data-col="waiting"][data-tone="you"] .lst-count > b { color: var(--lw-person-deep); }
+.lst-n[data-col="failed"] .lst-count b { color: var(--lw-bad); }
+.lst-n[data-col="failed"][data-tone="none"] .lst-count b { color: var(--lw-ink-2); }
+.lst-cause { color: var(--lw-ink-2); font-size: var(--lw-fs-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lst-n[data-col="failed"] .lst-count { display: flex; max-width: 100%; margin-right: 0; }
+/* A failure's cause wraps to two lines rather than cutting a path or an error mid-word; the step page shows it whole. */
+.lst-n[data-col="failed"] { white-space: normal; }
+.lst-n[data-col="failed"] .lst-cause { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; }
+/* A cause that only says nothing was kept: the count is the fact, the words step back. */
+.lst-cause[data-thin] { color: var(--lw-ink-3); }
+.lst-none { color: var(--lw-ink-3); }
+.lst-name:focus-visible, .lst-count:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; }
+
+/* The finders under the steps: the same column, the same rule weight. */
+.lst > .ft { margin-top: 36px; }
+.lst-sub { margin-bottom: 10px; }
+/* The summary row: one pointer to Problems' Not started, a quiet line under the bar. */
+.lst-pointers { display: flex; margin: -4px 0 10px -12px; }
+a.lst-fact { text-decoration: none; border-radius: var(--lw-r); }
+a.lst-fact:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+/* Waiting's words wrap inside their column ("6 on you · 3 someone else") rather than run into Failed. */
+.lst-n[data-col="waiting"] .lst-count { display: flex; flex-wrap: wrap; max-width: 100%; column-gap: 10px; }
+.lst-n[data-col="waiting"] .lst-cause { white-space: normal; overflow: visible; }

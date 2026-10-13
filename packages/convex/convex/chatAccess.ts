@@ -10,7 +10,7 @@
 // result.
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { isTeamMember } from "./privacy";
+import { isConversationOwner, isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
@@ -60,6 +60,20 @@ export async function channelMemberIds(
   return rows.map((r) => r.user_id);
 }
 
+/** The most roles and sessions one room holds (agent-channels.md C5). */
+export const MAX_CHANNEL_AGENTS = 50;
+
+/** The roles and sessions inside a room: chat_channel_agents rows. */
+export async function channelAgentRows(
+  ctx: ReadCtx,
+  channelId: Id<"chat_channels">,
+): Promise<Doc<"chat_channel_agents">[]> {
+  return await ctx.db
+    .query("chat_channel_agents")
+    .withIndex("by_channel", (q: any) => q.eq("channel_id", channelId))
+    .take(MAX_CHANNEL_AGENTS);
+}
+
 export async function canAccessChannel(
   ctx: ReadCtx,
   userId: Id<"users">,
@@ -83,9 +97,38 @@ export async function canAccessChannel(
     // transcript, so this widens nothing they could not already see. Only DM
     // rooms: a private channel never has a bot member.
     if (channel.kind === "dm") return await hostsAnchorIn(ctx, channel._id, userId);
-    return false;
+    // A role or session a member put in a private room reads and answers
+    // there as the person who runs it, the same stand-in an anchor's host is
+    // for its DM rooms: the lines reach that person's machine anyway.
+    return await runsAgentIn(ctx, channel._id, userId);
   }
   return true;
+}
+
+// Does `userId` run one of the room's member agents: own the session, or host
+// (or personally own) the role's standing agent?
+async function runsAgentIn(
+  ctx: ReadCtx,
+  channelId: Id<"chat_channels">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  for (const row of await channelAgentRows(ctx, channelId)) {
+    if (row.conversation_id) {
+      const conversation = await ctx.db.get(row.conversation_id);
+      if (conversation && (await isConversationOwner(ctx as any, userId, conversation as any))) return true;
+    } else if (row.role_id) {
+      const role = await ctx.db.get(row.role_id);
+      if (role && isRunner(role, userId)) return true;
+    }
+  }
+  return false;
+}
+
+// The host or personal owner of an anchor, or of a role (whose standing
+// session runs on its host's machine): both rows carry the same two fields.
+function isRunner(row: Pick<Doc<"anchors">, "host_user_id" | "scope_user_id">, userId: Id<"users">): boolean {
+  return row.host_user_id.toString() === userId.toString()
+    || (!!row.scope_user_id && row.scope_user_id.toString() === userId.toString());
 }
 
 // Is `userId` the host (or personal owner) of an anchor whose bot identity is a
@@ -102,9 +145,7 @@ async function hostsAnchorIn(
       .query("anchors")
       .withIndex("by_bot_user", (q: any) => q.eq("bot_user_id", memberId))
       .first();
-    if (!anchor) continue;
-    if (anchor.host_user_id.toString() === userId.toString()) return true;
-    if (anchor.scope_user_id && anchor.scope_user_id.toString() === userId.toString()) return true;
+    if (anchor && isRunner(anchor, userId)) return true;
   }
   return false;
 }
