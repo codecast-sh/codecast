@@ -838,6 +838,18 @@ export function describeSmallToolGroup(actions: readonly ToolCallLike[]): string
   return parts.join(" · ");
 }
 
+// A folded run of tool calls counted by kind: "read 3 files · ran 2 commands".
+export function countToolGroup(actions: readonly ToolCallLike[]): string {
+  const counts = new Map<string, number>();
+  for (const action of actions) counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
+  return [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
+}
+
+// The one line a folded run of tool calls reads as: what one or two did, else the counts.
+export function summarizeToolGroup(actions: readonly ToolCallLike[], counted = countToolGroup(actions)): string {
+  return (actions.length <= 2 && describeSmallToolGroup(actions)) || counted;
+}
+
 // A command or a query leads with what identifies it, so it clips from the end.
 // A path is the opposite — `codecast/packages/cli/src/stateCommand.ts` clipped
 // that way keeps only the directories and drops the one word the reader wants —
