@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 describe("session message queue labels", () => {
   test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
@@ -243,5 +243,14 @@ describe("serverPendingBubbles", () => {
     expect(pendingMessageReachedSession("serverpending_a", pending)).toBe(false);
     expect(pendingMessageHoldReason("serverpending_c", pending)).toBe("answer the dialog");
     expect(pendingCancelRef("c_c", pending)).toEqual({ messageId: "c", clientId: "c_c" });
+  });
+
+  test("a held row carries the terminal screen it was held on to its bubble", () => {
+    const held = row("c", "three", { hold_reason: "answer the dialog", hold_screen: "❯ 1. Yes\n  2. No" });
+    const pending = { ...held, inflight: [held] };
+    expect(pendingMessageHoldScreen("serverpending_c", pending)).toBe("❯ 1. Yes\n  2. No");
+    expect(serverPendingBubbles(pending, timeline())[0]).toMatchObject({ _serverPendingReason: "answer the dialog", _serverPendingScreen: "❯ 1. Yes\n  2. No" });
+    // The screen belongs to the hold: once the row is in the pane it says nothing.
+    expect(pendingMessageHoldScreen("serverpending_c", { ...held, status: "injected" })).toBeUndefined();
   });
 });

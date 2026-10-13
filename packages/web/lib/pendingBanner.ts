@@ -98,7 +98,7 @@ export function heldSendsOf(s: { pendingMessageStatus?: Record<string, unknown> 
   return conversationId ? heldSends(s.pendingMessageStatus?.[conversationId] as ServerPendingStatus | undefined) : [];
 }
 
-type PendingRowRef = { message_id: string; client_id?: string; status?: string; hold_reason?: string };
+type PendingRowRef = { message_id: string; client_id?: string; status?: string; hold_reason?: string; hold_screen?: string };
 type PendingLookup = PendingRowRef & { inflight?: PendingRowRef[] };
 
 // The server row behind a bubble: `serverpending_<id>` or the sender's client id.
@@ -197,6 +197,12 @@ export function inFlightPending<T extends { status?: string }>(pending: T | null
 /** Why the daemon is holding this message back, when it said (retryMessage holdReason): a key to add, a dialog to answer. */
 export function pendingMessageHoldReason(messageId: string, pending?: PendingLookup | null): string | undefined {
   return pendingRowHoldReason(serverPendingRowFor(messageId, pending));
+}
+
+/** The terminal rows a dialog hold was decided on, while the hold stands. */
+export function pendingMessageHoldScreen(messageId: string, pending?: PendingLookup | null): string | undefined {
+  const row = serverPendingRowFor(messageId, pending);
+  return pendingRowHoldReason(row) ? row?.hold_screen : undefined;
 }
 
 /** A pending row's hold reason: set while the daemon holds it back on purpose, rather than working on it. */
