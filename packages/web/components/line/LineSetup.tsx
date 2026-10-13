@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
-const WHAT_IT_DOES = "The line listens to a project's sources, like its error tracker and its evals, and groups what they file into causes. For each one it proves the problem, builds and checks a fix, and brings you one card to ship, revise or drop. After a ship it watches for the problem to come back.";
+const WHAT_IT_DOES = "The line listens to a project's sources, like its error tracker and its evals, and groups what they report into problems. For each one it proves the problem, builds and checks a fix, and brings it to you to ship, revise or drop. After a ship it watches for the problem to come back.";
 
 /** `title` names the project ("Set up the line for <title>"); `children`
  *  replaces the single action, for a list of projects to start from. */
@@ -17,7 +17,7 @@ export function LineSetup({ title, heading, profiled = false, href, children }: 
       <h2 className="text-[15px] font-semibold text-sol-text">{heading ?? (profiled ? "Nothing on the line yet" : `Set up the line for ${title}`)}</h2>
       <p className="mt-1.5 text-[13px] leading-relaxed text-sol-text-muted">
         {profiled
-          ? "The line is set up and no source has filed anything. When one does, its cause shows here with every step the line takes on it."
+          ? "The line is set up and no source has filed anything. When one does, its problem shows here with every step the line takes on it."
           : WHAT_IT_DOES}
       </p>
       {children ?? (href && (

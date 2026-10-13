@@ -18,7 +18,7 @@ export type ConversationDoc = Doc<"conversations">;
 // @codecast/shared/contracts/inboxProjection — ONE implementation serves the
 // server scan and every replica's working-set selection (sync-convergence C4).
 // Re-exported so existing `from "./inboxFilters"` importers keep working.
-export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, shouldShowInInbox } from "@codecast/shared/contracts";
+export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, isRunLog, shouldShowInInbox } from "@codecast/shared/contracts";
 import { shouldShowInInbox } from "@codecast/shared/contracts";
 
 // The three DISTINCT ways a session leaves the active inbox. They were reported
