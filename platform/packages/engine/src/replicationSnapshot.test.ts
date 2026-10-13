@@ -136,6 +136,23 @@ describe("bounded replication snapshots", () => {
     expect(p.posted).toHaveLength(length);
   });
 
+  // A hidden tab's host gets its chained timers held for up to a minute, past
+  // the follower's 3 s hello retry; chunk 0 alone went out, for ever.
+  it("finishes a snapshot when the host's timers never fire", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const p = port();
+    const h = createReplicationHost({ hostId: "h", channel: p.channel, getState: () => ({ rows: rows(900) }), replicatedKeys: keys, isCollectionKey: isCollection, applyUpdates: () => {} });
+    globalThis.setTimeout = (() => 0) as unknown as typeof setTimeout;
+    try {
+      p.deliver({ type: "hello", from: "f", snapshotRequest: "r" });
+      for (let i = 0; i < 50 && !p.posted.some((m) => m.type === "snapshotChunk" && m.done); i++) await new Promise((r) => realSetTimeout(r, 1));
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      h.stop();
+    }
+    expect(p.posted.filter((m) => m.type === "snapshotChunk").map((m) => [m.index, m.done])).toEqual([[0, false], [1, false], [2, false], [3, true]]);
+  });
+
   it("overflow requests a newer snapshot instead of silently losing the buffered tail", () => {
     const inbox = createFollowerInbox<{ hostId: string; seq: number }>(2);
     inbox.onUpdate({ hostId: "h", seq: 1 });
