@@ -5,7 +5,7 @@ import { useInboxStore, InboxSession, claimsViewer, isConvexId } from "../store/
 import { batchGet } from "./useSyncChangeFeed";
 import { useConvexSync } from "./useConvexSync";
 import { useIsSyncHost } from "./useSyncRole";
-import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useSplitQueryNoThrow } from "./useSplitQuery";
 import { useFeederError } from "./useSyncCollection";
 
 // Record the live (recent) id set, change-guarded so an identical payload doesn't
@@ -97,7 +97,7 @@ export const LIST_INBOX_SESSIONS_ARGS = { show_all: false, include_liveness: fal
 export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void }) {
   // Follower windows receive `sessions` over replication; only a host feeds it.
   const isSyncHost = useIsSyncHost();
-  const { data: inboxSessions, error } = useQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
+  const { data: inboxSessions, error } = useSplitQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip", "list");
   useFeederError("conversations.listInboxSessions", error);
   const convex = useConvex();
   const onSyncRef = useRef(opts?.onSync);
