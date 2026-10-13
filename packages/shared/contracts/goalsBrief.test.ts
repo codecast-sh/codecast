@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compactPrinciples, goalRefLabel, groundUpdateBody, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
+import { briefGoalRefs, compactPrinciples, GROUND_NOTE_MAX, goalRefLabel, groundUpdateBody, parseGroundReply, renderGoalsBrief, type GoalsBrief } from "./goalsBrief";
 
 const NOW = Date.UTC(2026, 9, 2, 12);
 const DAY = 86_400_000;
@@ -31,7 +31,7 @@ describe("renderGoalsBrief", () => {
   test("prints initiatives by priority with metric refs, then project charters", () => {
     expect(renderGoalsBrief(brief, { now: NOW })).toBe(`# Goals of Codecast
 
-A goal_ref is a metric ref (\`in-N:key\`), a project's short id, or \`none\`.
+A goal_ref is a metric ref (\`in-N:key\`), a project's short id, \`line\`, or \`none\`.
 
 ## Initiatives
 
@@ -52,6 +52,10 @@ Teams that try it keep using it.
 
 ### pj-a Sync (planning)
 - goal: No lost writes
+
+## The line
+
+- \`line\` the line doing its job: fewer expectation breaks a day, most new findings joining a problem it already knows, the fixes it ships holding, and every station working. Only a change to the line itself serves it.
 `);
   });
 
@@ -82,8 +86,10 @@ Teams that try it keep using it.
     );
   });
 
-  test("an empty workspace says so in one line", () => {
-    expect(renderGoalsBrief({ workspace: "user:u", initiatives: [], projects: [] })).toBe("# Goals\n\nNo active initiatives and no project charters in this workspace.\n");
+  test("an empty workspace says so in one line, and still offers the line's own goal", () => {
+    const out = renderGoalsBrief({ workspace: "user:u", initiatives: [], projects: [] });
+    expect(out).toStartWith("# Goals\n\nNo active initiatives and no project charters in this workspace.\n");
+    expect(out).toContain("\n- `line` the line doing its job");
   });
 
   test("one project's brief names the project before the workspace", () => {
@@ -120,6 +126,25 @@ describe("goalRefLabel", () => {
     expect(goalRefLabel(brief, "pj-b")).toEqual({ name: "Onboarding", why: "A new team runs an agent on day one" });
     expect(goalRefLabel(brief, "in-12:week4_retention")).toEqual({ name: "Retention: Week 4 retention", why: "target 40%" });
     expect(goalRefLabel(brief, "none")).toBeNull();
+    // A change to the line itself serves the line's own health (LM8), which every brief offers.
+    expect(goalRefLabel(brief, "line")?.name).toBe("The line");
+    expect(briefGoalRefs(brief).has("line")).toBe(true);
     expect(goalRefLabel(brief, "pj-zz")).toBeNull();
+  });
+});
+
+describe("parseGroundReply", () => {
+  const refs = new Set(["none"]);
+  const reply = (note: string) => ({ goal_ref: "none", category: "code", risk: "plan", readiness: "needs_context", note });
+  test("keeps the note whole, so the question it ends with is never cut (ct-58683 lost its ask at 500 characters)", () => {
+    const note = `${"The card showed one name. ".repeat(20)}Confirm whether the card's name set came from truncated data (a data or code bug) or from the grader's own context?`;
+    const r = parseGroundReply(reply(note), refs);
+    expect("fields" in r && r.fields.readiness_note).toBe(note);
+  });
+  test("a note past the cap ends at its last full sentence, never mid-word", () => {
+    const r = parseGroundReply(reply("A whole sentence here. ".repeat(200)), refs);
+    const kept = "fields" in r ? r.fields.readiness_note : "";
+    expect(kept.length).toBeLessThanOrEqual(GROUND_NOTE_MAX);
+    expect(kept.endsWith("here.")).toBe(true);
   });
 });
