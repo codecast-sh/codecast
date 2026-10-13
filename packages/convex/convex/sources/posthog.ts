@@ -21,7 +21,7 @@ import type { ActionCtx } from "../functions";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { invalidScope } from "../lib/auth";
-import { scopeArgs, scopeOf, sourceByRef } from "../ingest";
+import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../ingest";
 import { gunzipCapped, REPLAY_CHUNK_MAX_INFLATED_BYTES } from "../replays";
 import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";
 import { connectionIdForSource, tokenFor, type FetchLike } from "../tokenConnectors";
@@ -668,7 +668,7 @@ export async function fetchRecordingEvents(
 
 /** What an action needs of a source it may use, resolved under the caller's own access. Never a secret. */
 export const sourceForCaller = internalQuery({
-  args: { ...scopeArgs, source: v.string() },
+  args: { ...scopeArgs, source: v.string(), user_id: v.optional(v.id("users")) },
   handler: async (ctx, args) => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
     const source = await sourceByRef(ctx, userId, workspaceKey, args.source);
@@ -694,19 +694,30 @@ export async function connFor(ctx: Pick<ActionCtx, "runQuery">, input: { config:
   return posthogConn(cred, input.config);
 }
 
+type HogqlRows = { columns: unknown[]; types?: unknown[]; results: unknown[]; rows: number; truncated: boolean };
+
+/**
+ * One HogQL query against a source the scope may read, rows capped. The CLI
+ * door runs it as the caller; a published page's query runs it as the page's
+ * publisher (scope.user_id, internal callers only).
+ */
+export async function runHogql(ctx: Pick<ActionCtx, "runQuery">, scope: ScopeArgs & { user_id?: Id<"users"> }, source: string, hogql: string, fetchImpl: FetchLike = fetch): Promise<HogqlRows> {
+  const problem = validWatchQuery("hogql", hogql);
+  if (problem) invalidScope(problem);
+  const input = await ctx.runQuery(internal.sources.posthog.sourceForCaller, { ...scope, source });
+  const conn = await connFor(ctx, input);
+  if ("error" in conn) throw new Error(conn.error);
+  const parsed = parseJson(await posthogRequest(conn, "/query/", { method: "POST", body: hogqlBody(hogql), maxBytes: QUERY_READ_MAX_BYTES }, fetchImpl));
+  if (!parsed.ok) throw new Error(parsed.error.startsWith("PostHog's answer is over") ? `${parsed.error}; add a LIMIT` : parsed.error);
+  return capRows(parsed.body);
+}
+
 /** `cast metrics query "<hogql>"`: rows back to the caller, nothing stored. */
 export const query = action({
   args: { ...scopeArgs, source: v.string(), query: v.string() },
-  handler: async (ctx, args): Promise<{ columns: unknown[]; types?: unknown[]; results: unknown[]; rows: number; truncated: boolean }> => {
-    const problem = validWatchQuery("hogql", args.query);
-    if (problem) invalidScope(problem);
+  handler: async (ctx, args): Promise<HogqlRows> => {
     const { source, query: hogql, ...scope } = args;
-    const input = await ctx.runQuery(internal.sources.posthog.sourceForCaller, { ...scope, source });
-    const conn = await connFor(ctx, input);
-    if ("error" in conn) throw new Error(conn.error);
-    const parsed = parseJson(await posthogRequest(conn, "/query/", { method: "POST", body: hogqlBody(hogql), maxBytes: QUERY_READ_MAX_BYTES }));
-    if (!parsed.ok) throw new Error(parsed.error.startsWith("PostHog's answer is over") ? `${parsed.error}; add a LIMIT` : parsed.error);
-    return capRows(parsed.body);
+    return await runHogql(ctx, scope, source, hogql);
   },
 });
 

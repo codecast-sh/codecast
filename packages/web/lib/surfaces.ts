@@ -3,13 +3,13 @@
 // handlers, and <Surface> for a mount that is simply on or off.
 import { Fragment, createElement, useMemo, type ReactNode } from "react";
 import { useInboxStore } from "../store/inboxStore";
-import { isHostedUi } from "../components/simple/lanePaths";
+import { isHostedUi, simpleModeAllowed } from "../components/simple/lanePaths";
 import type { LaneHint } from "../components/simple/laneBoot";
 import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
 import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
 import { HOSTED_ACTION_WORDS as HOSTED_ACTION_WORDS_OF, MODE_WORDS, actionSurface as actionSurfaceOf, shownFor, surfaceMode, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
-export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
+export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, hiddenPageRedirect, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
 /** The slice of store state the registry reads. */
 export type SurfaceState = Pick<DefaultAgentState, "clientState" | "machineRoster" | "machineRosterLive">;
@@ -18,7 +18,8 @@ export type SurfaceState = Pick<DefaultAgentState, "clientState" | "machineRoste
  *  hydration, a brand-new signup with no cache), the device's last known mode
  *  (laneBoot.ts readLaneHint) decides, so developer chrome never flashes for
  *  a hosted person. */
-export function isHostedMode(s: Pick<SurfaceState, "clientState"> & { laneHint?: LaneHint | null }): boolean {
+export function isHostedMode(s: Pick<SurfaceState, "clientState"> & { laneHint?: LaneHint | null; currentUser?: { staff?: boolean } | null }): boolean {
+  if (!simpleModeAllowed(s.currentUser)) return false;
   const ui = s.clientState.ui;
   return ui?.lane !== undefined ? isHostedUi(ui) : s.laneHint === "simple";
 }
@@ -36,6 +37,17 @@ export function useSurface(name: DevSurface): boolean {
 /** Live: whether the viewer is in hosted mode. */
 export function useHostedMode(): boolean {
   return useInboxStore(isHostedMode);
+}
+
+/** Live: whether hosted mode's doors are open to the viewer (lanePaths
+ *  simpleModeAllowed). */
+export function useSimpleModeAllowed(): boolean {
+  return useInboxStore((s) => simpleModeAllowed(s.currentUser));
+}
+
+/** Outside React: whether hosted mode's doors are open to the viewer now. */
+export function simpleModeAllowedNow(): boolean {
+  return simpleModeAllowed(useInboxStore.getState().currentUser);
 }
 
 /** Live: hosted mode's Assistant/Everything scope (lib/assistantScope):
