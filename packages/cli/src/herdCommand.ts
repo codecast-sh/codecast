@@ -1,6 +1,6 @@
 // `cast herd` and `cast gc`: the person's view onto this machine's tmux agents.
 
-import { spawn } from "node:child_process";
+import { spawn } from "./proc.js";
 import { HERD_PROJECT_TOKEN, HERD_SESSION, HERDR_INSTALL_HINT, herdrAlive, herdrBin, herdrRequest, herdrSnapshot, herdrSocketPath } from "./herdr.js";
 import { HerdFocus, herdMembers, serverTitles, syncHerd } from "./herdMirror.js";
 import { claimHerdViewer } from "./herdViewer.js";
