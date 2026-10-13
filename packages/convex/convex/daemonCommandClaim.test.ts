@@ -56,6 +56,14 @@ describe("decideCommandClaim", () => {
     expect(commandVisibleToClaimer(held, "bootB", LINUX, NOW + 10)).toBe(true);
   });
 
+  test("a run_workflow held on one machine is held on every machine", () => {
+    const held: ClaimableCommand = { command: "run_workflow", claimed_by: "bootA", claimed_at: NOW, claimed_device: MAC };
+    expect(decideCommandClaim(held, on("bootB", LINUX), NOW + 10)).toBe("held_by_other");
+    expect(commandVisibleToClaimer(held, "bootB", LINUX, NOW + 10)).toBe(false);
+    // Its holder can still die before it runs: the lease lapses for every machine.
+    expect(decideCommandClaim(held, on("bootB", LINUX), NOW + CLAIM_GRACE_MS)).toBe("grant");
+  });
+
   test("an unknown device on either side still contends", () => {
     // A hold written before the device rode along, and a claimer too old to
     // send one. Both keep the pre-device behaviour rather than freeing a live
