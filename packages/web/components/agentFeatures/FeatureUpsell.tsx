@@ -12,11 +12,8 @@ import { FEATURE_EXPLAINERS } from "@codecast/shared/contracts";
 import { useRouter } from "next/navigation";
 import { useFeatureOffer } from "./useFeatureOffer";
 import { FeatureVignette } from "./FeatureVignette";
+import { agentFeatureHref } from "../../lib/agentFeatureHref";
 import { featureIcon, featureTone } from "./featureLook";
-
-function agentFeatureHref(slug: string): string {
-  return `/agent-features?feature=${encodeURIComponent(slug)}`;
-}
 
 export function FeatureUpsell({
   slug,

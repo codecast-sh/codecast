@@ -5,9 +5,10 @@
 import { c } from "./colors.js";
 import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
+import { usedOf } from "@codecast/shared/contracts/orgCapacity";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
-import { formatDateSmart, relTimeShort } from "@codecast/shared/time";
+import { formatDateSmart, formatShortDate, relTimeShort } from "@codecast/shared/time";
 import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */
@@ -59,7 +60,7 @@ export function briefInitiativeLines(rows: BriefInitiativeRow[], now: number): s
 /** The grants a role holds outside codecast, the expired ones left out. */
 export function authorityLine(role: { authority?: Array<{ kind: string; label: string; expires_at?: number | null }> }, now: number): string {
   const held = (role.authority ?? []).filter((g) => !g.expires_at || g.expires_at > now);
-  return `  ${c.dim}authority outside codecast: ${held.length ? held.map((g) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at, now)}` : ""})`).join("; ") : "none granted"}${c.reset}`;
+  return `  ${c.dim}authority outside codecast: ${held.length ? held.map((g) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatShortDate(g.expires_at, now)}` : ""})`).join("; ") : "none granted"}${c.reset}`;
 }
 
 export type BriefHandRow = {
@@ -163,7 +164,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,
     ...f.changed.map((ch: any) => `    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`),
-    `  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
+    `  today: ${usedOf(u.wakes, u.caps.wakes_per_day)} wakes · ${usedOf(u.hands, u.caps.hands_per_day)} sessions started · ${usedOf(u.tokens, u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
     ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
     ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
     ...briefCharterLines(String(brief.charter ?? "")),

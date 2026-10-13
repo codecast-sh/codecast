@@ -1,7 +1,8 @@
 // Native TextInput after send: iOS keeps the previous buffer (IME, blur) and
 // the next keystroke restores the just-sent text. Web's textarea does not do
 // this, so the shared send-clear helpers live in staleDraft and this hook is
-// the RN adapter — remount the native box, keep focus, ignore residue.
+// the RN adapter — remount the native box, ignore residue, and keep focus
+// unless the caller lets it go.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TextInput } from "react-native";
@@ -54,7 +55,7 @@ export function useComposerField(initialText = "") {
     setValue(next);
   }, []);
 
-  const clearAfterSend = useCallback((sent: string) => {
+  const clearAfterSend = useCallback((sent: string, { keepFocus = true }: { keepFocus?: boolean } = {}) => {
     sendingRef.current = true;
     const trimmed = sent.trim();
     justSentRef.current = trimmed || null;
@@ -67,7 +68,7 @@ export function useComposerField(initialText = "") {
     setValue("");
     setEpoch((n) => n + 1);
     sendingRef.current = false;
-    requestAnimationFrame(() => inputRef.current?.focus());
+    if (keepFocus) requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
   return {
