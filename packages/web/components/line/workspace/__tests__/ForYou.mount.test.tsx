@@ -291,3 +291,47 @@ test("what the stopped step advised leads: a wait is the primary and parks the p
   expect(q("[data-line-start-again]")?.hasAttribute("data-primary")).toBe(false);
   useInboxStore.setState(real as any);
 });
+
+test("a built fix opens with the decision its run's session presented, and nothing structured stands in for one that has none", async () => {
+  const before = { lineCards: useInboxStore.getState().lineCards, workflowRuns: useInboxStore.getState().workflowRuns };
+  const built = { ...needs.find((n: any) => n.ref === "ct-6"), kind: "review", key: "review:t-88", ref: "ct-88", caseId: "t-88", problemRef: "ct-88", title: "Warm offers ride the cold rail", runId: "r-88", fail: { key: "review:implement", step: "implement", label: "Handed off for review", raw: "", review: { ask: "Needs a look", gate: "Eval red" } } };
+  const opened: unknown[][] = [];
+  const draw = async (need: any, key: string) => { await act(async () => { root.render(React.createElement(WaitingItem, { key, need, head: false, onProblem() {}, onRun: (...a: unknown[]) => { opened.push(a); } })); }); };
+  await act(async () => { useInboxStore.setState({ workflowRuns: { ...before.workflowRuns, "r-88": { _id: "r-88", task_id: "t-88", status: "failed", node_statuses: [{ node_id: "prove", label: "Prove", status: "completed", session: { _id: "s-prove" } }, { node_id: "implement", label: "Implement", status: "failed", session: { _id: "s-build" } }, { node_id: "eval", status: "failed" }] } } } as any); });
+
+  // No session presented it: one line naming the step it is with, that session and the run. No gates, files or findings.
+  await draw(built, "none");
+  expect(q("[data-line-need-review]")?.getAttribute("data-line-need-review")).toBe("not-presented");
+  expect(q("[data-line-need-not-presented] > span")?.textContent).toBe("Implement has not presented this fix yet");
+  expect(q("[data-line-need-session]")?.getAttribute("data-line-need-session")).toBe("s-build");
+  await act(async () => { q("[data-line-need-run]")!.click(); });
+  expect(opened).toEqual([["r-88", "t-88"]]);
+  expect(q("[data-line-decision]")).toBeNull();
+  expect(q(".lwn-col")!.children.length).toBe(1);
+  expect(q("[data-line-need-evidence]")).toBeNull();
+  // Its act stays under it.
+  expect(q("[data-line-need-dock]")).not.toBeNull();
+
+  // The run's session presented it: its decision is the page, whatever another run's decision says.
+  await act(async () => { useInboxStore.setState({ lineCards: { ...(before.lineCards ?? {}), c87: { _id: "c87", short_id: "sd-87", task_id: "t-88", workflow_run_id: "r-old", status: "withdrawn", created_at: now }, c88: { _id: "c88", short_id: "sd-88", task_id: "t-88", workflow_run_id: "r-88", status: "answered", created_at: now - H } } } as any); });
+  for (const kind of ["review", "unlanded"]) {
+    await draw({ ...built, kind, fail: kind === "review" ? built.fail : null }, kind);
+    expect(q("[data-line-need-review]")?.getAttribute("data-line-need-review")).toBe("decision");
+    expect(q("[data-line-need-review] > [data-line-decision]")?.getAttribute("data-line-decision")).toBe("sd-88");
+    expect(q("[data-line-need-not-presented]")).toBeNull();
+    expect(q("[data-line-need-dock] [data-line-need-run]")).not.toBeNull();
+  }
+  await act(async () => { useInboxStore.setState(before as any); });
+});
+
+test("a trial card no session presented is the same one line, never a panel of its figures", async () => {
+  const before = useInboxStore.getState().workflowRuns;
+  await act(async () => { useInboxStore.setState({ workflowRuns: { ...before, "r-34": { _id: "r-34", task_id: "t-34", status: "paused", node_statuses: [{ node_id: "review_words", label: "Reviewer", status: "running", session: { _id: "s-words" } }] } } } as any); });
+  const card = { ...needs.find((n: any) => n.ref === "ct-6"), kind: "decision", key: "decide:tc-34", ref: "tc-34", cardRef: "tc-34", decisionRef: null, trial: true, caseId: "t-34", problemRef: "ct-34", runId: "r-34", fail: null };
+  await act(async () => { root.render(React.createElement(WaitingItem, { key: "tc", need: card, head: false, onProblem() {}, onRun() {} })); });
+  expect(q("[data-line-need-not-presented]")?.getAttribute("data-line-need-not-presented")).toBe("preparing");
+  expect(q("[data-line-need-not-presented] > span")?.textContent).toBe("Reviewer is preparing this decision");
+  expect(q("[data-line-need-session]")?.getAttribute("data-line-need-session")).toBe("s-words");
+  expect(q("[data-line-trial-panel]")).toBeNull();
+  await act(async () => { useInboxStore.setState({ workflowRuns: before } as any); });
+});
