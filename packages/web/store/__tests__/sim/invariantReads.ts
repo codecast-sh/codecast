@@ -140,7 +140,7 @@ export async function cursorLag(world: InvariantWorld, w: InvariantWindow): Prom
 export function undeliveredEntities(world: InvariantWorld, held: Iterable<string>): Set<string> {
   const scopes = new Set(held);
   return new Set(tableRows(world, "sync_outbox")
-    .filter((r) => r.pending && scopes.has(r.scope_key))
+    .filter((r) => r.pending && scopes.has(String(r.scope_key)))
     .map((r) => String(r.entity_id)));
 }
 
