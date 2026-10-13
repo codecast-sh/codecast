@@ -6,7 +6,7 @@ import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDelive
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
-import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
+import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
@@ -22,6 +22,7 @@ import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.
 import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
@@ -29,9 +30,11 @@ import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync
 import type { ChildProcess } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
+import { poolFile } from "./sim/pool.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
-import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, restoreTmuxServerSocket, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
+import { descendantRows, findOtherDaemonRows, isAgentCommand, killProcessTree, liveTmuxServerPid, parseProcessTable, reapTargets, restoreTmuxServerSocket, sameProcess, snapshotProcessTableAsync, staleTmuxServerKillPlan, terminalOfPath, type ProcRow } from "./processTable.js";
+import { ProcessLineage } from "./processLineage.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
@@ -57,7 +60,7 @@ import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHar
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
-import { liveRunnerPid } from "./workflow/runResume.js";
+import { liveRunnerPid, paneReplaceable, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -65,7 +68,7 @@ import {
   writeDeviceAccountStamp,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
+import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
 import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
@@ -106,6 +109,7 @@ import {
 } from "./ccLiveGate.js";
 import {
   launchAccountPrefix,
+  adoptPushedCredential,
   FLEET_GATE_ACCOUNT,
   fleetStoreReady,
   maintainFleetStore,
@@ -151,6 +155,7 @@ import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
+import { parseAgentToolSetupArgs, runAgentToolSetup } from "./agentToolSetup.js";
 import { CursorTranscriptWatcher, cursorTranscriptSessionId, isCursorTranscriptPath, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { activeCodexProfileName, autoSaveActiveCodexProfile, getCodexAccountsHeartbeatPayload, migrateLegacyCodexProfileNames, refreshCodexUsageSnapshots, resolveCodexAccount } from "./codexAccounts.js";
@@ -277,9 +282,9 @@ import {
 } from "./reconciliation.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
-import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
+import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
-import { sessionServerSockets, withTmuxSession } from "./tmuxRoute.js";
+import { hasSessionServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -344,7 +349,7 @@ import { atomicWriteFile } from "./atomicWrite.js";
 import { configDirTarget, fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
 import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
-import { bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
+import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import {
   fetchExport,
@@ -387,7 +392,7 @@ import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
 import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
+import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
@@ -484,7 +489,7 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: st
 async function typeIntoPane(target: string, command: string): Promise<void> {
   let line = command;
   if (Buffer.byteLength(command) > PANE_TYPED_LINE_MAX) {
-    const dir = path.join(CONFIG_DIR, "launch-scripts");
+    const dir = path.join(CONFIG_DIR, LAUNCH_SCRIPTS_DIRNAME);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = path.join(dir, `${randomUUID()}.sh`);
     fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
@@ -494,6 +499,8 @@ async function typeIntoPane(target: string, command: string): Promise<void> {
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 }
 const PANE_TYPED_LINE_MAX = 512;
+// paneContentAfterLaunchEcho finds a script-launched command by this name in its echo.
+const LAUNCH_SCRIPTS_DIRNAME = "launch-scripts";
 
 async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
   const exec = (argv: string[]) => _execFileAsync("tmux", argv, {
@@ -920,6 +927,16 @@ async function sendReparentNotice(opts: {
   }
 }
 
+// A pulled session resumes in this machine's checkout, not the folder it
+// recorded on the machine it left. Record where it runs now at once: a role's
+// work, a migration and the next resume all read the session's folder, and
+// the boot sweep would only correct it at the next daemon restart.
+async function placeArrivedSession(sessionId: string, cwd: string | undefined, recorded: string | undefined): Promise<void> {
+  if (!syncServiceRef || !cwd || cwd === recorded) return;
+  const placed = await syncServiceRef.updateProjectPath(sessionId, cwd, (await repoRootFor(cwd)) ?? cwd);
+  log(`[REPARENT] ${sessionId.slice(0, 8)} placed in ${cwd}${placed?.updated ? "" : " (server unchanged)"}`);
+}
+
 function validatePath(p: string): string | null {
   if (!p || typeof p !== "string") return null;
   if (!path.isAbsolute(p)) return null;
@@ -957,31 +974,125 @@ function validateTmuxTarget(target: string): boolean {
 // only the survivors the table still identifies (ct-49537). Descendants are
 // signalled leaves first, roots last.
 //
+// The ppid walk only sees what is still attached, so reapTargets adds what left
+// the tree before the kill: members of a group the tree leads (a dev server
+// whose launcher exited) and anything processLineage saw under a member (tool
+// shells an agent left behind when it restarted). `spare` roots are walked but
+// not signalled.
+//
 // Returns how many processes were confirmed dead.
-async function reapPidTrees(rootPids: number[]): Promise<number> {
+async function reapPidTrees(rootPids: number[], opts: { spare?: number[] } = {}): Promise<number> {
+  return stopReapPlan(await reapPlan(rootPids, opts));
+}
+
+type ReapPlan = { roots: number[]; targets: ProcRow[] };
+
+/** Everything stopping `rootPids` stops, from one table read, nothing signalled
+ *  yet. `terminals` are the caller's live panes' (terminalOfPath). */
+async function reapPlan(rootPids: number[], opts: { spare?: number[]; terminals?: string[] } = {}): Promise<ReapPlan> {
   const roots = rootPids.filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
-  if (roots.length === 0) return 0;
+  if (roots.length === 0) return { roots, targets: [] };
   const procs = await snapshotProcessTableAsync({ timeout: 10_000 });
-  const targets: ProcRow[] = [];
-  const seen = new Set<number>();
-  for (const root of roots) {
-    const rootRow = procs.find((p) => p.pid === root);
-    if (!rootRow) continue; // already gone; its ppid links mean nothing now
-    for (const row of [...descendantRows(procs, root).reverse(), rootRow]) {
-      if (seen.has(row.pid)) continue;
-      seen.add(row.pid);
-      targets.push(row);
-    }
+  const { targets } = reapTargets(procs, roots, {
+    spare: opts.spare,
+    terminals: opts.terminals,
+    uid: process.getuid?.(),
+    descendsFrom: (row, tree, table) => processLineage.descendsFrom(row, tree, table),
+  });
+  return { roots, targets };
+}
+
+/** Stop a plan's processes. With `recheck`, only those a fresh table still
+ *  shows as the same processes: for a plan taken a while before the stop. */
+async function stopReapPlan(plan: ReapPlan, opts: { recheck?: boolean } = {}): Promise<number> {
+  let { targets } = plan;
+  if (opts.recheck && targets.length) {
+    const live = new Map((await snapshotProcessTableAsync({ timeout: 10_000 })).map((r) => [r.pid, r]));
+    targets = targets.filter((t) => sameProcess(t, live.get(t.pid)));
   }
   if (targets.length === 0) return 0;
+  const detached = targets.filter((t) => t.ppid === 1);
+  if (detached.length) log(`[REAP] ${detached.length} process(es) under ${plan.roots.join(", ")} had left the tree: ${detached.slice(0, 6).map((t) => `${t.pid} ${t.command.split(/\s+/)[0]?.split("/").pop()}`).join(", ")}`);
   const { terminated, killed, unverified } = await killProcessTree(targets);
   if (unverified > 0) {
-    log(`[REAP] ${unverified} of ${targets.length} process(es) under ${roots.join(", ")} survived SIGTERM and could not be identified for SIGKILL`);
+    log(`[REAP] ${unverified} of ${targets.length} process(es) under ${plan.roots.join(", ")} survived SIGTERM and could not be identified for SIGKILL`);
   }
   return terminated + killed;
 }
 
+/**
+ * What stopping a tmux session stops: every pane's tree, in all its windows,
+ * and whatever is still on a pane's terminal after its parents exited.
+ *
+ * A session on a server of its own owns that whole server: the tmux sessions
+ * its agent opened from inside the pane (dev servers, a `dev-loop.sh` per
+ * service) live there too, and so do processes whose pane has closed, children
+ * of the server and of no pane. Then the server's whole tree is the plan and
+ * `server` names the socket to stop after it, unless this daemon runs inside it.
+ *
+ * On the shared server the agent's side sessions are found by the agent's id,
+ * which tmux copied into their environment when the agent's client created
+ * them (ensureTmuxCarriesSessionIds); tmuxSessionsCreatedBy leaves out any that
+ * hosts a live session. `sideSessions` are stopped after the plan.
+ */
+async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { panePids: number[]; server?: string; sideSessions: string[] }> {
+  const socket = sessionSocketName(tmuxSession);
+  const ownServer = hasSessionServer(tmuxSession) && socketOfTmuxEnv(process.env.TMUX) !== socket;
+  let panePids: number[] = [];
+  let serverPid: number | undefined;
+  let sideSessions: string[] = [];
+  const roots: number[] = [];
+  const terminals: string[] = [];
+  const addPanes = (stdout: string) => {
+    for (const line of stdout.split("\n")) {
+      const [pid, tty] = line.trim().split(/\s+/);
+      if (Number.isFinite(parseInt(pid, 10))) roots.push(parseInt(pid, 10));
+      const terminal = tty ? terminalOfPath(tty) : undefined;
+      if (terminal) terminals.push(terminal);
+    }
+  };
+  const PANE_FORMAT = "#{pane_pid} #{pane_tty}";
+  try {
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-s", "-t", tmuxSession, "-F", PANE_FORMAT],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    addPanes(stdout);
+    panePids = [...roots];
+    if (ownServer) {
+      const pid = parseInt((await tmuxExec(["-L", socket, "display-message", "-p", "-t", tmuxSession, "#{pid}"], { timeout: 3000, killSignal: "SIGKILL" })).stdout.trim(), 10);
+      if (Number.isInteger(pid) && pid > 1) serverPid = pid;
+      addPanes((await tmuxExec(["-L", socket, "list-panes", "-a", "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" })).stdout);
+    } else {
+      const agentId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
+      if (agentId) sideSessions = (await withTmuxSession(tmuxSession, () => tmuxSessionsCreatedBy(agentId))).filter((name) => name !== tmuxSession);
+      for (const name of sideSessions) {
+        addPanes((await tmuxExec(["list-panes", "-s", "-t", name, "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => ({ stdout: "" }))).stdout);
+      }
+    }
+  } catch {}
+  const plan = await reapPlan(serverPid ? [serverPid, ...roots] : roots, { spare: serverPid ? [serverPid] : [], terminals });
+  return { ...plan, panePids, sideSessions, ...(serverPid ? { server: socket } : {}) };
+}
+
+/** Close what a plan leaves of its tmux: the side sessions, and the session's own server. */
+async function closeReapPlanTmux(plan: { server?: string; sideSessions: string[] }): Promise<void> {
+  for (const name of plan.sideSessions) await tmuxExec(["kill-session", "-t", name], { timeout: 3000 }).catch(() => {});
+  if (plan.server) await tmuxExec(["-L", plan.server, "kill-server"], { timeout: 3000 }).catch(() => {});
+}
+
 const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]);
+
+/** Fed by every resource tick (collectResourceSnapshotNow), read by every reap,
+ *  and kept on disk so a restart remembers whose orphans are whose. */
+const PROCESS_LINEAGE_FILE = path.join(defaultConfigDir(), "process-lineage.json");
+const processLineage = ProcessLineage.load(PROCESS_LINEAGE_FILE);
+
+/** The function that called the caller of this one, for log lines that say who acted. */
+function callerName(): string {
+  const frame = new Error().stack?.split("\n")[3]?.trim() ?? "";
+  return frame.replace(/^at (async )?/, "").split(" ")[0] || "unknown";
+}
 
 // Fully terminate a tmux session: reap every pane's process tree (so no orphaned
 // claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
@@ -993,20 +1104,27 @@ const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]
 // and an auth restart once took the user's whole terminal down with it
 // (2026-09-28). Callers that hold the agent's pid reap its tree separately, so
 // the agent still stops and the user's shell and other windows survive.
-export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
+export async function killTmuxSessionAndTree(tmuxSession: string, reason?: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
   if (!isCodecastCreatedTmuxName(tmuxSession)) {
     log(`[REAP] Left tmux ${tmuxSession} standing: codecast did not create it`);
     return;
   }
+  // Every pane codecast destroys passes here, so this line is the one record
+  // of which pane died and who asked. Without a reason, the calling function's
+  // name says it (the daemon runs from source, so names survive).
+  const by = reason ?? callerName();
+  const plan = await tmuxSessionReapPlan(tmuxSession).catch(() => null);
+  const panePids = plan?.panePids ?? [];
+  if (plan) await stopReapPlan(plan).catch(() => 0);
+  if (plan?.sideSessions.length) await closeReapPlanTmux({ sideSessions: plan.sideSessions });
   try {
-    const { stdout } = await tmuxExec(
-      ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
-      { timeout: 3000, killSignal: "SIGKILL" },
-    );
-    await reapPidTrees(stdout.trim().split(/\s+/).map((tok) => parseInt(tok, 10)));
-  } catch {}
-  try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+    await tmuxExec(plan?.server ? ["-L", plan.server, "kill-server"] : ["kill-session", "-t", tmuxSession]);
+    log(`[KILL] tmux=${tmuxSession} panes=${panePids.join(",") || "-"} by=${by}`);
+  } catch (err) {
+    // Usually the session was already gone; a live one that refused is worth seeing.
+    log(`[KILL] tmux=${tmuxSession} kill-session failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) panes=${panePids.join(",") || "-"} by=${by}`, panePids.length ? "warn" : "info");
+  }
   // Release the OAuth refresh gate now rather than on the next reconcile: when
   // this was the last claude on the keychain login, the drain listener fires a
   // usage refetch, and a ten minute wait for it is a stale meter (ct-49526).
@@ -1210,15 +1328,21 @@ const PID_FILE_STALE_GRACE_MS = 2_000;
  * thread started without bypass permissions, but only sometimes" (only when
  * session creation routes through a blank-fallback path rather than the normal
  * start/resume). jsonlBypass is always false here: there is no transcript.
+ *
+ * A claude launch takes an assigned `--session-id`, as start_session does:
+ * Claude writes no transcript until its first turn, so a blank pane nobody
+ * types into can only be linked to its conversation by an id known up front.
  */
 export function buildBlankLaunchArgs(
   agentType: AgentClientId,
   config: Config | null | undefined,
+  assignedClaudeSessionId?: string,
 ): string[] {
   const permFlags = getPermissionFlags(agentType, config);
   if (agentType === "claude") {
-    const flags = combineClaudeResumeFlags(getAgentArgs(config, "claude"), permFlags, false);
-    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+    const configured = getAgentArgs(config, "claude");
+    const flags = combineClaudeResumeFlags(configured, permFlags, false);
+    return [...claudeSessionIdArgs(assignedClaudeSessionId, configured || ""), ...(flags ? flags.split(/\s+/).filter(Boolean) : [])];
   }
   if (agentType === "codex") {
     // getPermissionFlags already returns null when codex_args pins an approval
@@ -1450,11 +1574,24 @@ function persistLogQueue(): void {
 // A workflow run executes in a tmux pane of its own (`cast workflow run-daemon`,
 // which resumes a row a runner already took past its start). Both a
 // run_workflow command and the resume sweep start one here. A run a live
-// runner holds is left alone; a pane a dead runner left is replaced.
+// runner holds is left alone, and so is a pane still starting its runner
+// (paneReplaceable); a pane a dead runner left is replaced.
 async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: string): Promise<{ tmux_session: string } | { error: string }> {
   const holder = liveRunnerPid(runId);
   if (holder) return { error: `run ${runId} is already driven by pid ${holder}` };
   if (!hasTmux()) return { error: "tmux is not installed" };
+  const tmuxSession = runPaneName(runId);
+  let pane: { command: string; createdS: number } | null = null;
+  try {
+    // list-panes, not display-message: display-message answers for a missing session with empty output and exit 0.
+    // A printable separator: the routed tmux path prints a tab as "_", which read a dead runner's shell as "bash_1791761667", never replaceable.
+    const [command, created] = tmuxExecSync(["list-panes", "-s", "-t", `=${tmuxSession}`, "-F", "#{pane_current_command}|#{session_created}"], { timeout: 5000 }).trim().split("\n")[0].split("|");
+    pane = { command: command ?? "", createdS: Number(created) || 0 };
+  } catch { /* no pane */ }
+  if (!paneReplaceable(pane, Date.now() / 1000)) {
+    log(`[REMOTE] Workflow run ${runId} already has its pane ${tmuxSession} (${pane!.command}); not launching it twice`);
+    return { tmux_session: tmuxSession };
+  }
   let projectPath = process.env.HOME || "/tmp";
   try {
     const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
@@ -1466,8 +1603,7 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
     const vp = data.run?.project_path ? validatePath(data.run.project_path) : null;
     if (vp) projectPath = vp;
   } catch {}
-  const tmuxSession = `wf-${runId.slice(-6)}`;
-  try { tmuxExecSync(["kill-session", "-t", `=${tmuxSession}`], { timeout: 5000 }); } catch { /* none left */ }
+  if (pane) try { tmuxExecSync(["kill-session", "-t", `=${tmuxSession}`], { timeout: 5000 }); } catch { /* none left */ }
   const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
   const cmdText = `${[castCmd, ...castPrefix].join(" ")} workflow run-daemon ${runId}`;
   try {
@@ -1495,7 +1631,8 @@ async function resumeOrphanedWorkflowRuns(): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: token, device: deviceId() }),
   });
-  const data = await resp.json().catch(() => null) as { runs?: Array<{ run_id: string; current_node_id: string | null; updated_at: number }> } | null;
+  const data = await resp.json().catch(() => null) as { runs?: Array<{ run_id: string; current_node_id: string | null; updated_at: number }>; failed?: string[] } | null;
+  for (const id of data?.failed ?? []) log(`[WORKFLOW] ${id} stayed pending with no runner; failed it so it can be rerun`);
   const now = Date.now();
   for (const run of data?.runs ?? []) {
     if (liveRunnerPid(run.run_id)) continue;
@@ -1818,6 +1955,14 @@ export function agentStatusOnDisk(sessionId: string, dir = AGENT_STATUS_DIR): Ag
   } catch {
     return undefined;
   }
+}
+/**
+ * The session's last known status: what this daemon last sent, else what the
+ * hook last wrote. The in-memory map is empty after every restart until the
+ * session speaks again, and an idle session says nothing; the file survives.
+ */
+function knownAgentStatus(sessionId: string): AgentStatus | undefined {
+  return lastSentAgentStatus.get(sessionId) ?? agentStatusOnDisk(sessionId);
 }
 // Every write of an agent status file rides this one chain. Two statuses for a
 // session (a PostToolUse then a Stop) must land in that order, and two writes
@@ -3304,7 +3449,7 @@ async function executeCommandBatch(
   if (siteUrl && config.auth_token) primeCommandClaims(fresh.map((c) => c.id), siteUrl, config.auth_token);
   try {
     for (const cmd of fresh) {
-      log(`[${source}] Executing command: ${cmd.command} (${cmd.id})`);
+      log(`[${source}] Executing command: ${cmd.command} (${cmd.id})${commandLogContext(cmd.args)}`);
       const run = executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       if (DETACHED_COMMANDS.has(cmd.command)) void run.catch((err) => log(`[${source}] ${cmd.command} (${cmd.id}) failed: ${err instanceof Error ? err.message : String(err)}`));
       else await run;
@@ -5458,7 +5603,7 @@ export function startMigrationRunner(batchId: string): { started: boolean; pid?:
 
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string> } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -5472,6 +5617,7 @@ function runCastCommand(
         // anything it execs (a browser driver, claude) need the agent PATH.
         env: { ...process.env, ...opts.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
+        ...(opts.cwd ? { cwd: opts.cwd } : {}),
         // killGroup: the child leads its own process group so the cap can
         // take its grandchildren with it (an `ssh -N` forward survives its
         // parent's SIGKILL and would hold the host awake otherwise). Such a
@@ -5800,6 +5946,8 @@ async function killConversationBackends(
     stopManagedSessionHeartbeat(sessionId);
     stopCodexPermissionPoller(sessionId);
     forgetHibernationPark(sessionId);
+    // Its browser tabs too: a killed agent never drives them again. Not awaited.
+    void reapOrphanEngines(sessionId).catch((e) => reaperLog(`engine reap for ${shortId(sessionId)} failed: ${(e as Error)?.message ?? e}`, false));
     sessionProcessCache.delete(sessionId);
     resumeInFlight.delete(sessionId);
     resumeInFlightStarted.delete(sessionId);
@@ -5917,6 +6065,33 @@ function recordObservedPermissionMode(sessionId: string, conversationId: string,
   lastHookStatus.set(sessionId, data);
   queueAgentStatusWrite(sessionId, () => lastHookStatus.get(sessionId) || data);
   if (syncServiceRef) publishHookStatus(syncServiceRef, conversationId, sessionId, data, false, true);
+}
+
+// The head-window allowance is hit by every long transcript on every pass, and
+// was a fifth of daemon.log. It is expected, so it stays out of the file;
+// other metadata warnings are news.
+function transcriptWarningLevel(warning: string): LogLevel {
+  return /allowance exhausted/.test(warning) ? "debug" : "info";
+}
+
+const OUTCOME_LOGGED_COMMANDS = new Set([
+  "kill_session", "start_session", "resume_session", "fork_session", "hibernate_session",
+  "move_to_device", "switch_account", "escape", "rewind",
+]);
+
+// Which conversation a command acts on and who asked for it, for the
+// "Executing command" line: a kill used to log only its command id, so finding
+// what tore a session down meant dumping daemon_commands from prod.
+function commandLogContext(args: string | undefined): string {
+  if (!args) return "";
+  try {
+    const parsed = JSON.parse(args);
+    const conv = typeof parsed?.conversation_id === "string" ? ` conv=${parsed.conversation_id.slice(0, 12)}` : "";
+    const cause = typeof parsed?.cause === "string" ? ` cause=${parsed.cause}` : "";
+    return conv + cause;
+  } catch {
+    return "";
+  }
 }
 
 async function executeRemoteCommand(
@@ -7883,6 +8058,7 @@ async function executeRemoteCommand(
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
           if (reparented && conversationId) {
+            await placeArrivedSession(sessionId, reparentCheckout?.path, priorCwd);
             await sendReparentNotice({
               conversationId, sessionId, priorCwd, checkout: reparentCheckout, command: parsed,
             });
@@ -7960,6 +8136,7 @@ async function executeRemoteCommand(
                   if (reparented) {
                     // cwd (not projectPath): the refuse-or-resolve step above is
                     // what actually decided where this session lives now.
+                    await placeArrivedSession(newSessionId, cwd, priorCwd);
                     await sendReparentNotice({
                       conversationId, sessionId: newSessionId, priorCwd,
                       checkout: reparentCheckout?.path === cwd
@@ -8002,10 +8179,15 @@ async function executeRemoteCommand(
             // auto-resume. Building from config args alone here launched a bare
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
-            const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
+            // Without an assigned id, discovery waits for a transcript the
+            // pane never writes until someone types into it: a restart with
+            // nothing to redeliver left the pane unlinked and the conversation
+            // stuck on its old session id.
+            const blankSessionId = blankAgentType === "claude" ? randomUUID() : undefined;
+            const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config, blankSessionId));
             // Same account rule as every other Claude launch (blankLaunchAccount).
             const blankAccount = blankAgentType === "claude" ? await blankLaunchAccount(conversationId) : { prefix: "" as string, account: undefined as string | undefined };
-            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -8026,6 +8208,7 @@ async function executeRemoteCommand(
                 projectPath: cwd,
                 startedAt: Date.now(),
                 agentType: blankAgentType,
+                sessionId: blankSessionId,
               });
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
@@ -8035,7 +8218,10 @@ async function executeRemoteCommand(
               // the previous owner, has to reach this one.
               await clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank");
               result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
-              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+              // A blank pane links to the conversation only once a prompt shows up
+              // in it; this line names the new session so a pane that never links
+              // can be traced back to here.
+              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)} newSid=${blankSessionId?.slice(0, 8) ?? "-"} (the old session could not be resumed)`, "warn");
             } catch (spawnErr) {
               error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
             }
@@ -8204,6 +8390,80 @@ async function executeRemoteCommand(
           });
           result = answered = JSON.stringify(reply);
           log(`[CONFIG] Edited ${reply.file}${reply.changed ? "; republishing" : " (unchanged)"}`);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
+      case "line_graph_edit": {
+        // The app's edit of one step of a published graph (line-workspace.md
+        // LW4): the prompt or script file the .cast names, in the checkout
+        // that published it, fenced, parsed before the write, written
+        // atomically, then pushed again so the app's copy and its versions
+        // follow. args: LineGraphEditArgs. Result: LineGraphEditReply.
+        const { runLineGraphEdit } = await import("./lineGraphEdit.js");
+        try {
+          let answered: string | undefined;
+          const reply = await runLineGraphEdit(commandArgs ? JSON.parse(commandArgs) : {}, {
+            admit: (file) => fencedTarget(file, "line_graph"),
+            write: (file, content) => atomicWriteFile(file, content, fs.existsSync(file) ? {} : { mode: 0o644 }),
+            publish: (root, castAbs) => {
+              afterReport = () => void runCastCommand(["workflow", "push", castAbs], { env: { CODECAST_CWD: root }, timeoutMs: 120_000 }).then((res) => {
+                const published = res.code === 0 ? { ok: true } : { ok: false, detail: (res.stderr || res.stdout).trim().split("\n").pop()?.slice(0, 300) || `exit ${res.code}` };
+                if (!published.ok) log(`[CONFIG] Push of ${castAbs} after an edit failed: ${published.detail}`);
+                if (answered) void postCommandResult(siteUrl, config.auth_token!, commandId, JSON.stringify({ ...JSON.parse(answered), published })).catch(() => {});
+              });
+              return { ok: "pending" };
+            },
+          });
+          result = answered = JSON.stringify(reply);
+          log(`[CONFIG] Edited ${reply.node} in ${reply.target}${reply.changed ? "; pushing" : " (unchanged)"}`);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
+      case "line_try": {
+        // Try (line-workspace.md LW4): a step's edited prompt run on past
+        // cases through the dry-run harness, writes refused. The command
+        // answers at once; each case reports to its line_tries row as it
+        // settles. args: LineTryArgs (lineTry.ts).
+        const tryMod = await import("./lineTry.js");
+        try {
+          const args = commandArgs ? JSON.parse(commandArgs) : {};
+          if (typeof args.root !== "string" || typeof args.file !== "string" || !Array.isArray(args.cases)) throw new Error("line_try needs the graph's checkout, its file and the cases");
+          const castAbs = await fencedTarget(path.join(args.root, args.file), "line_graph");
+          if (!castAbs) throw new Error(`${path.join(args.root, args.file)} is not a graph in a project this machine tracks`);
+          const script = tryMod.harnessScriptPath();
+          if (!script) throw new Error("Trying a step needs codecast's source on the machine that published the graph (the dry-run harness is not in this build)");
+          const report = (rowId: string, r: unknown) => fetch(`${siteUrl}/cli/line-tries/report`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, row_id: rowId, report: r }),
+          }).then(() => undefined, () => undefined);
+          void tryMod.runLineTry(args, {
+            report,
+            harness: (argv, o) => tryMod.spawnHarness(argv, { ...o, env: { ...process.env, PATH: agentSpawnPath() } }),
+            fromCheckpoint: (runId, given) => tryMod.briefFromCheckpoint(castAbs, args.root, args.node, args.new_template, runId, given),
+            runDir: tryMod.tryRunDir,
+            harnessScript: script,
+          }).then((t) => log(`[LINE] Try ${args.try_id} on ${args.node}: ${t.ran} ran, ${t.not_tryable} not tryable, ${t.failed} failed`));
+          result = JSON.stringify({ accepted: args.cases.length });
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
+      case "line_trial_reask": {
+        // "Re-ask" in the line app on a trial run paused where no answer can
+        // land: the same re-ask the CLI does, run here because it stops the
+        // run's runner and reads its graph on this machine. args: { task, project_path? }.
+        try {
+          const args = commandArgs ? JSON.parse(commandArgs) : {};
+          if (typeof args.task !== "string" || !/^ct-\d+$/.test(args.task)) throw new Error("line_trial_reask needs the problem's ref");
+          const cwd = typeof args.project_path === "string" && fs.existsSync(args.project_path) ? args.project_path : undefined;
+          const ran = await runCastCommand(["line", "trial", "rerun", args.task, "--reask", "--json"], { timeoutMs: 3 * 60 * 1000, ...(cwd ? { cwd } : {}) });
+          if (ran.code === 0) { result = ran.stdout.trim() || JSON.stringify({ task: args.task }); log(`[LINE] Re-asked ${args.task}`); }
+          else error = (ran.stderr.trim() || ran.stdout.trim() || `cast line trial rerun exited ${ran.code}`).slice(-600);
         } catch (err) {
           error = err instanceof Error ? err.message : String(err);
         }
@@ -8599,6 +8859,15 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "agent_tool_setup": {
+        // The setup card under a `cast browser`/`cast computer` command that
+        // needed the Chrome extension or the macOS grants: check reads where
+        // they stand here, start opens the next step on this screen.
+        const setupArgs = parseAgentToolSetupArgs(commandArgs);
+        if (!setupArgs) { error = "agent_tool_setup needs a tool browser|computer and an op check|start"; break; }
+        result = JSON.stringify(await runAgentToolSetup(setupArgs, { runCast: (a) => runCastCommand(a, { timeoutMs: 90 * 1000 }) }));
+        break;
+      }
       case "cloud_agent_action": {
         // A session header's action on its cloud agent (Create PR, Apply
         // locally, Archive, Unarchive), run by the daemon that hosts the
@@ -8616,11 +8885,17 @@ async function executeRemoteCommand(
     error = err instanceof Error ? err.message : String(err);
   }
 
+  // The outcome, beside the "Executing command" line. Bodies are logged only
+  // for session lifecycle commands: other results can carry tokens.
+  const body = OUTCOME_LOGGED_COMMANDS.has(command) && result ? ` result=${result.slice(0, 160)}` : "";
+  log(`[CMD] ${command} (${commandId})${commandLogContext(commandArgs)} -> ${error ? `error=${error.slice(0, 200)}` : "ok"}${body}`, error ? "warn" : "info");
+
   // Report result
   try {
     await postCommandResult(siteUrl, config.auth_token, commandId, result, error);
-  } catch {
-    // Ignore
+  } catch (err) {
+    // The server keeps the command pending and may redeliver it.
+    log(`[CMD] ${command} (${commandId}) result not reported: ${err instanceof Error ? err.message : String(err)}`, "warn");
   } finally {
     // The lease dies with the report either way: a reported command carries an
     // executed_at, and the server refuses to release one of those.
@@ -8941,6 +9216,12 @@ async function transcriptGitInfo(projectPath: string | undefined, sessionId: str
   return cloud?.remoteUrl ? { remoteUrl: cloud.remoteUrl, branch: cloud.gitBranch } : undefined;
 }
 
+/** The checkout a session's repository is: a worktree's main checkout, a move clone's host checkout, else the toplevel. */
+function repoCheckoutRoot(commonDir: string | undefined, toplevel: string | undefined): string | undefined {
+  const root = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : toplevel;
+  return root && checkoutOfMoveClone(root);
+}
+
 async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const execGit = (args: string): Promise<string | undefined> =>
     new Promise((resolve) => {
@@ -8964,8 +9245,7 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const diffStaged = await execGit("diff --cached");
   const root = await execGit("rev-parse --show-toplevel");
 
-  const commonDir = await execGit("rev-parse --path-format=absolute --git-common-dir");
-  const repoRoot = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : root;
+  const repoRoot = repoCheckoutRoot(await execGit("rev-parse --path-format=absolute --git-common-dir"), root);
 
   const worktreeName = managedWorktreeName(projectPath);
 
@@ -10874,7 +11154,12 @@ async function processSessionFilePass(
     let messages = ingest.messages;
     const permissionObservation = permissionJustResolved.capture(sessionId);
     const suppressPermissionResponses = permissionObservation !== undefined;
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`, transcriptWarningLevel(warning));
+    // A subagent by where its file sits (subagents/) or by its own records (a
+    // sidechain written beside top-level sessions); the parent comes from the
+    // same two places. Every create below keys off these, never the path alone.
+    const subagentTranscript = isSubagent || !!metadata.sidechain;
+    const subagentParent = subagentParentSessionFromPath(filePath) ?? metadata.sidechain?.parentSessionId;
 
     if (suppressPermissionResponses) {
       const before = messages.length;
@@ -10977,7 +11262,7 @@ async function processSessionFilePass(
       // Detect parent conversation from file path (subagents/) or content (plan handoff)
       let isPlanHandoff = false;
       if (!parentConversationId) {
-        const parentSessionId = subagentParentSessionFromPath(filePath);
+        const parentSessionId = subagentParent;
         if (parentSessionId && conversationCache[parentSessionId]) {
           parentConversationId = conversationCache[parentSessionId];
           log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
@@ -11013,7 +11298,7 @@ async function processSessionFilePass(
       }
 
       let matchedStartedConversation: string | null = null;
-      if (!conversationId && !isSubagent && !parentConversationId) {
+      if (!conversationId && !subagentTranscript && !parentConversationId) {
         matchedStartedConversation = (await matchStartedStub("claude", sessionId, actualProjectPath))?.conversationId ?? null;
       }
 
@@ -11051,7 +11336,7 @@ async function processSessionFilePass(
         const cliFlags = metadata.cliFlags;
         let subagentDescription: string | undefined;
         let subagentAgentType: string | undefined;
-        if (isSubagent && metadata.subagent) {
+        if (subagentTranscript && metadata.subagent) {
           subagentDescription = metadata.subagent.description;
           subagentAgentType = metadata.subagent.agentType;
           if (subagentDescription) subagentDescriptions.set(sessionId, subagentDescription);
@@ -11059,12 +11344,12 @@ async function processSessionFilePass(
         // Teammate transcripts self-identify on every line — stamp the team
         // identity at create so the row never exists without it. The parent
         // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
-        const teamInfo = !isSubagent ? metadata.teamInfo : undefined;
+        const teamInfo = !subagentTranscript ? metadata.teamInfo : undefined;
         // A headless claude child (`claude -p` run from another session's Bash)
         // nests under its spawner as a subagent. Fork lineage (parentMessageUuid)
         // and agent-team teammates keep their first-class semantics — teammates
         // link via linkSpawnedBy, never via parent_conversation_id.
-        if (!parentConversationId && !isSubagent && !parentMessageUuid && !teamInfo) {
+        if (!parentConversationId && !subagentTranscript && !parentMessageUuid && !teamInfo) {
           try {
             const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "claude", conversationCache);
             if (spawnerConvId) {
@@ -11090,7 +11375,7 @@ async function processSessionFilePass(
           subagentDescription,
           // Path-derived: true even when the parent conversation isn't cached
           // yet, so the server never briefly sees this as a top-level session.
-          isSubagent: isSubagent || undefined,
+          isSubagent: subagentTranscript || undefined,
           agentTaskId: triggerRunTaskId(sessionId),
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
@@ -11098,6 +11383,7 @@ async function processSessionFilePass(
         const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
         conversationId = await syncService.createConversation(createParams);
         conversationId = finishCreate(conversationId);
+        if (createParams.agentTaskId) forgetTriggerRun(sessionId);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -11111,7 +11397,7 @@ async function processSessionFilePass(
         // Create plan entity for Plan-type subagents and bind to parent conversation
         if (subagentAgentType === "Plan" && parentConversationId && !planModeSynced.has(sessionId)) {
           planModeSynced.add(sessionId);
-          const parentSessionUuid = subagentParentSessionFromPath(filePath);
+          const parentSessionUuid = subagentParent;
           if (parentSessionUuid) {
             syncService.syncPlanFromPlanMode({
               sessionId: parentSessionUuid,
@@ -11185,7 +11471,7 @@ async function processSessionFilePass(
       // daemon): the pending-link sweep re-links it once both sides are cached.
       // jx70pyh (2026-07-29): a network blip here minted a workflow agent as a
       // flat, unparented conversation because the retry op dropped the parent.
-      const subagentParentSession = subagentParentSessionFromPath(filePath);
+      const subagentParentSession = subagentParent;
       if (subagentParentSession) {
         pendingSubagentParents.set(sessionId, subagentParentSession);
       }
@@ -11218,7 +11504,7 @@ async function processSessionFilePass(
         slug,
         startedAt: firstMsgTimestamp,
         gitInfo,
-        isSubagent: isSubagent || undefined,
+        isSubagent: subagentTranscript || undefined,
       }, errMsg);
 
       return;
@@ -11237,7 +11523,7 @@ async function processSessionFilePass(
   // conversation yet on the pass that saw the stamp, and the lead may only
   // resolve once the team's panes are live. Cheap string gate first — only
   // teammate transcripts carry the stamp.
-  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
+  if (conversationId && !subagentTranscript && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
     maybeLinkTeamSpawn(sessionId, conversationId, JSON.stringify(metadata.teamInfo), syncService, conversationCache).catch((err) => {
       log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -11343,7 +11629,7 @@ async function processSessionFilePass(
   // the authority, not sync success, so this precedes the batch send. Subagent
   // transcripts sync under their own session id, so a workflow's internal
   // turns never move the parent session's mark.
-  if (!isSubagent) {
+  if (!subagentTranscript) {
     const turnTs = latestTurnStartTs(messages);
     if (turnTs !== null) markTurnStarted(sessionId, turnTs);
   }
@@ -11375,6 +11661,10 @@ async function processSessionFilePass(
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
+      // A recreated subagent keeps its place under its parent, exactly as the
+      // first create placed it; without these it comes back as a top-level
+      // inbox session.
+      const recreateParent = parentConversationId ?? (subagentParent ? conversationCache[subagentParent] : undefined);
       const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
@@ -11386,6 +11676,8 @@ async function processSessionFilePass(
         title,
         startedAt: firstMessageTimestamp,
         gitInfo,
+        parentConversationId: recreateParent,
+        isSubagent: subagentTranscript || undefined,
       });
       conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
@@ -11962,7 +12254,7 @@ async function processCodexSessionPass(
     const {messages,bytesConsumed,metadata} = ingest;
     if (!bytesConsumed) return;
     const sessionMetaHead = metadata.appServerHead ?? "";
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`, transcriptWarningLevel(warning));
     const persistedAppServerThreadIds = new Set(
       [...persistedAppServerThreads.values()].map((record) => record.threadId),
     );
@@ -13931,7 +14223,9 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
               }
               log(`CWD match found ${unclaimed.length} unclaimed candidates for ${shortId(sessionId)}, could not disambiguate`);
             } else {
-              log(`CWD match found ${candidates.length} candidates for ${shortId(sessionId)} but all claimed by other sessions`);
+              // Debug: it fires on every pass for every unmatched subagent and was a
+              // tenth of daemon.log, which keeps only ~50 MB of history.
+              log(`CWD match found ${candidates.length} candidates for ${shortId(sessionId)} but all claimed by other sessions`, "debug");
             }
           } catch {}
         }
@@ -14722,6 +15016,22 @@ export function jsonlTailEndsWithLimitBanner(jsonlText: string): boolean {
   return lastIsLimitBanner;
 }
 
+// A message held for a dialog needs the card that answers it. The delivery
+// guard and the card scraper read the pane separately, and when only the guard
+// saw a dialog the message waited days behind a dialog nobody was shown
+// (jx78gaw, 2026-10-10). Ask the scraper now, and when it finds nothing, log
+// the screen the guard held on: the held message carries the same screen,
+// with Send anyway, so the person can still move it.
+function surfaceHeldDialog(target: string, sessionId: string, conversationId: string, syncService: SyncService, screen: string): void {
+  if (pendingInteractivePrompts.has(sessionId)) return;
+  checkForInteractivePrompt(target, sessionId, conversationId, syncService, 0)
+    .then(() => {
+      if (pendingInteractivePrompts.has(sessionId)) return;
+      logDelivery(`[HOLD-UNSEEN] conv=${conversationId.slice(0, 12)} held for a dialog the card scraper did not find; screen:\n${screen}`);
+    })
+    .catch(() => {});
+}
+
 async function checkForInteractivePrompt(
   tmuxTarget: string,
   sessionId: string,
@@ -15162,8 +15472,15 @@ export function extractTmuxLiveRegion(paneContent: string): string {
 // readline echoes it again after the prompt. Cutting at the first echo read a
 // mirrored ~/.bash_profile's brew error as a failed launch on every cloud
 // session (2026-10-04).
+// A launch longer than PANE_TYPED_LINE_MAX is typed as `. '<launch script>'`
+// (typeIntoPane), so its echo names the script directory instead; missing
+// that shape read rc noise as a crash on every resume of a migrated session
+// and restarted it without its history (2026-10-09).
 export function paneContentAfterLaunchEcho(paneContent: string): string {
-  const idx = paneContent.lastIndexOf("env -u CLAUDECODE");
+  const idx = Math.max(
+    paneContent.lastIndexOf("env -u CLAUDECODE"),
+    paneContent.lastIndexOf(`/${LAUNCH_SCRIPTS_DIRNAME}/`),
+  );
   if (idx < 0) return paneContent;
   const nl = paneContent.indexOf("\n", idx);
   return nl >= 0 ? paneContent.slice(nl + 1) : "";
@@ -17120,10 +17437,20 @@ export async function selectHighlightedOption(target: string, isTarget: (line: s
 class InputBlockedError extends Error {
   // What the held message shows its sender; a dialog by default.
   readonly holdReason: string;
-  constructor(reason: string, holdReason = "waiting for a human answer in the terminal") {
+  // The pane rows the hold was decided on, shown beside the held message so
+  // the person choosing between Cancel and Send anyway sees what we saw.
+  readonly screen?: string;
+  constructor(reason: string, holdReason = "waiting for a human answer in the terminal", screen?: string) {
     super(`AGENT_STDIN_NOT_READY: ${reason}; message remains pending`);
     this.holdReason = holdReason;
+    this.screen = screen;
   }
+}
+
+// The bottom of a pane, where a dialog and the composer under it sit.
+const HOLD_SCREEN_ROWS = 40;
+export function holdScreen(pane: string): string {
+  return pane.replace(/\s+$/, "").split("\n").slice(-HOLD_SCREEN_ROWS).join("\n");
 }
 
 // An error the delivery layer must see as is: a pane holding for a human, a
@@ -17148,19 +17475,21 @@ export function promptIsOwnText(prompt: { options: Array<{ label: string }> }, o
   return prompt.options.every((option) => flat(option.label).length > 0 && own.includes(flat(option.label)));
 }
 
-function assertPromptAbsent(pane: string, ownText?: string): void {
+function assertPromptAbsent(pane: string, ownText?: string, pastDialog = false): void {
   // A blank capture is a pane between a clear and its next draw (claude clears
   // the screen as it boots), not a dialog: refused for a short retry, never
   // held for a human answer. Holding it cost 29 of 39 launches a 45s hold on
   // 2026-09-24.
   if (!pane.trim()) throw new Error("AGENT_STDIN_NOT_READY: terminal capture is empty; message remains pending");
+  // The person saw the held screen and chose Send anyway.
+  if (pastDialog) return;
   // Folder-trust is answered by acceptTrustPrompt, not held as a card. Grok's
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
   // delivery on a dialog the launch path already knows how to dismiss.
   if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane)) return;
   const prompt = parseInteractivePrompt(pane, true);
-  if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer");
+  if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(pane));
 }
 
 // The check every paste runs before it touches the pane, whoever wrote the
@@ -17168,12 +17497,12 @@ function assertPromptAbsent(pane: string, ownText?: string): void {
 // not care who is typing, and keying this on the author is how a typed
 // message pasted into a dialog that had just refused a session message
 // (2026-09-15). Card answers (polls) never reach this: they answer the dialog.
-function inputGuard(capture: () => Promise<string>, ownText?: string): () => Promise<void> {
+function inputGuard(capture: () => Promise<string>, ownText?: string, pastDialog = false): () => Promise<void> {
   let blocked: InputBlockedError | undefined;
   return async () => {
     if (blocked) throw blocked;
     try {
-      assertPromptAbsent(await capture(), ownText);
+      assertPromptAbsent(await capture(), ownText, pastDialog);
     } catch (err) {
       blocked = err instanceof InputBlockedError
         ? err
@@ -17202,7 +17531,7 @@ export function autoContinueArmedOnPane(region: string): boolean {
   return region.split("\n").some((line) => isClaudeAutoContinueLine(line));
 }
 
-export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number, pastDialog = false): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
@@ -17264,7 +17593,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // A dialog only a person can answer: no key of ours is safe, and a paste
     // lands in no composer. The delivery layer holds the message (see
     // pendingPromptHold) until the scraped card is answered.
-    if (state === "menu") throw new Error("AGENT_STDIN_NOT_READY: terminal is waiting for a human answer");
+    if (state === "menu") {
+      if (pastDialog) return { busy: false };
+      throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(stdout));
+    }
     if (state === "signed_out") throw new InputBlockedError(`${agentType ?? "the agent"} is signed out on this machine`, `${agentType === "cursor" ? "cursor-agent" : "the agent"} is signed out on this machine: run \`${agentType === "cursor" ? "cursor-agent login" : "its login"}\` there, then restart the session`);
 
     // Grok is glyphless, so the skip below would swallow this as "still booting"
@@ -18121,7 +18453,12 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const sanitized = prepareInjectedContent(content, { bracketed });
   const receiptJournal = opts?.delivery ? opts.journal ?? tmuxDeliveryJournal() : null;
   const receipt = opts?.delivery ? receiptJournal!.get(opts.delivery.messageId) : null;
-  if (receipt && receipt.phase !== "paste" && receiptSettled(receipt, opts?.receiptSettleMs)) {
+  // The transcript settles a submit nothing else vouched for. A message the
+  // server already counts as finished needs no such evidence, and a pane with
+  // no session stamp has no transcript to find, so it skips straight to the
+  // receipt check below.
+  const finished = receipt && syncServiceRef ? await pendingMessageFinished(syncServiceRef, receipt.messageId) : false;
+  if (receipt && !finished && receipt.phase !== "paste" && receiptSettled(receipt, opts?.receiptSettleMs)) {
     let transcript: string;
     try {
       if (opts?.readTranscript) transcript = await opts.readTranscript();
@@ -18152,8 +18489,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
+  const pastDialog = isForcedPastDialog(opts?.delivery?.messageId);
   const beforeInput = inputGuard(async () =>
-    (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout, sanitized);
+    (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout, sanitized, pastDialog);
   const exec: typeof tmuxExec = async (args, opts) => {
     if (args[0] === "send-keys" || args[0] === "paste-buffer") await beforeInput();
     return tmuxExec(args, opts);
@@ -18161,7 +18499,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
-  await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized), captureLines);
+  await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -19814,6 +20152,8 @@ async function tmuxSessionsCreatedBy(sessionId: string): Promise<string[]> {
   const out: string[] = [];
   let hosts: Set<number> | undefined;
   for (const name of names) {
+    // A session codecast made is some session's home, never what an agent opened.
+    if (isCodecastCreatedTmuxName(name)) continue;
     try {
       if (!tmuxEnvNamesSession((await tmuxExec(["show-environment", "-t", name], { timeout: 3000 })).stdout, sessionId)) continue;
       // Another live agent running in one of its panes keeps the session open.
@@ -20879,6 +21219,12 @@ async function runHeartbeatMaintenance(): Promise<void> {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
 
+  // Shared checkouts that opted in ([ship] level) follow their upstream in
+  // place, touching only files nobody changed (land/levelSweep.ts).
+  if (tick % LEVEL_EVERY_N_FLUSHES === 0) {
+    await sweepLevelCheckouts(ids).catch((e) => log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`));
+  }
+
   // Reflog tail fallback: the watchers report within a second; this catches
   // anything they missed at the flush cadence. See pollGitActivity.
   await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
@@ -20906,6 +21252,22 @@ async function runHeartbeatMaintenance(): Promise<void> {
 //     past the watchdog's stale-heartbeat threshold on a large repo.
 const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
 const GIT_PLANE_EVERY_N_FLUSHES = 10; // ~5 min repair latency; fetches self-gate to ~10 min per repo
+const LEVEL_EVERY_N_FLUSHES = 2; // ~1 min: how stale a shared checkout may get behind its upstream
+
+async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
+  if (readConfig()?.level_checkouts_enabled === false) return;
+  const roots = new Set<string>();
+  for (const t of collectGitSweepTargets(sessionIds)) {
+    const root = await repoRootFor(t.cwd);
+    if (root) roots.add(root);
+  }
+  if (!roots.size) return;
+  const { levelOne, describeLevel } = await import("./land/levelSweep.js");
+  for (const root of roots) {
+    const line = describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) })));
+    if (line) log(`[LEVEL] ${line}`);
+  }
+}
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
 // every pass (local and cheap), and the tree hash gates the network — so steady
@@ -22112,15 +22474,16 @@ async function reapOneTerminal(
 // Engine browsers outlive their agents until something reaps them, and only a
 // `cast browser` start used to. Runs as a child so its tmux and ps reads stay
 // off this loop; the verb throttles itself, so a slow tick costs nothing extra.
-async function reapOrphanEngines(): Promise<void> {
-  const { executablePath, args } = selfExecInfo("browser", "reap");
+// `ended` names a session this daemon just killed: its tabs close at once.
+async function reapOrphanEngines(ended?: string): Promise<void> {
+  const { executablePath, args } = selfExecInfo("browser", "reap", ...(ended ? ["--ended", ended] : []));
   const { stdout } = await _execFileAsync(executablePath, args, { timeout: 60_000, env: scrubAgentEnv({ ...process.env }) });
   const line = String(stdout ?? "").trim();
   if (line) reaperLog(`engines: ${line}`);
 }
 
 async function reapIdleSimulators(): Promise<void> {
-  if (process.platform !== "darwin" || (!process.env.SIM_POOL && !fs.existsSync(path.join(process.env.HOME || "", ".codecast", "sim", "pool.json")))) return;
+  if (process.platform !== "darwin" || (!process.env.SIM_POOL && !fs.existsSync(poolFile()))) return;
   const { executablePath, args } = selfExecInfo("sim", "reap");
   const { stdout } = await _execFileAsync(executablePath, args, { timeout: 120_000, env: scrubAgentEnv({ ...process.env }) });
   for (const line of String(stdout ?? "").split("\n")) if (line.trim() && !/nothing to reap/.test(line)) reaperLog(`simulators: ${line.trim()}`);
@@ -22193,7 +22556,7 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       // session speaks again, and one waiting on a long workflow says nothing
       // for hours: fdf643a3 was reaped 2.7 minutes after a restart on
       // 2026-10-05, mid-workflow. Its status file still said "waiting".
-      agentStatus: lastSentAgentStatus.get(sessionId) ?? agentStatusOnDisk(sessionId),
+      agentStatus: knownAgentStatus(sessionId),
       openBackgroundWork: hasOpenBackgroundWork(sessionId),
       pendingMessages: !!lifecycle?.hasPendingMessages,
       deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
@@ -22244,6 +22607,14 @@ type HibernationBoundary = {
 type HibernationReservation = { done: Promise<void>; cancelled: boolean; committing: boolean; cancel(): void };
 const hibernationInFlight = new Map<string, HibernationReservation>();
 const hibernationEvidenceJobs = new Map<string, Promise<string | null>>();
+// Jobs whose attempt passed its deadline. Such a job can never commit a park
+// (beginCommit sees the cancelled reservation), so it stops counting against
+// the per-pass fan-out: on a loaded machine a Convex read or a ps scan inside
+// it can hang for many minutes, and five of those held every slot and refused
+// every park as evidence-busy for a whole day (2026-10-09). It still holds its
+// own session, and the ceiling below bounds how many hung reads pile up.
+const abandonedEvidenceJobs = new Set<Promise<string | null>>();
+const HIBERNATE_ABANDONED_EVIDENCE_MAX = 4 * HIBERNATE_MAX_PER_PASS;
 const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;
 type HibernationExit = { phase: "committing" | "parked"; replayStop?: () => void };
 const expectedHibernationExits = new Map<string, HibernationExit>();
@@ -22267,7 +22638,10 @@ export function publishHookStatus(sync: SyncService, conversationId: string, ses
   } else pendingOpenTaskReports.delete(sessionId);
   if (data.status === "stopped" && statusChanged) {
     const restartTs = restartingSessionIds.get(sessionId);
-    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
+    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) {
+      log(`[COMPLETE] conv=${conversationId.slice(0, 12)} sid=${sessionId.slice(0, 8)} via=hook-stopped`);
+      void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
+    }
   }
 }
 const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
@@ -22401,7 +22775,7 @@ async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolea
 function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPassIo, reservation: HibernationReservation): boolean {
   if (reservation.cancelled || hibernationInFlight.get(cand.sessionId) !== reservation) return false;
   if (resumeSessionCache.get(cand.sessionId) !== cand.tmux || !managedHeartbeatSessions.has(cand.sessionId)) return false;
-  if (lastSentAgentStatus.get(cand.sessionId) !== cand.status) return false;
+  if (knownAgentStatus(cand.sessionId) !== cand.status) return false;
   const cachedConv = io.conversationIds()[cand.sessionId];
   if (cachedConv && cachedConv !== cand.conversationId) return false;
   const fresh = {
@@ -22432,7 +22806,7 @@ async function previewHibernation(cand: HibernationCandidate, io: HibernationPas
 
 async function attemptHibernation(cand: HibernationCandidate, io: HibernationPassIo): Promise<string | null> {
   if (hibernationInFlight.has(cand.sessionId) || hibernationEvidenceJobs.has(cand.sessionId) || tmuxTargetLocks.has(cand.tmux)) return "in-flight-messages";
-  if (hibernationEvidenceJobs.size >= HIBERNATE_MAX_PER_PASS) return "evidence-busy";
+  if (hibernationEvidenceJobs.size - abandonedEvidenceJobs.size >= HIBERNATE_MAX_PER_PASS || abandonedEvidenceJobs.size >= HIBERNATE_ABANDONED_EVIDENCE_MAX) return "evidence-busy";
   let release!: () => void;
   let revoke!: () => void;
   const revoked = new Promise<void>(resolve => { revoke = resolve; });
@@ -22490,11 +22864,15 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
     log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
     return "evidence-unavailable";
   }).finally(() => {
+    abandonedEvidenceJobs.delete(work);
     if (hibernationEvidenceJobs.get(cand.sessionId) === work) hibernationEvidenceJobs.delete(cand.sessionId);
   });
   hibernationEvidenceJobs.set(cand.sessionId, work);
   try {
-    return await Promise.race([work, revoked.then(() => "evidence-cancelled")]);
+    return await Promise.race([work, revoked.then(() => {
+      if (hibernationEvidenceJobs.get(cand.sessionId) === work) abandonedEvidenceJobs.add(work);
+      return "evidence-cancelled";
+    })]);
   } finally {
     clearTimeout(deadline);
     reservation.cancelled = true;
@@ -22510,6 +22888,11 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
   const { target } = boundary;
   const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
   if (classifyLivePaneFor(detectSessionAgentType(sessionId), pane) !== "idle") return false;
+  // What the session started, read while the pane still roots it: once the
+  // pane is gone its tool shells, MCP servers and the tmux sessions its agent
+  // opened have no parent left to find them by. Stopped only once parked, and
+  // only what a fresh table still shows unchanged.
+  const leftovers = await tmuxSessionReapPlan(tmux).catch(() => null);
   if (!await boundary.revalidate() || !boundary.unchanged()) return false;
   const checks = [
     `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
@@ -22547,6 +22930,11 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
       expectedHibernationExits.delete(sessionId);
       expected.replayStop?.();
     }
+  }
+  if (leftovers) {
+    const stopped = await stopReapPlan(leftovers, { recheck: true }).catch(() => 0);
+    await closeReapPlanTmux(leftovers);
+    if (stopped) reaperLog(`HIBERNATE stopped ${stopped} process(es) ${tmux} left running`, false);
   }
   stopCodexPermissionPoller(sessionId);
   resumeSessionCache.delete(sessionId);
@@ -22731,7 +23119,10 @@ async function collectHibernationCandidates(io: HibernationPassIo): Promise<Hibe
       sessionId,
       tmux,
       conversationId: convId,
-      status: lastSentAgentStatus.get(sessionId),
+      // With source restarts every 30 minutes, the in-memory status alone left
+      // every idle session "status-unknown" and no pass could park one
+      // (2026-10-09); the reaper reads the same fact.
+      status: knownAgentStatus(sessionId),
       awakeIdleMs: io.awakeIdleMs(sessionId),
       statusDwellMs: now - (lastHeartbeatLogged.get(sessionId)?.since ?? now),
       attachedClients: attached,
@@ -23452,16 +23843,21 @@ async function discoverAndLinkSession(
   for (const f of await fs.promises.readdir(projectDir).catch(() => [] as string[])) {
     if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
   }
+  // The session this pane replaces. A restart that found nothing to resume
+  // starts a blank pane while the cache still maps the dead session to the
+  // conversation; that mapping is what this link supersedes, not a rival.
+  const replacedSessionId = buildReverseConversationCache(readConversationCache())[conversationId];
 
   const link = async (linkedSessionId: string, how: string): Promise<void> => {
     const startedEntry = startedSessionTmux.get(conversationId);
     const cache = readConversationCache();
-    const reverseCache = buildReverseConversationCache(cache);
-    if (reverseCache[conversationId]) {
-      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
+    const current = buildReverseConversationCache(cache)[conversationId];
+    if (current && current !== replacedSessionId && current !== linkedSessionId) {
+      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${current.slice(0, 8)} by another writer`);
       deleteStartedSession(conversationId);
       return;
     }
+    if (replacedSessionId && replacedSessionId !== linkedSessionId) stopManagedSessionHeartbeat(replacedSessionId);
     cache[linkedSessionId] = conversationId;
     if (conversationCacheRef) {
       conversationCacheRef[linkedSessionId] = conversationId;
@@ -23551,7 +23947,7 @@ async function discoverAndLinkSession(
       return;
     }
   }
-  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)} in tmux ${tmuxSession} (cwd ${cwd}): the pane stays unlinked until a message reaches it`, "warn");
 }
 
 // A daemon restart reloads startedSessionTmux from disk but not the discovery
@@ -23853,6 +24249,9 @@ async function collectResourceSnapshotNow(): Promise<void> {
       ? syncServiceRef.reportMachineResources(machine).catch(err => log(`[RESOURCES] Machine report failed: ${String(err)}`, "debug"))
       : Promise.resolve();
     if (!processSnapshot) { await machineReport; return; }
+    const agentPids = new Set(sessionPids.values());
+    processLineage.observe(processSnapshot, (p) => agentPids.has(p.pid) || isAgentCommand(p.command ?? ""));
+    processLineage.save(PROCESS_LINEAGE_FILE).catch((err) => log(`[RESOURCES] process lineage not saved: ${String(err)}`, "debug"));
     const resources = await collectSessionResources(sessionPids, sharedPidSessions, processSnapshot);
     latestSessionResources.clear();
     for (const [sessionId, r] of resources) {
@@ -24435,7 +24834,7 @@ export const hibernationConcurrencyForTests = {
   sendAgentStatus, serializeSessionStatus, sessionStatusQueues, sessionStatusWrites,
   pendingHibernationStamps, hibernationStampWrites, hibernationStampCleared,
   pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession,
-  hibernationInFlight, hibernationEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
+  hibernationInFlight, hibernationEvidenceJobs, abandonedEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
   freshClaims: (pid: number, registryDir: string) => hookClaimsForPid(pid, { fresh: true, registryDir }),
   setResumeInner: (fn: typeof autoResumeSessionInner | null) => { resumeInnerForTests = fn; },
 };
@@ -25602,11 +26001,48 @@ async function blankLaunchAccount(conversationId: string | undefined): Promise<{
   return launchAccountPrefix(pin, log);
 }
 
+/**
+ * Whether a delivery may start a backend of its own for a conversation. A
+ * start_session owns the launch: it carries the conversation's assigned
+ * session id, its worktree and the waiting message as the launch prompt. A
+ * delivery that starts a second process beside it takes the conversation's
+ * session binding, and the real session's transcript then syncs into a new,
+ * parentless conversation (a workflow station read its hand as empty,
+ * 2026-10-12). So delivery reuses a session the start registered, holds while
+ * one is running, and asks the server's queue before concluding there is none:
+ * the poll runs a queued start to its end.
+ */
+export async function freshDeliveryStartVerdict(
+  conversationId: string,
+  deps: {
+    started: (conversationId: string) => StartedSessionInfo | undefined;
+    startPending: (conversationId: string) => boolean;
+    pollCommands: () => Promise<void>;
+  } = {
+    started: (id) => startedSessionTmux.get(id),
+    startPending: (id) => pendingSessionStarts.has(id),
+    pollCommands: pollDaemonCommands,
+  },
+): Promise<{ kind: "reuse"; entry: StartedSessionInfo } | { kind: "held" } | { kind: "start" }> {
+  const settled = () => {
+    const entry = deps.started(conversationId);
+    return entry ? { kind: "reuse" as const, entry } : deps.startPending(conversationId) ? { kind: "held" as const } : null;
+  };
+  const known = settled();
+  if (known) return known;
+  await deps.pollCommands().catch(() => {});
+  return settled() ?? { kind: "start" };
+}
+
 async function startFreshSessionForDelivery(
   conversationId: string,
 ): Promise<StartedSessionInfo | null> {
-  const existing = startedSessionTmux.get(conversationId);
-  if (existing) return existing;
+  const verdict = await freshDeliveryStartVerdict(conversationId);
+  if (verdict.kind === "reuse") return verdict.entry;
+  if (verdict.kind === "held") {
+    logDelivery(`Not starting a fresh session for conv=${conversationId.slice(0, 12)}: its start_session is still running`);
+    throw new PendingDeliveryHeldError();
+  }
 
   // Before spawning ANOTHER blank session, consult tmux for a live one already
   // tagged with this conversation. Guards against the double-start where the
@@ -25688,10 +26124,16 @@ async function startFreshSessionForDelivery(
   // that spawns a fresh agent must enter bypass, not the project's dontAsk
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
-  const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
+  const blankSessionId = randomUUID();
+  const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config, blankSessionId));
   // Same account rule as every other Claude launch (blankLaunchAccount).
   const blankAccount = await blankLaunchAccount(conversationId);
-  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${["claude", ...safeBlankArgs].join(" ")}`;
+
+  // The lookups above took time; a start_session that arrived during them owns the launch.
+  const raced = startedSessionTmux.get(conversationId);
+  if (raced) return raced;
+  if (pendingSessionStarts.has(conversationId)) throw new PendingDeliveryHeldError();
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
@@ -25706,6 +26148,7 @@ async function startFreshSessionForDelivery(
       projectPath,
       startedAt: Date.now(),
       agentType: "claude",
+      sessionId: blankSessionId,
     };
     startedSessionTmux.set(conversationId, entry);
     if (syncServiceRef) {
@@ -26245,8 +26688,11 @@ async function deliverMessageIntoSession(
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
     } else if (!started) {
-      logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
-      for (let i = 0; i < 24; i++) {
+      logDelivery(`Waiting for start_session to register a session for conv=${conversationId.slice(0, 12)}`);
+      // A start this daemon is running (a worktree to create, a slow boot) is
+      // waited out however long it takes: it ends by registering the session
+      // or by failing, and either one ends this wait.
+      for (let i = 0; i < 24 || pendingSessionStarts.has(conversationId); i++) {
         await new Promise(r => setTimeout(r, 500));
         // Codex app-server startup registers asynchronously and has no tmux or
         // transcript-cache entry. Recheck its binding during the same readiness
@@ -26352,6 +26798,7 @@ async function deliverMessageIntoSession(
       }
     } catch (err) {
       if (err instanceof PendingDeliveryHeldError) throw err;
+      if (err instanceof InputBlockedError && err.screen) surfaceHeldDialog(injectTarget, sessionId, conversationId, syncService, err.screen);
       const msg = err instanceof Error ? err.message : String(err);
       // Same reasoning as tryStartedTmux: these two mean a live pane exists
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
@@ -26582,9 +27029,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
       return {};
     }
     const commonDir = await gitOut("rev-parse --path-format=absolute --git-common-dir", cwd);
-    const root = commonDir?.endsWith("/.git")
-      ? commonDir.slice(0, -5)
-      : await gitOut("rev-parse --show-toplevel", cwd);
+    const root = repoCheckoutRoot(commonDir, commonDir?.endsWith("/.git") ? undefined : await gitOut("rev-parse --show-toplevel", cwd));
     const identity: RepoIdentity = root ? { root, remote: await gitOut("remote get-url origin", cwd) } : {};
     repoRootCache.set(projectPath, identity);
     return identity;
@@ -27938,7 +28383,7 @@ let hostSweepInFlight = false;
 async function sweepHostDiskIfDue(): Promise<void> {
   if (!isRemoteDevice() || hostSweepInFlight || !syncServiceRef) return;
   const workDir = path.join(process.env.HOME || "", "work");
-  const free = freeDiskShare(workDir);
+  const free = freeDiskShare(process.env.HOME || "/");
   const sinceLast = Date.now() - lastHostSweepAt;
   const low = free !== null && free < HOST_SWEEP_LOW_DISK_SHARE;
   if (sinceLast < (low ? HOST_SWEEP_LOW_DISK_SPACING_MS : HOST_SWEEP_INTERVAL_MS)) return;
@@ -27947,7 +28392,7 @@ async function sweepHostDiskIfDue(): Promise<void> {
   try {
     const rows = await syncServiceRef.liveSessionsOnThisDevice();
     const inUsePaths = rows.flatMap((r) => [r.project_path, r.cloud_checkout_path]).filter((p): p is string => !!p);
-    const r = await sweepHostDisk({ workDir, inUsePaths, log });
+    const r = await sweepHostDisk({ workDir, checkouts: await enumerateLocalRootsAsync(process.env.HOME || ""), inUsePaths, log });
     log(`[DISK] sweep${low ? ` (disk ${Math.round((1 - free!) * 100)}% full)` : ""}: released ${r.released.length}, kept ${r.kept.length}${r.kept.length ? ` (${r.kept.slice(0, 5).map((k) => `${path.basename(k.path)}: ${k.reason}`).join("; ")})` : ""}`);
   } catch (err) {
     log(`[DISK] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -27983,7 +28428,8 @@ async function checkSourceChanged(): Promise<void> {
       log(`[SOURCE] running daemon source ${observed}; restarts onto changes once they hold still`);
       return;
     }
-    const next = decideSourceRestart(sourceRestartState, observed, Date.now());
+    const overloaded = os.loadavg()[0] / Math.max(1, os.cpus().length) >= BOOT_LOAD_RATIO_CAUTIOUS;
+    const next = decideSourceRestart(sourceRestartState, observed, Date.now(), overloaded);
     if (next.state.pendingId !== sourceRestartState.pendingId && next.state.pendingId) log(`[SOURCE] daemon code changed on disk (${sourceRestartState.bootId} -> ${next.state.pendingId}); restarting once it holds still`);
     sourceRestartState = next.state;
     if (!next.restart) return;
@@ -28798,13 +29244,17 @@ function startWatchdog(
               continue;
             }
           }
-          log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
+          log(`[COMPLETE] Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} conv=${convId.slice(0, 12)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
           deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
           sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
           await fs.promises.unlink(filePath).catch(() => {});
-        } catch {}
+        } catch (err) {
+          log(`Watchdog: status sweep failed for ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`, "warn");
+        }
       }
-    } catch {}
+    } catch (err) {
+      log(`Watchdog: status sweep failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    }
 
     // Tier 3 warm pool (opt-in): after stale files are reaped above, re-warm the most
     // recently-active sessions whose agent has died so a follow-up skips the cold boot.
@@ -29313,6 +29763,15 @@ async function main(): Promise<void> {
   setInterval(() => {
     pollDaemonCommands().catch(() => {});
   }, 10_000);
+
+  // On a cloud Mac: move each pushed login into the keychain Claude reads.
+  const adoptPushedLogin = (): void => {
+    if (adoptPushedCredential()) log("[REMOTE-AUTH] adopted the pushed login into this Mac's keychain");
+  };
+  if (isRemoteDevice()) {
+    adoptPushedLogin();
+    setInterval(adoptPushedLogin, REMOTE_CRED_CHANGE_TICK_MS);
+  }
 
   // Keep the remote Mac's copied credential fresh (it can't /login itself).
   setTimeout(() => { pushCredentialToRemoteHosts("daemon start").catch(() => {}); }, 60_000 * bootPacing.fanoutOffsetScale);
@@ -29907,6 +30366,13 @@ async function main(): Promise<void> {
   void seedLiveWorkflowRuns().catch((err) => logError("seedLiveWorkflowRuns failed", err as Error));
   setInterval(() => { void sweepGoneWorkflowHosts().catch((err) => logError("sweepGoneWorkflowHosts failed", err as Error)); }, 60_000);
   setInterval(() => { void resumeOrphanedWorkflowRuns().catch((err) => logError("resumeOrphanedWorkflowRuns failed", err as Error)); }, WORKFLOW_RESUME_TICK_MS);
+  // Moments (learning-loop.md LL7): a machine that published a product's
+  // extractors claims what is due and runs them in the product's checkout.
+  setInterval(() => {
+    void import("./momentsHost.js")
+      .then(({ daemonMomentsTick }) => daemonMomentsTick({ siteUrl: getSiteUrl(), token: getAuthToken(), deviceId: deviceId(), log }))
+      .catch((err) => logError("moments tick failed", err as Error));
+  }, 60_000);
 
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
@@ -30639,6 +31105,10 @@ async function main(): Promise<void> {
   // minutes after the first has a freshly-restarted watcher and a just-swept
   // backlog, so re-running the full recovery only adds load at the worst time.
   pushUnsyncedFilesHandler = syncUnsyncedFiles;
+  // `cast sync` asks for this sweep with SIGUSR2, so a manual sync runs the
+  // daemon's own ingest (subagent parenting, redaction, the shared cache)
+  // instead of a second uploader racing it.
+  process.on("SIGUSR2", () => { void syncUnsyncedFiles("Manual sync").catch(() => {}); });
   const WAKE_RECOVERY_MIN_INTERVAL_MS = 3 * 60 * 1000;
   let wakeRecoveryInProgress = false;
   let lastWakeRecoveryDoneAt = 0;
@@ -31405,11 +31875,14 @@ async function main(): Promise<void> {
           continue;
         }
         const msg = { ...pendingMsg, ...claimed };
+        const forced = msg.delivery_force === true;
+        setForcedPastDialog(msg._id, forced);
         // The terminal is waiting for a human answer: a paste would answer it,
         // so the conversation is skipped until the prompt closes or the hold
         // window lapses (see pendingPromptHold). Not a retry, not an attempt.
-        // Only a card answer goes through: it is what closes the prompt.
-        const holdMs = parsePollMessage(msg.content) ? 0 : promptHoldRemainingMs(msg.conversation_id);
+        // Only a card answer goes through: it is what closes the prompt, and a
+        // message the person chose to Send anyway past it.
+        const holdMs = parsePollMessage(msg.content) || forced ? 0 : promptHoldRemainingMs(msg.conversation_id);
         if (holdMs > 0) {
           logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - conv=${msg.conversation_id.slice(0, 12)} is waiting for a human answer (next try in ${Math.ceil(holdMs / 1000)}s)`);
           continue;
@@ -31442,7 +31915,12 @@ async function main(): Promise<void> {
 
         let messageContent = msg.content;
         if (imageIds.length > 0) {
+          // A fetch that fails in transit re-pends the message: delivering the
+          // text alone left the agent a bare "[Image 1]" while the daemon was
+          // stalled (jx765wt, 2026-10-09). Only an image the server reports
+          // gone (null) is dropped, so a deleted file cannot retry forever.
           const imagePaths: string[] = [];
+          let fetchError: string | null = null;
           for (const storageId of imageIds) {
             try {
               const imagePath = await downloadImage(storageId, syncService);
@@ -31451,8 +31929,16 @@ async function main(): Promise<void> {
                 log(`Downloaded image to ${imagePath}`);
               }
             } catch (err) {
-              log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
+              fetchError = err instanceof Error ? err.message : String(err);
+              break;
             }
+          }
+          if (fetchError !== null) {
+            logDelivery(`Image fetch failed for msg=${msg._id.slice(0, 8)} (${fetchError}); re-pending instead of delivering without it`);
+            messagesInFlight.delete(msg._id);
+            conversationDeliveryActive.delete(msg.conversation_id);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+            continue;
           }
           if (imagePaths.length > 0) {
             const realText = msg.content.replace(/^\[image\]$/i, "").trim();
@@ -31617,7 +32103,9 @@ async function main(): Promise<void> {
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
-            syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+            syncService.retryMessage(msg._id, err instanceof InputBlockedError
+              ? { holdReason: err.holdReason, holdScreen: err.screen }
+              : { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof CloudAgentHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
