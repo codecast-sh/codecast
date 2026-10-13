@@ -56,12 +56,12 @@ page does not spend itself on it. The page ends once the reader could choose.
 
 **The card** is the page's top in small. The question is the choice about
 people, short, as the reader would put it to themselves; adopting the change is
-one answer to it, never the question. The answers are the open courses, yours
-first, each said as what it does, then `::` and the fact that sizes it and what
+one answer to it, never the question. The answers are the open courses, any
+your own page turned up among them, yours first, each said as what it does, then `::` and the fact that sizes it and what
 happens next; no two leave people in the same place. The context is a few
 sentences, well under a hundred words, read at a glance on a phone: what was
-wrong, what the change does, what cuts hardest against your lean, and what you
-would do.
+wrong, what the change does, what cuts hardest against your lean, what you
+would do, and why you would still do it given that.
 
 ## Only what the record holds
 
@@ -69,7 +69,8 @@ Every message, name, time and number comes from the record or from something
 you read or ran, quoted exactly; quotation marks surround only words someone
 wrote or said. Each count says what it counted, out of how many and from where,
 opens to its cases, and is the same wherever it appears. A cause is a finding
-only when something isolated it; otherwise it is your reading and says so.
+only when something isolated it, and so is the claim that something was not
+the cause; otherwise it is your reading and says so.
 What the record lacks is said once where it bears, never filled in. Before
 posting, rebuild every number on the card from the page's cases, then read card
 and page top to bottom as the reader meeting them cold.

@@ -43,11 +43,9 @@ export type TrialCardRow = {
   /** The session decision the card is, when its station posted one (lineTrial.cards): the page to answer it on, and the session to talk to. */
   decision?: {
     _id: string; short_id: string | null; status: string; report_slug: string | null; session: { _id: string; short_id: string | null; title: string | null } | null;
-    /** The people it is asked of (lib/line/trialAudience): a card waits in their For you and nobody else's. */
-    asked?: string[];
-    /** The role it belongs to when not the trial owner's (a judge fix goes to the route's decider). */
-    for_role?: { _id: string; short_id: string | null; name: string; handle: string | null } | null;
   } | null;
+  /** The role the card belongs to and the people it waits on, when it is not the trial owner's (lib/line/trialAudience): a judge fix goes to its route's decider. */
+  audience?: { asked: string[]; role: { _id: string; short_id: string | null; name: string; handle: string | null } } | null;
   /** The problem's evidence now (convex lineTrial.problemEvidence); a card on a problem left with no findings reads stale. */
   evidence?: TrialEvidence | null;
   /** Set when the fix is codecast's own review machinery (a judge or an extractor), not the product: its card is not the executive's. */
