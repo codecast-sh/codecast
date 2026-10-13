@@ -103,7 +103,7 @@ export function DecisionBody({ decision, detail }: { decision: SessionDecisionIt
           <div className="mt-2 border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
         </details>
       )}
-      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} decision={decision._id} /></div>}
     </>
   );
 }
