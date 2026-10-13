@@ -23,6 +23,8 @@ import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning"
 import { applyActivate, getArmableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
+import { seatPlace } from "./lib/seatPlace";
+import { trustOf } from "./lib/orgCaps";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
 import { truncateStr } from "@codecast/shared/render";
 
@@ -180,6 +182,8 @@ export async function performRelease(ctx: Ctx, userId: Id<"users">, args: { temp
 // ── The instance row (H1, H3) ───────────────────────────────────────────────
 
 export type UpsertInstanceArgs = {
+  /** The workspace the caller pinned; the project decides it, so a different one is refused. */
+  team_id?: Id<"teams">;
   instance_key: string; instance: string; template_id: string; version: string; digest: string; project_id: Id<"projects">;
   role_id?: Id<"org_roles">; host?: { machine: string; dir: string }; phase?: "awaiting_host" | "ready" | "upgrading" | "retired"; update_policy?: "manual" | "canary" | "stable";
   config?: Record<string, string>; bindings?: Record<string, { host: string; path_hash: string; bound_at: number }>; ledgers?: Record<string, { taskId: string; shortId: string }>;
@@ -201,6 +205,7 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
   const project = await ctx.db.get(args.project_id);
   if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
   const access = await resolveWorkspaceKey(ctx as any, project);
+  if (args.team_id && access !== workspaceKey({ type: "team", teamId: args.team_id })) throw new Error("The instance's project is not in that team");
   const template = await visibleTemplate(ctx, args.template_id, access, args);
   if (!template) throw new Error(`Template ${args.template_id} is not available to this workspace`);
   const release = releaseOf(template, args);
@@ -329,7 +334,7 @@ async function tellRoleOfBind(ctx: Ctx, userId: Id<"users">, before: any, row: a
       instance: row.instance, machine: row.host?.machine, becameReady, newlyBound,
       secrets: (manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key], unlocks: i.unlocks })),
       routines: await routineRows(ctx, row, manifest),
-      readiness: readiness(manifest, state, reached.role.trust ?? "understand"),
+      readiness: readiness(manifest, state, trustOf(reached.role)),
     }),
     client_id: `template-bind:${row._id}:${stamp}`,
     from_user_id: userId,
@@ -383,7 +388,7 @@ export async function performInstanceStatus(ctx: Ctx, userId: Id<"users">, args:
   // The rendered setup text rides inside the setup rows; `setup_marks` is the
   // raw record of who marked what, which the host reads back into its receipt.
   const { setup_text, ...rest } = row;
-  return { ...rest, release: { version: pinned.version, status: pinned.status, class: pinned.class, yanked: pinned.yanked?.reason ?? null }, trust: role?.trust ?? "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state, setup_text), setup_marks: row.setup ?? {}, ask: nextHumanAsk(manifest, state, setup_text), readiness: readiness(manifest, state, role?.trust ?? "understand") };
+  return { ...rest, release: { version: pinned.version, status: pinned.status, class: pinned.class, yanked: pinned.yanked?.reason ?? null }, trust: role ? trustOf(role) : "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state, setup_text), setup_marks: row.setup ?? {}, ask: nextHumanAsk(manifest, state, setup_text), readiness: readiness(manifest, state, role ? trustOf(role) : "understand") };
 }
 export async function performListInstances(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; template_id?: string }) {
   const access = await callerWorkspace(ctx, userId, args.team_id);
@@ -451,9 +456,9 @@ export async function bindHostOf(ctx: Ctx, userId: Id<"users">, row: any): Promi
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
   const standing = role ? await standingConversationOf(ctx, role) : null;
   const project = await ctx.db.get(row.project_id);
-  // The daemon that polls the command belongs to the human who runs the role
-  // (org_roles.host_user_id); a standing session renders as its bot identity.
-  const hostUser: Id<"users"> = role?.host_user_id ?? standing?.owner_user_id ?? userId;
+  // The daemon that polls the command belongs to the human who runs the
+  // role's standing session (seatPlace); it renders as its bot identity.
+  const hostUser: Id<"users"> = role ? seatPlace(role, standing).runner_user_id : userId;
   const dir: string | null = standing?.project_path ?? project?.project_path ?? null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", hostUser)).collect();
   const now = Date.now();
@@ -688,7 +693,7 @@ export const requestBind = mutation({
 });
 export const upsertInstance = mutation({
   args: {
-    api_token: v.optional(v.string()), instance_key: v.string(), instance: v.string(), template_id: v.string(), version: v.string(), digest: v.string(), project_id: v.id("projects"),
+    api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), instance_key: v.string(), instance: v.string(), template_id: v.string(), version: v.string(), digest: v.string(), project_id: v.id("projects"),
     role_id: v.optional(v.id("org_roles")), host: v.optional(v.object({ machine: v.string(), dir: v.string() })),
     phase: v.optional(v.union(v.literal("awaiting_host"), v.literal("ready"), v.literal("upgrading"), v.literal("retired"))),
     update_policy: v.optional(v.union(v.literal("manual"), v.literal("canary"), v.literal("stable"))),

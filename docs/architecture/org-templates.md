@@ -72,7 +72,7 @@ If an attempted create has no verifiable server row, the command stops instead o
 
 ## Human approval and scheduling
 
-Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project and initial trust must be `understand`.
+Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project. The proposal carries the role's Starts work on its own switch, on by default like every hire (off only for the Head of People); applying the answer sets the switch the person approved, and reconcile refuses a role whose switch differs from it.
 
 Reconcile calls `/cli/org/apply-decision` with `provision: false`, verifies the resulting role, then calls `/cli/role/provision` with the explicit project directory. The backend must include the personal-stack boundary fix: when a stack exists, its personal or team boundary is authoritative rather than falling through to the conversation's team. Deploy that backend before using personal template reconcile.
 
@@ -85,7 +85,7 @@ The template CLI never clears this gate or resumes a trigger. After human review
 3. Run `cast org template status <instance> --dir <approved-checkout>` and verify the row remains `paused`, `gated` is false, `intervalMs` matches the reviewed cadence and `runAt` is one cadence ahead.
 4. Only then explicitly run `cast trigger resume tr-N`.
 
-**Clearing the gate and resuming without `--every` leaves the first run one year away**, because the backend's resume operation preserves a nonzero `run_at`. Status and reconcile output include a per-routine activation procedure with the actual cadence rendered in seconds, so weeks and custom live overrides are preserved exactly. Those commands are instructions, not authorization. Incomplete upgrades, external routines and retired routines receive no activation procedure. A precheck is not a sandbox: manually forcing a trigger or arbitrary shell access can bypass scheduler checks. These operations do not claim to isolate credentials, tools or files, and `understand` never becomes elevated automatically.
+**Clearing the gate and resuming without `--every` leaves the first run one year away**, because the backend's resume operation preserves a nonzero `run_at`. Status and reconcile output include a per-routine activation procedure with the actual cadence rendered in seconds, so weeks and custom live overrides are preserved exactly. Those commands are instructions, not authorization. Incomplete upgrades, external routines and retired routines receive no activation procedure. A precheck is not a sandbox: manually forcing a trigger or arbitrary shell access can bypass scheduler checks. These operations do not claim to isolate credentials, tools or files, and the role's switch changes only by a person's approval.
 
 ## Upgrades and adoption
 
