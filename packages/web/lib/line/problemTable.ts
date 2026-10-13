@@ -9,6 +9,7 @@ import type { LineIssue } from "./lineModel";
 import { attemptEndWords, problemState, type ProblemState } from "./timeline";
 import { sourceLabel } from "./loopSteps";
 import { clauseHeading } from "../lineFlow";
+import { plainTitle } from "./plainTitle";
 import { errorTitle } from "@codecast/shared/contracts/ingest";
 import type { ProblemSource } from "./stepRuns";
 import type { Overlap } from "./overlap";
@@ -125,31 +126,32 @@ export function errorWords(title: string, fromErrors = false): string | null {
   return e.words && (fromErrors || e.title !== title.trim()) ? e.words : null;
 }
 
-/** A problem as a head names it, where a full column has room: its written name, else for an error what failed in the
- *  product's words, else for a title stored cut its first whole clause, else `whole` (the page's expectation-restored
+/** A problem as a head names it, where a full column has room: its written name, else (its title as a person says it,
+ *  plainTitle) for an error what failed in the product's words, else for a title stored cut its first whole clause, else `whole` (the page's expectation-restored
  *  heading) or the title whole. Never problemListName's cut: that is for narrow lists only. */
 export function problemHeadName(issue: { title: string; name?: string | null }, o: { fromErrors?: boolean; whole?: string } = {}): string {
-  return issue.name?.trim() || errorWords(issue.title, o.fromErrors) || clauseHeading(issue.title) || o.whole || problemTitle(issue.title.trim());
+  if (issue.name?.trim()) return issue.name.trim();
+  const title = plainTitle(issue.title);
+  return errorWords(title, o.fromErrors) || clauseHeading(title) || (o.whole ? plainTitle(o.whole) : null) || problemTitle(title);
 }
 
 /** Longest name a problem list shows; lineRetitle's LIST_NAME_MAX names anything longer. */
 const LIST_MAX = 90;
 /** How far past LIST_MAX a list name may run to end its clause whole. */
 const REACH = 40;
-// A parenthetical carrying evidence a list reader cannot use: a call id, a Slack ts, a clock time.
-const ID_ASIDE = /\s*\((?=[^()]*(?:\b[0-9a-f]{7,}\b|\d{5,}|\b\d{1,2}:\d{2}))[^()]*\)/gi;
 
 /**
- * A problem as a list names it: its written name (cause.named) when it has one, else its title
- * cut to one scannable clause, never mid-word, with id asides dropped. The page keeps the title whole.
+ * A problem as a list names it: its written name (cause.named) when it has one, else its title as a person says it
+ * (plainTitle: no ids, hashes or thread references) cut to one scannable clause, never mid-word. The page keeps the title whole.
  */
 export function problemListName(issue: { title: string; name?: string | null }): string {
   if (issue.name?.trim()) return issue.name.trim();
-  const title = errorWords(issue.title) ?? errorTitle(issue.title).title;
+  const plain = plainTitle(issue.title);
+  const title = errorWords(plain) ?? errorTitle(plain).title;
   // A title stored cut at its cap: its first whole clause, never the cut.
   const whole = clauseHeading(title);
   if (whole && whole.length <= LIST_MAX) return whole;
-  const t = problemTitle(title).replace(ID_ASIDE, "").replace(/\s+([:,;.])/g, "$1").replace(/\s+/g, " ").trim();
+  const t = problemTitle(title).replace(/\s+/g, " ").trim();
   if (t.length <= LIST_MAX) return t;
   // A closing "…, not a defect" turns the whole sentence around: cut it off and the name says the opposite.
   if (t.length <= LIST_MAX + 24 && /,\s+not\s[^,]*$/i.test(t)) return t;

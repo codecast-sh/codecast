@@ -423,23 +423,36 @@ type PublishedPageEmbedProps = {
   /** A shorter frame where the page is a slice of something else (a decision
    *  card in a list), not the page's own surface. */
   height?: number;
+  /** The decision this page was filed on (its report or an option's page): whoever may read that decision opens a gated
+   *  page here as its owner does. */
+  decision?: string | null;
 };
+
+/** The signed-in viewer's way through a gated page's gates (artifacts.ownerUnlock): `keys` is the "&k=..&e=.." to add to
+ *  a frame or pane URL, empty when the page is open or the viewer has no way in; `locked` once the viewer is known to
+ *  have none. `decision` is the decision the page was filed on, whose readers pass as its owner does. */
+export function usePageUnlock(slug: string, gated: boolean, decision?: string | null) {
+  const q = useQueryNoThrow(api.artifacts.ownerUnlock, gated ? (decision ? { slug, decision } : { slug }) : "skip");
+  const unlock = q.data as { k: string | null; e: string | null; title: string; version: number } | null | undefined;
+  const locked = gated && (unlock === null || (unlock === undefined && !!q.error));
+  const keys = gated && unlock ? `${unlock.k ? `&k=${unlock.k}` : ""}${unlock.e ? `&e=${unlock.e}` : ""}` : "";
+  return { unlock, locked, keys };
+}
 
 export function PublishedPageEmbed(props: PublishedPageEmbedProps) {
   const asLink = useContext(PublishedPagesAsLinks);
   return asLink ? <PublishedPagePill slug={props.slug} href={pageShareUrl(props.slug)} /> : <PublishedPageFrame {...props} />;
 }
 
-function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) {
-  const shared = usePageMeta(slug);
-  // A gated page hides itself from getShared. Its owner, signed in here, gets their own unlock tokens and the real
-  // metadata (artifacts.ownerUnlock), so their page frames open; anyone else gets a link, never a password form.
+function PublishedPageFrame({ slug, caption, height, decision }: PublishedPageEmbedProps) {
+  const sharedQ = useQueryNoThrow(api.artifacts.getShared, { slug });
+  const shared = sharedQ.data as ReturnType<typeof usePageMeta>;
+  // A gated page hides itself from getShared. Its owner, or a reader of the decision it was filed on, signed in here,
+  // gets the unlock tokens and the real metadata (artifacts.ownerUnlock), so the page frames open; anyone else gets a
+  // link, never a password form.
   const gated = !!shared?.gated;
-  const unlockQ = useQueryNoThrow(api.artifacts.ownerUnlock, gated ? { slug } : "skip");
-  const unlock = unlockQ.data as { k: string | null; e: string | null; title: string; version: number } | null | undefined;
-  const locked = gated && (unlock === null || (unlock === undefined && !!unlockQ.error));
+  const { unlock, locked, keys } = usePageUnlock(slug, gated, decision);
   const meta = gated && unlock ? { ...shared!, title: unlock.title, version: unlock.version, gated: false } : shared;
-  const keys = gated && unlock ? `${unlock.k ? `&k=${unlock.k}` : ""}${unlock.e ? `&e=${unlock.e}` : ""}` : "";
   const [expanded, setExpanded] = useState(false);
   // Folded, the frame unmounts: a page out of sight should not keep running.
   const [collapsed, setCollapsed] = useState(false);
@@ -502,7 +515,9 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
   }
 
   const title = meta?.title || "Published page";
-  const waitingUnlock = gated && unlock === undefined;
+  // No frame until the viewer's way in is known: framed early, a gated page shows its password form even to its owner.
+  // A metadata read that failed frames the page as it is.
+  const waitingUnlock = (shared === undefined && !sharedQ.error) || (gated && unlock === undefined);
   return (
     <FramelessPage
       title={title}
