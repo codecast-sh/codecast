@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { act, createContext } from "react";
 import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { replaceGlobals } from "../../test-helpers/globals";
 
 mock.module("../AuthGuard", () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => children }));
@@ -27,7 +28,11 @@ const restoreGlobals = replaceGlobals({
 // here — after the globals above — not as a static import.
 const {createRoot} = await import("react-dom/client");
 
-afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
+// The search page offers a feature through FeatureUpsell, which binds its
+// turn-on mutation from the app's provider. Nothing here calls it.
+const convex = new ConvexReactClient("https://example.convex.cloud");
+
+afterAll(() => { void convex.close(); closeDomWindow(dom); restoreGlobals(); });
 
 const tab = (): AppTab => ({ id: "t1", title: "Inbox", path: "/inbox", createdAt: 0 });
 beforeEach(() => { useInboxStore.setState({ tabs: [tab()], activeTabId: "t1" } as any); });
@@ -53,7 +58,7 @@ function mountStage() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  const render = () => act(() => root.render(<MemoryRouter><Nest.Provider value={true}><Stage /></Nest.Provider></MemoryRouter>));
+  const render = () => act(() => root.render(<ConvexProvider client={convex}><MemoryRouter><Nest.Provider value={true}><Stage /></Nest.Provider></MemoryRouter></ConvexProvider>));
   return { container, root, render };
 }
 

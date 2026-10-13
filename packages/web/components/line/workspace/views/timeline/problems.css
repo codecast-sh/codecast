@@ -1,0 +1,122 @@
+/* Problems (line-journeys.md LJ8.2): three figures, the trend, and one table
+   of every problem under its status. The page scrolls as one; the chips and
+   the column heads stay at the top. An open problem takes the whole page. */
+
+.lw-stage-in:has(> .lwp-host) { height: 100%; }
+.lwp-host { container: lwp / inline-size; height: 100%; }
+.lwp { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; }
+.lwp-list { min-width: 0; min-height: 0; overflow: auto; scroll-padding-top: 84px; }
+.lwp-detail { container: lwpd / inline-size; min-width: 0; min-height: 0; overflow: auto; background: var(--lw-paper); animation: lw-fade var(--lw-med) both; }
+
+/* ── the figures and the window ──────────────────────────────────────── */
+
+.lwp-top { display: flex; align-items: flex-start; gap: var(--lw-s5); padding: var(--lw-s5) var(--lw-s5) var(--lw-s2); }
+.lwp-win { margin-left: auto; flex: none; }
+
+/* ── chips and search, the column heads under them ───────────────────── */
+
+.lwp-stick { position: sticky; top: 0; z-index: 2; background: var(--lw-paper); }
+.lwp-bar { display: flex; align-items: flex-start; gap: var(--lw-s3); padding: var(--lw-s3) var(--lw-s5) var(--lw-s2); }
+.lwp-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; flex: 1 1 auto; }
+.lwp-chip {
+  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px;
+  border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); font-size: var(--lw-fs-sm); font-weight: 550; white-space: nowrap; cursor: pointer;
+  transition: border-color var(--lw-fast), background var(--lw-fast), color var(--lw-fast), transform 100ms;
+}
+.lwp-chip:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+.lwp-chip:active { transform: scale(.97); }
+.lwp-chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 1px; }
+.lwp-chip .lw-num { font-size: var(--lw-fs-xs); font-weight: 500; color: var(--lw-ink-3); }
+.lwp-chip svg { width: 12px; height: 12px; }
+.lwp-chip[aria-pressed="true"] { background: var(--lw-ink); border-color: var(--lw-ink); color: var(--lw-paper); }
+.lwp-chip[aria-pressed="true"] .lw-num { color: color-mix(in srgb, var(--lw-paper) 72%, transparent); }
+/* Only the pressed chip is filled: a group that wants attention says so in its count's color, never in a chip that looks pressed. */
+.lwp-chip[data-status="you"]:not([aria-pressed="true"]) .lw-num { color: var(--lw-person-deep); font-weight: 700; }
+.lwp-chip[data-status="failed"]:not([aria-pressed="true"]) .lw-num { color: var(--lw-bad); font-weight: 700; }
+.lwp-search { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border: 1px solid var(--lw-rule); border-radius: 999px; background: var(--lw-card); color: var(--lw-ink-3); transition: border-color var(--lw-fast); }
+.lwp-search:focus-within { border-color: var(--lw-ink-3); }
+.lwp-search svg { width: 13px; height: 13px; flex: none; }
+.lwp-search input { border: 0; outline: 0; background: none; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-ink); width: 18ch; }
+.lwp-clear { all: unset; display: inline-flex; padding: 3px; border-radius: 50%; color: var(--lw-ink-3); cursor: pointer; }
+.lwp-clear:hover { color: var(--lw-ink); background: var(--lw-rule-2); }
+.lwp-clear:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); }
+.lwp-none { display: grid; justify-items: center; gap: 8px; }
+
+/* ── the table: four columns ─────────────────────────────────────────── */
+
+.lwp-table { font-size: var(--lw-fs-base); min-width: 0; padding-bottom: 64px; }
+.lwp-tr { display: grid; align-items: start; column-gap: var(--lw-s5); padding: 0 var(--lw-s5); grid-template-columns: minmax(0, 1fr) 96px minmax(150px, 230px) 44px; }
+.lwp-th { align-items: center; height: 28px; border-bottom: 1px solid var(--lw-rule); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-weight: 500; white-space: nowrap; }
+.lwp-th button { all: unset; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; border-radius: 4px; }
+.lwp-th button:hover, .lwp-th button[data-on] { color: var(--lw-ink); }
+.lwp-th button:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 2px; }
+.lwp-sort { width: 11px; height: 11px; }
+.lwp-th .lwp-c-find, .lwp-th .lwp-c-last { display: flex; justify-content: flex-end; }
+
+.lwp-section {
+  all: unset; box-sizing: border-box; display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 18px var(--lw-s5) 6px;
+  font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--lw-ink-2); border-bottom: 1px solid var(--lw-rule);
+}
+.lwp-section .lw-num { font-weight: 600; letter-spacing: 0; color: var(--lw-ink-3); }
+.lwp-section[data-status="you"] { color: var(--lw-person-deep); }
+.lwp-section[data-status="failed"] { color: var(--lw-bad); }
+button.lwp-section { cursor: pointer; padding-bottom: 12px; padding-top: 14px; transition: background var(--lw-fast), color var(--lw-fast); }
+button.lwp-section:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
+button.lwp-section:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 45%, transparent); outline-offset: -2px; }
+button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-self: center; color: var(--lw-ink-3); }
+
+/* A heading inside a group: a failure cause, a project not started. It carries the group's one act. */
+.lwp-sub-h { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px var(--lw-s5); background: var(--lw-paper-2); border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-sm); }
+.lwp-sub-h b { font-weight: 650; color: var(--lw-ink); min-width: 0; }
+.lwp-sub-n { color: var(--lw-ink-3); white-space: nowrap; display: inline-flex; align-items: baseline; gap: 4px; }
+.lwp-sub-n i { font-style: normal; opacity: .6; margin: 0 3px; }
+.lwp-sub-n [data-ready] { color: var(--lw-ink); font-weight: 650; }
+.lwp-sub-act { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; flex: none; font-size: var(--lw-fs-sm); }
+.lwp-sub-err { color: var(--lw-bad); font-size: var(--lw-fs-xs); }
+.lwp-sub-note { color: var(--lw-ink-3); }
+/* Why the ready ones are idle: a state, not a sentence (the whole reason is its title). */
+.lwp-sub-why { color: var(--lw-warn); font-size: var(--lw-fs-xs); font-weight: 500; white-space: nowrap; }
+
+.lwp-row {
+  position: relative; padding-top: 9px; padding-bottom: 9px; color: var(--lw-ink-2); text-decoration: none; cursor: pointer; border-bottom: 1px solid var(--lw-rule-2);
+  transition: background var(--lw-fast);
+}
+.lwp-row:hover { background: var(--lw-paper-2); }
+.lwp-row:focus-visible { outline: 0; background: var(--lw-paper-2); box-shadow: inset 2px 0 0 var(--lw-ink); }
+.lwp-c-title { display: grid; gap: 2px; min-width: 0; }
+.lwp-title { color: var(--lw-ink); font-weight: 520; line-height: 1.4; text-wrap: pretty; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.lwp-under { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lwp-row[data-status="closed"] .lwp-title { color: var(--lw-ink-2); font-weight: 450; }
+.lwp-row .lwp-c-find { display: flex; align-items: center; justify-content: flex-end; gap: 4px; line-height: 1.4; color: var(--lw-ink); font-weight: 600; }
+.lwp-c-find svg { width: 12px; height: 12px; flex: none; }
+.lwp-c-find:not([data-trend]) { padding-right: 16px; }
+.lwp-c-find[data-trend="up"] svg { color: var(--lw-bad); }
+.lwp-c-find[data-trend="down"] svg { color: var(--lw-ok); }
+.lwp-row .lwp-c-status { font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink-2); text-wrap: balance; }
+.lwp-row[data-status="you"] .lwp-c-status { color: var(--lw-person-deep); font-weight: 650; }
+.lwp-row[data-status="failed"] .lwp-c-status { color: var(--lw-bad); font-weight: 600; }
+.lwp-row[data-status="newask"] .lwp-c-status { color: var(--lw-warn); font-weight: 600; }
+.lwp-row[data-status="approved"] .lwp-c-status { color: var(--lw-warn); font-weight: 600; }
+.lwp-row[data-status="running"] .lwp-c-status { color: var(--lw-live); font-weight: 600; }
+.lwp-row[data-status="shipped"] .lwp-c-status { color: var(--lw-ok); }
+.lwp-row[data-status="closed"] .lwp-c-status, .lwp-row[data-status="notstarted"] .lwp-c-status { color: var(--lw-ink-3); }
+.lwp-row[data-status="notstarted"] .lwp-c-status[data-ready] { color: var(--lw-ink); }
+.lwp-row .lwp-c-last { text-align: right; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink-3); }
+
+@container lwp (max-width: 760px) {
+  .lwp-top { flex-wrap: wrap; padding: var(--lw-s4) var(--lw-s3) var(--lw-s2); }
+  .lwp-bar { flex-wrap: wrap; padding: var(--lw-s3) var(--lw-s3) var(--lw-s2); }
+  .lwp-tr { grid-template-columns: minmax(0, 1fr) 52px 40px; padding: 0 var(--lw-s3); column-gap: var(--lw-s3); }
+  .lwp-th .lwp-c-status { display: none; }
+  /* The status drops under the title, so a narrow pane still says where each problem stands. */
+  .lwp-row .lwp-c-status { grid-column: 1; grid-row: 2; }
+  .lwp-row .lwp-c-title { grid-column: 1; grid-row: 1; }
+  .lwp-row .lwp-c-find { grid-column: 2; grid-row: 1; }
+  .lwp-row .lwp-c-last { grid-column: 3; grid-row: 1; }
+  .lwp-section, .lwp-sub-h { padding-left: var(--lw-s3); padding-right: var(--lw-s3); }
+  .lwp-sub-h { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .lwp-chip, .lwp-row, .lwp-section { transition: none; } .lwp-chip:active { transform: none; } }
+
+/* ── the problem's page ──────────────────────────────────────────────── */
+.lwt-none { color: var(--lw-ink-3); font-weight: 400; }

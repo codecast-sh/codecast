@@ -16,7 +16,13 @@ export function prepareSessionSendBody(text: string, fromStdin: boolean): string
   return fromStdin ? removeStdinTransportNewline(text) : text;
 }
 
+let stdinRead = false;
+
+/** Stdin, which one process can read once: a second '-' would get nothing
+ *  and file an empty body, so it is refused instead. */
 function readStdinRaw(): string {
+  if (stdinRead) throw new Error("stdin was already read for another '-' value. Pass one '-' per command (several '-' text options split one stdin on lines containing only ---), and give a file path for --body-file");
+  stdinRead = true;
   return fs.readFileSync(0, "utf-8");
 }
 
