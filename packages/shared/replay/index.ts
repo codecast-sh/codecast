@@ -17,3 +17,5 @@ export {
 } from "./events";
 export { prepareDomCapture, domCapturePlayable } from "./dom";
 export { replayMoment, formatReplayMoment, replayClockStart, replayClockDuration, type ReplayMoment, type ReplayMomentOptions } from "./moment";
+export { fromMobileWireframes, isMobileCapture, type MobileConversion } from "./mobile";
+export { readVendorCapture, type VendorCapture } from "./capture";
