@@ -69,10 +69,17 @@ export function trialWords<D extends { question: string; options: ReadonlyArray<
     .replace(/^ship this change\?\s*/i, "Would you ship this? ")
     .replace(/^(ship|build|merge|apply)\b/i, (m) => `Would you ${m.toLowerCase()}`)
     .trim();
-  // The answers stay the plain verbs a person presses (Ship, Revise, Drop); what each does shows after the press, and
+  // An answer the session wrote in its own words keeps what it wrote under it: the fact that sizes the choice and
+  // what happens next. A bare verb (Ship, Revise, Drop) stays bare: what it does shows after the press, and
   // "nothing ships" is said once, by the trial mark, never on every option.
-  return { ...d, question, options: d.options.map(({ description: _d, ...o }: { label: string; description?: string }) => o) as unknown as D["options"] };
+  return { ...d, question, options: d.options.map((o: { label: string; description?: string }) => { if (!BARE_VERB.test(o.label.trim())) return o; const { description: _d, ...bare } = o; return bare; }) as unknown as D["options"] };
 }
+
+/** Whether a decision's answers are only routing verbs, with no words of the session's own: the fixed controls may stand in for them. */
+export const bareVerbAnswers = (options: ReadonlyArray<{ label: string }>): boolean => options.every((o) => BARE_VERB.test(o.label.trim()));
+
+/** An option that is only a routing verb. */
+const BARE_VERB = /^(?:\[[^\]]*\]\s*)?(?:ship|revise|drop|publish|not now|build it|approve|skip)$/i;
 
 const WOULD: Record<string, string> = { "not now": "Would hold off", "build it": "Would build it", approve: "Would approve", skip: "Would skip" };
 
