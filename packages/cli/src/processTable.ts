@@ -11,7 +11,9 @@
 // (2026-08-14: 165 orphan claudes / 56GB; 2026-08-20: 290 processes, 10 orphan
 // teammates / 5GB plus 267 idle login shells pushing `ps aux` past 20s).
 
+import * as fs from "node:fs";
 import { execFileAsync, execFileSync } from "./proc.js";
+import { TTY_TOKEN, noTerminal } from "./resourceMonitor.js";
 import { agentBinaryFromPsRow, isRecognizedAgentComm } from "./sessionProcessMatcher.js";
 import { tmuxRunAsync } from "./tmux.js";
 import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
@@ -41,6 +43,10 @@ export type ProcRow = {
    *  stamp would make a pid born during the scan look older than the capture
    *  and defeat the capture-second rule below. */
   capturedAtMs?: number;
+  /** The controlling terminal as ps prints it (terminalOfPath), `??`/`?` for
+   *  none. A terminal belongs to one session at a time, so a process on a
+   *  pane's terminal is in that pane's session whoever its parent is now. */
+  tty?: string;
   command: string;
 };
 
@@ -48,14 +54,14 @@ export type ProcRow = {
 // only column between the numbers and the command line that is not itself a
 // number, so it anchors the wide form unambiguously.
 const LSTART_RE = "[A-Za-z]{3}\\s+[A-Za-z]{3}\\s+\\d{1,2}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+\\d{4}";
-const WITH_IDENTITY = new RegExp(`^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(-?\\d+)\\s+(${LSTART_RE})\\s+(\\S.*)$`);
+const WITH_IDENTITY = new RegExp(`^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(-?\\d+)\\s+(?:(${TTY_TOKEN.source.slice(2, -2)})\\s+)?(${LSTART_RE})\\s+(\\S.*)$`);
 
 // `ps -o command` prints a multi-line command line with its newlines intact,
 // so a row can span lines: a line that does not start with a pid continues
 // the previous row's command.
 //
-// Three shapes are accepted, `pid ppid pgid uid lstart command`, `pid ppid uid
-// command` and `pid ppid command`, so a caller that already holds a narrower
+// Three shapes are accepted, `pid ppid pgid uid [tty] lstart command`, `pid
+// ppid uid command` and `pid ppid command`, so a caller that already holds a narrower
 // table keeps working. The widest form is tried first: its four leading numbers
 // followed by a date would otherwise be read as `pid ppid uid` plus a command
 // line beginning with a number and a weekday.
@@ -74,9 +80,10 @@ export function parseProcessTable(stdout: string, capturedAtMs?: number): ProcRo
         uid: Number(wide[4]),
         // ps pads the day of month, so the same instant can print with one or
         // two inner spaces; collapse them or a re-read would never match.
-        startedAt: wide[5].replace(/\s+/g, " "),
+        startedAt: wide[6].replace(/\s+/g, " "),
         capturedAtMs,
-        command: wide[6],
+        ...(wide[5] ? { tty: wide[5] } : {}),
+        command: wide[7],
       });
       continue;
     }
@@ -101,7 +108,9 @@ export function parseProcessTable(stdout: string, capturedAtMs?: number): ProcRo
 // pgid and lstart ride along because killProcessTree escalates to SIGKILL after
 // a grace window, and by then a pid is only evidence when its start time and
 // process group still agree (ct-49537).
-const PS_ARGS = ["-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,command="];
+// The terminal rides along for reapTargets: on macOS as a device number, since
+// `tty` names it by searching /dev, which is slow under load (resourceMonitor.ts).
+const PS_ARGS = ["-axww", "-o", `pid=,ppid=,pgid=,uid=,${process.platform === "darwin" ? "tdev" : "tty"}=,lstart=,command=`];
 // LC_ALL=C because lstart is localized: two captures under different locales
 // would print the same instant differently and never compare equal.
 const PS_OPTS = {
@@ -187,6 +196,128 @@ export function descendantRows(procs: ProcRow[], root: number): ProcRow[] {
     }
   }
   return out;
+}
+
+/** A terminal device path (tmux `#{pane_tty}`) as ps prints it: `tdev`'s
+ *  major/minor on macOS, the name under /dev elsewhere. Undefined when the
+ *  device is gone. */
+export function terminalOfPath(ttyPath: string): string | undefined {
+  if (process.platform !== "darwin") return ttyPath.replace(/^\/dev\//, "") || undefined;
+  try {
+    const rdev = fs.statSync(ttyPath).rdev;
+    return `${(rdev >>> 24) & 0xff}/${rdev & 0xffffff}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface ReapTargetOptions {
+  /** Walked from like any root, never signalled: a tmux server the caller
+   *  stops itself after its tree is gone. */
+  spare?: number[];
+  /** Ownership the table cannot show any more: was this process, now outside
+   *  the tree, once under one of its members (processLineage.ts)? `table` is
+   *  the whole read, by pid (null where a pid appears twice). */
+  descendsFrom?: (row: ProcRow, tree: ReadonlyMap<number, ProcRow>, table: ReadonlyMap<number, ProcRow | null>) => boolean;
+  /** Terminals the caller owns (its panes', from terminalOfPath), read while
+   *  those panes are alive. */
+  terminals?: string[];
+  selfPid?: number;
+  /** Only this user's processes are added by group or lineage. */
+  uid?: number;
+}
+
+/**
+ * Everything a teardown of `roots` must stop, from one table read, deepest
+ * first so roots go last.
+ *
+ * The ppid walk alone misses what left the tree before the kill. Two more
+ * rules bring it back, applied until nothing changes:
+ *
+ * - A process in a group whose leader is in the tree belongs to it. A group's
+ *   id cannot be handed out again while any member lives, so the leader's
+ *   presence in this same read proves it is the same group. This is the dev
+ *   server `next dev` forks: its parent exits, it reparents to pid 1, and it
+ *   keeps the group of the shell job that started it.
+ * - A process the lineage saw under a member of the tree belongs to it (an
+ *   agent's tool shell, orphaned when the agent restarted).
+ * - A process on one of the caller's terminals belongs to it. The kernel ties
+ *   a terminal to one session, and a pane's terminal to the pane's session for
+ *   as long as the pane lives, so this holds after every parent and the group
+ *   leader are gone: next-server once `next dev` and its launcher exited.
+ *   Whatever detached with setsid has no terminal and is not caught by it.
+ *
+ * This process, its ancestors and its descendants are never targets, whatever
+ * the rules say, and neither is anything on a terminal one of them sits on.
+ */
+export function reapTargets(procs: ProcRow[], roots: number[], opts: ReapTargetOptions = {}): { targets: ProcRow[]; tree: Map<number, ProcRow> } {
+  const selfPid = opts.selfPid ?? process.pid;
+  const byPid = new Map<number, ProcRow | null>();
+  for (const p of procs) byPid.set(p.pid, byPid.has(p.pid) ? null : p);
+  const children = new Map<number, ProcRow[]>();
+  for (const p of procs) {
+    if (byPid.get(p.pid) !== p) continue;
+    const list = children.get(p.ppid);
+    if (list) list.push(p);
+    else children.set(p.ppid, [p]);
+  }
+  // This process and its ancestors stay out of the tree, so neither they nor
+  // their groups are ever claimed; the walk passes through the ancestors to
+  // reach their other children, and stops at this process.
+  const self = new Set<number>();
+  for (let pid: number | undefined = selfPid, hops = 0; pid && pid > 1 && hops < 64; hops++) {
+    self.add(pid);
+    pid = byPid.get(pid)?.ppid;
+  }
+  const own = new Set<number>([selfPid]);
+  for (let queue = [selfPid]; queue.length; ) {
+    for (const child of children.get(queue.pop()!) ?? []) {
+      if (!own.has(child.pid)) { own.add(child.pid); queue.push(child.pid); }
+    }
+  }
+  const terminals = new Set((opts.terminals ?? []).filter((t) => !noTerminal(t)));
+  for (const pid of [...self, ...own]) {
+    const tty = byPid.get(pid)?.tty;
+    if (tty) terminals.delete(tty);
+  }
+  const tree = new Map<number, ProcRow>();
+  const visited = new Set<number>(own);
+  const add = (row: ProcRow) => {
+    if (visited.has(row.pid) || row.pid === selfPid) return;
+    visited.add(row.pid);
+    if (!self.has(row.pid)) tree.set(row.pid, row);
+    for (const child of children.get(row.pid) ?? []) add(child);
+  };
+  for (const root of roots) {
+    const row = byPid.get(root);
+    if (row && root > 1) add(row);
+  }
+  if (tree.size === 0) return { targets: [], tree };
+
+  const mine = (p: ProcRow) => opts.uid === undefined || p.uid === opts.uid;
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const p of byPid.values()) {
+      if (!p || visited.has(p.pid) || self.has(p.pid) || p.pid <= 1 || !mine(p)) continue;
+      const groupInTree = p.pgid !== undefined && tree.get(p.pgid)?.pgid === p.pgid;
+      const onTerminal = p.tty !== undefined && terminals.has(p.tty);
+      if (groupInTree || onTerminal || opts.descendsFrom?.(p, tree, byPid)) {
+        add(p);
+        grew = true;
+      }
+    }
+  }
+
+  const keep = new Set(opts.spare ?? []);
+  const depth = (row: ProcRow) => {
+    let d = 0;
+    for (let c = tree.get(row.ppid); c && d < 64; c = tree.get(c.ppid)) d++;
+    return d;
+  };
+  const targets = [...tree.values()].filter((p) => !keep.has(p.pid) && p.pid > 1);
+  const depths = new Map(targets.map((p) => [p.pid, depth(p)]));
+  targets.sort((a, b) => depths.get(b.pid)! - depths.get(a.pid)!);
+  return { targets, tree };
 }
 
 /** Does a command line's program look like one of our agent clients? Matches the
