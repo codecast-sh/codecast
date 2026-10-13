@@ -29,7 +29,8 @@ export type RoleScopeParty =
   | { kind: "role"; short_id: string; name: string; handle: string; avatar?: string }
   | { kind: "user"; name: string; image?: string };
 
-export type RoleLimits = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
+/** Daily limits; an absent or null one is no limit. */
+export type RoleLimits = { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null };
 export type RoleUse = { day: string; hands: number; wakes: number; tokens: number };
 
 /** The role's own facts, from the tree or from the card. */
@@ -164,11 +165,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 /** Today's use against the daily limit, in the staffing pane's words: a
  *  limit, wakes and sessions, never "caps" or "hands". */
 export function dailyLimitLine(caps: RoleLimits | null, counters: RoleUse | null, today: string): string | null {
-  if (!caps) return null;
+  const hands = caps?.hands_per_day ?? null, wakes = caps?.wakes_per_day ?? null;
+  // No limit set: today's use is not read against anything, so there is no line.
+  if (hands === null && wakes === null) return null;
   const used = counters && counters.day === today ? counters : { wakes: 0, hands: 0 };
   // A limit of zero is a rule, not a count: "0 of 0" says nothing to a person.
-  const starts = caps.hands_per_day > 0 ? `started ${used.hands} of ${plural(caps.hands_per_day, "session")}` : "may not start sessions";
-  return `woke ${used.wakes} of ${plural(caps.wakes_per_day, "time")} today · ${starts}`;
+  const starts = hands === null ? null : hands > 0 ? `started ${used.hands} of ${plural(hands, "session")}` : "may not start sessions";
+  return [wakes === null ? null : `woke ${used.wakes} of ${plural(wakes, "time")} today`, starts].filter(Boolean).join(" · ");
 }
 
 export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, today: string): RoleScopeModel {

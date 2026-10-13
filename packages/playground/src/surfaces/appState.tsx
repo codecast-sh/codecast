@@ -1,9 +1,11 @@
 // Everything one app's page shares between its parts, in four contexts that
 // change at different rates, so a part re-renders only for what it reads:
 // the app and where you are in it (slow), who is here (presence), the room's
-// stream (messages and builds), and the composer (every keystroke). AppPage
-// owns them; the room, capsule and timeline read them.
-import { createContext, useContext, type Context } from "react";
+// stream (messages and builds), and the composer (its mode and attachments;
+// the text itself is a draft store only the field subscribes to, so a
+// keystroke re-renders the field and nothing else). AppPage owns them; the
+// room, capsule and timeline read them.
+import { createContext, useCallback, useContext, useSyncExternalStore, type Context } from "react";
 import type { AppView } from "../../convex/apps";
 import type { MessageView } from "../../convex/messages";
 import type { TimelineEntry } from "../../convex/versions";
@@ -22,6 +24,9 @@ export type AppState = {
   /** Have version `n` ready out of sight (the timeline's hover), so showing
    *  it is instant. */
   warm: (n: number | null) => void;
+  /** Someone is reaching for the room or the timeline: load its part and
+   *  its data now, so opening it draws at once. */
+  prepare: (part: "room" | "timeline") => void;
   /** Flash the app column to say "this is live". */
   flashLive: () => void;
   /** When an action whose point is the app itself last ran (See it, View,
@@ -61,9 +66,31 @@ export type StreamState = {
   building: MessageView | null;
 };
 
+/** The composer's text, outside React state so typing re-renders only the
+ *  field that reads it (useDraft). */
+export type Draft = { get: () => string; set: (text: string) => void; subscribe: (listener: () => void) => () => void };
+
+export function createDraft(): Draft {
+  let text = "";
+  const listeners = new Set<() => void>();
+  return {
+    get: () => text,
+    set: (next) => {
+      if (next === text) return;
+      text = next;
+      for (const l of listeners) l();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+export const useDraft = (draft: Draft) => useSyncExternalStore(draft.subscribe, draft.get);
+
 export type ComposerState = {
-  text: string;
-  setText: (t: string) => void;
+  draft: Draft;
   mode: Mode;
   setMode: (m: Mode) => void;
   element: ElementRef | null;
@@ -93,3 +120,20 @@ export const useAppState = () => use(AppStateContext, "useAppState");
 export const useHereState = () => use(HereContext, "useHereState");
 export const useStream = () => use(StreamContext, "useStream");
 export const useComposer = () => use(ComposerContext, "useComposer");
+
+/** Put a change request in the composer, unsent, in Change it mode: Fix it,
+ *  Edit, an idea. An element given replaces the attached one. */
+export function useAskChange(): (text: string, element?: ElementRef | null) => void {
+  const { setMode, draft, setElement, focus } = useComposer();
+  return useCallback(
+    (text: string, element?: ElementRef | null) => {
+      setMode("change");
+      draft.set(text);
+      if (element !== undefined) setElement(element);
+      focus();
+    },
+    [setMode, draft, setElement, focus],
+  );
+}
+
+export const fixText = (error: string) => `Fix this error: ${error}`;

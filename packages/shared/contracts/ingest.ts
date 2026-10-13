@@ -8,6 +8,7 @@
 // Pure: no node or convex imports. The CLI, the browser SDK and the Convex
 // runtime all load it, which is why the key helpers use globalThis.crypto.
 import type { SignalKind } from "./signalFingerprint";
+import { MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
 
 // ── Sources ──
 
@@ -37,7 +38,7 @@ export const POSTHOG_PROJECT_ID = /^\d{1,12}$/;
  * server's check both come from this list.
  */
 export interface SourceConfigField {
-  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins";
+  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins" | "moment_storage" | "moment_retention";
   flag: string;
   list: boolean;
   providers: readonly SourceProvider[];
@@ -54,6 +55,10 @@ export const SOURCE_CONFIG_FIELDS: readonly SourceConfigField[] = [
   { key: "project_id", flag: "project-id", list: false, providers: ["posthog"], help: "PostHog project id, when not the connection's", pattern: POSTHOG_PROJECT_ID, what: "a PostHog project id (a number)" },
   { key: "environments", flag: "environments", list: true, providers: SOURCE_PROVIDERS, help: "Only these environments" },
   { key: "allowed_origins", flag: "allowed-origins", list: true, providers: KEYED_SOURCE_PROVIDERS, help: "Origins a browser SDK may post from" },
+  // learning-loop.md LL7: a moment can carry customer conversations, so its
+  // body stays on the extractor's host unless a person chooses codecast.
+  { key: "moment_storage", flag: "moment-storage", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "Where moment bodies are kept: host (the default) or codecast", pattern: new RegExp(`^(${MOMENT_STORAGES.join("|")})$`), what: `one of ${MOMENT_STORAGES.join(", ")}` },
+  { key: "moment_retention", flag: "moment-retention", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "How long codecast-stored bodies are kept: 30d (the default) or keep", pattern: new RegExp(`^(${MOMENT_RETENTIONS.join("|")})$`), what: `one of ${MOMENT_RETENTIONS.join(", ")}` },
 ];
 
 /**
@@ -376,10 +381,12 @@ export type IngestItem =
       chunks?: number;
       counts?: { clicks?: number; errors?: number; failed_requests?: number };
       at: number;
-    };
+    }
+  /** Something worth judging happened (learning-loop.md LL7): kept and coalesced into a moment, never counted only. */
+  | MomentEventItem;
 
 export type IngestItemType = IngestItem["type"];
-export const INGEST_ITEM_TYPES: readonly IngestItemType[] = ["error", "log", "job_failed", "check", "event", "deploy", "replay"];
+export const INGEST_ITEM_TYPES: readonly IngestItemType[] = ["error", "log", "job_failed", "check", "event", "deploy", "replay", "moment"];
 
 export interface IngestEnvelope {
   sdk: { name: string; version: string };
@@ -578,6 +585,8 @@ function validateItem(raw: unknown, now: number): IngestItem | string {
         at,
       };
     }
+    case "moment":
+      return validateMomentEvent(raw, at);
     default:
       return `unknown item type ${JSON.stringify(raw.type)?.slice(0, 40) ?? "undefined"}`;
   }
@@ -647,4 +656,27 @@ export function validateIngestBatch(body: unknown, now: number = Date.now()): In
     else items.push(dropUndefined(result));
   });
   return { ok: true, envelope, items, rejected };
+}
+
+// ── Error titles ──
+
+/**
+ * An error's title as a person reads it. Loggers often print "<what failed>: <err.message>" where the message already
+ * ends with err.message, so the error says itself twice ("Email dispatch giving up…: Rate limit exceeded. Retry after
+ * 1 seconds.: Rate limit exceeded. Retry after 1 seconds."). `title`: the line with repeated ": " parts said once;
+ * `words`: what failed, in the product's own words, when the title leads with words before the error; `error`: the
+ * error's message, or null when the title is all one part.
+ */
+export function errorTitle(raw: string): { title: string; words: string | null; error: string | null } {
+  const norm = (s: string) => s.trim().replace(/[.\s]+$/, "").toLowerCase();
+  const parts: string[] = [];
+  for (const p of raw.trim().split(/(?<=\S):\s+/)) if (!parts.length || norm(parts[parts.length - 1]) !== norm(p)) parts.push(p.trim());
+  // A part repeated anywhere later (": A: B: A: B") collapses too.
+  for (let size = Math.floor(parts.length / 2); size >= 1; size--) {
+    const tail = parts.slice(-size).map(norm).join("|");
+    if (parts.length >= 2 * size && parts.slice(-2 * size, -size).map(norm).join("|") === tail) parts.splice(-size);
+  }
+  const title = parts.join(": ");
+  const words = parts.length >= 2 && parts[0].split(/\s+/).length >= 3 ? parts[0].replace(/[.:\s]+$/, "") : null;
+  return { title, words, error: words ? parts.slice(1).join(": ") : null };
 }

@@ -4,7 +4,10 @@ import { Eye, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { Button } from "./ui/button";
 import { pickTeamSharingNudge, teamVisibilityOption } from "../lib/teamVisibility";
+import { ConsequentialSwitch } from "./consequential/ConsequentialSwitch";
+import { shareInFullLedger } from "./consequential/ledgers";
 
 // Snoozed for a month per dismiss, synced per user like the other strips.
 const SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -46,12 +49,18 @@ export function TeamSharingNudgeBanner() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={shareNew}
-            className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-cyan text-sol-base03"
-          >
-            Share new sessions in full
-          </button>
+          {/* The button opens the review of who then reads what; the review's own button raises the level. */}
+          <ConsequentialSwitch
+            on={false}
+            ledger={shareInFullLedger({ team: team.name, others, sees })}
+            onTurnOn={shareNew}
+            onTurnOff={() => {}}
+            trigger={({ press, reviewing }) => (
+              <Button variant="cyan" size="xs" onClick={press} aria-haspopup="dialog" aria-expanded={reviewing} data-share-in-full>
+                Share in full
+              </Button>
+            )}
+          />
           <Link
             href="/settings/sync"
             className="px-2.5 py-1 text-xs font-medium rounded-md text-sol-text-muted hover:text-sol-text transition-colors"

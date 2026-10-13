@@ -1,7 +1,7 @@
 import { BAR_FACES } from "../lib/faces/layout";
 import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2 } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
@@ -20,6 +20,9 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { objectHref, personRefOf } from "../lib/entityLinks";
+import { FaceChatLayer } from "./faces/FaceChatLayer";
+import { useFaceChatActive } from "../lib/chat/faceChat";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
@@ -70,15 +73,34 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // a mute that moves no face hands back the same row and this bar sleeps.
   const row = useFaceRow();
   const floating = useFacesFloating();
-  const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
+  const ctxMenu = useContextMenu<{ id: string; profileHref: string; displayName: string }>();
+
+  const barRef = useRef<HTMLDivElement | null>(null);
+  // Whoever is talking in chat right now, or holds a count, keeps a seat.
+  const chatActive = useFaceChatActive();
 
   // The header's slice of the row: me and the linked faces first (the model
-  // puts them at the head), then the rest by presence, up to the cap.
-  const shown = useMemo(
-    () => (row.entries.length > BAR_FACES ? { ...row, entries: row.entries.slice(0, BAR_FACES) } : row),
-    [row],
-  );
-  const hidden = row.entries.length - shown.entries.length;
+  // puts them at the head), then the rest by presence, up to the cap. Agents
+  // are off the header for now (people only); a teammate speaking in chat is
+  // pulled into the last seats so their line can drop from their face.
+  const people = useMemo(() => row.entries.filter((e) => !e.bot || row.links.some((l) => l.to === e.id)), [row]);
+  const shown = useMemo(() => {
+    if (people.length <= BAR_FACES) return people === row.entries ? row : { ...row, entries: people };
+    const head = people.slice(0, BAR_FACES);
+    const want = chatActive ? chatActive.split(",") : [];
+    const pulled = people.filter((e, i) => i >= BAR_FACES && want.includes(e.id)).slice(0, BAR_FACES - 1);
+    if (!pulled.length) return { ...row, entries: head };
+    // Make room from the end of the slice, never taking a linked face or me.
+    const keep = [...head];
+    for (const p of pulled) {
+      const at = keep.findLastIndex((e) => !e.me && !want.includes(e.id) && !row.links.some((l) => l.to === e.id));
+      if (at < 0) break;
+      keep.splice(at, 1);
+      keep.push(p);
+    }
+    return { ...row, entries: keep };
+  }, [row, people, chatActive]);
+  const hidden = people.length - shown.entries.length;
   // Something is happening on the row: an engagement, a ring, a voice. The
   // minimal style hides the bar otherwise (globals.css).
   const live = !!row.me || row.links.length > 0;
@@ -130,6 +152,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
 
   return (
     <div
+      ref={barRef}
       className="people-bar flex items-center gap-1 px-2"
       data-live={live ? "1" : undefined}
       onContextMenu={(e) => {
@@ -137,16 +160,17 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         const face = seat && row.entries.find((f) => f.id === seat.dataset.faceId);
         if (!face) return;
         const member = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === face.id);
-        ctxMenu.open(e, { id: face.id, username: member?.github_username, displayName: face.name });
+        ctxMenu.open(e, { id: face.id, profileHref: objectHref("person", personRefOf({ _id: face.id, github_username: member?.github_username })), displayName: face.name });
       }}
     >
       <TeamMembersPump teamId={effectiveTeamId} />
+      <FaceChatLayer barRef={barRef} />
       <FaceRow
         row={shown}
         density="bar"
         viewerId={viewerId}
         callsEnabled={callsEnabled}
-        onOpenProfile={(m) => router.push(`/team/${m.github_username || m._id}`)}
+        onOpenProfile={(m) => router.push(objectHref("person", personRefOf(m)))}
       >
         {/* EXPAND rides the call's own card, beside the mic and End: it
             acts on the call, so it sits in the call. Pop out (below, at the
@@ -221,7 +245,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         {(m) => (
           <>
             <CtxHeader title={m.displayName} />
-            <CtxItem icon={UserRound} onSelect={() => router.push(`/team/${m.username || m.id}`)}>
+            <CtxItem icon={UserRound} onSelect={() => router.push(m.profileHref)}>
               Open profile
             </CtxItem>
             <CtxItem icon={Filter} onSelect={() => handleMemberClick(m.id)}>
@@ -230,7 +254,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             <CtxItem
               icon={Link2}
               onSelect={() => {
-                copyToClipboard(`${shareOrigin()}/team/${m.username || m.id}`);
+                copyToClipboard(`${shareOrigin()}${m.profileHref}`);
                 toast.success("Profile link copied");
               }}
             >
