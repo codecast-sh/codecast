@@ -29,7 +29,7 @@ describe("updateCard", () => {
     expect(card.changelogs.map((c) => c.version)).toEqual(["2.2.0", "2.1.0"]);
   });
 
-  test("structure: each change by its title, new routines arrive paused", () => {
+  test("structure: each change by its title, and no step for the person to take", () => {
     const changes: ReleaseChanges = { ...none, routines_added: ["seo-weekly"], routines_removed: ["ads-daily"], routines_recadenced: [{ id: "cmo-weekly", from: "7d", to: "1d" }], inputs_added: ["product.domain"], setup_added: ["search-console"], setup_removed: ["bing"], evidence_changed: ["technical"] };
     const card = updateCard({ ...base, update_class: "structure", update_changes: changes, update_names: { routines: { "seo-weekly": { title: "SEO weekly", every: "7d" } }, setup: { "search-console": "Verify the domain" }, inputs: { "product.domain": "Apex domain" } } })!;
     expect(card.heading).toBe("Changes what the role does");
@@ -42,14 +42,14 @@ describe("updateCard", () => {
       "Setup step removed: Verify in Bing",
       "Evidence checks changed: technical",
     ]);
-    expect(card.note).toMatch(/arrives paused and needs Activate/);
+    expect(card.note).toBeNull();
     expect(card.action).toBe("Update");
   });
 
   test("structure without the offered release's names falls back to ids", () => {
     const card = updateCard({ ...base, update_class: "structure", update_changes: { ...none, routines_added: ["a", "b"] } })!;
     expect(card.changes).toEqual(["New routine: a", "New routine: b"]);
-    expect(card.note).toMatch(/New routines arrive paused/);
+    expect(card.note).toBeNull();
   });
 
   test("authority: never an Update; a permission request follows", () => {

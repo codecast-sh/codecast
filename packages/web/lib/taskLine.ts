@@ -47,6 +47,8 @@ export type LineRun = {
   gate_decision_id?: string;
   gate_decision_short_id?: string;
   gate_node_id?: string;
+  gate_decision_status?: string;
+  gate_answer?: string;
   node_statuses?: RunNodeStatus[];
   started_at?: number;
   updated_at?: number;
