@@ -1,0 +1,96 @@
+/* WaitingItem (line-journeys.md LJ6.2): the one reader for something that
+   waits on a person. The root fills the box its host gives it; a decision
+   (LineDecision) is a full-height pane of its own, the other kinds scroll a
+   reading column and dock their one act at the foot. */
+.lwn { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.lwn > .ld { flex: 1; min-height: 0; }
+.lwn-thing { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.lwn-thing > .ld { flex: 1; min-height: 0; }
+.lwn-scroll { flex: 1; min-height: 0; overflow: auto; }
+.lwn-col { max-width: 78ch; margin: 0 auto; padding: var(--lw-s5) var(--lw-s5) 56px; }
+
+.lwn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 var(--lw-s4); }
+.lwn-ref { padding: 0; border: 0; background: none; cursor: pointer; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: color var(--lw-fast), text-decoration-color var(--lw-fast); }
+.lwn-ref:hover { color: var(--lw-person-deep); text-decoration-color: currentColor; }
+.lwn-project { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwn-title { flex: 1 0 100%; margin: 0; font-size: var(--lw-fs-lg); line-height: 1.35; font-weight: 600; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere; }
+
+.lwn-h { display: flex; align-items: baseline; gap: 8px; margin: var(--lw-s5) 0 6px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+.lwn-h .lw-num { color: var(--lw-ink-3); font-weight: 500; }
+.lwn-findings { list-style: none; margin: 0; padding: 0; }
+.lwn-said { margin: 0; font-size: var(--lw-fs-md); line-height: 1.6; color: var(--lw-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.lwn-stopped .lwn-h { margin-top: 0; }
+.lwn-ask { margin: 0 0 var(--lw-s5); font-size: var(--lw-fs-md); font-weight: 650; line-height: 1.5; color: var(--lw-ink); }
+.lwn-ask { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.lwn-advice { font-size: var(--lw-fs-xs); font-weight: 600; padding: 1px 7px; border-radius: 4px; white-space: nowrap; background: var(--lw-warn-soft); color: var(--lw-warn); }
+.lwn-advice[data-act="go"] { background: var(--lw-ok-soft); color: var(--lw-ok); }
+.lwn-md { white-space: normal; }
+.lwn-link { margin-top: var(--lw-s3); padding: 0; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-person-deep); text-decoration: underline; text-underline-offset: 3px; }
+
+/* The dock: the facts on the left, the one act on the right, always in view under the thing. */
+.lwn-dock { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 20px; border-top: 1px solid var(--lw-rule); background: var(--lw-paper); }
+.lwn-facts { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0 auto 0 0; font-size: var(--lw-fs-sm); }
+.lwn-facts > div { display: flex; gap: 8px; }
+.lwn-facts dt { color: var(--lw-ink-3); }
+.lwn-facts dd { margin: 0; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
+.lwn[data-headless] .lwn-head { display: none; }
+.lwn-dock .lw-act { height: 30px; padding: 0 14px; white-space: nowrap; }
+.lwn-h-note { font-weight: 500; color: var(--lw-ink-3); }
+
+/* An agent's ask of a person (kind ask): who it is about over the agent's reason; a late Due reads as late. */
+.lwn-ask-who { margin: -6px 0 var(--lw-s3); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lwn-facts > div[data-late] dd { color: var(--lw-bad); font-weight: 600; }
+.lwn-facts > div[data-tone="ok"] dd, .lwn-facts > div[data-tone="ok"] dd a { color: var(--sol-green); }
+.lwn-facts > div[data-tone="bad"] dd, .lwn-facts > div[data-tone="bad"] dd a { color: var(--sol-red); }
+.lwn-facts > div[data-tone="warn"] dd, .lwn-facts > div[data-tone="warn"] dd a { color: var(--sol-yellow); }
+.lwn-dock a.lw-act { display: inline-flex; align-items: center; text-decoration: none; }
+.lwn-facts > div[data-line-need-failing="now"] dd { color: var(--sol-red); }
+/* Twins folded into a need (lineNeeds foldDuplicateNeeds): one row each, the merge act at its end. */
+.lwn-twins ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.lwn-twin { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.lwn-twin-n { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lwn-twin .lw-act { margin-left: auto; }
+.ask-q .lwn-ref { font-size: inherit; color: var(--lw-ink); }
+
+/* A built fix's diff, read in the reader: the shared changed-file rows, framed like the reader's other blocks. */
+.lwn-diff { border: 1px solid var(--lw-line, var(--sol-border)); border-radius: 8px; overflow: hidden; }
+.lwn-h-end { margin-left: auto; font-weight: 500; }
+
+/* A built fix for review (Review): what it does, then the facts its act follows from (gates, main, merge). */
+.lwn-does { margin: 0 0 var(--lw-s3); font-size: var(--lw-fs-md); font-weight: 600; line-height: 1.45; color: var(--lw-ink); text-wrap: pretty; }
+.lwn-does[data-line-need-review-does="reading"], .lwn-does[data-line-need-review-does="none"] { font-weight: 500; color: var(--lw-ink-3); }
+.lwn-state { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 var(--lw-s4); font-size: var(--lw-fs-sm); }
+.lwn-state > div { display: contents; }
+.lwn-state dt { color: var(--lw-ink-3); }
+.lwn-state dd { margin: 0; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
+.lwn-state > div[data-tone="warn"] dd { color: var(--sol-yellow); }
+.lwn-state > div[data-tone="ok"] dd { color: var(--sol-green); }
+.lwn-gate[data-state="pass"] { color: var(--sol-green); }
+.lwn-gate[data-state="red"], .lwn-gate[data-state="changes"] { color: var(--sol-red); }
+.lwn-gate .lw-link { color: inherit; font: inherit; padding: 0; border: 0; background: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+/* Regenerated fixtures folded under the change: one row, opened on demand. */
+.lwn-fold { margin-top: 6px; }
+.lwn-fold-row { display: inline-flex; align-items: center; gap: 6px; padding: 4px 2px; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lwn-fold-row:hover { color: var(--lw-ink); }
+.lwn-fold-row svg { transition: transform var(--lw-fast); }
+.lwn-fold-row svg[data-open] { transform: rotate(90deg); }
+.lwn-fold > .lwn-diff { margin-top: 4px; }
+/* A built fix in one line (ReviewSummary): its red gate and main's lead as figures, then its act. */
+.lwn-sum { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
+.lwn-sum-facts { display: inline-flex; gap: 0; flex-wrap: wrap; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.lwn-sum-fact { white-space: nowrap; }
+.lwn-sum-fact + .lwn-sum-fact::before { content: "·"; margin: 0 6px; color: var(--lw-ink-3); }
+.lwn-sum-fact[data-tone="warn"] { color: color-mix(in srgb, var(--lw-warn) 70%, var(--lw-ink)); }
+.lwn-sum-fact[data-tone="bad"] { color: var(--lw-bad); font-weight: 550; }
+.lwn-sum-fact[data-tone="ok"] { color: var(--lw-ok); }
+.lwn-sum-act { display: inline-flex; gap: 8px; align-items: center; margin-left: auto; }
+.lwn-sum-act .lw-act { height: 28px; padding: 0 12px; white-space: nowrap; }
+.lwn-sum-act a.lw-act { display: inline-flex; align-items: center; text-decoration: none; }
+/* A step's advice the problem's own count contradicts ("still one case" over 8 findings). */
+.lwn-contra { margin: -8px 0 var(--lw-s4); font-size: var(--lw-fs-sm); color: var(--sol-yellow); }
+.lwn-contra b { font-weight: 650; }
+/* Who reviews it: a short list of teammates over the act. */
+.lwn-pick-wrap { position: relative; display: inline-flex; }
+.lwn-pick { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 20; display: flex; flex-direction: column; min-width: 220px; max-height: 280px; overflow: auto; padding: 4px; border: 1px solid var(--lw-rule); border-radius: 8px; background: var(--lw-paper); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); }
+.lwn-pick-row { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px; background: none; cursor: pointer; text-align: left; font: inherit; font-size: var(--lw-fs-sm); color: var(--lw-ink); }
+.lwn-pick-row:hover, .lwn-pick-row:focus-visible { background: var(--lw-hover, color-mix(in srgb, var(--lw-ink) 8%, transparent)); }

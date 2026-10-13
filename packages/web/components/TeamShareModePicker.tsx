@@ -7,7 +7,9 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
-import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, teamVisibilityFor } from "../lib/teamVisibility";
+import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, teamVisibilityFor, teamVisibilityOption } from "../lib/teamVisibility";
+import { ConsequentialSwitch } from "./consequential/ConsequentialSwitch";
+import { shareInFullLedger } from "./consequential/ledgers";
 import type { TeamShareMode } from "../lib/teamFeedRows";
 
 const MODES: SegmentedOption<TeamShareMode>[] = [
@@ -111,16 +113,25 @@ export function TeamShareModePicker({
         </p>
       )}
       {mode === "full" && teamBelowFull && team && (
-        <button
-          type="button"
-          onClick={() => {
+        <ConsequentialSwitch
+          on={false}
+          ledger={shareInFullLedger({ team: team.name, others: Math.max(1, (team.member_count ?? 2) - 1), sees: teamVisibilityOption(team.visibility).sees })}
+          onTurnOn={() => {
             setTeamMembershipVisibility(String(team._id), "full", "going_forward");
             toast.success(`${team.name} sees the whole conversation for new sessions`);
           }}
+          onTurnOff={() => {}}
+          trigger={({ press }) => (
+        <button
+          type="button"
+          onClick={press}
+          aria-haspopup="dialog"
           className="text-[11px] text-sol-cyan hover:underline text-left"
         >
           Share all new sessions with {team.name} in full
         </button>
+          )}
+        />
       )}
     </div>
   );
