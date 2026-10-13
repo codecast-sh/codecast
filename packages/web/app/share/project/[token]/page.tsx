@@ -36,14 +36,14 @@ export default function SharedProjectPage() {
                 </>
               }
             />
-            {p.goal && <Callout label="Goal">{p.goal}</Callout>}
+            {p.goal && <Callout label="What it is for">{p.goal}</Callout>}
             {p.description && (
               <Section title="About">
                 <Prose content={p.description} />
               </Section>
             )}
             {p.success_metrics.length > 0 && (
-              <Section title="Success looks like">
+              <Section title="Signs it works">
                 <Bullets items={p.success_metrics} tone="green" />
               </Section>
             )}

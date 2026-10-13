@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CHAIN_DEPTH_CAP, chainHead, createTurnSnapshot, diffSnapshots, listChain, snapshotStateDir } from "./treeSnapshot.js";
+import { CHAIN_DEPTH_CAP, STALE_INDEX_LOCK_MS, chainHead, createTurnSnapshot, diffSnapshots, listChain, snapshotStateDir } from "./treeSnapshot.js";
 import { restoreWipSnapshot, pushWipSnapshot } from "./wipSnapshot.js";
 
 const tmps: string[] = [];
@@ -39,6 +39,37 @@ function repo(): { cwd: string; remote: string } {
 }
 
 describe("createTurnSnapshot", () => {
+  test("a lock left on the private index by a killed git is cleared once stale; a fresh one is respected", async () => {
+    const { cwd } = repo();
+    expect(await createTurnSnapshot(cwd)).not.toBeNull();
+    const lock = path.join((await snapshotStateDir(cwd))!, "wip.index.lock");
+    fs.writeFileSync(lock, "");
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "after the crash\n");
+    await expect(createTurnSnapshot(cwd)).rejects.toThrow(/index\.lock/);
+    const old = (Date.now() - STALE_INDEX_LOCK_MS - 60_000) / 1000;
+    fs.utimesSync(lock, old, old);
+    const snap = await createTurnSnapshot(cwd);
+    expect(snap?.changedPaths).toContain("tracked.txt");
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  test("a same-size edit in the same second as the real index is still seen (racy-git survives the index copy)", async () => {
+    // git trusts an entry's stat only when its mtime is older than the index
+    // file. The persistent index is seeded by copying the real one; stamped
+    // now, the copy vouched for an edit made in the index's own second.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { cwd } = repo();
+      git(cwd, ["update-index", "-q", "--refresh"]);
+      const indexSecond = Math.floor(fs.statSync(path.join(cwd, ".git", "index")).mtimeMs / 1000);
+      fs.writeFileSync(path.join(cwd, "tracked.txt"), "v2\n");
+      if (Math.floor(fs.statSync(path.join(cwd, "tracked.txt")).mtimeMs / 1000) !== indexSecond) continue;
+      await new Promise((r) => setTimeout(r, 1100));
+      const snap = await createTurnSnapshot(cwd);
+      expect(snap?.changedPaths).toContain("tracked.txt");
+      return;
+    }
+  });
+
   test("first snapshot: parent is HEAD, tree carries the dirty edit and the untracked file, never the ignored secret", async () => {
     const { cwd } = repo();
     fs.writeFileSync(path.join(cwd, "tracked.txt"), "dirty\n");
