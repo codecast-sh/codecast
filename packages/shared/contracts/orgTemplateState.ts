@@ -64,15 +64,14 @@ export function recordScores(declaring: { scoreboard?: Array<{ key: string }> },
 }
 
 /**
- * Setup items (H5). A `role` item is the role's to mark; a `human` item is a
- * person's, so a call from an agent session is refused. Done needs evidence
- * a person can open; reopening clears it.
+ * Setup items (H5). A `role` item is the role's to do; a `human` item is a
+ * person's to do. Either is marked by whoever sees it done, the role included.
+ * The role's own item needs evidence a person can open; reopening clears it.
  */
-export function markSetup(manifest: OrgTemplate, state: InstanceState, id: string, input: { status: string; evidence?: string; fromAgent: boolean; now?: number }): SetupState {
+export function markSetup(manifest: OrgTemplate, state: InstanceState, id: string, input: { status: string; evidence?: string; now?: number }): SetupState {
   const item = (manifest.setup ?? []).find((s) => s.id === id);
   if (!item) throw new Error(`Not a setup item of this template: ${id}`);
   if (!["open", "done", "skipped"].includes(input.status)) throw new Error("Status must be open, done or skipped");
-  if (item.who === "human" && input.fromAgent) throw new Error(`${id} is a person's step: they mark it from their own terminal or the role page`);
   const next: SetupState = input.status === "done"
     ? { status: "done", done_at: input.now ?? Date.now(), evidence: item.who === "role" ? href(input.evidence, "--evidence") : input.evidence }
     : { status: input.status as "open" | "skipped" };

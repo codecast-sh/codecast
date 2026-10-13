@@ -7,6 +7,7 @@
 // path.
 
 import { useState } from "react";
+import { Button } from "../ui/button";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -88,13 +89,14 @@ export function ArtifactEditModal({ artifact, onClose }: { artifact: ArtifactRow
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <button
+            <Button
+              variant="cyan"
+              size="sm"
               onClick={publish}
               disabled={source === null || saving || !dirty}
-              className="text-[13px] font-medium px-3 py-1.5 rounded bg-sol-cyan/90 text-sol-bg hover:bg-sol-cyan disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {saving ? "Publishing…" : "Publish"}
-            </button>
+            </Button>
             <button
               onClick={requestClose}
               className="p-1.5 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"

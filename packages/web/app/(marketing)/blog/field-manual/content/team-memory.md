@@ -37,17 +37,7 @@ Attribution is per line, not per commit. A commit that mixes an agent's edits wi
 
 When an agent commits, codecast adds one line to the commit message, a `Codecast-Session:` trailer pointing at the conversation. That is the session's own word, so it beats every heuristic; on codecast's pull request and commit pages it renders as a session pill rather than a URL. Commits without one (another tool, a hand commit, a commit from before codecast was installed) are matched by hash, then by subject and time, which is good but not certain. The trailer never blocks a commit, only sessions your team can see get one (a private session never leaks a link into a shared history), and it can be turned off per repository.
 
-The same blame is there for people who live in a terminal or an editor, in git blame's own format, so a vim or editor integration can show sessions where it showed authors:
-
-```terminal
-$ cast blame -L 41,44 packages/web/scripts/readme-shots.ts
-497bc4e815 (jx781zf Ashot Documentation audit and refresh 2026-10-05 41) const OUT_DIR = join(…);
-497bc4e815 (jx781zf Ashot Documentation audit and refresh 2026-10-05 42) const OUT_WIDTH = 1920;
-497bc4e815 (jx781zf Ashot Documentation audit and refresh 2026-10-05 43) const SETTLE_MS = 9000;
-497bc4e815 (Ashot Petrosian                               2026-10-05 44)
-```
-
-Line 44 is blank, so no session is credited with it and it falls back to the git author.
+For people who live in a terminal or an editor, the same blame is also available as `cast blame`, in git blame's own format, so an editor integration can show sessions where it showed authors. A blank line credits no session and falls back to the git author.
 
 > **Why it matters.** The chain is short: a reviewer wonders why the cap is 5, the repo view names the session that wrote the line, and asking that session "why 5?" returns the message where 3 was chosen and the load test that changed it. No one has to remember, and the agent that wrote the code does not need to still be running. Your agents get the same tools in their instructions, so they look up who settled a question before they change code someone else's agent wrote.
 

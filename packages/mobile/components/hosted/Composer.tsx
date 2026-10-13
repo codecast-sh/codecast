@@ -8,7 +8,8 @@ import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { TextInput } from '@/components/Themed';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
-import { HOSTED_RADIUS, useHostedTheme } from './hostedTheme';
+import { HOSTED_RADIUS, sendDisc, useHostedTheme } from './hostedTheme';
+import { useActiveLook } from '@/constants/Theme';
 
 const MAX_HEIGHT = 200;
 
@@ -17,14 +18,22 @@ export function Composer({
   onSend,
   seed,
   autoFocus = false,
+  held = false,
+  allowEmpty = false,
 }: {
   placeholder: string;
   onSend: (text: string) => void;
   /** Text to place in the box (a starter), applied when it changes. */
   seed?: { text: string; at: number } | null;
   autoFocus?: boolean;
+  /** A new ask cannot run now (useHostedAskGate): the words stay editable
+   *  and send waits. */
+  held?: boolean;
+  /** Send works with an empty box: starting an agent session needs no words. */
+  allowEmpty?: boolean;
 }) {
   const { c } = useHostedTheme();
+  const look = useActiveLook();
   const [text, setText] = useState('');
   const [seededAt, setSeededAt] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
@@ -36,10 +45,10 @@ export function Composer({
     queueMicrotask(() => ref.current?.focus());
   }
 
-  const ready = text.trim().length > 0;
+  const ready = (allowEmpty || text.trim().length > 0) && !held;
   const send = () => {
     const value = text.trim();
-    if (!value) return;
+    if (!ready) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     onSend(value);
     setText('');
@@ -96,11 +105,11 @@ export function Composer({
           borderRadius: 18,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: !ready ? c.wash : pressed ? c.accentPressed : c.accent,
+          ...sendDisc(c, look, ready, pressed).style,
           transform: [{ scale: pressed ? 0.94 : 1 }],
         })}
       >
-        <Feather name="arrow-up" size={18} color={ready ? c.onSolid : c.faint} />
+        <Feather name="arrow-up" size={18} color={sendDisc(c, look, ready).icon} />
       </Pressable>
     </View>
   );

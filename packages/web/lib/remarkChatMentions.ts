@@ -1,6 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import type { ChatRoleMention, ChatSlackMention } from "@codecast/shared/chat";
 import { SLACK_MARK_PATHS, SLACK_MARK_VIEWBOX } from "./slackLogo";
+import { objectHref } from "./entityLinks";
 
 // Highlight @mentions inside chat message bodies.
 //
@@ -95,11 +96,6 @@ function slackMarkHast() {
   };
 }
 
-/** The route a role pill opens. */
-export function orgRoleHref(shortId: string): string {
-  return `/org/${encodeURIComponent(shortId)}`;
-}
-
 export function remarkChatMentions(options: ChatMentionOptions = {}) {
   const { known, self, names, roles, sessions, slack, channels } = options;
   const has = (set: Set<string> | undefined, handle: string) =>
@@ -127,7 +123,7 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
             if (role) {
               return {
                 type: "link",
-                url: orgRoleHref(role.short_id),
+                url: objectHref("role", role.short_id),
                 data: {
                   hProperties: {
                     className: "editor-mention mention-role ch-mention-role",
