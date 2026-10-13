@@ -60,7 +60,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const { reportTemplate } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await reportTemplate(deps, instance, entries, options), null, 2));
     });
-  context(template.command("setup <instance> [id]").description("List the setup items, or mark one; a person's step is refused from an agent session"))
+  context(template.command("setup <instance> [id]").description("List the setup items, or mark one done, skipped or open"))
     .option("--done", "Mark the item done").option("--skip", "Mark the item skipped").option("--open", "Reopen the item")
     .option("--evidence <href>", "What shows it is done (required for the role's own items)")
     .action(async (instance: string, id: string | undefined, options: any) => {
@@ -140,8 +140,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const { catalogTemplates } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await catalogTemplates(deps, options), null, 2));
     });
-  context(template.command("activate <instance> <routine>").description("Activate a paused routine: human only; from an agent session the server refuses and says so"))
-    .option("--session <id>", "Calling session (default: current)")
+  context(template.command("activate <instance> <routine>").description("Turn on a paused routine now; bind, reconcile and status turn on each ready one by themselves"))
     .action(async (instance: string, routine: string, options: any) => {
       const { activateTemplateRoutine } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await activateTemplateRoutine(deps, instance, routine, options), null, 2));

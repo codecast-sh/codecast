@@ -17,7 +17,6 @@
 import * as fsp from "fs/promises";
 import { homedir } from "os";
 import * as path from "path";
-import type { ChildProcessWithoutNullStreams } from "child_process";
 import type {
   EvalsBridgeRequest,
   EvalsBridgeResponse,
@@ -25,7 +24,7 @@ import type {
   EvalsUnavailableReason,
 } from "@codecast/shared/contracts/evalsApi";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import { execFileAsync, spawn } from "../proc.js";
+import { execFileAsync, spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 
 /** The first three lines of the repo-root `evals` script. A directory whose
  *  `evals` does not start with them is not a codecast checkout. */

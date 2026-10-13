@@ -6,6 +6,8 @@ import {
   CARD_DECISION_OPTIONS,
   cardVerdictIndexes,
   assembleChangeCard,
+  BASE_CHECK,
+  baseCheck,
   countSentences,
   proofCountsIn,
   proofSummary,
@@ -20,6 +22,7 @@ import {
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
+  runVerify,
 } from "./changeCard";
 import { renderChangeCardHtml } from "../render/changeCardHtml";
 
@@ -84,6 +87,14 @@ describe("assembleChangeCard", () => {
     expect(evalOf("line")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("prompt")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("code")).toBeUndefined();
+  });
+
+  it("takes the author's real cases when no eval flipped any, at most three; eval flips win", () => {
+    const ex = (n: number) => ({ input: `case ${n}`, before: "still waiting note", after: "no message; reminder moved", note: "" });
+    const authored = assembleChangeCard({ task: { short_id: "ct-1", title: "T", category: "prompt" }, examples: [ex(1), ex(2), ex(3), ex(4)] });
+    expect(authored.examples.map((e) => e.input)).toEqual(["case 1", "case 2", "case 3"]);
+    expect(sample().examples.length).toBeGreaterThan(0);
+    expect(assembleChangeCard({ ...sampleAssemblyInput(), examples: [ex(9)] }).examples.map((e) => e.input)).not.toContain("case 9");
   });
 
   it("merges the recorded proof ahead of the eval proof and adds eval cost to the run's", () => {
@@ -303,5 +314,110 @@ describe("headline and context", () => {
     expect(long.ok).toBe(false);
     const two = validateChangeCard({ ...base, context: "It is a summary. People read it." });
     expect(two.ok ? [] : two.errors.join(" ")).toContain("context");
+  });
+});
+
+// LW5: a new attempt's card shows the cause's earlier shipped fix beside its own change.
+describe("earlier shipped fixes", () => {
+  const earlier = [{ attempt: 2, ref: "sd-9", change: "Pin the persona on the thread's first send", live: "Deployed to backend Oct 13", held: null, back: "Came back 2 times after the deploy of Oct 13." }];
+
+  test("assembly carries them, validation accepts them, and a card with none has no field", () => {
+    const c = assembleChangeCard({ ...sampleAssemblyInput(), earlier });
+    expect(c.earlier).toEqual(earlier);
+    expect(validateChangeCard(c).ok).toBe(true);
+    expect("earlier" in sample()).toBe(false);
+    expect("earlier" in assembleChangeCard({ ...sampleAssemblyInput(), earlier: [] })).toBe(false);
+  });
+
+  test("a malformed entry is named by its path", () => {
+    const c = clone(assembleChangeCard({ ...sampleAssemblyInput(), earlier }));
+    c.earlier[0].change = "";
+    c.earlier[0].back = 3;
+    expect(errorsOf(c)).toEqual(["earlier[0].change: is empty", "earlier[0].back: expected a string or null, got 3"]);
+  });
+
+  test("the page shows the earlier fix and that it came back, before the proof", () => {
+    const html = renderChangeCardHtml(assembleChangeCard({ ...sampleAssemblyInput(), earlier }));
+    expect(html).toContain("Shipped before");
+    expect(html).toContain("Pin the persona on the thread&#39;s first send");
+    expect(html).toContain('<li class="back">');
+    expect(html.indexOf("Shipped before")).toBeLessThan(html.indexOf("<h2>Proof"));
+    expect(renderChangeCardHtml(sample())).not.toContain("Shipped before");
+  });
+});
+
+describe("the Up to date check", () => {
+  test("a conflict or a touched file main changed fails and names the rebuild; behind on other files passes", () => {
+    expect(baseCheck({ behind: 382, changedOnMain: ["a/x.njk"], conflicts: ["f/one.jsonl", "f/two.jsonl"] }))
+      .toEqual({ name: BASE_CHECK, ok: false, detail: "Rebuild on main: 382 commits behind, 2 files conflict; one.jsonl, two.jsonl" });
+    expect(baseCheck({ behind: 1, changedOnMain: ["a/x.njk"], conflicts: [] }).detail).toBe("Rebuild on main: 1 commit behind, 1 file changed there; the proof ran on old x.njk");
+    expect(baseCheck({ behind: 12, changedOnMain: [], conflicts: [] })).toMatchObject({ ok: true, detail: "12 commits behind main, none of its files changed there" });
+    expect(baseCheck({ behind: 0, changedOnMain: [], conflicts: [] })).toMatchObject({ ok: true, detail: "Built on current main" });
+  });
+  test("a stale branch's card cannot recommend Ship, and the refusal names the rebuild", () => {
+    const card = assembleChangeCard({ ...sampleAssemblyInput(), base: { behind: 382, changedOnMain: [], conflicts: ["x.jsonl"] }, recommend: { verdict: "ship", why: "It works." } });
+    expect(card.checks.at(-1)?.name).toBe(BASE_CHECK);
+    const v = validateChangeCard(card);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.errors.join("\n")).toContain('recommend revise with the ask "Rebuild on main"');
+    expect(assembleChangeCard({ ...sampleAssemblyInput(), base: null }).checks.some((c) => c.name === BASE_CHECK)).toBe(false);
+  });
+});
+
+describe("the Verify check speaks for the current run", () => {
+  test("a run whose verify passed outranks an earlier run's blocked handoff", () => {
+    const verify = runVerify([{ node_id: "build", status: "completed" }, { node_id: "verify", status: "completed", outcome: "success" }]);
+    expect(verify).toEqual({ name: "Verify", ok: true, detail: "Typecheck and tests passed on this run" });
+    const card = assembleChangeCard({ task: { short_id: "ct-1", title: "t" } as any, evidence: { execution_status: "blocked", verification_evidence: "Build hit its visit cap.", files_changed: [] } as any, verify });
+    expect(card.checks.find((c) => c.name === "Verify")).toEqual(verify!);
+  });
+  test("a verify that has not run leaves the handoff to speak", () => {
+    expect(runVerify([{ node_id: "verify", status: "pending" }])).toBeNull();
+    expect(runVerify([{ node_id: "verify", status: "failed", error: "3 tests failed.\nmore" }])).toMatchObject({ ok: false, detail: "3 tests failed." });
+  });
+});
+
+describe("the author's risk and picked conversations", () => {
+  test("an author's risk outranks the ground rating, and picked conversations ride on the card", () => {
+    const card = assembleChangeCard({
+      ...sampleAssemblyInput(),
+      risk: { class: "low", reason: "Booking replies only, a few a week" },
+      seen: [{ signal: "sg-1545", asked: "the 1:45pm slot Union offered", quote: "I can't arrange a Zoom invitation for 1:45pm today at this notice." }],
+    });
+    expect(card.risk).toEqual({ class: "low", reason: "Booking replies only, a few a week" });
+    expect(card.seen?.[0]?.signal).toBe("sg-1545");
+    expect(validateChangeCard(card).ok).toBe(true);
+  });
+
+  test("a picked conversation names a finding and keeps its ask to a few words", () => {
+    const card = { ...sample(), seen: [{ signal: "mo-1", asked: "x".repeat(120), quote: "" }] };
+    const v = validateChangeCard(card);
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.errors.some((e) => e.startsWith("seen[0].signal"))).toBe(true);
+      expect(v.errors.some((e) => e.startsWith("seen[0].asked"))).toBe(true);
+    }
+  });
+});
+
+describe("coverage and what a change stops", () => {
+  test("a card carries how many conversations it reaches and what it stops; the validator names a malformed one", () => {
+    const ok = { ...sample(), reach: { conversations: 2, of: 17 }, stops: { per_week: 35, what: "emails", next: "the introduction or an honest close, when one exists" } };
+    expect(validateChangeCard(ok).ok).toBe(true);
+    const bad = validateChangeCard({ ...sample(), reach: { conversations: 18, of: 17 }, stops: { per_week: -1, what: "emails closing out a missed call", next: "" } });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) {
+      for (const p of ["reach.conversations", "stops.per_week", "stops.what", "stops.next"]) expect(bad.errors.some((e) => e.startsWith(p))).toBe(true);
+    }
+  });
+});
+
+describe("an earlier call the change reverses", () => {
+  test("is carried as a decision or task id, who made it and what it settled", () => {
+    const ok = validateChangeCard({ ...sample(), overturns: { ref: "ct-53874", by: "Cameron", what: "close notes carry no question or ask" } });
+    expect(ok.ok).toBe(true);
+    const bad = validateChangeCard({ ...sample(), overturns: { ref: "Cameron's ruling", by: "", what: "x" } });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors.join("\n")).toContain("overturns.ref");
   });
 });

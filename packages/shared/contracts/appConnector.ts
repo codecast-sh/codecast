@@ -8,6 +8,7 @@
 //
 // Pure: no node or convex imports.
 import { parseDuration } from "../time";
+import type { ProductViewDef } from "./productView";
 
 // ── Limits ──
 
@@ -21,6 +22,7 @@ export const APP_LIMITS = {
   max_readers: 200,
   max_actions: 200,
   max_watches: 50,
+  max_views: 50,
   /** The watch cron's cadence: a watch cannot poll faster than this. */
   min_watch_ms: 5 * 60_000,
   max_watch_ms: 24 * 3600_000,
@@ -202,6 +204,8 @@ export interface AppManifest {
   readers: AppReader[];
   actions: AppAction[];
   watches: AppWatch[];
+  /** The app's own screens codecast may frame (contracts/productView.ts), each opened through the `views.token` action. */
+  views: ProductViewDef[];
 }
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -372,8 +376,26 @@ export function parseAppManifest(raw: unknown): { ok: true; manifest: AppManifes
     });
   });
 
+  const views: ProductViewDef[] = [];
+  const viewNames = new Set<string>();
+  list("views", APP_LIMITS.max_views).forEach((v, i) => {
+    const where = `views[${i}]`;
+    if (!isPlainObject(v)) return void errors.push(`${where} is not an object`);
+    const n = typeof v.name === "string" ? v.name.trim() : "";
+    if (!NAME_RE.test(n)) return void errors.push(`${where}: name "${String(v.name ?? "")}" must be letters, digits, dots, dashes or underscores`);
+    if (viewNames.has(n)) return void errors.push(`view ${n}: declared twice`);
+    viewNames.add(n);
+    if (!isSafeAppPath(v.path)) return void errors.push(`view ${n}: path must be an absolute path, got ${JSON.stringify(v.path)}`);
+    const params = v.params === undefined ? [] : v.params;
+    if (!Array.isArray(params) || !params.every((p) => typeof p === "string" && FIELD_RE.test(p))) {
+      return void errors.push(`view ${n}: params must be a list of query param names`);
+    }
+    const description = text(v.description, 2000);
+    views.push({ name: n, title: text(v.title, 200) ?? n, path: v.path, params: params as string[], ...(description ? { description } : {}) });
+  });
+
   if (errors.length) return { ok: false, errors };
-  return { ok: true, manifest: { name: name!, version: text(raw.version, 100) ?? "0", readers, actions, watches } };
+  return { ok: true, manifest: { name: name!, version: text(raw.version, 100) ?? "0", readers, actions, watches, views } };
 }
 
 /** One watch's identity in the source's watch state: a reader may feed a check watch and a job watch. */
