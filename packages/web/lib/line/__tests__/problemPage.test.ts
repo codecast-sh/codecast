@@ -59,9 +59,9 @@ describe("problemBand: one state per problem", () => {
   });
   test("a stopped run that needs a yes is a need, never a failure", () => {
     const b = problemBand(input({ need: { kind: "stopped", since: NOW, fail: { key: "deadend:prove", step: "prove", label: "Prove: needs Cameron's yes", raw: "" } }, run: run([visit("prove", "done")]) }));
-    expect(bandLine(b)).toEqual({ text: "Prove finished: go on to Build?", tone: "you" });
-    // It waits on you: the Problems list files it there, never under Needs a new ask.
-    expect(problemNow(b).status).toBe("you");
+    expect(bandLine(b)).toEqual({ text: "Prove finished: go on to Build?", tone: "warn" });
+    // Nobody is asked mid-run: the Problems list files it under Needs a new ask, where a new run goes on.
+    expect(problemNow(b).status).toBe("newask");
   });
   test("a step that ended without a report is no yes: the band says what happened", () => {
     const b = problemBand(input({ run: run([visit("build", "failed")]), row: { kind: "failed", at: NOW - H, detail: null, fail: { key: "deadend-silent:build", step: "build", label: "Build ended without a report", raw: "" } } }));

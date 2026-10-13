@@ -243,25 +243,9 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
         let row: { task: string; run_id: string } | undefined;
         for (const p of projects) row ??= ((await post("/cli/line/trial/runs", { project: p.title }, true)) as Array<{ task: string; run_id: string }>).find((r) => r.task === task);
         if (!row) fail(`${task} has no trial run`);
-        const { liveRunnerPid } = await import("./workflow/runResume.js");
-        const pid = liveRunnerPid(row.run_id);
-        if (pid) {
-          process.kill(pid, "SIGTERM");
-          for (let i = 0; i < 50 && liveRunnerPid(row.run_id); i++) await new Promise((r) => setTimeout(r, 100));
-            if (liveRunnerPid(row.run_id)) fail(`The runner waiting on ${task} (pid ${pid}) did not stop`);
-        }
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
-        const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: row.run_id }, { read: true, exitOnError: false }).catch(() => null);
-        const { graphForDaemonRun } = await import("./workflow/daemonGraph.js");
-        const { deviceId } = await import("./remote/device.js");
-        const graph = got?.run ? graphForDaemonRun({ ...got.run, fresh_branch: true }, got.workflow, got.run.project_path || process.cwd(), deviceId(), true) : null;
-        const gate = got?.run?.gate_node_id as string | undefined;
-        if (opts.at && graph && !graph.nodes.has(opts.at)) fail(`The run's graph has no station ${opts.at}`);
-        if (!opts.at && gate && graph && !graph.nodes.has(gate)) fail(`${task} waits at ${gate}, which its graph no longer has: pick it up with --at <station>`);
-        asker = (gate && graph?.nodes.get(gate)?.asker) || undefined;
-        // Where a run sent back to work on changed findings starts: the station the graph's start leads to, which reads the problem again.
-        const start = graph ? [...graph.nodes.values()].find((n) => n.type === "start") : undefined;
-        entry = start ? graph!.edges.find((e) => e.from === start.id)?.to : undefined;
+        const { prepareReask } = await import("./workflow/reask.js");
+        ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
       }
       const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
