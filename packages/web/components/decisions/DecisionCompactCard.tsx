@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowUpRight, Layers, LayoutTemplate, ShieldCheck, Workflow } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
+import { DecisionDiscussion } from "./DecisionDiscussion";
 import { askingSessionName, decisionHref, gateRunLabel, ladderRecommendation, runHref } from "../../lib/decisionLinks";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import { useSyncWorkflowRun } from "../../hooks/useSyncWorkflows";
@@ -40,8 +41,11 @@ export function DecisionCompactCard({
   cta = false,
   line = false,
   folded = false,
+  askedOf,
 }: {
   decision: SessionDecisionItem;
+  /** The people it was asked of, when the viewer is not one of them. */
+  askedOf?: string;
   keys?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
@@ -60,13 +64,16 @@ export function DecisionCompactCard({
     (st) => decision.stack_id ? st.decisionStacks[decision.stack_id]?.title : undefined,
   ]);
   const answerDecision = useInboxStore((st) => st.answerDecision);
+  const adoptDecision = useInboxStore((st) => st.adoptDecision);
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
   const session = s.sessions[decision.conversation_id];
   const task = decision.task_id ? s.tasks[decision.task_id] : undefined;
   const stack = decision.stack_id ? s.decisionStacks[decision.stack_id] : undefined;
   const now = useCoarseNow(30_000);
-  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
-  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+  // A row outside the viewer's queue (asked of somebody else, read by id)
+  // becomes a store row first: the answer is a patch on a row that exists.
+  const onAnswer = useCallback((input: DecisionAnswerInput) => { adoptDecision(decision._id); answerDecision(decision._id, input); }, [adoptDecision, answerDecision, decision._id]);
+  const onDismiss = useCallback(() => onAnswer({ dismiss: true }), [onAnswer]);
   // Hosted mode's approvals carry no ids and no key hints.
   const internals = useSurface("questions.internals");
 
@@ -88,6 +95,7 @@ export function DecisionCompactCard({
       cta={cta}
       line={line}
       folded={folded}
+      askedOf={askedOf}
     />
   );
 }
@@ -113,8 +121,10 @@ export function DecisionCompactCardView({
   line = false,
   folded = false,
   hideIds = false,
+  askedOf,
 }: {
   decision: SessionDecisionItem;
+  askedOf?: string;
   /** Leave the decision's short id off its open link (hosted mode). */
   hideIds?: boolean;
   session?: AskingSessionRow;
@@ -217,6 +227,7 @@ export function DecisionCompactCardView({
             { key: "chips", plain: true, className: "flex-wrap items-center gap-2 min-w-0", node: (
               <>
                 {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
+                {askedOf && <span className="px-1.5 py-0.5 rounded border border-sol-border text-sol-text-muted" title={`Asked of ${askedOf}. Your answer counts, and they are told you answered.`} data-decision-asked-of>for {askedOf}</span>}
                 {/* The category decides who may answer, and only a real one says
                     anything: "unknown" is the absence of a proposal, so it earns no
                     chip here. The document page spells out what it means. */}
@@ -339,6 +350,10 @@ export function DecisionCompactCardView({
             </Link>
           )}
         </div>
+      )}
+      {/* Ask the session that owns it, without leaving the queue (ct-58330). */}
+      {!folded && !hostedApproval && (
+        <div className="px-4 pb-3"><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
     </div>
   );
