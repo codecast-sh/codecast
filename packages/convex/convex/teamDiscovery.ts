@@ -20,15 +20,12 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isTeamAdmin } from "./privacy";
 import { addTeamMember } from "./teams";
-import { bumpWindow } from "./ipRateLimit";
 import { deliver } from "./emails/send";
 import { verifyEmail } from "./emails/templates";
 import { emailProven, workDomain } from "./lib/workDomain";
+import { confirmEmailCode, sendEmailCode } from "./lib/emailProof";
 
 export { workDomain };
-
-const CODE_TTL_MS = 15 * 60 * 1000;
-const MAX_CODE_ATTEMPTS = 5;
 
 async function me(ctx: any): Promise<Doc<"users">> {
   const userId = await getAuthUserId(ctx);
@@ -172,18 +169,11 @@ export const sendWorkEmailCode = mutation({
   handler: async (ctx) => {
     const user = await me(ctx);
     if (!workDomain(user.email)) throw new Error("Only work addresses can be confirmed here");
-    const limit = await bumpWindow(ctx.db, `work-email-code:${user._id}`, 5, 60 * 60 * 1000);
-    if (!limit.ok) throw new Error("Too many codes this hour, try again later");
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    const existing = await ctx.db.query("work_email_codes").withIndex("by_user", (q) => q.eq("user_id", user._id)).first();
-    const row = { user_id: user._id, email: user.email!, code_hash: await sha256(code), expires_at: Date.now() + CODE_TTL_MS, attempts: 0 };
-    if (existing) await ctx.db.patch(existing._id, row);
-    else await ctx.db.insert("work_email_codes", row);
-    await ctx.scheduler.runAfter(0, internal.teamDiscovery.deliverWorkEmailCode, { email: user.email!, code });
-    return { sent_to: user.email };
+    return await sendEmailCode(ctx, user);
   },
 });
 
+/** Mails a code lib/emailProof issued. */
 export const deliverWorkEmailCode = internalAction({
   args: { email: v.string(), code: v.string() },
   handler: async (_ctx, args) => {
@@ -195,16 +185,7 @@ export const deliverWorkEmailCode = internalAction({
 export const confirmWorkEmailCode = mutation({
   args: { code: v.string() },
   handler: async (ctx, args) => {
-    const user = await me(ctx);
-    const row = await ctx.db.query("work_email_codes").withIndex("by_user", (q) => q.eq("user_id", user._id)).first();
-    if (!row || row.email !== user.email || Date.now() > row.expires_at) throw new Error("That code expired, send a new one");
-    if (row.attempts >= MAX_CODE_ATTEMPTS) throw new Error("Too many tries, send a new code");
-    if (row.code_hash !== (await sha256(args.code.trim()))) {
-      await ctx.db.patch(row._id, { attempts: row.attempts + 1 });
-      throw new Error("That code is not right");
-    }
-    await ctx.db.delete(row._id);
-    await ctx.db.patch(user._id, { emailVerificationTime: Date.now() });
+    await confirmEmailCode(ctx, await me(ctx), args.code);
     return { proven: true };
   },
 });
@@ -291,8 +272,3 @@ export const decideRequest = mutation({
     return { status: args.approve ? "approved" : "declined" };
   },
 });
-
-async function sha256(text: string): Promise<string> {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-}

@@ -13,7 +13,7 @@ import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
 import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
-import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
+import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
 import { dmOtherIds, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
@@ -382,7 +382,22 @@ export type ViewContext = {
   /** Live lookup for a session that typed a line (sessionAuthorFor). Absent
    *  where the caller has no session store — the row's snapshot still renders. */
   sessionFor?: (sessionId: string) => { title?: string; agentType?: string } | undefined;
+  /** Live lookup for a role's standing agent by its bot user id (seatAuthorFor). */
+  seatFor?: (botUserId: string) => RoleSeat | undefined;
 };
+
+/** A role's standing agent as chat names it: the role's person like name, its
+ *  title, and what its face and page need. */
+export type RoleSeat = { name: string; title: string; shortId: string; handle: string; avatar?: string | null };
+
+/** A line a role's standing agent wrote wears the role, not its bot user's
+ *  name: the person like name, the role's face, and a link to its page. */
+export function seatAuthorFor(userId: string, ctx: Pick<ViewContext, "members" | "seatFor">, authorKind?: "user" | "agent"): ChatAuthor {
+  const base = authorFor(userId, authorKind, ctx.members);
+  const seat = base.isAgent ? ctx.seatFor?.(userId) : undefined;
+  if (!seat) return base;
+  return { ...base, name: seat.name, role: { shortId: seat.shortId, handle: seat.handle, avatar: seat.avatar, title: seat.title } };
+}
 
 export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessageView {
   const local = ctx.rollups?.get(row._id);
@@ -398,7 +413,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   const reactions = ctx.reactionsFor?.(row._id);
   return {
     id: row._id,
-    author: slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? authorFor(row.user_id, row.author_kind, ctx.members),
+    author: slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? seatAuthorFor(row.user_id, ctx, row.author_kind),
     slack: row.external?.provider === "slack"
       ? { direction: row.external.direction, permalink: row.external.permalink }
       : undefined,
@@ -436,7 +451,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
           transcribing: row.voice.transcribing,
         }
       : row.attachments?.length === 1 &&
-          row.attachments[0].mime?.startsWith("audio/") &&
+          attachmentKind(row.attachments[0]) === "audio" &&
           !row.content.trim()
         ? { status: "done" as const, inferred: true }
         : undefined,
@@ -447,8 +462,8 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     lastReplyAt: lastReplyAt || undefined,
     replyFaces: faces?.slice(0, 4).map((f) => {
       if (f.slack) return { id: threadFaceId(f), name: f.slack.name, avatarUrl: f.slack.avatar_url || undefined };
-      const a = authorFor(f.user_id, undefined, ctx.members);
-      return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent };
+      const a = seatAuthorFor(f.user_id, ctx);
+      return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, role: a.role };
     }),
     threadAgentStatus: useSummary ? summary!.agent_status : undefined,
     pending: state === "pending",
