@@ -48,6 +48,8 @@ export const momentsTables = {
     /** The extractor file's git blob sha that produced it. */
     extractor_version: v.optional(v.string()),
     extracted_at: v.optional(v.number()),
+    /** Who it is about, as a list names it (contracts/moments momentWho): the extractor's own `who`, else its body's person facts. */
+    who: v.optional(v.string()),
     /** extracted_at minus event_at. */
     gap_ms: v.optional(v.number()),
     storage: v.optional(v.union(v.literal("host"), v.literal("codecast"))),
@@ -185,4 +187,20 @@ export const momentsTables = {
     set_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_workspace", ["workspace"]),
+
+  // LL10. What one project's model calls cost in one hour, by purpose: the
+  // budget's spend split by the project each call served, written where every
+  // call settles (modelCalls.withinBudget), so a project (a trial) reads its
+  // own model spend. `project_id` absent: calls that served no one project.
+  // A call that served several splits its cost evenly among them.
+  model_spend_hours: defineTable({
+    workspace: v.string(),
+    project_id: v.optional(v.id("projects")),
+    hour: v.number(),
+    usd: v.number(),
+    calls: v.number(),
+    by_purpose: budgetPurposes,
+  })
+    .index("by_project_hour", ["project_id", "hour"])
+    .index("by_workspace_hour", ["workspace", "hour"]),
 };
