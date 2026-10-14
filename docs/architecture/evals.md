@@ -40,10 +40,10 @@ it stale; `index.ts` captures, replays and gates it.
 | changes-edition | call | a Changes day's edition from its stories |
 | route | call | the semantic router: which role an unplaced request belongs to (org-staffing.md S35) |
 | ground | call | the line's ground step (the-line-end-to-end.md LE5): goal, category, risk and readiness for one cause over its goals brief (`groundRequest`); the line's ground station carries the same definitions |
-| card-write | call | the line's card words station (`line/card_write.md`) over one assembled card, as the runner briefs it |
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
 | anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
+| card-write | agent | the line's presenting station (`workflow/presenter.md` with `line/card_write.md`), as the runner briefs it: the problem and its findings served from the record, the change built as a git repository in the rep, and the recording guard (`line-present-replay-bin/cast`) keeping the decision and the report it pins; gated on what the line itself refuses (ship over a failing check or a red proof, a finding the problem lacks) |
 | guidance | agent | the codecast sections an install writes into CLAUDE.md, loaded as the run's user-level CLAUDE.md (`prompt-dry-run.ts --claude-md`); each fixture is a request, graded on the first tool the agent reaches for |
 
 Call surfaces build their request with the same exported function prod posts

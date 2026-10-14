@@ -168,6 +168,7 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     "/line": "The line",
     "/line/settings": "Line settings",
     "/org": "Org",
+    "/map": "Session Map",
     "/goals": "Goals",
     "/projects": "Projects",
     "/chat": "Chat",
