@@ -8,7 +8,9 @@
 //
 // The list is the workspace's roles as the org tree already holds them
 // (hooks/useOrgRoles): the viewer's direct reports first, read as their own,
-// everyone else's below and quieter. Typing filters by name, handle, title or
+// everyone else's below and quieter. Closed, the viewer's own reports sit in
+// the composer as one-click picks, each with its standing session's state, so
+// handing work to a report is as direct as starting a session. Typing filters by name, handle, title or
 // area (lib/roleRecipients). Keyboard first: ⌥R opens it from anywhere in the
 // composer, ↑↓ move, ↵ picks and hands the caret back to the message, Esc
 // backs out; the pill and every row take a click too.
@@ -22,13 +24,35 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal, isMac } from "../shortcuts";
 import { RoleFace } from "./org/RoleFace";
-import { filterRoleRecipients, roleRecipients, type RoleRecipient } from "../lib/roleRecipients";
+import { standingLineOf } from "./org/orgMeta";
+import { filterRoleRecipients, roleRecipients, sendRequestToRole, type GateImage, type RoleRecipient } from "../lib/roleRecipients";
+import { useInboxStore } from "../store/inboxStore";
+import { awaitUpload } from "../lib/pendingUploads";
+import { toast } from "sonner";
 
 const ALT_CAP = isMac ? "⌥" : "Alt";
 
 /** The chord that opens the picker: ⌥R. `code` so the mac Option dead key (®) never hides it. */
 function isRolePickerChord(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyR";
+}
+
+/** The picked recipient of a new request and the send that goes with it, for
+ *  every composer that hosts the picker (the Ctrl+N popup, the new-session
+ *  page). The send is MessageInput's gate: it receives the text and images
+ *  once the composer has emptied, and returns the role it reached. */
+export function useRoleRecipient() {
+  const [recipient, setRecipient] = useState<RoleRecipient | null>(null);
+  const recipientRef = useRef(recipient);
+  recipientRef.current = recipient;
+  const wakeRole = useCallback(async (text: string, images?: GateImage[]): Promise<RoleRecipient | null> => {
+    const r = recipientRef.current;
+    if (!r) return null;
+    const into = await sendRequestToRole(() => useInboxStore.getState(), r, text, images ?? [], awaitUpload);
+    if (!into) toast.error(`${r.name} has no standing session yet`);
+    return into ? r : null;
+  }, []);
+  return { recipient, setRecipient, recipientRef, wakeRole };
 }
 
 export function ComposeRolePicker({ picked, onPick, onDone }: {
@@ -138,6 +162,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           <button type="button" onClick={openPicker} className="flex items-center gap-1.5 min-w-0 flex-1 text-left hover:opacity-90" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
             <span className="text-sol-text-dim shrink-0">To</span>
             <RoleLine r={picked} handle />
+            <StandingDot r={picked} withLabel />
           </button>
           <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim/70 shrink-0">
             <KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap> change
@@ -148,8 +173,24 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
         </div>
       );
     }
+    const reports = all.filter((r) => r.mine && r.standingId);
     return (
-      <div ref={rootRef} className="flex items-center w-full">
+      <div ref={rootRef} className="flex items-center gap-1.5 w-full min-w-0 flex-wrap">
+        {reports.length > 0 && <span className="text-xs text-sol-text-dim shrink-0 pr-0.5">To</span>}
+        {reports.map((r) => (
+          <button
+            key={r.role._id}
+            type="button"
+            data-handle={r.handle}
+            onClick={() => { onPick(r); onDone(); }}
+            className="inline-flex items-center gap-1.5 pl-1 pr-2 py-0.5 text-xs rounded-full border border-sol-border/50 text-sol-text-muted hover:text-sol-text hover:border-sol-violet/50 hover:bg-sol-violet/5 transition-colors min-w-0"
+            title={`${r.name}, ${r.title}`}
+          >
+            <RoleFace role={r.role} size={16} />
+            <span className="truncate">{r.title}</span>
+            <StandingDot r={r} />
+          </button>
+        ))}
         <button
           type="button"
           onClick={openPicker}
@@ -157,7 +198,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           title="Send this request to one of your roles instead of a fresh session"
         >
           <AtSign className="w-3 h-3" />
-          To a role
+          {reports.length > 0 ? "Other role" : "To a role"}
           <span className="inline-flex items-center gap-[3px] ml-1 opacity-70"><KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap></span>
         </button>
       </div>
@@ -206,6 +247,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
               >
                 <RoleFace role={r.role} size={20} />
                 <RoleLine r={r} handle={byHandle} />
+                {!dead && r.role.status !== "paused" && <StandingDot r={r} withLabel />}
                 {r.role.status === "paused" && <span className="shrink-0 text-[10px] text-sol-yellow/80">paused</span>}
                 {dead && <span className="shrink-0 text-[10px] text-sol-text-dim">no agent yet</span>}
               </button>
@@ -232,6 +274,19 @@ function RoleLine({ r, handle }: { r: RoleRecipient; handle?: boolean }) {
       <span className="text-sol-text-muted truncate">{r.title}</span>
       {r.area && <span className="text-sol-text-dim truncate min-w-0 shrink-[2]">· {r.area}</span>}
       {handle && <span className="ml-auto pl-2 text-sol-text-dim/60 font-mono shrink-0">@{r.handle}</span>}
+    </span>
+  );
+}
+
+/** The role's standing session as a coloured dot (its declared status, else
+ *  its observed work state): what the role is doing before it is handed more. */
+function StandingDot({ r, withLabel }: { r: RoleRecipient; withLabel?: boolean }) {
+  const line = standingLineOf(r.role.standing);
+  if (!line) return null;
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0 text-[10px]" style={{ color: line.color }} title={line.text ?? line.label}>
+      <span aria-hidden className="w-1.5 h-1.5 rounded-full" style={{ background: line.color }} />
+      {withLabel && line.label}
     </span>
   );
 }

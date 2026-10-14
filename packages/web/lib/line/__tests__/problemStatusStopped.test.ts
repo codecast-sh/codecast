@@ -46,7 +46,7 @@ describe("problemStand: a newer run waits at a person's step someone else holds"
     expect(s).toMatchObject({ status: "others", phrase: "Plan to approve · Jason Benn", act: "opengate", gate: "plan_gate" });
   });
   test("a need of the viewer's still comes first", () => {
-    const s = problemStand({ status: "in_progress", history: two } as any, { gate: { node: "plan_gate", since: 5 }, need: { kind: "question", mine: true } }, 10);
+    const s = problemStand({ status: "in_progress", history: two } as any, { gate: { node: "plan_gate", since: 5 }, need: { kind: "decision", mine: true } }, 10);
     expect(s.status).toBe("you");
   });
 });
