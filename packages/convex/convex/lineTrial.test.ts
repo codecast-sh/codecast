@@ -9,7 +9,7 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, trialProjectOf, trialSpend } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP } from "./lineTrial";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -335,6 +335,11 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
       run("ruled", "completed", NOW - 100),
       run("live", "running", NOW - 10, { runner_device: "dev-mac" }),
     );
+    // The machine is busy but for two slots, whatever the cap: the passes below fill exactly those two.
+    for (let i = 0; i < TRIAL_RUNNING_CAP - 3; i++) {
+      tables.tasks.push(task(`busy${i}`, "in_review", { workflow_run_id: `workflow_runs_busy${i}` }));
+      tables.workflow_runs.push(run(`busy${i}`, "running", NOW - 20, { runner_device: "dev-mac" }));
+    }
     tables.trial_cards.push({ _id: "trial_cards_1", run_id: "workflow_runs_ruled", kind: "card", status: "answered", answer: { key: "S", label: "Ship", by: HOST, at: NOW } });
     tables.signals = [...findings("never", 3, 5), ...findings("big", 5, 4), ...findings("regrouped", 3, 7), ...findings("stale", 9, 9), ...findings("ruled", 9, 9), ...findings("live", 9, 9), ...findings("closed", 9, 9)];
     tables.workflows = [{ _id: "workflows_trial", name: "agentwatch_trial", nodes: [], edges: [] }];
@@ -347,7 +352,7 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     const { due, running, like } = await dueProblems(ctx, (await ctx.db.get(TRIAL))!);
     expect(due.map((d) => d.task)).toEqual(["ct-big", "ct-regrouped", "ct-never"]);
     expect(due.find((d) => d.task === "ct-regrouped")).toMatchObject({ regrouped: true, last_run: "completed" });
-    expect(running).toBe(1);
+    expect(running).toBe(TRIAL_RUNNING_CAP - 2);
     expect(like.product?._id).toBe("workflow_runs_live" as any);
     expect(like.judge).toBeNull();
   });
@@ -416,6 +421,33 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(r).toMatchObject({ max_runs: used + 1, runs: used });
   });
 
+  test("the trial's spend sums each run's price row and reads no task, run or session: a rerun or dispatch never waits on ~500 conversations", async () => {
+    const { ctx, tables } = world(1000);
+    const row = (run: string, usd: number, sessions: number, run_created_at = NOW - 100) => ({ _id: `trial_run_prices_${run}`, project_id: TRIAL, run_id: `workflow_runs_${run}`, run_created_at, sessions, usd, tokens: 1000, unpriced_tokens: 5, at: NOW, settled: true });
+    tables.trial_run_prices = [row("stale", 12.5, 3), row("live", 4, 2), row("before", 50, 9, NOW - 5000)];
+    const project = (await ctx.db.get(TRIAL))!;
+    for (const t of ["tasks", "workflow_runs", "conversations"]) tables[t] = new Proxy([], { get: () => { throw new Error(`trialSpend read ${t}`); } }) as any;
+    expect(await trialSpend(ctx, project, NOW)).toMatchObject({ runs: 2, sessions: 5, session_usd: 16.5, unpriced_tokens: 10 });
+  });
+
+  test("a run started for a trial problem opens its price row, so the trial's run count holds before the run is priced", async () => {
+    const { ctx, tables } = world(1000);
+    const before = (await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW)).runs;
+    const r = await dispatchPass(ctx, (await ctx.db.get(TRIAL))!, NOW);
+    expect(r.started.length).toBeGreaterThan(0);
+    expect((await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW)).runs).toBe(before + r.started.length);
+    expect(tables.trial_run_prices.every((p: any) => p.project_id === TRIAL && p.usd === 0 && !p.settled)).toBe(true);
+  });
+
+  test("a run's price is priced again while the run is live, ended recently, or moved after it was priced", () => {
+    const settled = { at: NOW, settled: true };
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS }, null)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS }, settled)).toBe(false);
+    expect(priceStale({ status: "running", updated_at: NOW - RUN_SETTLE_MS }, settled)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW + 1 }, settled)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - 1 }, { ...settled, settled: false })).toBe(true);
+  });
+
   test("spend outside codecast counts toward the cap: the total is one number (ledger 2026-10-12: ~$250 outside)", async () => {
     const { ctx, tables } = world(100);
     tables.projects[0].line_trial.outside = [{ usd: 95, what: "shadow + dry runs", at: NOW, by: HOST }];
@@ -482,12 +514,13 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     lostAt(w, "lost", "proposal_gate");
     const used = (await trialSpend(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW)).runs;
     w.tables.projects[0].line_trial.dispatch.max_runs = used;
+    const before = w.tables.workflow_runs.length;
     const r = await dispatchPass(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW);
     expect(r.resumed).toEqual(["ct-lost"]);
     expect(r.started).toEqual([]);
     expect(r.due.map((d: any) => d.task)).not.toContain("ct-lost");
     expect(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_lost")).toMatchObject({ status: "running", current_node_id: "proposal_gate", fail_reason: undefined, fresh_branch: true });
-    expect(w.tables.workflow_runs.length).toBe(6);
+    expect(w.tables.workflow_runs.length).toBe(before);
     expect(w.tables.tasks.find((t: any) => t._id === "tasks_lost").execution_status).toBeUndefined();
     expect(w.tables.daemon_commands.map((c: any) => [c.command, JSON.parse(c.args).workflow_run_id, c.target_device_id])).toEqual([["run_workflow", "workflow_runs_lost", "dev-mac"]]);
     expect(w.tables.projects[0].line_trial.dispatch.last.started).toEqual(["ct-lost"]);
@@ -608,6 +641,9 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
 describe("what a trial card reads beside its words", () => {
   test("a problem whose case is filed against a judge or an extractor is review tooling, not the product (ct-59532, ct-59527)", () => {
     expect(toolingOf({ cause: { issue_key: "judge:codecast:comms", fingerprints: [] } } as any)).toBe("judge");
+    // ct-59688: a problem gathered from two judges' cases, keyed per ruled finding, with no issue key, is still the judge route.
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "extractor:match:sg-2733"] } } as any)).toBe("judge");
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "evidence:contacts/x:ex-3:aa"] } } as any)).toBe("product");
     expect(toolingOf({ cause: { issue_key: "extractor:union-moments:contact-conversation", fingerprints: [] } } as any)).toBe("extractor");
     expect(toolingOf({ cause: { fingerprints: ["evidence:contacts/x:ex-agentwatch-trial-34:fa10997c"] } } as any)).toBeNull();
   });
