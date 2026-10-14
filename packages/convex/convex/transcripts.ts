@@ -2678,9 +2678,13 @@ export function sessionDeliveryVerdict(opts: {
   if (addressed) return { deliver: true, lane: "ask", held: false };
   const holding = (route.hold_until ?? 0) > now;
   if (pacing?.busy || holding) return { deliver: false };
-  // Only a lull's flush waits out the gap: a hold's catch up, a new route's
-  // backlog and the gap's own closing run deliver.
-  if (reason === "flush" && route.context_at && route.context_at + CONTEXT_MIN_GAP_MS > now) {
+  // A lull's flush and a turn's end both wait out the gap. A context chunk
+  // costs the agent a turn, and that turn's end is a settle seconds later:
+  // exempt, it shipped the next chunk at once and the gap never held. The
+  // gap's own closing run is a settle that arrives after the gap, so it
+  // delivers; a hold's catch up and a new route's backlog are never gapped.
+  const gapped = reason === "flush" || reason === "settle";
+  if (gapped && route.context_at && route.context_at + CONTEXT_MIN_GAP_MS > now) {
     return { deliver: false, wait: "gap", at: route.context_at + CONTEXT_MIN_GAP_MS };
   }
   const clockDriven = reason === "settle" || reason === "hold_expired";

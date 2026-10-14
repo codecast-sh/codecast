@@ -2,7 +2,7 @@
 // (ConsequentialSwitch SwitchLedger). Each is built from what its surface has
 // on hand, and every row is a label and a value a glance takes in.
 import type { SwitchLedger } from "./ConsequentialSwitch";
-import { MERGES_NEVER, RUNNING_ROW, STOP, dayCostFigure, dayLimitFigure, plural, priceRow, startingRow, usd, type RunCost } from "./lineStartLedger";
+import { MERGES_NEVER, RUNNING_ROW, STOP, costFigure, dayCostFigure, listRow, dayLimitFigure, plural, priceRow, startingRow, usd, type RunCost } from "./lineStartLedger";
 
 const compact = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 const areaOf = (projects: string[]) => (projects.length === 0 ? "No projects set" : projects.length <= 2 ? projects.join(", ") : `${projects.length} projects`);
@@ -18,7 +18,7 @@ export function roleAutonomyLedger(r: { name: string; handle: string; caps: { ha
     figures: [
       n != null ? dayLimitFigure(n) : { value: "∞", label: "a day, no cap", tone: "warn" },
       { value: String(r.usedToday ?? 0), label: "used today" },
-      ...(n != null ? [dayCostFigure(r.cost, n)] : r.cost ? [{ value: `~${usd(r.cost.avgUsd)}`, label: "a session, est.", tone: "warn" as const }] : []),
+      ...(n != null ? [dayCostFigure(r.cost, n)] : r.cost ? [costFigure(r.cost, 1, "a session")] : []),
     ],
     rows: [
       { k: "Area", v: areaOf(r.projects) },
@@ -137,10 +137,11 @@ export function startAgainLedger(r: { problem: string; project: string | null; b
     ...(r.hold ? { alert: "The last run stopped blocked" } : r.goOn?.warn ? { alert: "Its proof check will send it back" } : {}),
     figures: [
       { value: "1", label: "run starts now" },
-      r.cost ? { value: `~${usd(r.cost.avgUsd)}`, label: "est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
+      costFigure(r.cost, 1),
       ...(r.about ? [{ value: `~${r.about}`, label: "until it asks you" }] : []),
     ],
     rows: [
+      listRow(r.cost),
       ...(r.hold ? [{ k: "Blocked", v: r.hold, tone: "warn" as const }] : []),
       ...(back ? back.why.map((w, i) => ({ k: i ? "And" : "Sends back", v: w, tone: "warn" as const })) : []),
       ...(r.project ? [{ k: "Project", v: r.project }] : []),
@@ -171,10 +172,11 @@ export function keepRealLedger(r: { problem: string; project: string | null; emp
     alert: r.empty >= r.of ? "No finding supports it" : undefined,
     figures: [
       starts,
-      r.cost ? { value: `~${usd(r.cost.avgUsd)}`, label: "est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
+      costFigure(r.cost, 1),
       ...(r.about ? [{ value: `~${r.about}`, label: "until it asks you" }] : []),
     ],
     rows: [
+      listRow(r.cost),
       ...(r.project ? [{ k: "Project", v: r.project }] : []),
       { k: "Findings", v: `${r.empty} of ${r.of} empty`, tone: "warn" },
       { k: "From", v: "main" },
@@ -200,10 +202,11 @@ export function startTheseAgainLedger(r: { name?: string; cause: string; count: 
     figures: [
       { value: String(r.count), label: r.count === 1 ? "run starts now" : "runs start now", tone: r.count ? "warn" : undefined },
       ...(rest ? [{ value: String(rest), label: "wait here" }] : []),
-      r.cost ? { value: `~${usd(r.cost.avgUsd * r.count)}`, label: "these, est.", tone: "warn" as const } : { value: "$?", label: "not priced", tone: "warn" as const },
+      costFigure(r.cost, r.count, "these"),
       ...(r.about ? [{ value: `~${r.about}`, label: "each" }] : []),
     ],
     rows: [
+      listRow(r.cost, r.count),
       { k: "Where", v: areaOf(r.projects) },
       // The ones that start, by the names the list gives them, in its order.
       ...startingRow(r.count, r.first ?? []),
@@ -284,8 +287,9 @@ export function routineActivateLedger(r: { title: string; every: string; applies
     name: `Activate ${r.title}`,
     subject: `Every ${r.every}`,
     shift: ["Paused", "Running"],
-    figures: [{ value: "1", label: `paid run every ${r.every}`, tone: "warn" }, r.cost ? { value: `~${usd(r.cost.avgUsd)}`, label: "a run, est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" }],
+    figures: [{ value: "1", label: `paid run every ${r.every}`, tone: "warn" }, costFigure(r.cost, 1, "a run")],
     rows: [
+      listRow(r.cost),
       r.applies ? { k: "Acts", v: "Applies changes", tone: "warn" } : { k: "Acts", v: "Proposes only", tone: "ok" },
       { k: "First run", v: r.nextAt ? new Date(r.nextAt).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }) : "Next slot" },
     ],
