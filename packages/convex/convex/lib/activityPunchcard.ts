@@ -1,5 +1,6 @@
 import type { SendDayRow } from "./userSend";
 import type { UsageDayRow } from "./usageDaily";
+import type { ActivityDayRow } from "./activityDaily";
 
 // One credited slice of session activity, normalized across the three sources
 // (live conversations, team_activity_events, session_insights). `hours` is the
@@ -18,7 +19,13 @@ export type ActivityInterval = { start: number; end: number; hours: number; msgs
 // — hour-of-day only means something in the viewer's local clock. (One offset
 // is applied to the whole range, so cells across a DST switch can shift by an
 // hour.) Returns only per-cell aggregates — nothing identifying leaks.
-export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number, sendDays?: SendDayRow[], usageDays?: UsageDayRow[]) {
+export function bucketPunchcardRows(
+  intervals: ActivityInterval[],
+  tzOffsetMinutes: number,
+  sendDays?: SendDayRow[],
+  usageDays?: UsageDayRow[],
+  activityDays?: ActivityDayRow[],
+) {
   const HOUR = 3600000;
   const tzShift = tzOffsetMinutes * 60000;
   type Row = { hours: number[]; msgs: number[]; sends: number[]; words: number[]; tokens: number[]; spend: number[]; sessions: number[]; day_sessions: number };
@@ -68,7 +75,11 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
   // UTC hour) buckets; re-project each bucket into the viewer's local clock
   // via a mid-bucket pseudo timestamp. Whole-hour offsets map exactly; :30
   // offsets land in the nearer cell.
-  const project = (dayStart: number, utcHours: number[] | undefined, field: "sends" | "words" | "tokens" | "spend") => {
+  const project = (
+    dayStart: number,
+    utcHours: number[] | undefined,
+    field: "sends" | "words" | "tokens" | "spend" | "hours" | "msgs" | "sessions",
+  ) => {
     for (let h = 0; h < 24; h++) {
       const n = utcHours?.[h] || 0;
       if (!n) continue;
@@ -77,6 +88,18 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
       rowFor(d.toISOString().split("T")[0])[field][d.getUTCHours()] += n;
     }
   };
+  // Days outside the live window arrive pre-bucketed by (UTC day x UTC hour)
+  // from `user_activity_daily`, the same shape as the counters below, so they
+  // re-project the same way. `day_sessions` cannot be re-cut by local hour (one
+  // session spans hours), so the whole UTC day's count lands on the local date
+  // its midday falls in — within an hour-offset of the viewer's own clock.
+  for (const day of activityDays ?? []) {
+    project(day.day_start, day.hours, "hours");
+    project(day.day_start, day.msgs, "msgs");
+    project(day.day_start, day.sessions, "sessions");
+    const midday = new Date(day.day_start + 12 * HOUR - tzShift);
+    rowFor(midday.toISOString().split("T")[0]).day_sessions += day.day_sessions;
+  }
   for (const day of sendDays ?? []) {
     project(day.day_start, day.hours, "sends");
     project(day.day_start, day.word_hours, "words");
