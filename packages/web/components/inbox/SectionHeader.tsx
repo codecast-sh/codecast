@@ -1,4 +1,9 @@
 import type { CSSProperties, ReactNode } from "react";
+import type { WorkState } from "@codecast/shared/contracts";
+import { ORG_STATE_META } from "../org/orgMeta";
+
+// The states a group header tallies: the two a person acts on or watches.
+const HEADER_STATES: WorkState[] = ["needs_input", "working"];
 
 // The collapsible caption over an inbox section: its name, its count and the
 // chevron. The color rides on the header element itself so simple view can
@@ -17,6 +22,8 @@ export function SectionHeader({
   action,
   inRow = false,
   fixed = false,
+  icon,
+  states,
 }: {
   label: string;
   count: number;
@@ -39,11 +46,15 @@ export function SectionHeader({
   inRow?: boolean;
   /** A section that never folds (hosted mode's New): no chevron, no toggle. */
   fixed?: boolean;
+  /** Drawn before the label (a role's face in "By reports"). */
+  icon?: ReactNode;
+  /** Work-state tallies over the group's rows, nested ones included. */
+  states?: Partial<Record<WorkState, number>>;
 }) {
   if (action) {
     return (
       <div data-sv-sec-row className={`sticky top-0 z-10 flex items-center bg-sol-bg ${color}`}>
-        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow fixed={fixed} />
+        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow fixed={fixed} icon={icon} states={states} />
         <span className="shrink-0 pr-3 border-b border-sol-border/30 self-stretch flex items-center" data-sv-sec-action>{action}</span>
       </div>
     );
@@ -62,6 +73,7 @@ export function SectionHeader({
       {landedColor && <span key={landedColor} aria-hidden className="absolute inset-0 pointer-events-none animate-inbox-landed" />}
       {monoLabel ? (
         <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
+          {icon}
           <span className="truncate font-mono">{label}</span>
           <span className="opacity-70 shrink-0">({count})</span>
         </span>
@@ -70,6 +82,16 @@ export function SectionHeader({
           {/* Hosted mode (globals.css) drops the brackets and sets the bare
               count in the family's mono. */}
           {label} <span data-cc-sec-count><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
+        </span>
+      )}
+      {states && (
+        <span className="ml-auto flex items-center gap-2 shrink-0 font-mono text-[10px] tabular-nums">
+          {HEADER_STATES.map((k) => (states[k] ?? 0) > 0 && (
+            <span key={k} title={`${states[k]} ${ORG_STATE_META[k].label}`} className="flex items-center gap-1" style={{ color: ORG_STATE_META[k].color }}>
+              <span aria-hidden className="w-1.5 h-1.5 rounded-full" style={{ background: ORG_STATE_META[k].color }} />
+              {states[k]}
+            </span>
+          ))}
         </span>
       )}
       {!fixed && <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
