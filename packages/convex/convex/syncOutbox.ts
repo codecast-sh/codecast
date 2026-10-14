@@ -4,11 +4,13 @@ import { internalMutation, internalQuery, query } from "./functions";
 import { internal } from "./_generated/api";
 import { appendSyncAction, isLifecycleEntity, makeSyncAckCollector, syncLogDisabled } from "./syncLog";
 import { heldKeysFor } from "./lib/accessKeys";
+import { releaseDrain } from "./lib/drainMarker";
+import { outboxDrainKey } from "./syncOutboxWriter";
 
 export async function drainSyncOutbox(ctx: any, id: string) {
   if (syncLogDisabled()) return;
   const first = await ctx.db.get(id);
-  if (!first?.pending) return;
+  if (!first) return;
   const rows = await ctx.db.query("sync_outbox")
     .withIndex("by_scope_pending", (q: any) => q.eq("scope_key", first.scope_key).eq("pending", true))
     .take(32);
@@ -37,12 +39,18 @@ export async function drainSyncOutbox(ctx: any, id: string) {
       delivered_revision: deliveredRevision, position, pending,
       cargo: undefined, access: undefined, events: pending ? remaining : undefined,
     });
-    if (pending) await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: row._id });
   }
+  // One follow-up for the scope, which also covers a lifecycle slot whose
+  // events ran past this pass's cap: it is still pending. With nothing left,
+  // the scope's marker clears so the next save schedules a drain again.
   const next = await ctx.db.query("sync_outbox")
     .withIndex("by_scope_pending", (q: any) => q.eq("scope_key", first.scope_key).eq("pending", true))
     .first();
-  if (next) await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: next._id });
+  if (next) {
+    await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: next._id });
+    return;
+  }
+  await releaseDrain(ctx, outboxDrainKey(first.scope_key));
 }
 
 export const drain = internalMutation({
