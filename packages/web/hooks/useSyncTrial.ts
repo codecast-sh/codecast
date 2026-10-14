@@ -1,5 +1,6 @@
 // Trial projects (convex lineTrial.ts) for the /trial page: the workspace's
-// trial cards and projects, snapshots of the active workspace, and each
+// trial cards and projects, each feed the whole set of one workspace (several
+// workspaces can be fed at once: the line's For you lists every one), and each
 // trial's spend, one row per project.
 import type { ProposalCard } from "@codecast/shared/contracts/proposalCard";
 import { useMemo } from "react";
@@ -7,7 +8,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { useSyncCollection } from "./useSyncCollection";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
-import { useWorkspaceCollection } from "./useWorkspaceCollection";
+import { useActiveWorkspaceKey, useWorkspacesCollection } from "./useWorkspaceCollection";
+import type { WorkspaceKey } from "../lib/workspaceScope";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { trialHref } from "../lib/trialHref";
 import type { JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
@@ -43,11 +45,9 @@ export type TrialCardRow = {
   /** The session decision the card is, when its station posted one (lineTrial.cards): the page to answer it on, and the session to talk to. */
   decision?: {
     _id: string; short_id: string | null; status: string; report_slug: string | null; session: { _id: string; short_id: string | null; title: string | null } | null;
-    /** The people it is asked of (lib/line/trialAudience): a card waits in their For you and nobody else's. */
-    asked?: string[];
-    /** The role it belongs to when not the trial owner's (a judge fix goes to the route's decider). */
-    for_role?: { _id: string; short_id: string | null; name: string; handle: string | null } | null;
   } | null;
+  /** The role the card belongs to and the people it waits on, when it is not the trial owner's (lib/line/trialAudience): a judge fix goes to its route's decider. */
+  audience?: { asked: string[]; role: { _id: string; short_id: string | null; name: string; handle: string | null } } | null;
   /** The problem's evidence now (convex lineTrial.problemEvidence); a card on a problem left with no findings reads stale. */
   evidence?: TrialEvidence | null;
   /** Set when the fix is codecast's own review machinery (a judge or an extractor), not the product: its card is not the executive's. */
@@ -121,35 +121,48 @@ export type TrialRunRow = {
 export type TrialDispatch = { cap_usd: number; max_runs: number | null; held: string | null; at: number | null } | null;
 export type TrialProjectRow = { _id: string; workspace: string; title: string; short_id?: string; since: number; dispatch?: TrialDispatch };
 
+/** One subscription account a trial's runs use (convex lineTrial.trialQuota): its windows as its machine last reported them. */
+export type TrialQuotaRow = { device: string; provider: "claude" | "codex"; account: string; percent: number | null; windows: Array<{ label: string; percent: number; resets_at?: number }>; fetched_at: number | null; resets_at: number | null };
+
+/** A trial's spend (convex lineTrial.spend): billed money and subscription use, two kinds that never add. */
 export type TrialSpendRow = {
   _id: string;
   since: number;
-  budget: { cap_usd: number; month: string; spent_usd: number; held_usd: number; by_purpose: { judge: number; grouping: number; call: number }; refused: number; earlier_months_usd: number };
   runs: number;
-  sessions: number;
-  session_usd: number;
-  unpriced_tokens: number;
-  /** Spend outside codecast's accounting (`cast line trial spend add`), already inside total_usd. */
-  outside_usd?: number;
-  outside?: Array<{ usd: number; what: string; at: number }>;
-  total_usd: number;
+  /** The dispatcher's cap, on billed money only; null when it starts nothing on its own. */
+  cap_usd: number | null;
+  billed: {
+    usd: number;
+    model: { usd: number; cap_usd: number; month: string; spent_usd: number; held_usd: number; by_purpose: { judge: number; grouping: number; call: number }; refused: number; earlier_months_usd: number };
+    /** Hand entries (`cast line trial spend add`) by the key that billed them. */
+    keys: Array<{ billed_by: string; usd: number; entries: number }>;
+    run_sessions: { sessions: number; tokens: number; usd: number };
+  };
+  subscription: { sessions: number; tokens: number; list_usd: number; unpriced_tokens: number; providers: string[]; devices: string[] };
+  outside: Array<{ usd: number; what: string; billed_by: string; at: number }>;
+  quota: TrialQuotaRow[];
   at: number;
 };
 
-function useTeamArgs() {
-  const { args } = useFeederWorkspace();
+function useTeamArgs(workspace?: string | null) {
+  const { args } = useFeederWorkspace(workspace);
   const teamId = args === "skip" ? "skip" : args.team_id ?? "";
   // The workspace is named outright: lineTrial's reads take the CLI's scope
   // args, where a bare team_id falls back to the personal workspace.
   return useMemo(() => (teamId === "skip" ? "skip" : teamId ? { workspace: "team" as const, team_id: teamId } : { workspace: "personal" as const }), [teamId]);
 }
 
-/** Feeder: the active workspace's trial cards and trial projects. */
-export function useSyncTrial() {
-  const args = useTeamArgs();
-  const cards = useSyncCollection("trialCards", api.lineTrial.cards, args as any);
-  useSyncCollection("trialProjects", api.lineTrial.projects, args as any);
-  useSyncCollection("trialRuns", api.lineTrial.runs, args as any);
+/** A feed is the complete set of its workspace's rows: rows of other workspaces fed beside it stay. */
+const wholeWorkspace = (key: string | null) => (key ? { isDelta: true, pruneAbsentScope: (r: { workspace?: string }) => r.workspace === key } : undefined);
+
+/** Feeder: a workspace's trial cards, projects and runs; the active one unless `workspace` names another. */
+export function useSyncTrial(workspace?: string | null) {
+  const args = useTeamArgs(workspace);
+  const { key } = useFeederWorkspace(workspace);
+  const opts = useMemo(() => ({ syncOpts: wholeWorkspace(key) }), [key]);
+  const cards = useSyncCollection("trialCards", api.lineTrial.cards, args as any, opts);
+  useSyncCollection("trialProjects", api.lineTrial.projects, args as any, opts);
+  useSyncCollection("trialRuns", api.lineTrial.runs, args as any, opts);
   return cards;
 }
 
@@ -163,26 +176,35 @@ export function useSyncTrialSpend(projectId: string | null) {
   return useSyncCollection("trialSpend", api.lineTrial.spend, queryArgs as any, SPEND_OPTS);
 }
 
-const cardSig = (r: TrialCardRow) => `${r.superseded?.why ?? ""}|${r.status}|${r.superseded_by?.card ?? r.superseded_by?.task ?? ""}|${r.answer?.key ?? ""}|${r.run_status}|${r.task_status}|${r.task_title}|${r.task_name ?? ""}|${r.updated_at}|${r.evidence ? `${r.evidence.findings}/${r.evidence.conversations}/${r.evidence.moved_to.join(",")}/${r.evidence.gone?.length ?? 0}` : ""}`;
+const cardSig = (r: TrialCardRow) => `${r.superseded?.why ?? ""}|${r.status}|${r.superseded_by?.card ?? r.superseded_by?.task ?? ""}|${r.answer?.key ?? ""}|${r.run_status}|${r.task_status}|${r.task_title}|${r.task_name ?? ""}|${r.updated_at}|${r.evidence ? `${r.evidence.findings}/${r.evidence.conversations}/${r.evidence.moved_to.join(",")}/${r.evidence.gone?.length ?? 0}` : ""}|${r.audience?.asked.join(",") ?? ""}`;
 
-/** Reader: the active workspace's trial cards, newest first. Superseded cards are left out unless `all` (history readers: a problem's attempts, a card's own page). */
-export function useTrialCards(opts: { all?: boolean } = {}): TrialCardRow[] {
-  const rows = useWorkspaceCollection<TrialCardRow>("trialCards", cardSig);
+/** The workspaces a trial reader lists: those named, else the active one. */
+function useReadKeys(workspaces?: readonly WorkspaceKey[]): readonly (WorkspaceKey | null)[] {
+  const active = useActiveWorkspaceKey();
+  return useMemo(() => workspaces ?? [active], [workspaces, active]);
+}
+
+/** Reader: the active workspace's trial cards (or `workspaces`'), newest first. Superseded cards are left out unless `all` (history readers: a problem's attempts, a card's own page). */
+export function useTrialCards(opts: { all?: boolean; workspaces?: readonly WorkspaceKey[] } = {}): TrialCardRow[] {
+  const rows = useWorkspacesCollection<TrialCardRow>("trialCards", cardSig, useReadKeys(opts.workspaces));
   const all = !!opts.all;
   return useMemo(() => currentOnly(rows, all).sort((a, b) => b.created_at - a.created_at), [rows, all]);
 }
 
-/** Reader: the active workspace's trial runs, the latest per problem, newest first. Superseded runs are left out unless `all`. */
-export function useTrialRuns(opts: { all?: boolean } = {}): TrialRunRow[] {
+const runSig = (r: TrialRunRow) => `${r.superseded?.why ?? ""}|${r.status}|${r.run_id}|${r.node_id}|${r.fail_reason}|${r.task_title}|${r.task_name ?? ""}|${r.updated_at}|${r.stopped?.findings ?? ""}|${r.stopped?.words ?? ""}`;
+
+/** Reader: the active workspace's trial runs (or `workspaces`'), the latest per problem, newest first. Superseded runs are left out unless `all`. */
+export function useTrialRuns(opts: { all?: boolean; workspaces?: readonly WorkspaceKey[] } = {}): TrialRunRow[] {
   const all = !!opts.all;
-  const rows = useWorkspaceCollection<TrialRunRow>("trialRuns", (r) => `${r.superseded?.why ?? ""}|${r.status}|${r.run_id}|${r.node_id}|${r.fail_reason}|${r.task_title}|${r.task_name ?? ""}|${r.updated_at}|${r.stopped?.findings ?? ""}|${r.stopped?.words ?? ""}`);
+  const rows = useWorkspacesCollection<TrialRunRow>("trialRuns", runSig, useReadKeys(opts.workspaces));
   return useMemo(() => currentOnly(rows, all).sort((a, b) => b.updated_at - a.updated_at), [rows, all]);
 }
 
-/** Reader: the active workspace's trial projects. */
-export function useTrialProjects(): TrialProjectRow[] {
-  return useWorkspaceCollection<TrialProjectRow>("trialProjects", (r) => `${r.title}|${r.since}|${r.dispatch === undefined ? "?" : r.dispatch ? `${r.dispatch.held ?? ""}|${r.dispatch.cap_usd}|${r.dispatch.max_runs ?? ""}` : "off"}`);
+/** Reader: the active workspace's trial projects (or `workspaces`'). */
+export function useTrialProjects(workspaces?: readonly WorkspaceKey[]): TrialProjectRow[] {
+  return useWorkspacesCollection<TrialProjectRow>("trialProjects", projectSig, useReadKeys(workspaces));
 }
+const projectSig = (r: TrialProjectRow) => `${r.title}|${r.since}|${r.dispatch === undefined ? "?" : r.dispatch ? `${r.dispatch.held ?? ""}|${r.dispatch.cap_usd}|${r.dispatch.max_runs ?? ""}` : "off"}`;
 
 /** Reader: one trial project's spend. */
 export function useTrialSpend(projectId: string | null): TrialSpendRow | null {
