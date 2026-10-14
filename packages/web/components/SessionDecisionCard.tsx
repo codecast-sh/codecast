@@ -7,13 +7,15 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, type QueueItem } from "../lib/decisionQueue";
+import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { PassDecision } from "./decisions/PassDecision";
 import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
 import { GateRunChip } from "./decisions/DecisionCompactCard";
 import { useSyncDecisionDetail, useDecisionDetail } from "../hooks/useSyncDecisionDetail";
@@ -84,7 +86,21 @@ type Size = "full" | "line";
 let settledFromSheet: { conversationId: string; at: number } | null = null;
 const CONTINUE_MS = 5_000;
 
-export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueItem; stepper: DecisionStepper | null; more?: number }) {
+// A jump to a message in this thread (targetNonce is when it was asked for)
+// is a request to read the thread, so the sheet stays out of its way. An old
+// target says nothing about an ask that arrives later.
+const JUMP_FRESH_MS = 10_000;
+const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
+
+export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scrollToMessage }: {
+  item: QueueItem;
+  stepper: DecisionStepper | null;
+  more?: number;
+  /** When the pane was last asked to open at a message, if it was. */
+  targetNonce?: number;
+  /** Scrolls this pane's thread to a loaded message. */
+  scrollToMessage?: (messageId: string) => void;
+}) {
   const {
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
     answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
@@ -98,10 +114,15 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
 
   const [size, setSize] = useState<Size>(() => {
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
+    if (!stepper && jumpedHere(targetNonce)) return "line";
     return item.blocking || stepper || continuing ? "full" : "line";
   });
+  useWatchEffect(() => {
+    if (!stepper && jumpedHere(targetNonce)) setSize("line");
+  }, [targetNonce]);
   const full = size === "full";
   const [otherOpen, setOtherOpen] = useState(false);
+  const [passOpen, setPassOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -201,6 +222,9 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
     onDone();
   }, [answerItemFreeText, onDone]);
   const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
+  // A `cast decide` row can be handed on; a terminal prompt and a hosted
+  // assistant's ask (only its owner answers) cannot. A trial's stays put.
+  const canPass = item.source === "decide" && !!item.decisionId && !hosted && !item.trial;
 
   const onExit = stepper?.onExit;
   // Off the inbox (the /questions stepper) "open" must leave for the inbox;
@@ -212,7 +236,16 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   // thread hands it back. A fold by a button or a key stays folded.
   const foldedByScroll = useRef(false);
   const shrink = useCallback(() => { foldedByScroll.current = false; setSize("line"); }, []);
-  const shrinkByScroll = useCallback(() => { foldedByScroll.current = true; setSize("line"); }, []);
+  // Scrolling away from the question is asking what led to it: the thread
+  // opens at the ask, not at its tail.
+  const shrinkByScroll = useCallback(() => {
+    foldedByScroll.current = true;
+    setSize("line");
+    if (!canJumpToAsk) return;
+    const ask = findDecisionAnchorMessage(messages as any[], item.decisionId, item.question);
+    if (ask && scrollToMessage) scrollToMessage(ask._id);
+    else if (isOnThreadRoute()) void jumpToDecisionAsk();
+  }, [canJumpToAsk, messages, item.decisionId, item.question, scrollToMessage, jumpToDecisionAsk]);
   const grow = useCallback(() => setSize("full"), []);
 
   // Folding swaps the sheet for the pill in one frame, and the eye loses it.
@@ -265,6 +298,8 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   const onSkip = stepper?.onSkip;
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The pass menu owns the keys while it is open: its search and Escape.
+      if (passOpen) return;
       const target = e.target as HTMLElement | null;
       const action = routeQueueKey(e, {
         modalOpen: hasOpenModal(),
@@ -289,7 +324,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       // An answer, a dismissal or a typed answer is the card's only while it
       // is the thing in focus: a digit typed into anything else in this
       // window (another pane, a tab an agent drives) never answers it.
-      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
+      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "pass" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
       e.preventDefault();
       e.stopPropagation();
       switch (action.kind) {
@@ -299,6 +334,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
         case "dismiss": if (!hosted) dismiss(); break;
+        case "pass": if (canPass) setPassOpen(true); break;
         case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
         case "peek": shrink(); break;
         case "full": grow(); break;
@@ -312,7 +348,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -355,6 +391,9 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
 
   const badges = (
     <>
+      {item.trial && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
+      )}
       {tier === 3 && (
         <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
       )}
@@ -424,6 +463,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
           </button>
         </>
       )}
+      {canPass && <PassDecision decisionId={item.decisionId!} open={passOpen} onOpenChange={setPassOpen} onPassed={onDone} label="pass to…" />}
       {!hosted && <button
         onClick={dismiss}
         className="flex items-center gap-1.5 hover:text-sol-red transition-colors"
@@ -482,8 +522,8 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       )}
       {body}
       {card && facts}
-      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} />}
-      {detail && detailDecision && (
+      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} decision={decideId} />}
+      {detail && detailDecision && detail.ladder.length > 0 && (
         <div>
           <div className="decision-kicker">The ladder</div>
           <DecisionLadder decision={detailDecision} detail={detail} now={now} />
