@@ -131,7 +131,7 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
               <MarkdownRenderer content={row.context_md} />
             </div>
           )}
-          {row?.report_slug && <PublishedPageEmbed slug={row.report_slug} />}
+          {row?.report_slug && <PublishedPageEmbed slug={row.report_slug} decision={row._id} />}
           {row && (
             <Link href={decisionHref(row)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text hover:underline">
               the decision page <ArrowUpRight className="w-3 h-3" />

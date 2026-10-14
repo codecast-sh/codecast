@@ -9,6 +9,8 @@ import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
 import { performWebActiveSessions } from "./tasks";
 import { filterUserMessages } from "./userMessagesFilter";
+import { isRoleWakeFrame, isScheduledTaskMessage } from "@codecast/shared/contracts";
+import { clearHasPendingIfQuiet } from "./pendingMessages";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -1135,5 +1137,47 @@ export const repairReuploadedActivity = internalMutation({
       if (!args.dryRun) await ctx.db.patch(conv._id, { updated_at: to });
     }
     return { scanned: rows.length, fixed: fixed.length, rows: fixed };
+  },
+});
+
+// TEMPORARY (ct-56547): pending rows per owning device, with each device's
+// last heartbeat. Read-only.
+export const pendingByDevice = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("pending_messages").withIndex("by_status", (q: any) => q.eq("status", "pending")).collect();
+    const by: Record<string, { rows: number; convs: Set<string>; recent: number; user: string }> = {};
+    for (const m of rows as any[]) {
+      const c: any = await ctx.db.get(m.conversation_id);
+      const key = `${c?.user_id}:${c?.owner_device_id ?? "none"}`;
+      by[key] ??= { rows: 0, convs: new Set(), recent: 0, user: String(c?.user_id) };
+      by[key].rows++; by[key].convs.add(String(m.conversation_id));
+      if (Date.now() - m.created_at < 3_600_000) by[key].recent++;
+    }
+    const out = [];
+    for (const [key, v] of Object.entries(by)) {
+      const [user, device] = key.split(":");
+      const d: any = device === "none" ? null : await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", user).eq("device_id", device)).first();
+      out.push({ device, label: d?.label ?? null, seen_min: d ? Math.round((Date.now() - d.last_seen) / 60000) : null, rows: v.rows, convs: v.convs.size, last_hour: v.recent });
+    }
+    return out.sort((a, b) => b.rows - a.rows);
+  },
+});
+
+// TEMPORARY (ct-56547): cancel trigger wakes that have already failed
+// min_retry times (hours at the daemon's 300s ceiling): worker reports into
+// stations that can never resume. Messages a person typed are never touched.
+export const cancelFailedMachineWakes = internalMutation({
+  args: { min_retry: v.number(), dry_run: v.boolean(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db.query("pending_messages").withIndex("by_status", (q: any) => q.eq("status", "pending")).collect();
+    const hit = (rows as any[]).filter((m) => !m.human && m.retry_count >= args.min_retry
+      && (isScheduledTaskMessage(m.content) || isRoleWakeFrame(m.content))).slice(0, args.limit ?? 40);
+    const convs = new Set(hit.map((m) => m.conversation_id));
+    if (!args.dry_run) {
+      for (const m of hit) await ctx.db.patch(m._id, { status: "cancelled" as const });
+      for (const c of convs) await clearHasPendingIfQuiet(ctx, c);
+    }
+    return { pending: rows.length, cancelled: hit.length, conversations: convs.size };
   },
 });

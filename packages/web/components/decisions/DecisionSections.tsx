@@ -36,7 +36,7 @@ export function DecisionFacts({ decision, detail, className = "mt-4", ladder }: 
     <div className={`${className} decision-facts text-[12px]`} data-decision-facts>
       <p className="decision-facts-line text-sol-text-muted" data-decision-who>
         {who}
-        <span className="text-sol-text-dim"> · asked by </span><AskingSession decision={decision} />
+        <span className="text-sol-text-dim"> · asked by </span><AskingSession decision={decision} wrap />
       </p>
       <details className="decision-details mt-1.5" data-decision-details>
         <summary className="cursor-pointer text-sol-text-dim hover:text-sol-text w-fit">Details</summary>
@@ -103,7 +103,7 @@ export function DecisionBody({ decision, detail }: { decision: SessionDecisionIt
           <div className="mt-2 border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
         </details>
       )}
-      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} decision={decision._id} /></div>}
     </>
   );
 }
