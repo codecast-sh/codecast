@@ -400,6 +400,10 @@ crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as a
 // under its spend cap. One empty index read when no trial dispatches.
 crons.interval("dispatch trial runs", { minutes: 10 }, (internal as any).lineTrial.dispatchTick, {});
 
+// Each trial run's priced total (workflow_runs.priced), which the trial's
+// spend sums: only live, recently ended or moved runs are priced again.
+crons.interval("price trial runs", { minutes: 2 }, (internal as any).lineTrial.priceRunsTick, {});
+
 // A problem whose title was written from findings that have all left it is
 // renamed from the findings on it now (lineRetitle.ts). One index read per
 // open problem; a rename is one cheap call on the team's grouping budget.

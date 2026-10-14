@@ -17,7 +17,8 @@
 //    session's token totals the way the Spend chart prices them.
 
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { scopeArgs } from "./lib/ingestScopeArgs";
@@ -35,10 +36,10 @@ import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, 
 export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
-import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, stationSession, type GateChoice } from "./workflow_runs";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
+import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
 import { alignGateChoices } from "./lib/gateChoices";
-import { trialProjectOf, trialStackOf } from "./lib/trialDecision";
+import { trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
 import { parseMoveTally } from "./lib/moveTally";
 import { BEFORE_LINE, CLOSED_WITH, retireOnClose } from "./findingGroups";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -459,6 +460,8 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     options: asked?.options ?? (row.kind === "gate" && row.proposal ? proposalOptions(row.options ?? []) : row.options ?? []),
     /** The decision the asking station's session posted: its page leads the card, and its thread is where to talk it over. */
     decision: asked?.decision ?? null,
+    /** The role the card belongs to and the people it waits on, when it is not the trial owner's (audienceOf): it is in their For you and nobody else's. */
+    audience: await audienceOf(ctx, row, project, run),
     card: row.card,
     proposal: row.proposal as ProposalCard | undefined,
     /** The judge route's card (shared/contracts/judgeFix): a measured fix to a judge, its extractor or an expectation, for the project's reviewer. */
@@ -518,8 +521,6 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
   const keyOf = (i: number) => (onIt && run!.gate_choices?.[i]?.key) || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1));
   const options = d.options.map((o, i) => ({ key: keyOf(i), label: o.label, ...(o.description ? { description: o.description } : {}) }));
   const chosen = d.status === "answered" && d.answer_index !== undefined ? options[d.answer_index] : undefined;
-  // A trial decision with a ladder is a role's (sessionDecisions.routeFor: a judge fix goes to the route's decider).
-  const forRole: Doc<"org_roles"> | null = d.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
   return {
     question: d.question,
     context_md: d.context_md,
@@ -533,12 +534,25 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
       status: d.status,
       report_slug: d.report_slug ?? null,
       session: conversation ? { _id: conversation._id, short_id: conversation.short_id ?? null, title: conversation.title ?? null } : null,
-      /** The people it is asked of: a card is in their For you and nobody else's. */
-      asked: (d.asked_user_ids ?? [d.user_id]).map(String),
-      /** The role it belongs to, when it is not the trial owner's: it hears first and answers or hands up to `asked`. */
-      for_role: forRole ? { _id: forRole._id, short_id: forRole.short_id ?? null, name: forRole.name, handle: forRole.handle ?? null } : null,
     },
   };
+}
+
+/**
+ * Who a card waits on when it is a role's and not the trial owner's practice
+ * answer: null for the owner's. A decision that climbed a ladder names its
+ * role and the people it is asked of (sessionDecisions.routeFor). A judge-route
+ * card with no such decision (written before the trial named the route's
+ * decider, or by a gate no session asked) belongs to that decider all the
+ * same, and waits on the person its line ends at.
+ */
+export async function audienceOf(ctx: Ctx, row: Doc<"trial_cards">, project: Doc<"projects"> | null, run: Doc<"workflow_runs"> | null) {
+  const d: Doc<"session_decisions"> | null = row.decision_id ? await ctx.db.get(row.decision_id) : null;
+  const climbed: Doc<"org_roles"> | null = d?.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
+  const role = climbed ?? (project ? await trialDeciderOf(ctx, project, run) : null);
+  if (!role) return null;
+  const asked = climbed ? d!.asked_user_ids ?? [d!.user_id] : (await routeToRole(ctx, role, row.created_at)).people;
+  return { asked: asked.map(String), role: { _id: role._id, short_id: role.short_id ?? null, name: role.name, handle: role.handle ?? null } };
 }
 
 const VERDICT_KEY: Record<string, string> = { ship: "S", revise: "R", drop: "D" };
@@ -726,19 +740,15 @@ export async function trialSpend(ctx: Ctx, project: Doc<"projects">, now = Date.
   const since = project.line_trial?.since ?? project.created_at;
   const sinceMonth = new Date(since).toISOString().slice(0, 7);
   const earlier = budget.history.filter((h: { month: string; spent_usd: number }) => h.month >= sinceMonth).reduce((s: number, h: { spent_usd: number }) => s + h.spent_usd, 0);
-  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-  let runs = 0;
-  const priced = newRunPrice();
-  const seen = new Set<string>();
-  for (const task of tasks) {
-    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
-    for (const run of taskRuns) {
-      if (run.created_at < since) continue;
-      runs++;
-      await priceRun(ctx, run, seen, priced);
-    }
+  const trialRuns = await trialRunsOf(ctx, project);
+  const runs = trialRuns.length;
+  // Each run's own priced total (priceRunsTick): no session is read here, so a rerun or a dispatch never waits on them.
+  let sessions = 0, sessionUsd = 0, unpricedTokens = 0;
+  for (const run of trialRuns) {
+    sessions += run.priced?.sessions ?? 0;
+    sessionUsd += run.priced?.usd ?? 0;
+    unpricedTokens += run.priced?.unpriced_tokens ?? 0;
   }
-  const { sessions, usd: sessionUsd, unpriced_tokens: unpricedTokens } = priced;
   const round = (n: number) => Math.round(n * 100) / 100;
   const modelUsd = budget.spent_usd + earlier;
   const outside = project.line_trial?.outside ?? [];
@@ -759,6 +769,123 @@ export async function trialSpend(ctx: Ctx, project: Doc<"projects">, now = Date.
     at: now,
   };
 }
+
+/** A trial project's runs since the trial began. */
+async function trialRunsOf(ctx: Ctx, project: Doc<"projects">): Promise<Doc<"workflow_runs">[]> {
+  const since = project.line_trial?.since ?? project.created_at;
+  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
+  const out: Doc<"workflow_runs">[] = [];
+  for (const task of tasks) {
+    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
+    out.push(...taskRuns.filter((r) => r.created_at >= since));
+  }
+  return out;
+}
+
+/** How long after a run last moved its sessions are taken to be done: its price then stands until the run moves again. */
+export const RUN_SETTLE_MS = 30 * 60_000;
+
+/** Whether a run's stored price may be out of date: never priced, still live, ended too recently to stand, or moved since it was priced. */
+export function priceStale(run: Pick<Doc<"workflow_runs">, "status" | "updated_at" | "priced">): boolean {
+  const p = run.priced;
+  return !p || !p.settled || isLiveRunStatus(run.status) || run.updated_at > p.at;
+}
+
+/** A trial's runs whose price may be out of date (priceRunsTick). Reads runs, never their sessions. */
+export const staleRunPrices = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const projects: Doc<"projects">[] = await ctx.db.query("projects").withIndex("by_trial_since", (q: any) => q.gt("line_trial.since", 0)).collect();
+    const out: Id<"workflow_runs">[] = [];
+    for (const p of projects) for (const run of await trialRunsOf(ctx, p)) if (priceStale(run)) out.push(run._id);
+    return out;
+  },
+});
+
+/**
+ * These runs priced from their sessions now. A query, so the sessions it
+ * reads (live ones are written several times a second) never conflict with a
+ * write; writeRunPrices stores the answers.
+ */
+export const priceRuns = internalQuery({
+  args: { runs: v.array(v.id("workflow_runs")) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out = [];
+    for (const id of args.runs) {
+      const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
+      if (!run) continue;
+      const price = await priceRun(ctx, run, new Set(), newRunPrice());
+      out.push({ run: id, updated_at: run.updated_at, priced: { ...price, at: now, settled: !isLiveRunStatus(run.status) && now - run.updated_at > RUN_SETTLE_MS } });
+    }
+    return out;
+  },
+});
+
+const pricedV = v.object({ sessions: v.number(), usd: v.number(), tokens: v.number(), unpriced_tokens: v.number(), at: v.number(), settled: v.boolean() });
+
+/**
+ * Stores runs' prices (priceRuns), only what changed: the run row is read by
+ * its runner and its page. A settled price must describe the run as it is, so
+ * one priced before the run moved again is dropped and priced next tick.
+ */
+export const writeRunPrices = internalMutation({
+  args: { prices: v.array(v.object({ run: v.id("workflow_runs"), updated_at: v.number(), priced: pricedV })) },
+  handler: async (ctx, args) => {
+    let wrote = 0;
+    for (const { run: id, updated_at, priced } of args.prices) {
+      const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
+      if (!run || (priced.settled && run.updated_at !== updated_at)) continue;
+      const was = run.priced;
+      const same = !!was && was.sessions === priced.sessions && was.usd === priced.usd && was.tokens === priced.tokens && was.unpriced_tokens === priced.unpriced_tokens && was.settled === priced.settled;
+      if (same && (!priced.settled || was.at >= run.updated_at)) continue;
+      await ctx.db.patch(id, { priced });
+      wrote++;
+    }
+    return wrote;
+  },
+});
+
+/** Reconciler: a trial's stored run prices against pricing every session now, so drift is measured, not assumed. */
+export const spendDrift = internalQuery({
+  args: { project: v.id("projects") },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.project);
+    if (!project) return null;
+    const runs = await trialRunsOf(ctx, project);
+    const live = newRunPrice();
+    const seen = new Set<string>();
+    let alone = 0;
+    for (const run of runs) {
+      await priceRun(ctx, run, seen, live);
+      alone += (await priceRun(ctx, run, new Set(), newRunPrice())).sessions;
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    return {
+      runs: runs.length,
+      unpriced_runs: runs.filter((r) => !r.priced).length,
+      stale_runs: runs.filter(priceStale).length,
+      stored: { sessions: runs.reduce((n, r) => n + (r.priced?.sessions ?? 0), 0), usd: round(runs.reduce((n, r) => n + (r.priced?.usd ?? 0), 0)) },
+      live: { sessions: live.sessions, usd: round(live.usd) },
+      /** Sessions counted by more than one run when each run is priced alone. */
+      shared_sessions: alone - live.sessions,
+    };
+  },
+});
+
+/** Keeps every trial run's stored price current (cron): prices the stale ones in small batches and stores them. */
+export const priceRunsTick = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ stale: number; wrote: number }> => {
+    const stale: Id<"workflow_runs">[] = await ctx.runQuery((internal as any).lineTrial.staleRunPrices, {});
+    let wrote = 0;
+    for (let i = 0; i < stale.length; i += 20) {
+      const prices = await ctx.runQuery((internal as any).lineTrial.priceRuns, { runs: stale.slice(i, i + 20) });
+      wrote += await ctx.runMutation((internal as any).lineTrial.writeRunPrices, { prices });
+    }
+    return { stale: stale.length, wrote };
+  },
+});
 
 /** The trial's spend for one project (web store key `trialSpend`, keyed by project; `cast line trial`). */
 export const spend = query({
@@ -832,7 +959,7 @@ export const setTrial = mutation({
 });
 
 /** Trial runs at once, at most: the machine running them is shared. */
-export const TRIAL_RUNNING_CAP = 3;
+export const TRIAL_RUNNING_CAP = 10;
 
 /**
  * Which graph a trial problem runs: one whose findings are cases against a
@@ -1038,7 +1165,7 @@ export function stopOf(run: Pick<Doc<"workflow_runs">, "status" | "node_statuses
  * A run that died while it waited at one of its own cards: its gate ended with
  * no answer (a gate poll that failed, read as a withdrawn gate), so the runner
  * found no edge out of it. Its evidence and its proposal are all written; the
- * run picks up at that gate again (resumeAtGate). The card it left names it.
+ * run picks up at that gate again (resumeRunAt). The card it left names it.
  */
 export type GateLoss = { node: string; card: string; kind: "gate" | "card" };
 
@@ -1049,19 +1176,6 @@ export async function gateLossOf(ctx: Ctx, run: Pick<Doc<"workflow_runs">, "_id"
   const cards: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
   const last = cards.filter((c) => c.node_id === node).sort((a, b) => b.created_at - a.created_at)[0];
   return last ? { node, card: last.short_id, kind: last.kind } : null;
-}
-
-/**
- * The run continues at the gate it lost, on its own machine, from its
- * checkpoint (cli runResume.ts): the gate is asked again from the values the
- * run had made (its proposal, its proof), so a new card stands where the lost
- * one stood. fresh_branch makes the daemon read the graph file again, so the
- * stations after the gate are the current ones; a resume never resets the branch.
- */
-async function resumeAtGate(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
-  if (task.execution_status === "blocked") await ctx.db.patch(task._id, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device!, now });
 }
 
 /**
@@ -1161,7 +1275,7 @@ export const runs = query({
  * its daemon, which sets the earlier run's branch aside and starts from
  * origin/main (cli lineTrialBranch.ts), so the proof runs against unfixed code.
  * A run that died waiting at its own card picks up at that gate instead
- * (resumeAtGate): its evidence and proposal are already made. Both go through
+ * (resumeRunAt): its evidence and proposal are already made. Both go through
  * the same machine, spend and run-count check as the dispatcher (trialRoom);
  * a gate resume is the same run, so it spends no run of max_runs.
  */
@@ -1281,7 +1395,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
     const node = route.to === "investigate" ? entry!.trim() : at?.trim() || asker?.trim() || run.gate_node_id;
     for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
-    await resumeAtGate(ctx, userId, task, run, node, now);
+    await resumeRunAt(ctx as any, userId, run, node, now);
     // Taken back once the run no longer waits on it, so the withdrawal cannot fail the run.
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
@@ -1293,7 +1407,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   const refused = rerunRefusal(await trialRoom(ctx, project, now), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
-    await resumeAtGate(ctx, userId, task, run, lost.node, now);
+    await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
   const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
@@ -1489,7 +1603,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   const r = Math.min(slots, lost.length, affordable);
   const resumed: string[] = [];
   if (!dry) for (const l of lost.slice(0, r)) {
-    await resumeAtGate(ctx, project.line_trial!.by, l.task, l.run, l.loss.node, now);
+    await resumeRunAt(ctx as any, project.line_trial!.by, l.run, l.loss.node, now);
     resumed.push(l.task.short_id);
   }
   // A proposal that recommends waiting goes back for the evidence the pipeline can gather first; each takes a slot like a start.
@@ -1527,7 +1641,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
     running,
     cap: TRIAL_RUNNING_CAP,
     started,
-    /** Runs that died waiting at their own card, picked up at that gate (resumeAtGate), or due to be on a dry pass. */
+    /** Runs that died waiting at their own card, picked up at that gate (resumeRunAt), or due to be on a dry pass. */
     resumed: dry ? lost.slice(0, r).map((l) => l.task.short_id) : resumed,
     /** Proposal cards sent back to gather their own evidence (gatherDue), or due to be on a dry pass. */
     gathering: dry ? waits.slice(0, g).map((w) => w.short_id) : gathering,

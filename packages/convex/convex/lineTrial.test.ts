@@ -9,7 +9,7 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, trialProjectOf, trialSpend } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS } from "./lineTrial";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -416,6 +416,26 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(r).toMatchObject({ max_runs: used + 1, runs: used });
   });
 
+  test("the trial's spend sums each run's stored price and reads no session: a rerun or dispatch never waits on ~500 conversations", async () => {
+    const { ctx, tables } = world(1000);
+    const priced = (usd: number, sessions: number) => ({ sessions, usd, tokens: 1000, unpriced_tokens: 5, at: NOW, settled: true });
+    tables.workflow_runs.find((r) => r._id === "workflow_runs_stale").priced = priced(12.5, 3);
+    tables.workflow_runs.find((r) => r._id === "workflow_runs_live").priced = priced(4, 2);
+    tables.workflow_runs.find((r) => r._id === "workflow_runs_live").node_statuses = [{ node_id: "build", status: "running", session_id: "conv_live" }];
+    tables.conversations = new Proxy([], { get: () => { throw new Error("trialSpend read a conversation"); } }) as any;
+    const s = await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW);
+    expect(s).toMatchObject({ sessions: 5, session_usd: 16.5, unpriced_tokens: 10 });
+  });
+
+  test("a run's stored price is priced again while the run is live, ended recently, or moved after it was priced", () => {
+    const settled = { sessions: 1, usd: 1, tokens: 1, unpriced_tokens: 0, at: NOW, settled: true };
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS, priced: undefined })).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS, priced: settled })).toBe(false);
+    expect(priceStale({ status: "running", updated_at: NOW - RUN_SETTLE_MS, priced: settled })).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW + 1, priced: settled })).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - 1, priced: { ...settled, settled: false } })).toBe(true);
+  });
+
   test("spend outside codecast counts toward the cap: the total is one number (ledger 2026-10-12: ~$250 outside)", async () => {
     const { ctx, tables } = world(100);
     tables.projects[0].line_trial.outside = [{ usd: 95, what: "shadow + dry runs", at: NOW, by: HOST }];
@@ -608,6 +628,9 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
 describe("what a trial card reads beside its words", () => {
   test("a problem whose case is filed against a judge or an extractor is review tooling, not the product (ct-59532, ct-59527)", () => {
     expect(toolingOf({ cause: { issue_key: "judge:codecast:comms", fingerprints: [] } } as any)).toBe("judge");
+    // ct-59688: a problem gathered from two judges' cases, keyed per ruled finding, with no issue key, is still the judge route.
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "extractor:match:sg-2733"] } } as any)).toBe("judge");
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "evidence:contacts/x:ex-3:aa"] } } as any)).toBe("product");
     expect(toolingOf({ cause: { issue_key: "extractor:union-moments:contact-conversation", fingerprints: [] } } as any)).toBe("extractor");
     expect(toolingOf({ cause: { fingerprints: ["evidence:contacts/x:ex-agentwatch-trial-34:fa10997c"] } } as any)).toBeNull();
   });

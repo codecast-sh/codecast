@@ -1,5 +1,6 @@
 import { execFile, spawn } from "../../proc.js";
 import { type ChildProcess } from "../../proc.js";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { agentSpawnPath } from "../../agentSpawnPath.js";
 
@@ -38,10 +39,19 @@ export function sameMirrorProcess(a: MirrorProcessIdentity, b: MirrorProcessIden
   return a.pid === b.pid && a.pgid === b.pgid && a.uid === b.uid && a.started === b.started;
 }
 
-export function mirrorProcessInvocation(execPath = process.execPath, entry = process.argv[1] ?? ""): { command: string; args: string[] } {
+// On macOS the mirror runs clamped to utility QoS. It is the daemon's child, so
+// unclamped its builds (seconds of CPU each, every few minutes) count against
+// the daemon's own scheduling group, and under load that group starved the
+// daemon's loop and its liveness sends for minutes (2026-10-14). taskpolicy
+// execs the program, so the pid, its group and the identity checks below are
+// the supervised process's own.
+const TASKPOLICY = "/usr/sbin/taskpolicy";
+
+export function mirrorProcessInvocation(execPath = process.execPath, entry = process.argv[1] ?? "", platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
   const fromSource = /\.(?:[cm]?js|ts)$/.test(entry) && !entry.startsWith("/$bunfs/") && !entry.includes("~BUN/");
-  const args = fromSource ? [path.join(path.dirname(entry), entry.endsWith(".ts") ? "main.ts" : "main.js")] : [];
-  return { command: execPath, args: [...args, "cloud", "mirror-run"] };
+  const args = [...(fromSource ? [path.join(path.dirname(entry), entry.endsWith(".ts") ? "main.ts" : "main.js")] : []), "cloud", "mirror-run"];
+  if (platform === "darwin" && fs.existsSync(TASKPOLICY)) return { command: TASKPOLICY, args: ["-c", "utility", execPath, ...args] };
+  return { command: execPath, args };
 }
 
 export function startMirrorProcess(opts: {

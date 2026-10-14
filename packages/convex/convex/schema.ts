@@ -826,6 +826,10 @@ export default defineSchema({
     // hand's role (org-roles-standing.md T3), or a spawned worker's parent
     // (workerSettle.ts), so one settle tells once, not once per check.
     hand_wake_notified_key: v.optional(v.string()),
+    // When a spawned worker last `cast send`-ed its parent, cleared by any new
+    // input to the worker. A worker that reported its own result does not also
+    // get a settle wake sent on its behalf (workerSettle.ts).
+    reported_to_parent_at: v.optional(v.number()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
     // field and a relative check re-opens the session. Set by:
@@ -3596,6 +3600,7 @@ export default defineSchema({
     // Open PRs of one repository: check and push webhooks look a head sha or a
     // base branch up among these, never among every PR the repository ever had.
     .index("by_repository_state", ["repository", "state"])
+    .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"])
     // A team's pull requests touched in a trailing window (page data readers).
@@ -4708,6 +4713,12 @@ export default defineSchema({
       v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
     ),
     holder_key: v.optional(v.string()),
+    // A person handed the question to someone else (passCore): a teammate or a
+    // role. It then holds the decision whatever routing or grants say, and a
+    // role it was passed to may answer it without a grant.
+    passed_to: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number() })
+    ),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A
@@ -4947,9 +4958,16 @@ export default defineSchema({
     payload: v.string(),
     processed: v.boolean(),
     created_at: v.number(),
+    // Set on CI deliveries (check_run, check_suite, workflow_run): the
+    // repository whose drain folds them (githubWebhooks.drainCiEvents).
+    ci_repository: v.optional(v.string()),
+    // When a delivery found this one waiting too long and scheduled a fresh
+    // drain, so the next ones do not schedule another right away.
+    ci_redrain_at: v.optional(v.number()),
   })
     .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"]),
+    .index("by_processed", ["processed"])
+    .index("by_ci_pending", ["ci_repository", "processed"]),
 
   // Which event triggered a GitHub Actions check suite. A check_run names its
   // suite but not the event; the workflow_run delivery for the same suite does.
@@ -5384,7 +5402,9 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"])
     // Trial projects that start their own runs (lineTrial.dispatch).
-    .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"]),
+    .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"])
+    // Trial projects (lineTrial.priceRunsTick prices their runs).
+    .index("by_trial_since", ["line_trial.since"]),
 
   // An initiative (docs/architecture/initiatives-projects-role-page.md I1): a
   // goal the company is trying to reach, carried by an intentional set of
@@ -7885,6 +7905,18 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // A trial run's station sessions priced from their token totals, the one
+    // home of what a run cost (lineTrial.priceRunsTick writes it, trialSpend
+    // sums it). `settled`: the run ended long enough ago that its sessions
+    // are done, so it is not priced again until the run moves.
+    priced: v.optional(v.object({
+      sessions: v.number(),
+      usd: v.number(),
+      tokens: v.number(),
+      unpriced_tokens: v.number(),
+      at: v.number(),
+      settled: v.boolean(),
+    })),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.
