@@ -400,6 +400,17 @@ crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as a
 // under its spend cap. One empty index read when no trial dispatches.
 crons.interval("dispatch trial runs", { minutes: 10 }, (internal as any).lineTrial.dispatchTick, {});
 
+// Each trial run's price row (trial_run_prices), which the trial's
+// spend sums: only live, recently ended or moved runs are priced again.
+crons.interval("price trial runs", { minutes: 2 }, (internal as any).lineTrial.priceRunsTick, {});
+
+// Per-day activity counters for the profile graph, the punchcard and the team
+// charts (lib/activityDaily.ts). Each run re-rolls only the days still inside
+// (or just outside) the live window, for the accounts active in them, so a day
+// settles within an hour of leaving the window and a late transcript sync
+// corrects the day it belongs to. One small transaction per (user, day).
+crons.interval("roll up activity days", { hours: 1 }, internal.activityDays.sweep, {});
+
 // A problem whose title was written from findings that have all left it is
 // renamed from the findings on it now (lineRetitle.ts). One index read per
 // open problem; a rename is one cheap call on the team's grouping budget.

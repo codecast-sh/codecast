@@ -13,7 +13,7 @@ import { DecisionDiscussion } from "../../../../components/decisions/DecisionDis
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
 import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
-import { isLineRun } from "@codecast/shared/contracts/changeCard";
+import { costParts, costUsd, isLineRun } from "@codecast/shared/contracts/changeCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
 import { lineRefHref, lineWorkspaceHref, type LineSelectionPatch } from "../../../../lib/line/lineWorkspaceUrl";
@@ -54,7 +54,8 @@ interface WorkflowRun {
   task_title?: string;
   fail_reason?: string;
   merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string };
-  card_cost_usd?: number;
+  card_billed_usd?: number;
+  card_list_usd?: number;
   created_at: number;
   updated_at: number;
 }
@@ -148,8 +149,8 @@ function RunDetailContent({ runId }: { runId: string }) {
   const prUrl = run.merge?.pr_url ?? card?.diff.pr;
   const taskRef = task?.short_id ?? run.task_short_id;
   const projectId = task?.project_id ?? null;
-  // What the run cost, beside how long it took: the card's sum of its sessions.
-  const costUsd = card?.cost.usd ?? run.card_cost_usd ?? null;
+  // What the run cost, beside how long it took: billed money, and its subscription sessions at list price beside it.
+  const cost = card ? costParts(card.cost) : run.card_billed_usd != null ? { billed_usd: run.card_billed_usd, list_usd: run.card_list_usd ?? 0 } : null;
   // The card by what it decided; its key stays behind the link.
   const cardChip = run.gate_decision_short_id ? cardName(answer, card, run.status === "paused") : null;
   const earlier = causeRuns.filter((r) => r._id !== run._id);
@@ -198,7 +199,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             {!card && (agentMin != null && !isActive
               ? <span title="Agent time summed over the run's sessions"> · {agentMin} agent min</span>
               : <span title="Wall time, start to end"> · {duration}</span>)}
-            {!card && costUsd != null && costUsd > 0 && <span title="What the run's sessions cost"> · ${costUsd.toFixed(2)}</span>}
+            {!card && cost && (cost.billed_usd > 0 || cost.list_usd > 0) && <span title="Money the run billed; its subscription sessions at API list price, an equivalent never billed"> · {costUsd(cost.billed_usd)} billed · {costUsd(cost.list_usd)} at list price</span>}
           </p>
         </div>
         <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token }} />

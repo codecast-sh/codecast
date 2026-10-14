@@ -18,7 +18,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, headOfPeopleIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performRehomeSessions, performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
+import { performRehomeSessions, performReparentSession, personName, roleMayHoldSession } from "./sessionOwnership";
 import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
