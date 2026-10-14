@@ -1,0 +1,28 @@
+{
+ "name": "anchor-brief role-worker-flags-gap",
+ "anchor": {
+  "kind": "message",
+  "id": "fixture:role-worker-flags-gap"
+ },
+ "subject": {
+  "kind": "synthetic",
+  "id": "anchor-brief:role-worker-flags-gap",
+  "title": "anchor-brief role-worker-flags-gap"
+ },
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "trigger": {
+  "type": "anchor-brief"
+ },
+ "meta": {
+  "surface": "anchor-brief",
+  "visibility": "public",
+  "snapshot": "fixtures/anchor-brief/role-worker-flags-gap.json"
+ },
+ "judge": "hands the pricing table fix to a session (the billing worker that flagged it, or one it starts) with what to change and what done means, and does not edit or test the code itself",
+ "notes": null,
+ "tags": [
+  "scope"
+ ],
+ "id": "cdd571a5-1d3c-4910-a070-369e1b1aa394",
+ "createdAt": "2026-10-14T16:00:00.000Z"
+}
