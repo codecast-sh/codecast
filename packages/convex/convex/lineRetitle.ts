@@ -13,9 +13,10 @@
 // moment as its own, so a person's or a run's title is never overwritten
 // while a finding it was written over stays.
 //
-// A title too long to list (a judge's whole sentence, with its call ids and
-// timestamps) also gets a list name beside it (`cause.named`), from the same
-// pass and budget. The title stays whole for the problem's page.
+// Every title also gets a list name beside it (`cause.named`), from the same
+// pass and budget: a finder's title carries its evidence (call ids, hashes,
+// thread timestamps, a judge's whole sentence) and lists and decision heads
+// show the name. The title stays whole for the problem's page.
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
@@ -31,7 +32,7 @@ export const RETITLE_BATCH = 5;
 /** Findings a rename reads, newest first. */
 export const RETITLE_FINDINGS = 20;
 const TITLE_MAX = 90;
-/** A title longer than this is a judge's whole sentence, not a name a list can show: the sweep names it. */
+/** Longest list name the naming call may write. */
 export const LIST_NAME_MAX = 80;
 export const RETITLE_AUTHOR = "retitle";
 
@@ -52,12 +53,12 @@ export function retitleDue(title: string, titled: Titled | undefined, live: stri
   return titled.from.some((id) => now.has(id)) ? null : "retitle";
 }
 
-/** Whether a problem needs a list name: its title (less the judge's "Not met:") is too long to list, and no name was written for it. */
+/** Whether a problem needs a list name: no name was written for its title as it stands. */
 export function nameDue(title: string, named: { for: string } | undefined): boolean {
-  return title.replace(/^not met:\s*/i, "").trim().length > LIST_NAME_MAX && named?.for !== title;
+  return named?.for !== title;
 }
 
-const NAME_SYSTEM = `You name a problem in a product's quality review. The list of problems shows only this name, and a busy executive scans it to pick one to open: one plain clause under ${LIST_NAME_MAX} characters saying what went wrong, in the product's terms. Keep the problem's own subject (what failed, for whom) and leave out its evidence: no ids, call or thread numbers, timestamps, dates, quotes or people's names. Never shorten the meaning into a vaguer one.
+const NAME_SYSTEM = `You name a problem in a product's quality review. The list of problems shows only this name, and a busy executive scans it to pick one to open: one plain clause under ${LIST_NAME_MAX} characters saying what went wrong, in the product's terms. Keep the problem's own subject (what failed, for whom) and leave out its evidence: no ids, call or thread numbers, timestamps, dates, quotes or people's names. Never shorten the meaning into a vaguer one; a title that already says it that way keeps its own words.
 
 Answer with JSON only: {"name": "..."}`;
 

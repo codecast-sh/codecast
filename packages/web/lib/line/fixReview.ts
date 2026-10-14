@@ -1,7 +1,8 @@
 // A built fix read for review (line-journeys.md "Built fixes to review"), from
-// facts rather than the builder's last handoff line: what the change does (its
-// own commits), how its gates ended on the last build, where its branch stands
-// against main, and from those the one act that moves it on. Pure.
+// facts rather than the builder's last handoff line: how its gates ended on the
+// last build, where its branch stands against main, and from those the one act
+// that moves it on; and, while no session has presented it as a decision, the
+// session it is with. Pure.
 import type { BranchStanding } from "./mergeFixLedger";
 
 /** The gates a build passes after Implement, in the line's order (line.cast: verify -> green -> eval -> review). A run
@@ -53,16 +54,15 @@ export function reviewGates(nodes: ReadonlyArray<GateNode>, red: { step: string 
   return out;
 }
 
-const TEST_ONLY = /^(?:test|tests|chore|revert|style|docs|ci|build)(?:\([^)]*\))?!?:/i;
+type HolderNode = { node_id: string; status: string; label?: string; session?: { _id?: string } | null };
 
-/** What the change does, in its own commits' words: the newest commit that changes behaviour (not a test, a revert or
- *  a chore), its conventional prefix and trailing task ref taken off. `more`: how many other such commits it has. */
-export function changeSays(commits: ReadonlyArray<{ subject: string }> | null | undefined): { line: string; more: number } | null {
-  const said = [...new Set((commits ?? []).map((c) => c.subject.trim()).filter((s) => s && !TEST_ONLY.test(s)))];
-  const last = said.at(-1);
-  if (!last) return null;
-  const line = last.replace(/^[a-z]+(?:\([^)]*\))?!?:\s*/i, "").replace(/\s*\((?:ct|sd)-\d+\)\s*$/i, "").trim();
-  return line ? { line: line.charAt(0).toUpperCase() + line.slice(1), more: said.length - 1 } : null;
+/** The session a built fix is with while no session has presented it as a decision: the step its run ended at when
+ *  that step ran one, else the last step that did. `preparing`: that step is still at work. Null when the run ran no
+ *  session at all. */
+export function fixHolder(nodes: ReadonlyArray<HolderNode> | null | undefined, step?: string | null): { step: string; label: string | null; sessionId: string; preparing: boolean } | null {
+  const ran = (nodes ?? []).filter((n) => !!n.session?._id);
+  const n = ran.find((x) => x.node_id === step) ?? ran.find((x) => x.status === "running") ?? ran.at(-1);
+  return n ? { step: n.node_id, label: n.label ?? null, sessionId: n.session!._id!, preparing: n.status === "running" } : null;
 }
 
 /** What a built fix waiting on review needs next, from its facts: sent back to its builder when a gate was left red or
