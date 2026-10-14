@@ -4708,6 +4708,12 @@ export default defineSchema({
       v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
     ),
     holder_key: v.optional(v.string()),
+    // A person handed the question to someone else (passCore): a teammate or a
+    // role. It then holds the decision whatever routing or grants say, and a
+    // role it was passed to may answer it without a grant.
+    passed_to: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number() })
+    ),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A

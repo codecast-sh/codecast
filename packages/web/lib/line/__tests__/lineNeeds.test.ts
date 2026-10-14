@@ -31,12 +31,12 @@ describe("what waits on the viewer (lineNeeds)", () => {
   ];
   const needs = lineNeeds(groups, { row: (r) => (r.caseId === "1" ? "agentwatch" : "codecast-line") });
 
-  test("counts only what can be answered now, in the reader: a decision, a question, a confirm, a step's yes to go on", () => {
+  test("counts only the decision a session presents at the end: what a station asked before it never waits on a person", () => {
     expect(needs.map((n) => [n.ref, n.kind, n.counted])).toEqual([
-      ["sd-1", "decision", true], ["sd-2", "decision", true], ["ct-3", "question", true], ["ct-4", "lapsed", false],
-      ["ct-5", "confirm", true], ["ct-6", "stopped", true], ["ct-13", "stopped", true], ["tc-10", "reask", false],
+      ["sd-1", "decision", true], ["sd-2", "decision", true], ["ct-3", "question", false], ["ct-4", "lapsed", false],
+      ["ct-5", "confirm", false], ["ct-6", "stopped", false], ["ct-13", "stopped", false], ["tc-10", "reask", false],
     ]);
-    expect(needCount(needs)).toBe(6);
+    expect(needCount(needs)).toBe(2);
     // The old count and the new one are one reading.
     expect(inboxCount(groups)).toBe(needCount(needs));
   });
@@ -45,16 +45,12 @@ describe("what waits on the viewer (lineNeeds)", () => {
     expect(needs.some((n) => ["ct-7", "ct-8", "ct-9"].includes(n.ref))).toBe(false);
   });
 
-  test("groups are named for the act, oldest first; Needs a new ask comes last, a built fix leading it", () => {
+  test("For you lists the decisions only, oldest first, under what the person is asked; the rest is never listed", () => {
     const g = needGroups(needs);
-    expect(g.map((x) => [x.label, x.counted, x.needs.map((n) => n.ref)])).toEqual([
-      ["Fixes to decide", true, ["sd-2", "sd-1"]],
-      ["Questions", true, ["ct-3"]],
-      ["New: is this real?", true, ["ct-5"]],
-      ["Go on to the next step?", true, ["ct-6", "ct-13"]],
-      ["Needs a new ask", false, ["ct-4", "tc-10"]],
-    ]);
-    expect(needOrder(g).map((n) => n.ref)).toEqual(["sd-2", "sd-1", "ct-3", "ct-5", "ct-6", "ct-13", "ct-4", "tc-10"]);
+    expect(g.map((x) => [x.label, x.needs.map((n) => n.ref)])).toEqual([["Ship these fixes?", ["sd-2", "sd-1"]]]);
+    expect(needOrder(g).map((n) => n.ref)).toEqual(["sd-2", "sd-1"]);
+    // The list and the count are one set.
+    expect(needOrder(g).length).toBe(needCount(needs));
   });
 
   test("a need carries what its reader shows: the question whole, its process, the stopped step's words", () => {
@@ -188,18 +184,18 @@ describe("a twin is asked once (foldDuplicateNeeds)", () => {
   test("a twin's confirm folds into the older problem's: one row, both findings, counted once, opened by either ref", () => {
     const needs = foldDuplicateNeeds(twins(row("confirm", "57470", { findings: 5, at: now - 120 * H })), twinOf);
     expect(needs.map((n) => [n.ref, n.kind])).toEqual([["ct-57470", "confirm"], ["sd-9", "decision"]]);
-    expect(needCount(needs)).toBe(2);
+    expect(needCount(needs)).toBe(1);
     const older = needs[0];
     expect(older.findings).toBe(8);
     expect(older.dups).toEqual([{ ref: "ct-59757", caseId: "59757", projectId: "p2", findings: 3 }]);
     expect(needForRef(needs, "ct-59757")).toBe(older);
   });
 
-  test("a twin whose older problem asks nothing waits on one act: merge it in", () => {
+  test("a twin whose older problem asks nothing waits on one act, merging it in, on Problems and never For you", () => {
     const needs = foldDuplicateNeeds(twins(null), twinOf);
     const dup = needs.find((n) => n.caseId === "59757")!;
-    expect([dup.kind, dup.counted, dup.ask, dup.dupOf]).toEqual(["duplicate", true, "Same as ct-57470", { caseId: "57470", ref: "ct-57470" }]);
-    expect(needGroups(needs).map((g) => g.label)).toContain("Same as another problem");
+    expect([dup.kind, dup.counted, dup.ask, dup.dupOf]).toEqual(["duplicate", false, "Same as ct-57470", { caseId: "57470", ref: "ct-57470" }]);
+    expect(needOrder(needGroups(needs)).map((n) => n.kind)).toEqual(["decision"]);
   });
 
   test("a decision on a twin is about its own run: it stays its own", () => {
@@ -208,14 +204,14 @@ describe("a twin is asked once (foldDuplicateNeeds)", () => {
   });
 });
 
-describe("a build handed off for review waits on a person (Problems › Failed listed it as a failure)", () => {
-  test("its failure row is a counted review need, grouped as built fixes to review", () => {
+describe("a build no session presented is its run's to present, never a failure and never a person's to review", () => {
+  test("its failure row is a review need nobody is asked: it needs a new ask", () => {
     const fail = { key: "review:implement", step: "implement", label: "Handed off for review", raw: "", review: { ask: "Needs a reviewer to confirm the outage guard.", gate: null } };
     expect(needKind({ kind: "failed", fail } as never)).toBe("review");
-    expect(needCounted("review")).toBe(true);
+    expect(needCounted("review")).toBe(false);
     const [n] = lineNeeds([{ kind: "failed", rows: [{ key: "k", kind: "failed", fail, title: "Nudges dead-letter", ref: "ct-58682", caseId: "t1", projectId: null, runId: "r1", at: 1 }] }] as never);
-    expect(n).toMatchObject({ kind: "review", counted: true, ask: "Needs a reviewer to confirm the outage guard.", line: "Nudges dead-letter" });
-    expect(needGroups([n]).map((g) => g.label)).toEqual(["Built fixes to review"]);
+    expect(n).toMatchObject({ kind: "review", counted: false, ask: "Needs a reviewer to confirm the outage guard.", line: "Nudges dead-letter" });
+    expect(needGroups([n])).toEqual([]);
   });
 });
 
@@ -256,7 +252,7 @@ describe("practice answers", () => {
     const real = need("sd-1", false);
     const practice = need("sd-2", true);
     const g = needGroups([practice, real]);
-    expect(g.map((x) => x.label)).toEqual(["Fixes to decide", "Trial: what would you do?"]);
+    expect(g.map((x) => x.label)).toEqual(["Ship these fixes?", "Trial: what would you do?"]);
     expect(needCount([practice, real])).toBe(1);
   });
 });
