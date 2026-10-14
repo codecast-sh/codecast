@@ -17,6 +17,13 @@ test("recommendations need fresh source evidence and retain unknown host capacit
   args.source.receivedAt = -200000;
   expect(buildOffloadPlan(args)).toBeNull();
 });
+test("a reporting laptop whose device heartbeat lapsed still offers its sessions", () => {
+  const args = input();
+  args.source.online = false;
+  args.devices[0].online = false;
+  const plan = buildOffloadPlan(args)!;
+  expect(plan.candidates[0].perDestination.linux.readiness).toBe("preflight_required");
+});
 test("pins, unsupported harnesses and shared ownership are not offered", () => {
   for (const reason of ["pin", "harness", "shared"]) {
     const args = input();

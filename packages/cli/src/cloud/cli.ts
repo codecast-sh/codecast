@@ -245,8 +245,7 @@ export function registerCloudCommand(program: Command): void {
         process.exit(1);
       }
       const { seedCwd, repoRoot } = resolveSeedRoots(localPath);
-      const deviceId: string | undefined = opts.device ?? target.owner_device_id ?? undefined;
-      const hostArg = opts.host ?? (deviceId ? hostForDevice(deviceId)?.id : undefined);
+      const parkedDevice: string | undefined = opts.device ?? target.owner_device_id ?? undefined;
 
       const say = (m: string) => console.log(`  ${m}`);
       const mode: CloudWorkspaceMode = normalizeCloudWorkspace(opts.workspace ?? target.cloud_workspace);
@@ -272,6 +271,14 @@ export function registerCloudCommand(program: Command): void {
         console.error(`the conversation's repo is ${target.git_remote_url} but ${repoRoot} points at ${laptopOrigin} — not seeding a different repository`);
         process.exit(1);
       }
+      // A host out of memory would stall every step below until a timeout
+      // fires minutes in: choose a host with room first. Only an isolated
+      // worktree may go elsewhere; a shared placement is about that host's
+      // checkout.
+      const { chooseCloudHost } = await import("./hostHeadroom.js");
+      const chosen = chooseCloudHost(opts.host ?? (parkedDevice ? hostForDevice(parkedDevice)?.id : undefined), say, { fallback: mode !== "shared" });
+      const hostArg = chosen.host.id;
+      const deviceId = chosen.moved ? chosen.host.deviceId : parkedDevice;
       const expectToken = target.cloud_placement_token ?? undefined;
       const launch = {
         model: launchModelKey(target.model, target.agent_type),

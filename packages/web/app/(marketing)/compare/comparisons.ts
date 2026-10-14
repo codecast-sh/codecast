@@ -62,11 +62,12 @@ const SHARED_ROWS = {
   model: {
     dimension: "Core model",
     codecast:
-      "Records and steers the agent sessions you already run in your own terminals; adds a team layer on top",
+      "Records and steers every agent session you run, wherever you start it, from the history the agent already writes; a team layer is there when you want one",
   },
   agents: {
     dimension: "Agents supported",
-    codecast: "Claude Code, Codex CLI, Cursor, Gemini (OpenCode and pi in progress)",
+    codecast:
+      "Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark, plus Cursor and Codex cloud agents",
   },
   team: {
     dimension: "Team visibility",
@@ -84,11 +85,12 @@ const SHARED_ROWS = {
   },
   remote: {
     dimension: "Remote steering",
-    codecast: "Web, desktop, and iOS apps; answer permission prompts from any device",
+    codecast:
+      "Web, macOS desktop and iOS apps; send messages into a live terminal session and answer permission prompts from any device",
   },
   oss: {
     dimension: "Open source",
-    codecast: "MIT, self-hostable backend",
+    codecast: "MIT, with a backend you can host yourself",
   },
 } as const;
 
@@ -98,67 +100,469 @@ export const COMPARISONS: Comparison[] = [
     competitor: "T3 Code",
     competitorUrl: "https://t3.codes",
     title: "Codecast vs T3 Code",
-    dek: "T3 Code is an open source control surface for the coding agents on your own machine. Codecast is the workspace a team and its agents share. They answer different questions, and threads you start in T3 Code sync into Codecast like any other session.",
-    verifiedOn: "2026-10-12",
+    dek: "T3 Code is an open source app you start agent threads inside. Codecast records every agent session you run, wherever you started it, and gives you one place to read, search, steer and automate all of them, alone or with a team. Threads you run in T3 Code sync into Codecast too.",
+    verifiedOn: "2026-10-14",
     codecastIs:
-      "Codecast is a workspace for a team and its coding agents. A daemon syncs every session your team runs, on any supported agent and any machine, into one searchable, steerable record, and the team's chat, tasks, plans, docs, pull requests and decisions live on that record with agents taking part in each.",
+      "Codecast is a workspace for your coding agents. A daemon watches the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live, on every machine you use, including sessions you started in a terminal, an IDE or another app before you installed it. From web, desktop or phone you read them, search them, message them, answer their permission prompts, fork them and schedule follow ups. A team layer (shared feed, chat, tasks, docs, calls) is there when you want it and stays out of the way when you work alone.",
     competitorIs:
-      "T3 Code describes itself as an agent harness control surface: a desktop app, web app and iOS and Android apps for starting and steering agent threads on a machine you own. It works with your own subscriptions to Claude Code, Codex, Cursor, Grok Build, OpenCode and Google Antigravity, gives each thread its own branch or worktree, and opens the pull request for you. It is MIT licensed, and its README calls the project very early.",
+      "T3 Code describes itself as an agent harness control surface: desktop, web, iOS and Android apps for starting and steering agent threads on a machine you own, on your own Claude Code, Codex, Cursor, Grok Build, OpenCode and Antigravity logins plus ACP agents. It gives each thread a branch or worktree, opens the pull request, and has a built in terminal and simulator panel. It is MIT licensed, and its README says the project is very early.",
     bottomLine:
-      "If the question is \"what is the best window for running my own agents\", T3 Code is a strong answer and you should try it. If the question is \"what are all of us and all our agents doing, what did they decide, and who needs to act\", that is Codecast. Nothing stops you using both: keep T3 Code as the place you run a thread, and let Codecast be the record your team reads.",
+      "T3 Code is a window you move your agent work into: a thread exists in T3 Code because T3 Code started it. Codecast works the other way round. Keep starting agents however you like, in a terminal, in Cursor, in T3 Code, from a script, and Codecast records and steers all of them, with search, memory, line attribution, forks, triggers and cloud hosts on top. If you want one app to launch threads and press the pull request button, T3 Code is good at that. If you want every session you run, past and present, in one record you control from anywhere, that is Codecast, and it is free for one person.",
     rows: [
       {
         ...SHARED_ROWS.model,
-        competitor: "Starts and drives agent threads itself, one person's machines at a time",
+        competitor: "Starts and drives agent threads itself; a thread exists because T3 Code launched it",
+      },
+      {
+        dimension: "Sessions you started elsewhere",
+        codecast:
+          "Every session on a supported agent syncs live, whether it started in a terminal, an IDE, T3 Code or a script, and history already on disk is picked up the first time the daemon runs",
+        competitor:
+          "A one time import in the first run wizard: Claude and Codex sessions from the last 30 days, capped at 200 messages each with tool activity dropped; nothing syncs afterwards, and continuing an imported Claude thread currently fails (open issue)",
       },
       {
         ...SHARED_ROWS.agents,
-        competitor: "Claude Code, Codex, Cursor, Grok Build, OpenCode and Google Antigravity",
+        competitor: "Claude Code, Codex, Cursor, Grok Build, OpenCode and Antigravity, plus pi, Muse and other ACP agents",
       },
       {
-        dimension: "Whose work it shows",
-        codecast: "Everyone on the team, across every machine a daemon runs on",
-        competitor: "Yours: the environments you have paired to your own account or devices",
-      },
-      {
-        ...SHARED_ROWS.team,
-        competitor: "No team or organization features in its docs or on its site",
+        dimension: "Machines",
+        codecast:
+          "Every machine with a daemon feeds one inbox and one history; move a live session between laptop and cloud host mid turn, uncommitted work included",
+        competitor:
+          "Clients connect to several paired machines, but each machine keeps its own SQLite history and threads stay where they started",
       },
       {
         ...SHARED_ROWS.memory,
-        competitor: "Thread history inside the app; no search across a team's sessions is documented",
+        competitor:
+          "Find threads by title and search your messages and the agent's final answers; no search over tool output and no memory agents consult",
       },
-      { ...SHARED_ROWS.blame, competitor: "Not documented; each turn shows its own diff for review" },
+      { ...SHARED_ROWS.blame, competitor: "Not offered; each turn shows its own diff" },
       {
         ...SHARED_ROWS.remote,
-        competitor: "iOS and Android apps, web and desktop, through T3 Connect or direct pairing; the host machine must stay running",
+        competitor:
+          "iOS, Android, web and desktop through T3 Connect or direct pairing, with push notifications; the host machine must stay running and reachable",
+      },
+      {
+        dimension: "Forks and other agents",
+        codecast:
+          "Fork from any message in several directions at once, spawn workers on any agent that report back, and switch a running session to another agent or model with its full history",
+        competitor:
+          "Fork from any response; send one prompt to several models in parallel worktrees; switching provider carries a budgeted summary of the thread (16k tokens by default)",
       },
       {
         dimension: "Git and pull requests",
-        codecast: "Pull requests linked to the sessions that wrote them, with review in the app",
-        competitor: "A branch or worktree per thread, one button to commit, push and open the pull request, on GitHub, GitLab, Bitbucket and others",
+        codecast:
+          "Worktrees with their own env files and ports on request; every pull request and commit linked to the session that wrote it; the owning session wakes for reviews and failing checks",
+        competitor:
+          "A worktree per thread, one flow to commit, push and open the pull request on GitHub, GitLab, Bitbucket, Azure DevOps and others, stacked PRs, and rewind of the conversation with its files",
+      },
+      {
+        dimension: "Automation",
+        codecast:
+          "Triggers on a delay, a schedule or an event, workflows with approval gates, plans run in waves, a decisions queue, and sessions that resume on another saved account at a usage limit",
+        competitor: "Scheduled tasks and webhook triggers per project, /goal to keep working until a goal is met, resume at limit reset",
+      },
+      {
+        dimension: "What agents can reach",
+        codecast:
+          "Your own signed in Chrome, native macOS apps, iOS simulators, published pages at a link, and messages to other sessions",
+        competitor: "A built in terminal, an iOS Simulator or Android Emulator panel the agent can drive, and an MCP server other agents connect to",
+      },
+      {
+        ...SHARED_ROWS.team,
+        competitor: "None: access is per paired device, with no shared threads, share links or organizations",
+      },
+      {
+        dimension: "Status",
+        codecast: "Generally available; free for individuals, per seat for teams",
+        competitor: "Version 0.0.x with several nightly builds a day; the README says to expect bugs; free",
+      },
+      { ...SHARED_ROWS.oss, competitor: "MIT; mostly not accepting outside contributions" },
+    ],
+    strengths: {
+      codecast: {
+        pros: [
+          "Nothing to move: every session on eleven agent clients syncs live, wherever and however you started it, including your history from before you installed it.",
+          "One record across all your machines and agents, searchable by keyword or meaning, askable in plain language, and readable by your agents before they start work.",
+          "cast blame traces any line of code back to the conversation and the message that wrote it.",
+          "Steer a live terminal session from web, desktop or phone: send messages, queue follow ups, approve or deny permission prompts.",
+          "Work that runs without you: triggers, workflows, cloud hosts, live migration between machines, and automatic recovery at usage limits.",
+          "Grows with you: share a project with a team and you get a shared feed, chat, calls, tasks, plans, docs and decisions on the same record.",
+        ],
+        cons: [
+          "No one button flow to commit, push and open a pull request; that happens through the agent or cast pr.",
+          "A fork branches the conversation but not the files, so there is no rewind of the working tree to an earlier message.",
+          "No built in terminal or editor: you keep using your own.",
+          "The desktop app is macOS only and the phone app is iOS only.",
+          "Some agents lack capabilities: Gemini has no live state detection, and OpenCode, Grok and Muse launched from the web run without permission prompts.",
+        ],
+      },
+      competitor: {
+        pros: [
+          "A polished single window to start, watch and review agent threads, with native apps on macOS, Windows, Linux, iOS and Android.",
+          "Owns the git loop: a worktree per thread, a commit, push and pull request flow on many hosts, stacked PRs, and threads that settle when their PR merges.",
+          "Rewind a thread with its files, and fan one prompt out to several models in parallel worktrees.",
+          "A built in terminal and a simulator panel the agent can drive.",
+          "Many harnesses, including ACP agents, on your own subscriptions.",
+          "Free and MIT licensed.",
+        ],
+        cons: [
+          "Sees only what it launched. Sessions from a terminal or IDE come in once, at setup, trimmed to 200 messages without tool activity; the import cannot be rerun later, and continuing an imported Claude thread fails today.",
+          "History lives in a separate SQLite file on each machine, with no sync between them and no export of a whole thread.",
+          "Search covers your messages and final answers only, and there is no memory agents can query and no line attribution.",
+          "The host machine must stay on; there are no cloud hosts or moving a live thread to another machine.",
+          "No teams, no sharing and no share links.",
+          "Pre 1.0 with several nightly builds a day; the README warns to expect bugs.",
+        ],
+      },
+    },
+    deepDives: [
+      {
+        heading: "Where your sessions come from",
+        paragraphs: [
+          "This is the real difference. T3 Code is a place you start agents. Its history is the threads it launched, kept in a SQLite database on the machine that ran them. If you already have months of Claude Code and Codex sessions from your terminal, T3 Code offers to import them once, in its welcome wizard: sessions from the last 30 days, each cut to the first prompt and the newest messages up to 200, with tool calls and attachments dropped. After onboarding the import is unreachable, nothing you run outside T3 Code shows up again, and its issue tracker has open reports of imported Claude threads failing on the first follow up and of Codex subagents imported as dozens of junk threads.",
+          "Codecast does not ask you to start agents anywhere in particular. Its daemon reads the transcripts Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark already write, in full, tool calls included, and keeps reading them. A session you started in a tmux pane an hour ago, one Cursor ran in your IDE, one a cron job launched, and one you started in T3 Code all land in the same inbox, live, on every device. Nothing is trimmed, and nothing stops syncing after setup.",
+        ],
+      },
+      {
+        heading: "What codecast gives one person",
+        paragraphs: [
+          "Codecast is not only for teams. Everything below works on the free plan, for one person and their own machines.",
+        ],
+        points: [
+          {
+            label: "One inbox for every agent and machine",
+            text: "Sessions sorted by who acts next: needs input, working, idle, done. Pin, stash, label and kill them. Laptop and cloud host sessions sit in the same list.",
+          },
+          {
+            label: "Steer a terminal session from anywhere",
+            text: "Messages you send from the web, the desktop app or the iOS app are typed into the live terminal session with delivery checks, and permission prompts can be approved from your phone.",
+          },
+          {
+            label: "Search and ask across everything you have run",
+            text: "Keyword and semantic search over every session, filtered by file, commit, pull request or time; cast ask answers a question across all of it, and your agents run the same queries before they start work.",
+          },
+          {
+            label: "cast blame",
+            text: "git blame whose author column is the conversation that wrote the line, in the terminal, the web repo view, VS Code, Cursor and vim.",
+          },
+          {
+            label: "Forks, workers and switching agents",
+            text: "Fork a conversation from any message in several directions at once, spawn workers on any agent that report back to the session that started them, or continue a session under another agent or model with its history.",
+          },
+          {
+            label: "Cloud hosts and live migration",
+            text: "Start a session on your own cloud machine from your checkout as it stands, mirror its tree back, and move live sessions between laptop and host mid turn.",
+          },
+          {
+            label: "Triggers and workflows",
+            text: "Follow ups after a delay, standing monitors on a schedule, and reactions to pull request comments or new issues, reporting into the session that armed them.",
+          },
+          {
+            label: "Usage limits are a pause",
+            text: "Save several Claude Code logins; a session that hits a limit parks and resumes at the reset or on the account with the most headroom.",
+          },
+          {
+            label: "Agents that reach past the editor",
+            text: "Drive your own signed in Chrome in a background tab, operate native macOS apps, use an iOS simulator from a shared pool, and publish reports and mockups at a link.",
+          },
+        ],
+      },
+      {
+        heading: "What T3 Code does better",
+        paragraphs: [
+          "T3 Code owns the agent process, so it can do things around a thread that a recorder cannot.",
+        ],
+        points: [
+          {
+            label: "The pull request loop",
+            text: "A worktree for each thread, one flow to commit, push and open the pull request on most git hosts, stacked PRs, and threads that settle themselves when the PR merges.",
+          },
+          {
+            label: "Rewind with files",
+            text: "Edit from an earlier message and revert the files too, on worktree threads. Codecast forks the conversation but the fork starts from the current checkout.",
+          },
+          {
+            label: "A terminal and a simulator next to the thread",
+            text: "A built in terminal and an iOS Simulator or Android Emulator panel the agent drives with its own tools.",
+          },
+          {
+            label: "Platforms",
+            text: "Native apps on Windows and Linux and an Android app. Codecast's desktop app is macOS only and its phone app is iOS only; elsewhere the daemon and the web app cover the same ground.",
+          },
+        ],
+      },
+    ],
+    whenCompetitor: [
+      "You want one app to start every thread in, and you are happy to start your agents there from now on.",
+      "You want the app to own the worktree, the commit and the pull request button, and to rewind files with the conversation.",
+      "You want a built in terminal and simulator panel, or native apps on Windows, Linux or Android.",
+    ],
+    whenCodecast: [
+      "You already run agents in terminals, IDEs and scripts and want all of it, including the sessions you ran before today, recorded and steerable without changing how you work.",
+      "You use more than one machine and want one history and one inbox across them, with live sessions you can move between laptop and cloud host.",
+      "You want to search and ask across everything your agents have done, have agents read that history themselves, and trace a line of code to the conversation that wrote it.",
+      "You want follow ups, monitors and workflows to run while you are away, and a team layer ready the day you share a project.",
+    ],
+    together:
+      "They compose. T3 Code drives the agents' own harnesses, which keep their transcripts on disk, so a Codecast daemon on the same machine syncs a T3 Code thread like any other session. We checked this on 2026-10-12 with a Claude thread and a Codex thread started in the T3 Code desktop app: both appeared in Codecast with no setup, the Claude one within about a minute. Start threads in T3 Code if you like its window, and Codecast keeps them in the same record as everything else you run.",
+  },
+  {
+    slug: "codecast-vs-amp",
+    competitor: "Amp",
+    competitorUrl: "https://ampcode.com",
+    title: "Codecast vs Amp",
+    dek: "Amp is a hosted coding agent: its own harness, threads stored on its servers, and cloud machines it starts for each thread. Codecast records and steers the agents you already run, Claude Code, Codex, Cursor and five more, on machines you control, and builds search, attribution, automation and a team layer on that record.",
+    verifiedOn: "2026-10-14",
+    codecastIs:
+      "Codecast is a workspace for your coding agents. A daemon watches the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live from every machine you use, including sessions started before you installed it. From web, desktop or phone you read, search, message and fork them and answer their permission prompts; triggers, workflows and cloud hosts keep work going while you are away; and a team layer (shared feed, chat, calls, tasks, docs, decisions) sits on the same record. It is MIT licensed with a backend you can host yourself.",
+    competitorIs:
+      "Amp, from Amp Frontier Corporation (spun out of Sourcegraph in December 2025), is a coding agent with its own harness. Threads run in orbs, cloud machines Amp creates for each thread, or on runners, machines of your own; you reach them from the web, macOS and iOS apps and a terminal CLI. Amp chooses the model behind each mode of its Dial, adds subagents such as Oracle and Librarian, and offers Puck, an assistant that starts and coordinates agents, in Slack and over MCP. Threads live on Amp's servers, shared with your workspace by default. It is closed source.",
+    bottomLine:
+      "The choice is about who owns the agent. Amp is the agent: you adopt its harness, its model choices and its servers, and in return you get managed cloud machines per thread, curated modes and a polished hosted product. Codecast owns no agent: you keep Claude Code, Codex, Cursor or whatever comes next, on your own subscriptions and machines, and Codecast gives all of them one record with search, line attribution, forks, permission prompts you answer from your phone, automation and a team layer. Pick Amp if you want one vendor to run the agent and the compute. Pick Codecast if you want to keep your agents and own the record of what they did.",
+    rows: [
+      {
+        dimension: "Core model",
+        codecast:
+          "Records and steers the agents you already run, from the transcripts they write on your machines",
+        competitor: "Is the agent: its own harness, with threads stored on Amp's servers",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor:
+          "Amp's own agent, with models Amp assigns to each mode; a Claude Code mode runs the Claude Agent SDK on your Claude plan inside an Amp thread",
+      },
+      {
+        dimension: "Sessions you already have",
+        codecast:
+          "Every session on a supported agent syncs live, whether it started in a terminal, an IDE or another app, and history already on disk is picked up",
+        competitor: "No import or view of sessions from Claude Code, Codex, Cursor or other agents; history starts with your first Amp thread",
+      },
+      {
+        dimension: "Models",
+        codecast:
+          "Whatever your agents run, on your own subscriptions; pick model and effort at launch or change them mid session, and switch a session to another agent with its history",
+        competitor:
+          "Four modes (low, medium, high, ultra) with models chosen by Amp; Tune Modes pins a model and effort per mode, Oracle and subagents",
+      },
+      {
+        dimension: "Where code runs",
+        codecast:
+          "Your machines and your own cloud hosts: start a session on a host from your checkout as it stands, and move live sessions between laptop and host mid turn",
+        competitor:
+          "Orbs, a managed cloud machine per thread that pauses when idle and is billed by the hour, or runners on your own machines, shareable with the workspace",
+      },
+      {
+        dimension: "Where history lives",
+        codecast: "A backend you can host yourself; transcripts stay on disk where your agents wrote them",
+        competitor: "Amp's servers on Google Cloud, encrypted at rest; no self hosting",
+      },
+      {
+        ...SHARED_ROWS.memory,
+        competitor:
+          "An activity feed and thread search by keyword, file, author, label or date; agents read other threads when you mention them",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not offered" },
+      {
+        dimension: "Branching and handoff",
+        codecast:
+          "Fork from any message in several directions at once; spawn workers on any agent that report back; cast handoff writes context for a fresh session",
+        competitor: "Handoff starts a fresh thread with the context that matters; fork was removed in January 2026",
+      },
+      {
+        dimension: "Permissions",
+        codecast:
+          "The agent's own permission prompts stay in force, answered from web, desktop or phone",
+        competitor:
+          "Does not ask before running tools by default; gating needs a policy plugin; orbs isolate each thread",
+      },
+      {
+        ...SHARED_ROWS.remote,
+        competitor:
+          "Web, macOS and iOS apps; a running CLI thread can be opened and messaged from another device; orb threads keep running with the laptop closed",
+      },
+      {
+        dimension: "Automation",
+        codecast:
+          "Triggers on a delay, a schedule or an event, workflows with approval gates, plans run in waves across agents, a decisions queue, and resume on another account at a usage limit",
+        competitor:
+          "A plain language schedule per thread, event driven orbs, threads that follow their PR's comments and checks, amp -x for CI, and SDKs for TypeScript and Python",
+      },
+      {
+        dimension: "Coordinating agents",
+        codecast:
+          "Sessions message each other; cast spawn, fork and plan orchestrate run work in parallel; org roles keep standing sessions on an area",
+        competitor: "Agents spawn and message each other; Puck starts, monitors and splits work across agents, by voice, in Slack or over MCP",
+      },
+      {
+        dimension: "Pull requests and review",
+        codecast:
+          "The session that opened a PR owns it and wakes for reviews and failing checks; batched line reviews; every PR and commit linked to its sessions",
+        competitor:
+          "A GitHub App that pushes as you and subscribes threads to PR comments and checks (github.com only); amp review with checks you define; Restack",
+      },
+      {
+        ...SHARED_ROWS.team,
+        competitor:
+          "One workspace per user, threads shared with it by default and admins able to read private ones; multiplayer threads; a call inside each thread; spend by model and member",
       },
       {
         dimension: "Around the sessions",
-        codecast: "Team chat, calls, tasks, plans, docs and decisions, with agents taking part in each",
-        competitor: "The threads themselves; a terminal, a simulator panel and an MCP server other agents can connect to",
+        codecast: "Team chat, calls, tasks, plans, docs, decisions and published pages, with agents taking part in each",
+        competitor: "Slack through Puck, a voice and video Space in each thread",
       },
-      { ...SHARED_ROWS.oss, competitor: "MIT; built to be forked" },
+      {
+        dimension: "Enterprise controls",
+        codecast: "Per conversation privacy levels, hashed project paths, optional encryption the server cannot read, self hosting",
+        competitor: "SSO, SCIM, groups, allowed model lists, an MCP allowlist, audit logs, IP allowlisting and SOC 2 Type II",
+      },
+      { ...SHARED_ROWS.oss, competitor: "Closed source" },
+    ],
+    strengths: {
+      codecast: {
+        pros: [
+          "Keeps the agents you have: eleven agent clients, local and cloud, on your own subscriptions, and no new harness to learn.",
+          "Every session you have run is in the record, including history from before you installed it, in full with tool calls.",
+          "cast blame traces any line of code to the conversation and message that wrote it; agents search and ask across the whole history before they start.",
+          "Fork any conversation from any message, in several directions, and switch a live session to another agent or model.",
+          "Permission prompts stay on and can be answered from a phone.",
+          "MIT licensed, self hostable, with per conversation privacy and optional encryption the server cannot read.",
+          "Tasks, plans, docs, decisions, triggers, workflows, published pages, browser and macOS app control all on the same record.",
+        ],
+        cons: [
+          "No managed cloud compute: cloud sessions run on a host you provide.",
+          "No curated model modes or built in Oracle and Librarian style subagents; you get what your agents ship.",
+          "No in house harness, so a capability your agent lacks (for example permission prompts on OpenCode launched from the web) is missing in Codecast too.",
+          "Fewer enterprise controls today: no SCIM, audit log export or IP allowlisting.",
+          "A fork branches the conversation, not the files.",
+          "The desktop app is macOS only and the phone app is iOS only.",
+        ],
+      },
+      competitor: {
+        pros: [
+          "Orbs: a cloud machine per thread that keeps working with the laptop closed and pauses when idle, with a shared terminal and desktop view.",
+          "Curated modes with models picked and tuned by Amp, plus Oracle, Librarian and Search subagents.",
+          "Thread references and handoff are first class: mention a thread and the agent reads it.",
+          "Puck coordinates agents by voice, from Slack, or from Claude and ChatGPT over MCP.",
+          "A full enterprise package: SSO, SCIM, audit logs, allowed models, SOC 2 Type II, and spend broken down by model and member.",
+          "Free with your own runners and keys; model use billed at provider prices.",
+        ],
+        cons: [
+          "Only Amp's agent. Sessions from Claude Code, Codex, Cursor and others are not imported or shown, and your history starts at your first Amp thread.",
+          "Closed source and hosted only: threads live on Amp's servers with no self hosting.",
+          "Does not ask before running tools by default.",
+          "No line attribution, and fork, public threads, the editor extensions and custom commands have all been removed during 2026.",
+          "One workspace per user, and admins can read members' private threads.",
+          "GitHub integration covers github.com only, not GitHub Enterprise Server.",
+        ],
+      },
+    },
+    deepDives: [
+      {
+        heading: "Owning the agent versus owning the record",
+        paragraphs: [
+          "Amp's view is that the agent is the product. It ships its own harness, decides which model sits behind each mode, runs threads on machines it manages, and keeps every thread on its servers. That is how it can offer orbs, curated modes and a coordinator like Puck: it controls every piece.",
+          "Codecast's view is that people should keep choosing their agents, and that the lasting value is the record of what those agents did. So it owns no agent. It reads the transcripts that Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark write on your machines, syncs them live, and builds everything else on top: steering, search, attribution, forks, automation and the team layer. When a better agent ships next month, it joins the same record instead of starting a new silo.",
+          "The tradeoff is real in both directions. Amp can do things only a harness owner can, such as pausing a whole machine with its thread. Codecast keeps working the day you change agents, and keeps the history you already have.",
+        ],
+      },
+      {
+        heading: "Your existing sessions",
+        paragraphs: [
+          "Amp has no way to bring in the work you did in other agents. Its closest feature, Claude Code mode, runs the Claude Agent SDK on your Claude plan inside a new Amp thread; it does not import the sessions already in your Claude Code history.",
+          "Codecast starts from that history. The first time the daemon runs it picks up the sessions already on disk for every supported agent, and from then on each new session syncs live with its tool calls, diffs and permission prompts, whether you started it in a terminal, Cursor, T3 Code, a script or a trigger.",
+        ],
+      },
+      {
+        heading: "What Amp has that codecast does not",
+        paragraphs: [],
+        points: [
+          {
+            label: "Managed cloud machines",
+            text: "Each orb is a cloud machine created for a thread, with a shared terminal and desktop view, that keeps working when you close the laptop and resumes intact after it pauses. Codecast runs cloud sessions on hosts you provide.",
+          },
+          {
+            label: "Curated modes and specialist subagents",
+            text: "Amp tunes the model and effort behind each of its four modes and adds Oracle for hard reasoning, Librarian for reading other codebases, and a Search subagent.",
+          },
+          {
+            label: "Puck",
+            text: "An assistant that starts, monitors and messages agents, splits work across them, takes voice, works in Slack, and is exposed over MCP to Claude and ChatGPT.",
+          },
+          {
+            label: "Enterprise administration",
+            text: "SCIM, groups, allowed model lists, an MCP registry allowlist, audit logs, IP allowlisting, SOC 2 Type II, and spend reporting by model, mode and member with CSV export.",
+          },
+          {
+            label: "Code review checks",
+            text: "amp review runs checks you define in your repository, and Restack tidies a branch's commits.",
+          },
+          {
+            label: "A native app for iPad and macOS that runs threads",
+            text: "The Mac app can act as a runner itself. Codecast's macOS app and iOS app steer sessions that run in your terminals and hosts.",
+          },
+        ],
+      },
+      {
+        heading: "What codecast has that Amp does not",
+        paragraphs: [],
+        points: [
+          {
+            label: "Any agent, and the history you already have",
+            text: "Eleven agent clients including Claude Code, Codex, Cursor and the Cursor and Codex cloud agents, with sessions from before you installed codecast included.",
+          },
+          {
+            label: "Line attribution",
+            text: "cast blame resolves any line of code to the conversation and message that wrote it, in the terminal, the web repo view, VS Code, Cursor and vim, and agent commits carry a trailer that leads back to the session.",
+          },
+          {
+            label: "Forks",
+            text: "Branch a conversation from any message, in several directions at once, locally or on a cloud host. Amp removed its fork in January 2026 in favor of handoff.",
+          },
+          {
+            label: "Permission prompts from anywhere",
+            text: "Your agent's own permission model stays in force and you approve or deny from web, desktop or phone. Amp runs tools without asking unless a policy plugin intervenes.",
+          },
+          {
+            label: "Open source and your own backend",
+            text: "MIT licensed and documented for self hosting, with per conversation privacy and optional encryption the server cannot read. Amp is closed source and hosted only.",
+          },
+          {
+            label: "Work tracking on the same record",
+            text: "Tasks assigned to agents, plans run in parallel waves, docs, a decisions queue, team chat, transcribed calls whose action items become tasks, and Linear and GitHub issue sync.",
+          },
+          {
+            label: "Agents that reach past the code",
+            text: "Drive your own signed in Chrome in a background tab, operate native macOS apps, use iOS simulators, and publish reports at a link with versions and comments.",
+          },
+          {
+            label: "Usage limits are a pause",
+            text: "Save several Claude Code logins; a session that hits a limit parks and resumes at the reset or on the account with the most headroom.",
+          },
+        ],
+      },
+      {
+        heading: "Teams and privacy",
+        paragraphs: [
+          "Amp puts each user in one workspace. Threads in workspace projects are shared with the workspace by default, workspace admins can read members' private threads, and credits are pooled. Enterprise adds groups and visibility controls.",
+          "Codecast keeps sessions private by default. You map a project directory to a team and its sessions are shared from then on, at the level each member chooses: hidden, a summary, or the full conversation. You can switch between a personal workspace and several teams, and the data can live on a backend you run.",
+        ],
+      },
     ],
     whenCompetitor: [
-      "You work alone and want one fast window to start, watch and review your own agent threads.",
-      "You want the widest choice of harnesses on your own subscriptions, including Grok Build, OpenCode and Antigravity.",
-      "You want the app itself to own the branch, the worktree and the pull request for each thread.",
-      "You want something you can fork and reshape.",
+      "You want one vendor to provide the agent, the model choices and the cloud machines, and you are happy to move your work into its threads.",
+      "You want a managed cloud machine for each thread that keeps going with your laptop closed.",
+      "You need SCIM, audit logs, allowed model lists and IP allowlisting today.",
+      "You like the idea of a coordinator you can talk to, from Slack or by voice.",
     ],
     whenCodecast: [
-      "More than one person runs agents, and you need to see each other's sessions, hand work over and answer what is waiting.",
-      "You keep running agents in your own terminals and want them recorded without changing how you start them.",
-      "You want a permanent record your agents can search, and any line of code traced back to the conversation that wrote it.",
-      "The work around the code matters as much as the sessions: tasks, plans, docs, chat and decisions in the same place.",
+      "You use Claude Code, Codex, Cursor or several agents and want to keep them, on your own subscriptions.",
+      "You want every session you have run, including history from before today, in one searchable record you can host yourself.",
+      "You want to trace code to the conversation that wrote it, fork conversations, and keep permission prompts on while you steer from your phone.",
+      "You want tasks, plans, docs, decisions, triggers and team chat built on the same record as the sessions.",
     ],
     together:
-      "They compose. T3 Code drives the agents' own harnesses, which keep their transcripts on disk, so a Codecast daemon on the same machine syncs a T3 Code thread like any other session. We checked this on 2026-10-12 with a Claude thread and a Codex thread started in the T3 Code desktop app: both appeared in Codecast with no setup, the Claude one within about a minute. Run threads in T3 Code, and let Codecast give them a team, a search box and a history.",
+      "They do not overlap today. Amp threads run in Amp's harness and live on Amp's servers, so there is no transcript on disk for a codecast daemon to read. If your team runs Amp beside Claude Code or Codex, codecast records the Claude Code and Codex sessions as usual and Amp keeps its own threads.",
   },
   {
     slug: "codecast-vs-delta",

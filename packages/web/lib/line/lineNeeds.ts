@@ -1,24 +1,27 @@
 // What waits on the viewer in the line (line-journeys.md LJ6.1): one selector
 // over the Inbox's rows (lineInbox buildLineInbox, every process), read by the
 // nav's one count, the For you page, a problem's act band, a run's person step
-// and a step's waiting rows. A need is counted only when the viewer can answer
-// it now, in the reader, with no run started:
+// and a step's waiting rows. A line puts one thing in front of a person per
+// problem: the decision the session that built the fix presents at the end of
+// its run. So a need is counted (it is For you, and the nav's count) only when
+// it is that decision:
 //   decision  a fix a session presents            -> answered on the decision
-//   question  a problem holding on a fact         -> answered in the Ask block
-//   confirm   a new problem: is this real?        -> answered in the Ask block
-//   stopped   a step finished and needs a yes     -> Go on (a new run, reviewed) / Not a problem in the reader
-//   review    a build handed off for review       -> Open its pull request (Ship, reviewed) in the reader
-//   unlanded  an approved fix nothing merged       -> Open or merge its pull request (Ship, reviewed) in the reader
-//   fixed     a run found main already fixes it   -> Close as fixed in the reader
-//   assigned  a problem assigned to the viewer    -> Hand it to the line, or Close, in the reader
+// Everything else about a problem is the line's to carry, and is kept,
+// uncounted, as the problem's state on Problems, where whoever opens the
+// problem can still read and act on it:
+//   unlanded  an approved fix nothing merged       -> Approved, not merged: the line lands it (Rebase, then Ship)
+//   fixed     a run found main already fixes it   -> Needs a new ask: Close as fixed on its row
+//   assigned  a problem assigned to the viewer    -> Not started, held by them
 //   duplicate a problem the line reads as an older one's twin (overlap), with nothing of the older one asked
-//                                                 -> Merge into the older one in the reader
+//                                                 -> Needs a new ask: Merge into the older one on its row
+//   question  a problem holding on a fact         -> Not started, waiting on its project's lead role
+//   confirm   a new problem: is this real?        -> Not started, waiting on its project's lead role
+//   stopped   a step finished with no next step   -> Needs a new ask: a new run goes on
+//   review    a build no session presented        -> Needs a new ask: its run presents it
+//   lapsed    a fix built, asked, never answered  -> Needs a new ask: a new run asks again
+//   reask     a paused run nobody can answer      -> Needs a new ask: its agent presents again
 // A question or a confirm on a problem that is an older one's twin is not asked twice: it folds into the older
-// problem's need (foldDuplicateNeeds), one row whose findings are both problems', counted once, merged by one act.
-// The rest are kept, uncounted, for the surfaces that show a problem's state
-// (its band, a run's step, Problems' "Needs a new ask"), never For you's list:
-//   lapsed    a fix built, asked, never answered  -> a new run asks again
-//   reask     a paused run nobody can answer      -> its agent presents again
+// problem's need (foldDuplicateNeeds), one row whose findings are both problems'.
 // A run whose step failed, a silent run, a problem waiting for more findings
 // and a project whose line is off are never needs: they are Problems statuses. What a product's agents asked its team to
 // do (Union's escalations) is the team's, not the viewer's: the Escalation finder's Team asks list holds it (teamAsks).
@@ -174,7 +177,7 @@ export function needKind(row: Pick<InboxRow, "kind" | "fail">): NeedKind | null 
   return by[row.kind] ?? null;
 }
 
-const COUNTED: ReadonlySet<NeedKind> = new Set(["decision", "question", "confirm", "stopped", "review", "unlanded", "fixed", "assigned", "duplicate"]);
+const COUNTED: ReadonlySet<NeedKind> = new Set(["decision"]);
 export const needCounted = (kind: NeedKind): boolean => COUNTED.has(kind);
 
 type ProcessOf = { row: (row: Pick<InboxRow, "caseId" | "runId" | "projectId">) => string | null | undefined };
@@ -224,7 +227,7 @@ export function foldDuplicateNeeds(needs: ReadonlyArray<LineNeed>, twinOf: TwinO
       folded.set(twin.caseId, [...(folded.get(twin.caseId) ?? []), { ref: n.problemRef, caseId: n.caseId!, projectId: n.projectId, findings: n.findings }]);
       continue;
     }
-    out.push({ ...n, kind: "duplicate", counted: true, ask: `Same as ${twin.ref ?? "an older problem"}`, line: n.title, dupOf: twin });
+    out.push({ ...n, kind: "duplicate", counted: needCounted("duplicate"), ask: `Same as ${twin.ref ?? "an older problem"}`, line: n.title, dupOf: twin });
   }
   return out.map((n) => {
     const dups = n.caseId ? folded.get(n.caseId) : undefined;
@@ -246,33 +249,29 @@ export function rowLine(kind: NeedKind, ask: string, title: string): string {
  *  and never counted with what changes the product. A judge fix is not practice: its Publish writes the judges. */
 export const isPractice = (n: Pick<LineNeed, "kind" | "trial" | "publishes">): boolean => n.trial && n.kind === "decision" && !n.publishes;
 
-/** "For you": the needs the viewer can clear in the reader that change the product (a trial's practice answers are not
- *  among them). The one count, shown on the nav entry. */
 /** The needs of one line (`process`, its graph key), in one project when `project` is given: the Line page's "waiting on
  *  you" and the For you list that figure opens (`process` in the address). Null process keeps every need. */
 export const needsOfLine = <N extends Pick<LineNeed, "process" | "projectId">>(needs: ReadonlyArray<N>, process: string | null | undefined, project?: string | null): N[] =>
   !process ? [...needs] : needs.filter((n) => n.process === process && (!project || n.projectId === project));
 
+/** "For you": the fixes the viewer is asked to decide that change the product (a trial's practice answers are not
+ *  among them). The one count: the nav entry's, the reader's "N of M" and Problems' "Waiting on you". */
 export const needCount = (needs: ReadonlyArray<LineNeed>): number => needs.reduce((n, x) => n + (x.counted && !isPractice(x) ? 1 : 0), 0);
 
-export type NeedGroupKey = "decision" | "review" | "unlanded" | "question" | "confirm" | "duplicate" | "stopped" | "fixed" | "assigned" | "practice" | "newask";
-export type NeedGroup = { key: NeedGroupKey; label: string; counted: boolean; needs: LineNeed[] };
+export type NeedGroupKey = "decision" | "practice";
+export type NeedGroup = { key: NeedGroupKey; label: string; needs: LineNeed[] };
 
-/** Each group named for its act (LJ8.1), in the order a person clears them. */
-export const NEED_GROUP_LABELS: Record<NeedGroupKey, string> = { decision: "Fixes to decide", review: "Built fixes to review", unlanded: "Approved, not merged", question: "Questions", confirm: "New: is this real?", duplicate: "Same as another problem", stopped: "Go on to the next step?", fixed: "Already fixed on main", assigned: "Assigned to you", practice: "Trial: what would you do?", newask: "Needs a new ask" };
-const GROUP_ORDER: NeedGroupKey[] = ["decision", "review", "unlanded", "question", "confirm", "duplicate", "stopped", "fixed", "assigned", "practice", "newask"];
-/** A built fix on a branch is worth the most, so it leads "Needs a new ask". */
-const NEWASK_ORDER: NeedKind[] = ["lapsed", "reask"];
-const groupOf = (n: LineNeed): NeedGroupKey => (isPractice(n) ? "practice" : COUNTED.has(n.kind) ? (n.kind as NeedGroupKey) : "newask");
+/** Each group named for what the person is asked, in their words. */
+export const NEED_GROUP_LABELS: Record<NeedGroupKey, string> = { decision: "Ship these fixes?", practice: "Trial: what would you do?" };
 
-/** The needs as the For you list shows them: the counted groups, then a trial's practice answers, then "Needs a new
- *  ask"; inside a group, oldest first. */
+/** The counted needs as For you lists them: the fixes to decide, then a trial's practice answers apart; inside a
+ *  group, oldest first. An uncounted need is never listed. */
 export function needGroups(needs: ReadonlyArray<LineNeed>): NeedGroup[] {
   const oldest = (a: LineNeed, b: LineNeed) => (a.since ?? Infinity) - (b.since ?? Infinity);
-  return GROUP_ORDER.map((key) => {
-    const rows = needs.filter((n) => groupOf(n) === key).sort((a, b) => (key === "newask" ? NEWASK_ORDER.indexOf(a.kind) - NEWASK_ORDER.indexOf(b.kind) : 0) || oldest(a, b));
-    return { key, label: NEED_GROUP_LABELS[key], counted: key !== "newask" && key !== "practice", needs: rows };
-  }).filter((g) => g.needs.length > 0);
+  const counted = needs.filter((n) => n.counted);
+  return (["decision", "practice"] as const).map((key) => ({
+    key, label: NEED_GROUP_LABELS[key], needs: counted.filter((n) => isPractice(n) === (key === "practice")).sort(oldest),
+  })).filter((g) => g.needs.length > 0);
 }
 
 /** The needs in list order: what the reader's previous and next walk. */
@@ -292,7 +291,7 @@ export const needOfCase = (needs: ReadonlyArray<LineNeed>, caseId: string | null
  *  how long the fix has sat. */
 export function unlandedNeed(p: { id: string; ref: string | null; title: string; name: string | null; projectId: string | null; process: string | null }, fix: UnlandedFix): LineNeed {
   return {
-    key: `unlanded:${p.id}`, ref: p.ref ?? p.id, kind: "unlanded", counted: true, ask: p.title, line: p.title, title: p.title, name: p.name,
+    key: `unlanded:${p.id}`, ref: p.ref ?? p.id, kind: "unlanded", counted: needCounted("unlanded"), ask: p.title, line: p.title, title: p.title, name: p.name,
     problemRef: p.ref, caseId: p.id, projectId: p.projectId, process: p.process, since: fix.at, runId: fix.runId,
     decisionRef: null, cardRef: null, trial: false, note: null, fail: null, why: null, findings: null, approvedBy: fix.answeredBy, behind: fix.behind,
     aliases: fix.ref ? [fix.ref] : [],
