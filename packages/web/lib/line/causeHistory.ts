@@ -12,6 +12,7 @@ import {
   type HistoryAttempt as SharedHistoryAttempt,
   type HistoryDecisionRow,
   type DeployRow,
+  type HandMerge,
   type OccurrenceRow,
   type RunSaid,
 } from "@codecast/shared/contracts/causeHistory";
@@ -23,7 +24,7 @@ export {
   backTimes, carryingDeploys, historyBrief, earlierFixes, closesSummary, closesArgument, closedAtStep, unshippedGuard,
   type OccurrenceRow, type DeployRow, type RunMergeRow, type Occurrence, type AttemptCard, type AttemptMerge, type CarriedHow,
   type HistoryDeploy, type FixBasis, type HistoryShip, type WatchState, type HistoryWatch, type HistoryRegression, type DeployCoverage,
-  type EarlierFix, type HistoryClose, type CloseFold, foldTarget, type HistoryRecurrence, type CloseKind, type CloseArgument, type RunSaid,
+  type EarlierFix, type HandMerge, type HistoryClose, type CloseFold, foldTarget, type HistoryRecurrence, type CloseKind, type CloseArgument, type RunSaid,
 } from "@codecast/shared/contracts/causeHistory";
 
 export type HistoryAttempt = SharedHistoryAttempt<RunOutcome>;
@@ -44,6 +45,8 @@ export type HistoryInput = {
   watchDays: number | null;
   /** When the fix of a cause a close folded into went live, when known. */
   foldFixAt?: (into: string) => number | null;
+  /** The cause's fix branch merged through its pull request by hand (problemPage fixMerges). */
+  handMerge?: HandMerge | null;
   now: number;
 };
 

@@ -2,7 +2,7 @@
 // pure: the act band's state (every problem has exactly one), the one line
 // that states it beside the stage track, the runs as Work rows, and a
 // finding's own text and where it leads. The components only draw this.
-import { carryingDeploys, type CauseHistory, type HistoryAttempt } from "./causeHistory";
+import { type CauseHistory, type HandMerge, type HistoryAttempt } from "./causeHistory";
 import { unlandedFix } from "./approvedFix";
 import type { InboxRow } from "./lineInbox";
 import { askParts, fixedOnMain, waitsForFindings } from "./lineInbox";
@@ -155,8 +155,6 @@ export type BandInput = {
   approver?: string | null;
   /** Findings after the newest fix that cite another expectation than the problem's. */
   offTopic?: number;
-  /** The problem's fix branch merged through a pull request (useFixPullRequest): when and where. */
-  prMerged?: { at: number; url: string } | null;
   /** What the newest run's ship (or merge) step printed, whole: why a fix approved to ship did not merge. */
   shipOutput?: string | null;
   /** The problem's notes, oldest first: where an escalated run said why it handed the problem back. */
@@ -303,17 +301,6 @@ export function problemBand(i: BandInput): ProblemBand {
   const need = (i.need?.runId && last && i.need.runId !== last.runId && h.attempts.some((a) => a.runId === i.need!.runId)) || i.need?.kind === "fixed" ? null : i.need;
   const state = problemState(h, issue.status);
   const terminal = issue.status === "done" || issue.status === "dropped";
-  // A fix merged through its pull request with no merge on the line's record (its merge step off, so a person merged
-  // the run's branch by hand): the pull request's merge is the record (ct-58282, union-mobile#3859), never "withdrawn".
-  const handMerged = i.prMerged && !h.attempts.some((a) => a.merge || a.live) && issue.status !== "dropped" && !h.regressed && !h.cameBack ? i.prMerged : null;
-  if (handMerged) {
-    // Which recorded deploy carried it, by the rule every merge is read with: a live deploy of the same code after it.
-    const repository = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(handMerged.url)?.[1] ?? null;
-    const carried = carryingDeploys({ sha: "", branch: "", into: "", at: handMerged.at, prUrl: handMerged.url, repository }, h.coverage.live ?? [], "")[0];
-    if (carried) return { kind: "production", mergedAt: handMerged.at, link: handMerged.url, sha: null, liveAt: carried.at, target: carried.target, deployUrl: carried.url, watchEnd: null, watch: null, since: h.occurrences.filter((o) => o.at > carried.at).length, sinceOff: i.offTopic ?? 0, faults: faultsAfter(issue, carried.at) };
-    return { kind: "merged", mergedAt: handMerged.at, link: handMerged.url, sha: null, recorded: h.coverage.state, lastDeploy: lastDeployOf(h) };
-  }
-
   if (need) {
     const stopped = need.kind === "stopped" || need.kind === "review" ? run?.visits.find((x) => x.node === need.fail?.step)?.label ?? need.fail?.step ?? null : null;
     const lapsed = need.kind === "lapsed";
@@ -400,9 +387,9 @@ export function problemBand(i: BandInput): ProblemBand {
       const d = ship.deploys[0];
       const watch = shownWatches(h).find((w) => w.runId === ship.runId) ?? null;
       const back = h.regressions.find((r) => r.afterRunId === ship.runId);
-      return { kind: "production", mergedAt: merge?.at ?? null, link: merge?.prUrl ?? null, sha: merge?.sha ?? null, liveAt: d.at, target: d.target, deployUrl: d.url, watchEnd: watch?.end ?? null, watch: watch && watch.state !== "unknown" ? watch.state : null, since: back?.count ?? 0, sinceOff: i.offTopic ?? 0, faults: faultsAfter(issue, d.at) };
+      return { kind: "production", mergedAt: merge?.at ?? null, link: merge?.prUrl ?? null, sha: merge?.sha || null, liveAt: d.at, target: d.target, deployUrl: d.url, watchEnd: watch?.end ?? null, watch: watch && watch.state !== "unknown" ? watch.state : null, since: back?.count ?? 0, sinceOff: i.offTopic ?? 0, faults: faultsAfter(issue, d.at) };
     }
-    if (merge && !reopenedSince) return { kind: "merged", mergedAt: merge.at, link: merge.prUrl, sha: merge.sha, recorded: h.coverage.state, lastDeploy: lastDeployOf(h) };
+    if (merge && !reopenedSince) return { kind: "merged", mergedAt: merge.at, link: merge.prUrl, sha: merge.sha || null, recorded: h.coverage.state, lastDeploy: lastDeployOf(h) };
   }
   // The run reached its ship step with an answer, and nothing merged: say so, with the step's own reason.
   if (unlanded && last) return approvedBand(i, last, before, null);
@@ -500,14 +487,14 @@ export function bandLine(b: ProblemBand): { text: string; tone: "you" | "bad" | 
   switch (b.kind) {
     case "need":
       if (b.need === "decision") return { text: `Fix to decide${b.since ? `, since ${dayWords(b.since)}` : ""}`, tone: "you" };
-      if (b.need === "question") return { text: "Question for you", tone: "you" };
-      if (b.need === "confirm") return { text: "New: is this real?", tone: "you" };
+      if (b.need === "question") return { text: "Holds on an open question", tone: "warn" };
+      if (b.need === "confirm") return { text: "New, not confirmed", tone: "warn" };
       // A card taken back unanswered is "Withdrawn", the word the decision itself and For you use.
       if (b.need === "lapsed") return { text: unansweredWords(b.withdrawn ?? false, b.askedAt), tone: "warn" };
-      if (b.need === "stopped") return { text: b.ask ?? `Stopped${b.step ? ` at ${b.step}` : ""}: go on?`, tone: "you" };
-      if (b.need === "review") return { text: `Built, waiting on a review${b.step ? ` at ${b.step}` : ""}`, tone: "you" };
-      if (b.need === "assigned") return { text: "Assigned to you", tone: "you" };
-      if (b.need === "duplicate") return { text: b.ask ?? "Same as another problem", tone: "you" };
+      if (b.need === "stopped") return { text: b.ask ?? `Stopped${b.step ? ` at ${b.step}` : ""}: go on?`, tone: "warn" };
+      if (b.need === "review") return { text: "Built, not presented", tone: "warn" };
+      if (b.need === "assigned") return { text: "Assigned to you", tone: "none" };
+      if (b.need === "duplicate") return { text: b.ask ?? "Same as another problem", tone: "none" };
       // Why a new ask is needed, never the group's own name: the card it holds can take no answer.
       if (b.why) return { text: /removed/.test(b.why) ? "Card's step was removed" : "Card has no session to answer", tone: "warn" };
       return { text: "Paused, nothing asked", tone: "warn" };
@@ -515,7 +502,7 @@ export function bandLine(b: ProblemBand): { text: string; tone: "you" | "bad" | 
     case "decision":
       if (b.mine) return { text: `Fix to decide${b.since ? `, since ${dayWords(b.since)}` : ""}`, tone: "you" };
       return b.mine === false ? { text: "Waiting on someone else", tone: "none" } : { text: "Waiting on an answer", tone: "none" };
-    case "ask": return b.unsupported ? { text: "No supporting finding", tone: "warn" } : { text: b.required ? "Question for you" : "New: is this real?", tone: "you" };
+    case "ask": return b.unsupported ? { text: "No supporting finding", tone: "warn" } : { text: b.required ? "Holds on an open question" : "New, not confirmed", tone: "warn" };
     case "failed": return { text: b.silent ? `${b.step} ended without a report` : b.stop ? `${b.stop.charAt(0).toUpperCase()}${b.stop.slice(1)} at ${b.step}` : b.step === NO_STEP ? (b.ended ? b.ended.replace(/\.$/, "") : "Failed before any step ran") : `Failed at ${b.step}`, tone: b.stop ? "warn" : "bad" };
     case "stalled": return { text: `No progress for ${spanShort(b.silentMs)}${b.step ? ` at ${b.step}` : ""}`, tone: "bad" };
     case "running": return { text: b.doing, tone: "live" };
@@ -612,10 +599,12 @@ export function problemNow(b: ProblemBand): { status: StatusKey; phrase: string 
   const status: StatusKey = (() => {
     switch (b.kind) {
       // A trial's practice answer is filed with the trial, never with what waits on the viewer to change the product.
-      case "need": return b.trial ? "trial" : b.need === "decision" || b.need === "question" || b.need === "confirm" || b.need === "stopped" || b.need === "review" || b.need === "assigned" || b.need === "duplicate" ? "you" : "newask";
+      // Only the end decision waits on the viewer (lineNeeds COUNTED). The rest holds the problem where it is: a fact
+      // it waits on, a person holding it or a twin to merge is not started, a run that ended short needs a new one.
+      case "need": return b.trial ? "trial" : b.need === "decision" ? "you" : b.need === "question" || b.need === "confirm" || b.need === "assigned" || b.need === "duplicate" ? "notstarted" : "newask";
       case "decision": return b.mine ? "you" : "others";
       // A problem that rests on no finding asks nobody: a person closes it (Needs a new ask).
-      case "ask": return b.unsupported ? "newask" : "you";
+      case "ask": return b.unsupported ? "newask" : "notstarted";
       case "failed": case "stalled": case "escalated": return "failed";
       case "running": return "running";
       case "approved": return "approved";
@@ -628,8 +617,8 @@ export function problemNow(b: ProblemBand): { status: StatusKey; phrase: string 
       // The close is in doubt and nothing is asked: a person reopens it, moves the findings out, or closes it again.
       case "returned": return "newask";
       case "review": return b.holder ? "others" : "newask";
-      // Main already carries its fix: the one act is a person's, closing it (For you lists it too).
-      case "parked": return b.fixedSha ? "you" : "notstarted";
+      // Main already carries its fix: the line closes it (park.sh); one parked before that is closed from its row.
+      case "parked": return b.fixedSha ? "newask" : "notstarted";
       case "morefindings": return "notstarted";
       // Grounding found nothing to change: it ended, nothing will start it, and closing it is a person's act no answer reaches.
       case "notstarted": return b.nothing != null ? "newask" : "notstarted";
@@ -818,7 +807,7 @@ export function workRows(h: CauseHistory, runs: ReadonlyArray<LineRunModel>, opt
       waitingSince: paused ? (() => { const w = run?.visits[run.visits.length - 1]; return w?.startedAt ?? w?.at ?? null; })() : null,
       headline: personWords(card?.headline ?? a.proposed ?? a.found ?? a.outcome.text), outcome, tone,
       found: a.found ? personWords(a.found) : null,
-      change: a.diff || merge ? { files: a.diff?.files ?? 0, added: a.diff?.added ?? 0, removed: a.diff?.removed ?? 0, pr: a.diff?.pr ?? merge?.prUrl ?? null, branch: merge?.branch ?? null, sha: merge?.sha ?? null, commitUrl: merge?.repository && merge.sha ? `https://github.com/${merge.repository}/commit/${merge.sha}` : null } : null,
+      change: a.diff || merge ? { files: a.diff?.files ?? 0, added: a.diff?.added ?? 0, removed: a.diff?.removed ?? 0, pr: a.diff?.pr ?? merge?.prUrl ?? null, branch: merge?.branch || null, sha: merge?.sha || null, commitUrl: merge?.repository && merge.sha ? `https://github.com/${merge.repository}/commit/${merge.sha}` : null } : null,
       proof: runProof(run),
       answer: card ? { ref: card.ref, words: (card.answer && opts.trial?.(a.runId) ? `${wouldLabel(card.answer)} · trial` : card.answer) ?? (a.unapproved ? "No answer" : card.status === "pending" || card.status === "waiting" ? "Waiting on an answer" : card.status.charAt(0).toUpperCase() + card.status.slice(1)), at: card.answeredAt } : null,
       opens: !!run,
@@ -1106,21 +1095,22 @@ export function findingCutWords(cut: NonNullable<FindingCut>, url: string | null
 }
 
 /** The pull request rows `fixMerges` reads (the store's pullRequests). */
-export type FixPullRequest = { state?: string; merged_at?: number; head_ref?: string; task_ids?: string[]; repository?: string; number?: number };
+export type FixPullRequest = { state?: string; merged_at?: number; head_ref?: string; base_ref?: string; task_ids?: string[]; repository?: string; number?: number };
 
 /**
  * Problems whose fix branch (`codecast/line-<ref>`, the branch the line builds on) merged through a pull request linked
  * to them, keyed by task id: when, and the pull request. A person lands the run's branch this way when the line's merge
- * step is off, and the line's own record never hears of it (ct-58282, union-mobile#3859). The band reads it (prMerged).
+ * step is off, and the line's own record never hears of it (ct-58282, union-mobile#3859). Each problem's history reads it
+ * as its merge (causeHistory handMerge), so every surface says merged and in production from the same record.
  */
-export function fixMerges(prs: Iterable<FixPullRequest>, refOf: (taskId: string) => string | null | undefined): Map<string, { at: number; url: string }> {
-  const out = new Map<string, { at: number; url: string }>();
+export function fixMerges(prs: Iterable<FixPullRequest>, refOf: (taskId: string) => string | null | undefined): Map<string, HandMerge> {
+  const out = new Map<string, HandMerge>();
   for (const pr of prs) {
     if (pr.state !== "merged" || !pr.merged_at || !pr.head_ref?.startsWith("codecast/line-")) continue;
     for (const id of pr.task_ids ?? []) {
       if (`codecast/line-${refOf(id)}` !== pr.head_ref) continue;
       const prev = out.get(id);
-      if (!prev || prev.at < pr.merged_at) out.set(id, { at: pr.merged_at, url: `https://github.com/${pr.repository}/pull/${pr.number}` });
+      if (!prev || prev.at < pr.merged_at) out.set(id, { at: pr.merged_at, url: `https://github.com/${pr.repository}/pull/${pr.number}`, branch: pr.head_ref, into: pr.base_ref ?? null });
     }
   }
   return out;
