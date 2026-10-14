@@ -104,7 +104,8 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
           />
           {refused && <p className="px-3 pb-1.5 text-[11.5px] text-sol-red" data-discussion-refused>Not sent: {refused}</p>}
           <div className="flex items-center gap-2 border-t border-sol-border/40 px-3 py-1.5 text-[11.5px] text-sol-text-dim">
-            <span className="min-w-0 flex-1 truncate" title={ownerReason(owner.via)}>Goes to <span className="text-sol-text-muted">{ownerName}</span>. {ownerReason(owner.via)}</span>
+            {/* The box already names who it asks: only a discussion that goes elsewhere than the session that asked says where, and why. */}
+            {owner.via === "asker" ? <span className="flex-1" /> : <span className="min-w-0 flex-1 truncate" title={ownerReason(owner.via)}>Goes to <span className="text-sol-text-muted">{ownerName}</span>. {ownerReason(owner.via)}</span>}
             <span className="hidden sm:inline-flex items-center gap-1"><KeyCap size="xs">esc</KeyCap>close</span>
             <button type="button" onClick={send} disabled={!text.trim()} className="inline-flex items-center gap-1 rounded-md bg-sol-cyan/15 px-2 py-0.5 text-sol-cyan hover:bg-sol-cyan/25 disabled:opacity-40 transition-colors">
               Send<KeyCap size="xs">return</KeyCap>
