@@ -41,8 +41,9 @@ export function ProcessView(props: LineViewProps) {
   return <StepsPage {...props} toggle={toggle} />;
 }
 
-/** The Problems chip the summary row points at: problems no run has taken. */
-const NOT_TAKEN = ["notstarted"] as const;
+/** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again and problems
+ *  no run has taken. */
+const NOT_TAKEN = ["newask", "notstarted"] as const;
 
 const COLS: Array<{ show: StepShow; label: string }> = [
   { show: "waiting", label: "Waiting" },
@@ -84,8 +85,8 @@ const StepsPage = memo(function StepsPage({ model, workspace: ws, selection, sel
         </span>
         <div className="lst-bar-r">{toggle}</div>
       </header>
-      {/* The problems the line has not taken: they open Problems' Not started, where each project's start control lives. */}
-      <ProblemPointers keys={NOT_TAKEN} counts={counts} href={href} process={line} className="lst-pointers" label="Not on the line" />
+      {/* The line's queue: they open Problems' chips, where each row's act and each project's start control live. */}
+      <ProblemPointers keys={NOT_TAKEN} counts={counts} href={href} process={line} className="lst-pointers" label="The line's queue" />
 
       {rows.length ? (
         <table className="lst-table">
