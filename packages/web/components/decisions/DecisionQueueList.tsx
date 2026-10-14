@@ -21,7 +21,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, stackDue, STACK_GROUP_MIN, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
-import { answeredLabel, answeredLine, answerSaid, questionAsStatement } from "../../lib/decisionQueue";
+import { answeredLabel, answeredLine, answerSaid, askedOfViewer, questionAsStatement } from "../../lib/decisionQueue";
 import { useWaitingOnPerson } from "../../hooks/useNeedsInputCount";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { StackChecklist } from "./StackChecklist";
@@ -38,7 +38,7 @@ const api = _api as any;
 // no session and counts on no badge (isStackedAsk), but it is still theirs to
 // steer: it lists here in its own group.
 const pendingWhere = (d: SessionDecisionItem) => d.status === "pending";
-const pendingSig = (d: SessionDecisionItem) => `${d.blocking}:${d.created_at}:${d.updated_at ?? 0}:${d.stack_id ?? ""}:${d.holder_key ?? ""}:${d.task_id ?? ""}`;
+const pendingSig = (d: SessionDecisionItem) => `${d.blocking}:${d.created_at}:${d.updated_at ?? 0}:${d.stack_id ?? ""}:${d.holder_key ?? ""}:${d.task_id ?? ""}:${d.asked_user_ids?.join(",") ?? ""}`;
 const handledSig = (d: HandledDecisionItem) => `${d.status}:${d.resolved_at ?? 0}`;
 const answeredWhere = (d: SessionDecisionItem) => d.status === "answered" && !!d.resolved_at;
 const answeredSig = (d: SessionDecisionItem) => `${d.resolved_at ?? 0}:${d.answer_index ?? ""}`;
@@ -64,7 +64,8 @@ export function DecisionQueueList() {
   const assistantIds = useAssistantConversationIds();
   const inScope = useCallback((conversationId: string) => !scope.only || assistantIds.has(conversationId), [scope.only, assistantIds]);
   const pendingAll = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
-  const pending = useMemo(() => pendingAll.filter((d) => inScope(d.conversation_id)), [pendingAll, inScope]);
+  const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
+  const pending = useMemo(() => pendingAll.filter((d) => inScope(d.conversation_id) && askedOfViewer(d, meId)), [pendingAll, inScope, meId]);
   const stacks = useInboxStore((s) => s.decisionStacks);
   const handledAll = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
   const handled = useMemo(() => handledAll.filter((d) => inScope(d.conversation_id)), [handledAll, inScope]);

@@ -1,0 +1,647 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { execFile, spawnSync } from "../../proc.js";
+import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
+import type { Config } from "../../config/types.js";
+import type { TouchLedger } from "./ledger.js";
+import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
+import { GH_WRAPPER_REL } from "../ghWrapper.js";
+import { MAX_MIRROR_BODY_BYTES } from "./bundle.js";
+import { isCredentialFilePath } from "../../secretPatterns.js";
+import { credentialContentReason, homeRelative, isActiveConfig, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
+export { isActiveConfig } from "./transform.js";
+
+export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode", ".cursor", ".pi"] as const;
+/** Single state files that installed skills read; their directories hold other state, so only these files travel. */
+export const SKILL_STATE_FILES: readonly string[] = [".hyperframes/config.json", ".media/preferences.json"];
+/**
+ * The shell's own startup files. They travel so a cloud agent's shell has the
+ * laptop's aliases, functions, PATH and exports, the way the laptop's agents
+ * do; the files they source come along as references (a brace list such as
+ * `~/.{aliases,exports}` included). Their exports are the person's own
+ * environment, keys too, carried to their own host like their logins, so the
+ * credential scan does not apply to them.
+ */
+export const SHELL_ENV_FILES: readonly string[] = [
+  ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".bash_aliases",
+  ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout",
+  ".config/fish/config.fish", ".config/fish/conf.d", ".config/fish/functions",
+  ".inputrc", ".tmux.conf", ".cargo/env",
+];
+/** Personal commands on the laptop PATH. Only portable text scripts travel from here. */
+export const LOCAL_BIN_ROOT = ".local/bin";
+export const LOCAL_BIN_SCRIPT_CAP = 1024 * 1024;
+/**
+ * Commands the host installs into ~/.local/bin itself (the gh wrapper, the
+ * agent CLIs, the runtimes the host tools step installs). A laptop file of the
+ * same name would replace the host's working copy, so none of them travel.
+ */
+export const HOST_OWNED_LOCAL_BIN: readonly string[] = [
+  GH_WRAPPER_REL, ".local/bin/cast", ".local/bin/codecast",
+  ...[...INSTALLABLE_CLIENTS, "uv", "uvx", "bun", "bunx", "node", "npm", "npx"].map((name) => `${LOCAL_BIN_ROOT}/${name}`),
+];
+/** The bundle's own body limit, which the host enforces too: a cap above it only moves the refusal to the push. */
+export const CONTEXT_SIZE_CAP = MAX_MIRROR_BODY_BYTES;
+/**
+ * Audio and video are never agent context: no agent reads them, and a render
+ * or a recording a doc links to runs to hundreds of MiB (the explainer film's
+ * renders filled the whole bundle, 2026-09-29). Only an active config that
+ * requires one, or an explicit include, carries one.
+ */
+export const MEDIA_FILE_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|mpe?g|mp3|m4a|wav|aac|flac|ogg|oga|opus|aiff?)$/i;
+
+/**
+ * The project context is over the cap, and leaving `files` out brings it
+ * under: the largest files the walk or a prose reference picked up (never a
+ * file an active config requires). Paths are home-relative, the form
+ * `cloud_mirror_exclude` takes, so the answer "leave them out" is those paths
+ * appended to that setting.
+ */
+export class ContextTooLargeError extends Error {
+  constructor(readonly totalBytes: number, readonly capBytes: number, readonly files: Array<{ path: string; bytes: number }>) {
+    const mib = (n: number) => `${Math.ceil(n / 1048576)} MiB`;
+    super(`project context is ${mib(totalBytes)}, over the ${mib(capBytes)} cap; leaving out ${files.length} file${files.length === 1 ? "" : "s"} would fit: ${files.slice(0, 3).map((f) => `${f.path} (${mib(f.bytes)})`).join(", ")}${files.length > 3 ? `, and ${files.length - 3} more` : ""}`);
+    this.name = "ContextTooLargeError";
+  }
+}
+
+/** The ContextTooLargeError behind `err`, through any wrapper that kept it as `cause`. */
+export function findContextTooLarge(err: unknown): ContextTooLargeError | null {
+  for (let e: any = err, depth = 0; e && depth < 8; e = e.cause, depth++) if (e instanceof ContextTooLargeError) return e;
+  return null;
+}
+export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
+export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
+  ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
+];
+export const AGENT_RUNTIME_ROOTS: readonly string[] = [
+  ...CLAUDE_RUNTIME_ROOTS, ".codex/skills/.system", ".claude/skills/synced", ".claude/plugins/synced",
+  ".claude/hooks/peon-ping/.last_update_check", ".claude/plugins/.last_inuse_sweep",
+];
+export function isAgentRuntimePath(rel: string): boolean {
+  return AGENT_RUNTIME_ROOTS.some((root) => rel === root || rel.startsWith(`${root}/`))
+    || /^\.claude\/plugins\/cache\/.*\/(?:\.in_use(?:\/|$)|\.orphaned_at$)/.test(rel);
+}
+export const CONTEXT_DENYLIST: readonly string[] = [
+  ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl",
+  ".claude/sessions", ".claude/session-env", ".claude/shell-snapshots", ".claude/file-history",
+  ".claude/backups", ".claude/cache", ".claude/downloads", ".claude/todos", ".claude/statsig",
+  ".claude/chrome", ".claude/daemon", ".claude/debug", ".claude/feedback", ".claude/image-cache",
+  ".claude/jobs", ".claude/paste-cache", ".claude/tasks", ".claude/teams", ".claude/telemetry", ".claude/worktrees",
+  ".claude/daemon-auth-status.json", ".claude/daemon-auth-cooldown", ".claude/stats-cache.json",
+  ".claude/.last-cleanup", ".claude/.last-update-result.json", ".claude/commands.zip",
+  // Claude Code's own bookkeeping: the policy stamp is rewritten every few
+  // minutes and rebuilt and re-shipped the bundle each time (2026-09-23).
+  ".claude/policy-limits.json", ".claude/policy-limits.json.stamp.json", ".claude/remote-settings.json", ".claude/.watchmanconfig",
+  ...AGENT_RUNTIME_ROOTS,
+  ".codex/auth.json", ".codex/sessions", ".codex/archived_sessions", ".codex/cache", ".codex/tmp", ".codex/.tmp",
+  ".codex/shell_snapshots", ".codex/thread-writer-locks", ".codex/models_cache.json", ".codex/installation_id",
+  ".codex/browser", ".codex/computer-use", ".codex/dictation-history", ".codex/history", ".codex/ipc",
+  ".codex/log", ".codex/node_repl", ".codex/process_manager", ".codex/sqlite", ".codex/vendor_imports",
+  ".codex/attachments", ".codex/generated_images", ".codex/visualizations", ".codex/ambient-suggestions",
+  ".codex/.codex-global-state.json", ".codex/.codex-global-state.json.bak", ".codex/chrome-native-hosts-v2.json",
+  ".codex/realtime-voice-continuity.json", ".grok/sessions", ".grok/active_sessions.json", ".grok/agent_id",
+  ".codex/.personality_migration", ".codex/.sandbox_migration", ".codex/version.json",
+  ".grok/logs", ".grok/memtrace", ".grok/relocations", ".grok/upload_queue", ".grok/models_cache.json",
+  ".grok/.metadata_version", ".grok/last-copy.txt", ".grok/grove/pin_gc_orphans.json", ".grok/slash-mru.json", ".grok/tip_cursor.json", ".grok/trusted_folders.toml", ".grok/version.json",
+  ".cursor/extensions", ".cursor/projects", ".cursor/chats", ".cursor/ai-tracking", ".cursor/worktrees", ".cursor/snapshots",
+  ".cursor/ide_state.json", ".cursor/argv.json", ".cursor/cli-config.json",
+  ".pi/agent/sessions", ".pi/agent/bin", ".pi/agent/git",
+  ".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/tmp", ".gemini/history",
+  ".gemini/antigravity/brain", ".gemini/antigravity/code_tracker", ".gemini/antigravity/conversations", ".gemini/antigravity/implicit",
+  ".gemini/antigravity/installation_id", ".gemini/antigravity/user_settings.pb", ".gemini/antigravity/browserAllowlist.txt",
+  ".config/gh", ".config/gcloud", ".ssh", ".aws", ".gnupg", ".kube", ".docker/config.json",
+  ".app-store-connect", ".cloudflared", ".convex", ".railway", ".fly", ".supabase", ".vercel", ".netlify", ".wrangler",
+  ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
+  ".azure", ".terraform.d", ".pulumi", ".config/doppler", ".config/op", ".password-store", ".local/share/keyrings",
+  ".fig", ".vimrc", ".vim", ".config/nvim", ".config/fish/fish_variables", ...HOST_OWNED_LOCAL_BIN,
+  "Dropbox", "OneDrive", "Google Drive", "GoogleDrive", ".dropbox", ".dropbox-dist",
+  "Library", "Applications", ".Trash", ".mozilla", ".config/google-chrome", ".config/chromium",
+  ".netrc", ".npmrc", ".pgpass", ".codecast", ".config/opencode/plugins/codecast-stable.js",
+  "*.pem", "id_*", "*.key", "*.p8", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.sqlite*", "credentials*.json", "hosts.yml", "auth.json", "auth.json.*", "oauth_creds.json", ".env", ".env.*",
+  "pass.txt", "passwords.txt", "passwords.csv", "*.kdbx", "*.1password", "*.keychain", "*.keychain-db",
+];
+export const DEFAULT_EXCLUDES: readonly string[] = [
+  "**/node_modules/**", "**/.git/**", "**/__pycache__/**", "**/.DS_Store", "**/*.log",
+  "**/.venv/**", "**/venv/**", "**/.plugin-appserver/**", "**/*.sqlite*", "**/*.db", "**/*.db-*",
+  "**/.codecast/**", "**/.conductor/**", "**/.worktrees/**", "**/.next/**", "**/.turbo/**", "**/.cache/**",
+  "**/.build/**", "**/Pods/**", "**/DerivedData/**", "**/.gradle/**", "**/.expo/**",
+  "**/*.app/**", "**/*.framework/**", "**/*.xcframework/**",
+  "**/.state.json", "**/.usage-cache.json",
+  "**/*.jsonl", "**/*.lock", "**/*.sock", "**/*.pid", "**/*.pyc", "**/*.dylib", "**/*.dll", "**/*.exe", "**/*.so", "**/*.node",
+  // Trees an agent fetches for itself on the host (marketplace clones, bundled
+  // skills, install staging, catalog caches) and what it threw away. Installed
+  // plugins stay: they are the human's choice and their assets are context.
+  "**/.trash/**", "**/*.tmp.*", ".codex/plugins/.remote-plugin-install-staging/**",
+  ".grok/marketplace-cache/**", ".grok/bundled/**", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json",
+  // Caches and install manifests each machine's agent rewrites for itself: the
+  // host edits them too, so mirroring them only ever ends in a conflict that
+  // holds back the whole push.
+  ".claude/plugins/plugin-directory-cache*.json", ".claude/mcp-needs-auth-cache.json",
+  ".config/opencode/package.json", ".config/opencode/package-lock.json", ".opencode/package.json", ".opencode/package-lock.json",
+];
+
+const globCache = new Map<string, RegExp>();
+
+export function globToRegExp(glob: string): RegExp {
+  const cached = globCache.get(glob);
+  if (cached) return cached;
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++;
+        if (glob[i + 1] === "/") { i++; re += "(?:.*/)?"; } else re += ".*";
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  const compiled = new RegExp(`^${re}$`);
+  globCache.set(glob, compiled);
+  return compiled;
+}
+
+export function matchesContextPattern(pattern: string, rel: string, isDir = false): boolean {
+  if (/[*?]/.test(pattern) && !pattern.includes("/")) return !isDir && globToRegExp(pattern).test(path.posix.basename(rel));
+  const base = pattern.replace(/\/\*\*$/, "");
+  return rel === base || rel.startsWith(`${base}/`) || /[*?]/.test(pattern) && globToRegExp(pattern).test(rel);
+}
+
+export function isDeniedPath(rel: string, isDir = false): boolean {
+  if (!isDir && isCredentialFilePath(rel)) return true;
+  if (rel.startsWith(".claude/projects/")) {
+    const parts = rel.split("/");
+    if (parts.length > 3 && parts[3] !== "memory") return true;
+    if (parts.length === 3 && !isDir) return true;
+  }
+  return CONTEXT_DENYLIST.some((p) => matchesContextPattern(p, rel, isDir));
+}
+
+export function isDefaultExcluded(rel: string): boolean {
+  return isAgentRuntimePath(rel) || DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`));
+}
+
+/**
+ * Only files, directories and links can be context. A socket, fifo or device
+ * never is, and Bun's realpath refuses a socket (EOPNOTSUPP), so every walker
+ * checks this on the lstat before resolving anything.
+ */
+export function isContextEntry(stat: fs.Stats): boolean {
+  return stat.isFile() || stat.isDirectory() || stat.isSymbolicLink();
+}
+
+export function isAccountDataPath(rel: string): boolean {
+  return /^(?:Documents|Desktop|Downloads|Pictures|Movies|Music|Public)(?:\/|$)/.test(rel);
+}
+
+/** The first four bytes of ELF and Mach-O (thin and fat) executables; a PE one starts "MZ". */
+export const NATIVE_BINARY_MAGICS: readonly string[] = ["7f454c46", "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"];
+
+export function isNativeBinary(bytes: Buffer): boolean {
+  const magic = bytes.subarray(0, 4).toString("hex");
+  return bytes.subarray(0, 2).toString() === "MZ" || NATIVE_BINARY_MAGICS.includes(magic);
+}
+
+/** A text script that runs on any host: a shebang first line, no NUL bytes, under the script cap. */
+/**
+ * A text script with a shebang. When `home` is given, a shebang whose
+ * interpreter sits under that home (a uv, pipx or npm launcher) is not
+ * portable: the interpreter does not exist on the host.
+ */
+export function isPortableScript(bytes: Buffer, home?: string): boolean {
+  if (!(bytes.length <= LOCAL_BIN_SCRIPT_CAP && bytes.subarray(0, 2).toString() === "#!" && !bytes.includes(0))) return false;
+  if (!home) return true;
+  const end = bytes.indexOf(10);
+  const interpreter = bytes.subarray(2, end < 0 ? bytes.length : end).toString().trim().split(/\s+/)[0] ?? "";
+  return !interpreter.startsWith(`${home.replace(/\/+$/, "")}/`);
+}
+
+export function configPatterns(value: string | undefined): string[] {
+  return (value ?? "").split(",").map((p) => p.trim().replace(/^~\//, "").replace(/^\.\//, "")).filter(Boolean);
+}
+
+export function contextReferences(text: string, sourcePath: string, home: string): string[] {
+  const escapedHome = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const prefix = `(?:${escapedHome}/|~/|\\$HOME/|\\$\\{HOME\\}/)`;
+  const found = new Set<string>();
+  const quoted: Array<{ start: number; end: number }> = [];
+  const add = (raw: string) => {
+    const clean = raw.replace(/:[0-9]+(?::[0-9]+)?$/, "").split("#")[0]!;
+    if (!clean || /[\\\x00-\x1f\x7f]/.test(clean) || /^[a-z]+:\/\//i.test(clean)) return;
+    const expanded = clean.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/)/, home);
+    const abs = path.resolve(path.dirname(sourcePath), expanded);
+    found.add(abs);
+  };
+  for (const m of text.matchAll(new RegExp(`(["'\x60])(${prefix}[^\\n"'\x60]{1,4096}?)\\1`, "g"))) {
+    quoted.push({ start: m.index!, end: m.index! + m[0].length });
+    add(m[2]!);
+  }
+  let quoteIndex = 0;
+  for (const m of text.matchAll(new RegExp(`${prefix}[^\\s\\\\"'\x60<>()[\\]{},;]{1,4096}`, "g"))) {
+    while (quoted[quoteIndex] && quoted[quoteIndex]!.end <= m.index!) quoteIndex++;
+    const span = quoted[quoteIndex];
+    if (!span || m.index! < span.start) add(m[0].replace(/[.:]+$/, ""));
+  }
+  for (const m of text.matchAll(/\[[^\]\n]{0,500}\]\((?:<([^>\n]{1,4096})>|([^\s)]{1,4096}))/g)) add(m[1] ?? m[2]!);
+  for (const m of text.matchAll(/["'`]((?:\.\.?\/)[^"'`\n]{1,4096})["'`]/g)) add(m[1]!);
+  for (const m of text.matchAll(/(?:^|\s)@((?:\.?\.?\/)?[\w./-]+\.[\w-]+)/gm)) add(m[1]!);
+  // A shell brace list names several files at once: `for f in ~/.{path,exports,aliases}; do source "$f"; done`.
+  for (const m of text.matchAll(new RegExp(`${prefix}[^\\s"'\x60;|&<>()]*\\{[^}\\s]*,[^}\\s]*\\}[^\\s"'\x60;|&<>()]*`, "g"))) {
+    for (const name of expandBraces(m[0])) add(name);
+  }
+  return [...found];
+}
+
+/** Shell brace expansion of comma lists: `a{b,c}d{e,f}` is `abde abdf acde acdf`. */
+export function expandBraces(text: string): string[] {
+  const m = /\{([^{}]*,[^{}]*)\}/.exec(text);
+  if (!m) return [text];
+  return m[1]!.split(",").flatMap((part) => expandBraces(text.slice(0, m.index) + part + text.slice(m.index + m[0].length)));
+}
+
+export function isReferencedDirectory(abs: string): boolean {
+  return /(?:^|\/)(?:agent-scripts|scripts|skills|docs|rules|commands|hooks|references|assets|memory|memories|prompts|agents)(?:\/|$)/.test(abs);
+}
+
+export function activeContextReferences(text: string, source: string, home: string, kind: MirrorKind): Set<string> {
+  if (kind === "claude-md" || kind === "agents-md") {
+    const imports = text.replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gm, "").replace(/`[^`\n]*`/g, "");
+    const required = new Set<string>();
+    for (const match of imports.matchAll(/(?:^|\s)@(?:"([^"\n]+)"|'([^'\n]+)'|([~$\w./{}-]+))/gm)) {
+      const file = match[1] ?? match[2] ?? match[3]!.replace(/[.]+$/, "");
+      if (!/[/.]/.test(file)) continue;
+      const expanded = file.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/)/, home);
+      required.add(path.resolve(path.dirname(source), expanded));
+    }
+    return required;
+  }
+  if (!isActiveConfig(kind)) return new Set();
+  let config: unknown;
+  try {
+    const portable = transformByKind(kind, Buffer.from(text), { fromHome: home, toHome: home }).bytes.toString("utf8");
+    config = kind === "codex-toml" || kind === "toml-remap" ? Bun.TOML.parse(portable) : parseJsonLoose(portable);
+  }
+  catch { throw new Error(`cannot parse active context config: ${source}`); }
+  const required = new Set<string>();
+  const visit = (value: unknown, dependency?: "command" | "path", mcp = false): void => {
+    if (typeof value === "string" && dependency) {
+      // A codecast hook command (the statusline) names a script the host's own daemon writes.
+      if (dependency === "command" && isCodecastHookCommand(value, home)) return;
+      for (const ref of contextReferences(dependency === "command" ? value : JSON.stringify(value), source, home)) required.add(ref);
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, dependency, mcp);
+    } else if (value && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        const field = /^(?:command|args|script|instructions?_file|model_instructions_file|experimental_instructions_file)$/i.test(key)
+          ? key === "command" && !mcp ? "command" : "path" : undefined;
+        visit(item, field, mcp || /^(?:mcp|mcp_servers|mcpServers)$/.test(key));
+      }
+    }
+  };
+  visit(config);
+  return required;
+}
+
+export function commandCompatibilityWarnings(text: string, rel: string): string[] {
+  const found = [...new Set(text.match(/\/Applications\/[^\s"'`]+|\/(?:opt\/homebrew|usr\/local\/Cellar)\/[^\s"'`]+|\b(?:osascript|xcrun|pbcopy|pbpaste)\b|\bopen\s+-a\b/g) ?? [])];
+  return found.map((command) => `${rel}: host compatibility requires review for ${command}`);
+}
+
+function* portableHookSteps(bytes: Buffer, source: string, home: string, kind: MirrorKind): ContextSteps<{ bytes: Buffer; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (!["claude-settings", "codex-hooks", "gemini-settings"].includes(kind)) return { bytes, warnings };
+  let config: Record<string, any>;
+  try { config = parseJsonLoose(bytes.toString("utf8")) as Record<string, any>; }
+  catch { throw new Error(`cannot parse active context config: ${source}`); }
+  if (!config?.hooks || typeof config.hooks !== "object" || Array.isArray(config.hooks)) return { bytes, warnings };
+  for (const [event, groups] of Object.entries(config.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = [];
+    for (const group of groups) {
+      const nested = Array.isArray(group?.hooks);
+      const entries = nested ? group.hooks : [group];
+      const available = [];
+      for (const entry of entries) {
+        const missing: string[] = [];
+        if (typeof entry?.command === "string" && !isCodecastHookCommand(entry.command, home)) {
+          const refs = contextReferences(entry.command, source, home);
+          const denied = refs.some((ref) => { const rel = homeRelative(ref, home); return rel !== null && isDeniedPath(rel); });
+          for (const ref of denied ? [] : refs) {
+            const rel = homeRelative(ref, home);
+            if (rel === null || isDeniedPath(rel) || isDefaultExcluded(rel)) continue;
+            try { yield { op: "stat", path: ref }; }
+            catch (err) {
+              if (!["ENOENT", "ENOTDIR", "ELOOP"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+              missing.push(ref);
+            }
+          }
+        }
+        if (missing.length) warnings.push(`${source}: omitted ${event} hook from the remote copy; missing locally: ${missing.join(", ")}`);
+        else available.push(entry);
+      }
+      if (available.length) kept.push(nested ? { ...group, hooks: available } : group);
+    }
+    if (kept.length) config.hooks[event] = kept;
+    else delete config.hooks[event];
+  }
+  return { bytes: warnings.length ? Buffer.from(JSON.stringify(config, null, 2) + "\n") : bytes, warnings };
+}
+
+export async function portableHooks(bytes: Buffer, source: string, home: string, kind: MirrorKind): Promise<{ bytes: Buffer; warnings: string[] }> {
+  return executeStepsAsync(portableHookSteps(bytes, source, home, kind));
+}
+
+export interface ProjectContextFile {
+  sourcePath: string;
+  relativePath: string;
+  scope: "project" | "home";
+  kind: MirrorKind;
+  mode: "0600" | "0700";
+  bytes: Buffer;
+}
+
+export interface ProjectContextOptions {
+  root: string;
+  home?: string;
+  includeTracked?: boolean;
+  /**
+   * Inside a git repo, carry only agent context: instruction files (tracked
+   * or not, CLAUDE.local.md included), agent config folders and .mcp.json.
+   * Every other file, gitignored ones too, belongs to the session's seed and
+   * folder sync (cloud/syncSide.ts), which leave agent context to this
+   * mirror: one owner per file, so the two never meet as a conflict.
+   */
+  agentContextOnly?: boolean;
+  includeAncestors?: boolean;
+  config?: Pick<Config, "cloud_mirror_include" | "cloud_mirror_exclude"> | null;
+  maxBytes?: number;
+  /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
+  ledger?: TouchLedger;
+  /**
+   * Report a missing required reference as skipped instead of failing. For a
+   * caller that only lists files to copy within one machine (a worktree's copy
+   * list), where a config's dangling dependency is the config's problem, not a
+   * reason to refuse the worktree. The mirror to a host stays strict.
+   */
+  tolerateMissing?: boolean;
+}
+
+export interface ProjectContext {
+  files: ProjectContextFile[];
+  skipped: Array<{ path: string; reason: string }>;
+  warnings: string[];
+  totalBytes: number;
+}
+
+function isContextFile(rel: string): boolean {
+  return AGENT_CONTEXT_ROOTS.some((r) => rel.startsWith(`${r}/`))
+    || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(rel)
+    || INSTRUCTION_FILE_RE.test(path.basename(rel))
+    || /\.(?:md|mdx|rst|txt|adoc|org)$/i.test(rel)
+    || /(?:^|\/)(?:docs|scripts|agent-scripts|references|assets)\//.test(rel)
+    || path.basename(rel) === ".mcp.json";
+}
+
+function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<ProjectContext> {
+  const root: string = yield { op: "realpath", path: opts.root };
+  const home: string = yield { op: "realpath", path: opts.home ?? os.homedir() };
+  const result: ProjectContext = { files: [], skipped: [], warnings: [], totalBytes: 0 };
+  const files = new Map<string, ProjectContextFile>();
+  const scanned = new Set<string>();
+  const scannedDirs = new Set<string>();
+  const scannedReferences = new Set<string>();
+  const credentialPaths = new Set<string>();
+  const securityPaths = new Set<string>();
+  const skippedMedia = new Set<string>();
+  const cap = opts.maxBytes ?? CONTEXT_SIZE_CAP;
+  const candidates: Array<{ path: string; bytes: number }> = [];
+  let overflowBytes = 0;
+  const excludes = configPatterns(opts.config?.cloud_mirror_exclude);
+  const includes = configPatterns(opts.config?.cloud_mirror_include);
+  const tracked = new Set<string>();
+  if (opts.includeTracked === false) {
+    const paths: string[] = yield { op: "tracked", path: root };
+    for (const rel of paths) tracked.add(rel);
+  }
+  // Ignored files and whole ignored folders ("dir/"), when only those travel.
+  // Outside a git repo nothing else carries the files, so all of them travel.
+  const inRepo: boolean = opts.agentContextOnly ? yield { op: "inRepo", path: root } : false;
+  const isAgentContext = (rel: string) => INSTRUCTION_FILE_RE.test(path.basename(rel)) || path.basename(rel) === ".mcp.json"
+    || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(rel);
+  const denied = (abs: string, directory: boolean) => {
+    const rel = homeRelative(abs, root);
+    const homeRel = homeRelative(abs, home);
+    if (rel === null && homeRel !== null && isAccountDataPath(homeRel) && !includes.some((p) => matchesContextPattern(p, homeRel, directory))) return true;
+    return [rel, homeRel].some((p) => p !== null && (isDeniedPath(p, directory) || isDefaultExcluded(p) || isCodecastOwnedHomePath(p) || excludes.some((g) => matchesContextPattern(g, p, directory))));
+  };
+  const securityDenied = (abs: string, directory: boolean) => [homeRelative(abs, root), homeRelative(abs, home)]
+    .some((rel) => rel !== null && isDeniedPath(rel, directory));
+  const visit = function* (source: string, ancestors: Set<string>, includeAll = false, optionalReference = false): ContextSteps<void> {
+    const logical = path.resolve(source);
+    if (homeRelative(logical, root) === null && homeRelative(logical, home) === null || denied(logical, true)) return;
+    const projectPath = homeRelative(logical, root);
+    // Build output stays out of the walk and out of prose references (a doc
+    // naming `packages/cli/dist` must not ship the compiled CLI); only an
+    // active config that requires a file there, or an explicit include, enters it.
+    if ((!includeAll || optionalReference) && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
+    const stat: fs.Stats | undefined = yield { op: "lstat", path: logical };
+    if (!stat || !isContextEntry(stat) || denied(logical, stat.isDirectory())) return;
+    if (stat.isFile() && !includeAll && !isContextFile(homeRelative(logical, root) ?? homeRelative(logical, home)!)) return;
+    let real: string;
+    try { real = yield { op: "realpath", path: logical }; } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT" && (err as NodeJS.ErrnoException).code !== "ELOOP") throw err;
+      result.skipped.push({ path: logical, reason: optionalReference ? "optional reference has an unresolved symlink" : "dangling or cyclic symlink" });
+      return;
+    }
+    const actual: fs.Stats = yield { op: "stat", path: real };
+    if (homeRelative(real, root) === null && homeRelative(real, home) === null || denied(real, actual.isDirectory())) {
+      if (securityDenied(real, actual.isDirectory()) || homeRelative(real, home) === null) securityPaths.add(logical);
+      result.skipped.push({ path: logical, reason: "symlink resolves outside context roots or into a denied path" });
+      return;
+    }
+    if (actual.isDirectory()) {
+      if (scannedDirs.has(logical)) return;
+      if (ancestors.has(real)) { result.skipped.push({ path: logical, reason: "symlink cycle" }); return; }
+      scannedDirs.add(logical);
+      const chain = new Set(ancestors).add(real);
+      const names: string[] = yield { op: "readdir", path: real };
+      // A nested checkout (a worktree or another repo inside this one) is its
+      // own project, never this one's context: union-mobile's agent worktrees
+      // under .agents/ walked 3.6 GiB of repo copies (2026-10-04).
+      if (ancestors.size > 0 && projectPath && names.includes(".git")) { result.skipped.push({ path: logical, reason: "nested git checkout" }); return; }
+      for (const name of names.sort()) yield* visit(path.join(logical, name), chain, includeAll, optionalReference);
+      return;
+    }
+    if (!actual.isFile() || scanned.has(logical)) return;
+    const projectRel = homeRelative(logical, root);
+    const scope = projectRel === null ? "home" : "project";
+    const rel = projectRel ?? homeRelative(logical, home)!;
+    if (!includeAll && !isContextFile(rel)) return;
+    if ((!includeAll || optionalReference) && MEDIA_FILE_RE.test(rel)) { if (!skippedMedia.has(logical)) result.skipped.push({ path: logical, reason: "audio or video" }); skippedMedia.add(logical); return; }
+    const prefix: Buffer = yield { op: "prefix", path: real };
+    if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
+    // Past the cap a file that could be left out is only sized, never read,
+    // so the walk can still name what to leave out; a required one fails here.
+    const droppable = !includeAll || optionalReference;
+    // Only what ships counts against the cap; a file read just for its references does not.
+    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
+    if (emit && actual.size + result.totalBytes + overflowBytes > cap) {
+      if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
+      scanned.add(logical);
+      overflowBytes += actual.size;
+      candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: actual.size });
+      return;
+    }
+    let bytes: Buffer = yield { op: "bytes", path: real };
+    scanned.add(logical);
+    const kind = kindForPath(rel);
+    const hooks = yield* portableHookSteps(bytes, logical, home, kind);
+    bytes = hooks.bytes;
+    result.warnings.push(...hooks.warnings);
+    const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
+    if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
+    if (emit) {
+      files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
+      result.totalBytes += bytes.length;
+      if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });
+    }
+    const text = portableText(bytes);
+    if (text !== null) {
+      result.warnings.push(...commandCompatibilityWarnings(text, rel));
+      const required = activeContextReferences(text, logical, home, kindForPath(rel));
+      for (const ref of new Set([...contextReferences(text, logical, home), ...required])) {
+        if (required.has(ref) && credentialPaths.has(ref)) throw new Error(`active context reference contains credential material: ${logical} -> ${ref}`);
+        if (required.has(ref) && (securityPaths.has(ref) || securityDenied(ref, true))) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
+        if (scanned.has(ref) || scannedDirs.has(ref) || scannedReferences.has(ref) && !required.has(ref)) continue;
+        scannedReferences.add(ref);
+        if (homeRelative(ref, root) === null && homeRelative(ref, home) === null) { result.skipped.push({ path: ref, reason: "reference outside context roots" }); continue; }
+        if (denied(ref, true)) {
+          result.skipped.push({ path: ref, reason: "excluded reference or unsupported host dependency" });
+          if (required.has(ref)) result.warnings.push(`${logical}: unsupported host dependency ${ref}`);
+          continue;
+        }
+        try {
+          const st: fs.Stats | undefined = yield { op: "lstat", path: ref };
+          if (!st) {
+            if (required.has(ref) && !opts.tolerateMissing) throw new Error(`missing active context reference: ${logical} -> ${ref}`);
+            result.skipped.push({ path: ref, reason: "referenced path not found" }); continue;
+          }
+          if (required.has(ref) && securityDenied(ref, st.isDirectory())) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
+          if (!st.isDirectory() || required.has(ref) || isReferencedDirectory(ref)) yield* visit(ref, new Set(), true, !required.has(ref));
+          if (required.has(ref) && credentialPaths.has(ref)) throw new Error(`active context reference contains credential material: ${logical} -> ${ref}`);
+          if (required.has(ref) && securityPaths.has(ref)) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
+        } catch (err) {
+          if (required.has(ref) || !isAccessError(err)) throw err;
+          result.skipped.push({ path: ref, reason: `optional reference inaccessible (${(err as NodeJS.ErrnoException).code})` });
+        }
+      }
+    }
+  };
+  yield* visit(root, new Set());
+  if (opts.includeAncestors !== false) {
+    for (let dir = path.dirname(root); homeRelative(dir, home) !== null; dir = path.dirname(dir)) {
+      const names: string[] = yield { op: "readdir", path: dir };
+      for (const name of names) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") yield* visit(path.join(dir, name), new Set(), true);
+      if (dir === home) break;
+    }
+  }
+  for (const extra of includes) yield* visit(path.resolve(home, extra), new Set(), true);
+  if (overflowBytes > 0) {
+    const total = result.totalBytes + overflowBytes;
+    const leaveOut: typeof candidates = [];
+    let freed = 0;
+    for (const file of candidates.sort((a, b) => b.bytes - a.bytes)) {
+      if (total - freed <= cap) break;
+      leaveOut.push(file);
+      freed += file.bytes;
+    }
+    if (total - freed > cap) throw new Error(`project context exceeds ${cap / 1048576} MiB even without the files it could leave out`);
+    throw new ContextTooLargeError(total, cap, leaveOut);
+  }
+  result.files = [...files.values()].sort((a, b) => a.scope.localeCompare(b.scope) || (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
+  result.warnings = [...new Set(result.warnings)];
+  return result;
+}
+
+
+type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked" | "inRepo"; path: string };
+type ContextSteps<T> = Generator<ContextOperation, T, any>;
+
+
+export function isAccessError(err: unknown): boolean {
+  return ["EACCES", "EPERM", "ENOENT", "ENOTDIR"].includes((err as NodeJS.ErrnoException)?.code ?? "");
+}
+
+function trackedFiles(stdout: string, stderr: string, code: number | null): string[] {
+  if (code !== 0 && !stderr.includes("not a git repository")) throw new Error(`project context git enumeration failed (exit ${code})`);
+  return code === 0 ? stdout.split("\0").filter(Boolean) : [];
+}
+
+function executeContextSync(op: ContextOperation): unknown {
+  if (op.op === "lstat") return fs.lstatSync(op.path, { throwIfNoEntry: false });
+  if (op.op === "realpath") return fs.realpathSync(op.path);
+  if (op.op === "stat") return fs.statSync(op.path);
+  if (op.op === "readdir") return fs.readdirSync(op.path);
+  if (op.op === "inRepo") return spawnSync("git", ["-C", op.path, "rev-parse", "--git-dir"], { stdio: "ignore", timeout: 30_000 }).status === 0;
+  if (op.op === "tracked") {
+    const r = spawnSync("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+    if (r.error) throw r.error;
+    return trackedFiles(r.stdout, r.stderr, r.status);
+  }
+  const fd = fs.openSync(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    if (op.op === "bytes") return fs.readFileSync(fd);
+    const prefix = Buffer.alloc(4);
+    fs.readSync(fd, prefix, 0, 4, 0);
+    return prefix;
+  } finally { fs.closeSync(fd); }
+}
+
+async function executeContextAsync(op: ContextOperation): Promise<unknown> {
+  if (op.op === "lstat") return fs.promises.lstat(op.path).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return undefined; });
+  if (op.op === "realpath") return fs.promises.realpath(op.path);
+  if (op.op === "stat") return fs.promises.stat(op.path);
+  if (op.op === "readdir") return fs.promises.readdir(op.path);
+  if (op.op === "inRepo") return new Promise((resolve) => { execFile("git", ["-C", op.path, "rev-parse", "--git-dir"], { timeout: 30_000 }, (err) => resolve(!err)); });
+  if (op.op === "tracked") return new Promise((resolve, reject) => {
+    execFile("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && !stderr.includes("not a git repository")) { reject(new Error("project context git enumeration failed")); return; }
+      resolve(trackedFiles(stdout, stderr, err ? 1 : 0));
+    });
+  });
+  const fd = await fs.promises.open(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    if (op.op === "bytes") return await fd.readFile();
+    const prefix = Buffer.alloc(4);
+    await fd.read(prefix, 0, 4, 0);
+    return prefix;
+  } finally { await fd.close(); }
+}
+
+export function collectProjectContext(opts: ProjectContextOptions): ProjectContext {
+  const steps = projectContextSteps(opts);
+  let next = steps.next();
+  while (!next.done) {
+    let value: unknown;
+    try { value = executeContextSync(next.value); } catch (err) { next = steps.throw(err); continue; }
+    next = steps.next(value);
+  }
+  return next.value;
+}
+
+async function executeStepsAsync<T>(steps: ContextSteps<T>, ledger?: TouchLedger): Promise<T> {
+  let next = steps.next();
+  while (!next.done) {
+    let value: unknown;
+    if (next.value.op !== "tracked" && next.value.op !== "inRepo") ledger?.note(next.value.path);
+    try { value = await executeContextAsync(next.value); } catch (err) { next = steps.throw(err); continue; }
+    next = steps.next(value);
+  }
+  return next.value;
+}
+
+export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
+  return executeStepsAsync(projectContextSteps(opts), opts.ledger);
+}

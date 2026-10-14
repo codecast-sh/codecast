@@ -1,0 +1,340 @@
+/**
+ * What the home mirror ships: the human-authored parts of ~/.claude,
+ * ~/.codex, ~/.grok, ~/.gemini, ~/.agents, ~/.config/opencode, ~/.cursor,
+ * ~/.pi, the state files installed skills read, the portable text scripts
+ * in ~/.local/bin, plus a rendered, allowlisted ~/.gitconfig and the global
+ * gitignore.
+ *
+ * Collection is pure over a `home`: an lstat walk that follows in-home
+ * symlinks (a dotfiles repo is the common skill setup), refuses anything that
+ * resolves outside $HOME or into a denied root, excludes codecast-owned
+ * paths, honours cloud_mirror_include/exclude — the denylist always wins —
+ * and refuses a bundle over the size cap naming the roots that filled it.
+ */
+
+import { execFileSync } from "../../proc.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
+import type { Config } from "../../config/types.js";
+import {
+  credentialContentReason, homeRelative, kindForPath, parseGitConfigList, parseJsonLoose, portableText, projectClaudeMcp, renderGitconfig, type GitConfigPair, type MirrorKind,
+} from "./transform.js";
+import type { TouchLedger } from "./ledger.js";
+
+import {
+  AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SHELL_ENV_FILES, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
+  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isContextEntry, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern, portableHooks,
+} from "./discovery.js";
+
+export { CONTEXT_DENYLIST as MIRROR_DENYLIST, DEFAULT_EXCLUDES, globToRegExp, isDeniedPath, isDefaultExcluded } from "./discovery.js";
+export const MIRROR_MANAGED_ROOTS: readonly string[] = AGENT_CONTEXT_ROOTS;
+export const MIRROR_SOURCES = AGENT_CONTEXT_ROOTS.map((path) => ({ path, kind: "verbatim" as const, dir: true }));
+export const MIRROR_SIZE_CAP = CONTEXT_SIZE_CAP;
+
+export interface MirrorEntry {
+  /** Home-relative posix path (the host writes it under its own home). */
+  path: string;
+  kind: MirrorKind;
+  mode: "0600" | "0700";
+  bytes: Buffer;
+  /** The managed root it belongs to (first path segment(s)), for size reports. */
+  root: string;
+}
+
+export interface SkippedEntry {
+  path: string;
+  reason: string;
+}
+
+export interface CollectOptions {
+  home: string;
+  config?: Pick<Config, "cloud_mirror_exclude" | "cloud_mirror_include"> | null;
+  /** The host home, for the gitconfig render. */
+  hostHome: string;
+  /** Read the git config from here so `includeIf gitdir:` blocks resolve. */
+  localGitRoot?: string;
+  /** Extra process env for the git call (tests pin GIT_CONFIG_GLOBAL). */
+  gitEnv?: NodeJS.ProcessEnv;
+  maxBytes?: number;
+  /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
+  ledger?: TouchLedger;
+}
+
+export interface Inventory {
+  entries: MirrorEntry[];
+  skipped: SkippedEntry[];
+  excludesApplied: string[];
+  warnings: string[];
+  /** The laptop's git identity, reported only (shipped by the host git setup, not the mirror). */
+  gitIdentity: { name?: string; email?: string };
+}
+
+/**
+ * Everything in an inventory that does not depend on the host: the files,
+ * plus the git pairs the host's `.gitconfig` is rendered from. One collection
+ * serves every host in a tick; `renderInventoryForHost` finishes it.
+ */
+export interface MirrorSources extends Inventory {
+  home: string;
+  gitPairs: GitConfigPair[];
+}
+
+function rootOf(rel: string): string {
+  for (const r of MIRROR_MANAGED_ROOTS) if (rel === r || rel.startsWith(`${r}/`)) return r;
+  return rel.split("/")[0] ?? rel;
+}
+
+function fileMode(stat: fs.Stats): "0600" | "0700" {
+  return stat.mode & 0o100 ? "0700" : "0600";
+}
+
+/**
+ * Collect every mirrorable file under `home`. Async so the daemon's tick
+ * does not block its loop on a big skills tree.
+ */
+export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventory> {
+  return renderInventoryForHost(await collectMirrorSources(opts), opts.hostHome);
+}
+
+/** The host's `.gitconfig`, rendered from the collected pairs, joins the host-independent files. */
+export function renderInventoryForHost(sources: MirrorSources, hostHome: string): Inventory {
+  const rendered = renderGitconfig(sources.gitPairs, { fromHome: sources.home, toHome: hostHome });
+  const entries = sources.entries.filter((e) => e.path !== ".gitconfig");
+  if (rendered.text) entries.push({ path: ".gitconfig", kind: "gitconfig", mode: "0600", bytes: Buffer.from(rendered.text), root: ".gitconfig" });
+  entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { entries, skipped: sources.skipped, excludesApplied: sources.excludesApplied, warnings: sources.warnings, gitIdentity: sources.gitIdentity };
+}
+
+/** The host-independent part of `collectMirrorFiles`: every file, and the git pairs, but no rendered `.gitconfig`. */
+export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome">): Promise<MirrorSources> {
+  const home = opts.home.replace(/\/+$/, "");
+  const ledger = opts.ledger;
+  const entries = new Map<string, MirrorEntry>();
+  const skipped: SkippedEntry[] = [];
+  const excludes = configPatterns(opts.config?.cloud_mirror_exclude ?? undefined);
+  const includes = configPatterns(opts.config?.cloud_mirror_include ?? undefined);
+  const excludesApplied = new Set<string>();
+  const warnings: string[] = [];
+  let totalBytes = 0;
+  const referenceQueue: MirrorEntry[] = [];
+  const collectedDirs = new Set<string>();
+  const skippedPaths = new Map<string, SkippedEntry>();
+
+  const skip = (rel: string, reason: string) => {
+    const previous = skippedPaths.get(rel);
+    if (previous) {
+      if (previous.reason.startsWith("optional reference") && !reason.startsWith("optional reference")) previous.reason = reason;
+      return;
+    }
+    const entry = { path: rel, reason };
+    skippedPaths.set(rel, entry);
+    skipped.push(entry);
+  };
+
+  const realHome = await fs.promises.realpath(home);
+
+  const excluded = (rel: string, directory = false): boolean => {
+    for (const pattern of excludes) {
+      if (matchesContextPattern(pattern, rel, directory)) { excludesApplied.add(pattern); return true; }
+    }
+    return false;
+  };
+
+  const resolveEntry = async (rel: string, optionalReference = false): Promise<{ real: string; stat: fs.Stats } | null> => {
+    if (!rel || path.isAbsolute(rel) || rel.split("/").includes("..")) { skip(rel, "unsafe path"); return null; }
+    if (isCodecastOwnedHomePath(rel)) { skip(rel, "codecast-owned path"); return null; }
+    if (isDeniedPath(rel, true)) { skip(rel, "denied"); return null; }
+    if (isAccountDataPath(rel) && !includes.some((p) => matchesContextPattern(p, rel, true))) { skip(rel, "account data excluded"); return null; }
+    if (isDefaultExcluded(rel) || excluded(rel, true)) { skip(rel, "excluded"); return null; }
+    const abs = path.join(home, rel);
+    ledger?.note(abs);
+    const entry = await fs.promises.lstat(abs).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return null; });
+    if (entry && !isContextEntry(entry)) { skip(rel, "not a file, directory or link"); return null; }
+    let real: string;
+    try { real = await fs.promises.realpath(abs); } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ELOOP") throw err;
+      const link = await fs.promises.lstat(abs).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return null; });
+      if (link) skip(rel, optionalReference ? "optional reference has an unresolved symlink" : "dangling or cyclic symlink");
+      return null;
+    }
+    const realRel = homeRelative(real, realHome);
+    if (realRel === null) { skip(rel, "symlink resolves outside home"); return null; }
+    if (isAccountDataPath(realRel) && !includes.some((p) => matchesContextPattern(p, realRel, true))) { skip(rel, "symlink resolves into excluded account data"); return null; }
+    const stat = await fs.promises.stat(real);
+    if (isDeniedPath(rel, stat.isDirectory())) { skip(rel, "denied"); return null; }
+    if (isDeniedPath(realRel, stat.isDirectory()) || isCodecastOwnedHomePath(realRel)) { skip(rel, `symlink resolves into a denied path (${realRel})`); return null; }
+    if (isDefaultExcluded(realRel) || excluded(realRel, stat.isDirectory())) { skip(rel, "symlink target excluded"); return null; }
+    return { real, stat };
+  };
+
+  // Shell startup files and what they source: the person's environment, exports and all.
+  const shellEnv = new Set<string>();
+  const addFile = async (rel: string, kind: MirrorKind, real: string, stat: fs.Stats, shell = false) => {
+    if (entries.has(rel) || excluded(rel)) return;
+    if (!stat.isFile()) { skip(rel, "not a regular file"); return; }
+    const script = rel.startsWith(`${LOCAL_BIN_ROOT}/`);
+    if (script && stat.size > LOCAL_BIN_SCRIPT_CAP) { skip(rel, "not a portable text script"); return; }
+    ledger?.note(real);
+    const fd = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let bytes: Buffer;
+    try {
+      const prefix = Buffer.alloc(4);
+      await fd.read(prefix, 0, 4, 0);
+      if (isNativeBinary(prefix)) { skip(rel, "native binary"); return; }
+      if (totalBytes + stat.size > (opts.maxBytes ?? MIRROR_SIZE_CAP)) {
+        const counts = new Map<string, number>();
+        for (const entry of entries.values()) counts.set(entry.root, (counts.get(entry.root) ?? 0) + entry.bytes.length);
+        counts.set(rootOf(rel), (counts.get(rootOf(rel)) ?? 0) + stat.size);
+        const largest = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${(n / 1048576).toFixed(1)} MiB)`).join(", ");
+        throw new Error(`home mirror is over the ${(opts.maxBytes ?? MIRROR_SIZE_CAP) / 1048576} MiB cap — largest: ${largest}; exclude with cast config cloud_mirror_exclude`);
+      }
+      totalBytes += stat.size;
+      bytes = await fd.readFile();
+    } finally { await fd.close(); }
+    if (script && !isPortableScript(bytes, home)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
+    const credential = !shell && !isActiveConfig(kind) && credentialContentReason(bytes);
+    if (credential) { totalBytes -= stat.size; skip(rel, credential); return; }
+    const hooks = await portableHooks(bytes, path.join(home, rel), home, kind);
+    bytes = hooks.bytes;
+    warnings.push(...hooks.warnings);
+    const text = portableText(bytes);
+    if (text !== null) warnings.push(...commandCompatibilityWarnings(text, rel));
+    totalBytes += bytes.length - stat.size;
+    const entry = { path: rel, kind, mode: fileMode(stat), bytes, root: rootOf(rel) };
+    entries.set(rel, entry);
+    if (shell) shellEnv.add(rel);
+    referenceQueue.push(entry);
+  };
+
+  const collect = async (initial: string, optionalReference = false, shell = false) => {
+    const queue = [{ rel: initial, ancestors: new Set<string>() }];
+    for (let start = 0; start < queue.length;) {
+      const batch = queue.slice(start, start + 8);
+      start += batch.length;
+      const children = await Promise.all(batch.map(async ({ rel, ancestors }) => {
+        if (entries.has(rel) || collectedDirs.has(rel)) return [];
+        const resolved = await resolveEntry(rel, optionalReference);
+        if (!resolved) return [];
+        if (resolved.stat.isDirectory()) {
+          if (ancestors.has(resolved.real)) { skip(rel, "symlink cycle"); return []; }
+          collectedDirs.add(rel);
+          const chain = new Set(ancestors).add(resolved.real);
+          ledger?.note(resolved.real);
+          return (await fs.promises.readdir(resolved.real)).sort().map((name) => ({ rel: `${rel}/${name}`, ancestors: chain }));
+        }
+        await addFile(rel, kindForPath(rel), resolved.real, resolved.stat, shell);
+        return [];
+      }));
+      queue.push(...children.flat());
+    }
+  };
+
+  for (const rel of [...MIRROR_SOURCES.map((src) => src.path), ...SKILL_STATE_FILES, LOCAL_BIN_ROOT]) await collect(rel);
+  for (const rel of SHELL_ENV_FILES) await collect(rel, true, true);
+  ledger?.note(home);
+  for (const name of await fs.promises.readdir(home)) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") await collect(name);
+  for (const inc of includes) await collect(inc);
+
+  if (!excluded(".claude.json")) {
+    const source = path.join(home, ".claude.json");
+    ledger?.note(source);
+    const stat = await fs.promises.lstat(source).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return null; });
+    if (stat) {
+      const real = await fs.promises.realpath(source);
+      const rel = homeRelative(real, realHome);
+      if (rel === null || rel !== ".claude.json" && (isDeniedPath(rel) || isDefaultExcluded(rel) || isAccountDataPath(rel))) throw new Error("Claude MCP source resolves outside portable context");
+      const fd = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try { bytes = await fd.readFile(); } finally { await fd.close(); }
+      let projection: ReturnType<typeof projectClaudeMcp>;
+      try { projection = projectClaudeMcp(parseJsonLoose(bytes.toString("utf8"))); }
+      catch { throw new Error(`cannot parse Claude MCP source: ${source}`); }
+      projection.projects = Object.fromEntries(Object.entries(projection.projects ?? {}).filter(([root]) => homeRelative(root, home) !== null));
+      const entry: MirrorEntry = { path: ".claude.json", kind: "claude-mcp", mode: "0600", bytes: Buffer.from(JSON.stringify(projection)), root: ".claude.json" };
+      entries.set(entry.path, entry);
+      referenceQueue.push(entry);
+    }
+  }
+
+  // Git: an allowlisted render of the global config and the global ignore file.
+  const gitIdentity: Inventory["gitIdentity"] = {};
+  const gitPairs = readGlobalGitConfig(home, undefined, opts.gitEnv, ledger);
+  for (const p of gitPairs) {
+    if (p.key.toLowerCase() === "user.name") gitIdentity.name = p.value;
+    if (p.key.toLowerCase() === "user.email") gitIdentity.email = p.value;
+  }
+
+  // The referenced files do not depend on the host home; the render itself does, so it happens per host.
+  const rendered = renderGitconfig(gitPairs, { fromHome: home, toHome: home });
+  let ignoreRel: string | null = null;
+  const excludesFile = [...gitPairs].reverse().find((p) => p.key.toLowerCase() === "core.excludesfile")?.value;
+  if (excludesFile) {
+    const abs = excludesFile.startsWith("~/") ? path.join(home, excludesFile.slice(2)) : excludesFile;
+    ignoreRel = homeRelative(abs, home);
+  } else if (fs.existsSync(path.join(home, ".config/git/ignore"))) {
+    ignoreRel = ".config/git/ignore";
+  }
+  for (const rel of [...(ignoreRel ? [ignoreRel] : []), ...rendered.referencedFiles]) {
+    if (entries.has(rel)) continue;
+    const r = await resolveEntry(rel);
+    if (r && r.stat.isFile()) await addFile(rel, rel === ignoreRel ? "gitignore" : "verbatim", r.real, r.stat);
+  }
+
+  const scanned = new Set<string>();
+  for (let index = 0; index < referenceQueue.length; index++) {
+    const entry = referenceQueue[index]!;
+    if (scanned.has(entry.path)) continue;
+    scanned.add(entry.path);
+    const text = portableText(entry.bytes);
+    if (text === null) continue;
+    const required = activeContextReferences(text, path.join(home, entry.path), home, entry.kind);
+    for (const ref of new Set([...contextReferences(text, path.join(home, entry.path), home), ...required])) {
+      const rel = homeRelative(ref, home);
+      if (!rel || entries.has(rel) || collectedDirs.has(rel) || skippedPaths.has(rel) && !required.has(ref)) continue;
+      try {
+        const resolved = await resolveEntry(rel, !required.has(ref));
+        if (!resolved) {
+          const reason = skippedPaths.get(rel)?.reason;
+          if (required.has(ref) && /denied|account data/.test(reason ?? "")) throw new Error(`active context reference is denied: ${entry.path} -> ${rel}`);
+          if (required.has(ref) && (!reason || /dangling|unresolved symlink/.test(reason))) throw new Error(`missing active context reference: ${entry.path} -> ${rel}`);
+          if (required.has(ref)) warnings.push(`${entry.path}: unsupported host dependency ${rel} (${reason})`);
+          skip(rel, "referenced path absent or excluded"); continue;
+        }
+        if (resolved.stat.isDirectory() && !required.has(ref) && !isReferencedDirectory(ref)) continue;
+        await collect(rel, !required.has(ref), shellEnv.has(entry.path));
+        if (required.has(ref) && /credential|private key/.test(skippedPaths.get(rel)?.reason ?? "")) throw new Error(`active context reference contains credential material: ${entry.path} -> ${rel}`);
+      } catch (err) {
+        if (required.has(ref) || !isAccessError(err)) throw err;
+        skip(rel, `optional reference inaccessible (${(err as NodeJS.ErrnoException).code})`);
+      }
+    }
+  }
+
+
+  const list = [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const total = list.reduce((n, e) => n + e.bytes.length, 0);
+  if (total > (opts.maxBytes ?? MIRROR_SIZE_CAP)) {
+    const byRoot = new Map<string, number>();
+    for (const e of list) byRoot.set(e.root, (byRoot.get(e.root) ?? 0) + e.bytes.length);
+    const biggest = [...byRoot.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([r, n]) => `${r} (${(n / 1048576).toFixed(1)} MiB)`).join(", ");
+    throw new Error(`home mirror is ${(total / 1048576).toFixed(1)} MiB, over the ${MIRROR_SIZE_CAP / 1048576} MiB cap — largest: ${biggest}; exclude with \`cast config cloud_mirror_exclude\``);
+  }
+  return { home, gitPairs, entries: list, skipped, excludesApplied: [...excludesApplied], warnings: [...new Set(warnings)], gitIdentity };
+}
+
+export function readGlobalGitConfig(home: string, cwd?: string, env?: NodeJS.ProcessEnv, ledger?: TouchLedger): Array<{ key: string; value: string }> {
+  const gitEnv: NodeJS.ProcessEnv = { ...process.env, ...env, HOME: home };
+  if (!gitEnv.XDG_CONFIG_HOME) gitEnv.XDG_CONFIG_HOME = path.join(home, ".config");
+  const sources = gitEnv.GIT_CONFIG_GLOBAL ? [gitEnv.GIT_CONFIG_GLOBAL] : [path.join(gitEnv.XDG_CONFIG_HOME, "git/config"), path.join(home, ".gitconfig")];
+  return sources.flatMap((file) => {
+    ledger?.note(file);
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })) return [];
+    const output = execFileSync("git", ["config", "--file", file, "--includes", "--list", "-z", "--show-origin"], {
+      cwd: cwd ?? home, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
+    });
+    return parseGitConfigList(output).map(({ key, value }) => ({ key, value }));
+  });
+}
