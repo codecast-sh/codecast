@@ -196,3 +196,21 @@ test("a daemon without the row still reports the file as outside the vault", asy
   expect(useVaultStore.getState().opError).toBe(`${known.root}/gone.txt isn't in this vault.`);
   expect(view.routes).toEqual(["/files"]);
 });
+
+test("a file missing from a cached list opens anyway when the daemon cannot be asked", async () => {
+  const rel = "docs/new-note.md";
+  const view = await mount(`${known.root}/${rel}`);
+  expect(requests).toHaveLength(0);
+  await act(async () => {});
+  expect(useVaultStore.getState().opError).toBeNull();
+  expect(view.routes).toEqual([`/files?f=${encodeURIComponent(rel)}&l=23`]);
+});
+
+test("a failed daemon lookup opens the file rather than calling it outside the vault", async () => {
+  const rel = "docs/new-note.md";
+  await update({ endpoint, connection: "connected" });
+  const view = await mount(`${known.root}/${rel}`);
+  await answer(0, { error: "boom" }, 500);
+  expect(useVaultStore.getState().opError).toBeNull();
+  expect(view.routes).toEqual([`/files?f=${encodeURIComponent(rel)}&l=23`]);
+});

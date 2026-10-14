@@ -1,0 +1,28 @@
+{
+ "name": "anchor-brief role-investigation-request",
+ "anchor": {
+  "kind": "message",
+  "id": "fixture:role-investigation-request"
+ },
+ "subject": {
+  "kind": "synthetic",
+  "id": "anchor-brief:role-investigation-request",
+  "title": "anchor-brief role-investigation-request"
+ },
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "trigger": {
+  "type": "anchor-brief"
+ },
+ "meta": {
+  "surface": "anchor-brief",
+  "visibility": "public",
+  "snapshot": "fixtures/anchor-brief/role-investigation-request.json"
+ },
+ "judge": "hands the investigation and the fix to a session it starts, briefed with the goal and what done means, tells Mara which session has it, and does not dig through the files or fix links itself",
+ "notes": null,
+ "tags": [
+  "scope"
+ ],
+ "id": "badfe163-8ba2-4e1c-880d-589e66eb0bc8",
+ "createdAt": "2026-10-14T16:00:00.000Z"
+}

@@ -8449,7 +8449,7 @@ async function buildUserSessionMaps(
 // on 2026-10-02 (ct-53363). Covers the named rows and the children enrichment
 // reads for them (the same newest-20 range enrichInboxSessionRow takes), keeps
 // only the viewer's own managed rows exactly as the user-wide read does, and
-// reads latestHeartbeat as the newest row of by_user_heartbeat, the same maximum.
+// takes the user's daemon liveness from the user row (see below).
 // Teammates read per named lead. The full scan pools every teammate its
 // windows hold; a lead with more live teammates than this is beyond any team
 // the product spawns.
@@ -8479,21 +8479,24 @@ export async function buildNamedSessionMaps(
   const covered = new Map<string, any>();
   for (const c of [...convs, ...childLists.flat()]) covered.set(c._id.toString(), c);
   const uid = userId.toString();
-  const [newest, rowLists] = await Promise.all([
-    ctx.db
-      .query("managed_sessions")
-      // Daemon rows only (hosted absent): a hosted row's heartbeat is a
-      // running turn, not a daemon, and a user with no daemon has only those.
-      .withIndex("by_user_hosted_heartbeat", (q: any) => q.eq("user_id", userId).eq("hosted", undefined))
-      .order("desc")
-      .first(),
+  // Whether the user's daemon is alive comes from the daemon's own beat on the
+  // user row (users.daemonHeartbeat writes it at most every 50 s), never from
+  // the newest managed_sessions heartbeat. That newest row is the top of an
+  // index every session heartbeat moves, so reading it made every named watch
+  // re-run on every heartbeat of every session the user ran: 16.8 full runs a
+  // second and the busiest hours at 88 to 92% CPU on 2026-10-12 to 14
+  // (ct-56547). The two agree whenever the daemon is beating its sessions; they
+  // differ only for a daemon alive with no session heartbeating, where the
+  // daemon's own beat is the truer answer to "is the daemon alive".
+  const [user, rowLists] = await Promise.all([
+    ctx.db.get(userId),
     Promise.all([...covered.values()].map((c: any) => ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
       .collect())),
   ]);
   const own = rowLists.flat().filter((s: any) => s.user_id?.toString() === uid);
-  return { maps: sessionMapsFromManagedRows(own, now, newest?.last_heartbeat), children: childLists.flat() };
+  return { maps: sessionMapsFromManagedRows(own, now, user?.daemon_last_seen), children: childLists.flat() };
 }
 
 // The one derivation of InboxSessionMaps from managed_sessions rows, shared by
@@ -9018,6 +9021,7 @@ async function enrichInboxSessionRow(
     cloud_workspace: (conv as any).cloud_workspace ?? null,
     cloud_seed: (conv as any).cloud_seed ?? null, local_mirror: (conv as any).local_mirror ?? null,
     cloud_context_too_large: (conv as any).cloud_context_too_large ?? null,
+    cloud_placement_progress: (conv as any).cloud_placement_progress ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     // Read by the web's isSub (inboxStore) via isAgentSpawnedConversation so
@@ -9197,6 +9201,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     cloud_workspace: child.cloud_workspace ?? null,
     cloud_seed: child.cloud_seed ?? null, local_mirror: child.local_mirror ?? null,
     cloud_context_too_large: child.cloud_context_too_large ?? null,
+    cloud_placement_progress: child.cloud_placement_progress ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
