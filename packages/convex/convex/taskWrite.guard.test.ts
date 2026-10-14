@@ -31,6 +31,8 @@ const ALLOWED: Record<string, string[]> = {
     "pauseAtGateCore(args.run_id)",                 // the run's status
     "answerGateCore(run._id)",                      // the run's status
     "cancelCore(run._id)",                          // the run's status
+    "resumeRunAt(run._id)",                         // the run's status
+    "landAgainCore(run._id)",                       // the run's status
     "create(args.existing_conversation_id)",        // the conversation's title
     "updateProgress(args.run_id)",                  // the run's status
     "updateProgress(run.primary_conversation_id)",  // the conversation's counters
