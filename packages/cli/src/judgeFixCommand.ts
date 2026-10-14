@@ -692,7 +692,8 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       const ruledExp = new Set(ruled.map((c) => c.expectation));
       const live: any[] = [];
       for (const name of cf.judges) {
-        const r = await apiPost(deps, "/cli/signal/ls", { ...scope, source: `judge:${name}`, limit: 400 }, { read: true });
+        // Asked for by project: the newest 400 of a judge's findings team-wide can hold almost none of this project's.
+        const r = await apiPost(deps, "/cli/signal/ls", { ...scope, project: cf.project_id, source: `judge:${name}`, limit: 400 }, { read: true });
         live.push(...(r.signals ?? []).filter((s: any) => s.project_id === cf.project_id && !s.retired && s.moment && !ruledMoments.has(s.moment)));
       }
       live.sort((a, b) => Number(ruledExp.has(b.subject)) - Number(ruledExp.has(a.subject)) || b.created_at - a.created_at);

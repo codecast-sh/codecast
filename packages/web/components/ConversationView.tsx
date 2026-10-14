@@ -4923,7 +4923,7 @@ const ConversationViewInner = (
       {/* A hosted conversation's own approval lives in the transcript's
           flow (hostedTailCard); the rest dock above the composer. */}
       {decisionItem && conversation && !onSendOverride && !hostedOwnCard && (
-        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} />
+        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} targetNonce={targetMessageId ? targetNonce : undefined} scrollToMessage={scrollToMessageById} />
       )}
 
       {showMessageInput && conversation && runLogEnded && workflowRun && <RunLogEndedBar run={workflowRun as any} />}
