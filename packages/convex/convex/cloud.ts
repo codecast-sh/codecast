@@ -22,9 +22,9 @@ import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, CLOUD_LEAVE_OUT_MAX, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, CLOUD_LEAVE_OUT_MAX, CLOUD_PLACEMENT_LINE_CHARS, CLOUD_PLACEMENT_LINES_MAX, CLOUD_PLACEMENT_STEPS, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
 import { resolveConversationRefRanked } from "./conversationSessionLookup";
-import { cloudHostReportValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
+import { cloudHostReportValidator, cloudPlacementProgressValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 // The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
@@ -186,6 +186,7 @@ export const placeConversation = mutation({
       cloud_placement_token: undefined,
       cloud_placement_failed_at: undefined,
       cloud_context_too_large: undefined,
+      cloud_placement_progress: undefined,
       session_error: undefined,
       updated_at: Date.now(),
     });
@@ -317,11 +318,44 @@ export const reportPlacementFailure = mutation({
     if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const, reason: "not_yours" };
     const fence = placementFence(conv, args.placement_token);
     if (fence) return { recorded: false as const, reason: fence };
+    const progress = (conv as any).cloud_placement_progress;
     await ctx.db.patch(args.conversation_id, {
       session_error: args.error,
       cloud_placement_failed_at: Date.now(),
+      ...(progress && progress.token === args.placement_token ? { cloud_placement_progress: { ...progress, failed_at: Date.now() } } : {}),
       cloud_context_too_large: args.context_too_large?.files.length ? { ...args.context_too_large, files: args.context_too_large.files.slice(0, CLOUD_LEAVE_OUT_MAX) } : undefined,
       updated_at: Date.now(),
+    });
+    return { recorded: true as const };
+  },
+});
+
+/**
+ * The laptop's `cast cloud start` child reports where the placement stands:
+ * the host, the step, its last lines. Fenced like every placement write: a
+ * child whose park was superseded writes nothing, and the record must carry
+ * the park's own token.
+ */
+export const reportPlacementProgress = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    progress: cloudPlacementProgressValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const, reason: "not_yours" };
+    const fence = placementFence(conv, args.progress.token);
+    if (fence) return { recorded: false as const, reason: fence };
+    const { lines, steps } = args.progress;
+    await ctx.db.patch(args.conversation_id, {
+      cloud_placement_progress: {
+        ...args.progress,
+        steps: steps.slice(-CLOUD_PLACEMENT_STEPS.length * 2),
+        lines: lines.slice(-CLOUD_PLACEMENT_LINES_MAX).map((l) => l.slice(0, CLOUD_PLACEMENT_LINE_CHARS)),
+      },
     });
     return { recorded: true as const };
   },

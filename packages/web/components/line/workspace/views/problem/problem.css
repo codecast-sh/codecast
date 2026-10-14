@@ -114,3 +114,9 @@
 .pb-since-act { flex: none; white-space: nowrap; }
 .pf-apart { margin-top: 18px; }
 .pf-apart > .pp-sec-h { color: var(--lw-ink-2); font-size: var(--lw-fs-sm); font-weight: 650; margin: 0 0 6px; }
+
+/* The problem's life on one axis, leading the page: the range presets over the chart. */
+.pp-timeline { border: 1px solid var(--lw-rule-2); border-radius: 12px; background: var(--lw-card); min-width: 0; }
+.pp-timeline-h { display: flex; justify-content: flex-end; padding: 8px 10px 0; }
+.pp-timeline-h .lw-seg button { padding: 1px 8px; font-size: var(--lw-fs-2xs); }
+.pp-timeline .lwt-chart { padding: 0 10px 4px 14px; }

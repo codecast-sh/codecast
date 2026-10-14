@@ -45,6 +45,13 @@ export function isServerMetaMessage(m: ExportedMessage): boolean {
     && !m.tool_calls?.length && !m.tool_results?.length;
 }
 
+/** Whether an export holds anything a transcript can be built from. A
+ *  conversation of workflow events alone generates an empty transcript, which
+ *  the agent refuses to resume; repairing it again only loops. */
+export function hasResumableMessages(data: { messages: ExportedMessage[] }): boolean {
+  return data.messages.some((m) => !isServerMetaMessage(m));
+}
+
 export interface ExportedConversation {
   id: string;
   title: string;

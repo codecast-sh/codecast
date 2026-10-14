@@ -9,6 +9,7 @@ import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
 import { performWebActiveSessions } from "./tasks";
 import { filterUserMessages } from "./userMessagesFilter";
+import { isConversationSafetyBlocked } from "./conversationSafety";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -1135,5 +1136,45 @@ export const repairReuploadedActivity = internalMutation({
       if (!args.dryRun) await ctx.db.patch(conv._id, { updated_at: to });
     }
     return { scanned: rows.length, fixed: fixed.length, rows: fixed };
+  },
+});
+
+// TEMPORARY (ct-56547): for every "pending" row, the first gate in
+// canDaemonSeePendingMessage that keeps it from its owner's daemon, so a
+// backlog that never drains can be split by cause. Read-only.
+export const pendingGateCensus = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .collect();
+    const convs = new Map<string, any>();
+    const out: any[] = [];
+    for (const m of rows as any[]) {
+      const key = String(m.conversation_id);
+      if (!convs.has(key)) convs.set(key, await ctx.db.get(m.conversation_id));
+      const c = convs.get(key);
+      const gate = !c ? "no_conversation"
+        : isConversationSafetyBlocked(c) ? "safety_blocked"
+        : m.delivery_protocol_version !== undefined ? "fenced_row"
+        : c.execution_protocol_state !== undefined ? `conv_protocol:${c.execution_protocol_state}`
+        : c.cloud_placement === "pending" ? "cloud_placement_pending"
+        : c.migration ? "migrating"
+        : c.agent_type === "codecast" ? "hosted"
+        : "open";
+      out.push({
+        id: m._id, conv: key, gate, age_h: Math.round((Date.now() - m.created_at) / 360000) / 10,
+        owner: String(m.owner_user_id ?? c?.user_id), device: c?.owner_device_id ?? null,
+        agent: c?.agent_type ?? null, retry: m.retry_count, conv_status: c?.status ?? null,
+        killed: !!c?.inbox_killed_at,
+      });
+    }
+    const devices: Record<string, any> = {};
+    for (const d of new Set(out.map((r) => r.device).filter(Boolean))) {
+      const row: any = await ctx.db.query("devices").withIndex("by_device_id", (q: any) => q.eq("device_id", d)).first();
+      devices[d as string] = row ? { label: row.label ?? row.hostname, last_seen_min: Math.round((Date.now() - row.last_seen) / 60000), daemon_version: row.daemon_version ?? row.cli_version ?? null } : null;
+    }
+    return { devices, rows: out };
   },
 });

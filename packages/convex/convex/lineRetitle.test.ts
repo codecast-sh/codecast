@@ -25,13 +25,13 @@ test("the rename asks for the shared miss and reads a reply only when it fits", 
   expect(parseRetitle("not json")).toBeNull();
 });
 
-test("a title too long to list is named once, beside the title it names", () => {
+test("every title is named once, beside the title it names", () => {
   const long = "Not met: Call grader scored Keith Conrad's Zoom (call 0b30cb37) off a transcript missing 03:38-09:00, though the caller said so";
   expect(nameDue(long, undefined)).toBe(true);
   expect(nameDue(long, { for: long })).toBe(false);
-  // A new title is named again; a short one never is.
+  // A new title is named again; a short title carrying evidence is named too.
   expect(nameDue(long, { for: "an older title" })).toBe(true);
-  expect(nameDue("Callers name a fee percentage of Union's own", undefined)).toBe(false);
+  expect(nameDue("Main CI red at ac5c98b: web tests fail", undefined)).toBe(true);
   expect(nameRequest(long).prompt).not.toContain("Not met:");
   expect(parseName('{"name": "Grader scores calls from a transcript with gaps."}')).toBe("Grader scores calls from a transcript with gaps");
   expect(parseName('{"name": "' + "x".repeat(81) + '"}')).toBeNull();

@@ -58,10 +58,10 @@ describe("a finding about something else under a title that rests on nothing", (
 });
 
 describe("keeping an unsupported problem names the run it starts", () => {
-  const base = { problem: "ct-57470", project: "Agent Quality", empty: 2, of: 3, cost: { avgUsd: 8, runs: 10, scope: "project" as const }, about: "31m" };
+  const base = { problem: "ct-57470", project: "Agent Quality", empty: 2, of: 3, cost: { billedUsd: 8, listUsd: 0, runs: 10, scope: "project" as const }, about: "31m" };
   test("starts now", () => {
     const l = keepRealLedger({ ...base, now: true, ahead: null, off: false });
-    expect(l.figures.map((f) => `${f.value} ${f.label}`)).toEqual(["1 run starts now", "~$8 est.", "~31m until it asks you"]);
+    expect(l.figures.map((f) => `${f.value} ${f.label}`)).toEqual(["1 run starts now", "~$8 billed", "~31m until it asks you"]);
     expect(l.confirm).toBe("Keep it and start");
     expect(l.stop).toBe("Stop from its page");
     expect(l.rows.find((r) => r.k === "Findings")?.v).toBe("2 of 3 empty");

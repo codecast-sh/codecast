@@ -166,7 +166,7 @@ declare module "codecast-mod" {
       create(doc: { title: string; content: string }): Promise<{ id: string }>;
     };
     /**
-     * The mod's local half (manifest "local"), running on your machines where you approved it.
+     * The mod's local half (manifest "local"), running on each of your machines where it is on.
      * get() reads a value it published with $.publish, and a surface that reads one redraws when it
      * changes. call() runs one of its on("local.call", { method }) hooks and resolves with the answer.
      */
@@ -201,7 +201,7 @@ declare module "codecast-mod" {
     commands?: { id: string; title: string; keywords?: string; icon?: string }[];
     fences?: { lang: string; description?: string }[];
     sidebar?: { id: string; title: string }[];
-    /** What agents should know to use this mod well: its objects, its fences, when to reach for them. `cast mod guide` prints it to every agent that asks. */
+    /** What agents should know to use this mod well: its objects, its fences, when to reach for them. Write it in AGENTS.md beside the manifest; every session the mod applies to starts with it, and `cast mod guide` prints it. */
     agents?: string;
     /**
      * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
