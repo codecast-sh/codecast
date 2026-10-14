@@ -1748,9 +1748,11 @@ diffs-container {
 }
 .simple-view .cc-block-quote {
   left: calc(-1 * min(1.85rem, var(--cc-gutter-l, 1.85rem) - 0.2rem));
+  --cc-hit-in: max(0rem, min(1.85rem, var(--cc-gutter-l, 1.85rem) - 0.2rem) - 1.2rem);
 }
 .simple-view .cc-block-comment {
   right: calc(-1 * min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem));
+  --cc-hit-in: max(0rem, min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem) - 1.2rem);
 }
 .simple-view .cc-block-quote.cc-block-quote-key {
   left: auto;
@@ -2405,6 +2407,29 @@ diffs-container {
   background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
   transform: scale(1.06);
 }
+/* Both gutter handles take the pointer well beyond their drawn box: the target
+   reaches inward to the text edge (--cc-hit-in is the handle's gap to it, so no
+   dead strip sits between a block and its handle), outward into the gutter,
+   and above and below. */
+.cc-block-quote { --cc-hit-in: 0.65rem; }
+.cc-block-comment { --cc-hit-in: 0.4rem; }
+.cc-block-quote::before,
+.cc-block-comment::before {
+  content: "";
+  position: absolute;
+  top: -0.45rem;
+  bottom: -0.45rem;
+}
+.cc-block-quote::before {
+  left: calc(-1 * var(--cc-hit-out, 0.5rem));
+  right: calc(-1 * var(--cc-hit-in));
+}
+.cc-block-comment::before {
+  left: calc(-1 * var(--cc-hit-in));
+  right: calc(-1 * var(--cc-hit-out, 0.5rem));
+}
+/* Inline rail: the note sits right against the handle's outer edge. */
+.cc-rail-inline .cc-block-quote { --cc-hit-out: 0rem; }
 .cc-block-comment[aria-expanded="true"] {
   color: var(--sol-cyan);
   border-color: var(--sol-cyan);
@@ -6345,6 +6370,15 @@ diffs-container {
     linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--sol-text) 5%, transparent) 50%, transparent 70%) 0 0 / 220% 100%,
     color-mix(in srgb, var(--sol-bg-alt) 60%, transparent);
   animation: page-embed-shimmer 1.6s linear infinite;
+}
+.page-embed__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--sol-text-dim);
 }
 @keyframes page-embed-shimmer { from { background-position: 120% 0, 0 0; } to { background-position: -120% 0, 0 0; } }
 /* The toolbar straddles the page's top edge, half in the gap above it, so it
