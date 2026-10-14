@@ -129,7 +129,8 @@ export interface ChangeCard {
   risk: { class: RiskClass; reason: string };
   /** `source` "evidence": the reader turned the author's verdict to Drop because no finding is left behind the problem; the why is that, not the checks. */
   recommend: { verdict: ChangeVerdict; why: string; source?: "evidence" };
-  cost: { tokens: number; usd: number; minutes: number };
+  /** `usd`: money billed (evals, call nodes, sessions on a metered key). `list_usd`: the runs' subscription sessions at API list price, an equivalent never billed. Read through costParts. */
+  cost: { tokens: number; usd: number; minutes: number; list_usd?: number };
   /** The cause's earlier shipped fixes, oldest first, so a person sees what was tried beside what is proposed now, and whether it held (line-workspace.md LW5). Absent when nothing shipped before. */
   earlier?: EarlierFix[];
 }
@@ -376,6 +377,7 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     count("cost.tokens", cost.tokens);
     count("cost.usd", cost.usd);
     count("cost.minutes", cost.minutes);
+    if (cost.list_usd !== undefined) count("cost.list_usd", cost.list_usd);
   }
 
   if (c.earlier !== undefined) {
@@ -604,6 +606,19 @@ export interface CardEvidenceInput {
   review_verdict: { verdict: string; note?: string } | null;
 }
 
+/**
+ * A card's cost as two kinds that never add: money billed, and the API list
+ * price of its subscription sessions, an equivalent only. A card built before
+ * the two were told apart has no `list_usd`; its `usd` was its sessions at
+ * list price (those cards carried no eval cost), so it reads as that.
+ */
+export function costParts(cost: { usd: number; list_usd?: number }): { billed_usd: number; list_usd: number } {
+  return cost.list_usd === undefined ? { billed_usd: 0, list_usd: cost.usd } : { billed_usd: cost.usd, list_usd: cost.list_usd };
+}
+
+/** Dollars as cost surfaces print them. */
+export const costUsd = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+
 export interface CardAssemblyInput {
   task: CardTaskInput;
   evidence?: CardEvidenceInput | null;
@@ -615,7 +630,7 @@ export interface CardAssemblyInput {
   diff?: { files: number; added: number; removed: number } | null;
   /** The branch against main (BranchBase); null when git could not say. */
   base?: BranchBase | null;
-  cost?: { tokens?: number; minutes?: number; usd?: number } | null;
+  cost?: { tokens?: number; minutes?: number; usd?: number; list_usd?: number } | null;
   headline?: string;
   context?: string;
   ask?: string;
@@ -855,6 +870,7 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       tokens: Math.round(input.cost?.tokens ?? 0),
       usd: Math.round(((input.cost?.usd ?? 0) + (evalResult?.costUsd ?? 0)) * 100) / 100,
       minutes: Math.round(input.cost?.minutes ?? 0),
+      list_usd: Math.round((input.cost?.list_usd ?? 0) * 100) / 100,
     },
     ...(input.earlier?.length ? { earlier: input.earlier } : {}),
   };

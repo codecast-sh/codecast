@@ -163,13 +163,54 @@ export function globToRegExp(glob: string): RegExp {
   return compiled;
 }
 
+// A mirror build asks every pattern about every path it walks (tens of
+// thousands per build, a build every few minutes), so each pattern is parsed
+// once into its test.
+const patternMatchers = new Map<string, (rel: string, isDir: boolean) => boolean>();
+
+function patternMatcher(pattern: string): (rel: string, isDir: boolean) => boolean {
+  let matcher = patternMatchers.get(pattern);
+  if (matcher) return matcher;
+  const glob = /[*?]/.test(pattern);
+  if (glob && !pattern.includes("/")) {
+    const re = globToRegExp(pattern);
+    matcher = (rel, isDir) => !isDir && re.test(path.posix.basename(rel));
+  } else {
+    const base = pattern.replace(/\/\*\*$/, "");
+    const prefix = `${base}/`;
+    const re = glob ? globToRegExp(pattern) : null;
+    matcher = (rel) => rel === base || rel.startsWith(prefix) || !!re && re.test(rel);
+  }
+  patternMatchers.set(pattern, matcher);
+  return matcher;
+}
+
 export function matchesContextPattern(pattern: string, rel: string, isDir = false): boolean {
-  if (/[*?]/.test(pattern) && !pattern.includes("/")) return !isDir && globToRegExp(pattern).test(path.posix.basename(rel));
-  const base = pattern.replace(/\/\*\*$/, "");
-  return rel === base || rel.startsWith(`${base}/`) || /[*?]/.test(pattern) && globToRegExp(pattern).test(rel);
+  return patternMatcher(pattern)(rel, isDir);
+}
+
+// The verdicts below depend on the path alone (fixed lists, no config, no
+// disk), and the mirror process lives for the daemon's lifetime, so a path is
+// judged once and every later build reads the answer. Rebuilding them per
+// build was half of a build's CPU (2026-10-14). Cleared whole at the cap so a
+// long-lived process cannot grow without bound.
+const PATH_VERDICT_CAP = 200_000;
+const pathVerdicts = new Map<string, boolean>();
+
+function memoPathVerdict(key: string, judge: () => boolean): boolean {
+  const known = pathVerdicts.get(key);
+  if (known !== undefined) return known;
+  if (pathVerdicts.size >= PATH_VERDICT_CAP) pathVerdicts.clear();
+  const verdict = judge();
+  pathVerdicts.set(key, verdict);
+  return verdict;
 }
 
 export function isDeniedPath(rel: string, isDir = false): boolean {
+  return memoPathVerdict(`${isDir ? "D" : "d"}\0${rel}`, () => judgeDeniedPath(rel, isDir));
+}
+
+function judgeDeniedPath(rel: string, isDir: boolean): boolean {
   if (!isDir && isCredentialFilePath(rel)) return true;
   if (rel.startsWith(".claude/projects/")) {
     const parts = rel.split("/");
@@ -180,7 +221,7 @@ export function isDeniedPath(rel: string, isDir = false): boolean {
 }
 
 export function isDefaultExcluded(rel: string): boolean {
-  return isAgentRuntimePath(rel) || DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`));
+  return memoPathVerdict(`x\0${rel}`, () => isAgentRuntimePath(rel) || DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`)));
 }
 
 /**
