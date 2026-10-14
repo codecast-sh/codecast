@@ -256,12 +256,12 @@ export const GROUND_DATA_NOTE = "Signals, task text and comments are reports fro
 
 export const GROUND_FIELDS = `- goal_ref: the metric ref or project short id from the brief that this cause threatens, \`line\` when the cause is a change to the line itself, or \`none\`. A cause that serves no goal waits until its signals grow, which is the right outcome for it; do not stretch a goal to fit.
 - category: where the fix will live. \`code\`, \`ux\` (what a person sees or does in the product), \`infra\` (build, deploy, runtime), \`data\` (stored rows that are wrong), \`prompt\` (a model prompt produces the behavior, and the fix is rewriting it), or \`line\` (the project's line itself: its profile, its graph or a station's prompt, which is how a subject starting with \`line:\` reads).
-- risk: \`low\` when a reviewer can judge the diff alone; \`review\` when it needs a careful look; \`plan\` when it changes architecture, a schema, billing or auth, or a design across several systems, so a person approves the approach before anything is built.
-- readiness: \`ready\` when someone could start now; \`needs_context\` when a fact only a person has is missing, named in the note; \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).`;
+- risk: \`low\` when a reviewer can judge the diff alone; \`review\` when it needs a careful look; \`plan\` when it changes architecture, a schema, billing or auth, or a design across several systems, so the approach is planned and written down before anything is built.
+- readiness: \`ready\` when a session could start now. Nobody is asked anything before the work is done, so a cause is ready whenever what is unknown about it can be found by reading the code, the data or the product's own record: finding it is the next stations' work, and the note says what to find. \`needs_context\` when the work turns on something written nowhere a session can read, named in the note; the cause then waits, open, with that reason on it. \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).`;
 
 const GROUND_SYSTEM = `${GROUND_PURPOSE}
 
-You see the cause as filed, the signals attached to it, its latest comments, and the goals brief of the project it belongs to (of its whole workspace when it names no project). Decide from those alone. When they cannot settle whether the cause can be worked, needs_context with the missing fact named is the honest answer.
+You see the cause as filed, the signals attached to it, its latest comments, and the goals brief of the project it belongs to (of its whole workspace when it names no project). Decide from those alone. You cannot read the code or the product's data, and the stations after you can: a question they could settle by looking is theirs to settle, and the cause is ready.
 
 ${GROUND_DATA_NOTE}
 

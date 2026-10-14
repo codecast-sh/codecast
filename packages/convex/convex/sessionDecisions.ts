@@ -19,7 +19,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib/access";
-import { teamVisibleConvTeam } from "./privacy";
+import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, decisionAnswerLabel, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
@@ -28,7 +28,8 @@ import { internal } from "./_generated/api";
 import { enqueuePendingMessage, reachableRole, tellRole, wakeHostedConversation } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
-import { projectLeadRole, roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
@@ -37,7 +38,7 @@ import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
-import { settleExpectationCard } from "./lib/expectationsApply";
+import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
 import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -88,19 +89,8 @@ const HISTORY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 // ── Id resolution ─────────────────────────────────────────────────────────────
 
-// `sd-N` (the short id the CLI prints) or a raw Convex id.
-export async function findDecision(ctx: Ctx, ref: string): Promise<DecisionRow | null> {
-  if (/^sd-\d+$/.test(ref)) {
-    return (
-      (await ctx.db
-        .query("session_decisions")
-        .withIndex("by_short_id", (q: any) => q.eq("short_id", ref))
-        .first()) ?? null
-    );
-  }
-  const id = ctx.db.normalizeId("session_decisions", ref);
-  return id ? await ctx.db.get(id) : null;
-}
+// `sd-N` (the short id the CLI prints) or a raw Convex id; who may read one (lib/decisionAccess).
+export { findDecision, userMayRead };
 
 async function findTask(ctx: Ctx, ref: string): Promise<any | null> {
   if (/^ct-\d+$/.test(ref)) {
@@ -259,7 +249,7 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
 // a ladder: `trial: "owner"` is the trial owner's practice answer, in nobody's
 // queue. A judge-route run's decision is the role the trial names for that
 // route (`trial: "role"`, trialDeciderOf): it climbs that role's line alone.
-export async function routeFor(ctx: Ctx, conversation: any, now: number, task?: any): Promise<{
+export async function routeFor(ctx: Ctx, conversation: any, now: number, task?: any, asStation?: any): Promise<{
   role: Doc<"org_roles"> | null;
   ladder: Awaited<ReturnType<typeof buildLadder>>;
   people: Id<"users">[];
@@ -271,7 +261,7 @@ export async function routeFor(ctx: Ctx, conversation: any, now: number, task?: 
   if (isHostedAgentType(conversation.agent_type)) {
     return { role: null, ladder: await buildLadder(ctx, null, now), people: [conversation.user_id as Id<"users">], hears: null, trial: null };
   }
-  const station = await trialStationOf(ctx, conversation);
+  const station = (await trialStationOf(ctx, conversation)) ?? (asStation ? await trialStationOf(ctx, asStation) : null);
   const decider = station ? await trialDeciderOf(ctx, station.project, station.run) : null;
   if (decider) return { role: await roleOfConversation(ctx, conversation), ...(await routeToRole(ctx, decider, now)), trial: "role" };
   const routed = await routeForSession(ctx, conversation, now, task);
@@ -371,8 +361,13 @@ export async function reroutePendingDecisionsForConversation(
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { moved: 0 };
   for (const row of openRows) {
+    // A person handed this one to somebody; ownership moves do not take it back.
+    if (row.passed_to) continue;
     const task = row.task_id ? await ctx.db.get(row.task_id) : null;
-    const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task);
+    // A proposal's decision asked by another session keeps routing as the station that proposed it.
+    const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
+    const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversationId) ? await ctx.db.get(proposal.conversation_id) : undefined;
+    const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
     // A row asked with no ladder takes the one it now climbs, and its first
     // role hears; a row that has one keeps it and the recommendations on it.
     const climbs = !row.hops?.length && ladder.hops.length > 0;
@@ -515,6 +510,11 @@ export async function refreshHolder(
   now: number,
   opts: { excludeRoleIds?: Id<"org_roles">[] } = {},
 ): Promise<void> {
+  if (row.passed_to) {
+    const { kind, id } = row.passed_to;
+    await ctx.db.patch(row._id, { holder: { kind, id }, holder_key: `${kind}:${id}` });
+    return;
+  }
   const excluded = new Set((opts.excludeRoleIds ?? []).map(String));
   const roleIds = (row.hops ?? [])
     // A role that passed the question up gave up its hold ("escalated" is
@@ -971,6 +971,8 @@ export type AskArgs = {
   to?: string[];
   /** A trial project's question asked by a run's own conversation rather than a station (lineTrial.askTrialGate). A station of a trial run is noticed without it. */
   trial?: boolean;
+  /** The station whose work this decision is about, when another session asks it (a proposal's decision re-asked): it routes as that station's. Set by the server, never by a caller. */
+  as_station?: any;
 };
 
 // An option's page (the-line.md L6) must be a published page: a mistyped
@@ -1062,7 +1064,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   if ("error" in bound) return bound;
   // A station of a trial run asks into the trial (lib/trialDecision): the run's
   // task, the trial's one stack, and nobody's queue, inbox or ladder.
-  const station = await trialStationOf(ctx, conversation);
+  // A decision about a station's work asked by another session (a proposal re-asked, AskArgs.as_station) routes as that station's.
+  const station = (await trialStationOf(ctx, conversation)) ?? (args.as_station ? await trialStationOf(ctx, args.as_station) : null);
   // A trial decision is a station's: a session outside the run (the plan driving it) cannot post one for it.
   if (args.trial && !station) return { error: "Only a station of the trial run (a session nested under its primary conversation) asks its decision" };
   const trialProject = station?.project ?? null;
@@ -1094,7 +1097,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
-  const routed = await routeFor(ctx, conversation, now, task);
+  const routed = await routeFor(ctx, conversation, now, task, args.as_station);
   // A hosted conversation asks its owner only, so an address (--to) is ignored.
   const addressed = args.to?.length && !isHostedAgentType(conversation.agent_type)
     ? await resolveAskedPeople(ctx, conversation, args.to)
@@ -1234,12 +1237,24 @@ export const ask = mutation({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     gate_node_id: v.optional(v.string()),
     to: v.optional(v.array(v.string())),
+    // An expectations proposal (`cast decide --proposal xp-N`): the session's
+    // own decision about it, whose answer applies or closes it.
+    proposal: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) return { error: "Unauthorized" };
-    const { api_token: _t, ...rest } = args;
-    return askCore(ctx, auth, rest as AskArgs);
+    const { api_token: _t, proposal: proposalRef, ...rest } = args;
+    const target = proposalRef ? await proposalToAsk(ctx, auth.userId, proposalRef, rest.options) : null;
+    if (target && "error" in target) return target;
+    const proposer = target?.proposal.conversation_id ? await ctx.db.get(target.proposal.conversation_id) : null;
+    const asked = await askCore(ctx, auth, { ...(rest as AskArgs), ...(proposer ? { as_station: proposer } : {}) });
+    if (!target || asked?.error) return asked;
+    const now = Date.now();
+    const row = await ctx.db.get(asked.id as Id<"session_decisions">);
+    const linked = await linkProposalDecision(ctx, target.proposal, row!, now);
+    if (linked.replaced) await withdrawCore(ctx, linked.replaced, now);
+    return { ...asked, proposal: target.proposal.short_id, ...(linked.replaced ? { replaced: linked.replaced.short_id } : {}), ...(linked.trial_card ? { trial_card: linked.trial_card } : {}) };
   },
 });
 
@@ -1647,6 +1662,9 @@ async function answererFor(
     if (row.holder?.kind !== "role" || String(role._id) !== row.holder.id) {
       return { error: `${role.name} does not hold this decision; recommend instead (cast decide recommend), or a person answers it` };
     }
+    // A person handed it to this role: their word is the authority, so no
+    // grant or switch is needed.
+    if (row.passed_to?.kind === "role" && row.passed_to.id === String(role._id)) return { kind: "role", id: String(role._id) };
     // The switch (org-staffing.md S23.1): a role that does not start work on
     // its own reads and recommends; it may not answer, grant or no grant, and
     // it never asks a person to change its own settings.
@@ -1780,6 +1798,50 @@ export const reopen = mutation({
     return reopenCore(ctx, userId, args.decision_id);
   },
 });
+
+export type PassTarget = { kind: "user" | "role"; id: string };
+
+// A person hands an open question to someone else. To a teammate: it leaves
+// the current people's queues and enters theirs. To a role: the role is woken
+// on it and may answer it; its people keep the card, held by the role, so any
+// of them can still answer or pass it on. Refusals are returned, not thrown,
+// because the web sends this through the outbox (dispatch passDecision).
+export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string, to: PassTarget): Promise<{ passed: true } | { error: string }> {
+  const row = await findDecision(ctx, decisionId);
+  if (!row) return { error: "Decision not found" };
+  if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
+  if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
+  if (row.trial) return { error: "A trial run's question stays with its trial" };
+  const conversation = await ctx.db.get(row.conversation_id);
+  if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
+  if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
+    return { error: "It is already theirs" };
+  }
+  const teamId = conversation?.team_id;
+  const now = Date.now();
+  const passed_to = { ...to, by: userId, at: now };
+  if (to.kind === "user") {
+    const target = await ctx.db.get(to.id as Id<"users">);
+    if (!target || target.is_bot) return { error: "Pass it to a person or a role" };
+    if (String(target._id) !== String(userId) && !(teamId && (await isTeamMember(ctx, target._id, teamId)))) {
+      return { error: `${target.name ?? "They"} is not on this session's team` };
+    }
+    await ctx.db.patch(row._id, { passed_to, holder: { kind: "user", id: to.id }, holder_key: `user:${to.id}`, asked_user_ids: [target._id], updated_at: now });
+    await syncDecisionInbox(ctx, row._id, [target._id], now);
+    return { passed: true };
+  }
+  const role = await ctx.db.get(to.id as Id<"org_roles">);
+  if (!role || role.status === "retired") return { error: "No such role" };
+  if (!(await userCanAccessRole(ctx, userId, role))) return { error: "Unauthorized: not your role" };
+  if (role.team_id && teamId && String(role.team_id) !== String(teamId)) return { error: `${role.name} is on another team` };
+  const woken = await tellHearingRole(ctx, role, row, now);
+  if (woken.length === 0) return { error: `${role.name} has no running session to hear it` };
+  const hops = (row.hops ?? []).some((h) => String(h.role_id) === String(role._id))
+    ? row.hops
+    : [...(row.hops ?? []), { role_id: role._id, at: now }];
+  await ctx.db.patch(row._id, { passed_to, holder: { kind: "role", id: to.id }, holder_key: `role:${to.id}`, hops, updated_at: now });
+  return { passed: true };
+}
 
 // Agreement history (D2): answered decisions of this category in this scope
 // where the role recommended and the person picked that option. The grant
@@ -1921,23 +1983,6 @@ export const revoke = mutation({
 });
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
-
-// Who may read a decision: its people, anyone who can read the asking
-// conversation, and the HOST (or personal owner) of a role on its ladder,
-// reading what their seat was asked. Not the role's whole team: a private
-// conversation reporting to a team role must not open its decisions to every
-// member; team visible conversations are covered by the conversation clause.
-export async function userMayRead(ctx: Ctx, userId: Id<"users">, row: DecisionRow): Promise<boolean> {
-  const people = (row.asked_user_ids ?? [row.user_id]).map(String);
-  if (people.includes(String(userId))) return true;
-  const conversation = await ctx.db.get(row.conversation_id);
-  if (conversation && (await canAccessConversation(ctx, userId, conversation))) return true;
-  for (const hop of row.hops ?? []) {
-    const role = await ctx.db.get(hop.role_id);
-    if (role && (await roleGrants(ctx, userId, role, () => false))) return true;
-  }
-  return false;
-}
 
 // A decision row the signed-in viewer may read.
 async function readableDecision(ctx: any, decisionId: any): Promise<DecisionRow | null> {
