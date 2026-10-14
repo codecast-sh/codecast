@@ -202,8 +202,9 @@ const MODE_ITEMS = [
  * New-session context adjustment: preview the cards that will be injected and
  * let the user swap the mode or drop individual sessions for THIS session.
  */
-export function StableContextPicker({ conversationId, trailing }: {
+export function StableContextPicker({ conversationId, trailing, className = "w-full max-w-2xl mx-auto mt-4" }: {
   conversationId: string;
+  className?: string;
   // Rendered at the right end of the header line — the new-session surface
   // parks its machine picker here so the two quiet controls share one row.
   trailing?: React.ReactNode;
@@ -292,7 +293,7 @@ export function StableContextPicker({ conversationId, trailing }: {
   ).length;
 
   return (
-    <div className="w-full max-w-2xl mx-auto mt-4">
+    <div className={className}>
       <div className="flex items-center justify-between gap-3 mb-2">
         <button
           type="button"
