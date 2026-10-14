@@ -16,6 +16,10 @@
 //            The address carries the ref, so a copied link reads; the views
 //            read the row id (caseRefs)
 //   source   a finder's name: Line opens it
+//   stage    a leading stage of the line open as a drawer over the Map:
+//            moments, expectations, judges, grouping or dispatch
+//   item     the object open inside that stage's drawer (a moment kind or
+//            mo-N, a judge's name, a problem's ref)
 //   finding  a finding's (signal's) id, open in place
 //   row      a problem page's expanded run row (its run id), open in place
 //   ask      1: the open problem's question, its answer box focused
@@ -37,6 +41,13 @@ export const LINE_MODES = ["table", "map"] as const;
 export type LineMode = (typeof LINE_MODES)[number];
 export const DEFAULT_LINE_MODE: LineMode = "table";
 
+/** The stages before the line's own stations, in the order work flows through them (learning-loop.md LL1): what the
+ *  product sends, what it should do, who grades it, how findings become problems, and what starts a run. Each opens
+ *  as a drawer over the Map. */
+export const LINE_STAGES = ["moments", "expectations", "judges", "grouping", "dispatch"] as const;
+export type LineStage = (typeof LINE_STAGES)[number];
+const stageOf = (v: string | null | undefined): LineStage | null => ((LINE_STAGES as readonly string[]).includes(v ?? "") ? (v as LineStage) : null);
+
 /** The views' earlier names, each the view and mode that hold its job now (LJ4): the Inbox is For you; a run is read
  *  under its problem; a source is a finder on Line; the graph is Line's map, the notebook its table; Chat is a step's
  *  instructions. */
@@ -50,15 +61,15 @@ type LegacyView = keyof typeof LEGACY_VIEWS;
 /** A view as a link may name it: its own name, or an earlier one. */
 export type LineViewName = LineView | LegacyView;
 
-export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null };
-export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null }>;
+export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null };
+export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null }>;
 
 type Search = { get(key: string): string | null } | null | undefined;
 
-const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show"] as const;
+const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item"] as const;
 type Key = (typeof KEYS)[number];
 /** Where a key lives in the address: the drawer's tab has its own name, `tab` belongs to the page hosting the app. */
-const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show" };
+const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show", stage: "stage", item: "item" };
 /** The drawer's tabs, which an older link named as `tab`. */
 const DRAWER_TABS = new Set(["prompt", "decisions", "try", "ask"]);
 const legacyTab = (search: Search) => { const t = search?.get("tab"); return t && DRAWER_TABS.has(t) ? t : null; };
@@ -68,11 +79,11 @@ const modeOf = (v: string | null | undefined): LineMode | null => (!v ? null : (
 /** The selection each view reads; moving to a view drops the rest, unless the move names it. */
 // The Problems list's own keys (LJ5): its status chip, its process, the quiet narrowing and a figure's or bar's narrowing
 // (`found`: "more", or a picked bar's start) are places; search, sort and window are not.
-const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show"] as const;
+const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item"] as const;
 const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]>> = {
   // A decision rides into Problems only when the move names it: For you's reader settles one on its need, and a
   // problem's band shows its own without it, so a decision kept from another view would follow every later link.
-  foryou: ["need", "card", "decision"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding"],
+  foryou: ["need", "card", "decision"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"],
 };
 /** The view that reads a step of its own (Problems reads one too, as an open run's playhead). */
 const STEP_VIEWS = new Set<LineView>(["line"]);
@@ -117,6 +128,8 @@ export function readLineSelection(search: Search): LineSelection {
     sort: search?.get("sort") || null,
     win: search?.get("win") || null,
     show: search?.get("show") || null,
+    stage: stageOf(search?.get("stage")),
+    item: search?.get("item") || null,
   };
 }
 
@@ -187,6 +200,11 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
     if (p.decision === undefined) del("decision");
   }
   if (p.source !== undefined && p.source !== before.source && p.finding === undefined) del("finding");
+  // What was open inside one stage's drawer is not open in another's.
+  if (p.stage !== undefined && p.stage !== before.stage && p.item === undefined) del("item");
+  // One drawer at a time: a stage opened closes the step, a step opened closes the stage.
+  if (p.stage && p.step === undefined) { del("step"); del("tab"); del("show"); }
+  if (p.step && p.stage === undefined) { del("stage"); del("item"); }
   const s = q.toString();
   return s ? `?${s}` : "";
 }
@@ -194,7 +212,7 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
 /** The keys that name a place: a change to any of them is a move Back and Forward walk. The drawer's tab, a finding
  *  opened in a list, a problem page's expanded run row and the answer box's focus change what a place shows, not the
  *  place: they replace, so reload and Back return to the place as it was left. */
-const PLACE_KEYS = ["project", "view", "graph", "step", "run", "case", "source", "card", "decision", "need", "status", "process", "quiet", "found"] as const;
+const PLACE_KEYS = ["project", "view", "graph", "step", "run", "case", "source", "card", "decision", "need", "status", "process", "quiet", "found", "stage", "item"] as const;
 
 /** Whether moving from one address to the next is a new history entry (push) rather than a correction of the
  *  current one (replace): true when any place key differs, the default view and mode read as named. */
@@ -246,16 +264,16 @@ export function resolveLineProject(param: string | null | undefined, projects: I
  * only a link that names a thing (a row, a count, "the run") opens it.
  */
 export function lineViewHome(view: LineView): LineSelectionPatch {
-  return { view, step: null, tab: null, run: null, case: null, source: null, finding: null, row: null, ask: null, card: null, decision: null, need: null };
+  return { view, step: null, tab: null, run: null, case: null, source: null, finding: null, row: null, ask: null, card: null, decision: null, need: null, stage: null, item: null };
 }
 
 /** A view's name in the nav, in nav order. */
-export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "For you", problems: "Problems", line: "Line" };
+export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "For you", problems: "Problems", line: "Steps" };
 export const LINE_MODE_LABELS: Record<LineMode, string> = { table: "Table", map: "Map" };
 
 /** The second key of the go chord (G, then this) for each view. The shell binds no digit: an open decision answers
  *  on bare 1 to 9 (LJ5). */
-export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "l" };
+export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "s" };
 
 /** The view the second key of the go chord opens; null for any other key. */
 export const lineViewForGoKey = (key: string): LineView | null => LINE_VIEWS.find((v) => LINE_VIEW_KEYS[v] === key.toLowerCase()) ?? null;
