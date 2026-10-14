@@ -5,8 +5,22 @@ import type { LineAdmission } from "../../lib/lineFlow";
 import { startsAtOnce, type NotReady } from "../line/map/LineStartSwitch";
 import type { SwitchLedger } from "./ConsequentialSwitch";
 
-/** What a run costs, from runs whose card recorded a price: this project's own, else every line's in the workspace. */
-export type RunCost = { avgUsd: number; runs: number; scope: "project" | "workspace" };
+/** What a run costs, from runs whose card recorded a price: this project's own, else every line's in the workspace.
+ *  `billedUsd`: money a run bills (call nodes, sessions on API keys). `listUsd`: its subscription sessions at API
+ *  list price, an equivalent never billed; they spend account quota. */
+export type RunCost = { billedUsd: number; listUsd: number; runs: number; scope: "project" | "workspace" };
+
+/** `times` runs' cost as a review figure: the money they would bill, est., with their list-price equivalent beside it. */
+export function costFigure(cost: RunCost | null | undefined, times: number, what = ""): SwitchLedger["figures"][number] {
+  if (!cost) return { value: "$?", label: "not priced", tone: "warn" };
+  const billed = cost.billedUsd * times;
+  return { value: `~${usd(billed)}`, label: what ? `${what}, billed` : "billed", ...(billed > 0 ? { tone: "warn" as const } : {}) };
+}
+
+/** Beside a cost figure: the runs' subscription sessions at API list price, an equivalent they spend as quota, not money. */
+export function listRow(cost: RunCost | null | undefined, times = 1): SwitchLedger["rows"][number] {
+  return { k: "List price", v: cost ? `~${usd(cost.listUsd * times)}, not billed` : "Not priced yet" };
+}
 
 /** Dollars to the precision an estimate deserves: whole dollars from $2 up. */
 export const usd = (n: number) => (n >= 2 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -57,7 +71,7 @@ export function lineStartLedger({ project, admission: given, roleOwnSwitchOff = 
     // No daily cap is the loudest fact a cost can have: said as one, never left blank.
     perDay != null ? dayLimitFigure(perDay) : { value: "∞", label: "a day, no cap", tone: "warn" },
     // Without a daily cap the bound is the queue: what working through all of it costs.
-    perDay != null ? dayCostFigure(cost, perDay) : cost && queued ? { value: `~${usd(cost.avgUsd * queued)}`, label: "all, est.", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
+    perDay != null ? dayCostFigure(cost, perDay) : cost && queued ? costFigure(cost, queued, "all") : { value: "$?", label: "not priced", tone: "warn" },
   ];
   const rows: SwitchLedger["rows"] = [
     { k: "Each", v: "1 agent session per problem" },
@@ -136,14 +150,14 @@ export function dayLimitFigure(perDay: number): SwitchLedger["figures"][number] 
 
 /** A full day at that limit, in dollars; no price, no number. */
 export function dayCostFigure(cost: RunCost | null | undefined, perDay: number | null): SwitchLedger["figures"][number] {
-  if (!cost || perDay == null) return { value: "$?", label: "not priced", tone: "warn" };
-  return { value: `~${usd(cost.avgUsd * perDay)}`, label: "a day, est.", tone: "warn" };
+  if (perDay == null) return { value: "$?", label: "not priced", tone: "warn" };
+  return costFigure(cost, perDay, "a day");
 }
 
 /** What one session costs and how many runs say so. */
 export function priceRow(cost: RunCost | null | undefined): SwitchLedger["rows"][number] {
   return cost
-    ? { k: "Per session", v: `~${usd(cost.avgUsd)} · ${cost.runs}-run avg` }
+    ? { k: "Per session", v: `~${usd(cost.billedUsd)} billed · ~${usd(cost.listUsd)} list · ${cost.runs}-run avg` }
     : { k: "Per session", v: "Not priced yet", tone: "warn" };
 }
 
