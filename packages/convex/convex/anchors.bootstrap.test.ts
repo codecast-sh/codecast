@@ -37,7 +37,7 @@ describe("a role's opening message", () => {
     const m = bootstrapMessage({ name: "Release", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union", role: { handle: "release", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true } });
     expect(m).toContain("You look after no area of your own: you run your routine and answer what you are asked.");
     expect(m).not.toMatch(/whole workspace|You own/);
-    expect(m).toContain("Raise it in this thread");
+    expect(m).toContain("raise it in this thread");
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 
@@ -48,7 +48,12 @@ describe("a role's opening message", () => {
     // The review is one of its jobs, run by its routine, not its opening.
     expect(m).not.toContain("## Talk it through");
     expect(m.endsWith("Read `cast brief` now.")).toBe(true);
-    expect(m.split(/\s+/).length).toBeLessThan(260);
+    // How a standing role works comes from the one shared text, said once.
+    expect(m).toContain("Start every turn with `cast brief`");
+    expect(m).toContain("raise it in this thread");
+    expect(m).toContain("Your brief is your memory between turns");
+    expect(m.split("Start every turn").length).toBe(2);
+    expect(m.split(/\s+/).length).toBeLessThan(420);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 
@@ -56,6 +61,7 @@ describe("a role's opening message", () => {
     const m = bootstrapMessage({ name: "Executive Assistant", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", role: { handle: "executive-assistant", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, assistantOpening: "You are Ada, Ashot's Executive Assistant for everything Ashot works on." } });
     expect(m.startsWith("You are Ada, Ashot's Executive Assistant")).toBe(true);
     expect(m).toContain("Read `cast brief` now, post a one-line hello, then stand by.");
+    expect(m).toContain("Start every turn with `cast brief`");
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 });

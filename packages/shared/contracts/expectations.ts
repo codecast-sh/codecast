@@ -502,3 +502,26 @@ export function renderProposal(p: { summary: string; ops: ExpectationOp[] }, cur
   }
   return out.join("\n");
 }
+
+/**
+ * What an answer to a proposal's decision does, read off the first word of its
+ * label: "Apply" lands the proposal as the next version, "Keep" (or the older
+ * "Drop") closes it with the lines as they stand, and any other course leaves
+ * it open for the session that asked. The proposing session writes its own
+ * answers, so the verb is the contract, never the answer's position.
+ */
+export function proposalAnswerAction(label: string | undefined): "apply" | "drop" | null {
+  const word = (label ?? "").trim().split(/[\s:,.;]/)[0]?.toLowerCase();
+  return word === "apply" ? "apply" : word === "keep" || word === "drop" ? "drop" : null;
+}
+
+/** The answer that does `action` among a decision's options, or -1. */
+export function proposalAnswerIndex(options: ReadonlyArray<{ label: string }>, action: "apply" | "drop"): number {
+  return options.findIndex((o) => proposalAnswerAction(o.label) === action);
+}
+
+/** Why a decision's answers cannot settle a proposal, or null: one must apply it and one must keep the lines. */
+export function proposalAnswersError(options: ReadonlyArray<{ label: string }>): string | null {
+  const missing = [proposalAnswerIndex(options, "apply") < 0 && `one answer opening with "Apply" (it lands the proposal)`, proposalAnswerIndex(options, "drop") < 0 && `one opening with "Keep" (it closes the proposal and the lines stay as they are)`].filter(Boolean);
+  return missing.length ? `A proposal's decision needs ${missing.join(" and ")}` : null;
+}

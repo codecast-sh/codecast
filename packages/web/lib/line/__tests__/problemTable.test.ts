@@ -49,9 +49,11 @@ describe("problemStand: one status a problem, first match wins", () => {
   test("what the viewer can answer comes first, in the act's words", () => {
     const live = issue("a", { h: { attempts: [attempt({ live: true, end: null })] } });
     expect(stand(live, { need: { kind: "decision", mine: true } })).toEqual({ status: "you", phrase: "Fix to decide" });
-    expect(stand(issue("a"), { need: { kind: "confirm", mine: true } }).phrase).toBe("New: is this real?");
-    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).phrase).toBe("Question for you");
-    expect(stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { need: { kind: "question", mine: true } }).phrase).toBe("Question for you");
+    expect(stand(issue("a"), { need: { kind: "confirm", mine: true } }).phrase).toBe("New, not confirmed");
+    // What a station asked before its run reached a decision waits on nobody: the problem is not started.
+    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).status).toBe("notstarted");
+    expect(stand(issue("a"), { need: { kind: "question", mine: true } }).phrase).toBe("Holds on an open question");
+    expect(stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { need: { kind: "question", mine: true } }).phrase).toBe("Holds on an open question");
   });
   test("a decision open on the newest run that is not the viewer's waits on someone else", () => {
     const card = { decisionId: "d", ref: "sd-615", headline: null, change: null, wrong: null, recommend: null, status: "pending", answer: null, note: null, answeredAt: null } as never;
@@ -68,7 +70,7 @@ describe("problemStand: one status a problem, first match wins", () => {
   });
   test("a need nobody can answer in place needs a new ask, and is never a failure", () => {
     expect(stand(issue("a"), { need: { kind: "lapsed", mine: true } })).toEqual({ status: "newask", phrase: "Fix asked, unanswered", act: "ask" });
-    expect(stand(issue("a"), { need: { kind: "stopped", mine: true, step: "Prove", ask: "Prove finished: go on to Build?" }, failed: { key: "deadend:prove", label: "x", step: "Prove" } })).toEqual({ status: "you", phrase: "Prove finished: go on to Build?" });
+    expect(stand(issue("a"), { need: { kind: "stopped", mine: true, step: "Prove", ask: "Prove finished: go on to Build?" }, failed: { key: "deadend:prove", label: "x", step: "Prove" } })).toEqual({ status: "newask", phrase: "Prove finished: go on to Build?", act: "ask" });
     // Its row says why a new ask is needed, never the group's own name; a card no session asked is asked again.
     expect(stand(issue("a"), { need: { kind: "reask", mine: true, why: "No session asked this card, so there is nobody to answer" } })).toMatchObject({ phrase: "Card has no session to answer", act: "ask" });
     expect(stand(issue("a"), { need: { kind: "reask", mine: true, why: "The step this run waits at was removed from the line" } }).phrase).toBe("Card's step was removed");
@@ -83,8 +85,8 @@ describe("problemStand: one status a problem, first match wins", () => {
     const handed = issue("a", { status: "in_review", h: { attempts: [attempt({ outcome: { tone: "waiting", end: null, text: "Handed to a person at Refine." } as never })] } });
     expect(stand(handed, { task: task({ status: "in_review" }), notes })).toEqual({ status: "failed", phrase: "Escalated at Refine: 107 of 246 findings reject the cause", cause: { key: "escalated:refine", label: "Refine handed it back" } });
   });
-  test("a build handed off for review waits on a person, never under Failed", () => {
-    expect(stand(issue("a"), { need: { kind: "review", mine: true, step: "Implement" } })).toEqual({ status: "you", phrase: "Built, waiting on a review at Implement" });
+  test("a build no session presented needs a new ask, never under Failed and never waiting on the viewer", () => {
+    expect(stand(issue("a"), { need: { kind: "review", mine: true, step: "Implement" } })).toEqual({ status: "newask", phrase: "Built, not presented", act: "ask" });
   });
   test("a failure no row names is headed by the station's handoff outcome when it gave one (ct-59445, ct-59385)", () => {
     const failed = issue("a", { h: { attempts: [attempt({ outcome: { tone: "failed", end: null, text: "Stopped: Build failed." } as never })] } });
@@ -179,8 +181,14 @@ describe("problemStand: one status a problem, first match wins", () => {
     expect(blocked({ status: "in_progress" }).phrase).toBe("In progress outside the line");
     // A run parked it because main already carries the fix (ct-59687): one state, the park record's, everywhere.
     const parked = stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { task: task({ readiness: "not_actionable", workflow_run_id: "r1", readiness_note: "Already fixed on main by fc0d85ba65 (classifies both files); CI on it in progress" }) });
-    // Its one act is a person's, closing it as fixed: it waits on you, never under Not started.
-    expect(parked).toEqual({ status: "you", phrase: "Already fixed on main (fc0d85b)" });
+    // Closing it as fixed is the line's queue's, on its row: it never waits on you, and never sits under Not started.
+    expect(parked).toEqual({ status: "newask", phrase: "Already fixed on main (fc0d85b)", ready: false, act: "fixed" });
+  });
+  test("a fact grounding needs is asked of the project's lead role, never the viewer", () => {
+    const asks = (f: ProblemFacts) => stand(issue("a", { ask: "Has Quinn left?", findings: 3 }), { need: { kind: "question", mine: true }, task: task({ readiness: "needs_context" }), ...f });
+    expect(asks({ lead: "union-lead" })).toEqual({ status: "others", phrase: "Holds on an open question · @union-lead" });
+    // No role holds the project: it stays where it is, Not started, for the line's page to set one up.
+    expect(asks({}).status).toBe("notstarted");
   });
   // Real: ct-57552, six runs each parked at ground in about a minute, "readiness ready, goal none ... test-only fix, no
   // project goal is threatened", read "Run 6 ended: start by hand" with Start again on its row: a seventh park.

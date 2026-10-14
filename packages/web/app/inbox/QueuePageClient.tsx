@@ -19,6 +19,7 @@ import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../
 import type { ConversationData } from "../../components/conversation/types";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
+import { freshHomeLaunchPending } from "../../store/viewNav";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
 import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
@@ -657,6 +658,8 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!isActiveTab) return;
     if (paramSessionId || currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
+    // A fresh open is DashboardLayout's to land on the new-session page.
+    if (freshHomeLaunchPending()) return;
     // Board home: an empty view means "show the fleet", never "adopt a
     // conversation" — the board is the landing surface, drilling in is a
     // gesture. Feed home keeps the old top-of-inbox adoption.
