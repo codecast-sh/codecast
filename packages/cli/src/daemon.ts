@@ -10423,7 +10423,7 @@ export async function acquireSessionProcessOwnership(sessionId: string, signal?:
     await fs.promises.access(file.path, fs.constants.R_OK);
     const stat = await fs.promises.stat(file.path);
     if (!current() || !stat.isFile()) return "unknown";
-    sessionFileIndex?.set(sessionId, file);
+    learnSessionFile(sessionId, file);
     return "owned";
   } catch { return "unknown"; }
 }
@@ -19413,14 +19413,15 @@ const codexRolloutKnownMisses = new Set<string>();
 let sessionFileIndexHome = "";
 
 // Ids that missed and are waiting for a fresh build to confirm or refute
-// them: id -> the build time they first missed against. Survives installs on
-// purpose (it is what turns a pending miss into a confirmed one).
+// them: id -> when they first missed. Survives installs on purpose (it is
+// what turns a pending miss into a confirmed one).
 const sessionFilePendingMisses = new Map<string, number>();
 
 /** Test hook: forget the index so the next lookup re-walks. */
 export function resetSessionFileIndexForTests(): void {
   if (!sessionFileIndexRefresh) sessionFileIndexGeneration++;
   sessionFileIndexReady = false;
+  sessionFileIndexCompleteHome = null;
   recentSessionScans.clear();
   sessionOwnershipCache.clear();
   borrowsUnknownUntil.clear();
@@ -19577,14 +19578,43 @@ async function buildSessionFileIndexAsync(home: string, signal?: AbortSignal, ob
   return build;
 }
 
-function installSessionFileIndex(home: string, built: SessionFileIndexBuild, ready = true): void {
+// A build knows only the files that existed when its walk read their
+// directory, and under load a walk runs for minutes. So a build is stamped
+// with the time its walk STARTED (a miss is confirmed only by a walk that
+// began after it), and installing it keeps every entry the live map learned
+// that the walk could not have seen: a transcript the watcher or the recent
+// probe found while the walk ran. Replacing the map outright dropped those,
+// and a fresh session's settles then read "no transcript" and answered idle
+// over its open background work (ct-59925, 2026-10-14).
+function installSessionFileIndex(home: string, built: SessionFileIndexBuild, ready = true, startedAt = Date.now()): void {
+  if (sessionFileIndexHome === home) {
+    keepLearnedEntries(sessionFileIndex, built.index, (e) => e.path);
+    keepLearnedEntries(codexRolloutIndex, built.codexRollouts, (p) => p);
+  }
   sessionFileIndexReady = ready;
+  sessionFileIndexCompleteHome = ready ? home : null;
   sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
-  sessionFileIndexBuiltAt = Date.now();
+  sessionFileIndexBuiltAt = startedAt;
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
+}
+// The live entries a build lacks are files deleted since the last walk or
+// files born after this one read their directory; the stat tells them apart.
+function keepLearnedEntries<T>(live: Map<string, T> | null, built: Map<string, T>, pathOf: (entry: T) => string): void {
+  if (!live) return;
+  for (const [id, entry] of live) {
+    if (!built.has(id) && fs.existsSync(pathOf(entry))) built.set(id, entry);
+  }
+}
+// What the daemon learns about a session's transcript outside a walk (the
+// watcher's chosen copy, a probe hit, an ownership check) goes into the live
+// index here, so every lookup, the settle verdict's included, sees it at once.
+function learnSessionFile(sessionId: string, file: SessionFileInfo): void {
+  sessionFileIndex?.set(sessionId, file);
+  sessionFileKnownMisses.delete(sessionId);
+  sessionFilePendingMisses.delete(`all:${sessionId}`);
 }
 
 function rebuildSessionFileIndex(): void {
@@ -19606,6 +19636,9 @@ let sessionFileIndexRefresh: Promise<void> | null = null;
 let sessionFileIndexRefreshHome = "";
 let sessionFileIndexGeneration = 0;
 let sessionFileIndexReady = false;
+// The HOME whose installed map came from a finished walk. A refresh walks for
+// minutes under load and clears `ready` meanwhile, but this map stays whole.
+let sessionFileIndexCompleteHome: string | null = null;
 let sessionFileIndexController: AbortController | null = null;
 export function refreshSessionFileIndex(): Promise<void> {
   const home = process.env.HOME || "";
@@ -19616,6 +19649,7 @@ export function refreshSessionFileIndex(): Promise<void> {
   sessionFileIndexController = controller;
   const generation = ++sessionFileIndexGeneration;
   sessionFileIndexRefreshHome = home;
+  const startedAt = Date.now();
   const pending = buildSessionFileIndexAsync(home, controller.signal, (store, files) => {
     if (controller.signal.aborted || generation !== sessionFileIndexGeneration || (process.env.HOME || "") !== home) return;
     if (!sessionFileIndex || !codexRolloutIndex || sessionFileIndexHome !== home) {
@@ -19624,7 +19658,7 @@ export function refreshSessionFileIndex(): Promise<void> {
     recordIndexFiles({ index: sessionFileIndex!, codexRollouts: codexRolloutIndex! }, store, files);
   })
     .then((built) => {
-      if (!controller.signal.aborted && generation === sessionFileIndexGeneration && (process.env.HOME || "") === home) installSessionFileIndex(home, built);
+      if (!controller.signal.aborted && generation === sessionFileIndexGeneration && (process.env.HOME || "") === home) installSessionFileIndex(home, built, true, startedAt);
     })
     .catch(() => {})
     .finally(() => { if (sessionFileIndexRefresh === pending) sessionFileIndexRefresh = null; });
@@ -19646,6 +19680,15 @@ export function primeSessionFileIndexAtBoot(): Promise<void> {
 export function ensureSessionFileIndex(): Promise<void> {
   if (sessionFileIndexReady && sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
   return refreshSessionFileIndex();
+}
+
+/** Like ensureSessionFileIndex, but a refresh over a complete map does not
+ *  hold the lookup: it answers from that map (hits are stat-validated) and the
+ *  recent probe covers what the walk has not reached. Waiting out the walk
+ *  held message delivery for over a minute under load. */
+function ensureSessionFileLookups(): Promise<void> {
+  if (sessionFileIndex && sessionFileIndexCompleteHome === (process.env.HOME || "")) return Promise.resolve();
+  return ensureSessionFileIndex();
 }
 
 /** Test seam: when the index was last built (0 while none exists). */
@@ -19680,10 +19723,10 @@ function indexedSessionLookup<T>(
   }
   if (hit === undefined && !knownMisses.has(sessionId)) {
     const missKey = `${getMap() === codexRolloutIndex ? "codex:" : "all:"}${sessionId}`;
-    const firstMissedAgainst = sessionFilePendingMisses.get(missKey);
-    if (rebuiltThisCall || (firstMissedAgainst !== undefined && firstMissedAgainst < sessionFileIndexBuiltAt)) {
-      // Confirmed absent: by the walk this call just did, or by a build that
-      // landed after the id first missed. Remembered until the next build.
+    const firstMissedAt = sessionFilePendingMisses.get(missKey);
+    if (rebuiltThisCall || (firstMissedAt !== undefined && firstMissedAt < sessionFileIndexBuiltAt)) {
+      // Confirmed absent: by the walk this call just did, or by a walk that
+      // started after the id first missed. Remembered until the next build.
       knownMisses.add(sessionId);
       sessionFilePendingMisses.delete(missKey);
     } else {
@@ -19694,7 +19737,7 @@ function indexedSessionLookup<T>(
       // sync rebuild here, cleared of its known misses by every install, walked
       // the whole tree every 2s for as long as any session had no transcript:
       // 9 freezes of up to 47s in 8 minutes on a busy disk (2026-09-02).
-      if (firstMissedAgainst === undefined) sessionFilePendingMisses.set(missKey, sessionFileIndexBuiltAt);
+      if (firstMissedAt === undefined) sessionFilePendingMisses.set(missKey, Date.now());
       if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) void refreshSessionFileIndex();
     }
   }
@@ -19738,7 +19781,7 @@ function recentSessionObservation(sessionId: string, codexOnly: boolean): Sessio
     entry.value = value; entry.at = Date.now();
     if (value) {
       if (codexOnly) { codexRolloutIndex?.set(sessionId, value.path); codexRolloutKnownMisses.delete(sessionId); }
-      else { sessionFileIndex?.set(sessionId, value); sessionFileKnownMisses.delete(sessionId); }
+      else learnSessionFile(sessionId, value);
     }
   }, () => { if (recentSessionScans.get(key) === entry) recentSessionScans.delete(key); });
   return null;
@@ -19748,7 +19791,7 @@ export async function awaitRecentSessionFile(sessionId: string, codexOnly = fals
   // only sees directories changed since that empty install. Without this wait
   // every transcript already on disk reads as missing for the first minutes of
   // a daemon's life, which is when a restart asks.
-  await ensureSessionFileIndex();
+  await ensureSessionFileLookups();
   const hit = findSessionFile(sessionId, { staleOk: true });
   if (hit) return hit;
   recentSessionObservation(sessionId, codexOnly);
@@ -19779,10 +19822,7 @@ export function findSessionFile(sessionId: string, opts?: { staleOk?: boolean })
   let hit = indexedSessionLookup(() => sessionFileIndex, (e) => e.path, sessionFileKnownMisses, sessionId);
   if (!hit && !opts?.staleOk) {
     hit = probeRecentSessionFiles(sessionId);
-    if (hit) {
-      sessionFileIndex?.set(sessionId, hit);
-      sessionFileKnownMisses.delete(sessionId);
-    }
+    if (hit) learnSessionFile(sessionId, hit);
   }
   if (hit) return hit;
 
@@ -19931,13 +19971,23 @@ export function isSupersededAppServerSession(
   return !!liveId && liveId !== sessionId;
 }
 
+// The superseded check for a fleet pass: `reverse` is the conversation cache
+// inverted once for the whole pass. Without it every call scans the cache
+// (41k entries on a busy machine) for the one conversation, twice per
+// due session per tick, which pinned the loop through a 50s freeze under load
+// (2026-10-14).
+function isSupersededInPass(sessionId: string, reverse?: Readonly<Record<string, string>>): boolean {
+  const cache = conversationCacheRef;
+  return isSupersededAppServerSession(sessionId, cache?.[sessionId], appServerConversations, persistedAppServerThreads, cache, reverse);
+}
+
 export function currentHeartbeatSessions(
   sessions: Iterable<string> = managedHeartbeatSessions,
   cache: ConversationCache | null = conversationCacheRef,
   live: ReadonlyMap<string, string> = appServerConversations,
   persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+  reverse: Readonly<Record<string, string>> = cache ? buildReverseConversationCache(cache) : {},
 ): string[] {
-  const reverse = cache ? buildReverseConversationCache(cache) : {};
   return [...sessions].filter(id => !isSupersededAppServerSession(id, cache?.[id], live, persisted, cache, reverse));
 }
 
@@ -21175,7 +21225,10 @@ export async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = currentHeartbeatSessions();
+  // One inversion of the conversation cache serves the whole pass.
+  const cache = conversationCacheRef;
+  const reverse = cache ? buildReverseConversationCache(cache) : {};
+  const ids = currentHeartbeatSessions(managedHeartbeatSessions, cache, appServerConversations, persistedAppServerThreads, reverse);
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -21187,8 +21240,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
   // Bounded, not serial: each reconcile may await a transcript prime after a
   // restart, and the health checks below wait for all of them.
-  await runBounded(due, 4, (sessionId) => reconcileStatusFromTranscript(sessionId, sync).catch(() => {}));
-  await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
+  await runBounded(due, 4, (sessionId) => reconcileStatusFromTranscript(sessionId, sync, reverse).catch(() => {}));
+  await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId, reverse).catch(() => {}));
 
   // Conservative reap of long-idle orphan terminals — gentle (capped per pass)
   // and logged to a dedicated reaper.log. See reapIdleOrphanTerminals.
@@ -23356,8 +23409,8 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // particular has no Stop-hook equivalent and its watcher-driven idle transition
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
-export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
+export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService, reverse?: Readonly<Record<string, string>>): Promise<void> {
+  if (isSupersededInPass(sessionId, reverse)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -23457,8 +23510,8 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   sendAgentStatus(syncService, conversationId, sessionId, corrected);
 }
 
-async function heartbeatHealthCheck(sessionId: string): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
+async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record<string, string>>): Promise<void> {
+  if (isSupersededInPass(sessionId, reverse)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
@@ -30447,6 +30500,7 @@ async function main(): Promise<void> {
       if (stale) { stale.stop(); fileSyncs.delete(choice.supersededFilePath); }
     }
     canonicalTranscripts.set(event.sessionId, incoming);
+    learnSessionFile(event.sessionId, { path: filePath, agentType: "claude" });
 
     claudeTranscriptRetrySync(fileSyncs, filePath, event.sessionId, projectPath, transcriptDeps).invalidate();
   };
@@ -30560,7 +30614,7 @@ async function main(): Promise<void> {
       // meanwhile, and the persist keeps the on disk record equal to what
       // lastHookStatus holds.
       if (data.status === "idle" && !opts?.primed && !data.session_boundary) {
-        const transcript = data.transcript_path || claudeTranscriptFor(sessionId);
+        const transcript = hookTranscriptFor(sessionId, data);
         if (transcript) {
           const settle = data;
           void primeOpenTaskScan(transcript, sessionId, primeOpts)
@@ -30618,12 +30672,13 @@ async function main(): Promise<void> {
       // A session boundary is exempt: no turn ended, so there is no verdict to
       // derive and no open-task report to publish — and the transcript scan a
       // resume would otherwise pay for is pure waste.
+      // The Stop hook names its transcript; the settle reads that one, and the
+      // index learns it so the pane and heartbeat reconciles agree.
       if (data.status === "idle" && !data.session_boundary) {
-        const settled = resolveTurnEndStatus(
-          sessionId,
-          data.transcript_path ? { path: data.transcript_path, agentType: "claude" } : undefined,
-          opts?.tail,
-        );
+        const known = hookTranscriptFor(sessionId, data);
+        const transcript: SessionFileInfo | undefined = known ? { path: known, agentType: "claude" } : undefined;
+        if (transcript) learnSessionFile(sessionId, transcript);
+        const settled = resolveTurnEndStatus(sessionId, transcript, opts?.tail);
         if (settled !== "idle") data = { ...data, status: settled };
       }
 

@@ -27,7 +27,7 @@ import { useStepTable } from "../step/useStepFacts";
 import { FIT_MIN_K, usePanZoom, type Insets, type View } from "./graph/usePanZoom";
 import { EdgeArrows } from "../../EdgeArrows";
 import type { LineViewProps } from "./types";
-import { FindBand } from "../FindBand";
+import { FlowBand } from "../stages/FlowBand";
 
 const MODE_KEY = "lw-graph-mode";
 const NO_PAST: { left: string[]; right: string[] } = { left: [], right: [] };
@@ -139,7 +139,7 @@ const ARROW_BELOW_ROW = 78;
 /** How far in from each side of the stage its edge fade hides words, in px (graph.css .lwg::before: 112px, nearly opaque for the first third). */
 const EDGE_FADE = 40;
 
-export function GraphView({ model, workspace, selection, select, lead }: LineViewProps & { lead?: ReactNode }) {
+export function GraphView({ model, workspace, selection, select, href, lead }: LineViewProps & { lead?: ReactNode }) {
   const nav = useLineNav();
   const [mode, setModeState] = useState<GraphMode>(readMode);
   const [peek, setPeek] = useState<string | null>(null);
@@ -218,7 +218,8 @@ export function GraphView({ model, workspace, selection, select, lead }: LineVie
   const pz = usePanZoom(svgRef, worldRef, {
     bounds: layout.bounds,
     insets,
-    onBackgroundClick: () => { if (drawerStep) select({ step: null }); setRunsOpen(false); },
+    // A press on the graph behind an open drawer closes it.
+    onBackgroundClick: () => { if (drawerStep) select({ step: null }); else if (selection.stage) select({ stage: null }); setRunsOpen(false); },
     onView,
   });
 
@@ -350,7 +351,7 @@ export function GraphView({ model, workspace, selection, select, lead }: LineVie
       if (k === "Escape") {
         if (help) { take(); setHelp(false); return; }
         if (runsOpen) { take(); setRunsOpen(false); return; }
-        if (drawerStep) return;
+        if (drawerStep || selection.stage) return;
         if (run) { take(); pickRun(null); }
         return;
       }
@@ -380,15 +381,15 @@ export function GraphView({ model, workspace, selection, select, lead }: LineVie
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [active, help, runsOpen, drawerStep, run, focus, mode, moveFocus, open, pickRun, setMode, settle, stepRun, pz]);
+  }, [active, help, runsOpen, drawerStep, selection.stage, run, focus, mode, moveFocus, open, pickRun, setMode, settle, stepRun, pz]);
 
   if (!model.graph.nodes.length) {
     return <div className="lw-empty" data-line-view="graph"><b>No steps to draw yet</b>This graph names no steps codecast can read. Its first run fills it in.</div>;
   }
   return (
-    // The loop starts above the line (learning-loop.md LL1): the Find band, then the line's lanes.
+    // The loop starts above the line (learning-loop.md LL1): the whole flow as one band, then the line's lanes.
     <div className="lw-graph-col">
-    <FindBand loop={workspace.loop} projectId={nav.projectId ?? workspace.project?._id ?? null} product={workspace.product} layout="row" routes={workspace.rollup?.graphs} neverRun={workspace.rollup?.neverRun} squeezed={!!drawerStep} />
+    <FlowBand model={model} workspace={workspace} selection={selection} select={select} href={href} projectId={workspace.project?._id ?? nav.projectId ?? null} />
     <div className="lwg-wrap">
     <div className="lwg" ref={rootRef} data-line-view="graph" data-mode={mode} data-hovering={peek ? "" : undefined} data-run-bar={run ? "" : undefined} data-more-left={past.left.length ? "" : undefined} data-more-right={past.right.length ? "" : undefined}>
       <svg ref={svgRef} className="lwg-svg" role="group" aria-label={`${model.title}: ${model.graph.nodes.length} steps`}>
