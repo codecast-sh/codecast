@@ -52,7 +52,7 @@ const causeByShortId = (tasks: Record<string, CauseRow> | undefined, ref: string
  * short id ("sd-N") or a Convex id.
  */
 export function useDecisionPage(id: string | undefined) {
-  const { ready, missing } = useSyncDecisionDetail(id);
+  const { ready, missing, error } = useSyncDecisionDetail(id);
   const detail = useDecisionDetail(id);
   const liveRow = useInboxStore((s) => (detail ? s.sessionDecisions[detail._id] : undefined));
   const meId = useInboxStore((s) => String(s.currentUser?._id ?? ""));
@@ -61,7 +61,7 @@ export function useDecisionPage(id: string | undefined) {
   // it first, or a decision asked of somebody else, keeps it out of their
   // queue, not out of their hands (onAnswer adopts the detail's copy first).
   const decision: SessionDecisionItem | null = liveRow ?? detail?.decision ?? null;
-  return { ready, missing, detail: detail ?? null, decision, answerable: !!liveRow || (!!detail && mayAnswerFromDocument(detail, meId)) };
+  return { ready, missing, error: error ?? null, detail: detail ?? null, decision, answerable: !!liveRow || (!!detail && mayAnswerFromDocument(detail, meId)) };
 }
 
 export type DecisionAnswering = ReturnType<typeof useDecisionAnswering>;

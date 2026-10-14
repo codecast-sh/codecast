@@ -443,7 +443,8 @@ describe("trialHold: why a trial's ready problems sit idle", () => {
   test("its dispatcher's own last hold, short on the heading, whole in the title", () => {
     const h = trialHold({ cap_usd: 1350, max_runs: 115, held: "115 of 115 runs used: the trial starts no more" });
     expect(h?.short).toBe("Held: 115 of 115 runs used");
-    expect(trialHold({ cap_usd: 1350, max_runs: null, held: "spend $1480 of $1350: another run (~$6) would cross the cap" })?.short).toBe("Held: spend $1480 of $1350");
+    expect(trialHold({ cap_usd: 1900, max_runs: null, held: "billed $1900 of $1900: the cap is reached" })?.short).toBe("Held: billed $1900 of $1900");
+    expect(trialHold({ cap_usd: 1900, max_runs: null, held: "quota 91% on work (claude): runs wait for its reset in 1h" })?.short).toBe("Held: quota 91% on work (claude)");
     expect(trialStartWord({ cap_usd: 1, max_runs: null, held: "x: y" })).toBe("Trial held");
   });
   test("no dispatcher starts nothing; a dispatcher holding nothing, or one not known yet, says nothing", () => {

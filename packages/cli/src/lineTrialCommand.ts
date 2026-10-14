@@ -5,13 +5,13 @@
 //   cast line trial [--project <ref>] [--json]            spend, then the cards
 //   cast line trial on --project <ref> [--graph <file>]   make a project a trial
 //   cast line trial off --project <ref>
-//   cast line trial run <ct-N> [--graph <file>]           start a trial run (3 running at most)
+//   cast line trial run <ct-N> [--graph <file>]           start a trial run (10 running at most)
 //   cast line trial answer <tc-N> <key> [note]            answer a card (an agent: an earlier gate only)
 //   cast line trial recard <tc-N> --file <card.json>      replace a waiting change card with a rebuilt one
 //   cast line trial recard <tc-N> --proposal <file>       give a proposal gate its proposal card
 //   cast line trial recard <tc-N> --judge-fix <file>      replace a waiting judge-fix card with its new measurement
 //   cast line trial rebuild <tc-N>                         send a stale-base change card's run back to rebuild on main
-//   cast line trial spend add <usd> <what...> [--force]    record spend made outside codecast (shadow keys, dry runs)
+//   cast line trial spend add <usd> <what...> --billed-by <key> [--force]   record money billed outside codecast (evals, shadow keys)
 //   cast line trial spend rm <at>                          take back one outside entry
 //   cast line trial runs [--failed]                        each problem's latest run
 //   cast line trial rerun <ct-N>                           rerun a failed run (at its lost card when it died there)
@@ -35,6 +35,22 @@ function fail(message: string, code = 2): never {
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const age = (ms: number) => durationWords(Math.max(0, Date.now() - ms));
+const tokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+
+/** A trial's spend (convex lineTrial.spend): billed money by what billed it, against the cap; then subscription use, which bills nothing, with its accounts' quota. */
+export function spendLines(spend: any): string[] {
+  const b = spend.billed;
+  const m = b.model;
+  const pct = (n: number | null) => (n == null ? "?" : `${Math.round(n)}%`);
+  return [
+    `  billed      ${usd(b.usd)}${spend.cap_usd != null ? ` of ${usd(spend.cap_usd)} cap` : ""}`,
+    `    model calls  ${usd(m.usd)}  (${m.calls} calls: judging ${usd(m.by_purpose.judge)}, call nodes ${usd(m.by_purpose.call)}, grouping ${usd(m.by_purpose.grouping)}; team budget ${m.team_budget.month} ${usd(m.team_budget.spent_usd)} of ${usd(m.team_budget.cap_usd)}${m.team_budget.refused ? `, ${m.team_budget.refused} refused` : ""})`,
+    ...b.keys.map((k: any) => `    ${k.billed_by}  ${usd(k.usd)}  (${k.entries} ${k.entries === 1 ? "entry" : "entries"})`),
+    ...(b.run_sessions.sessions ? [`    run sessions on API keys  ${usd(b.run_sessions.usd)}  (${b.run_sessions.sessions} sessions, ${tokens(b.run_sessions.tokens)} tokens)`] : []),
+    `  subscription  ${spend.runs} runs, ${spend.subscription.sessions} sessions, ${tokens(spend.subscription.tokens)} tokens${spend.subscription.unpriced_tokens ? ` (${tokens(spend.subscription.unpriced_tokens)} on unpriced models)` : ""}; API list price equivalent ${usd(spend.subscription.list_usd)}, not billed`,
+    ...(spend.quota ?? []).map((q: any) => `    quota ${q.account} (${q.provider}, ${q.device})  ${q.windows.map((w: any) => `${w.label} ${pct(w.percent)}`).join(", ") || "no windows reported"}${q.fetched_at ? `  as of ${age(q.fetched_at)} ago` : ""}`),
+  ];
+}
 
 export function registerLineTrialCommands(line: Command, deps: PublishDeps): void {
   const scope = async () => {
@@ -67,11 +83,8 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
       if (options.json) return console.log(JSON.stringify(options.project ? out[0] ?? null : out, null, 2));
       if (!out.length) return console.log("No trial projects. Make one with `cast line trial on --project <ref>`.");
       for (const { project, spend, cards, superseded } of out) {
-        const b = spend.budget;
-        console.log(`${fmt.label(project)}  since ${new Date(spend.since).toISOString().slice(0, 10)}  total ${usd(spend.total_usd)}`);
-        console.log(`  model budget ${b.month}: ${usd(b.spent_usd)} of ${usd(b.cap_usd)} (judging ${usd(b.by_purpose.judge)}, grouping ${usd(b.by_purpose.grouping)}, calls ${usd(b.by_purpose.call)})${b.earlier_months_usd ? `, ${usd(b.earlier_months_usd)} earlier` : ""}${b.refused ? `, ${b.refused} refused` : ""}`);
-        console.log(`  line runs: ${spend.runs} runs, ${spend.sessions} sessions, ${usd(spend.session_usd)}${spend.unpriced_tokens ? ` + ${Math.round(spend.unpriced_tokens / 1000)}k tokens unpriced` : ""}`);
-        if (spend.outside_usd) console.log(`  outside codecast: ${usd(spend.outside_usd)} in ${spend.outside.length} entries (cast line trial spend add)`);
+        console.log(`${fmt.label(project)}  since ${new Date(spend.since).toISOString().slice(0, 10)}`);
+        for (const l of spendLines(spend)) console.log(l);
         if (superseded) console.log(`  ${superseded} superseded card${superseded === 1 ? "" : "s"} hidden (--all shows them)`);
         if (!cards.length) { console.log("  No cards yet."); continue; }
         for (const c of cards) {
@@ -121,7 +134,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
 
   trial
     .command("run <task>")
-    .description("Start a trial run on one problem of a trial project, on this machine's daemon (3 running at most)")
+    .description("Start a trial run on one problem of a trial project, on this machine's daemon (10 running at most)")
     .option("--graph <file>", "A graph other than the project's trial graph")
     .option("--json", "Machine-readable output")
     .action(async (task: string, options: { graph?: string; json?: boolean }) => {
@@ -145,7 +158,8 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
   // problems most in need of a run; these turn it on and show what it would do.
   const dispatchProject = (opts: { project?: string }): string => opts.project ?? dispatch.opts().project ?? projectOf({});
   const printPass = (r: any) => {
-    console.log(`${fmt.label(r.project)}  spend ${usd(r.spent_usd)} of ${usd(r.cap_usd)}, ~${usd(r.per_run_usd)} a run, ${r.running} of ${r.cap} running${r.max_runs != null ? `, ${r.runs} of ${r.max_runs} runs used` : ""}`);
+    const tight = (r.quota ?? []).map((q: any) => `${q.account} ${q.percent == null ? "?" : Math.round(q.percent)}%`).join(", ");
+    console.log(`${fmt.label(r.project)}  billed ${usd(r.billed_usd)} of ${usd(r.cap_usd)}${r.per_run_usd ? `, ~${usd(r.per_run_usd)} billed a run` : ""}${tight ? `, quota ${tight}` : ""}, ${r.running} of ${r.cap} running${r.max_runs != null ? `, ${r.runs} of ${r.max_runs} runs used` : ""}`);
     if (r.started.length) console.log(`  started ${r.started.join(", ")}`);
     if (r.gathering?.length) console.log(`  sent back to gather evidence before asking: ${r.gathering.join(", ")}`);
     if (r.ended?.length) console.log(`  ended, waiting on a closed problem: ${r.ended.join(", ")}`);
@@ -167,9 +181,9 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     });
   dispatch
     .command("on")
-    .description("The trial starts its own runs every 10 minutes while its spend stays under --cap")
+    .description("The trial starts its own runs every 10 minutes while its billed money stays under --cap and its runs' subscription accounts have quota")
     .option("--project <ref>", "The trial project")
-    .requiredOption("--cap <usd>", "Stop starting runs when the trial's spend (model budget and run sessions) would cross this")
+    .requiredOption("--cap <usd>", "Stop starting runs when the trial's billed money (model budget, spend added by hand, run sessions on API keys) would cross this; subscription sessions are held by quota instead")
     .option("--max-runs <n>", "Stop starting runs once the trial has this many line runs (every route, since it began)")
     .action(async (opts: { project?: string; cap: string; maxRuns?: string }) => {
       const r = await post("/cli/line/trial/dispatch-set", { project: dispatchProject(opts), cap_usd: Number(opts.cap), ...(opts.maxRuns !== undefined ? { max_runs: Number(opts.maxRuns) } : {}) });
@@ -186,19 +200,20 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
 
   const spend = trial
     .command("spend")
-    .description("Spend outside codecast's own accounting");
+    .description("Money billed outside codecast's own accounting");
   spend
     .command("add <usd> <what...>")
-    .description("Record spend the trial made outside codecast (a shadow harness on another key, prompt dry runs on a login): it joins the trial's total, which the dispatcher's cap reads. The same amount and words within an hour is refused as a repeat")
+    .description("Record money the trial was billed outside codecast (a shadow harness or evals on an API key): it joins the trial's billed money, which the dispatcher's cap reads. Subscription use (a dry run on a Claude login) bills nothing; do not record it. The same amount and words within an hour is refused as a repeat")
+    .requiredOption("--billed-by <key>", "The key or account that billed it (\"evals key\", \"openrouter\")")
     .option("--project <ref>", "The trial project")
     .option("--force", "Record it although the same amount and words were recorded within the hour")
     .option("--json", "Machine-readable output")
-    .action(async (amount: string, what: string[], opts: { project?: string; force?: boolean; json?: boolean }) => {
+    .action(async (amount: string, what: string[], opts: { project?: string; billedBy: string; force?: boolean; json?: boolean }) => {
       const value = Number(amount.replace(/^\$/, ""));
       if (!(value > 0)) fail(`${amount} is not a dollar amount`);
-      const r = await post("/cli/line/trial/spend-add", { project: projectOf(opts), usd: value, what: what.join(" "), ...(opts.force ? { force: true } : {}) });
+      const r = await post("/cli/line/trial/spend-add", { project: projectOf(opts), usd: value, what: what.join(" "), billed_by: opts.billedBy, ...(opts.force ? { force: true } : {}) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
-      console.log(`${r.project}: +${usd(r.added_usd)} outside codecast (${usd(r.outside_usd)} in all); trial total ${usd(r.total_usd)}${r.cap_usd ? ` of the ${usd(r.cap_usd)} dispatch cap` : ""}.`);
+      console.log(`${r.project}: +${usd(r.added_usd)} billed by ${r.billed_by} (${usd(r.key_usd)} on it in all); billed ${usd(r.billed_usd)}${r.cap_usd ? ` of the ${usd(r.cap_usd)} cap` : ""}.`);
     });
   spend
     .command("rm <at>")
@@ -209,7 +224,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
       if (!/^\d+$/.test(at)) fail(`${at} is not an entry's time (a number of milliseconds)`);
       const r = await post("/cli/line/trial/spend-rm", { project: projectOf(opts), at: Number(at) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
-      console.log(`${r.project}: -${usd(r.removed.usd)} "${r.removed.what}" (${usd(r.outside_usd)} outside in all); trial total ${usd(r.total_usd)}.`);
+      console.log(`${r.project}: -${usd(r.removed.usd)} "${r.removed.what}" (billed by ${r.removed.billed_by}); billed ${usd(r.billed_usd)}.`);
     });
 
   trial
@@ -230,7 +245,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
 
   trial
     .command("rerun <task>")
-    .description("Run a failed or stopped trial problem again (the review page's Rerun): one that died waiting at its own card picks up at that card; any other starts fresh from main. Under the dispatcher's spend cap and run limit")
+    .description("Run a failed or stopped trial problem again (the review page's Rerun): one that died waiting at its own card picks up at that card; any other starts fresh from main. Under the dispatcher's billed-money cap, its accounts' quota and its run limit")
     .option("--reask", "A run waiting at a card: stop its runner here and ask that card again on the stations as they are now. A change card whose fix no longer answers its problem's findings is not worded again: with the findings changed and under half reached the run reads the problem again and works on; with none reached it ends and the problem is due a run from main")
     .option("--at <node>", "With --reask, pick the run up at this station whatever its findings (a gate the graph no longer has resumes at the station after it)")
     .option("--json", "Machine-readable output")
@@ -243,25 +258,9 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
         let row: { task: string; run_id: string } | undefined;
         for (const p of projects) row ??= ((await post("/cli/line/trial/runs", { project: p.title }, true)) as Array<{ task: string; run_id: string }>).find((r) => r.task === task);
         if (!row) fail(`${task} has no trial run`);
-        const { liveRunnerPid } = await import("./workflow/runResume.js");
-        const pid = liveRunnerPid(row.run_id);
-        if (pid) {
-          process.kill(pid, "SIGTERM");
-          for (let i = 0; i < 50 && liveRunnerPid(row.run_id); i++) await new Promise((r) => setTimeout(r, 100));
-            if (liveRunnerPid(row.run_id)) fail(`The runner waiting on ${task} (pid ${pid}) did not stop`);
-        }
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
-        const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: row.run_id }, { read: true, exitOnError: false }).catch(() => null);
-        const { graphForDaemonRun } = await import("./workflow/daemonGraph.js");
-        const { deviceId } = await import("./remote/device.js");
-        const graph = got?.run ? graphForDaemonRun({ ...got.run, fresh_branch: true }, got.workflow, got.run.project_path || process.cwd(), deviceId(), true) : null;
-        const gate = got?.run?.gate_node_id as string | undefined;
-        if (opts.at && graph && !graph.nodes.has(opts.at)) fail(`The run's graph has no station ${opts.at}`);
-        if (!opts.at && gate && graph && !graph.nodes.has(gate)) fail(`${task} waits at ${gate}, which its graph no longer has: pick it up with --at <station>`);
-        asker = (gate && graph?.nodes.get(gate)?.asker) || undefined;
-        // Where a run sent back to work on changed findings starts: the station the graph's start leads to, which reads the problem again.
-        const start = graph ? [...graph.nodes.values()].find((n) => n.type === "start") : undefined;
-        entry = start ? graph!.edges.find((e) => e.from === start.id)?.to : undefined;
+        const { prepareReask } = await import("./workflow/reask.js");
+        ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
       }
       const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
@@ -271,14 +270,14 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     });
 
   trial
-    .command("restart")
-    .description("Restart the runners of trial runs waiting at a card when their graph files or the runner's code changed since they started: each waits at the same card again, on current code (the daemon resumes it within 2 minutes)")
+    .command("restart [tasks...]")
+    .description("Restart the runners of trial runs waiting at a card when their graph files or the runner's code changed since they started: each waits at the same card again, on current code (the daemon resumes it within 2 minutes). Naming problems restarts only theirs")
     .option("--project <ref>", "The trial project")
     .option("--all", "Every waiting run's runner on this machine, changed or not")
     .option("--dry", "Name the runners it would restart")
     .option("--json", "Machine-readable output")
-    .action(async (opts: { project?: string; all?: boolean; dry?: boolean; json?: boolean }) => {
-      const waiting: Array<{ task: string; run_id: string; status: string; node: string | null }> = (await post("/cli/line/trial/runs", { project: projectOf(opts) }, true)).filter((r: any) => r.status === "paused");
+    .action(async (tasks: string[], opts: { project?: string; all?: boolean; dry?: boolean; json?: boolean }) => {
+      const waiting: Array<{ task: string; run_id: string; status: string; node: string | null }> = (await post("/cli/line/trial/runs", { project: projectOf(opts) }, true)).filter((r: any) => r.status === "paused" && (!tasks.length || tasks.includes(r.task)));
       const { liveRunnerPid, runnerPidFile, runnerCodeFiles } = await import("./workflow/runResume.js");
       const { graphForDaemonRun } = await import("./workflow/daemonGraph.js");
       const { deviceId } = await import("./remote/device.js");
