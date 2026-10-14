@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { performTellParent, scheduleWorkerSettle } from "./workerSettle";
+import { performTellParent, REPORT_COVERS_SETTLE_MS, scheduleWorkerSettle } from "./workerSettle";
 import { makeFakeDb } from "./testDb";
 
 // A `cast spawn --subagent` worker reports to the session it nests under. On
@@ -152,6 +152,23 @@ describe("a spawned worker's settle wakes its parent", () => {
     // b's own check finds its settle already told.
     expect(await tell(ctx, "b")).toEqual({ told: 0, reason: "already" });
     expect(wakes(tables)).toHaveLength(1);
+  });
+
+  // 2026-10-14, jx77sf8: every worker sent its report with `cast send`, then
+  // the settle woke the parent a second time with nothing new to read.
+  test("a worker that reported its result itself is not told about again", async () => {
+    const reported = { reported_to_parent_at: STATUS_TS - 20_000 };
+    const { ctx, tables } = world([worker("a", reported)], [session("a", "done")]);
+    expect(await tell(ctx, "a")).toEqual({ told: 0, reason: "already" });
+    expect(wakes(tables)).toHaveLength(0);
+
+    // A note sent long before the settle is not the report; a stall always tells.
+    const early = { reported_to_parent_at: STATUS_TS - REPORT_COVERS_SETTLE_MS - 1 };
+    for (const [w, s] of [[worker("b", early), session("b", "idle")], [worker("c", reported), session("c", "stopped")]] as const) {
+      const { ctx, tables } = world([w], [s]);
+      expect(await tell(ctx, w.short_id)).toEqual({ told: 1 });
+      expect(wakes(tables)).toHaveLength(1);
+    }
   });
 
   test("rows that report elsewhere, a newer status, and a killed parent tell nobody", async () => {
