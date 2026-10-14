@@ -169,6 +169,7 @@ Subcommands:
   cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
                                       --for-human: from a session, as your human, only at their explicit word
   cast decide kit [page.html]         The decision page kit for a --report page: its guide, or that page written as it will be served
+  cast decide kit page.html --serve   That page served over local http for the cast browser, rebuilt on each load
 
 Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
   --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md

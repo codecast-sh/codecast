@@ -143,6 +143,8 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
       ...(opts.tools ? ['--tools', opts.tools.join(',')] : []),
       ...thenFiles.flatMap((f) => ['--then', f]),
       ...(claudeMdFile ? ['--claude-md', claudeMdFile] : []),
+      ...(opts.guard ? ['--guard', opts.guard] : []),
+      ...(opts.cwd ? ['--cwd', opts.cwd] : []),
     ],
     dir,
   );
