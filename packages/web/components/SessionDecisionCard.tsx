@@ -7,13 +7,15 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, type QueueItem } from "../lib/decisionQueue";
+import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { PassDecision } from "./decisions/PassDecision";
 import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
 import { GateRunChip } from "./decisions/DecisionCompactCard";
 import { useSyncDecisionDetail, useDecisionDetail } from "../hooks/useSyncDecisionDetail";
@@ -84,7 +86,21 @@ type Size = "full" | "line";
 let settledFromSheet: { conversationId: string; at: number } | null = null;
 const CONTINUE_MS = 5_000;
 
-export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueItem; stepper: DecisionStepper | null; more?: number }) {
+// A jump to a message in this thread (targetNonce is when it was asked for)
+// is a request to read the thread, so the sheet stays out of its way. An old
+// target says nothing about an ask that arrives later.
+const JUMP_FRESH_MS = 10_000;
+const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
+
+export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scrollToMessage }: {
+  item: QueueItem;
+  stepper: DecisionStepper | null;
+  more?: number;
+  /** When the pane was last asked to open at a message, if it was. */
+  targetNonce?: number;
+  /** Scrolls this pane's thread to a loaded message. */
+  scrollToMessage?: (messageId: string) => void;
+}) {
   const {
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
     answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
@@ -98,10 +114,15 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
 
   const [size, setSize] = useState<Size>(() => {
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
+    if (!stepper && jumpedHere(targetNonce)) return "line";
     return item.blocking || stepper || continuing ? "full" : "line";
   });
+  useWatchEffect(() => {
+    if (!stepper && jumpedHere(targetNonce)) setSize("line");
+  }, [targetNonce]);
   const full = size === "full";
   const [otherOpen, setOtherOpen] = useState(false);
+  const [passOpen, setPassOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -201,6 +222,9 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
     onDone();
   }, [answerItemFreeText, onDone]);
   const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
+  // A `cast decide` row can be handed on; a terminal prompt and a hosted
+  // assistant's ask (only its owner answers) cannot. A trial's stays put.
+  const canPass = item.source === "decide" && !!item.decisionId && !hosted && !item.trial;
 
   const onExit = stepper?.onExit;
   // Off the inbox (the /questions stepper) "open" must leave for the inbox;
@@ -212,7 +236,16 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   // thread hands it back. A fold by a button or a key stays folded.
   const foldedByScroll = useRef(false);
   const shrink = useCallback(() => { foldedByScroll.current = false; setSize("line"); }, []);
-  const shrinkByScroll = useCallback(() => { foldedByScroll.current = true; setSize("line"); }, []);
+  // Scrolling away from the question is asking what led to it: the thread
+  // opens at the ask, not at its tail.
+  const shrinkByScroll = useCallback(() => {
+    foldedByScroll.current = true;
+    setSize("line");
+    if (!canJumpToAsk) return;
+    const ask = findDecisionAnchorMessage(messages as any[], item.decisionId, item.question);
+    if (ask && scrollToMessage) scrollToMessage(ask._id);
+    else if (isOnThreadRoute()) void jumpToDecisionAsk();
+  }, [canJumpToAsk, messages, item.decisionId, item.question, scrollToMessage, jumpToDecisionAsk]);
   const grow = useCallback(() => setSize("full"), []);
 
   // Folding swaps the sheet for the pill in one frame, and the eye loses it.
@@ -265,6 +298,8 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   const onSkip = stepper?.onSkip;
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The pass menu owns the keys while it is open: its search and Escape.
+      if (passOpen) return;
       const target = e.target as HTMLElement | null;
       const action = routeQueueKey(e, {
         modalOpen: hasOpenModal(),
@@ -289,7 +324,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       // An answer, a dismissal or a typed answer is the card's only while it
       // is the thing in focus: a digit typed into anything else in this
       // window (another pane, a tab an agent drives) never answers it.
-      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
+      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "pass" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
       e.preventDefault();
       e.stopPropagation();
       switch (action.kind) {
@@ -299,6 +334,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
         case "dismiss": if (!hosted) dismiss(); break;
+        case "pass": if (canPass) setPassOpen(true); break;
         case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
         case "peek": shrink(); break;
         case "full": grow(); break;
@@ -312,7 +348,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -350,16 +386,19 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   }, [full]);
 
   const dot = (
-    <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${tier === 1 ? "bg-sol-yellow animate-pulse" : tier === 2 ? "bg-sol-text-dim" : "bg-sol-blue"}`} />
+    <span className={`inline-block align-middle w-1.5 h-1.5 shrink-0 rounded-full ${tier === 1 ? "bg-sol-yellow animate-pulse" : tier === 2 ? "bg-sol-text-dim" : "bg-sol-blue"}`} />
   );
 
   const badges = (
     <>
+      {item.trial && (
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
+      )}
       {tier === 3 && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
       )}
       {tier === 2 && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">session not running</span>
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">session not running</span>
       )}
     </>
   );
@@ -389,7 +428,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
   const facts = detail && detailDecision ? <DecisionFacts decision={detailDecision} detail={detail} className={card ? "" : "mt-4 mb-5"} /> : null;
 
   const whoIsAsking = askingRole ? (
-    <div className="flex items-center gap-2 min-w-0 flex-1" data-decision-asker={askingRole.handle}>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 flex-[1_1_14rem]" data-decision-asker={askingRole.handle}>
       {dot}
       <RoleFace role={askingRole} size={18} className="shrink-0" />
       <button onClick={stepper ? openSession : undefined} className={`text-sm text-sol-text truncate ${stepper ? "hover:text-sol-blue transition-colors" : "cursor-default"}`}>
@@ -398,16 +437,25 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       {badges}
     </div>
   ) : (
-    <div className="flex items-center gap-2 min-w-0 flex-1">
+    // One flow of words, not a row of boxes: a long title wraps and the chips
+    // follow it, so nothing is cut short in a narrow pane.
+    <div className="min-w-0 flex-[1_1_14rem] leading-relaxed [&>*+*]:ml-2">
       {dot}
       {stepper ? (
-        <button onClick={openSession} className="text-sm text-sol-text hover:text-sol-blue transition-colors truncate">
+        // A button lays out as a box; an inline element lets the chips follow its last line.
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={openSession}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSession(); } }}
+          className="cursor-pointer text-sm text-sol-text hover:text-sol-blue transition-colors [overflow-wrap:anywhere] focus-visible:outline focus-visible:outline-1 focus-visible:outline-sol-blue"
+        >
           {session?.title || "Session"}
-        </button>
+        </span>
       ) : (
-        <span className="text-sm text-sol-text truncate">{item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
+        <span className="text-sm text-sol-text">{item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
       )}
-      {stepper && project && <span className="text-[11px] text-sol-text-dim truncate">{project}</span>}
+      {stepper && project && <span className="decision-head-wide whitespace-nowrap text-[11px] text-sol-text-dim">{project}</span>}
       {badges}
     </div>
   );
@@ -424,6 +472,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
           </button>
         </>
       )}
+      {canPass && <PassDecision decisionId={item.decisionId!} open={passOpen} onOpenChange={setPassOpen} onPassed={onDone} label="pass to…" />}
       {!hosted && <button
         onClick={dismiss}
         className="flex items-center gap-1.5 hover:text-sol-red transition-colors"
@@ -482,8 +531,8 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
       )}
       {body}
       {card && facts}
-      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} />}
-      {detail && detailDecision && (
+      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} decision={decideId} />}
+      {detail && detailDecision && detail.ladder.length > 0 && (
         <div>
           <div className="decision-kicker">The ladder</div>
           <DecisionLadder decision={detailDecision} detail={detail} now={now} />
@@ -584,7 +633,7 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
         {/* One row of chrome, kept while the rest scrolls: who is asking,
             where this sits in the queue, and the way back to the thread. */}
         <div className="decision-sheet-head-cq shrink-0 border-b border-sol-border/70">
-          <div className="decision-sheet-col mx-auto w-full px-6 h-10 flex items-center gap-3 min-w-0">
+          <div className="decision-sheet-col mx-auto w-full px-6 min-h-10 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
             {whoIsAsking}
             {place && (
               <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums" data-decision-place>
@@ -644,14 +693,17 @@ export function SessionDecisionCard({ item, stepper, more = 0 }: { item: QueueIt
             title="The options are below the reasoning: jump to them"
             data-decision-options-strip
           >
-            <div className="decision-sheet-col mx-auto w-full px-6 h-9 flex items-center gap-4 min-w-0 text-[11px] text-sol-text-muted">
-              <ChevronDown className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
-              {options.map((o, n) => (
-                <span key={n} className="flex-1 min-w-0 flex items-center gap-1.5">
-                  {n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
-                  <span className="truncate">{o.label.replace(" (Recommended)", "")}</span>
-                </span>
-              ))}
+            {/* Each answer reads whole: a long one wraps in its column, and in a narrow pane they stack. */}
+            <div className="decision-sheet-col mx-auto w-full px-6 py-2 flex items-start gap-x-4 gap-y-1.5 min-w-0 text-left text-[11px] leading-snug text-sol-text-muted">
+              <ChevronDown className="w-3.5 h-3.5 mt-px shrink-0 text-sol-text-dim" />
+              <span className="flex flex-1 flex-wrap gap-x-4 gap-y-1.5 min-w-0">
+                {options.map((o, n) => (
+                  <span key={n} className="flex-[1_1_12rem] min-w-0 flex items-start gap-1.5">
+                    {n < 9 && <KeyCap size="xs">{String(n + 1)}</KeyCap>}
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{o.label.replace(" (Recommended)", "")}</span>
+                  </span>
+                ))}
+              </span>
             </div>
           </button>
         )}

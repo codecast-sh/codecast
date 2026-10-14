@@ -4,7 +4,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
-import { cloudHostReportValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
+import { cloudHostReportValidator, cloudPlacementProgressValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { changeGuideValidator } from "./lib/changeGuideValidator";
 import { followViewValidator } from "./lib/followView";
@@ -826,6 +826,10 @@ export default defineSchema({
     // hand's role (org-roles-standing.md T3), or a spawned worker's parent
     // (workerSettle.ts), so one settle tells once, not once per check.
     hand_wake_notified_key: v.optional(v.string()),
+    // When a spawned worker last `cast send`-ed its parent, cleared by any new
+    // input to the worker. A worker that reported its own result does not also
+    // get a settle wake sent on its behalf (workerSettle.ts).
+    reported_to_parent_at: v.optional(v.number()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
     // field and a relative check re-opens the session. Set by:
@@ -988,6 +992,11 @@ export default defineSchema({
       cap_bytes: v.number(),
       files: v.array(v.object({ path: v.string(), bytes: v.number() })),
     })),
+    // Where the placement stands while the laptop's child prepares the host:
+    // the host, the step and its log lines (contracts/cloudPlacementProgress).
+    // Kept after a failure (failed_at) so the strip names the step that broke;
+    // cleared by placeConversation and by a fresh park.
+    cloud_placement_progress: v.optional(cloudPlacementProgressValidator),
     // A cloud session's working tree mirrored live into a worktree on one of
     // the owner's laptops (`cast remote sync` as a daemon job). The laptop
     // running it writes the state (cloud.reportLocalMirror) on landing and on
@@ -3596,6 +3605,7 @@ export default defineSchema({
     // Open PRs of one repository: check and push webhooks look a head sha or a
     // base branch up among these, never among every PR the repository ever had.
     .index("by_repository_state", ["repository", "state"])
+    .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"])
     // A team's pull requests touched in a trailing window (page data readers).
@@ -4708,6 +4718,12 @@ export default defineSchema({
       v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
     ),
     holder_key: v.optional(v.string()),
+    // A person handed the question to someone else (passCore): a teammate or a
+    // role. It then holds the decision whatever routing or grants say, and a
+    // role it was passed to may answer it without a grant.
+    passed_to: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number() })
+    ),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A
@@ -4947,9 +4963,23 @@ export default defineSchema({
     payload: v.string(),
     processed: v.boolean(),
     created_at: v.number(),
+    // Set on CI deliveries (check_run, check_suite, workflow_run): the
+    // repository whose drain folds them (githubWebhooks.drainCiEvents).
+    ci_repository: v.optional(v.string()),
+    // Legacy: the stale-drain stamp before drain_markers. No longer written.
+    ci_redrain_at: v.optional(v.number()),
   })
     .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"]),
+    .index("by_processed", ["processed"])
+    .index("by_ci_pending", ["ci_repository", "processed"]),
+
+  // Whether a drain is on its way for a key (lib/drainMarker.ts): a sync
+  // outbox scope ("outbox:<scope>") or a repository's CI queue ("ci:<repo>").
+  drain_markers: defineTable({
+    key: v.string(),
+    scheduled: v.boolean(),
+    scheduled_at: v.number(),
+  }).index("by_key", ["key"]),
 
   // Which event triggered a GitHub Actions check suite. A check_run names its
   // suite but not the event; the workflow_run delivery for the same suite does.
@@ -5339,8 +5369,9 @@ export default defineSchema({
     // graph and cwd: the trial graph `cast line trial run` starts, and the
     // checkout it runs from, on the machine that turned the trial on.
     // dispatch: when set, the trial starts its own runs (lineTrial.dispatch),
-    // the problems most in need first, while its spend stays under cap_usd;
-    // last is what the latest pass started, or why it held.
+    // the problems most in need first, while its billed money stays under
+    // cap_usd and its subscription accounts have quota; last is what the
+    // latest pass started, or why it held.
     line_trial: v.optional(v.object({
       since: v.number(),
       by: v.id("users"),
@@ -5360,11 +5391,11 @@ export default defineSchema({
         max_runs: v.optional(v.number()),
         last: v.optional(v.object({ at: v.number(), started: v.array(v.string()), held: v.optional(v.string()) })),
       })),
-      // Spend the trial made outside codecast's own accounting (shadow
-      // harnesses on another key, prompt dry runs on a login), recorded by
-      // `cast line trial spend add` so the trial's total, and the
-      // dispatcher's cap, read one number.
-      outside: v.optional(v.array(v.object({ usd: v.number(), what: v.string(), at: v.number(), by: v.id("users") }))),
+      // Money the trial was billed outside codecast's own accounting (shadow
+      // harnesses and evals on an API key), recorded by `cast line trial
+      // spend add`; `billed_by` names the key or account that billed it. It
+      // counts toward the dispatcher's cap with the rest of billed money.
+      outside: v.optional(v.array(v.object({ usd: v.number(), what: v.string(), billed_by: v.optional(v.string()), at: v.number(), by: v.id("users") }))),
       // The one stack the trial's decisions sit in (lineTrial.trialStackOf).
       stack_id: v.optional(v.id("decision_stacks")),
       // The viewing password every page a trial decision attaches gets
@@ -5384,7 +5415,9 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"])
     // Trial projects that start their own runs (lineTrial.dispatch).
-    .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"]),
+    .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"])
+    // Trial projects (lineTrial.priceRunsTick prices their runs).
+    .index("by_trial_since", ["line_trial.since"]),
 
   // An initiative (docs/architecture/initiatives-projects-role-page.md I1): a
   // goal the company is trying to reach, carried by an intentional set of
@@ -7809,6 +7842,34 @@ export default defineSchema({
   })
     .index("by_target", ["target_key", "created_at"])
     .index("by_conversation", ["conversation_id"]),
+
+  // What one trial run cost: its station sessions priced from their token
+  // totals, the one home of that fact (lineTrial.priceRunsTick writes it,
+  // trialSpend sums it). Its own small table so a trial's spend reads ~200
+  // bytes a run, never the runs or their sessions. Opened when the run is
+  // created (lib/trialRunPrices.ts), so the row count is the trial's run
+  // count. `settled`: the run ended long enough ago that its sessions are
+  // done, so it is not priced again until the run moves.
+  // sessions/usd/tokens/unpriced_tokens cover every session (usd at API list
+  // price); `key` is the part on a metered provider key, which bills money.
+  // The rest ran on subscription accounts (`providers`): quota, not a bill.
+  // `device`: the machine the run ran on, whose accounts the quota reads.
+  trial_run_prices: defineTable({
+    project_id: v.id("projects"),
+    run_id: v.id("workflow_runs"),
+    run_created_at: v.number(),
+    sessions: v.number(),
+    usd: v.number(),
+    tokens: v.number(),
+    unpriced_tokens: v.number(),
+    key: v.optional(v.object({ sessions: v.number(), tokens: v.number(), usd: v.number() })),
+    providers: v.optional(v.array(v.string())),
+    device: v.optional(v.string()),
+    at: v.number(),
+    settled: v.boolean(),
+  })
+    .index("by_project_created", ["project_id", "run_created_at"])
+    .index("by_run", ["run_id"]),
 
   workflow_runs: defineTable({
     user_id: v.id("users"),
