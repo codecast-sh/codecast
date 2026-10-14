@@ -4,6 +4,7 @@
 // building, so it runs in the CLI, the browser and a test alike.
 
 import {
+  costParts,
   proofSummary,
   honestChecks,
   riskLabel,
@@ -241,7 +242,8 @@ export function renderChangeCardHtml(card: ChangeCard): string {
   const proofBlock = card.proof.before.length || card.proof.after.length
     ? `<section class="block"><h2>Proof <span class="count">${esc(proof.evidence)}</span></h2><div class="beads" aria-hidden="true">${beads(card)}</div><ul class="proof">${proofRows(card)}</ul></section>`
     : `<section class="block"><h2>Proof <span class="count">none recorded</span></h2></section>`;
-  const { tokens, usd, minutes } = card.cost;
+  const { tokens, minutes } = card.cost;
+  const cost = costParts(card.cost);
 
   return `<!doctype html>
 <html lang="en">
@@ -272,7 +274,7 @@ ${checksList(honestChecks(card.checks))}
 <div class="panels">
   ${diffPanel(card)}
   <div class="panel"><h3>Risk</h3><div class="big mid">${esc(riskLabel(card.risk))}</div><div class="sub">${esc(card.risk.reason)}</div></div>
-  <div class="panel"><h3>Cost</h3><div class="costs"><span><span class="num">${formatUsd(usd)}</span></span><span><span class="num">${formatTokens(tokens)}</span> tokens</span><span><span class="num">${formatMinutes(minutes)}</span> of agent time</span></div></div>
+  <div class="panel"><h3>Cost</h3><div class="costs"><span><span class="num">${formatUsd(cost.billed_usd)}</span> billed</span><span><span class="num">${formatUsd(cost.list_usd)}</span> at list price, not billed</span><span><span class="num">${formatTokens(tokens)}</span> tokens</span><span><span class="num">${formatMinutes(minutes)}</span> of agent time</span></div></div>
 </div>
 <div class="rec"><span class="word">${verdictLabel(card.recommend.verdict)}</span><p>${esc(card.recommend.why)}</p></div>
 </div>

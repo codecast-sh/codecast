@@ -1,0 +1,6 @@
+/* A session's live thread inside its map card (MapCard Stage): the card has a
+   fixed size on the canvas, so the messages scroll and the composer stays put. */
+.map-stage { display: flex; flex-direction: column; border-top: 1px solid color-mix(in srgb, var(--sol-border) 22%, transparent); }
+.map-stage > .th-card-open-session { flex: 1; min-height: 0; border-top: 0; padding-bottom: 6px; }
+.map-stage .th-session-rows { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 12px 2px; }
+.map-stage .th-session-composer { flex-shrink: 0; padding: 0 8px; }
