@@ -81,7 +81,7 @@ function ModeSwitch({ on, accent, label, title, onClick, disabled = false }: { o
       className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
       title={title}
     >
-      <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${on ? lit.track : "bg-sol-bg-alt"}`}>
+      <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${on ? lit.track : "bg-sol-border/40"}`}>
         <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${on ? `left-3.5 ${lit.knob}` : "left-0.5 bg-sol-text-dim"}`} />
       </span>
       <span className={on ? lit.text : ""}>{label}</span>

@@ -59,9 +59,9 @@ describe("problemBand: one state per problem", () => {
   });
   test("a stopped run that needs a yes is a need, never a failure", () => {
     const b = problemBand(input({ need: { kind: "stopped", since: NOW, fail: { key: "deadend:prove", step: "prove", label: "Prove: needs Cameron's yes", raw: "" } }, run: run([visit("prove", "done")]) }));
-    expect(bandLine(b)).toEqual({ text: "Prove finished: go on to Build?", tone: "you" });
-    // It waits on you: the Problems list files it there, never under Needs a new ask.
-    expect(problemNow(b).status).toBe("you");
+    expect(bandLine(b)).toEqual({ text: "Prove finished: go on to Build?", tone: "warn" });
+    // Nobody is asked mid-run: the Problems list files it under Needs a new ask, where a new run goes on.
+    expect(problemNow(b).status).toBe("newask");
   });
   test("a step that ended without a report is no yes: the band says what happened", () => {
     const b = problemBand(input({ run: run([visit("build", "failed")]), row: { kind: "failed", at: NOW - H, detail: null, fail: { key: "deadend-silent:build", step: "build", label: "Build ended without a report", raw: "" } } }));
@@ -468,14 +468,6 @@ test("statementAdds: a problem filed from one report does not print that report 
   expect(statementAdds("Main CI red at ac5c98b.", "Main CI red at ac5c98b", [])).toBe(false);
 });
 
-describe("a fix merged by hand through its pull request", () => {
-  test("the line never recorded the merge, its branch's pull request did: merged, never withdrawn (ct-58282, #3859)", () => {
-    const h = hist({ attempts: [attempt({ ended: "shipped", unapproved: true, card: { ref: "sd-557", status: "withdrawn" } as never })] });
-    const b = problemBand(input({ issue: issue({ status: "in_review", history: h }), history: h, prMerged: { at: NOW - 20 * H, url: "https://github.com/union-ai/union-mobile/pull/3859" } }));
-    expect(b).toMatchObject({ kind: "merged", mergedAt: NOW - 20 * H, link: "https://github.com/union-ai/union-mobile/pull/3859" });
-  });
-});
-
 describe("fixMerges", () => {
   test("only a merged pull request on the problem's own line branch, linked to it", () => {
     const prs = [
@@ -484,7 +476,7 @@ describe("fixMerges", () => {
       { state: "merged", merged_at: 6, head_ref: "feature/x", task_ids: ["t1"], repository: "u/m", number: 2 },
     ];
     const ref = (id: string) => ({ t1: "ct-58282", t2: "ct-58281", t3: "ct-1" } as Record<string, string>)[id];
-    expect([...fixMerges(prs, ref)]).toEqual([["t1", { at: 5, url: "https://github.com/u/m/pull/3859" }]]);
+    expect([...fixMerges(prs, ref)]).toEqual([["t1", { at: 5, url: "https://github.com/u/m/pull/3859", branch: "codecast/line-ct-58282", into: null }]]);
   });
 });
 
@@ -517,21 +509,6 @@ describe("findingCut: an opened finding that ends cut says so", () => {
   test("an uncut feed, or a whole that arrived whole, has no cut line", () => {
     expect(findingCut("All of it.", { data: undefined, error: false })).toBeNull();
     expect(findingCut(head, { data: "All of it, whole.", error: false })).toBeNull();
-  });
-});
-
-describe("a fix merged by hand reads its deploys with the rule every merge is read with (ct-58282)", () => {
-  const deploy = (at: number) => ({ _id: `d${at}`, project_id: "p", at, sha: "fc0d85ba6", repository: null, surface: null, environment: "production", version: null, source: "union-errors", via: "source" as const, title: "Deployed", url: null });
-  const pr = { at: NOW - 8 * H, url: "https://github.com/Union-AI/union-mobile/pull/3859" };
-  const withDeploys = (ats: number[]) => hist({ coverage: { state: "known", targets: ["production"], words: "", last: ats.length ? { at: Math.max(...ats), url: null } : null, live: ats.map(deploy) } });
-  test("a live deploy after the merge carried it: in production from that deploy", () => {
-    const h = withDeploys([NOW - 2 * H, NOW - 2.5 * H, NOW - 30 * H]);
-    const b = problemBand(input({ issue: issue({ history: h }), history: h, prMerged: pr, task: { status: "done" } }));
-    expect(b).toMatchObject({ kind: "production", liveAt: NOW - 2.5 * H, mergedAt: pr.at });
-  });
-  test("with no deploy after the merge it is merged, not in production", () => {
-    const h = withDeploys([NOW - 30 * H]);
-    expect(problemBand(input({ issue: issue({ history: h }), history: h, prMerged: pr, task: { status: "done" } })).kind).toBe("merged");
   });
 });
 

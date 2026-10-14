@@ -31,7 +31,7 @@ import { CAST_MOTION_JS } from "./lib/castMotion";
 import { CAST_DATA_JS } from "./lib/castData";
 import { pageUsesData } from "@codecast/shared/contracts/pageData";
 import { servePageData, type ValidatedQuery } from "./pageData";
-import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageUsesPlayer } from "@codecast/shared/contracts";
+import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
@@ -312,7 +312,7 @@ export function injectMotion(html: string, apiBase: string): string {
   const runtime = pageHasHyperframesRuntime(html)
     ? ""
     : `<script src="${HYPERFRAMES_RUNTIME.url}" integrity="${HYPERFRAMES_RUNTIME.integrity}" crossorigin="anonymous"></script>`;
-  const tags = `${runtime}<script src="${apiBase}/cli/motion.js" defer></script>`;
+  const tags = `${runtime}<script src="${pageServingOrigin(apiBase)}/cli/motion.js" defer></script>`;
   const head = html.match(/<head[^>]*>/i);
   if (!head) return tags + html;
   const at = html.indexOf(head[0]) + head[0].length;
@@ -329,7 +329,7 @@ export const dataJs = httpAction(async () =>
 /** Pages that read live data get the data runtime first in <head>, so window.cast exists before the page's own scripts; it carries the page's data URL, gate tokens included. */
 export function injectData(html: string, dataUrl: string, apiBase: string): string {
   if (!pageUsesData(html) || /\/cli\/data\.js/.test(html)) return html;
-  const tag = `<script src="${apiBase}/cli/data.js" data-endpoint="${dataUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></script>`;
+  const tag = `<script src="${pageServingOrigin(apiBase)}/cli/data.js" data-endpoint="${dataUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></script>`;
   const head = html.match(/<head[^>]*>/i);
   if (!head) return tag + html;
   const at = html.indexOf(head[0]) + head[0].length;
@@ -344,7 +344,7 @@ async function withDataHash(contentHash: string, setJson: string): Promise<strin
 /** Pages with <cast-player> or a <video> get the player script, from the host that served them. */
 function injectPlayer(html: string, apiBase: string): string {
   if (!pageUsesPlayer(html) || /\/cli\/player\.js/.test(html)) return html;
-  const tag = `<script src="${apiBase}/cli/player.js" defer></script>`;
+  const tag = `<script src="${pageServingOrigin(apiBase)}/cli/player.js" defer></script>`;
   const head = html.match(/<\/head>/i);
   return head ? html.replace(/<\/head>/i, `${tag}</head>`) : tag + html;
 }
@@ -1068,7 +1068,7 @@ export const serve = httpAction(async (ctx, request) => {
         views: art.views,
         comment_count: art.comments_disabled ? 0 : artifact.comment_count,
         comments: art.comments_disabled ? [] : artifact.open_comments,
-        session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, conversation_id: artifact.session_conversation_id ?? null, title: artifact.session_title, short_title: artifact.session_short_title } : null,
         // The publishing session's live state for the agent chip: state is a
         // work state (working / needs_input / done / dormant / idle), since
         // when it last moved, awaiting_since when a comment sent to the agent

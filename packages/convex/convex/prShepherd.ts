@@ -14,7 +14,10 @@ import { syncPullRequestSessions } from "./lib/prSessions";
 const SHEPHERD_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const WAKE_RETRY_MS = 20 * 1000;
 const MAX_WAKE_RETRIES = 5;
-const MERGE_STATE_RETRY_MS = 15 * 1000;
+// GitHub computes mergeability lazily after a push; a repository with hundreds
+// of open PRs takes minutes to answer for all of them, so each retry waits
+// twice as long as the one before (15s, 30s, 60s, 120s).
+const mergeStateRetryMs = (attempt: number) => 15_000 * 2 ** attempt;
 const MAX_MERGE_STATE_ATTEMPTS = 4;
 const RETIRE_RETRY_MS = 5 * 60 * 1000;
 const MAX_RETIRE_ATTEMPTS = 12;
@@ -925,7 +928,7 @@ export const refreshMergeState = internalAction({
       ctx.runAction(internal.prShepherd.tokenForPR, { pr_id: pr._id }),
     );
     if (result.retry && attempt < MAX_MERGE_STATE_ATTEMPTS) {
-      await ctx.scheduler.runAfter(MERGE_STATE_RETRY_MS, internal.prShepherd.refreshMergeState, {
+      await ctx.scheduler.runAfter(mergeStateRetryMs(attempt), internal.prShepherd.refreshMergeState, {
         pr_id: args.pr_id,
         attempt: attempt + 1,
       });
@@ -990,7 +993,7 @@ export const refreshMergeStates = internalAction({
     await Promise.all(Array.from({ length: MERGE_STATE_BATCH_CONCURRENCY }, worker));
 
     if (unanswered.length > 0 && args.attempt < MAX_MERGE_STATE_ATTEMPTS) {
-      await ctx.scheduler.runAfter(MERGE_STATE_RETRY_MS, internal.prShepherd.refreshMergeStates, {
+      await ctx.scheduler.runAfter(mergeStateRetryMs(args.attempt), internal.prShepherd.refreshMergeStates, {
         pr_ids: unanswered,
         attempt: args.attempt + 1,
       });
