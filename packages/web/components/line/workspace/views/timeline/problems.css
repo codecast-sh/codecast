@@ -46,7 +46,7 @@
 /* ── the table: four columns ─────────────────────────────────────────── */
 
 .lwp-table { font-size: var(--lw-fs-base); min-width: 0; padding-bottom: 64px; }
-.lwp-tr { display: grid; align-items: start; column-gap: var(--lw-s5); padding: 0 var(--lw-s5); grid-template-columns: minmax(0, 1fr) 96px minmax(150px, 230px) 76px; }
+.lwp-tr { display: grid; align-items: start; column-gap: var(--lw-s5); padding: 0 var(--lw-s5); grid-template-columns: minmax(0, 1fr) 236px minmax(150px, 230px) 76px; }
 .lwp-th { align-items: center; height: 28px; border-bottom: 1px solid var(--lw-rule); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-weight: 500; white-space: nowrap; }
 .lwp-th button { all: unset; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; border-radius: 4px; }
 .lwp-th button:hover, .lwp-th button[data-on] { color: var(--lw-ink); }
@@ -97,7 +97,20 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
 .lwp-under { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lwp-row[data-status="closed"] .lwp-title { color: var(--lw-ink-2); font-weight: 450; }
 .lwp-row .lwp-c-find { display: flex; align-items: center; justify-content: flex-end; gap: 4px; line-height: 1.4; color: var(--lw-ink); font-weight: 600; }
-.lwp-c-find svg { width: 12px; height: 12px; flex: none; }
+.lwp-c-find > svg { width: 12px; height: 12px; flex: none; }
+.lwp-c-find .lw-num { min-width: 3ch; text-align: right; }
+/* The row's time strip: findings over the window, the fix where it went live, the span since tinted by what followed. */
+.lwp-c-find > svg.lwp-strip { width: 150px; height: 24px; margin-right: auto; overflow: visible; }
+.lwp-strip-base { stroke: var(--lw-rule); stroke-width: 1; }
+.lwp-strip-bar { fill: var(--lwt-occ); }
+.lwp-strip-bar[data-back] { fill: var(--lwt-back); }
+.lwp-strip-after { fill: color-mix(in srgb, var(--lwt-live) 13%, transparent); }
+.lwp-strip[data-state="back"] .lwp-strip-after { fill: color-mix(in srgb, var(--lwt-back) 11%, transparent); }
+.lwp-strip-fix { stroke: var(--lwt-live); stroke-width: 2; }
+.lwp-strip[data-state="back"] .lwp-strip-fix { stroke: var(--lwt-back); }
+.lwp-strip[data-fix="unlive"] .lwp-strip-fix { stroke: var(--lw-warn); stroke-dasharray: 3 2; }
+.lwp-strip[data-fix="merged"] .lwp-strip-fix { stroke-dasharray: 3 2; }
+.lwp-strip-close { stroke: var(--lwt-closed); stroke-width: 1.5; stroke-dasharray: 2 2; }
 .lwp-c-find:not([data-trend]) { padding-right: 16px; }
 .lwp-c-find[data-trend="up"] svg { color: var(--lw-bad); }
 .lwp-c-find[data-trend="down"] svg { color: var(--lw-ok); }
@@ -117,6 +130,7 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
   .lwp-bar { flex-wrap: wrap; padding: var(--lw-s3) var(--lw-s3) var(--lw-s2); }
   .lwp-tr { grid-template-columns: minmax(0, 1fr) 52px 40px; padding: 0 var(--lw-s3); column-gap: var(--lw-s3); }
   .lwp-th .lwp-c-status { display: none; }
+  .lwp-c-find > svg.lwp-strip { display: none; }
   /* The status drops under the title, so a narrow pane still says where each problem stands. */
   .lwp-row .lwp-c-status { grid-column: 1; grid-row: 2; }
   .lwp-row .lwp-c-title { grid-column: 1; grid-row: 1; }
