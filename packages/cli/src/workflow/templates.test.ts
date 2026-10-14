@@ -960,10 +960,10 @@ describe("line.cast offline run through the session path", () => {
       expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
       expect(calls.some((c) => c.route === "/cli/workflow-runs/gate")).toBe(false);
       expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
-      expect(calls.findLast((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
+      expect(calls.filter((c) => c.route === "/cli/work/update").at(-1)?.body).toMatchObject({ short_id: "ct-7", status: "open" });
       const blocker = calls.find((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")?.body.text;
       expect(blocker).toBe("Stopped: The fix needs the release branch, which this checkout does not have.");
-      const ended = calls.findLast((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")?.body;
+      const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed").at(-1)?.body;
       expect(ended?.fail_reason).toBe(blocker);
     }, 30000);
   }

@@ -30,6 +30,7 @@ import {
 import {
   getVaultEndpoint,
   listVaults,
+  locateVault,
   readVaultFile,
   scanVault,
   subscribeVaultEvents,
@@ -142,6 +143,11 @@ interface VaultState {
    *  the entry cap). Kept in `files` across rescans until the vault changes. */
   linkedFiles: Record<string, VaultFileEntry>;
   adoptLinkedFile: (entry: VaultFileEntry) => void;
+  /** The row for a path in the active vault, asking the daemon when the file
+   *  list lacks it: the list is a scan (capped, rule-filtered, possibly a stale
+   *  cached copy), so a missing row is not a missing file. Null when the daemon
+   *  says this vault has no such file; undefined when it could not be asked. */
+  ensureEntry: (path: string) => Promise<VaultFileEntry | null | undefined>;
   /** What the last rename did to the vault's links, for a dismissible strip.
    *  Transient: never persisted, cleared when the next rename starts. */
   lastRenameReport: RenameReport | null;
@@ -785,6 +791,22 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       linkedFiles: { ...s.linkedFiles, [entry.path]: entry },
       files: { ...s.files, [entry.path]: s.files[entry.path] ?? entry },
     })),
+  ensureEntry: async (path) => {
+    const { endpoint, activeVaultId, vaults, files, isRemote } = get();
+    if (files[path]) return files[path];
+    const root = vaults.find((v) => v.id === activeVaultId)?.root;
+    if (!endpoint || !root || isRemote) return undefined;
+    try {
+      const located = await locateVault(endpoint, `${root.replace(/\/$/, "")}/${path}`);
+      if (get().activeVaultId !== activeVaultId) return undefined;
+      const row = located?.vault.id === activeVaultId ? located.entry : undefined;
+      if (!row) return null;
+      if (!row.dir) get().adoptLinkedFile(row);
+      return row;
+    } catch {
+      return undefined;
+    }
+  },
   adoptVault: (vault) =>
     set((s) => {
       if (s.vaults.some((v) => v.id === vault.id)) return {};

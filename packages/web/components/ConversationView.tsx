@@ -162,6 +162,7 @@ import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, C
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionView, NonOwnerMessageInput } from "./conversation/sessionControls";
+import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import type { Commit, CondensedReceipt, ConversationDensity, ConversationViewHandle, ConversationViewProps, ImageData, Message, MessageFeedDensity, PullRequest, ReceiptEntry, TaskRecord, TimelineItem, ToolCallChangeSelection, ToolResult, UserMessageKind } from "./conversation/types";
 import { useConversationFileDrop } from "../hooks/useConversationFileDrop";
 import { useWorkflowLaunch } from "../hooks/useWorkflowLaunch";
@@ -3845,6 +3846,14 @@ const ConversationViewInner = (
   // the feed/composer seam (see the render below).
   // An ended run's log has nobody to read a message: the bar replaces the composer.
   const runLogEnded = isEndedRunLog(conversation as any, workflowRun);
+  // The new-session page: a blank session its owner is about to start. The
+  // composer leaves the bottom edge for the middle of the page, with the
+  // project chips above it, the launch pickers in its foot and the project's
+  // recent sessions below; NewSessionView fills the two slots by portal.
+  const newSessionPage = !!conversation && timeline.length === 0 && !(leadNode && !leadPinned) && effectiveIsOwner && showMessageInput
+    && conversation.fork_status !== "copying" && !(conversation.message_count ?? 0) && !runLogEnded;
+  const [newSessionFootSlot, setNewSessionFootSlot] = useState<HTMLElement | null>(null);
+  const [newSessionBelowSlot, setNewSessionBelowSlot] = useState<HTMLElement | null>(null);
   const ownerComposerMounted = !!(showMessageInput && conversation && !runLogEnded && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
@@ -4685,7 +4694,7 @@ const ConversationViewInner = (
         {conversation && timeline.length === 0 && leadNode && !leadPinned ? (
           <div className="flex-1">{leadNode}</div>
         ) : (!conversation || timeline.length === 0) ? (
-          <div className={`flex-1 flex flex-col items-center gap-3 ${hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
+          <div className={`flex-1 flex flex-col items-center gap-3 ${newSessionPage ? "justify-end pt-6 pb-5" : hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
               (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
                 <MessagesUnavailableState
@@ -4697,6 +4706,7 @@ const ConversationViewInner = (
               ) : isOwner ? (
                 <NewSessionView
                   conversation={conversation}
+                  slots={newSessionPage ? { foot: newSessionFootSlot, below: newSessionBelowSlot } : undefined}
                   agentControls={{
                     showWorkflow,
                     onToggleWorkflow: () => setShowWorkflow((v) => !v),
@@ -4923,7 +4933,7 @@ const ConversationViewInner = (
       {/* A hosted conversation's own approval lives in the transcript's
           flow (hostedTailCard); the rest dock above the composer. */}
       {decisionItem && conversation && !onSendOverride && !hostedOwnCard && (
-        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} />
+        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} targetNonce={targetMessageId ? targetNonce : undefined} scrollToMessage={scrollToMessageById} />
       )}
 
       {showMessageInput && conversation && runLogEnded && workflowRun && <RunLogEndedBar run={workflowRun as any} />}
@@ -4974,7 +4984,10 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} hero={newSessionPage} composerFoot={newSessionPage ? <>
+                <div ref={setNewSessionFootSlot} className="flex min-w-0 flex-wrap items-center gap-0.5" />
+                <span className="ml-auto"><ComposerAttachButton dropRef={dropFilesRef} className="w-7 h-7 rounded-full flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/60 transition-colors" /></span>
+              </> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
                     here" for a share link guest with no face on the roster)
                     and who asks to send into it. Inside the composer, so they
@@ -5009,6 +5022,7 @@ const ConversationViewInner = (
           </>}
         </div>
       )}
+      {newSessionPage && <div ref={setNewSessionBelowSlot} className="flex-1 min-h-0 overflow-y-auto pb-6" />}
 
       {timeline.length > 0 && conversation && composerPresenceEnabled(conversation) && (
         <ReadingMarks

@@ -371,7 +371,31 @@ export const sweep = internalMutation({
 });
 
 export type LineQueueItem = { task_id: string; short_id: string | null; title: string; cause: boolean; priority: number; waiting: string | null };
-export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[] };
+/** A cause the role leads that grounding held on a fact (readiness needs_context): the lead's to answer, never a
+ *  person's For you. `note` is grounding's own words, the question inside them. */
+export type LineAsk = { task_id: string; short_id: string | null; title: string; note: string | null; findings: number };
+export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[]; asks: LineAsk[] };
+
+/** A note that parks a cause until more findings come asks nobody anything (web lineInbox waitsForFindings). */
+const WAITS_FOR_FINDINGS = /\bwaits? (?:for|on) more (?:signals|findings)\b/i;
+
+// A run's grounding asks no person: a cause it held on a fact waits for the
+// role whose area holds its project (the lead its line runs as), oldest
+// first. These are the role's asks, beside the queue it would start.
+export async function lineAsksFor(ctx: Ctx, role: any): Promise<LineAsk[]> {
+  const roles = await allRolesInBoundary(ctx, role);
+  const seen = new Set<string>();
+  const out: Array<LineAsk & { at: number }> = [];
+  for (const task of await linePool(ctx, role, new Set([agentAssignee(role), String(role._id)]))) {
+    if (seen.has(String(task._id))) continue;
+    seen.add(String(task._id));
+    if (task.source !== "signal" || task.status !== "open" || task.workflow_run_id || task.readiness !== "needs_context") continue;
+    if (WAITS_FOR_FINDINGS.test(task.readiness_note ?? "")) continue;
+    if (!(await lineOwns(ctx, role, task, roles))) continue;
+    out.push({ task_id: String(task._id), short_id: task.short_id ?? null, title: task.title, note: task.readiness_note?.trim() || null, findings: task.cause?.signal_count ?? 0, at: task.created_at ?? task._creationTime ?? 0 });
+  }
+  return out.sort((a, b) => a.at - b.at).map(({ at: _at, ...a }) => a);
+}
 
 // LE6: the line page's queue for one role: its candidates in admission order,
 // each with why it waits (null: it starts at the next sweep). `waiting` on the
@@ -400,6 +424,7 @@ export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promi
     hands,
     hands_cap: handsCap,
     waiting,
+    asks: await lineAsksFor(ctx, role),
     items: ranked.map(({ task, priority }, i) => ({
       task_id: String(task._id),
       short_id: task.short_id ?? null,
