@@ -182,10 +182,12 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
     ? { tone: "waiting", text: "A fix is ready for your decision." }
     : untouched && stopped ? { tone: worst >= 7 ? "failed" : "waiting", text: !a?.role ? "Not being fixed: no one owns fixes for this project yet." : `Not being fixed: ${stopped}.` } : { ...where, text: plainWhere(where.text, sinceClosed, closedAt ? now - closedAt : null) };
 
-  // What it has cost: judging the conversations behind it and its fix runs' sessions (convex lineTrial.cost).
+  // What it has cost (convex lineTrial.cost): money billed (judging, its runs' call nodes and key sessions), and its runs'
+  // subscription sessions at API list price beside it, an equivalent never added to the money.
   const scope = workspace?.startsWith("team:") ? { workspace: "team" as const, team_id: workspace.slice(5) } : { workspace: "personal" as const };
   const { data: cost } = useQueryNoThrow((api as any).lineTrial.cost, workspace && task.cause ? { ...scope, task: task.short_id } : "skip");
-  const spent = cost as { total_usd: number; judge_usd: number; run_usd: number; runs: number; sessions: number; unpriced_tokens: number } | null | undefined;
+  const spent = cost as { billed_usd?: number; judge_usd: number; run_billed_usd: number; run_list_usd: number; runs: number; sessions: number; unpriced_tokens: number } | null | undefined;
+  const priced = spent?.billed_usd !== undefined && spent.billed_usd + spent.run_list_usd > 0 ? spent : null;
 
   const cited = useMemo(() => [...new Set(signals.map((s) => s.subject).filter(isExpectationId))], [signals]);
   const { data: lines } = useQueryNoThrow((api as any).expectations.lines, cited.length > 0 && workspace ? { workspace, ids: cited } : "skip");
@@ -194,7 +196,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
   return (
     <section className="mb-6" data-problem-summary>
       {/* The numbers: how often, how bad, which way it is going. */}
-      <div className={cn("grid items-stretch gap-px overflow-hidden rounded-lg border border-sol-border/30 bg-sol-border/30", spent && spent.total_usd > 0 ? "grid-cols-[auto_auto_auto_auto_minmax(10rem,1fr)]" : "grid-cols-[auto_auto_auto_minmax(10rem,1fr)]")} data-problem-numbers>
+      <div className={cn("grid items-stretch gap-px overflow-hidden rounded-lg border border-sol-border/30 bg-sol-border/30", priced ? "grid-cols-[auto_auto_auto_auto_minmax(10rem,1fr)]" : "grid-cols-[auto_auto_auto_minmax(10rem,1fr)]")} data-problem-numbers>
         <Stat label="Conversations" value={String(conversations || count)} sub={firstSeen ? `since ${day(firstSeen)}` : undefined} title={`${count} ${count === 1 ? "report" : "reports"} across ${conversations} conversations`} />
         <Stat label="Severity" value={worst ? `${worst}/10` : "–"} valueClass={worst >= 9 ? "text-sol-red" : worst >= 7 ? "text-sol-orange" : undefined} sub={worst ? (noticed ? `${noticed} noticed by the contact` : severityWord(worst)) : undefined} title="The worst a judge rated one of these conversations. 9-10 broke the contact's trust, 7-8 the contact noticed, 5-6 a lapse they likely missed." />
         {isClosed && closedAt
@@ -202,7 +204,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
           : measured
             ? <Stat label="Measured" value={`${measured.count}/${measured.of}`} valueClass="text-sol-orange" sub={measured.window} title={`The fix run counted the miss itself by ${measured.method === "replay" ? "replaying real cases" : "reading production records"}: ${measured.count} of ${measured.of} over ${measured.window}${measured.after !== undefined ? `; ${measured.after} with the fix` : ""}`} />
             : <Stat label="Found this week" value={String(week)} sub={trendWord(week, lastWeek)} title="Conversations judges filed a finding on in the last 7 days, against the 7 before. Findings only: it says when a judge read them, not how often it happens now." />}
-        {spent && spent.total_usd > 0 && <Stat label="Spent" value={usd(spent.total_usd)} sub={`judging ${usd(spent.judge_usd)} · fixes ${usd(spent.run_usd)}`} title={`Judging the conversations behind it ${usd(spent.judge_usd)}; ${spent.runs} fix ${spent.runs === 1 ? "run" : "runs"} over ${spent.sessions} agent sessions ${usd(spent.run_usd)}${spent.unpriced_tokens ? ` (plus ${Math.round(spent.unpriced_tokens / 1000)}k tokens on unpriced models)` : ""}`} />}
+        {priced && <Stat label="Billed" value={usd(priced.billed_usd!)} sub={`${usd(priced.run_list_usd)} at list price, not billed`} title={`Billed: judging the conversations behind it ${usd(priced.judge_usd)}, its fix runs ${usd(priced.run_billed_usd)} (call nodes, sessions on API keys). Not billed: ${priced.runs} fix ${priced.runs === 1 ? "run" : "runs"} over ${priced.sessions} subscription sessions, ${usd(priced.run_list_usd)} at API list price${priced.unpriced_tokens ? ` (plus ${Math.round(priced.unpriced_tokens / 1000)}k tokens on unpriced models)` : ""}`} />}
         <div className="bg-sol-bg px-4 py-2.5 min-w-0">
           <div className="flex items-baseline justify-between gap-2 text-[11px] text-sol-text-dim">
             <span>Conversations per day</span>

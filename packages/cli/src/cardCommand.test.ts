@@ -20,9 +20,9 @@ describe("cast card build inputs", () => {
       { created_at: 0, updated_at: 1059 * 60_000, node_statuses: [{ started_at: 0, completed_at: 30 * 60_000 }, { started_at: 31 * 60_000, completed_at: 39 * 60_000 }, { started_at: 40 * 60_000 }] },
       { node_statuses: [] },
     ];
-    expect(runCost(runs, { tokens: 1000, run_usd: 51.2 })).toEqual({ tokens: 1000, minutes: 38, usd: 51.2 });
-    expect(runCost(runs, { tokens: 1000, run_usd: 51.2, minutes: 41 })).toEqual({ tokens: 1000, minutes: 41, usd: 51.2 });
-    expect(runCost(runs, null)).toEqual({ tokens: 0, minutes: 38, usd: 0 });
+    expect(runCost(runs, { tokens: 1000, run_billed_usd: 0.4, run_list_usd: 51.2 })).toEqual({ tokens: 1000, minutes: 38, usd: 0.4, list_usd: 51.2 });
+    expect(runCost(runs, { tokens: 1000, run_billed_usd: 0, run_list_usd: 51.2, minutes: 41 })).toEqual({ tokens: 1000, minutes: 41, usd: 0, list_usd: 51.2 });
+    expect(runCost(runs, null)).toEqual({ tokens: 0, minutes: 38, usd: 0, list_usd: 0 });
   });
 
   test("a presenting station's bare covers become the card's reach, counted from the record", () => {
