@@ -132,8 +132,13 @@ test("the header says what an expectation is and where the document stands; prop
   // The waiting proposal comes before the document, with who proposed it and its source's speaker.
   const order = [...host.querySelectorAll("[data-expectation-proposals], [data-expectations-lines]")].map((el) => (el as HTMLElement).hasAttribute("data-expectation-proposals") ? "proposals" : "lines");
   expect(order).toEqual(["proposals", "lines"]);
+  // Nobody was asked: the row reads the line's new words and says so; who proposed it is behind the row.
   const p = host.querySelector("[data-expectation-proposal='xp-7']")!;
-  expect(text(p)).toContain("Ashot's session");
+  expect(text(p)).toContain("Not asked yet");
+  expect(text(p)).not.toContain("Ashot's session");
+  expect((p.querySelector("[data-expectation-open]") as HTMLElement).title).toContain("Ashot's session");
+  // It opens in place, the one place it is answered, with its source's speaker.
+  await click(p.querySelector("[data-expectation-open='xp-7']"));
   expect(text(p.querySelector("[data-citation-who]"))).toBe("Cam");
   await click(p.querySelector("[data-expectation-apply='xp-7']"));
   expect(calls).toEqual([["resolve", PID, "xp-7", "apply"]]);

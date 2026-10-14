@@ -49,28 +49,45 @@ def load_jsonl(p):
 
 def relation(msg, convs, short):
     sender = msg["sender"]
-    if sender == "unknown": return "huddle-feed"
-    rc, sc = convs.get(msg["conversation_id"]), short.get(sender)
-    if not rc or not sc: return "unresolved"
+    # Codecast's own notices (a reporting line moved, a send still queued) carry
+    # no agent sender either: they are neither huddle talk nor agent traffic.
+    if sender == "codecast": return "system"
+    if sender == "unknown":
+        head = re.sub(r"^<session-message[^>]*>\s*", "", msg["content"])[:120]
+        return "huddle-feed" if re.search(r"huddle|talking in this session|voice in the call", head, re.I) else "system"
+    rc = convs.get(msg["conversation_id"])
+    # A short id is a 7 character prefix and thousands collide across users, so
+    # one sender id can name several sessions: take the reading closest to the
+    # recipient's line, since a stranger sharing a parent's prefix is not the sender.
+    found = [place(rc, sc, convs) for sc in short.get(sender, [])] if rc else []
+    return min(found, key=LINE_ORDER.index) if found else "unresolved"
+
+
+LINE_ORDER = ["parent->worker", "worker->parent", "sibling", "ancestor", "descendant", "role", "peer"]
+
+
+def place(rc, sc, convs):
     if rc.get("parent_conversation_id") == sc["_id"]: return "parent->worker"
     if sc.get("parent_conversation_id") == rc["_id"]: return "worker->parent"
     if sc.get("parent_conversation_id") and sc.get("parent_conversation_id") == rc.get("parent_conversation_id"): return "sibling"
-    if rc.get("standing_role_id") or sc.get("standing_role_id"): return "role"
     for a, b in ((rc, sc["_id"]), (sc, rc["_id"])):
         p, d = a.get("parent_conversation_id"), 0
         while p and d < 6:
             if p == b: return "ancestor" if a is rc else "descendant"
             p, d = convs.get(p, {}).get("parent_conversation_id"), d + 1
+    if rc.get("standing_role_id") or sc.get("standing_role_id"): return "role"
     return "peer"
 
 
 def call_model(run_dir, prompt, system, model, account):
     os.makedirs(run_dir, exist_ok=True)
     reply_path = os.path.join(run_dir, "h", "reply.txt")
-    if not (os.path.exists(reply_path) and "Failed to authenticate" not in open(reply_path).read() and "limit" not in open(reply_path).read()[:200]):
+    prompt_path = os.path.join(run_dir, "prompt.md")
+    same = os.path.exists(prompt_path) and open(prompt_path).read() == prompt
+    if not (same and os.path.exists(reply_path) and "Failed to authenticate" not in open(reply_path).read() and "limit" not in open(reply_path).read()[:200]):
         subprocess.run(["rm", "-rf", os.path.join(run_dir, "h")])
-        open(os.path.join(run_dir, "prompt.md"), "w").write(prompt)
-        args = ["bun", HARNESS, "--run", os.path.join(run_dir, "h"), "--prompt", os.path.join(run_dir, "prompt.md"),
+        open(prompt_path, "w").write(prompt)
+        args = ["bun", HARNESS, "--run", os.path.join(run_dir, "h"), "--prompt", prompt_path,
                 "--system", system, "--model", model, "--call", "--max-output-tokens", "16000"]
         if account: args += ["--account", account]
         subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800)
@@ -101,7 +118,9 @@ def main():
 
     keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "standing_role_id", "org_role_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
-    short = {c["short_id"]: c for c in convs.values() if c.get("short_id")}
+    short = collections.defaultdict(list)
+    for c in convs.values():
+        if c.get("short_id"): short[c["short_id"]].append(c)
     since = (datetime.datetime.now() - datetime.timedelta(days=a.days)).timestamp() * 1000
     msgs = []
     for r in load_jsonl(os.path.join(exp, "pending.jsonl")):
@@ -110,12 +129,21 @@ def main():
         r["sender"] = m.group(1) if m else "unknown"
         r["rel"] = relation(r, convs, short)
         msgs.append(r)
-    print(f"{len(msgs)} messages in the last {a.days} days", flush=True)
+    notices = sum(1 for m in msgs if m["rel"] == "system")
+    msgs = [m for m in msgs if m["rel"] != "system"]
+    print(f"{len(msgs)} messages in the last {a.days} days ({notices} system notices left out)", flush=True)
 
     # Shape: counts that need no model.
     rel = collections.Counter(m["rel"] for m in msgs)
     huddle = [m for m in msgs if m["rel"] == "huddle-feed"]
     named = sum(1 for m in huddle if "They named you" in m["content"][:500])
+    # AC3's direct check: how often an unnamed chunk reached a session less than
+    # the context gap after the one before it, inside one call (pairs under an hour).
+    arrivals = collections.defaultdict(list)
+    for m in huddle:
+        if "They named you" not in m["content"][:500]: arrivals[m["conversation_id"]].append(m["_creationTime"])
+    gaps = [b - t for v in arrivals.values() for t, b in zip(sorted(v), sorted(v)[1:]) if b - t < 3600_000]
+    inside_gap = round(100 * sum(1 for g in gaps if g < 170_000) / len(gaps), 1) if gaps else None
     per_recipient = collections.Counter(m["conversation_id"] for m in msgs if m["rel"] != "huddle-feed")
     senders_of = collections.defaultdict(set)
     for m in msgs:
@@ -161,10 +189,10 @@ def main():
     outside = [x for x in directing if x["rel"] not in ("parent->worker", "ancestor")]
     report = {
         "date": today, "days": a.days, "user": a.user,
-        "messages": len(msgs), "sessions_created": created,
+        "messages": len(msgs), "system_notices": notices, "sessions_created": created,
         "messages_per_new_session": round(len(msgs) / created, 3) if created else None,
         "by_relation": dict(rel.most_common()),
-        "huddle": {"chunks": len(huddle), "named": named, "unnamed": len(huddle) - named, "noise_pct": pct(hd, lambda x: x.get("noise"))},
+        "huddle": {"chunks": len(huddle), "named": named, "unnamed": len(huddle) - named, "inside_gap_pct": inside_gap, "noise_pct": pct(hd, lambda x: x.get("noise"))},
         "hubs": {"recipients_with_5plus_senders": len(hubs), "their_share_pct": round(100 * sum(per_recipient[k] for k in hubs) / agent_total, 1),
                  "top": [{"title": (convs.get(k) or {}).get("title"), "messages": per_recipient[k], "senders": len(senders_of[k])} for k, _ in per_recipient.most_common(5)]},
         "exact_duplicates": sum(v - 1 for v in dup.values() if v > 1),
@@ -193,6 +221,7 @@ def main():
     if os.path.exists(base): reports.insert(0, json.load(open(base)))
     rows = [("messages/new session", lambda r: r.get("messages_per_new_session")),
             ("huddle chunks unnamed", lambda r: r["huddle"]["unnamed"] if r.get("days") == 7 else round(r["huddle"]["unnamed"] * 7 / r["days"])),
+            ("unnamed chunks inside the 3 min gap %", lambda r: r["huddle"]["inside_gap_pct"]),
             ("huddle noise %", lambda r: r["huddle"]["noise_pct"]),
             ("agent noise %", lambda r: r["agent_to_agent"]["noise_pct"]),
             ("changed recipient %", lambda r: r["agent_to_agent"]["changed_pct"]),
