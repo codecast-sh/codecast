@@ -168,8 +168,8 @@ describe("history: which moves Back and Forward walk", () => {
 
 describe("the line app's address", () => {
   test("G then F, P or L opens the pages; no digit opens anything", () => {
-    expect(["f", "p", "l", "F"].map(lineViewForGoKey)).toEqual(["foryou", "problems", "line", "foryou"]);
-    expect(["1", "2", "3", "x", "t"].map(lineViewForGoKey)).toEqual([null, null, null, null, null]);
+    expect(["f", "p", "s", "F"].map(lineViewForGoKey)).toEqual(["foryou", "problems", "line", "foryou"]);
+    expect(["1", "2", "3", "x", "l"].map(lineViewForGoKey)).toEqual([null, null, null, null, null]);
   });
 
   test("one project is a filter on /line", () => {
