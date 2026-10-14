@@ -261,7 +261,11 @@ export type AttemptCard = {
   answeredBy: string | null;
 };
 
-export type AttemptMerge = { sha: string; branch: string; into: string; at: number; prUrl: string | null; repository: string | null };
+/** `byHand`: a person merged the fix's pull request outside the line (its merge step off), so no commit is recorded (sha ""). */
+export type AttemptMerge = { sha: string; branch: string; into: string; at: number; prUrl: string | null; repository: string | null; byHand?: true };
+
+/** A fix branch's pull request a person merged by hand (the web's fixMerges): the line's own record never hears of it. */
+export type HandMerge = { at: number; url: string; branch?: string | null; into?: string | null };
 
 /** A run's outcome in words; a reader may carry more (the web's tone). */
 export type AttemptOutcome = { end: LineRunEnd | null; text: string };
@@ -433,6 +437,9 @@ export type HistoryInput<R extends HistoryRunRow, O extends AttemptOutcome> = {
   quoteAt?: (at: number) => string | null;
   /** When the fix of a cause a close folded into ("ct-4681") went live, when the reader knows; null while it has not or is unknown. */
   foldFixAt?: (into: string) => number | null;
+  /** The cause's fix branch merged through its pull request by hand, when the reader knows: the newest attempt before it
+   *  is taken to have merged then, and every reading (ships, deploys, closes, comebacks) follows from that. */
+  handMerge?: HandMerge | null;
   /** The line profile's watch days, when known. */
   watchDays: number | null;
   now: number;
@@ -575,6 +582,13 @@ export function causeHistory<R extends HistoryRunRow, O extends AttemptOutcome>(
       merge: mergeOf(run),
     };
   });
+  // A fix merged by hand through its pull request (ct-58282, ct-57509): the merge belongs to the newest attempt that started
+  // before it, unless the line itself recorded a merge since.
+  const hand = input.handMerge;
+  if (hand && !attempts.some((a) => a.merge && a.merge.at >= hand.at)) {
+    const a = [...attempts].reverse().find((x) => !x.merge && x.start <= hand.at);
+    if (a) a.merge = { sha: "", branch: hand.branch ?? "", into: hand.into ?? "", at: hand.at, prUrl: hand.url, repository: parsePrRef(hand.url)?.repository ?? null, byHand: true };
+  }
 
   // ── ships, merges and the deploys that carried them ──
   const coverage = coverageOf(input.deploys);
@@ -833,7 +847,7 @@ export function historyBrief(h: CauseHistory<AttemptOutcome>, exceptRunId?: stri
       a.built && `Built: ${clip(a.built, 600)}`,
       a.card?.answer && `Card answered ${a.card.answer}${a.card.note ? `: "${clip(a.card.note, 300)}"` : ""}`,
       a.diff && `Diff: ${plural(a.diff.files, "file")}, +${a.diff.added} -${a.diff.removed}${a.diff.pr ? ` (${a.diff.pr})` : ""}`,
-      a.merge && `Merged ${a.merge.sha.slice(0, 10)} into ${a.merge.into}`,
+      a.merge && (a.merge.byHand ? `Merged by hand through ${a.merge.prUrl} ${shortDay(a.merge.at)}` : `Merged ${a.merge.sha.slice(0, 10)} into ${a.merge.into}`),
       ship && ship.words,
       unshipped && "Nothing shipped with this close: any eval or guard it mentions was never shipped, so nothing guards against it",
       close?.fold && (close.fold.liveAt == null
