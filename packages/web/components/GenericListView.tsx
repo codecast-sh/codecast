@@ -901,11 +901,11 @@ export function GenericListView<T>({
     dnd.onReorder?.(item, before, after, row.groupKey);
   }, [dropHint, draggedItem, dnd, dndMaps, rowModel, getItemId, clearDrag]);
 
-  // Ctrl+N with rows multi-selected: seed the new-session composer with the
-  // selection's refs (bare short IDs render as live reference cards), so the
-  // first message can just say what to do with them. With nothing selected,
-  // decline — DashboardLayout's default handler opens the blank composer.
-  useShortcutAction('session.compose', () => {
+  // Ctrl+N (or Ctrl+Shift+N) with rows multi-selected: seed the compose popup
+  // with the selection's refs (bare short IDs render as live reference cards),
+  // so the first message can just say what to do with them. With nothing
+  // selected, decline — DashboardLayout's default handlers take the chord.
+  const composeFromSelection = () => {
     if (!getComposeRef || selectedIds.size === 0) return false;
     const refs = visibleItems
       .filter((item) => selectedIds.has(getItemId(item)))
@@ -914,7 +914,9 @@ export function GenericListView<T>({
     if (refs.length === 0) return false;
     storeOpenCompose(refs.join(" ") + " ");
     return true;
-  });
+  };
+  useShortcutAction('session.create', composeFromSelection);
+  useShortcutAction('session.compose', composeFromSelection);
 
   const toggleGroup = useCallback((key: string) => {
     setCollapsedGroups((prev) => {

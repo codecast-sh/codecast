@@ -1544,6 +1544,8 @@ http.route({
           to: body.to,
           // LE11: the change card the decision is about.
           card: body.card,
+          // LM5: the expectations proposal the decision settles.
+          proposal: body.proposal,
         });
       }
 
@@ -4836,6 +4838,8 @@ cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(ap
 cliRoute("/cli/workflow-runs/live-on-device", async (ctx, body) => ctx.runMutation(api.workflow_runs.liveRunsForDevice, body));
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
+// `cast workflow reask`: a run's decision asked again by the stations as they are now.
+cliRoute("/cli/workflow-runs/reask", async (ctx, body) => ctx.runMutation(api.workflow_runs.reaskFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.
