@@ -77,6 +77,8 @@ export type QueueItem = {
   // documents.md D2): the lead's to clear, so the badge and "waiting on you"
   // leave it out while the queue still lists it under "With a lead".
   heldByRole?: boolean;
+  // Asked by a trial run: answering records what the person would do and ships nothing.
+  trial?: boolean;
   // AskUserQuestion answers ride poll keys; a confirmation dialog maps its
   // two options to Enter/Escape rather than 1/2.
   toolUseId?: string;
@@ -120,6 +122,7 @@ export type QueueKeyAction =
   | { kind: "open-session" }
   | { kind: "skip" }
   | { kind: "dismiss" }
+  | { kind: "pass" }
   | { kind: "open-free-text" }
   | { kind: "peek" }
   | { kind: "full" }
@@ -173,6 +176,8 @@ export function routeQueueKey(
   // good (a `cast decide` row resolves as dismissed), the session is not told.
   if (e.key === "x" || e.key === "X") return { kind: "dismiss" };
   if (e.key === "t" || e.key === "T") return { kind: "open-free-text" };
+  // Pass = "someone else should answer this": a teammate or a role.
+  if (e.key === "p" || e.key === "P") return { kind: "pass" };
   // Up moves into the thread, down brings the question back. Escape leaves the
   // queue from full, but from peek it first restores the question — otherwise
   // the key that means "back" would skip a step.
@@ -250,6 +255,13 @@ export function optionPageSlugs(options: ReadonlyArray<Pick<DecisionOption, "pag
   return options.map((o) => o.page_slug).filter((slug): slug is string => !!slug);
 }
 
+/** Whether a decision row is this viewer's: no people set (a legacy row), or
+ *  they are among its people. A row passed to a teammate leaves the passer's
+ *  queue on the draft, before the server drops it from their feed. */
+export function askedOfViewer(d: { asked_user_ids?: string[] }, meId: string | undefined): boolean {
+  return !d.asked_user_ids || !meId || d.asked_user_ids.includes(meId);
+}
+
 /** What a PERSON must answer: the queue minus the rows a lead holds. */
 export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
   return items.filter((i) => !i.heldByRole);
@@ -300,6 +312,7 @@ export function decisionQueueItems(
       askedMessageCount: d.asked_message_count,
       decisionId: d._id,
       heldByRole: d.holder?.kind === "role",
+      ...(d.trial ? { trial: true } : {}),
     });
   }
   return out;

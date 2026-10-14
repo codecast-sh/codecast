@@ -5,11 +5,13 @@
 
 export type LinePhaseKey = "understand" | "prove" | "build" | "check" | "decide" | "ship";
 
+// plan_gate, ask and merge are stations the line had once: they stay placed
+// so a run recorded on that line still reads in phases.
 export const LINE_PHASES: ReadonlyArray<{ key: LinePhaseKey; label: string; stations: readonly string[] }> = [
   { key: "understand", label: "Understand", stations: ["ground", "park", "plan", "plan_gate", "analyze"] },
-  { key: "prove", label: "Prove", stations: ["prove", "prove_line", "red", "dissolve"] },
-  { key: "build", label: "Build", stations: ["implement", "implement_line", "ask", "reopen"] },
-  { key: "check", label: "Check", stations: ["verify", "green", "eval", "unscored", "review"] },
+  { key: "prove", label: "Prove", stations: ["prove", "prove_line", "red", "dissolve", "unproven"] },
+  { key: "build", label: "Build", stations: ["implement", "implement_line", "ask", "reopen", "stopped"] },
+  { key: "check", label: "Check", stations: ["verify", "green", "eval", "unscored", "review", "rejected"] },
   { key: "decide", label: "Decide", stations: ["card_draft", "card_write", "card", "decide", "drop"] },
   { key: "ship", label: "Ship", stations: ["rebase", "ship", "merge", "watch"] },
 ];

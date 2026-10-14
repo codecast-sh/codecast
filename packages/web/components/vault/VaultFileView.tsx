@@ -17,6 +17,7 @@ import { highlightCode, languageForPath } from "../../lib/codeLanguage";
 import { vaultAssetUrl } from "../../lib/vault/client";
 import { useVaultStore } from "../../store/vaultStore";
 import { VaultFileHeader, RevealButton } from "./VaultFileHeader";
+import { useVaultEntryState } from "./useVaultEntry";
 import { buttonVariants } from "../ui/button";
 
 /** Bytes, in the unit a person would say out loud. */
@@ -97,6 +98,7 @@ const CodeText = memo(function CodeText({ content, path }: { content: string; pa
 
 export const VaultFileView = memo(function VaultFileView({ path }: { path: string }) {
   const entry = useVaultStore((s) => s.files[path]);
+  const entryState = useVaultEntryState(path);
   const body = useVaultStore((s) => s.bodies[path]);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const endpoint = useVaultStore((s) => s.endpoint);
@@ -116,7 +118,7 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
     if (kind === "text" && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
   }, [kind, path, !!body, endpoint]);
 
-  if (!entry) {
+  if (entryState === "missing") {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-muted">
         <FileQuestion className="w-8 h-8 opacity-30" />

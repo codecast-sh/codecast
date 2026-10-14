@@ -52,7 +52,9 @@ export type LineRun = {
   /** The last gate's answer, in the option's words (workflow_runs.enrichRun). */
   gate_answer?: string;
   /** The cost the run's card records, in dollars. */
-  card_cost_usd?: number;
+  /** The card's billed money and its subscription sessions' list price (changeCard costParts). */
+  card_billed_usd?: number;
+  card_list_usd?: number;
   gate_node_id?: string;
   gate_choices?: Array<{ key: string; label: string; target: string }>;
   gate_response?: string;
@@ -70,7 +72,7 @@ export type LineRun = {
 };
 
 const lineRunSig = (r: LineRun) =>
-  `${r.superseded?.why ?? ""}|${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_cost_usd ?? ""}`;
+  `${r.superseded?.why ?? ""}|${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_billed_usd ?? ""}|${r.card_list_usd ?? ""}`;
 const newestFirst = (a: LineRun, b: LineRun) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0);
 
 /** A run belongs to the active workspace by its stored access key (L8). A

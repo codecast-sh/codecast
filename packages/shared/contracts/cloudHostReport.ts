@@ -22,7 +22,21 @@ export interface HostReadiness {
   at: number;
 }
 
-export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image"] as const;
+export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image", "clone"] as const;
+
+/**
+ * The sizes the app offers for a new Linux host (the `clone` action: another
+ * host like this one), with their on-demand rate in us-west-2. The CLI's
+ * price table includes these, so the confirm screen and `cast hosts ls`
+ * quote the same number.
+ */
+export const CLOUD_HOST_SIZES = [
+  { type: "t3.large", vcpu: 2, memory_gb: 8, hourly_usd: 0.0832 },
+  { type: "t3.xlarge", vcpu: 4, memory_gb: 16, hourly_usd: 0.1664 },
+  { type: "t3.2xlarge", vcpu: 8, memory_gb: 32, hourly_usd: 0.3328 },
+] as const;
+export type CloudHostSize = (typeof CLOUD_HOST_SIZES)[number]["type"];
+export const isCloudHostSize = (t: unknown): t is CloudHostSize => CLOUD_HOST_SIZES.some((s) => s.type === t);
 export type CloudHostAction = (typeof CLOUD_HOST_ACTIONS)[number];
 
 export interface CloudHostReport {
