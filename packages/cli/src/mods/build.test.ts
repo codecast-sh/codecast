@@ -154,3 +154,26 @@ export function register(on: any) {
     }
   });
 });
+
+describe("AGENTS.md, the mod's surface for agents", () => {
+  test("a new mod ships one, and the build carries it in the manifest and the published source", async () => {
+    const files = scaffoldFiles("agent-surface");
+    expect(files["AGENTS.md"]).toContain("```agent-surface-note");
+    const dir = writeMod("agent-surface", { ...files, "AGENTS.md": "Track probes as probe-N.\n" });
+    const build = await buildMod(dir);
+    if (!build.ok) throw new Error(build.errors.join("; "));
+    expect(build.manifest.agents).toBe("Track probes as probe-N.");
+    expect(build.source["AGENTS.md"]).toBe("Track probes as probe-N.\n");
+  });
+
+  test("instructions in both AGENTS.md and the manifest are refused, and an oversized file is named", async () => {
+    const files = scaffoldFiles("agent-twice");
+    const manifest = { ...JSON.parse(files["codecast-mod.json"]), agents: "inline" };
+    const both = await buildMod(writeMod("agent-twice", { ...files, "codecast-mod.json": JSON.stringify(manifest) }));
+    expect(both.ok).toBe(false);
+    if (!both.ok) expect(both.errors[0]).toContain("not both");
+    const long = await buildMod(writeMod("agent-long", { ...scaffoldFiles("agent-long"), "AGENTS.md": "x".repeat(2500) }));
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.errors[0]).toStartWith("AGENTS.md:");
+  });
+});

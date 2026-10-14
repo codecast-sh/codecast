@@ -297,8 +297,9 @@ async function stackOnWaiting(deps: PublishDeps, dir: string, cf: CasesFile): Pr
   const seen = new Set([...cf.judges.map((j) => `${JUDGES_DIR}/${j}.md`), ...kinds.filter(Boolean).map((k) => `${MOMENTS_DIR}/${k}.ts`)]);
   const reaches = (file: string) => seen.has(file) || (file.startsWith(`${MOMENTS_DIR}/`) && file.slice(MOMENTS_DIR.length + 1).includes("/"));
   const waiting = (views ?? [])
-    // A card whose problem has closed (fixed some other way, dropped) is not going to publish: nothing is built on it.
-    .filter((v) => v.status === "waiting" && v.judge_fix && !CLOSED_PROBLEM.has(v.task_status) && v.task_short_id !== cf.task && !(cf.stacked ?? []).some((s) => s.card === v.short_id))
+    // A card whose problem has closed (fixed some other way, dropped) is not going to publish, nor is one later work
+    // superseded (line-versions.md LV1: shown to nobody, asked of nobody): nothing is built on either.
+    .filter((v) => v.status === "waiting" && v.judge_fix && !v.superseded && !CLOSED_PROBLEM.has(v.task_status) && v.task_short_id !== cf.task && !(cf.stacked ?? []).some((s) => s.card === v.short_id))
     .filter((v) => (v.judge_fix as JudgeFixCard).diff.some((d) => reaches(d.file)))
     .sort((a, b) => a.created_at - b.created_at);
   const added: StackedFix[] = [];
@@ -621,7 +622,7 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       const recordOf = momentRecords(deps, scope, cf, baseRoot, false, specs);
       const ruled = await ruledCases(deps, cf, recordOf);
       // The same runs ab's base side reads for a prompt edit, so they are not paid for twice.
-      const m = await measure(deps, scope, { task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base"], units: ruled, stamp: await baseStamp(cf, baseRoot, specs, []), withhold: ruledQuotesByMoment(cf.cases) });
+      const m = await measure(deps, { ...scope, project: cf.project_id }, { task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base"], units: ruled, stamp: await baseStamp(cf, baseRoot, specs, []), withhold: ruledQuotesByMoment(cf.cases) });
       const rows = await Promise.all(ruled.map(async (c) => ({ c, b: await countRuled(m, recordOf, c, "base", options.reps) })));
       const ran = rows.filter((r) => r.b.runs > 0);
       const draws = ran.filter((r) => isDraw(r.b));
@@ -692,7 +693,8 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       const ruledExp = new Set(ruled.map((c) => c.expectation));
       const live: any[] = [];
       for (const name of cf.judges) {
-        const r = await apiPost(deps, "/cli/signal/ls", { ...scope, source: `judge:${name}`, limit: 400 }, { read: true });
+        // Asked for by project: the newest 400 of a judge's findings team-wide can hold almost none of this project's.
+        const r = await apiPost(deps, "/cli/signal/ls", { ...scope, project: cf.project_id, source: `judge:${name}`, limit: 400 }, { read: true });
         live.push(...(r.signals ?? []).filter((s: any) => s.project_id === cf.project_id && !s.retired && s.moment && !ruledMoments.has(s.moment)));
       }
       live.sort((a, b) => Number(ruledExp.has(b.subject)) - Number(ruledExp.has(a.subject)) || b.created_at - a.created_at);
@@ -707,7 +709,7 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       // What waiting proposals rest on, by name: a fix that stops finding one empties that proposal (tc-44).
       const rests = await restsOf(deps, scope, cf, live);
 
-      const m = await measure(deps, scope, {
+      const m = await measure(deps, { ...scope, project: cf.project_id }, {
         task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base", "arm"],
         units: [...ruled, ...held, ...controls, ...rests], stamp: await baseStamp(cf, baseRoot, specs, extractorChanged ? changed : []), withhold: ruledQuotesByMoment(cf.cases),
       });

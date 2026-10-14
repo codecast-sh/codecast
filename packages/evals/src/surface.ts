@@ -136,6 +136,10 @@ export interface AgentOptions {
   then?: string[];
   /** The run's user-level CLAUDE.md (prompt-dry-run.ts --claude-md): global instructions the agent loads the way a person's session does. */
   claudeMd?: string;
+  /** A guard directory in place of the dry run's own (prompt-dry-run.ts --guard), such as one that records the writes it refuses. */
+  guard?: string;
+  /** The directory the agent starts in (prompt-dry-run.ts --cwd); the run dir by default. */
+  cwd?: string;
   /**
    * run.json.promptSha when the briefing wraps the prompt under test in text
    * of the run's own (org-review: the analyzer prompt without the harness
