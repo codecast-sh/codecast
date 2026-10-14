@@ -202,7 +202,8 @@ Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
           else console.log(`# ${spec.name} ${version} on ${spec.model}, up to ${spec.max_tokens} tokens out\n\n## System\n${request.system}\n\n## Prompt\n${request.prompt}`);
           return;
         }
-        const result = await callModel(deps, await scopeFor(deps, options.team, false), request, `Judge try ${spec.name}`);
+        // Charged to the judge's first project, the one whose expectations it grades.
+        const result = await callModel(deps, await scopeFor(deps, options.team, false, spec.projects[0]), request, `Judge try ${spec.name}`);
         const outcome: TryOutcome = { moment: name, result };
         if (result.ok) {
           const parsed = parseJudgeReply(result.text, ids);
