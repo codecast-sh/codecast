@@ -197,6 +197,7 @@ import type * as lib_codeAnchorValidator from "../lib/codeAnchorValidator.js";
 import type * as lib_codecastSigning from "../lib/codecastSigning.js";
 import type * as lib_commentSessionInfo from "../lib/commentSessionInfo.js";
 import type * as lib_daemonCommandClaim from "../lib/daemonCommandClaim.js";
+import type * as lib_decisionAccess from "../lib/decisionAccess.js";
 import type * as lib_decisionAudience from "../lib/decisionAudience.js";
 import type * as lib_decisionCategory from "../lib/decisionCategory.js";
 import type * as lib_deletedSessions from "../lib/deletedSessions.js";
@@ -675,6 +676,7 @@ declare const fullApi: ApiFromModules<{
   "lib/codecastSigning": typeof lib_codecastSigning;
   "lib/commentSessionInfo": typeof lib_commentSessionInfo;
   "lib/daemonCommandClaim": typeof lib_daemonCommandClaim;
+  "lib/decisionAccess": typeof lib_decisionAccess;
   "lib/decisionAudience": typeof lib_decisionAudience;
   "lib/decisionCategory": typeof lib_decisionCategory;
   "lib/deletedSessions": typeof lib_deletedSessions;

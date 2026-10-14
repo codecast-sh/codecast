@@ -27,8 +27,8 @@ const shippedRun: ReportRun = {
 describe("phases", () => {
   test("every station of the shipped line sits in exactly one phase", () => {
     const stations = SHIPPED_LINE.nodes.map((x) => x.id).filter((id) => id !== "start" && id !== "exit");
-    // merge stays placed for runs from before the line dropped it.
-    const placed = LINE_PHASES.flatMap((p) => p.stations).filter((id) => id !== "merge");
+    // merge and the two early gates stay placed for runs from before the line dropped them.
+    const placed = LINE_PHASES.flatMap((p) => p.stations).filter((id) => !["merge", "plan_gate", "ask"].includes(id));
     expect(new Set(placed).size).toBe(placed.length);
     expect([...stations].sort()).toEqual([...placed].sort());
   });
@@ -41,8 +41,8 @@ describe("runPath", () => {
   test("groups the stations it reached by phase and folds the rest", () => {
     expect(path.map((p) => p.key)).toEqual(["understand", "prove", "build", "check", "decide", "ship"]);
     expect(phase("understand").steps.map((s) => s.id)).toEqual(["ground", "analyze"]);
-    expect(phase("understand").folded.map((s) => s.id).sort()).toEqual(["park", "plan", "plan_gate"]);
-    expect(phase("prove").folded.map((s) => s.id)).toEqual(["prove_line", "dissolve"]);
+    expect(phase("understand").folded.map((s) => s.id).sort()).toEqual(["park", "plan"]);
+    expect(phase("prove").folded.map((s) => s.id)).toEqual(["prove_line", "dissolve", "unproven"]);
   });
 
   test("a gate reads as its answer, never a raw key, and is not a failure", () => {
