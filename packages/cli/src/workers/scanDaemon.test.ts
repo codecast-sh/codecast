@@ -85,3 +85,10 @@ test('Cursor workspace stale observations run in worker and preserve position co
 test('hibernation retains the E1 refusal for old indexed Codex rollouts before any process probe',async()=>{
  const {inspectHibernationTarget}=await import('../daemon.js');const home=temp();process.env.HOME=home;const id='99999999-1111-4111-8111-111111111111';const file=write(home,`.codex/sessions/old/archive/deep/tree/rollout-${id}.jsonl`);fs.utimesSync(path.dirname(file),1000,1000);await start(true);resetSessionFileIndexForTests();await ensureSessionFileIndex();expect(await inspectHibernationTarget(id,'f2-no-such-owned-fixture','fixture')).toBeNull();
 });
+test('a lookup answers from the complete index while a refresh walks, rather than waiting the walk out',async()=>{
+ const home=temp();process.env.HOME=home;resetSessionFileIndexForTests();const {awaitRecentSessionFile}=await import('../daemon.js');
+ const transcript=write(home,`.claude/projects/p/${ids[0]}.jsonl`);await ensureSessionFileIndex();
+ const order:string[]=[];const refresh=refreshSessionFileIndex().then(()=>order.push('refresh'));
+ expect((await awaitRecentSessionFile(ids[0]))?.path).toBe(transcript);order.push('lookup');await refresh;
+ expect(order).toEqual(['lookup','refresh']);
+});

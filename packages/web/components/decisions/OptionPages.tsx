@@ -6,6 +6,7 @@ import { useTrackedStore, type SessionDecisionItem } from "../../store/inboxStor
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { pageFrameSrc, pageShareUrl } from "../../lib/publishedPageUrls";
 import { PageThumb } from "../PageThumb";
+import { usePageUnlock } from "../PublishedPageEmbed";
 import { openBrowserPane } from "../../lib/stage";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import "./decisions.css";
@@ -24,7 +25,7 @@ export function OptionPages({
   onAnswer,
   chosen,
 }: {
-  decision: Pick<SessionDecisionItem, "options" | "status">;
+  decision: Pick<SessionDecisionItem, "options" | "status"> & { _id?: string };
   answerable?: boolean;
   onAnswer?: (index: number) => void;
   chosen?: ReadonlySet<number>;
@@ -41,6 +42,7 @@ export function OptionPages({
             label={o.label.replace(" (Recommended)", "")}
             slug={o.page_slug}
             picked={!!chosen?.has(i)}
+            decisionId={decision._id}
             onAnswer={canAnswer ? () => onAnswer!(i) : undefined}
           />
         ) : null,
@@ -49,7 +51,7 @@ export function OptionPages({
   );
 }
 
-function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: number; label: string; slug: string; picked: boolean; onAnswer?: () => void }) {
+function OptionPageCard({ index, label, slug, picked, decisionId, onAnswer }: { index: number; label: string; slug: string; picked: boolean; decisionId?: string; onAnswer?: () => void }) {
   // The artifacts store row (fed by listForWeb) names the page when the
   // viewer owns it or a teammate shared it; getShared is the enrichment for
   // a page outside that set. The frame and the thumb need neither.
@@ -62,7 +64,10 @@ function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: numbe
   const { data: meta } = useQueryNoThrow(api.artifacts.getShared, row ? "skip" : { slug });
   const title: string = row?.title ?? meta?.title ?? "Published page";
   const version = row?.version ?? meta?.version ?? 0;
-  const openPane = () => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
+  // A gated page (a trial's, which quotes a customer) opens in the pane for the decision's readers, past its password.
+  const gated = !!row?.has_password || !!row?.email_gate || !!meta?.gated;
+  const { keys } = usePageUnlock(slug, gated, decisionId);
+  const openPane = () => openBrowserPane({ kind: "url", url: `${pageFrameSrc(slug)}${keys.replace(/^&/, "?")}` });
 
   return (
     <div className="decision-option-page" data-option-page={index} data-picked={picked ? "true" : "false"}>

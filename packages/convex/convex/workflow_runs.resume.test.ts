@@ -3,7 +3,7 @@
 // the live runs it drove. Driven against the fake db like the gate tests.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { failStrandedPendingRuns, liveRunsForDevice, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
+import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any;
@@ -61,6 +61,62 @@ describe("resumeRunCore", () => {
     const ended = await seed({ status: "failed" });
     await expect(resumeRunCore(ended.ctx, HOST, RUN)).rejects.toThrow("nothing to resume");
     expect(tables.daemon_commands).toEqual([]);
+  });
+});
+
+describe("reaskRunCore", () => {
+  const SD = "session_decisions_old" as any;
+  const WF = "workflows_line" as any;
+  async function waiting(run: Record<string, any> = {}, task: Record<string, any> = {}) {
+    const w = await seed({ status: "paused", runner_device: "dev-mini", task_id: "tasks_cause", workflow_id: WF, gate_decision_id: SD, gate_prompt: "Ship this change?", gate_response: undefined, ...run });
+    w.tables.tasks = [{ _id: "tasks_cause", short_id: "ct-9", title: "A problem", status: "in_review", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: NOW, updated_at: NOW, ...task }];
+    w.tables.projects = [{ _id: "projects_trial", title: "Trial", line_trial: { by: HOST } }];
+    w.tables.workflows = [{ _id: WF, slug: "line", nodes: [{ id: "card_write", type: "prompt" }, { id: "decide", type: "human" }] }];
+    w.tables.session_decisions = [{ _id: SD, short_id: "sd-1", status: "pending", user_id: HOST, workflow_run_id: RUN, conversation_id: "conversations_hand", question: "Ship this change?", options: [], created_at: NOW }];
+    return w;
+  }
+
+  test("a waiting decision is asked again by the station that presents it, and the old one is withdrawn without failing the run", async () => {
+    const { ctx, tables } = await waiting();
+    expect(await reaskRunCore(ctx, HOST, RUN, { asker: "card_write" }, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "card_write", replaced: "sd-1" });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "card_write", fresh_branch: true });
+    expect(tables.workflow_runs[0].gate_decision_id).toBeUndefined();
+    expect(tables.workflow_runs[0].gate_node_id).toBeUndefined();
+    expect(tables.session_decisions[0].status).toBe("withdrawn");
+    expect(commandArgs(tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
+  });
+
+  test("a named station wins over the asker, and a gate with no asker is asked again where it stands", async () => {
+    const named = await waiting();
+    expect((await reaskRunCore(named.ctx, HOST, RUN, { at: "analyze", asker: "card_write" }, NOW + 1)).resumed_at).toBe("analyze");
+    const bare = await waiting();
+    expect((await reaskRunCore(bare.ctx, HOST, RUN, {}, NOW + 1)).resumed_at).toBe("decide");
+  });
+
+  test("a run that failed standing at its gate is asked again, and its blocked problem is unblocked", async () => {
+    const { ctx, tables } = await waiting({ status: "failed", fail_reason: "hand killed", gate_node_id: undefined, gate_decision_id: undefined }, { status: "open", execution_status: "blocked", execution_concerns: "hand killed" });
+    expect(await reaskRunCore(ctx, HOST, RUN, { asker: "card_write" }, NOW + 1)).toMatchObject({ resumed_at: "card_write", replaced: null });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "card_write" });
+    expect(tables.workflow_runs[0].fail_reason).toBeUndefined();
+    expect(tables.tasks[0].execution_status).toBeUndefined();
+  });
+
+  test("refused, or only checked, writes nothing: another person, a run not at a decision, a closed problem, a trial problem", async () => {
+    const mate = await waiting();
+    await expect(reaskRunCore(mate.ctx, MATE, RUN)).rejects.toThrow("owner");
+    const working = await waiting({ status: "running", current_node_id: "implement", gate_node_id: undefined, gate_decision_id: undefined });
+    await expect(reaskRunCore(working.ctx, HOST, RUN)).rejects.toThrow("not waiting on a decision");
+    const midway = await waiting({ status: "failed", current_node_id: "card_write", gate_node_id: undefined, gate_decision_id: undefined });
+    await expect(reaskRunCore(midway.ctx, HOST, RUN)).rejects.toThrow("did not end at one");
+    const closed = await waiting({}, { status: "done" });
+    await expect(reaskRunCore(closed.ctx, HOST, RUN)).rejects.toThrow("closed problem");
+    const trial = await waiting({}, { project_id: "projects_trial" });
+    await expect(reaskRunCore(trial.ctx, HOST, RUN)).rejects.toThrow("cast line trial rerun ct-9 --reask");
+    const checked = await waiting();
+    expect(await reaskRunCore(checked.ctx, HOST, RUN, { asker: "card_write", check: true })).toMatchObject({ resumed_at: "card_write", replaced: null });
+    expect(checked.tables.workflow_runs[0]).toMatchObject({ status: "paused", gate_decision_id: SD });
+    for (const w of [mate, working, midway, closed, trial, checked]) expect(w.tables.daemon_commands).toEqual([]);
+    expect(trial.tables.session_decisions[0].status).toBe("pending");
   });
 });
 
