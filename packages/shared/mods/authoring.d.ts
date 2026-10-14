@@ -166,7 +166,7 @@ declare module "codecast-mod" {
       create(doc: { title: string; content: string }): Promise<{ id: string }>;
     };
     /**
-     * The mod's local half (manifest "local"), running on your machines where you approved it.
+     * The mod's local half (manifest "local"), running on each of your machines where it is on.
      * get() reads a value it published with $.publish, and a surface that reads one redraws when it
      * changes. call() runs one of its on("local.call", { method }) hooks and resolves with the answer.
      */
@@ -176,6 +176,13 @@ declare module "codecast-mod" {
       meta(key: string): Promise<{ value: unknown; device: string | null; at: number } | null>;
       call<T = unknown>(method: string, args?: unknown): Promise<T>;
     };
+    /**
+     * Your mod's own instructions to agents, kept current from code: what it tracks right now, which
+     * objects matter, how to use its blocks today. They follow the manifest's `agents` text in
+     * `cast mod guide` and in every session the mod applies to. set() replaces the last text
+     * (at most 4000 characters, since every session carries it); "" clears it. Author's mods only.
+     */
+    agents: { set(text: string): Promise<void> };
     /** Fetch from an origin listed under permissions.fetch. Runs in the sandbox, so the server must allow CORS. */
     http: {
       fetch(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; headers: Record<string, string>; text: string; json: any }>;
@@ -323,6 +330,8 @@ declare module "codecast-mod/local" {
   export interface LocalApi {
     /** Publish a value the mod's UI reads with $.local.get(key) and redraws on. Coalesced to one write a second per key. */
     publish(key: string, value: unknown): void;
+    /** Your mod's own instructions to agents, as on the UI side: they reach `cast mod guide` and every session the mod applies to. */
+    agents: { set(text: string): Promise<void> };
     objects: {
       create(obj: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string }): Promise<{ short_id: string }>;
       update(shortId: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string }): Promise<void>;

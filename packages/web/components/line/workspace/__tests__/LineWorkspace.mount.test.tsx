@@ -105,7 +105,7 @@ test("the app: three pages, For you the home and the only count; G then a letter
   expect(moves.filter((m) => m.includes("view="))).toEqual([]);
   await key("g"); await key("p");
   expect(pushed.at(-1)).toBe("/line?view=problems");
-  await key("g"); await key("l");
+  await key("g"); await key("s");
   expect(pushed.at(-1)).toBe("/line?view=line");
   await act(async () => { root.unmount(); });
 }, 30_000);
@@ -114,7 +114,7 @@ test("keys pressed inside an open decision are the decision's: G then P moves no
   search = "need=sd-9";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000 } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  const inside = host.querySelector<HTMLElement>("[data-line-decision='sd-9']")!;
+  const inside = host.querySelector<HTMLElement>("[data-line-decision-session='sd-9']")!;
   expect(inside).not.toBeNull();
   const press = (k: string) => act(async () => { inside.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
   await press("g"); await press("p"); await press("j"); await press("k");
@@ -149,7 +149,8 @@ test("For you lists the fix decision by what it asks, opens it in the reader on 
   expect(row?.querySelector("button, [data-line-inbox-decide]")).toBeNull();
   expect(row?.getAttribute("aria-current")).toBe("true");
   expect(host.querySelector("[data-line-foryou-reader]")?.getAttribute("data-line-foryou-reader")).toBe("decision");
-  expect(host.querySelector("[data-line-decision='sd-9']")).not.toBeNull();
+  // The reader is the asking session with its decision open.
+  expect(host.querySelector("[data-line-decision-session='sd-9']")).not.toBeNull();
   // The address names what is drawn, in place: Back is not spent on it, and a click on the open row moves nothing.
   expect(moves).toEqual(["/line?need=sd-9"]);
   await act(async () => { root.unmount(); });

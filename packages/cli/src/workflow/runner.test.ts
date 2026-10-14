@@ -317,6 +317,25 @@ describe("workflow/runner (dry-run)", () => {
     expect(cap.logs.some(l => l.includes("max_visits"))).toBe(true);
   });
 
+  test("an edge can route on a station's visit count before max_visits aborts", async () => {
+    // The loop leaves for `out` once impl has run twice, so its max_visits=2 never trips.
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      impl   [label="Impl", max_visits=2]
+      verify [label="Verify"]
+      out    [label="Out"]
+      exit   [shape=Msquare]
+      start  -> impl -> verify
+      verify -> out  [condition="impl.visits >= 2"]
+      verify -> impl [condition="outcome = success"]
+      out -> exit
+    }`);
+    const outcome = await runWorkflow(g, { ...dryRun, cwd: tmpDir });
+    expect(cap.logs.some(l => l.includes("max_visits"))).toBe(false);
+    expect(cap.logs.some(l => l.includes("Out"))).toBe(true);
+    expect(outcome).not.toBe("failure");
+  });
+
   test("workflow reports invalid when validation errors exist", async () => {
     const g = parseWorkflowSource(`digraph g {
       exit [shape=Msquare]
@@ -811,6 +830,9 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(spawn.body.title).toBe("Ground");
     expect(stationTitle({ id: "prove", label: "Prove" }, { task_id: "ct-9" })).toBe("Prove · ct-9");
     expect(stationTitle({ id: "prove", label: "" }, {})).toBe("prove");
+    // The presenting station is named by its problem: its title is what a person meets in the decision's chat and page.
+    expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9", task_title: "Graded sims hidden\nby world runs" }, true)).toBe("Graded sims hidden by world runs");
+    expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9" }, true)).toBe("Present · ct-9");
   }, 30000);
 
   test("a live hand that reads needs input once, then works on, is not taken as settled", async () => {
@@ -827,6 +849,26 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     const live = (work_state: string) => ({ id: "conv_hand", work_state, is_live: true });
     inboxReads = [live("needs_input"), live("needs_input")];
     workState = "working";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+  }, 30000);
+
+  test("a working hand whose daemon goes quiet is not taken as settled", async () => {
+    // The agentwatch Build station, 2026-10-14: the hand sat in one long tool
+    // call while its daemon's loop froze for 199s. With no heartbeat and no
+    // sync for two minutes the row read stopped, so needs_input and not live,
+    // and the run routed a working hand to failure. It pinned done at 06:12.
+    const live = (work_state: string) => ({ id: "conv_hand", work_state, is_live: true, agent_status: "working", message_count: 40 });
+    const dark = { id: "conv_hand", work_state: "needs_input", is_live: false, agent_status: "stopped", message_count: 40 };
+    inboxReads = [live("working"), dark, dark, dark, live("working")];
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(6);
+  }, 30000);
+
+  test("a hand that declared done settles even while its daemon is quiet", async () => {
+    inboxReads = [{ id: "conv_hand", work_state: "working", is_live: true, message_count: 40 } as any];
+    workState = "done";
     expect(await run()).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);

@@ -74,6 +74,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
+import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectNotice";
@@ -823,7 +824,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
     }
     const ctxRoot = seedable(ctx.gitRoot) ? ctx.gitRoot : undefined;
-    return { path: ctxRoot, gitRoot: ctxRoot, agentType: ctx.agentType };
+    if (ctxRoot) return { path: ctxRoot, gitRoot: ctxRoot, agentType: ctx.agentType };
+    // Nothing open yet (a fresh launch): the project of the conversation this
+    // client was last in.
+    const last = store.lastFocusedConversationId ? store.sessions[store.lastFocusedConversationId] : undefined;
+    const lastRoot = last?.git_root || last?.project_path;
+    return seedable(lastRoot)
+      ? { path: lastRoot, gitRoot: lastRoot, agentType: ctx.agentType ?? last?.agent_type }
+      : { path: undefined, gitRoot: undefined, agentType: ctx.agentType };
   }, [directoryFilter, sessionListActiveId]);
 
   // Every "New Session" affordance opens the floating compose popup (ComposeView
@@ -867,6 +875,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       router.push(`/conversation/${stubId}?focus=1`);
     }
   }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage]);
+
+  // A fresh open of the app lands on the new-session page (store/viewNav
+  // freshHomeLaunchPending), once hydration has put the store in place.
+  const clientStateInitialized = useInboxStore((st) => st.clientStateInitialized);
+  useWatchEffect(() => {
+    if (!clientStateInitialized || !freshHomeLaunchPending()) return;
+    settleFreshHomeLaunch();
+    handleNewFullSession();
+  }, [clientStateInitialized, handleNewFullSession]);
 
   // Bridge for the Electron "New Session" affordances (the palette's "open full"
   // hand-off, the app menu / dock / tray) — fired via the NEW_SESSION_EVENT DOM
@@ -972,9 +989,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useFollowMode();
   useShortcutContext('desktop', isDesktopApp);
 
-  // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
-  // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
-  // window. Isolated-worktree creation lives as a toggle inside the compose surface.
+  // Ctrl+N (and the + button) → the new-session page in the main window.
+  // Ctrl+Shift+N → the compose popup (modal overlay here; the always-on-top
+  // window on desktop).
   useShortcutAction('session.create', handleNewFullSession);
 
   // Handlers receive the dispatch source ("key" | "named"); never let it reach
@@ -1330,7 +1347,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label={words.newConversation} action="session.create">
               <TopbarButton
                 onClick={(e) => {
-                  openCompose();
+                  handleNewFullSession();
                   tipActions.whisper('session.create', e);
                 }}
                 aria-label={words.newConversation}

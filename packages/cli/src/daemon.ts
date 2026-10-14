@@ -19931,13 +19931,23 @@ export function isSupersededAppServerSession(
   return !!liveId && liveId !== sessionId;
 }
 
+// The superseded check for a fleet pass: `reverse` is the conversation cache
+// inverted once for the whole pass. Without it every call scans the cache
+// (41k entries on a busy machine) for the one conversation, twice per
+// due session per tick, which pinned the loop through a 50s freeze under load
+// (2026-10-14).
+function isSupersededInPass(sessionId: string, reverse?: Readonly<Record<string, string>>): boolean {
+  const cache = conversationCacheRef;
+  return isSupersededAppServerSession(sessionId, cache?.[sessionId], appServerConversations, persistedAppServerThreads, cache, reverse);
+}
+
 export function currentHeartbeatSessions(
   sessions: Iterable<string> = managedHeartbeatSessions,
   cache: ConversationCache | null = conversationCacheRef,
   live: ReadonlyMap<string, string> = appServerConversations,
   persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+  reverse: Readonly<Record<string, string>> = cache ? buildReverseConversationCache(cache) : {},
 ): string[] {
-  const reverse = cache ? buildReverseConversationCache(cache) : {};
   return [...sessions].filter(id => !isSupersededAppServerSession(id, cache?.[id], live, persisted, cache, reverse));
 }
 
@@ -21175,7 +21185,10 @@ export async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = currentHeartbeatSessions();
+  // One inversion of the conversation cache serves the whole pass.
+  const cache = conversationCacheRef;
+  const reverse = cache ? buildReverseConversationCache(cache) : {};
+  const ids = currentHeartbeatSessions(managedHeartbeatSessions, cache, appServerConversations, persistedAppServerThreads, reverse);
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -21187,8 +21200,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
   // Bounded, not serial: each reconcile may await a transcript prime after a
   // restart, and the health checks below wait for all of them.
-  await runBounded(due, 4, (sessionId) => reconcileStatusFromTranscript(sessionId, sync).catch(() => {}));
-  await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
+  await runBounded(due, 4, (sessionId) => reconcileStatusFromTranscript(sessionId, sync, reverse).catch(() => {}));
+  await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId, reverse).catch(() => {}));
 
   // Conservative reap of long-idle orphan terminals — gentle (capped per pass)
   // and logged to a dedicated reaper.log. See reapIdleOrphanTerminals.
@@ -23356,8 +23369,8 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // particular has no Stop-hook equivalent and its watcher-driven idle transition
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
-export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
+export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService, reverse?: Readonly<Record<string, string>>): Promise<void> {
+  if (isSupersededInPass(sessionId, reverse)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -23457,8 +23470,8 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   sendAgentStatus(syncService, conversationId, sessionId, corrected);
 }
 
-async function heartbeatHealthCheck(sessionId: string): Promise<void> {
-  if (isSupersededAppServerSession(sessionId)) return;
+async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record<string, string>>): Promise<void> {
+  if (isSupersededInPass(sessionId, reverse)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
