@@ -10,10 +10,12 @@
 // failed before its card is a row of its own (Failed), with the station it
 // stopped at and why, and a rerun from a fresh branch off origin/main; so is a
 // run that gave up at a failure station and left its problem open (Stopped).
-// Our tooling also holds the trial's open expectation proposals, drawn with
-// the Expectations page's own Proposal: a trial asks nobody in their queue.
+// Our tooling also holds the trial's open expectation proposals: one a run's
+// station asked is its trial decision's card, and one no station asked is
+// drawn with the Expectations page's own Proposal.
 import { findingConversation } from "@codecast/shared/contracts/judges";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { formatCountdown, USAGE_WARN_PERCENT } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink, RotateCcw } from "lucide-react";
 import { SupersededNote } from "../SupersededNote";
@@ -158,7 +160,11 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
   const stoppedRuns = useMemo(() => runs.filter((r) => (!project || r.project_id === project._id) && r.stopped).sort((a, b) => (b.stopped!.findings - a.stopped!.findings) || b.updated_at - a.updated_at), [runs, project]);
   useSyncProjectExpectations(project?._id ?? null);
   const expectations = useProjectExpectations(project?._id ?? null);
-  const proposals = useMemo(() => openProposals(expectations).filter((p) => p.short_id), [expectations]);
+  // A proposal a station asked as its trial decision is listed once, as that decision's card.
+  const proposals = useMemo(() => {
+    const carded = new Set(every.map((c) => c.decision?.short_id).filter(Boolean));
+    return openProposals(expectations).filter((p) => p.short_id && !(p.card && carded.has(p.card)));
+  }, [expectations, every]);
   const failedByTask = useMemo(() => new Map(runs.filter((r) => r.status === "failed").map((r) => [r.task_short_id, r])), [runs]);
   const counts = useMemo(() => ({
     failed: failedRuns.filter((r) => r.status === "failed").length,
@@ -563,13 +569,14 @@ function ExpectationProposalPane({ projectId, row, p }: { projectId: string; row
   );
 }
 
-/** The trial's header: whether its dispatcher is held and by which of its two limits (runs started, spend), the act that
- *  lifts them through the confirm flow, and the spend against the cap the dispatcher reads, its parts a press away. */
+/** The trial's header: whether its dispatcher is held and by which limit (runs started, billed money, quota), the act
+ *  that lifts the first two through the confirm flow, then billed money against the cap and subscription use with its
+ *  accounts' quota, two kinds that never add, each a press away from its parts. */
 function TrialLimitsBar({ spend, project, held, heldHref }: { spend: TrialSpendRow | null; project: TrialProjectRow | null; held: ReturnType<typeof dispatchHold>; heldHref: string | null }) {
   const raise = useInboxStore((s) => s.trialRaiseLimits);
   const [pick, setPick] = useState<string | null>(null);
   const d = project?.dispatch;
-  const limits: TrialLimits | null = d && spend ? { runs: spend.runs, maxRuns: d.max_runs, spent: spend.total_usd, cap: d.cap_usd, perRun: spend.runs ? spend.session_usd / spend.runs : 0 } : null;
+  const limits: TrialLimits | null = d && spend ? { runs: spend.runs, maxRuns: d.max_runs, spent: spend.billed.usd, cap: d.cap_usd, perRun: spend.runs ? spend.billed.run_sessions.usd / spend.runs : 0 } : null;
   const hit = limits ? limitsHit(limits) : null;
   return (
     <div className="ml-auto flex items-center gap-4 text-[12px] tabular-nums text-sol-text-dim" data-trial-limits>
@@ -580,7 +587,8 @@ function TrialLimitsBar({ spend, project, held, heldHref }: { spend: TrialSpendR
           Runs <b className="font-semibold text-sol-text">{limits.runs}</b> of {limits.maxRuns}
         </span>
       )}
-      {spend && <SpendFold spend={spend} cap={limits?.cap ?? null} over={!!hit?.spend} />}
+      {spend && <BilledFold spend={spend} cap={limits?.cap ?? null} over={!!hit?.spend} />}
+      {spend && <SubscriptionFold spend={spend} />}
       {limits && project && (hit?.runs || hit?.spend) && (
         <button type="button" onClick={() => setPick(RAISE_PICKS[0])} aria-haspopup="dialog" className="rounded-md bg-sol-blue px-2.5 py-1 text-[12px] font-medium text-sol-bg hover:opacity-90" data-trial-raise>Raise the limits…</button>
       )}
@@ -596,48 +604,101 @@ function TrialLimitsBar({ spend, project, held, heldHref }: { spend: TrialSpendR
   );
 }
 
-/** The trial's whole spend against its dispatcher's cap; pressed, its three parts in plain words, each with what it holds. */
-function SpendFold({ spend, cap, over }: { spend: TrialSpendRow; cap: number | null; over: boolean }) {
-  const b = spend.budget;
-  const model = b.spent_usd + b.earlier_months_usd;
-  const by = b.by_purpose;
-  const recorded = spend.outside ?? [];
+const PART_ROWS = "[&_td]:px-3 [&_td]:py-2 [&_tr]:border-b [&_tr]:border-sol-border/40";
+const monthShort = (month: string) => new Date(`${month}-15`).toLocaleString("en-US", { month: "short" });
+const tokenCount = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(0)}M` : `${Math.round(n / 1000)}k`);
+
+/** Money the trial was billed, against the dispatcher's cap; pressed, each thing that billed it. */
+function BilledFold({ spend, cap, over }: { spend: TrialSpendRow; cap: number | null; over: boolean }) {
+  const b = spend.billed;
+  const m = b.model;
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className={cn("hover:text-sol-text", over && "text-sol-red")} data-trial-spend data-over={over ? "" : undefined}>
-          Spent <b className="font-semibold text-sol-text">{usd(spend.total_usd)}</b>{cap != null && <> of {usd(cap)}</>}
+        <button type="button" className={cn("hover:text-sol-text", over && "text-sol-red")} data-trial-billed data-over={over ? "" : undefined}>
+          Billed <b className={cn("font-semibold", over ? "text-sol-red" : "text-sol-text")}>{usd(b.usd)}</b>{cap != null && <> of {usd(cap)}</>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[26rem] border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-spend-parts>
+      <PopoverContent align="end" className="w-[26rem] border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-billed-parts>
         <table className="w-full tabular-nums">
-          <tbody className="[&_td]:px-3 [&_td]:py-2 [&_tr]:border-b [&_tr]:border-sol-border/40">
-            <tr data-trial-spend-part="runs">
-              <td>Line runs<div className="text-[11px] text-sol-text-dim">{spend.runs} runs · {spend.sessions} sessions{spend.unpriced_tokens ? ` · ${Math.round(spend.unpriced_tokens / 1000)}k tokens unpriced` : ""}</div></td>
-              <td className="text-right">{usd(spend.session_usd)}</td>
+          <tbody className={PART_ROWS}>
+            <tr data-trial-billed-part="model">
+              <td>Model calls<div className="text-[11px] text-sol-text-dim">{m.calls.toLocaleString("en-US")} calls · judge {usd(m.by_purpose.judge)} · calls {usd(m.by_purpose.call)} · grouping {usd(m.by_purpose.grouping)}</div><div className="text-[11px] text-sol-text-dim">team budget {monthShort(m.team_budget.month)} {usd(m.team_budget.spent_usd)} of {usd(m.team_budget.cap_usd)}{m.team_budget.refused ? ` · ${m.team_budget.refused} refused` : ""}</div></td>
+              <td className="text-right align-top">{usd(m.usd)}</td>
             </tr>
-            <tr data-trial-spend-part="model">
-              <td>Judging and calls<div className="text-[11px] text-sol-text-dim">judge {usd(by.judge)} · calls {usd(by.call)} · grouping {usd(by.grouping)} · team budget {usd(b.spent_usd)} of {usd(b.cap_usd)} in {new Date(`${b.month}-15`).toLocaleString("en-US", { month: "short" })}{b.refused ? ` · ${b.refused} refused` : ""}</div></td>
-              <td className="text-right">{usd(model)}</td>
-            </tr>
-            {recorded.length > 0 && (
-              <tr data-trial-spend-part="recorded">
+            {b.keys.map((k) => (
+              <tr key={k.billed_by} data-trial-billed-part={k.billed_by}>
                 <td>
-                  Prompt tests and shadow runs
+                  {k.billed_by}
                   <details className="text-[11px] text-sol-text-dim">
-                    <summary className="cursor-pointer hover:text-sol-text">{recorded.length} recorded by hand</summary>
+                    <summary className="cursor-pointer hover:text-sol-text">{k.entries} {k.entries === 1 ? "entry" : "entries"}</summary>
                     <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto pr-1">
-                      {recorded.map((o) => <li key={o.at} className="flex gap-2"><span className="shrink-0 text-sol-text-muted">{usd(o.usd)}</span><span className="min-w-0">{o.what}</span></li>)}
+                      {spend.outside.filter((o) => o.billed_by === k.billed_by).map((o) => <li key={o.at} className="flex gap-2"><span className="shrink-0 text-sol-text-muted">{usd(o.usd)}</span><span className="min-w-0">{o.what}</span></li>)}
                     </ul>
                   </details>
                 </td>
-                <td className="align-top text-right">{usd(spend.outside_usd ?? 0)}</td>
+                <td className="text-right align-top">{usd(k.usd)}</td>
+              </tr>
+            ))}
+            {b.run_sessions.sessions > 0 && (
+              <tr data-trial-billed-part="run-keys">
+                <td>Run sessions on API keys<div className="text-[11px] text-sol-text-dim">{b.run_sessions.sessions} sessions · {tokenCount(b.run_sessions.tokens)} tokens</div></td>
+                <td className="text-right align-top">{usd(b.run_sessions.usd)}</td>
               </tr>
             )}
             <tr className="font-semibold">
-              <td>Total{cap != null && <span className="font-normal text-sol-text-dim"> · the dispatcher's cap {usd(cap)}</span>}</td>
-              <td className={cn("text-right", over && "text-sol-red")}>{usd(spend.total_usd)}</td>
+              <td>Billed{cap != null && <span className="font-normal text-sol-text-dim"> · cap {usd(cap)}</span>}</td>
+              <td className={cn("text-right", over && "text-sol-red")}>{usd(b.usd)}</td>
             </tr>
+          </tbody>
+        </table>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const quotaTone = (p: number | null) => (p == null ? "text-sol-text-dim" : p >= 100 ? "text-sol-red" : p >= USAGE_WARN_PERCENT ? "text-sol-yellow" : "text-sol-text");
+const quotaFill = (p: number) => (p >= 100 ? "bg-sol-red" : p >= USAGE_WARN_PERCENT ? "bg-sol-yellow" : "bg-sol-green");
+
+/** The line runs' subscription use: the tightest account's quota and the sessions; pressed, each account's windows and
+ *  the tokens, with their API list price as an equivalent that was never billed. */
+function SubscriptionFold({ spend }: { spend: TrialSpendRow }) {
+  const sub = spend.subscription;
+  const quota = spend.quota ?? [];
+  const worst = quota.reduce<number | null>((w, q) => (q.percent == null ? w : Math.max(w ?? 0, q.percent)), null);
+  const now = spend.at;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className="hover:text-sol-text" data-trial-subscription>
+          Quota <b className={cn("font-semibold", quotaTone(worst))}>{worst == null ? "?" : `${Math.round(worst)}%`}</b> · {sub.sessions} sessions
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[26rem] border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-subscription-parts>
+        {quota.map((q) => (
+          <div key={`${q.device}:${q.provider}:${q.account}`} className="border-b border-sol-border/40 px-3 py-2" data-trial-quota={q.account}>
+            <div className="flex items-baseline gap-2">
+              <span className="font-medium">{q.account}</span>
+              <span className="text-[11px] text-sol-text-dim">{q.provider === "claude" ? "Claude" : "Codex"} · {q.device}</span>
+              {q.fetched_at != null && <span className="ml-auto text-[11px] text-sol-text-dim">{formatTimeAgo(q.fetched_at, now)}</span>}
+            </div>
+            <div className="mt-1.5 grid grid-cols-[6.5rem_1fr_2.5rem_4rem] items-center gap-x-2 gap-y-1 text-[11px] tabular-nums">
+              {q.windows.map((w) => (
+                <Fragment key={w.label}>
+                  <span className="text-sol-text-muted">{w.label}</span>
+                  <span className="h-1.5 overflow-hidden rounded-full bg-sol-border/40"><span className={cn("block h-full", quotaFill(w.percent))} style={{ width: `${Math.min(100, w.percent)}%` }} /></span>
+                  <span className={cn("text-right", quotaTone(w.percent))}>{Math.round(w.percent)}%</span>
+                  <span className="text-right text-sol-text-dim">{w.resets_at && w.resets_at > now ? formatCountdown(w.resets_at - now) : ""}</span>
+                </Fragment>
+              ))}
+            </div>
+          </div>
+        ))}
+        <table className="w-full tabular-nums">
+          <tbody className={PART_ROWS}>
+            <tr><td>Sessions</td><td className="text-right">{sub.sessions} in {spend.runs} runs</td></tr>
+            <tr><td>Tokens{sub.unpriced_tokens > 0 && <div className="text-[11px] text-sol-text-dim">{tokenCount(sub.unpriced_tokens)} on unpriced models</div>}</td><td className="text-right align-top">{tokenCount(sub.tokens)}</td></tr>
+            <tr className="text-sol-text-dim" data-trial-list-equivalent><td>At API list price<div className="text-[11px]">equivalent, not billed</div></td><td className="text-right align-top">{usd(sub.list_usd)}</td></tr>
           </tbody>
         </table>
       </PopoverContent>
