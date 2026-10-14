@@ -179,7 +179,7 @@ async function executeCallNode(node: WorkflowNode, graph: WorkflowGraph, context
     const resp = await fetch(`${options.convexSiteUrl}/cli/model/call`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: options.apiToken, ...body }),
+      body: JSON.stringify({ api_token: options.apiToken, ...body, ...(options.runId ? { run_id: options.runId } : {}) }),
     });
     result = await resp.json();
     if (!resp.ok && !result?.reason) result = { ok: false, error: result?.error ?? `the server answered ${resp.status}`, cost_usd: 0 };
@@ -500,6 +500,22 @@ async function executeSessionNode(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
+    // A hand seen live that now reads not live, neither killed nor
+    // hibernated, has a daemon that went quiet: its heartbeat lapsed, and the
+    // row reads stopped and needs_input on that alone. That is the daemon's
+    // silence, not the hand's answer: a hand that exits is reported by its
+    // daemon while the row is still live, and the settle below catches it
+    // there. A daemon frozen for 199s under load settled a hand mid tool
+    // call and routed the run to failure (agentwatch Build, 2026-10-14).
+    // Wait for the daemon to come back, or for the node's timeout; a hand
+    // that declared done before the silence keeps that answer.
+    const dark = wasLive && !row.is_live && !row.is_killed && row.agent_status !== "hibernated";
+    if (dark && state !== "done") {
+      if (lastState !== "dark") console.log(`${c.dim}  ${shortId}: its daemon has gone quiet, waiting for it to report again${c.reset}`);
+      lastState = "dark";
+      askedOnce = false;
+      continue;
+    }
     if (state !== lastState) {
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
@@ -601,7 +617,7 @@ async function spawnHand(
     prompt,
     project_path: cwd,
     git_root: gitRoot,
-    title: stationTitle(node, context),
+    title: stationTitle(node, context, presentsDecision(node, graph)),
     // A station is the run's worker: nested under the run's own session, so
     // it reads, answers cast send and shows on the run, and stays out of the
     // inbox's top level. The task's blocker comment is what reaches a person.
@@ -1275,8 +1291,13 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
 
 // A station's name, fixed at spawn: the node and what it works on, so the row
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
-// unattended preamble every station's prompt opens with.
-export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>): string {
+// unattended preamble every station's prompt opens with. A station that
+// presents a decision is the session a person talks the fix over with, and its
+// title shows wherever they meet it (the decision's chat, its page's bar): it
+// is named by the problem, in the problem's own words.
+export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>, presents = false): string {
+  const problem = context["task_title"]?.replace(/\s+/g, " ").trim();
+  if (presents && problem) return problem.length > 100 ? `${problem.slice(0, 99).trimEnd()}…` : problem;
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
   const label = node.label || node.id;
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;
@@ -1595,6 +1616,7 @@ async function driveRun(
     // task, the profile, the run's ids) is read again.
     state.context = { ...resumeAt.context, ...initialContext };
     state.visitCounts = resumeAt.visit_counts;
+    for (const [id, n] of Object.entries(state.visitCounts)) state.context[`${id}.visits`] = String(n);
     state.completed = resumeAt.completed;
     state.currentNodeId = resumeAt.node_id;
     Object.assign(nodeOutcomes, resumeAt.node_outcomes);
@@ -1761,6 +1783,8 @@ async function runNodeLoop(
     state.currentNodeId = current.id;
     const visits = (state.visitCounts[current.id] || 0) + 1;
     state.visitCounts[current.id] = visits;
+    // Edges may route on how often a station has run (`build.visits >= 3`).
+    state.context[`${current.id}.visits`] = String(visits);
 
     if (current.max_visits !== undefined && visits > current.max_visits) {
       console.log(`\n${c.red}${c.bold}  ✗ max_visits=${current.max_visits} exceeded on '${current.label}' — aborting${c.reset}`);
