@@ -162,6 +162,9 @@ function scratchProfile(hidden: number, readOnly = false): string {
     '(allow file-read* (subpath (param "GUARD_DIR")) (subpath (param "SERVE_DIR")))',
     '(deny file-write* (subpath (param "GUARD_DIR")))',
     ...Array.from({ length: hidden }, (_, i) => `(deny file-read* file-write* (subpath (param "HIDDEN_${i}")))`),
+    // DRY_RUN_HIDE_REGEX: one path pattern the agent must not read (every .env of a
+    // checkout, say). The launcher writes it, never the replayed work; no quote may appear in it.
+    ...(process.env.DRY_RUN_HIDE_REGEX && !process.env.DRY_RUN_HIDE_REGEX.includes('"') ? [`(deny file-read* file-write* (regex #"${process.env.DRY_RUN_HIDE_REGEX}"))`] : []),
   ].join("\n");
 }
 
@@ -170,7 +173,9 @@ function scratchSandbox(run: string, readable: { guard: string; serve?: string }
   const scratch = path.join(run, "tmp");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   const real = (p: string) => (fs.existsSync(p) ? fs.realpathSync(p) : p);
-  const hidden = credentialDirs().map(real);
+  // DRY_RUN_HIDE: more paths (colon separated) the agent must not read, such as a
+  // checkout's real .env or a cloud login, when the replayed work runs project code.
+  const hidden = [...credentialDirs(), ...(process.env.DRY_RUN_HIDE ?? "").split(":").filter(Boolean)].map(real);
   const prefix = [
     "sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`,
     ...hidden.flatMap((dir, i) => ["-D", `HIDDEN_${i}=${dir}`]),

@@ -216,7 +216,17 @@ export function ModelEffortMenu(props: ModelEffortRowsProps) {
  * pill row and relaunches the blank session with --model/--effort flags via
  * reconfigureSession (the same idempotent respawn the agent pills use).
  */
-export function LaunchModelPill({ conversationId }: { conversationId: string }) {
+/** A picker trigger in the new-session composer foot: a quiet text button. */
+export const FOOT_PICK = "inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs whitespace-nowrap text-sol-text-muted hover:text-sol-text hover:bg-sol-bg/60 data-[state=open]:bg-sol-bg/60 data-[state=open]:text-sol-text transition-colors";
+
+// The resting look of a launch pill: a bordered chip in the agent row, or the
+// composer foot's text button.
+const LAUNCH_PILL = {
+  chip: "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono",
+  ghost: FOOT_PICK,
+};
+
+export function LaunchModelPill({ conversationId, variant = "chip" }: { conversationId: string; variant?: "chip" | "ghost" }) {
   const live = useLiveSessionMeta(conversationId);
   const agentType = live?.agentType ?? "claude_code";
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
@@ -234,7 +244,8 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
+          type="button"
+          className={LAUNCH_PILL[variant]}
           title="Model and effort for this session"
         >
           {opt?.label ?? "Model"}
@@ -268,7 +279,7 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
  *  Library). Picking one stamps the row; a definition that names a client
  *  flips the agent pill too, and its model rides the create through the
  *  server's resolveSpawnDefinition. Hidden until the workspace has one. */
-export function AgentDefinitionPill({ conversationId }: { conversationId: string }) {
+export function AgentDefinitionPill({ conversationId, variant = "chip" }: { conversationId: string; variant?: "chip" | "ghost" }) {
   const definitions = useAgentDefinitions();
   const live = useLiveSessionMeta(conversationId);
   if (definitions.length === 0) return null;
@@ -283,7 +294,8 @@ export function AgentDefinitionPill({ conversationId }: { conversationId: string
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all font-mono ${
+          type="button"
+          className={variant === "ghost" ? `${LAUNCH_PILL.ghost} ${current ? "!text-sol-cyan" : ""}` : `inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all font-mono ${
             current ? "border-sol-cyan/50 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
           }`}
           title="Launch as a named agent definition"

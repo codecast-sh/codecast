@@ -11,6 +11,8 @@ import {
   cardVerdictIndexes,
   checksLabel,
   checkNotRun,
+  costParts,
+  costUsd,
   evalsOwed,
   honestChecks,
   proofSummary,
@@ -241,7 +243,8 @@ export function ChangeCardVerdictBar({ card, children }: { card: ChangeCard; chi
   );
 }
 
-const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Shipped", revise: "Sent back to revise", drop: "Dropped" };
+/** A Ship answer approves the change; whether it has landed is the run's to say, never the answer's. */
+const VERDICT_DONE: Record<ChangeVerdict, string> = { ship: "Approved to ship", revise: "Sent back to revise", drop: "Dropped" };
 /** A trial run's answer records what the person would have done and ships nothing: it is never worded as done. */
 const VERDICT_WOULD: Record<ChangeVerdict, string> = { ship: "Would ship", revise: "Would revise", drop: "Would drop" };
 
@@ -659,6 +662,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
   // proof has its own section right above, so it is not a row again) and
   // the risk's reason.
   const ownChecks = summarized ? honestChecks(card.checks) : [];
+  const cost = costParts(card.cost);
   return (
     <article className={`change-card ${inline ? "cc-inline" : "cc-full"} ${animate ? "cc-animate" : ""}`} data-change-card={card.cause.task}>
       {/* The head every surface draws (ChangeCardHeadline): the change,
@@ -748,15 +752,16 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
             </dd>
           </div>
           <div className="cc-fact">
-            {/* A card that recorded no spend says its agent time alone, never "$0.00". */}
-            <dt className="cc-label">{card.cost.usd > 0 ? "Cost" : "Agent time"}</dt>
+            {/* Money billed leads; the subscription sessions' list price is an equivalent beside it, never added. */}
+            <dt className="cc-label">Billed</dt>
             <dd>
-              {/* Agent time is summed over the run's sessions, not the run's wall time. */}
-              <span className="cc-nowrap">{card.cost.usd > 0 ? `$${card.cost.usd.toFixed(2)}` : `${card.cost.minutes} min`}</span>
+              <span className="cc-nowrap">{costUsd(cost.billed_usd)}</span>
               <SepRow className="cc-fact-sub" items={[
+                ...(cost.list_usd > 0 ? [{ key: "list", className: "cc-nowrap", node: `${costUsd(cost.list_usd)} at list price, not billed` }] : []),
                 // A card that recorded no tokens says nothing rather than "0 tokens".
                 ...(card.cost.tokens > 0 ? [{ key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` }] : []),
-                ...(card.cost.usd > 0 ? [{ key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` }] : []),
+                // Agent time is summed over the run's sessions, not the run's wall time.
+                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` },
               ]} />
             </dd>
           </div>
