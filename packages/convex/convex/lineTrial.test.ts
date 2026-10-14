@@ -9,7 +9,7 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, trialProjectOf, trialSpend } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend } from "./lineTrial";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -608,6 +608,9 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
 describe("what a trial card reads beside its words", () => {
   test("a problem whose case is filed against a judge or an extractor is review tooling, not the product (ct-59532, ct-59527)", () => {
     expect(toolingOf({ cause: { issue_key: "judge:codecast:comms", fingerprints: [] } } as any)).toBe("judge");
+    // ct-59688: a problem gathered from two judges' cases, keyed per ruled finding, with no issue key, is still the judge route.
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "extractor:match:sg-2733"] } } as any)).toBe("judge");
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "evidence:contacts/x:ex-3:aa"] } } as any)).toBe("product");
     expect(toolingOf({ cause: { issue_key: "extractor:union-moments:contact-conversation", fingerprints: [] } } as any)).toBe("extractor");
     expect(toolingOf({ cause: { fingerprints: ["evidence:contacts/x:ex-agentwatch-trial-34:fa10997c"] } } as any)).toBeNull();
   });
