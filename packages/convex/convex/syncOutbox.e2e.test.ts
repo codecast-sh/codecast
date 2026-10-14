@@ -3,7 +3,8 @@ import { mutation, syncAckReceipts } from "./functions";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import schema from "./schema";
 import { drainSyncOutbox, readDeliveryReceipts, recover } from "./syncOutbox";
-import { enqueueSyncAction } from "./syncOutboxWriter";
+import { attachSyncOutbox, enqueueSyncAction } from "./syncOutboxWriter";
+import { makeSyncAckCollector } from "./syncLog";
 import { readRangePage } from "./syncLog";
 
 function fixture() {
@@ -159,6 +160,31 @@ describe("durable sync delivery through wrapped application saves", () => {
     await deliverAll(ctx);
     expect(db._tables.sync_actions.map((r: any) => r.op)).toEqual(["scope_removed", "scope_added", "scope_removed"]);
     expect(db._tables.sync_actions.map((r: any) => r.position)).toEqual([1, 2, 3]);
+  });
+
+  // Every drain job costs the scheduler a slot whether or not it finds work,
+  // and in prod most of them found none (2026-10-14: 10.6k of 13.6k an hour).
+  test("one transaction touching many entities in a scope schedules one drain", async () => {
+    const { ctx, db, scheduled } = fixture();
+    const collector = makeSyncAckCollector();
+    attachSyncOutbox(ctx, collector);
+    for (let i = 0; i < 10; i++) await collector.enqueue!("user:owner", "conversations" as any, `c${i}`, "upsert", { cargo: { partial: true } } as any);
+    await collector.enqueue!("team:t1", "conversations" as any, "c0", "upsert", { cargo: { partial: true } } as any);
+    expect(db._tables.sync_outbox.filter((r: any) => r.pending)).toHaveLength(11);
+    expect(scheduled.map((args) => args[2].id)).toHaveLength(2);
+    await deliverAll(ctx);
+    expect(db._tables.sync_actions).toHaveLength(11);
+  });
+
+  test("a lifecycle slot past one pass's event cap gets exactly one follow-up drain", async () => {
+    const { ctx, db, scheduled } = fixture();
+    for (let i = 0; i < 40; i++) await enqueueSyncAction(ctx, "user:owner", "member", "m1", i % 2 ? "scope_added" : "scope_removed");
+    scheduled.length = 0;
+    await drainSyncOutbox(ctx, db._tables.sync_outbox[0]._id);
+    expect(db._tables.sync_actions).toHaveLength(32);
+    expect(scheduled).toHaveLength(1);
+    await drainSyncOutbox(ctx, scheduled[0][2].id);
+    expect(db._tables.sync_actions).toHaveLength(40);
   });
 
   test("receipts never reveal another scope's position", async () => {

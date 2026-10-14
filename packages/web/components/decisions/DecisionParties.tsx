@@ -56,8 +56,8 @@ export function AskingSessionView({
    *  dropped from the name so the header never says it twice. */
   omitRef?: string;
   /** Plain words in place of the session's face, live dot, title and
-   *  project (a change card names the line, not its build session); the
-   *  title stays on hover and the click still jumps to the ask. */
+   *  project (a change card names the line, not its build session, whose
+   *  title is a station name); the click still jumps to the ask. */
   label?: string;
   className?: string;
 }) {
@@ -77,7 +77,7 @@ export function AskingSessionView({
       <Link
         href={`/conversation/${decision.conversation_id}`}
         className="truncate text-sol-text-muted hover:text-sol-blue transition-colors"
-        title={fullTitle ? `${fullTitle}: go to the ask in the conversation` : "Go to the ask in the conversation"}
+        title={fullTitle && !label ? `${fullTitle}: go to the ask in the conversation` : "Go to the ask in the conversation"}
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           e.preventDefault();
