@@ -153,6 +153,12 @@
 .ld-ev-pr { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--sol-blue); }
 
 /* A trial's answers record what you would do: one mark says so, on the answers themselves. */
+/* Until the page they answer is in view, the answers show but take nothing. */
+.ld-answers[data-reading] { opacity: .45; transition: opacity .2s ease; }
+.ld-answers { transition: opacity .2s ease; }
+.ld-answers-row { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
+.ld-answers-row > .ld-answers-h { margin: 0; }
+.ld-answers-row > .ld-talk-fold { margin: 0 0 0 auto; }
 .ld-answers-h { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--sol-text-muted); }
 .ld-answers-sub { font-weight: 400; color: var(--sol-text-dim); }
 
@@ -244,3 +250,31 @@
 .ld-grid[data-talk="folded"] { grid-template-columns: minmax(0, 74ch); }
 .ld-talk-fold { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 18px; padding: 4px 10px; border-radius: 8px; font-size: 12.5px; color: var(--sol-text-muted); border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); transition: color 120ms ease, background-color 120ms ease; }
 .ld-talk-fold:hover { color: var(--sol-text); background: var(--sol-bg-alt); }
+
+/* The one real case an older card leads with, under its words. */
+.ld-case { margin: 4px 0 18px; }
+
+/* With the chat open the answers sit under it, one column: asking and answering in one place. On a narrow pane the
+   chat and its answers are the pane's foot, as the dock is. */
+.ld-talk-answers { margin-top: 14px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); }
+.ld-talk-answers .ld-answers { margin: 0; }
+.ld-talk-answers [data-option-list] { display: flex; flex-direction: column; gap: 6px; }
+.ld-talk-answers [data-option-list] > * { margin-top: 0 !important; }
+@container (max-width: 899px) {
+  .ld-talk[data-with-answers] { position: sticky; bottom: 0; z-index: 3; max-height: 60cqh; overflow: auto; }
+}
+/* A message's own tools (copy, link, bookmark, send on) have no job beside a decision. */
+.ld-talk :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar]) { display: none; }
+
+/* The change's code, folded under the decision. */
+.ld-code { margin-top: 28px; }
+.ld-code + .ld-full { margin-top: 12px; }
+.ld-code-sum { margin-left: 8px; font-weight: 400; color: var(--sol-text-dim); }
+.ld-code-sum b { font-weight: 500; }
+.ld-code-sum b[data-k="add"] { color: var(--sol-green); }
+.ld-code-sum b[data-k="del"] { color: var(--sol-red); }
+.ld-code-note { font-size: 13px; color: var(--sol-text-muted); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ld-code-commits { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--sol-text); }
+.ld-code-commits code { margin-right: 8px; font-size: 11.5px; color: var(--sol-text-dim); }
+.ld-code-files { border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); border-radius: 8px; overflow: hidden; }
+.ld-code-link { display: inline-flex; align-items: center; gap: 4px; width: fit-content; font-size: 12.5px; color: var(--sol-blue); }

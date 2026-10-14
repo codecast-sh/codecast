@@ -2,8 +2,8 @@
 // The bottom-edge resize grip: a full-width hit strip with a rounded bar,
 // dragged to set the height of the element above it. Shared by the inline
 // object reveal band and the published page embed. The height a reader drags
-// to persists under a storage key, so every later frame of that kind opens
-// at the reader's height.
+// to persists under a storage key when one is given, so every later frame of
+// that kind opens at the reader's height.
 
 import React, { useCallback } from "react";
 import { cssZoomOf } from "../lib/cssZoom";
@@ -27,7 +27,8 @@ export function savedGripHeight(key: string, min: number): number | null {
 export function HeightGrip({ target, storageKey, min, onResized, className = "" }: {
   /** The element whose height the drag sets. Carries data-resizing while dragged. */
   target: React.RefObject<HTMLElement | null>;
-  storageKey: string;
+  /** Where the dragged height persists; without one a drag sizes this frame alone. */
+  storageKey?: string;
   min: number;
   onResized?: (height: number) => void;
   className?: string;
@@ -65,9 +66,11 @@ export function HeightGrip({ target, storageKey, min, onResized, className = "" 
         delete el.dataset.resizing;
         delete grip.dataset.resizing;
         const final = Math.round(h);
-        try {
-          localStorage.setItem(storageKey, String(final));
-        } catch {}
+        if (storageKey) {
+          try {
+            localStorage.setItem(storageKey, String(final));
+          } catch {}
+        }
         onResized?.(final);
       };
       grip.addEventListener("pointermove", move);

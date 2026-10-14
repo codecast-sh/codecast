@@ -9,10 +9,10 @@ import { MERGES_NEVER, usd, type RunCost } from "../../components/consequential/
 /** A trial station's node id as its name ("build" -> "Build"); no node is its start. */
 export const trialStationName = (id: string | null) => (id ? id.replace(/_/g, " ").replace(/^\w/, (ch) => ch.toUpperCase()) : "Start");
 
-/** The trial limit that refuses any new run now (lineTrial rerunRefusal: its runs used, its spend cap), in words
- *  ("115 of 115 runs used"), read off its dispatcher's last hold; null when a run would start. */
+/** The trial limit that refuses any new run now (lineTrial rerunRefusal: its runs used, its billed-money cap, its
+ *  accounts' quota), in words ("115 of 115 runs used"), read off its dispatcher's last hold; null when a run would start. */
 export function trialRunLimit(held: string | null | undefined): string | null {
-  return held && /^(\d+ of \d+ runs used|spend \$)/.test(held) ? held.split(/:\s/)[0] : null;
+  return held && /^(\d+ of \d+ runs used|billed \$|quota \d+%)/.test(held) ? held.split(/:\s/)[0] : null;
 }
 
 /** A new run from main asked for a different approach: the station's report rides on the problem and in the run's history.
@@ -62,8 +62,9 @@ export function closeStoppedLedger(r: { problem: string; findings: number; week:
   };
 }
 
-/** The trial's two limits as its dispatcher reads them (lineTrial trialRoom): runs started against `max_runs`, and the
- *  whole spend (line runs, model calls, recorded tests) against `cap_usd`. `perRun` is a line run's average cost. */
+/** The trial's two raisable limits as its dispatcher reads them (lineTrial trialRoom): runs started against `max_runs`,
+ *  and billed money (model calls, hand entries, run sessions on API keys) against `cap_usd`. `perRun` is a line run's
+ *  average billed money: nothing while its sessions run on subscription accounts, which quota limits instead. */
 export type TrialLimits = { runs: number; maxRuns: number | null; spent: number; cap: number; perRun: number };
 
 /** How many more runs a raise allows, the picks the review offers. */
@@ -93,12 +94,13 @@ export function raiseLimitsLedger(r: { project: string; limits: TrialLimits; pic
     shift: null,
     figures: [
       { value: String(more), label: "more runs it may start" },
-      { value: `~${usd(more * l.perRun)}`, label: "at most, est.", tone: "warn" },
+      { value: `~${usd(more * l.perRun)}`, label: "billed, est.", tone: "warn" },
     ],
     rows: [
       { k: "Run limit", v: `${l.maxRuns ?? "none"} → ${next.maxRuns}` },
-      { k: "Spend limit", v: `${usd(l.cap)} → ${usd(next.cap)}` },
-      { k: "A run costs", v: `~${usd(l.perRun)}, its sessions` },
+      { k: "Billed cap", v: `${usd(l.cap)} → ${usd(next.cap)}` },
+      { k: "A run bills", v: `~${usd(l.perRun)}` },
+      { k: "Runs spend", v: "Subscription quota" },
       { k: "Starts", v: "On its next pass, within 10 min" },
       { k: "Merges", v: MERGES_NEVER, tone: "ok" },
     ],
