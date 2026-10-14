@@ -1484,10 +1484,9 @@ export function ActionSubmenu({
 // We substring-match the local session cache OURSELVES and hand cmdk only the
 // matches — because cmdk mounts and re-scores every Item it's given on each
 // keystroke, so feeding it the whole cache (thousands of sessions) janks typing.
-// RECENT_SEARCH_CAP bounds how deep into the (updated_at-desc) cache we scan;
-// RECENT_RENDER_CAP bounds how many matches we actually mount. The long tail
-// beyond the scan is covered by the async server search ("Search Results") below.
-const RECENT_SEARCH_CAP = 750;
+// The scan covers the whole cache, so every cached session answers on the first
+// keystroke; RECENT_RENDER_CAP bounds how many matches we actually mount. The
+// server search ("Search Results") below covers sessions this device never cached.
 const RECENT_RENDER_CAP = 25;
 const RECENT_IDLE_CAP = 8;
 const EMPTY_ROSTER: Device[] = [];
@@ -1743,7 +1742,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   // Pre-filter the local cache ourselves so cmdk only ever mounts the matches
   // (RECENT_RENDER_CAP), never the whole cache. With no query we show the most
-  // recent few; with a query we scan up to RECENT_SEARCH_CAP and collect matches.
+  // recent few; with a query we scan the whole cache and collect matches.
   // A pick's exclusions (a session already in the call) leave the recents
   // too, and so does a role's standing agent while the role has its own row.
   const { roles: orgRoles } = useOrgRoles();
@@ -1774,10 +1773,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // words name them: a favorite is not a reason to outrank a title that
     // starts with what was typed. The Favorites group is the empty palette's.
     const pool = q && favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool;
-    const scan = pool.length > RECENT_SEARCH_CAP ? pool.slice(0, RECENT_SEARCH_CAP) : pool;
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
-    return rankSessions(scan, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
+    return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
   }, [recentPool, query, standingOf, favorites, pick]);
   // Hosted mode reads recents as a list of errands, not a fleet: workers under
   // another conversation and unsent drafts stay out, and so does anything the

@@ -18,9 +18,7 @@ import { composeDraftContent, findKeptComposeDraft, type ComposeContext, type Co
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
-import { awaitUpload } from "../lib/pendingUploads";
-import { ComposeRolePicker } from "./ComposeRolePicker";
-import { sendRequestToRole, type GateImage, type RoleRecipient } from "../lib/roleRecipients";
+import { ComposeRolePicker, useRoleRecipient } from "./ComposeRolePicker";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -116,12 +114,10 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // a role sends it into that role's standing session instead. On the role
   // path the stub is never materialized: the gate clears its draft, so the
   // unmount abandon prunes it like any un-sent blank.
-  const [recipient, setRecipient] = useState<RoleRecipient | null>(null);
+  const { recipient, setRecipient, recipientRef, wakeRole } = useRoleRecipient();
   // A role is an org seat, a developer idea: where only the assistant can
   // answer, the "To a role" chip goes with the agent row (NewSessionView).
   const onlyHosted = useOnlyHostedAgent();
-  const recipientRef = useRef(recipient);
-  useWatchEffect(() => { recipientRef.current = recipient; }, [recipient]);
 
   // One session per popup instance (PaletteRoot remounts via key): in the
   // palette window an empty open resumes the last kept draft, else a fresh
@@ -287,16 +283,6 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, []);
 
-  // The role path of a send (lib/roleRecipients.sendRequestToRole):
-  // MessageInput's gate hands over the text and the images once it has
-  // emptied the composer, and the request goes into the role's standing
-  // conversation. Only a seat with none refuses, and the picker never offers one.
-  const wakeRole = useCallback(async (text: string, images?: GateImage[]) => {
-    const r = recipientRef.current;
-    if (!r) return;
-    const into = await sendRequestToRole(() => useInboxStore.getState(), r, text, images ?? [], awaitUpload);
-    if (!into) toast.error(`${r.name} has no standing session yet`);
-  }, []);
 
   // The agent the stub holds now (the agent row may switch it before the
   // first send). A hosted agent's send goes through the gate below rather
@@ -648,7 +634,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           agentType={recipient ? undefined : liveAgentType}
           onDropFiles={dropFilesRef}
           onPopulateInput={populateInputRef}
-          onGateSend={recipient ? wakeRole : hosted ? startHosted : undefined}
+          onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
           composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? MODE_WORDS.hosted.composerPlaceholder : undefined}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}

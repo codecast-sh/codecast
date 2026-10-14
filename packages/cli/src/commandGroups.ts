@@ -168,9 +168,12 @@ Subcommands:
   cast decide pass <sd>               A role on the ladder hands the card to its people with no recommendation (--note -)
   cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
                                       --for-human: from a session, as your human, only at their explicit word
+  cast decide brief                   How a decision is put to a person: the brief every line's decision follows
   cast decide kit [page.html]         The decision page kit for a --report page: its guide, or that page written as it will be served
+  cast decide kit page.html --serve   That page served over local http for the cast browser, rebuilt on each load
 
 Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
+  --proposal xp-N   the expectations proposal it settles (an answer opening Apply lands it, Keep closes it)
   --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
   --option-page n=file.html|slug|url   a page per option (a file publishes like --report); spec: "page" per option
 
