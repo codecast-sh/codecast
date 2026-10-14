@@ -30,7 +30,7 @@ import { notFound } from "./lib/auth";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { nextShortId } from "./counters";
 import { askCore, finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
-import { removeWaitCore } from "./taskWaits";
+import { fileTrialCard, stationNodeOf, trialStationOf } from "./lib/trialDecision";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { answererOf } from "./orgLine";
 import { personName } from "./sessionOwnership";
@@ -512,13 +512,17 @@ async function copiesAppliedLines(ctx: Ctx, project: Doc<"projects">, ops: Expec
 }
 
 /**
- * Put an open proposal in the project's person's queue from the session that
- * proposed it. A trial project asks nobody (LL12): its proposals wait on the
- * trial review page's Our tooling lane, never in a person's queue.
+ * Put an open proposal in front of the project's person from the session that
+ * proposed it. In a trial project (LL12) the proposal is a station's trial
+ * decision, asked the way the run's other decisions are (lib/trialDecision):
+ * flagged trial, routed as the trial routes that run, and filed for the trial
+ * feed, so it is in For you with the run's other practice answers. A trial
+ * proposal from a session that is no station of a run in that trial asks
+ * nobody; it waits on the trial review page's Our tooling lane.
  */
-async function postCard(ctx: Ctx, userId: Id<"users">, conversation: any, project: Doc<"projects">, proposal: any, current: any[]): Promise<{ card?: string; card_error?: string }> {
-  if (project.line_trial) return {};
-  const person = await projectPerson(ctx, project);
+async function postCard(ctx: Ctx, userId: Id<"users">, conversation: any, project: Doc<"projects">, proposal: any, current: any[]): Promise<{ card?: string; card_error?: string; trial_card?: string }> {
+  const station = project.line_trial ? await trialStationOf(ctx, conversation) : null;
+  if (project.line_trial && String(station?.project._id) !== String(project._id)) return {};
   const n = proposal.ops.length;
   const asked = await askCore(ctx as any, { userId }, {
     session_id: conversation.session_id,
@@ -530,11 +534,13 @@ async function postCard(ctx: Ctx, userId: Id<"users">, conversation: any, projec
     context_md: renderProposal(proposal, current),
     blocking: false,
     silent: true,
-    to: [String(person)],
+    ...(station ? { trial: true } : { to: [String(await projectPerson(ctx, project))] }),
   });
   if (asked?.error) return { card_error: asked.error };
   await ctx.db.patch(proposal._id, { decision_id: asked.id });
-  return { card: asked.short_id };
+  if (!station) return { card: asked.short_id };
+  const trial_card = await fileTrialCard(ctx, { ...station, node_id: stationNodeOf(station.run, conversation), decision_id: asked.id, kind: "gate" }, Date.now());
+  return { card: asked.short_id, trial_card };
 }
 
 /**
@@ -642,9 +648,10 @@ export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: s
 /**
  * A person applies or drops a proposal (LM5): from a terminal or the web,
  * never from an agent session, which proposes and leaves the answer to the
- * person (resolveProposalCore). A trial project asks nobody (LL12), so there
- * an agent session answers as a stand-in, the way it answers a trial run's
- * earlier gates, and the version records that it did.
+ * person (resolveProposalCore). In a trial project (LL12) an agent session
+ * may answer as a stand-in, the way it answers a trial run's earlier gates:
+ * the version records that it did, and the proposal's trial decision is
+ * withdrawn rather than answered in the person's name.
  */
 export const resolve = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), action: v.union(v.literal("apply"), v.literal("drop")), conversation_id: v.optional(v.string()) },
@@ -704,45 +711,39 @@ export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposa
 }
 
 /**
- * One-off repair (packages/convex/run.sh expectations:settleTrialCards): a
- * trial project's open proposals leave every person's queue. Each pending card
- * is withdrawn and unlinked, and a task waiting on that card stops waiting
- * (the proposal waits on the trial review page instead). A proposal written
- * against an older version is re-based onto the current one when its changes
- * still apply there, or keeps the reason it cannot. `dry` reports only.
+ * One-off repair (packages/convex/run.sh expectations:askTrialProposals): a
+ * trial project's open proposals written while a trial asked nobody get their
+ * decision now, through postCard, as a trial decision of the station that
+ * proposed them. A proposal written against an older version is re-based onto
+ * the current one first when its changes still apply there, or keeps the
+ * reason it cannot and is not asked. `dry` reports only.
  */
-export const settleTrialCards = internalMutation({
+export const askTrialProposals = internalMutation({
   args: { dry: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const now = Date.now();
     const projects: Doc<"projects">[] = (await ctx.db.query("projects").collect()).filter((p: Doc<"projects">) => !!p.line_trial);
-    const out: Array<{ project: string; proposal: string; card?: string; withdrawn?: boolean; unwaited?: string[]; rebased?: string; refused?: string }> = [];
+    const out: Array<{ project: string; proposal: string; rebased?: string; refused?: string; station?: string; card?: string; trial_card?: string; card_error?: string }> = [];
     for (const project of projects) {
       const latest = await latestExpectations(ctx, project._id);
       const version = latest?.version ?? 0;
-      const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-      const open: Doc<"expectation_proposals">[] = (await ctx.db.query("expectation_proposals").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).collect()).filter((p: any) => p.status === "open");
+      const open: Doc<"expectation_proposals">[] = (await ctx.db.query("expectation_proposals").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).collect()).filter((p: any) => p.status === "open" && !p.decision_id);
       for (const p of open) {
         const row: (typeof out)[number] = { project: project.title, proposal: p.short_id };
-        const card = p.decision_id ? await ctx.db.get(p.decision_id) : null;
-        if (card) {
-          row.card = card.short_id;
-          const waiting = tasks.filter((t) => (t.waits ?? []).some((w: any) => w.kind === "decision" && String(w.decision).toLowerCase() === String(card.short_id).toLowerCase()));
-          row.unwaited = waiting.map((t) => t.short_id);
-          row.withdrawn = card.status === "pending";
-          if (!args.dry) {
-            for (const t of waiting) await removeWaitCore(ctx as any, project.line_trial!.by, t.short_id, { ref: card.short_id });
-            if (card.status === "pending") await withdrawCore(ctx as any, card, now);
-            await ctx.db.patch(p._id, { decision_id: undefined, updated_at: now });
-          }
-        }
+        out.push(row);
         if (p.base_version < version) {
           const trial = applyOps({ items: latest?.items ?? [], prefix: latest?.prefix ?? "x", next_n: latest?.next_n ?? 1 }, p.ops, version + 1, p.base_version);
           if (trial.ok) row.rebased = `${p.base_version} -> ${version}`;
           else row.refused = trial.errors.join("\n");
           if (!args.dry) await ctx.db.patch(p._id, trial.ok ? { base_version: version, refused: undefined, updated_at: now } : { refused: row.refused, updated_at: now });
+          if (!trial.ok) continue;
         }
-        out.push(row);
+        const conversation = p.conversation_id ? await ctx.db.get(p.conversation_id) : null;
+        const station = await trialStationOf(ctx, conversation);
+        if (!station || String(station.project._id) !== String(project._id)) continue;
+        row.station = station.task.short_id;
+        if (args.dry) continue;
+        Object.assign(row, await postCard(ctx, p.user_id, conversation, project, await ctx.db.get(p._id), latest?.items ?? []));
       }
     }
     return out;
