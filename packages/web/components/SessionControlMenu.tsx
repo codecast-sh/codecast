@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, ArrowRightLeft, ChevronRight, MoveRight, Send, Split } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowRightLeft, ChevronRight, ChevronUp, MoveRight, Send, Split } from "lucide-react";
 import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, isCloudAgentBranch, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
 import { formatShortcutParts, getShortcutsForAction, useShortcuts } from "../shortcuts";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -428,7 +428,10 @@ export function HeaderModelControl({
   canEdit,
   open,
   onOpenChange,
+  variant = "header",
 }: {
+  /** "composer": the chip in the composer's status row, opening upward. */
+  variant?: "header" | "composer";
   conversationId: string | undefined;
   agentType: string | undefined;
   model: string | undefined;
@@ -490,28 +493,48 @@ export function HeaderModelControl({
     );
   }
 
+  const composer = variant === "composer";
+  const title = cloudNote
+    ? `${cloudNote} · switch attempt, fork, hand off`
+    : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`;
+  // A cloud launch that asked for nothing more names what the panel does instead: move it (fork or hand off).
+  const triggerBody = <>
+    {!label && cloud && <MoveRight className="h-2.5 w-2.5 shrink-0" aria-hidden />}
+    <span className="truncate max-w-none">{label || (cloud ? "move" : "model")}</span>
+    {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
+  </>;
+
   return (
-    <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-      <span className="text-sol-text-dim">&middot;</span>
+    <div className={composer ? "flex items-center flex-shrink-0" : "hidden sm:flex items-center gap-1.5 flex-shrink-0"}>
+      {!composer && <span className="text-sol-text-dim">&middot;</span>}
       <DropdownMenu open={isOpen} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
-          <button
-            data-session-control-trigger
-            className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
-            title={cloudNote
-              ? `${cloudNote} · switch attempt, fork, hand off`
-              : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`}
-          >
-            {/* A cloud launch that asked for nothing more names what the panel does instead: move it (fork or hand off). */}
-            {!label && cloud && <MoveRight className="h-2.5 w-2.5 shrink-0" aria-hidden />}
-            <span className="truncate max-w-none">{label || (cloud ? "move" : "model")}</span>
-            {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
-            <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
+          {composer ? (
+            <button
+              type="button"
+              data-session-control-trigger="composer"
+              onMouseDown={(e) => e.preventDefault()}
+              className="group flex items-center gap-1.5 rounded-full border border-sol-border/40 py-0.5 pl-1 pr-1.5 font-mono text-[10px] text-sol-text-secondary transition-colors hover:border-sol-border hover:bg-sol-bg-alt hover:text-sol-text data-[state=open]:border-sol-border data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text"
+              title={title}
+            >
+              <AgentMark type={agentType || "claude_code"} current size="sm" />
+              {triggerBody}
+              <ChevronUp className="h-2.5 w-2.5 opacity-50 transition-opacity group-hover:opacity-80" />
+            </button>
+          ) : (
+            <button
+              data-session-control-trigger
+              className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
+              title={title}
+            >
+              {triggerBody}
+              <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          )}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-[21rem] max-w-[calc(100vw-1rem)] p-0">
+        <DropdownMenuContent align="end" side={composer ? "top" : undefined} className="w-[21rem] max-w-[calc(100vw-1rem)] p-0">
           <SessionControlPanel
             conversationId={conversationId!}
             agentType={agentType}
