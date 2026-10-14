@@ -19,10 +19,18 @@ import { internal } from "./_generated/api";
 // `cast state` has landed. Every sibling worker that settled and has not yet
 // told the parent rides the same message: a fan-out that finishes together
 // reads as one turn, not five.
+//
+// A worker that ended its turn by reporting with `cast send` already woke the
+// parent with the result itself, so its settle tells nothing more: on
+// 2026-10-14 jx77sf8 took a second, empty turn after nearly every report.
+// Only a report close to the settle counts, so a note sent early in a long
+// turn does not hide the finish; stalls and declared blocks always tell.
 
 const SIBLING_SCAN_LIMIT = 100;
 /** How far back a worker with nothing pinned is searched for a typed line. */
 const TYPED_SCAN_LIMIT = 40;
+/** How long before a settle a `cast send` to the parent still counts as the report. */
+export const REPORT_COVERS_SETTLE_MS = 5 * 60_000;
 
 type WorkerRow = {
   _id: Id<"conversations">;
@@ -42,6 +50,7 @@ type WorkerRow = {
   thread_state_at?: number;
   thread_state_msg_count?: number;
   hand_wake_notified_key?: string;
+  reported_to_parent_at?: number;
 };
 
 export function isSpawnedWorker(c: WorkerRow): boolean {
@@ -61,6 +70,12 @@ export function workerSettleWhy(w: WorkerRow, agentStatus: string | undefined, n
   const blocked = w.thread_state_status === "blocked" && !!w.thread_state &&
     threadStateFreshness(w, w.message_count ?? 0, now).freshness !== "stale";
   return blocked ? "blocked" : "ended";
+}
+
+/** The worker told its parent the result itself at the end of this turn. */
+function reportedItself(w: WorkerRow, why: string, settledAt: number): boolean {
+  return (why === "ended" || why === "done") && w.reported_to_parent_at !== undefined &&
+    settledAt - w.reported_to_parent_at <= REPORT_COVERS_SETTLE_MS;
 }
 
 function episodeOf(w: WorkerRow): string {
@@ -133,7 +148,7 @@ export async function performTellParent(
     if (!c.message_count || !isSpawnedWorker(c) || c.hand_wake_notified_key === episodeOf(c)) continue;
     const status = c === worker ? session : await statusOf(ctx, c._id);
     const why = workerSettleWhy(c, status?.agent_status, now);
-    if (why) told.push({ worker: c, why });
+    if (why && !reportedItself(c, why, status?.agent_status_updated_at ?? now)) told.push({ worker: c, why });
   }
   // A settled worker gives its slot back, and the queue behind it starts.
   if ((worker as any).subagent_slot === "running") await drainFleet(ctx, worker.user_id);

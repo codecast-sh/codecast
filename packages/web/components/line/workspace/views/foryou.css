@@ -26,6 +26,8 @@
 .fy-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
 .fy-ask {
   font-size: var(--lw-fs-base); line-height: 1.4; font-weight: 550; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere;
+  /* A row names what is asked; the reader beside it holds the question whole. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 .fy-meta { display: flex; flex-wrap: wrap; column-gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .fy-meta > span + span::before { content: "·"; margin-right: 6px; color: var(--lw-ink-3); opacity: .7; }
@@ -33,22 +35,26 @@
 .fy-due[data-late] { color: var(--lw-bad); }
 
 /* Where the rest went: one quiet line per Problems chip, outside the list's count and its J/K walk. */
-.fy-elsewhere { display: flex; flex-direction: column; margin-top: var(--lw-s4); padding-top: 8px; border-top: 1px solid var(--lw-rule); }
 .fy-none { margin: 6px 12px; font-size: var(--lw-fs-base); font-weight: 550; color: var(--lw-ink); }
 .fy-keys { display: flex; gap: 4px; margin: var(--lw-s4) 12px 0; opacity: .55; }
 
 .fy-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.fy-reader-h { flex: none; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 7px 12px 7px 20px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fy-reader-h { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 40px; padding: 7px 12px 7px 20px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .fy-process { font-weight: 600; color: var(--lw-ink-2); }
 /* The one head line: the problem (ref and whole title, opening the problem) and how long it has waited. */
-.fy-head { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; color: var(--lw-ink); text-decoration: none; }
+.fy-head { flex: 1 1 14rem; min-width: 0; display: flex; align-items: baseline; gap: 8px; color: var(--lw-ink); text-decoration: none; }
 .fy-ref { flex: none; font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .fy-title { font-size: var(--lw-fs-sm); line-height: 1.35; font-weight: 600; text-wrap: pretty; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: text-decoration-color var(--lw-fast); }
 a.fy-head:hover .fy-title { text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
 a.fy-head:hover .fy-ref { color: var(--lw-person-deep); }
 a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
 .fy-age { flex: none; }
-.fy-trial { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
+.fy-proj { flex: none; font-weight: 600; color: var(--lw-ink-2); }
+/* The route to the problem itself: a control, not a footnote, since the decision is read about it. */
+.fy-problem { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
+.fy-problem:hover { border-color: color-mix(in srgb, var(--lw-person) 45%, transparent); color: var(--lw-person-deep); }
+.fy-problem:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
+.fy-trial { flex-shrink: 0; white-space: nowrap; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
 .fy-trial:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
 .fy-pos { flex: none; margin-left: auto; }
 .fy-reader-h .lw-iconbtn:disabled { opacity: .3; pointer-events: none; }

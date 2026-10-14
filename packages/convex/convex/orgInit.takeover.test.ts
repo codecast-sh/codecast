@@ -96,7 +96,7 @@ describe("a scope change takes over the sessions in it", () => {
     expect(roleOf(db, 3)).toBeUndefined();
     expect(roleOf(db, 4)).toBeUndefined();
     // Each moved session was told once, through the reparent core's line.
-    const told = db._tables.pending_messages.filter((m: any) => String(m.content).includes("You now report to Growth."));
+    const told = db._tables.pending_messages.filter((m: any) => String(m.content).includes("You now report to Growth (@"));
     expect(told.length).toBe(2);
   });
 
