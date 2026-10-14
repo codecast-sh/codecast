@@ -280,11 +280,18 @@ export function personName(u: any): string {
   return u?.name || u?.github_username || u?.email?.split("@")[0] || "a teammate";
 }
 
-// The line every reparent delivers (org-staffing.md S11). One writer, so the
-// session and the role hear the same sentence.
-export function reportsToLine(name: string, note?: string): string {
-  const trimmed = note?.trim();
-  return `You now report to ${name}.${trimmed ? ` ${trimmed}` : ""}`;
+// The line every reparent delivers (org-staffing.md S11). It says what the
+// move changes for the agent: under a role, how to reach it; under a person,
+// that their questions now go to them. `note` is written to the agent; a
+// `handoff` note was written to the new owner (the ownership menu, `cast own`)
+// and is quoted as theirs, so the agent does not read it as its own orders.
+export function reportsToLine(to: ReportsTo, opts: { note?: string; handoff?: string } = {}): string {
+  const head = to.kind === "role"
+    ? `You now report to ${to.name} (@${to.handle}): what you need from a person goes to it first, and \`cast send @${to.handle}\` reaches it.`
+    : `You now report to ${to.name}: your questions and decisions go to them.`;
+  const note = opts.note?.trim();
+  const handoff = opts.handoff?.trim();
+  return [head, note, handoff && `Note handed to ${to.name} with this session: "${handoff}"`].filter(Boolean).join(" ");
 }
 
 // Who a session reports to: its role, else its primary owner (the
@@ -381,7 +388,7 @@ export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"use
 export async function performReparentSession(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; target: ReparentSessionTarget; note?: string; from_session?: string },
+  args: { session_id: string; target: ReparentSessionTarget; note?: string; handoff?: string; from_session?: string },
   // The batch form: the prepared role target, and the session's row as the
   // caller read it in this same transaction. The access rule below is the
   // same one; only the lookups that would answer the same thing are skipped.
@@ -393,10 +400,11 @@ export async function performReparentSession(
 async function reparentSessionCore(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; target: ReparentSessionTarget; note?: string; from_session?: string },
+  args: { session_id: string; target: ReparentSessionTarget; note?: string; handoff?: string; from_session?: string },
   known?: { batch: ReparentBatch; row: any },
 ): Promise<ReparentSessionResult> {
   const note = args.note?.trim() || undefined;
+  const handoff = args.handoff?.trim() || undefined;
   const targetRole = args.target.kind === "role" ? known?.batch.role ?? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
   const canReshapeTarget = known ? known.batch.canReshape : targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
   // Who may file: a person target is the ownership rule (the runner, or any
@@ -465,7 +473,7 @@ async function reparentSessionCore(
       }
     } else {
       for (const user of desired) {
-        if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, note)) added.push(user._id);
+        if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, handoff ?? note)) added.push(user._id);
       }
       if (mode === "set") {
         for (const ownerId of await listSessionOwnerIds(ctx, conversation._id)) {
@@ -509,7 +517,7 @@ async function reparentSessionCore(
   const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read });
   const told: { sessions: number; roles: number; deferred?: number } = { sessions: 0, roles: 0 };
   if (after && reportsToKey(after) !== reportsToKey(before)) {
-    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after.name, note), args.from_session, reportsToKey(after), known?.batch);
+    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after, { note, handoff }), args.from_session, reportsToKey(after), known?.batch);
     if (how === "deferred") told.deferred = 1; else told.sessions = 1;
   }
   // Open questions follow the new owners. Without this, asked_user_ids and
@@ -733,7 +741,7 @@ export async function performSetSessionOwners(
   authUserId: Id<"users">,
   args: { session_id: string; owners: string[]; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
-  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, note: args.note, from_session: args.from_session });
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, handoff: args.note, from_session: args.from_session });
 }
 
 // Add ONE owner without disturbing the others (`cast own`).
@@ -742,7 +750,7 @@ export async function performAddSessionOwner(
   authUserId: Id<"users">,
   args: { session_id: string; owner: string; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
-  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "add" }, note: args.note, from_session: args.from_session });
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "add" }, handoff: args.note, from_session: args.from_session });
 }
 
 // Remove ONE owner, leaving the rest (`cast disown`; defaults to self).

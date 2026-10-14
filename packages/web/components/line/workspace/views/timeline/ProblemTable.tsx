@@ -5,14 +5,15 @@
 // stands in one phrase, and when it was last seen. Rows sit under their status
 // group; a failure cause and a project not started are headings that carry the
 // group's one act. The whole row is the link to the problem.
-import { memo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { ageShort } from "../../../../../lib/lineFlow";
 import { momentWords } from "../../../../../lib/line/timeline";
-import { countIn } from "../../../../../lib/line/problemsOverview";
+import { countIn, rowStrip, stripWords, type OverviewWindow } from "../../../../../lib/line/problemsOverview";
 import { problemListName, rowTrend, type ProblemRow, type ProblemSection, type ProblemSort, type ProblemSub } from "../../../../../lib/line/problemTable";
 import type { StatusKey } from "../../../../../lib/line/problemStatus";
 import type { OverviewRange } from "../../../../../lib/line/problemsOverview";
+import { RowStrip } from "./RowStrip";
 
 /** The column heads: Findings and Last sort the whole list flat; Status returns to the page's own grouped order. */
 export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range: OverviewRange; sort: ProblemSort; onSort: (s: ProblemSort) => void; /** One chip is on: the list is that group whatever the sort, so Status sorts nothing. */ grouped: boolean; /** A picked bar: the column counts that day ("Oct 9"). */ day?: string | null }) {
@@ -37,10 +38,12 @@ export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range:
   );
 }
 
-export function ProblemTable({ sections, now, range, day, showProject, projectName, processOf, href, open, onStatus, subAct, rowAct, sectionAct }: {
+export function ProblemTable({ sections, now, range, win, day, showProject, projectName, processOf, href, open, onStatus, subAct, rowAct, sectionAct }: {
   sections: ReadonlyArray<ProblemSection>;
   now: number;
   range: OverviewRange;
+  /** The page's window: each row's strip spans it. */
+  win: OverviewWindow;
   /** A picked bar: each row's Findings cell is its count that day, the number the list is sorted by. */
   day?: { from: number; to: number } | null;
   showProject: boolean;
@@ -59,7 +62,7 @@ export function ProblemTable({ sections, now, range, day, showProject, projectNa
   sectionAct?: (status: StatusKey, rows: ReadonlyArray<ProblemRow>) => ReactNode;
 }) {
   const one = (r: ProblemRow) => {
-    const row = <Row key={r.id} row={r} range={range} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} />;
+    const row = <Row key={r.id} row={r} range={range} win={win} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} />;
     const act = rowAct?.(r);
     // The act sits under the row's status, outside its link: a press acts, never opens the problem.
     return act ? <div key={r.id} className="lwp-rowbox">{row}<div className="lwp-tr lwp-row-act" data-line-row-act={r.id}><span className="lwp-row-act-c">{act}</span></div></div> : row;
@@ -123,9 +126,11 @@ export function ProblemTable({ sections, now, range, day, showProject, projectNa
   );
 }
 
-const Row = memo(function Row({ row: r, range, dayN, age, project, process, href, open }: { row: ProblemRow; range: OverviewRange; dayN: number | null; age: string; project: string; process: string; href: string; open: (id: string) => void }) {
+const Row = memo(function Row({ row: r, range, win, dayN, age, project, process, href, open }: { row: ProblemRow; range: OverviewRange; win: OverviewWindow; dayN: number | null; age: string; project: string; process: string; href: string; open: (id: string) => void }) {
   // Under a picked bar the cell is that day's count, with no arrow: the comparison is the window's, not the day's.
   const trend = dayN == null ? rowTrend(r) : null;
+  const h = r.issue.history;
+  const strip = useMemo(() => rowStrip(h, win), [h, win]);
   const under = [r.issue.ref, process, project, r.dupOf && !r.foldedInto ? `same as ${r.dupOf}` : null, r.twins?.length ? `also ${r.twins.map((t) => t.issue.ref).filter(Boolean).join(", ")}` : null].filter(Boolean).join(" · ");
   return (
     <a
@@ -146,6 +151,7 @@ const Row = memo(function Row({ row: r, range, dayN, age, project, process, href
         {under && <span className="lwp-under">{under}</span>}
       </span>
       <span className="lwp-c-find" role="gridcell" data-trend={trend ?? undefined} title={r.before == null ? `${r.findings} in all` : `${r.before} in the ${range} before, ${r.findings} in all`}>
+        <RowStrip strip={strip} words={stripWords(strip, h, range)} />
         <span className="lw-num">{dayN ?? r.inWindow}</span>
         {trend === "up" && <ArrowUp aria-label="more than the window before" />}
         {trend === "down" && <ArrowDown aria-label="fewer than the window before" />}
