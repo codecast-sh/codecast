@@ -177,7 +177,13 @@ async function prsForSha(
   if (found.length) return found;
   if (!headSha) return [];
 
-  return (await openPRsInRepository(ctx, repository)).filter((pr) => pr.head_sha === headSha);
+  // By head, not by scanning the repository's open PRs: CI on a base branch
+  // names no PR, and a busy repository sends hundreds of those per commit.
+  const atHead: Doc<"pull_requests">[] = await ctx.db
+    .query("pull_requests")
+    .withIndex("by_repository_head", (q: any) => q.eq("repository", repository).eq("head_sha", headSha))
+    .collect();
+  return atHead.filter((pr) => pr.state === "open");
 }
 
 /**
@@ -277,7 +283,15 @@ export const storeWebhookEvent = internalMutation({
       return { success: true, duplicate: true };
     }
 
+    let payload: any = null;
+    try {
+      payload = JSON.parse(args.payload);
+    } catch {}
+    const repository: string | undefined = normalizeRepository(payload?.repository?.full_name);
+
     const handled = HANDLED_EVENT_TYPES.has(args.event_type);
+    const ciRepository = CI_EVENT_TYPES.has(args.event_type) ? repository : undefined;
+    if (ciRepository) await ensureCiDrain(ctx, ciRepository);
     const eventId = await ctx.db.insert("github_webhook_events", {
       delivery_id: args.delivery_id,
       event_type: args.event_type,
@@ -285,13 +299,8 @@ export const storeWebhookEvent = internalMutation({
       payload: args.payload,
       processed: !handled,
       created_at: Date.now(),
+      ...(ciRepository ? { ci_repository: ciRepository } : {}),
     });
-
-    let payload: any = null;
-    try {
-      payload = JSON.parse(args.payload);
-    } catch {}
-    const repository: string | undefined = normalizeRepository(payload?.repository?.full_name);
     const prNumber: number | undefined = payload?.pull_request?.number ?? payload?.issue?.number;
 
     if (args.event_type === "pull_request") {
@@ -310,12 +319,6 @@ export const storeWebhookEvent = internalMutation({
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processReviewEvent, { event_id: eventId });
     } else if (args.event_type === "pull_request_review_comment") {
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processReviewCommentEvent, { event_id: eventId });
-    } else if (args.event_type === "check_run") {
-      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processCheckRunEvent, { event_id: eventId });
-    } else if (args.event_type === "check_suite") {
-      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processCheckSuiteEvent, { event_id: eventId });
-    } else if (args.event_type === "workflow_run") {
-      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processWorkflowRunEvent, { event_id: eventId });
     } else if (args.event_type === "status") {
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processStatusEvent, { event_id: eventId });
     } else if (args.event_type === "pull_request_review_thread") {
@@ -1108,36 +1111,43 @@ export const processReviewThreadEvent = internalMutation({
 
 // ── Checks and commit statuses ──
 
+type Actor = { actor_login?: string; actor_avatar_url?: string };
+type CheckItem = { entry: CheckEntry; actor: Actor };
+
 /**
- * Fold one check result into a pull request and act on what changed.
+ * Fold check results into a pull request and act on what changed.
  *
  * A failure is worth saying out loud every time it happens, because each one is
  * a new thing to fix. Green is worth saying only on the way back from red or
  * from waiting: a repository whose checks pass all day should not wake anybody.
+ *
+ * `settled` collects PRs whose checks just settled so the caller can ask for
+ * their merge state once; without it the refresh is scheduled here.
  */
-async function applyCheckToPR(
+async function applyChecksToPR(
   ctx: any,
   pr: Doc<"pull_requests">,
-  entry: CheckEntry,
-  actor: { actor_login?: string; actor_avatar_url?: string },
+  items: CheckItem[],
+  settled?: Set<Id<"pull_requests">>,
 ): Promise<void> {
   const before = pr.checks_state;
-  const result = await patchPullRequest(ctx, pr._id, { checks: upsertCheck(pr.checks, entry) });
+  let checks = pr.checks;
+  for (const { entry } of items) checks = upsertCheck(checks, entry);
+  const result = await patchPullRequest(ctx, pr._id, { checks });
   if (!result) return;
   const updated = result.pr;
 
   // Once the checks have settled either way, ask GitHub to recompute whether the
-  // branch merges. Deliberately gated on the FOLDED state rather than on this
-  // one entry: a twenty leg matrix would otherwise queue twenty refreshes, and
+  // branch merges. Deliberately gated on the FOLDED state rather than on one
+  // entry: a twenty leg matrix would otherwise queue twenty refreshes, and
   // every one of them spends two API calls to learn the same thing.
-  if (entry.status === "completed" && updated.checks_state !== "pending") {
-    await ctx.scheduler?.runAfter(CHECK_MERGE_STATE_DELAY_MS, internal.prShepherd.refreshMergeState, {
-      pr_id: updated._id,
-      attempt: 0,
-    });
+  if (items.some((i) => i.entry.status === "completed") && updated.checks_state !== "pending") {
+    if (settled) settled.add(updated._id);
+    else await scheduleMergeStateRefreshes(ctx, [updated._id], CHECK_MERGE_STATE_DELAY_MS);
   }
 
-  if (isFailingCheck(entry)) {
+  const failing = items.filter((i) => isFailingCheck(i.entry));
+  for (const { entry, actor } of failing) {
     await recordExternalEvent(ctx, {
       source: "github",
       team_id: updated.team_id,
@@ -1157,8 +1167,8 @@ async function applyCheckToPR(
     });
     await fireTrigger(ctx, "pr_check_failed", updated);
     await wakeShepherd(ctx, updated._id, "check_failed", `${checkLabel(entry)} ${entry.conclusion}`);
-    return;
   }
+  if (failing.length) return;
 
   if (updated.checks_state === "success" && before !== "success") {
     await recordExternalEvent(ctx, {
@@ -1166,7 +1176,7 @@ async function applyCheckToPR(
       team_id: updated.team_id,
       repository: updated.repository,
       kind: "pr_check",
-      ...actor,
+      ...items[items.length - 1].actor,
       title: `CI passed on PR #${updated.number}`,
       url: prUrl(updated.repository, updated.number),
       sha: updated.head_sha,
@@ -1183,42 +1193,32 @@ async function applyCheckToPR(
   }
 }
 
-export const processCheckRunEvent = internalMutation({
-  args: {
-    event_id: v.id("github_webhook_events"),
-  },
-  handler: async (ctx, args) => {
-    const event = await ctx.db.get(args.event_id);
-    if (!event) return { success: false };
-    await ctx.db.patch(args.event_id, { processed: true });
+/** A check_run delivery as the check entry it adds and the PRs it belongs to. */
+async function readCheckRun(
+  ctx: any,
+  payload: any,
+): Promise<{ prs: Doc<"pull_requests">[]; item?: CheckItem } | null> {
+  const run = payload.check_run;
+  const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
+  if (!run || !repository) return null;
 
-    const payload = JSON.parse(event.payload) as any;
-    const run = payload.check_run;
-    const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
-    if (!run || !repository) return { success: false };
+  const prs = await prsForSha(ctx, repository, run.pull_requests, run.head_sha);
+  if (prs.length === 0) return { prs };
 
-    const prs = await prsForSha(ctx, repository, run.pull_requests, run.head_sha);
-    if (prs.length === 0) return { success: true, prs: 0, reason: "no PR for this head" };
-
-    const suiteId = run.check_suite?.id != null ? String(run.check_suite.id) : undefined;
-    const entry: CheckEntry = {
-      name: run.name,
-      status: run.status,
-      conclusion: run.conclusion ?? undefined,
-      url: run.html_url ?? run.details_url,
-      updated_at: Date.now(),
-      external_id: String(run.id),
-      suite_id: suiteId,
-      event: await checkSuiteEvent(ctx, repository, suiteId),
-      app: run.app?.slug ?? undefined,
-    };
-
-    for (const pr of prs) {
-      await applyCheckToPR(ctx, pr, entry, actorFrom(payload));
-    }
-    return { success: true, prs: prs.length };
-  },
-});
+  const suiteId = run.check_suite?.id != null ? String(run.check_suite.id) : undefined;
+  const entry: CheckEntry = {
+    name: run.name,
+    status: run.status,
+    conclusion: run.conclusion ?? undefined,
+    url: run.html_url ?? run.details_url,
+    updated_at: Date.now(),
+    external_id: String(run.id),
+    suite_id: suiteId,
+    event: await checkSuiteEvent(ctx, repository, suiteId),
+    app: run.app?.slug ?? undefined,
+  };
+  return { prs, item: { entry, actor: actorFrom(payload) } };
+}
 
 /**
  * Remember what triggered a workflow run's check suite. Every action of the
@@ -1228,6 +1228,181 @@ export const processCheckRunEvent = internalMutation({
  * repository's default branch also files on the github-ci source
  * (defaultBranchCiRun).
  */
+async function applyWorkflowRun(ctx: any, payload: any) {
+  const run = payload.workflow_run;
+  const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
+  if (!run || !repository || run.check_suite_id == null || !run.event) return { success: true, skipped: true };
+
+  const suiteId = String(run.check_suite_id);
+  const row = {
+    repository,
+    suite_id: suiteId,
+    event: String(run.event),
+    workflow_run_id: run.id != null ? String(run.id) : undefined,
+    head_sha: run.head_sha ?? undefined,
+    updated_at: Date.now(),
+  };
+  const existing = await ctx.db
+    .query("github_check_suites")
+    .withIndex("by_repository_suite", (q: any) => q.eq("repository", repository).eq("suite_id", suiteId))
+    .first();
+  if (existing) await ctx.db.patch(existing._id, row);
+  else await ctx.db.insert("github_check_suites", row);
+
+  // CI on the default branch has no pull request to fold into: it files as
+  // a check on the team's github-ci source instead (external-data.md X7).
+  const ci = defaultBranchCiRun(payload);
+  const team = ci ? await resolveTeamForRepository(ctx, repository) : null;
+  const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
+  return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
+}
+
+/**
+ * A finished check suite, used only when no individual check_run reached us
+ * (a provider that reports suites alone). With per-run detail in hand the suite
+ * would say the same thing twice, so it stands aside.
+ */
+async function applyCheckSuite(ctx: any, payload: any, settled?: Set<Id<"pull_requests">>) {
+  const suite = payload.check_suite;
+  const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
+  if (!suite || !repository || suite.status !== "completed") return { success: true, skipped: true };
+
+  const prs = await prsForSha(ctx, repository, suite.pull_requests, suite.head_sha);
+  let applied = 0;
+  for (const pr of prs) {
+    // A PR's checks belong to its current head (synchronize clears them), so a
+    // suite for an older head is stale and must not speak for the new one.
+    if (suite.head_sha && pr.head_sha && suite.head_sha !== pr.head_sha) continue;
+    // Webhook order is not guaranteed. Standing aside means standing aside for
+    // REAL per-run detail, whether it arrived before this suite or after: a
+    // previous synthetic entry of our own is no reason to stay quiet.
+    if ((pr.checks ?? []).some((c) => !isSyntheticSuite(c))) continue;
+    const entry: CheckEntry = {
+      name: suite.app?.name ? `${suite.app.name} checks` : "checks",
+      status: "completed",
+      conclusion: suite.conclusion ?? undefined,
+      url: prUrl(repository, pr.number),
+      updated_at: Date.now(),
+      external_id: `suite:${suite.id}`,
+    };
+    await applyChecksToPR(ctx, pr, [{ entry, actor: actorFrom(payload) }], settled);
+    applied++;
+  }
+  return { success: true, prs: applied };
+}
+
+// ── CI deliveries, drained per repository ──
+//
+// A busy repository's CI sends a check_run per job per commit (littlebird: ~72
+// per PR head, 418 for one commit on main), plus workflow_run and check_suite
+// deliveries for each. One scheduled job per delivery filled the scheduler's
+// slots for many minutes at a stretch and every other scheduled write in prod
+// waited behind them. A delivery now only joins its repository's queue
+// (ci_repository + processed:false), and one drain folds a batch of them: a
+// PR's checks are written once per batch and its merge state asked for once.
+
+const CI_EVENT_TYPES = new Set(["check_run", "check_suite", "workflow_run"]);
+// Long enough for a matrix's burst to land in one batch, short against CI.
+const CI_DRAIN_DELAY_MS = 2_000;
+// Small enough to stay well inside a mutation's 1s of JS under load.
+const CI_DRAIN_BATCH = 50;
+// A queue whose oldest delivery waited this long lost its drain.
+const CI_DRAIN_STALE_MS = 2 * 60 * 1000;
+
+function pendingCiEvents(ctx: { db: any }, repository: string) {
+  return ctx.db
+    .query("github_webhook_events")
+    .withIndex("by_ci_pending", (q: any) => q.eq("ci_repository", repository).eq("processed", false));
+}
+
+/**
+ * Before a CI delivery joins its repository's queue: the first delivery to find
+ * the queue empty schedules the drain, and the rest join the queue that drain
+ * reads. A queue whose oldest delivery has waited too long lost its drain, so
+ * a delivery schedules another, stamping the oldest so the next ones wait.
+ */
+async function ensureCiDrain(ctx: any, repository: string): Promise<void> {
+  const oldest: Doc<"github_webhook_events"> | null = await pendingCiEvents(ctx, repository).first();
+  if (oldest) {
+    if (Date.now() - (oldest.ci_redrain_at ?? oldest.created_at) < CI_DRAIN_STALE_MS) return;
+    await ctx.db.patch(oldest._id, { ci_redrain_at: Date.now() });
+  }
+  await ctx.scheduler.runAfter(oldest ? 0 : CI_DRAIN_DELAY_MS, internal.githubWebhooks.drainCiEvents, { repository });
+}
+
+function parsePayload(event: Doc<"github_webhook_events">): any {
+  try {
+    return JSON.parse(event.payload);
+  } catch {
+    return null;
+  }
+}
+
+export const drainCiEvents = internalMutation({
+  args: { repository: v.string() },
+  handler: async (ctx, args) => {
+    const events: Doc<"github_webhook_events">[] = await pendingCiEvents(ctx, args.repository).take(CI_DRAIN_BATCH);
+    for (const event of events) await ctx.db.patch(event._id, { processed: true });
+
+    const of = (type: string) => events.filter((e) => e.event_type === type).map(parsePayload).filter(Boolean);
+    const failed: string[] = [];
+    const attempt = async (what: string, fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+      } catch (error) {
+        failed.push(what);
+        console.error(`[githubWebhooks] CI drain ${args.repository}: ${what} failed:`, error);
+      }
+    };
+
+    // Workflow runs first: a check_run reads the triggering event they record.
+    for (const payload of of("workflow_run")) await attempt("workflow_run", () => applyWorkflowRun(ctx, payload));
+
+    const byPr = new Map<Id<"pull_requests">, { pr: Doc<"pull_requests">; items: CheckItem[] }>();
+    for (const payload of of("check_run")) {
+      await attempt("check_run", async () => {
+        const read = await readCheckRun(ctx, payload);
+        if (!read?.item) return;
+        for (const pr of read.prs) {
+          const group = byPr.get(pr._id) ?? { pr, items: [] };
+          group.items.push(read.item);
+          byPr.set(pr._id, group);
+        }
+      });
+    }
+    const settled = new Set<Id<"pull_requests">>();
+    for (const { pr, items } of byPr.values()) await attempt("checks", () => applyChecksToPR(ctx, pr, items, settled));
+
+    // Suites last: they stand aside for any per-run detail this batch just wrote.
+    for (const payload of of("check_suite")) await attempt("check_suite", () => applyCheckSuite(ctx, payload, settled));
+
+    await scheduleMergeStateRefreshes(ctx, [...settled], CHECK_MERGE_STATE_DELAY_MS);
+    if (events.length === CI_DRAIN_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.githubWebhooks.drainCiEvents, { repository: args.repository });
+    }
+    return { events: events.length, prs: byPr.size, settled: settled.size, failed };
+  },
+});
+
+// Single-delivery processors: the drain's steps for one stored event.
+
+export const processCheckRunEvent = internalMutation({
+  args: {
+    event_id: v.id("github_webhook_events"),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.event_id);
+    if (!event) return { success: false };
+    await ctx.db.patch(args.event_id, { processed: true });
+
+    const read = await readCheckRun(ctx, JSON.parse(event.payload));
+    if (!read) return { success: false };
+    if (!read.item) return { success: true, prs: 0, reason: "no PR for this head" };
+    for (const pr of read.prs) await applyChecksToPR(ctx, pr, [read.item]);
+    return { success: true, prs: read.prs.length };
+  },
+});
+
 export const processWorkflowRunEvent = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -1236,42 +1411,10 @@ export const processWorkflowRunEvent = internalMutation({
     const event = await ctx.db.get(args.event_id);
     if (!event) return { success: false };
     await ctx.db.patch(args.event_id, { processed: true });
-
-    const payload = JSON.parse(event.payload) as any;
-    const run = payload.workflow_run;
-    const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
-    if (!run || !repository || run.check_suite_id == null || !run.event) return { success: true, skipped: true };
-
-    const suiteId = String(run.check_suite_id);
-    const row = {
-      repository,
-      suite_id: suiteId,
-      event: String(run.event),
-      workflow_run_id: run.id != null ? String(run.id) : undefined,
-      head_sha: run.head_sha ?? undefined,
-      updated_at: Date.now(),
-    };
-    const existing = await ctx.db
-      .query("github_check_suites")
-      .withIndex("by_repository_suite", (q: any) => q.eq("repository", repository).eq("suite_id", suiteId))
-      .first();
-    if (existing) await ctx.db.patch(existing._id, row);
-    else await ctx.db.insert("github_check_suites", row);
-
-    // CI on the default branch has no pull request to fold into: it files as
-    // a check on the team's github-ci source instead (external-data.md X7).
-    const ci = defaultBranchCiRun(payload);
-    const team = ci ? await resolveTeamForRepository(ctx, repository) : null;
-    const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
-    return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
+    return await applyWorkflowRun(ctx, JSON.parse(event.payload));
   },
 });
 
-/**
- * A finished check suite, used only when no individual check_run reached us
- * (a provider that reports suites alone). With per-run detail in hand the suite
- * would say the same thing twice, so it stands aside.
- */
 export const processCheckSuiteEvent = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -1280,34 +1423,7 @@ export const processCheckSuiteEvent = internalMutation({
     const event = await ctx.db.get(args.event_id);
     if (!event) return { success: false };
     await ctx.db.patch(args.event_id, { processed: true });
-
-    const payload = JSON.parse(event.payload) as any;
-    const suite = payload.check_suite;
-    const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
-    if (!suite || !repository || suite.status !== "completed") return { success: true, skipped: true };
-
-    const prs = await prsForSha(ctx, repository, suite.pull_requests, suite.head_sha);
-    let applied = 0;
-    for (const pr of prs) {
-      // A PR's checks belong to its current head (synchronize clears them), so a
-      // suite for an older head is stale and must not speak for the new one.
-      if (suite.head_sha && pr.head_sha && suite.head_sha !== pr.head_sha) continue;
-      // Webhook order is not guaranteed. Standing aside means standing aside for
-      // REAL per-run detail, whether it arrived before this suite or after: a
-      // previous synthetic entry of our own is no reason to stay quiet.
-      if ((pr.checks ?? []).some((c) => !isSyntheticSuite(c))) continue;
-      const entry: CheckEntry = {
-        name: suite.app?.name ? `${suite.app.name} checks` : "checks",
-        status: "completed",
-        conclusion: suite.conclusion ?? undefined,
-        url: prUrl(repository, pr.number),
-        updated_at: Date.now(),
-        external_id: `suite:${suite.id}`,
-      };
-      await applyCheckToPR(ctx, pr, entry, actorFrom(payload));
-      applied++;
-    }
-    return { success: true, prs: applied };
+    return await applyCheckSuite(ctx, JSON.parse(event.payload));
   },
 });
 
@@ -1338,7 +1454,7 @@ export const processStatusEvent = internalMutation({
 
     const prs = await prsForSha(ctx, repository, undefined, sha);
     for (const pr of prs) {
-      await applyCheckToPR(ctx, pr, entry, actorFrom(payload));
+      await applyChecksToPR(ctx, pr, [{ entry, actor: actorFrom(payload) }]);
     }
     return { success: true, prs: prs.length };
   },
