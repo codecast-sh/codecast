@@ -3596,6 +3596,7 @@ export default defineSchema({
     // Open PRs of one repository: check and push webhooks look a head sha or a
     // base branch up among these, never among every PR the repository ever had.
     .index("by_repository_state", ["repository", "state"])
+    .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"])
     // A team's pull requests touched in a trailing window (page data readers).
@@ -4708,6 +4709,12 @@ export default defineSchema({
       v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
     ),
     holder_key: v.optional(v.string()),
+    // A person handed the question to someone else (passCore): a teammate or a
+    // role. It then holds the decision whatever routing or grants say, and a
+    // role it was passed to may answer it without a grant.
+    passed_to: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number() })
+    ),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A
@@ -4947,9 +4954,16 @@ export default defineSchema({
     payload: v.string(),
     processed: v.boolean(),
     created_at: v.number(),
+    // Set on CI deliveries (check_run, check_suite, workflow_run): the
+    // repository whose drain folds them (githubWebhooks.drainCiEvents).
+    ci_repository: v.optional(v.string()),
+    // When a delivery found this one waiting too long and scheduled a fresh
+    // drain, so the next ones do not schedule another right away.
+    ci_redrain_at: v.optional(v.number()),
   })
     .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"]),
+    .index("by_processed", ["processed"])
+    .index("by_ci_pending", ["ci_repository", "processed"]),
 
   // Which event triggered a GitHub Actions check suite. A check_run names its
   // suite but not the event; the workflow_run delivery for the same suite does.

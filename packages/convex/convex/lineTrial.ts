@@ -35,10 +35,10 @@ import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, 
 export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
-import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, stationSession, type GateChoice } from "./workflow_runs";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
+import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
 import { alignGateChoices } from "./lib/gateChoices";
-import { trialProjectOf, trialStackOf } from "./lib/trialDecision";
+import { trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
 import { parseMoveTally } from "./lib/moveTally";
 import { BEFORE_LINE, CLOSED_WITH, retireOnClose } from "./findingGroups";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -459,6 +459,8 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     options: asked?.options ?? (row.kind === "gate" && row.proposal ? proposalOptions(row.options ?? []) : row.options ?? []),
     /** The decision the asking station's session posted: its page leads the card, and its thread is where to talk it over. */
     decision: asked?.decision ?? null,
+    /** The role the card belongs to and the people it waits on, when it is not the trial owner's (audienceOf): it is in their For you and nobody else's. */
+    audience: await audienceOf(ctx, row, project, run),
     card: row.card,
     proposal: row.proposal as ProposalCard | undefined,
     /** The judge route's card (shared/contracts/judgeFix): a measured fix to a judge, its extractor or an expectation, for the project's reviewer. */
@@ -518,8 +520,6 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
   const keyOf = (i: number) => (onIt && run!.gate_choices?.[i]?.key) || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1));
   const options = d.options.map((o, i) => ({ key: keyOf(i), label: o.label, ...(o.description ? { description: o.description } : {}) }));
   const chosen = d.status === "answered" && d.answer_index !== undefined ? options[d.answer_index] : undefined;
-  // A trial decision with a ladder is a role's (sessionDecisions.routeFor: a judge fix goes to the route's decider).
-  const forRole: Doc<"org_roles"> | null = d.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
   return {
     question: d.question,
     context_md: d.context_md,
@@ -533,12 +533,25 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
       status: d.status,
       report_slug: d.report_slug ?? null,
       session: conversation ? { _id: conversation._id, short_id: conversation.short_id ?? null, title: conversation.title ?? null } : null,
-      /** The people it is asked of: a card is in their For you and nobody else's. */
-      asked: (d.asked_user_ids ?? [d.user_id]).map(String),
-      /** The role it belongs to, when it is not the trial owner's: it hears first and answers or hands up to `asked`. */
-      for_role: forRole ? { _id: forRole._id, short_id: forRole.short_id ?? null, name: forRole.name, handle: forRole.handle ?? null } : null,
     },
   };
+}
+
+/**
+ * Who a card waits on when it is a role's and not the trial owner's practice
+ * answer: null for the owner's. A decision that climbed a ladder names its
+ * role and the people it is asked of (sessionDecisions.routeFor). A judge-route
+ * card with no such decision (written before the trial named the route's
+ * decider, or by a gate no session asked) belongs to that decider all the
+ * same, and waits on the person its line ends at.
+ */
+export async function audienceOf(ctx: Ctx, row: Doc<"trial_cards">, project: Doc<"projects"> | null, run: Doc<"workflow_runs"> | null) {
+  const d: Doc<"session_decisions"> | null = row.decision_id ? await ctx.db.get(row.decision_id) : null;
+  const climbed: Doc<"org_roles"> | null = d?.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
+  const role = climbed ?? (project ? await trialDeciderOf(ctx, project, run) : null);
+  if (!role) return null;
+  const asked = climbed ? d!.asked_user_ids ?? [d!.user_id] : (await routeToRole(ctx, role, row.created_at)).people;
+  return { asked: asked.map(String), role: { _id: role._id, short_id: role.short_id ?? null, name: role.name, handle: role.handle ?? null } };
 }
 
 const VERDICT_KEY: Record<string, string> = { ship: "S", revise: "R", drop: "D" };
@@ -832,7 +845,7 @@ export const setTrial = mutation({
 });
 
 /** Trial runs at once, at most: the machine running them is shared. */
-export const TRIAL_RUNNING_CAP = 3;
+export const TRIAL_RUNNING_CAP = 10;
 
 /**
  * Which graph a trial problem runs: one whose findings are cases against a
@@ -1038,7 +1051,7 @@ export function stopOf(run: Pick<Doc<"workflow_runs">, "status" | "node_statuses
  * A run that died while it waited at one of its own cards: its gate ended with
  * no answer (a gate poll that failed, read as a withdrawn gate), so the runner
  * found no edge out of it. Its evidence and its proposal are all written; the
- * run picks up at that gate again (resumeAtGate). The card it left names it.
+ * run picks up at that gate again (resumeRunAt). The card it left names it.
  */
 export type GateLoss = { node: string; card: string; kind: "gate" | "card" };
 
@@ -1049,19 +1062,6 @@ export async function gateLossOf(ctx: Ctx, run: Pick<Doc<"workflow_runs">, "_id"
   const cards: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
   const last = cards.filter((c) => c.node_id === node).sort((a, b) => b.created_at - a.created_at)[0];
   return last ? { node, card: last.short_id, kind: last.kind } : null;
-}
-
-/**
- * The run continues at the gate it lost, on its own machine, from its
- * checkpoint (cli runResume.ts): the gate is asked again from the values the
- * run had made (its proposal, its proof), so a new card stands where the lost
- * one stood. fresh_branch makes the daemon read the graph file again, so the
- * stations after the gate are the current ones; a resume never resets the branch.
- */
-async function resumeAtGate(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
-  if (task.execution_status === "blocked") await ctx.db.patch(task._id, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device!, now });
 }
 
 /**
@@ -1161,7 +1161,7 @@ export const runs = query({
  * its daemon, which sets the earlier run's branch aside and starts from
  * origin/main (cli lineTrialBranch.ts), so the proof runs against unfixed code.
  * A run that died waiting at its own card picks up at that gate instead
- * (resumeAtGate): its evidence and proposal are already made. Both go through
+ * (resumeRunAt): its evidence and proposal are already made. Both go through
  * the same machine, spend and run-count check as the dispatcher (trialRoom);
  * a gate resume is the same run, so it spends no run of max_runs.
  */
@@ -1281,7 +1281,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
     const node = route.to === "investigate" ? entry!.trim() : at?.trim() || asker?.trim() || run.gate_node_id;
     for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
-    await resumeAtGate(ctx, userId, task, run, node, now);
+    await resumeRunAt(ctx as any, userId, run, node, now);
     // Taken back once the run no longer waits on it, so the withdrawal cannot fail the run.
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
@@ -1293,7 +1293,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   const refused = rerunRefusal(await trialRoom(ctx, project, now), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
-    await resumeAtGate(ctx, userId, task, run, lost.node, now);
+    await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
   const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
@@ -1489,7 +1489,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   const r = Math.min(slots, lost.length, affordable);
   const resumed: string[] = [];
   if (!dry) for (const l of lost.slice(0, r)) {
-    await resumeAtGate(ctx, project.line_trial!.by, l.task, l.run, l.loss.node, now);
+    await resumeRunAt(ctx as any, project.line_trial!.by, l.run, l.loss.node, now);
     resumed.push(l.task.short_id);
   }
   // A proposal that recommends waiting goes back for the evidence the pipeline can gather first; each takes a slot like a start.
@@ -1527,7 +1527,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
     running,
     cap: TRIAL_RUNNING_CAP,
     started,
-    /** Runs that died waiting at their own card, picked up at that gate (resumeAtGate), or due to be on a dry pass. */
+    /** Runs that died waiting at their own card, picked up at that gate (resumeRunAt), or due to be on a dry pass. */
     resumed: dry ? lost.slice(0, r).map((l) => l.task.short_id) : resumed,
     /** Proposal cards sent back to gather their own evidence (gatherDue), or due to be on a dry pass. */
     gathering: dry ? waits.slice(0, g).map((w) => w.short_id) : gathering,
