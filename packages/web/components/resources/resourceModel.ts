@@ -103,10 +103,14 @@ export type Freshness = "cold" | "live" | "stale" | "offline";
 
 export function freshness(m: ResourceMachine, now: number): Freshness {
   if (!m.snapshot || m.receivedAt === undefined) return m.online ? "cold" : "offline";
-  if (!m.online) return "offline";
   // A freshly received report can still carry an old (or future-dated) sample.
   const at = m.snapshot.sample.at;
-  return now - m.receivedAt > RESOURCE_STALE_MS || now - at > RESOURCE_STALE_MS || at > now + 30_000 ? "stale" : "live";
+  const stale = now - m.receivedAt > RESOURCE_STALE_MS || now - at > RESOURCE_STALE_MS || at > now + 30_000;
+  // A fresh report is itself proof of life. The device heartbeat is a separate,
+  // heavier call that drops out for minutes on an overloaded machine, so it
+  // must not hide the one machine whose load matters most right then.
+  if (!stale) return "live";
+  return m.online ? "stale" : "offline";
 }
 
 export const memoryUsed = (p: ResourcePoint) => Math.max(0, p.memoryTotal - p.memoryAvailable);

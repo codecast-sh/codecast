@@ -10,7 +10,7 @@ Put one line in the page's `<head>`:
 
 `cast decide --report` and `cast publish` replace that line with the kit, inline, so the published page is one self-contained file. Write the body as plain HTML inside `<main>`, using the pieces below. `example.html` beside this file shows the pieces on invented data.
 
-Look before you post: `cast decide kit page.html` writes `page.preview.html`, the page exactly as it will be served. Open that in the cast browser at a wide and a narrow width, with `?theme=dark` and `?theme=light`, and read it as the person who has to decide.
+Look before you post: `cast decide kit page.html --serve` serves the page exactly as it will be published on a local address (it reloads from the file, so keep it running while you write). Open that in the cast browser at a wide and a narrow width, with `?theme=dark` and `?theme=light`, and read it as the person who has to decide. Without `--serve` it writes `page.preview.html` instead.
 
 ## What makes a page good
 
@@ -71,6 +71,19 @@ A message's `time` is read as when the person received it, so a line inside a ca
 
 A side holds anything: a message, a `<dk-event>` for an outcome that is not a message (a booking made, nothing sent), a paragraph, a `<dk-gap>`. In a side, each item is a slot of its own, so several runs of one moment read as a list: an outcome that is not a message is framed like the messages beside it, never as a divider.
 
+**A screen.** When the change alters something people see in the product, the picture of it is a screenshot of the product itself, never text or markup drawn to stand for it. Run the product as it was and as changed, on the same records, and capture the same screen from both; `cast image` (or `cast browser shot --share`) turns a capture into the address `src` takes. Capture at a width the screen is really used at and clip to the part the decision is about, so it still reads on a phone. Two or more shots of one screen share a frame and flip by their labels, so the change reads in place; one shot stands alone, and either sits in a case or a side like any other piece.
+
+```html
+<dk-shots>
+  <figcaption>Evals, Cases grid, the same 30 runs</figcaption>
+  <dk-shot label="Today" src="https://…" alt="What the screen shows">What to look at, in a line.</dk-shot>
+  <dk-shot label="With the change" src="https://…" alt="…">…</dk-shot>
+</dk-shots>
+<dk-shot label="The page a person lands on" src="https://…" alt="…"></dk-shot>
+```
+
+A shot opens full size in one tap. Its text, when it has any, says what to look at.
+
 **Nothing on record.** The honest state of a slot that could not be filled, for a case the decision does not turn on. When the empty slot is the one the decision turns on, the gap is the question, asked on the card, not a box on the page.
 
 ```html
@@ -115,7 +128,7 @@ A change appears once on the page as what it does: the rendered words, or what t
 </dk-examples>
 ```
 
-A case may hold a `<dk-msg>`, a `<dk-pair>`, a `<dk-gap>` or a `<dk-view>`.
+A case may hold a `<dk-msg>`, a `<dk-pair>`, a `<dk-gap>`, a `<dk-shot>` or `<dk-shots>`, or a `<dk-view>`.
 
 **Facts.** A number set large is read as measured, so only a number that was counted gets one, with what it counts and out of how many. Facts in one strip are read as like for like, so they share one strip only when they count the same thing the same way. A fact is set in ink, never coloured: what a count means for people is said in its words, which read at a glance (what it counts, out of what); whatever more it needs belongs in the page's text.
 
@@ -141,6 +154,15 @@ A case may hold a `<dk-msg>`, a `<dk-pair>`, a `<dk-gap>` or a `<dk-view>`.
 ```
 
 **A table.** A few rows of counts read across, as a plain `<table>` with `<th>` headers; the first column names the row and the rest are numbers. Every header and row label says, in the founder's words, which version a person met and what happened to them; a cell is one count out of its whole. On a phone a table of three or more columns stacks each row under its name, a label and value per column, so every column stays in view.
+
+**A grid of results.** A grid of passes and fails that no screen shows (results the page works out itself, a check's history read from logs) is drawn as cells, never as letters in `<pre>`; a grid people see on a screen is that screen, shot. Each row is one case, named whole by what tells it apart, its cells one letter each (`P` pass, `F` fail, `.` not run, oldest first) and its `note` the count it is sorted by. Before and after are two grids over the same rows.
+
+```html
+<dk-cells>
+  <figcaption>Today: the 5 cases that flip most, newest 30 runs</figcaption>
+  <dk-row name="Search status, when the carrier answers late" note="8 flips">..P.F..PF</dk-row>
+</dk-cells>
+```
 
 **A caveat** the reader must not miss: `<dk-caveat><b>Not checked:</b> …</dk-caveat>`.
 
