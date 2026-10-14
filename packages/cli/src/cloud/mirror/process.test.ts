@@ -185,14 +185,14 @@ test("actual runner retains parent-death cleanup after TERM while its tick is st
   cleanupReceipts.push({ control: "actual runner TERM then supervisor death", senderPid, descendantPid, trace, termHandled: true, heldTickReleased: false, groupAbsentBeforeFixtureCleanup: true });
 }, 15_000);
 
-test("source, built and compiled invocations run with the repaired launchd PATH", async () => {
+test("source, built and compiled invocations run with the repaired launchd PATH, clamped to utility QoS on macOS", async () => {
   const f = fixture();
   for (const extension of ["ts", "js"]) {
     const root = path.join(f.root, extension);
     fs.mkdirSync(root);
     const marker = path.join(root, "received.json");
     const main = path.join(root, `main.${extension}`);
-    fs.writeFileSync(main, `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),path:process.env.PATH,noUpdate:process.env.CODECAST_NO_AUTO_UPDATE})); setInterval(()=>{},1000);`);
+    fs.writeFileSync(main, `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),path:process.env.PATH,noUpdate:process.env.CODECAST_NO_AUTO_UPDATE,pri:Number(require('node:child_process').execFileSync('/bin/ps',['-o','pri=','-p',String(process.pid)]).toString().trim())})); setInterval(()=>{},1000);`);
     const invocation = mirrorProcessInvocation(process.execPath, path.join(root, `daemon.${extension}`));
     const prior = process.env.PATH;
     process.env.PATH = "/bin";
@@ -203,6 +203,9 @@ test("source, built and compiled invocations run with the repaired launchd PATH"
       expect(seen.args).toEqual(["cloud", "mirror-run"]);
       expect(seen.path).toContain("/.local/bin");
       expect(seen.noUpdate).toBe("1");
+      // Clamped to utility QoS on macOS, off the daemon's scheduling class; the
+      // stop below still finds the process it supervised (same pid).
+      if (process.platform === "darwin") expect(seen.pri).toBeLessThanOrEqual(20);
       await capture(f);
       await controller.stop();
     } finally { process.env.PATH = prior; }
