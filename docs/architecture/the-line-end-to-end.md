@@ -5,7 +5,7 @@ holds, evidence, runs. This document extends the line in both directions so
 that every change we make, to code or to a prompt, follows one graph:
 
 ```
-sense → attach → ground → admit → [plan gate] → prove → build → verify
+sense → attach → ground → admit → [plan] → prove → build → verify
       → eval → review → card → decide gate → ship → watch → learn
 ```
 
@@ -157,7 +157,7 @@ against), and the cause with its signals, and writes four fields:
 - `category`: `code` | `prompt` | `ux` | `infra` | `data` | `line`.
 - `risk`: `low` | `review` | `plan`. `plan` means architecture, cross cutting
   design, schema, billing or anything in the protected decision categories:
-  the run stops at a plan gate before build.
+  the approach is planned and written down before build (LE7).
 - `readiness`: `ready` | `needs_context` | `not_actionable`, with one line why.
 
 Priority is computed, not judged: goal priority × severity × signal count,
@@ -208,10 +208,21 @@ standing session spawned. Candidates are the role's assigned tasks plus causes
 
 ## LE7. Plan (only when `risk = plan`)
 
-An agent writes a short plan to the task (the approach, the files, what will
-be proven red, the size budget) and the run pauses on a plan gate: Approve,
-Revise (with a note, back to plan), Drop. Scope is frozen at the gate; new
-information during build sends the run back here instead of steering build.
+An agent writes a short plan to the task (the approach and why it beats the
+alternatives, the files, what will be proven red, the size budget) and the run
+goes straight on. Nobody approves the plan: the builder holds to it, the
+reviewer checks the branch against it, and the person meets the approach once,
+inside the finished change at Decide (LE11). A planner the record cannot carry
+to an approach pins `blocked` with what is missing, and the run stops (below).
+
+**Stopping instead of asking.** A run asks a person one thing, at its end. A
+station that cannot go on never parks a question in anyone's queue: the planner
+or builder that hands off `blocked` or `needs_context`, and the reviewer that
+rejects, end the run on purpose at a stop exit (`stopped`, `rejected`). The run
+fails with `fail_reason` "Stopped: <the station's own words>", the problem goes
+back to `open` with those words as a blocker comment, and it stays there until
+someone reruns the line. Any other failure (rounds exhausted, a dead session)
+ends the same way, with why and no decision (`on_failure=stop` on the graph).
 
 ## LE8. Prove, build, verify, eval
 
@@ -238,12 +249,15 @@ Prove tried, or the run's last error when Prove left no output. It is never
 built on or dissolved; a person reruns the line once the miss can be shown.
 
 **Build.** One change, in the worktree, within the profile's size budget
-(400 changed lines by default; more splits or returns to plan). Prompt changes
+(400 changed lines by default). A choice the builder meets on the way is its
+own to make from the record, with the reason in its evidence; when the change
+cannot be built it hands off `blocked` and the run stops (LE7). Prompt changes
 follow the profile's prompting standard (codecast's `docs/prompting.md` by
 default).
 
 **Verify.** The profile's check command in the worktree (`cast ws check` by
-default). Two failed rounds stop the run with a decision to the owner.
+default). When the builder's rounds run out the run stops and the problem is left open
+with what the last check said; nobody is asked.
 
 **Eval.** The profile's eval command picks the surfaces the branch owes,
 replays them on the base and on the branch, and writes `$run_dir/reps.json`;
@@ -285,16 +299,38 @@ ChangeCard {
 }
 ```
 
-Only `wrong`, `change` and `recommend` are written by a model, in one call that
-reads the rest. Everything else is assembled from what the nodes recorded.
+The card is the run's record of the change, not what the person reads. Code
+assembles it from what the nodes recorded (proof, checks, diff, cost, and reach
+counted from the findings the presenter says the change covers); the only words
+it takes from a model are the presenter's `recommend` and `why`, and it refuses
+a report that contradicts the facts (Ship over a red check or proof).
 
 ## LE11. Decide
 
-The card becomes a blocking gate decision bound to the task and run (the-line.md
-L4), with the card as its report and three options: Ship, Revise (a note goes
-back to build), Drop (close with the reason). A card is one decision in the
-person's one queue; the line files no stack of its own. The answer patches the
-run through `finalizeAnswer`; nothing is relayed by a session.
+Decide is the only time a run asks a person anything, and it is the last thing
+the run does before landing the change.
+
+The question comes from a session, not from a form. The presenting station
+(`card_write`, named by the gate as `asker=card_write`) reads the base presenter
+(`packages/cli/src/workflow/presenter.md`) followed by this line's addendum
+(`templates/line/card_write.md`). It runs the product before and after on the
+cases behind the problem, builds a page with the decision kit, and posts one
+decision with `cast decide`: its own question, its own answers, a short context
+and the page. It then pins `question`, `recommend`, `why`, `covers` and `page`.
+
+What the person gets reads like the answer a good session gives to "what was
+wrong, what did you do, should we ship it": plain language, and the problem and
+the fix shown on real cases. Code (the diff, the files, the checks) sits behind
+one fold. The session stays alive, so the person can talk it over in the same
+thread before answering.
+
+The `decide` gate adopts that session's pending decision and binds it to the
+task and run (the-line.md L4); it is one `session_decisions` row in the
+person's one queue, and the line files no stack of its own. The run routes on
+how the answer opens: `Ship` lands the change (LE12), `Drop` closes the problem
+with the reason, and any other answer goes back to the builder as the person's
+note. The answer patches the run through `finalizeAnswer`; nothing is relayed
+by a session.
 
 ## LE12. Ship, watch, learn
 

@@ -196,4 +196,9 @@ describe("threadStateResult", () => {
     expect(threadStateResult("Working on it.")).toBeNull();
     expect(threadStateResult('```json\n{ "a": \n```')).toBeNull();
   });
+
+  test("a block whose strings hold fences, closed on the json's last line, is read whole (ct-59945)", () => {
+    const report = JSON.stringify({ outcome: "proposed", proposal_md: "## Fix\n\n```ts\nconst a = 1;\n```\n" }, null, 1);
+    expect(JSON.parse(threadStateResult(`Proposed.\n\n\`\`\`json\n${report}\`\`\``)!)).toMatchObject({ outcome: "proposed" });
+  });
 });

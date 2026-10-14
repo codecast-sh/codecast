@@ -36,6 +36,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("crosstalk", "agents talking to each other across sessions"),
   dash("goals", "every goal, with its owner, health and the projects serving it (/goals/<in-N> opens one)"),
   dash("projects", "every project grouped by the goal it serves (/projects/<pj-…> opens its board)"),
+  dash("map", "every live session on one zoomable canvas, in piles you arrange, with the org's roles and reporting lines on top"),
   dash("org", "the people and agent roles who carry the work, and what waits on you (/org/<or-N|@handle> opens one)"),
   dash("browser", "a web page as a pane: the address rides the query string (?u=<url>)"),
   dash("chat", "human channels and direct messages"),
