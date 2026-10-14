@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { AgentResult } from '../../surface';
-import { budgetGate, callsByTurn, intendedWrites, playbookGate, standingGates } from './actions';
+import { budgetGate, callsByTurn, intendedWrites, ownWorkCalls, playbookGate, standingGates } from './actions';
 
 const agent = (turns: string[][], calls: string[] = []): AgentResult => ({ runSubdir: '/tmp/a', said: turns.flat(), turns, calls, costUsd: 0, modelUsage: {}, isError: false, exitCode: 0, model: 'pin', realMs: 0 });
 const verdict = (agents: AgentResult[], label: Parameters<typeof standingGates>[1], from = 1) => standingGates(agents, label, from).map((g) => [g.id, g.pass, g.evidence.summary]);
@@ -95,6 +98,36 @@ describe('the label gates', () => {
 });
 
 // A role's playbook and its own wake (org-staffing.md S38).
+describe('handing hands-on work off', () => {
+  // A run dir whose turn 2 stream made these tool calls (turn 1, the opening, made one of its own that the gate skips).
+  const withTools = (calls: Array<[string, Record<string, string>]>, said: string): AgentResult => {
+    const dir = mkdtempSync(join(tmpdir(), 'delegates-'));
+    const line = (name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
+    writeFileSync(join(dir, 'stream.jsonl'), line('Read', { file_path: '/repo/a.ts' }));
+    writeFileSync(join(dir, 'stream2.jsonl'), calls.map(([n, i]) => line(n, i)).join('\n'));
+    return { ...agent([['hello'], [said]]), runSubdir: dir };
+  };
+  const spawnSaid = '```\ncast spawn --subagent -- "Fix the broken link check"\n```';
+
+  test('cast calls are reading its world; any other tool call is its own work', () => {
+    const a = withTools([['Bash', { command: 'cast read jx7abcd' }], ['Bash', { command: 'cd /repo && cast brief' }], ['Bash', { command: 'grep -rn foo src' }], ['Edit', { file_path: '/repo/x.ts' }]], 'ok');
+    expect(ownWorkCalls([a], 2)).toEqual(['grep -rn foo src', 'Edit /repo/x.ts']);
+    expect(ownWorkCalls([a], 1)).toHaveLength(3);
+  });
+
+  test('spawn: a named spawn with a glance passes; doing the work, or starting nothing, fails', () => {
+    expect(verdict([withTools([['Bash', { command: 'cast read jx7abcd' }]], spawnSaid)], { delegates: 'spawn' }, 2)[0]?.[1]).toBe(true);
+    const dug = withTools([1, 2, 3, 4].map((i) => ['Bash', { command: `grep -rn x${i} src` }] as [string, Record<string, string>]), spawnSaid);
+    expect(verdict([dug], { delegates: 'spawn' }, 2)[0]?.[1]).toBe(false);
+    expect(verdict([withTools([], 'I will look into it.')], { delegates: 'spawn' }, 2)[0]).toEqual(['delegates', false, 'started no session for the work; 0 tool call(s) of its own outside cast']);
+  });
+
+  test('recommend: no spawn and no digging passes; a spawn fails', () => {
+    expect(verdict([withTools([], 'I recommend a session to fix it.')], { delegates: 'recommend' }, 2)[0]?.[1]).toBe(true);
+    expect(verdict([withTools([], spawnSaid)], { delegates: 'recommend' }, 2)[0]?.[1]).toBe(false);
+  });
+});
+
 describe('the wake a turn leaves behind', () => {
   const tuned = (cmd: string, calls: string[] = []) => verdict([agent([[`\`${cmd}\``]], calls)], { tune: 'slower' })[0];
   const quiet = (text: string, calls: string[] = []) => verdict([agent([[text]], calls)], { tune: 'none' })[0];
