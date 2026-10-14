@@ -972,9 +972,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useFollowMode();
   useShortcutContext('desktop', isDesktopApp);
 
-  // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
-  // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
-  // window. Isolated-worktree creation lives as a toggle inside the compose surface.
+  // Ctrl+N (and the + button) → the new-session page in the main window.
+  // Ctrl+Shift+N → the compose popup (modal overlay here; the always-on-top
+  // window on desktop).
   useShortcutAction('session.create', handleNewFullSession);
 
   // Handlers receive the dispatch source ("key" | "named"); never let it reach
@@ -1330,7 +1330,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label={words.newConversation} action="session.create">
               <TopbarButton
                 onClick={(e) => {
-                  openCompose();
+                  handleNewFullSession();
                   tipActions.whisper('session.create', e);
                 }}
                 aria-label={words.newConversation}

@@ -1,7 +1,7 @@
 
 ## Publishing pages (cast publish)
 
-Publish a standalone deliverable (a report, dashboard, mockup, visualization) with `cast publish <file|dir>` and put its URL in your reply. A URL alone on its line embeds the live page in the conversation; inside a sentence it renders as a titled pill. Republishing a path updates the same URL and keeps versions. Markdown renders as a reading page, and a directory needs an `index.html`.
+Publish a standalone deliverable (a report, dashboard, mockup, visualization) with `cast publish <file|dir>` and put its URL in your reply. A URL alone on its line embeds the live page in the conversation at the conversation's width, so lay the page out for that column; inside a sentence it renders as a titled pill. Republishing a path updates the same URL and keeps versions. Markdown renders as a reading page, and a directory needs an `index.html`.
 
 ```bash
 cast publish report.html [--task ct-N]   # → https://codecast.sh/a/<slug>; --task attaches it as evidence
