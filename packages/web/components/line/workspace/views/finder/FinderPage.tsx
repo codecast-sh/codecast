@@ -60,7 +60,7 @@ export function FinderPage({ workspace, selection, select, href }: LineViewProps
   // The way back, on the title's line: the finder's name is said once, as the page's heading.
   const crumb = (
     <nav className="fp-crumb" aria-label="Where this finder is">
-      <a className="fp-crumb-link" href={href({ view: "line", source: null, finding: null, step: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select({ view: "line", source: null, finding: null, step: null }); }}>Line</a>
+      <a className="fp-crumb-link" href={href({ view: "line", source: null, finding: null, step: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select({ view: "line", source: null, finding: null, step: null }); }}>Steps</a>
       <span aria-hidden>›</span>
     </nav>
   );

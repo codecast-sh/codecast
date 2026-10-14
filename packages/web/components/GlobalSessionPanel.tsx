@@ -24,7 +24,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { awaitingOkIds } from "../lib/decisionQueue";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -2188,6 +2188,9 @@ function SessionListPanelImpl({
     // Which hosted conversations ended on a stop: they leave the person's
     // turn for "Couldn't finish" (lib/hostedNotice splitHostedStops).
     s => hostedStopsSig(s.sessions, s.messages),
+    // What the project, goal and reports lenses group by (a signature: the
+    // task collection churns far more than the few facts a lens reads).
+    s => orgLensWakeSig(s),
   ]);
   // Hosted mode lists the assistant's conversations unless widened
   // (hostedOnlyInbox); chipFilterOpts carries it into every list below.
@@ -2898,6 +2901,35 @@ function SessionListPanelImpl({
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
 
+  // The org lenses ("By project", "By goal", "By reports"): the same active
+  // set, regrouped by what the work is filed under or which report runs it.
+  // Shared with the store's visualOrder so Ctrl+J/K walks this layout.
+  const lensSig = orgLensWakeSig(s);
+  const lensSources = useMemo(() => orgLensSourcesOf(s), [lensSig, s.sessions]);
+  const orgLensView = useMemo(() => {
+    if (!isOrgLensMode(viewMode)) return null;
+    return { mode: viewMode, ...groupSessionsForOrgLens(viewMode, [...filteredNew, ...lensSettled, ...filteredWorking], lensSources) };
+  }, [viewMode, filteredNew, lensSettled, filteredWorking, lensSources]);
+  const orgLenses = useMemo(
+    () => ORG_LENS_MODES.filter((m) => orgLensAvailable(m, activeSessions, lensSources)),
+    [activeSessions, lensSources],
+  );
+  // A group header's count and tallies: its rows and the rows nested under
+  // them, the way a status section counts.
+  const groupTally = (items: InboxSession[]) => {
+    const states: Partial<Record<ReturnType<typeof sessionWorkState>, number>> = {};
+    let count = 0;
+    for (const row of items) {
+      for (const x of [row, ...(globalSubByParent.get(row._id) ?? [])]) {
+        const ws = sessionWorkState(x);
+        states[ws] = (states[ws] ?? 0) + 1;
+        count++;
+      }
+    }
+    return { count, states };
+  };
+  const rolesById = useMemo(() => new Map((s.orgTree?.roles ?? []).map((r) => [String(r._id), r])), [lensSig]);
+
   // Favorites view: the SAME session cache filtered to the kept set, grouped by
   // project — the shelf's organization ("what is it about"), distinct from the
   // active desk's status buckets ("what needs me now"). allFavorites (unscoped)
@@ -3136,6 +3168,12 @@ function SessionListPanelImpl({
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
+        : orgLensView
+        ? [
+            [filteredPinned, "pinned"],
+            ...orgLensView.groups.map(({ key, items }) => [items, `${orgLensView.mode}_${key}`] as [InboxSession[], string]),
+            ...orgLensView.projectGroups.map(({ name, items }) => [items, `${orgLensView.mode}proj_${name}`] as [InboxSession[], string]),
+          ]
         : viewMode === "trigger"
         ? [
             // Trigger sub rows are always visible (their rows don't collapse),
@@ -3364,6 +3402,10 @@ function SessionListPanelImpl({
       // Never folds, whatever an old click stored (hosted mode's New: the
       // rows the Inbox count counts are the one group that exists to be seen).
       fixed?: boolean;
+      // The org lenses: a role's face before the label, and the group's
+      // work-state tallies.
+      icon?: React.ReactNode;
+      states?: Partial<Record<ReturnType<typeof sessionWorkState>, number>>;
     },
   ) => {
     const isDropTarget = !!opts?.onDropSession;
@@ -3414,6 +3456,8 @@ function SessionListPanelImpl({
           onToggle={() => s.toggleCollapsedSection(key)}
           action={opts?.headerAction}
           fixed={opts?.fixed}
+          icon={opts?.icon}
+          states={opts?.states}
         />
         {!collapsed && (() => {
           // The Assistant scope's Done shows its newest few and folds the rest
@@ -3665,6 +3709,7 @@ function SessionListPanelImpl({
             onChange={s.setInboxViewMode}
             hasLabels={visibleBuckets.length > 0}
             hasPlans={hasPlanSessions}
+            orgLenses={orgLenses}
             hasTriggers={scheduleRowsView.length > 0}
           />
           {rowInternals && totalSubagentCount > 0 && (
@@ -3886,6 +3931,30 @@ function SessionListPanelImpl({
         {planView.projectGroups.map(({ name, items }) => (
           <div key={`planproj-${name}`}>
             {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `planproj_${name}` })}
+          </div>
+        ))}
+        </>
+        ) : orgLensView ? (
+        <>
+        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {orgLensView.groups.map(({ key, label, items, roleId }) => {
+          const role = roleId ? rolesById.get(roleId) : undefined;
+          return (
+            <div key={key}>
+              {renderSection(label, items, role ? "text-sol-text" : orgLensView.mode === "goal" && key.startsWith("goal:") ? "text-sol-violet" : "text-teal-400", undefined, undefined, {
+                key: `${orgLensView.mode}_${key}`,
+                monoLabel: true,
+                icon: role ? <RoleFace role={role} size={14} className="shrink-0" /> : undefined,
+                ...groupTally(items),
+              })}
+            </div>
+          );
+        })}
+        {/* Sessions bound to nothing group by repo folder, the fallback tier
+            every lens shares. */}
+        {orgLensView.projectGroups.map(({ name, items }) => (
+          <div key={`${orgLensView.mode}proj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `${orgLensView.mode}proj_${name}` })}
           </div>
         ))}
         </>

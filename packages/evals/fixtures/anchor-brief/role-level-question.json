@@ -1,0 +1,116 @@
+{
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "notes": "A question at the role's own level: answer from the brief, start nothing.",
+ "label": {
+  "delegates": "none"
+ },
+ "snapshot": {
+  "captured_at": "2026-10-14T09:00:00.000Z",
+  "facts": {
+   "name": "Docs lead",
+   "scopeType": "team",
+   "scopeLabel": "the Fernhill team",
+   "teamName": "Fernhill",
+   "role": {
+    "handle": "docs",
+    "scopeNames": [
+     "Docs site",
+     "API reference"
+    ],
+    "parentName": "Mara",
+    "startsOnItsOwn": true
+   }
+  },
+  "world": "fernhill",
+  "values": {
+   "role": "docs"
+  },
+  "turns": [
+   {
+    "text": "Where do docs stand this week, and is anything stuck on me?"
+   }
+  ],
+  "repo": {
+   "README.md": "# fernhill-docs\n\nThe Fernhill docs site and API reference. `bun run build` renders `docs/` to `site/`; `bun run gen:api` regenerates `docs/api/` from `schema/openapi.yaml`.\n",
+   "package.json": "{\n \"name\": \"fernhill-docs\",\n \"scripts\": {\n  \"build\": \"bun scripts/build.ts\",\n  \"gen:api\": \"bun scripts/gen-api.ts\",\n  \"linkcheck\": \"bun scripts/linkcheck.ts\"\n }\n}\n",
+   "scripts/gen-api.ts": "// Renders docs/api from schema/openapi.yaml. Event pages go under docs/api/webhooks/<version>/.\nimport { readFileSync, writeFileSync, mkdirSync } from 'node:fs';\nconst VERSION = 'v2';\nconst schema = readFileSync('schema/openapi.yaml', 'utf8');\nconst events = [...schema.matchAll(/^  ([a-z]+\\.[a-z]+):/gm)].map((m) => m[1]);\nmkdirSync(`docs/api/webhooks/${VERSION}`, { recursive: true });\nfor (const e of events) writeFileSync(`docs/api/webhooks/${VERSION}/${e}.md`, `# ${e}\\n\\nSent when ${e.replace('.', ' is ')}.\\n`);\n",
+   "scripts/linkcheck.ts": "// Crawls site/ and writes every link that does not resolve to linkcheck.log.\n",
+   "linkcheck.log": "linkcheck 2026-10-14T02:00Z: 38 broken links in site/api (was 0 on 2026-10-12)\nmost common targets:\n- /api/webhooks/v1/order.created.html\n- /api/webhooks/v1/order.paid.html\n- /api/webhooks/v1/order.refunded.html\n- /api/webhooks/v1/invoice.sent.html\n- /api/webhooks/v1/invoice.failed.html\n- /api/webhooks/v1/customer.updated.html\n... 32 more under /api/webhooks/v1/\nreferenced from: docs/api/guides/*.md (14 files), docs/api/index.md\n",
+   "schema/openapi.yaml": "openapi: 3.1.0\nx-webhooks:\n  order.created:\n  order.paid:\n  order.refunded:\n  invoice.sent:\n  invoice.failed:\n  customer.updated:\n",
+   "docs/api/index.md": "# API reference\n\n- [Webhooks](/api/webhooks/v1/order.created.html)\n- [Guides](/api/guides/)\n",
+   "docs/api/guides/receiving-webhooks.md": "# Receiving webhooks\n\nVerify the `X-Fernhill-Sig` header on every delivery. See [order.paid](/api/webhooks/v1/order.paid.html).\n",
+   "docs/api/guides/refunds.md": "# Refunds\n\nListen for [order.refunded](/api/webhooks/v1/order.refunded.html).\n",
+   "docs/api/webhooks/v2/order.created.md": "# order.created\n\nSent when order is created.\n",
+   "src/components/PricingTable.tsx": "import plans from '../../data/plans.v1.json';\n\nexport function PricingTable() {\n  return (\n    <table>\n      <tbody>{plans.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.price}</td></tr>)}</tbody>\n    </table>\n  );\n}\n",
+   "data/plans.v1.json": "[{\"id\": \"starter\", \"name\": \"Starter\", \"price\": \"$9\"}, {\"id\": \"team\", \"name\": \"Team\", \"price\": \"$29\"}]\n",
+   "data/plans.v2.json": "[{\"id\": \"solo\", \"name\": \"Solo\", \"price\": \"$12\"}, {\"id\": \"studio\", \"name\": \"Studio\", \"price\": \"$40\"}, {\"id\": \"enterprise\", \"name\": \"Enterprise\", \"price\": \"Talk to us\"}]\n",
+   "src/components/PricingTable.test.tsx": "import { expect, test } from 'bun:test';\ntest('lists the plans', () => { expect(true).toBe(true); });\n",
+   "docs/site/billing.md": "# Billing\n\n<PricingTable />\n",
+   "docs/site/pricing.md": "# Pricing\n\n<PricingTable />\n",
+   "docs/site/teams.md": "# Teams\n\nTeams start on the Team plan. <PricingTable />\n"
+  },
+  "reads": [
+   {
+    "argv": [
+     "search"
+    ],
+    "out": "No sessions, docs or tasks match.",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "task",
+     "ls"
+    ],
+    "out": "  ct-412  in_review  Regenerate the webhooks reference  \u00b7 docs\n  ct-415  backlog    Retire the hand-written reference pages  \u00b7 docs\n  ct-418  backlog    Billing page still describes the old plans  \u00b7 docs",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "plan",
+     "context"
+    ],
+    "out": "\n  \u25cb Reference from schema\n  pl-31 | active | 3/5 tasks done\n\nGoal: Generate every page of the API reference from the schema, never by hand.\n\n  \u2713 ct-401 Generate the REST reference from the schema\n  \u2713 ct-405 Generate the events reference from the schema\n  \u2713 ct-409 Publish generated pages on every schema release\n  \u25d0 ct-412 Regenerate the webhooks reference \u00b7 in_review\n  \u25cb ct-415 Retire the hand-written reference pages",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "events"
+    ],
+    "out": "No events from this workspace's sources in that window.",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "metrics"
+    ],
+    "out": "No metrics are watched in this workspace.",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "task",
+     "show",
+     "ct-415"
+    ],
+    "out": "ct-415 \u00b7 backlog \u00b7 Retire the hand-written reference pages\n  plan pl-31 Reference from schema \u00b7 project API reference \u00b7 label docs\n  Once every reference page is generated from the schema, delete the hand-written pages under docs/api/ and redirect their URLs.\n  no sessions yet",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "plan",
+     "ls"
+    ],
+    "out": "  pl-31  active  Reference from schema  3/5",
+    "prefix": true
+   },
+   {
+    "argv": [
+     "diff"
+    ],
+    "out": "No file changes recorded for that session yet.",
+    "prefix": true
+   }
+  ]
+ }
+}
