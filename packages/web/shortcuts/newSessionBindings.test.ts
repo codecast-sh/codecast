@@ -1,9 +1,9 @@
 import { test, expect, describe } from "bun:test";
 import { SHORTCUTS, matchShortcut, altChordDirection, type ShortcutAction } from "./registry";
 
-// Ctrl+N opens the compose modal; Ctrl+Alt+N (⌃⌥N) opens a full new session in the
-// main window. This guards that swap (a prior commit had Ctrl+N opening the full
-// page) AND the macOS Option-key trap: ⌥ composes letters, so ⌥N arrives as the
+// Ctrl+N opens the new-session page in the main window (Ctrl+Alt+N, its older
+// chord, still does); Ctrl+Shift+N opens the compose popup. This guards that
+// split AND the macOS Option-key trap: ⌥ composes letters, so ⌥N arrives as the
 // tilde dead key (e.key "Dead", never "n") — the chord must still match via e.code.
 
 // Mirror the dispatcher's resolution: first SHORTCUTS def that matches wins. The
@@ -15,8 +15,12 @@ function resolveAction(e: Partial<KeyboardEvent>): ShortcutAction | null {
 }
 
 describe("new-session key bindings", () => {
-  test("Ctrl+N opens the compose modal, not the full page", () => {
-    expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).toBe("session.compose");
+  test("Ctrl+N opens the new-session page, not the popup", () => {
+    expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).toBe("session.create");
+  });
+
+  test("the new-session tooltip names Ctrl+N: it is the first binding for the action", () => {
+    expect(SHORTCUTS.find((d) => d.action === "session.create")?.key).toBe("ctrl+n");
   });
 
   test("Ctrl+Shift+N stays the palette compose; Ctrl+Shift+M is the docked composer and fires over the open modal", () => {
@@ -39,11 +43,7 @@ describe("new-session key bindings", () => {
   test("the e.code fallback never fires for a plain (no-Alt) chord", () => {
     // Ctrl+N with a mismatched e.key must NOT borrow the physical key — only Alt
     // chords get the fallback, so a layout that maps KeyN elsewhere still wins.
-    expect(resolveAction({ key: "j", code: "KeyN", ctrlKey: true })).not.toBe("session.compose");
-  });
-
-  test("Ctrl+N (no Alt) never resolves to the full-page action", () => {
-    expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).not.toBe("session.create");
+    expect(resolveAction({ key: "j", code: "KeyN", ctrlKey: true })).not.toBe("session.create");
   });
 });
 
