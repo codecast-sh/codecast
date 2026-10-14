@@ -10,8 +10,9 @@
 // failed before its card is a row of its own (Failed), with the station it
 // stopped at and why, and a rerun from a fresh branch off origin/main; so is a
 // run that gave up at a failure station and left its problem open (Stopped).
-// Our tooling also holds the trial's open expectation proposals, drawn with
-// the Expectations page's own Proposal: a trial asks nobody in their queue.
+// Our tooling also holds the trial's open expectation proposals: one a run's
+// station asked is its trial decision's card, and one no station asked is
+// drawn with the Expectations page's own Proposal.
 import { findingConversation } from "@codecast/shared/contracts/judges";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -158,7 +159,11 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
   const stoppedRuns = useMemo(() => runs.filter((r) => (!project || r.project_id === project._id) && r.stopped).sort((a, b) => (b.stopped!.findings - a.stopped!.findings) || b.updated_at - a.updated_at), [runs, project]);
   useSyncProjectExpectations(project?._id ?? null);
   const expectations = useProjectExpectations(project?._id ?? null);
-  const proposals = useMemo(() => openProposals(expectations).filter((p) => p.short_id), [expectations]);
+  // A proposal a station asked as its trial decision is listed once, as that decision's card.
+  const proposals = useMemo(() => {
+    const carded = new Set(every.map((c) => c.decision?.short_id).filter(Boolean));
+    return openProposals(expectations).filter((p) => p.short_id && !(p.card && carded.has(p.card)));
+  }, [expectations, every]);
   const failedByTask = useMemo(() => new Map(runs.filter((r) => r.status === "failed").map((r) => [r.task_short_id, r])), [runs]);
   const counts = useMemo(() => ({
     failed: failedRuns.filter((r) => r.status === "failed").length,

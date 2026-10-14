@@ -17,7 +17,8 @@
 //    session's token totals the way the Spend chart prices them.
 
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { scopeArgs } from "./lib/ingestScopeArgs";
@@ -35,10 +36,10 @@ import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, 
 export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
-import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, stationSession, type GateChoice } from "./workflow_runs";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
+import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
 import { alignGateChoices } from "./lib/gateChoices";
-import { trialProjectOf, trialStackOf } from "./lib/trialDecision";
+import { fileTrialCard, trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
 import { parseMoveTally } from "./lib/moveTally";
 import { BEFORE_LINE, CLOSED_WITH, retireOnClose } from "./findingGroups";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -76,7 +77,7 @@ export async function askTrialGate(
   now: number,
 ): Promise<{ ok: true; trial_card: string; decision_id: Id<"session_decisions">; decision_short_id?: string } | { error: string }> {
   const open: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
-  for (const row of open) if (row.status === "waiting") await ctx.db.patch(row._id, { status: "closed", updated_at: now });
+  for (const row of open) if (row.status === "waiting" && !(await proposalHolds(ctx, row.decision_id))) await ctx.db.patch(row._id, { status: "closed", updated_at: now });
 
   const station = await stationSession(ctx, args.asker_session_id, run._id);
   const own = station ? await openDecisionOf(ctx, station._id) : null;
@@ -140,32 +141,28 @@ export async function askTrialGate(
 
   // Earlier posts on this problem the run has moved past (a station that ran again posted again).
   const stale: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
-  for (const d of stale) if (d.trial && d._id !== decision._id) await withdrawCore(ctx, d as any, now);
+  for (const d of stale) if (d.trial && d._id !== decision._id && !(await proposalHolds(ctx, d._id))) await withdrawCore(ctx, d as any, now);
 
   const card = args.card && validateChangeCard(args.card).ok ? args.card : undefined;
   const proposal = args.proposal && validateProposalCard(args.proposal).ok ? args.proposal : undefined;
   const fix = args.judge_fix ? validateJudgeFixCard(args.judge_fix) : null;
   const judge_fix = fix?.ok ? fix.card : undefined;
-  const short_id = await nextShortId(ctx.db, "tc");
-  await ctx.db.insert("trial_cards", {
-    workspace: project.workspace ?? task.workspace,
-    ...(project.team_id ? { team_id: project.team_id } : {}),
-    project_id: project._id,
-    task_id: task._id,
-    run_id: run._id,
-    short_id,
-    node_id: args.node_id,
+  const short_id = await fileTrialCard(ctx, {
+    project, task, run, node_id: args.node_id, decision_id: decision._id,
     // The judge route's card is its run's last stop, answered by a person like a change card.
     kind: card || judge_fix || args.node_id === CARD_GATE_NODE_ID ? "card" : "gate",
-    decision_id: decision._id,
-    ...(card ? { card } : {}),
-    ...(proposal ? { proposal } : {}),
-    ...(judge_fix ? { judge_fix } : {}),
-    status: "waiting",
-    created_at: now,
-    updated_at: now,
-  });
+    card, proposal, judge_fix,
+  }, now);
   return { ok: true, trial_card: short_id, decision_id: decision._id, decision_short_id: decision.short_id };
+}
+
+/**
+ * Whether an expectation proposal's card is this decision: a station asked it
+ * off any gate (expectations.postCard), so no gate the run reaches later
+ * closes it, and it is answered as itself (answerTrialDecision).
+ */
+async function proposalHolds(ctx: Ctx, decisionId: Id<"session_decisions"> | undefined): Promise<boolean> {
+  return !!decisionId && !!(await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).first());
 }
 
 /** Whether a run belongs to a trial project: orgLineMerge.check refuses its merge. */
@@ -414,7 +411,9 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   }
   // A waiting card whose run moved on or ended without an answer reads closed; so does one whose problem
   // was merged into another, which the survivor's card supersedes (`superseded_by`, filled by `cards`).
-  const live = run && run.status === "paused" && run.gate_node_id === row.node_id;
+  // A proposal's card was asked off any gate (proposalHolds): it waits on its decision, wherever its run is.
+  const offGate = await proposalHolds(ctx, row.decision_id);
+  const live = offGate || (run && run.status === "paused" && run.gate_node_id === row.node_id);
   const mergedInto: Id<"tasks"> | null = task?.cause?.merged_into ?? null;
   const asked = await askedOf(ctx, row, run);
   // Who answered: the person, and the agent session that carried it when one did.
@@ -428,7 +427,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   const problem = await problemSuperseded(ctx, task);
   const superseded = supersededCard({
     waiting: recorded === "waiting",
-    run: run ? await runSuperseded(ctx, run, task) : null,
+    run: run && !offGate ? await runSuperseded(ctx, run, task) : null,
     run_at_gate: !!live,
     problem,
     covered: card?.reach?.covers ? coverage?.covered ?? null : null,
@@ -459,6 +458,8 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     options: asked?.options ?? (row.kind === "gate" && row.proposal ? proposalOptions(row.options ?? []) : row.options ?? []),
     /** The decision the asking station's session posted: its page leads the card, and its thread is where to talk it over. */
     decision: asked?.decision ?? null,
+    /** The role the card belongs to and the people it waits on, when it is not the trial owner's (audienceOf): it is in their For you and nobody else's. */
+    audience: await audienceOf(ctx, row, project, run),
     card: row.card,
     proposal: row.proposal as ProposalCard | undefined,
     /** The judge route's card (shared/contracts/judgeFix): a measured fix to a judge, its extractor or an expectation, for the project's reviewer. */
@@ -512,14 +513,9 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
   // A person's answer an agent carried names that session.
   const viaConv: Doc<"conversations"> | null = d.answered_by?.via ? await ctx.db.get(d.answered_by.via) : null;
   const viaShort = viaConv ? viaConv.short_id ?? null : null;
-  // Once the run has moved on, an answer keeps the letter its verdict had while it waited (S, R, D), so the same
-  // answer reads under the same key on every asking of a card, whatever order its author listed them in.
-  const letters = d.options.map((o) => VERDICT_KEY[verdictOfOption(o.label) ?? ""] ?? "");
-  const keyOf = (i: number) => (onIt && run!.gate_choices?.[i]?.key) || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1));
-  const options = d.options.map((o, i) => ({ key: keyOf(i), label: o.label, ...(o.description ? { description: o.description } : {}) }));
+  const keys = optionKeys(d, onIt ? run!.gate_choices : null);
+  const options = d.options.map((o, i) => ({ key: keys[i], label: o.label, ...(o.description ? { description: o.description } : {}) }));
   const chosen = d.status === "answered" && d.answer_index !== undefined ? options[d.answer_index] : undefined;
-  // A trial decision with a ladder is a role's (sessionDecisions.routeFor: a judge fix goes to the route's decider).
-  const forRole: Doc<"org_roles"> | null = d.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
   return {
     question: d.question,
     context_md: d.context_md,
@@ -533,15 +529,39 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
       status: d.status,
       report_slug: d.report_slug ?? null,
       session: conversation ? { _id: conversation._id, short_id: conversation.short_id ?? null, title: conversation.title ?? null } : null,
-      /** The people it is asked of: a card is in their For you and nobody else's. */
-      asked: (d.asked_user_ids ?? [d.user_id]).map(String),
-      /** The role it belongs to, when it is not the trial owner's: it hears first and answers or hands up to `asked`. */
-      for_role: forRole ? { _id: forRole._id, short_id: forRole.short_id ?? null, name: forRole.name, handle: forRole.handle ?? null } : null,
     },
   };
 }
 
+/**
+ * Who a card waits on when it is a role's and not the trial owner's practice
+ * answer: null for the owner's. A decision that climbed a ladder names its
+ * role and the people it is asked of (sessionDecisions.routeFor). A judge-route
+ * card with no such decision (written before the trial named the route's
+ * decider, or by a gate no session asked) belongs to that decider all the
+ * same, and waits on the person its line ends at.
+ */
+export async function audienceOf(ctx: Ctx, row: Doc<"trial_cards">, project: Doc<"projects"> | null, run: Doc<"workflow_runs"> | null) {
+  const d: Doc<"session_decisions"> | null = row.decision_id ? await ctx.db.get(row.decision_id) : null;
+  const climbed: Doc<"org_roles"> | null = d?.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
+  const role = climbed ?? (project ? await trialDeciderOf(ctx, project, run) : null);
+  if (!role) return null;
+  const asked = climbed ? d!.asked_user_ids ?? [d!.user_id] : (await routeToRole(ctx, role, row.created_at)).people;
+  return { asked: asked.map(String), role: { _id: role._id, short_id: role.short_id ?? null, name: role.name, handle: role.handle ?? null } };
+}
+
 const VERDICT_KEY: Record<string, string> = { ship: "S", revise: "R", drop: "D" };
+
+/**
+ * A card's option keys: the gate's keys while its run waits on it (what an
+ * answer routes by). Otherwise each keeps the letter its verdict had while it
+ * waited (S, R, D), so the same answer reads under the same key on every
+ * asking of a card, whatever order its author listed them in, else its number.
+ */
+function optionKeys(d: Pick<Doc<"session_decisions">, "options">, gateChoices: Array<{ key: string }> | null | undefined): string[] {
+  const letters = d.options.map((o) => VERDICT_KEY[verdictOfOption(o.label) ?? ""] ?? "");
+  return d.options.map((_, i) => gateChoices?.[i]?.key || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1)));
+}
 
 type Supersedable = { task_id: Id<"tasks">; task_short_id: string; short_id: string; created_at: number; merged_into: Id<"tasks"> | null; superseded_by: { card?: string; task: string } | null };
 
@@ -726,19 +746,15 @@ export async function trialSpend(ctx: Ctx, project: Doc<"projects">, now = Date.
   const since = project.line_trial?.since ?? project.created_at;
   const sinceMonth = new Date(since).toISOString().slice(0, 7);
   const earlier = budget.history.filter((h: { month: string; spent_usd: number }) => h.month >= sinceMonth).reduce((s: number, h: { spent_usd: number }) => s + h.spent_usd, 0);
-  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-  let runs = 0;
-  const priced = newRunPrice();
-  const seen = new Set<string>();
-  for (const task of tasks) {
-    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
-    for (const run of taskRuns) {
-      if (run.created_at < since) continue;
-      runs++;
-      await priceRun(ctx, run, seen, priced);
-    }
+  // Each run's own price row (priceRunsTick): no task, run or session is read here, so a rerun or a dispatch never waits on them.
+  const prices = await runPricesOf(ctx, project);
+  const runs = prices.length;
+  let sessions = 0, sessionUsd = 0, unpricedTokens = 0;
+  for (const p of prices) {
+    sessions += p.sessions;
+    sessionUsd += p.usd;
+    unpricedTokens += p.unpriced_tokens;
   }
-  const { sessions, usd: sessionUsd, unpriced_tokens: unpricedTokens } = priced;
   const round = (n: number) => Math.round(n * 100) / 100;
   const modelUsd = budget.spent_usd + earlier;
   const outside = project.line_trial?.outside ?? [];
@@ -759,6 +775,144 @@ export async function trialSpend(ctx: Ctx, project: Doc<"projects">, now = Date.
     at: now,
   };
 }
+
+/** A trial project's runs since the trial began, walked through its problems (the sweep's and the reconciler's view). */
+async function trialRunsOf(ctx: Ctx, project: Doc<"projects">): Promise<Doc<"workflow_runs">[]> {
+  const since = project.line_trial?.since ?? project.created_at;
+  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
+  const out: Doc<"workflow_runs">[] = [];
+  for (const task of tasks) {
+    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
+    out.push(...taskRuns.filter((r) => r.created_at >= since));
+  }
+  return out;
+}
+
+/** A trial project's run price rows since the trial began: one per run. */
+async function runPricesOf(ctx: Ctx, project: Doc<"projects">): Promise<Doc<"trial_run_prices">[]> {
+  const since = project.line_trial?.since ?? project.created_at;
+  return await ctx.db.query("trial_run_prices").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id).gte("run_created_at", since)).collect();
+}
+
+/** How long after a run last moved its sessions are taken to be done: its price then stands until the run moves again. */
+export const RUN_SETTLE_MS = 30 * 60_000;
+
+/** Whether a run's price may be out of date: never priced, still live, ended too recently to stand, or moved since it was priced. */
+export function priceStale(run: Pick<Doc<"workflow_runs">, "status" | "updated_at">, price: Pick<Doc<"trial_run_prices">, "at" | "settled"> | null): boolean {
+  return !price || !price.settled || isLiveRunStatus(run.status) || run.updated_at > price.at;
+}
+
+/** A trial's runs whose price may be out of date, and the project each prices under (priceRunsTick). Reads runs, never their sessions. */
+export const staleRunPrices = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const projects: Doc<"projects">[] = await ctx.db.query("projects").withIndex("by_trial_since", (q: any) => q.gt("line_trial.since", 0)).collect();
+    const out: Array<{ run: Id<"workflow_runs">; project: Id<"projects"> }> = [];
+    for (const p of projects) {
+      const prices = new Map((await runPricesOf(ctx, p)).map((r) => [String(r.run_id), r]));
+      for (const run of await trialRunsOf(ctx, p)) if (priceStale(run, prices.get(String(run._id)) ?? null)) out.push({ run: run._id, project: p._id });
+    }
+    return out;
+  },
+});
+
+/**
+ * These runs priced from their sessions now. A query, so the sessions it
+ * reads (live ones are written several times a second) never conflict with a
+ * write; writeRunPrices stores the answers.
+ */
+export const priceRuns = internalQuery({
+  args: { runs: v.array(v.object({ run: v.id("workflow_runs"), project: v.id("projects") })) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out = [];
+    for (const { run: id, project } of args.runs) {
+      const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
+      if (!run) continue;
+      const price = await priceRun(ctx, run, new Set(), newRunPrice());
+      out.push({ run: id, project, run_created_at: run.created_at, updated_at: run.updated_at, priced: { ...price, at: now, settled: !isLiveRunStatus(run.status) && now - run.updated_at > RUN_SETTLE_MS } });
+    }
+    return out;
+  },
+});
+
+const pricedV = v.object({ sessions: v.number(), usd: v.number(), tokens: v.number(), unpriced_tokens: v.number(), at: v.number(), settled: v.boolean() });
+
+/**
+ * Stores runs' prices (priceRuns), only what changed. A settled price must
+ * describe the run as it is, so one priced before the run moved again is
+ * dropped and priced next tick.
+ */
+export const writeRunPrices = internalMutation({
+  args: { prices: v.array(v.object({ run: v.id("workflow_runs"), project: v.id("projects"), run_created_at: v.number(), updated_at: v.number(), priced: pricedV })) },
+  handler: async (ctx, args) => {
+    let wrote = 0;
+    for (const { run: id, project, run_created_at, updated_at, priced } of args.prices) {
+      if (priced.settled && (await ctx.db.get(id))?.updated_at !== updated_at) continue;
+      const was: Doc<"trial_run_prices"> | null = await ctx.db.query("trial_run_prices").withIndex("by_run", (q: any) => q.eq("run_id", id)).first();
+      if (!was) {
+        await ctx.db.insert("trial_run_prices", { project_id: project, run_id: id, run_created_at, ...priced });
+        wrote++;
+        continue;
+      }
+      const same = was.sessions === priced.sessions && was.usd === priced.usd && was.tokens === priced.tokens && was.unpriced_tokens === priced.unpriced_tokens && was.settled === priced.settled;
+      if (same && (!priced.settled || was.at >= updated_at)) continue;
+      await ctx.db.patch(was._id, priced);
+      wrote++;
+    }
+    return wrote;
+  },
+});
+
+/** Reconciler: a trial's stored run prices and live count against reading every run and session now, so drift is measured, not assumed. */
+export const spendDrift = internalQuery({
+  args: { project: v.id("projects") },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.project);
+    if (!project) return null;
+    const runs = await trialRunsOf(ctx, project);
+    const prices = await runPricesOf(ctx, project);
+    const byRun = new Map(prices.map((r) => [String(r.run_id), r]));
+    const live = newRunPrice();
+    const seen = new Set<string>();
+    let alone = 0;
+    for (const run of runs) {
+      await priceRun(ctx, run, seen, live);
+      alone += (await priceRun(ctx, run, new Set(), newRunPrice())).sessions;
+    }
+    let walked = 0;
+    for (const t of (await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) as Doc<"tasks">[]) {
+      const run = t.workflow_run_id ? await ctx.db.get(t.workflow_run_id) : null;
+      if (run?.status === "running" || run?.status === "pending") walked++;
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    return {
+      runs: runs.length,
+      price_rows: prices.length,
+      unpriced_runs: runs.filter((r) => !byRun.has(String(r._id))).length,
+      stale_runs: runs.filter((r) => priceStale(r, byRun.get(String(r._id)) ?? null)).length,
+      stored: { sessions: prices.reduce((n, r) => n + r.sessions, 0), usd: round(prices.reduce((n, r) => n + r.usd, 0)) },
+      live: { sessions: live.sessions, usd: round(live.usd) },
+      /** Sessions counted by more than one run when each run is priced alone. */
+      shared_sessions: alone - live.sessions,
+      running: { by_status: await runningIn(ctx, project), by_tasks: walked },
+    };
+  },
+});
+
+/** Keeps every trial run's price current (cron): prices the stale ones in small batches and stores them. */
+export const priceRunsTick = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ stale: number; wrote: number }> => {
+    const stale: Array<{ run: Id<"workflow_runs">; project: Id<"projects"> }> = await ctx.runQuery((internal as any).lineTrial.staleRunPrices, {});
+    let wrote = 0;
+    for (let i = 0; i < stale.length; i += 20) {
+      const prices = await ctx.runQuery((internal as any).lineTrial.priceRuns, { runs: stale.slice(i, i + 20) });
+      wrote += await ctx.runMutation((internal as any).lineTrial.writeRunPrices, { prices });
+    }
+    return { stale: stale.length, wrote };
+  },
+});
 
 /** The trial's spend for one project (web store key `trialSpend`, keyed by project; `cast line trial`). */
 export const spend = query({
@@ -832,7 +986,7 @@ export const setTrial = mutation({
 });
 
 /** Trial runs at once, at most: the machine running them is shared. */
-export const TRIAL_RUNNING_CAP = 3;
+export const TRIAL_RUNNING_CAP = 10;
 
 /**
  * Which graph a trial problem runs: one whose findings are cases against a
@@ -845,12 +999,13 @@ export function routeOf(task: Pick<Doc<"tasks">, "cause">): "judge" | "product" 
 
 /** How many of a trial project's runs hold a machine now (a paused run waits on a card and holds none). */
 async function runningIn(ctx: Ctx, project: Doc<"projects">): Promise<number> {
+  // From the live runs, not the project's problems: a rerun reads a handful of runs, never every task.
   let running = 0;
-  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-  for (const t of tasks) {
-    if (!t.workflow_run_id) continue;
-    const run = await ctx.db.get(t.workflow_run_id);
-    if (run?.status === "running" || run?.status === "pending") running++;
+  for (const status of ["running", "pending"] as const) {
+    for (const run of (await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect()) as Doc<"workflow_runs">[]) {
+      const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
+      if (task?.project_id === project._id && task.workflow_run_id === run._id) running++;
+    }
   }
   return running;
 }
@@ -920,16 +1075,19 @@ async function answerTrialDecision(ctx: Ctx, userId: Id<"users">, row: Doc<"tria
   if (!decision || decision.status !== "pending") throw new Error(`${row.short_id} is already ${decision?.status ?? "gone"}`);
   if (!(await userMayRead(ctx, userId, decision as any))) throw new Error("Trial card not found");
   const run: Doc<"workflow_runs"> | null = await ctx.db.get(row.run_id);
-  if (!run || run.status !== "paused" || String(run.gate_decision_id ?? "") !== String(decision._id)) {
+  // A proposal's card was asked off any gate: the run never waited on it, and its answer settles the proposal alone.
+  const gated = !(await proposalHolds(ctx, decision._id));
+  if (gated && (!run || run.status !== "paused" || String(run.gate_decision_id ?? "") !== String(decision._id))) {
     await ctx.db.patch(row._id, { status: "closed", updated_at: now });
     throw new Error(`${row.short_id}'s run is no longer waiting on it`);
   }
   const k = key.trim().toUpperCase();
-  const byKey = (run.gate_choices ?? []).findIndex((c: { key: string }) => c.key && c.key.toUpperCase() === k);
+  const keys = optionKeys(decision, gated ? run!.gate_choices : null);
+  const byKey = keys.findIndex((c) => c && c.toUpperCase() === k);
   const index = byKey >= 0 ? byKey : /^\d+$/.test(k) ? Number(k) - 1 : -1;
   const option = decision.options[index];
   // A gate key none of the session's options carries (the dispatcher's Revise to gather) routes as typed text.
-  const graphKey = !option && /^[A-Z]$/.test(k);
+  const graphKey = gated && !option && /^[A-Z]$/.test(k);
   if (!option && !graphKey) throw new Error(`${row.short_id} has no option ${key}`);
   const text = note?.trim().slice(0, 4000);
   const verdict = normalizeVerdict(decision as any, option
@@ -938,7 +1096,7 @@ async function answerTrialDecision(ctx: Ctx, userId: Id<"users">, row: Doc<"tria
   if ("error" in verdict) throw new Error(verdict.error);
   await finalizeAnswer(ctx, decision as any, verdict, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
   const label = option?.label ?? k;
-  if (standIn) await ctx.db.patch(row._id, { answer: { key: option ? run.gate_choices?.[index]?.key || String(index + 1) : k, label, ...(text ? { note: text } : {}), by: userId, at: now, stand_in: true, ...(via ? { via } : {}) } });
+  if (standIn) await ctx.db.patch(row._id, { answer: { key: option ? keys[index] : k, label, ...(text ? { note: text } : {}), by: userId, at: now, stand_in: true, ...(via ? { via } : {}) } });
   return { short_id: row.short_id, answer: label };
 }
 
@@ -1038,7 +1196,7 @@ export function stopOf(run: Pick<Doc<"workflow_runs">, "status" | "node_statuses
  * A run that died while it waited at one of its own cards: its gate ended with
  * no answer (a gate poll that failed, read as a withdrawn gate), so the runner
  * found no edge out of it. Its evidence and its proposal are all written; the
- * run picks up at that gate again (resumeAtGate). The card it left names it.
+ * run picks up at that gate again (resumeRunAt). The card it left names it.
  */
 export type GateLoss = { node: string; card: string; kind: "gate" | "card" };
 
@@ -1049,19 +1207,6 @@ export async function gateLossOf(ctx: Ctx, run: Pick<Doc<"workflow_runs">, "_id"
   const cards: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
   const last = cards.filter((c) => c.node_id === node).sort((a, b) => b.created_at - a.created_at)[0];
   return last ? { node, card: last.short_id, kind: last.kind } : null;
-}
-
-/**
- * The run continues at the gate it lost, on its own machine, from its
- * checkpoint (cli runResume.ts): the gate is asked again from the values the
- * run had made (its proposal, its proof), so a new card stands where the lost
- * one stood. fresh_branch makes the daemon read the graph file again, so the
- * stations after the gate are the current ones; a resume never resets the branch.
- */
-async function resumeAtGate(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
-  if (task.execution_status === "blocked") await ctx.db.patch(task._id, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device!, now });
 }
 
 /**
@@ -1161,7 +1306,7 @@ export const runs = query({
  * its daemon, which sets the earlier run's branch aside and starts from
  * origin/main (cli lineTrialBranch.ts), so the proof runs against unfixed code.
  * A run that died waiting at its own card picks up at that gate instead
- * (resumeAtGate): its evidence and proposal are already made. Both go through
+ * (resumeRunAt): its evidence and proposal are already made. Both go through
  * the same machine, spend and run-count check as the dispatcher (trialRoom);
  * a gate resume is the same run, so it spends no run of max_runs.
  */
@@ -1281,7 +1426,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
     const node = route.to === "investigate" ? entry!.trim() : at?.trim() || asker?.trim() || run.gate_node_id;
     for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
-    await resumeAtGate(ctx, userId, task, run, node, now);
+    await resumeRunAt(ctx as any, userId, run, node, now);
     // Taken back once the run no longer waits on it, so the withdrawal cannot fail the run.
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
@@ -1293,7 +1438,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   const refused = rerunRefusal(await trialRoom(ctx, project, now), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
-    await resumeAtGate(ctx, userId, task, run, lost.node, now);
+    await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
   const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
@@ -1489,7 +1634,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   const r = Math.min(slots, lost.length, affordable);
   const resumed: string[] = [];
   if (!dry) for (const l of lost.slice(0, r)) {
-    await resumeAtGate(ctx, project.line_trial!.by, l.task, l.run, l.loss.node, now);
+    await resumeRunAt(ctx as any, project.line_trial!.by, l.run, l.loss.node, now);
     resumed.push(l.task.short_id);
   }
   // A proposal that recommends waiting goes back for the evidence the pipeline can gather first; each takes a slot like a start.
@@ -1527,7 +1672,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
     running,
     cap: TRIAL_RUNNING_CAP,
     started,
-    /** Runs that died waiting at their own card, picked up at that gate (resumeAtGate), or due to be on a dry pass. */
+    /** Runs that died waiting at their own card, picked up at that gate (resumeRunAt), or due to be on a dry pass. */
     resumed: dry ? lost.slice(0, r).map((l) => l.task.short_id) : resumed,
     /** Proposal cards sent back to gather their own evidence (gatherDue), or due to be on a dry pass. */
     gathering: dry ? waits.slice(0, g).map((w) => w.short_id) : gathering,

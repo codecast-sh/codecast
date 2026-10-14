@@ -5,7 +5,9 @@ import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { brief, forProject, lines, overview, personEditCore, propose, resolve, resolveProposalCore, retract, show } from "./expectations";
+import { askTrialProposals, brief, forProject, lines, overview, personEditCore, propose, resolve, resolveProposalCore, retract, show } from "./expectations";
+import { answerTrialCardCore, cards } from "./lineTrial";
+import { pauseAtGateCore } from "./workflow_runs";
 import { settleExpectationCard } from "./lib/expectationsApply";
 
 const INDEXES = schemaIndexes(schema);
@@ -301,6 +303,77 @@ describe("a session's proposal that needs a person", () => {
     expect(out).toEqual({ short_id: "xp-2", status: "open", version: 1 });
     expect((await ctx.db.query("session_decisions").collect()).filter((d: any) => !d.short_id?.match(/^sd-9[56]$/))).toHaveLength(0);
     expect(await run(resolve, ctx, { api_token: `tok-${OWNER}`, proposal: "xp-2", action: "apply", conversation_id: "sess-routine" })).toEqual({ short_id: "xp-2", status: "applied", version: 2 });
+  });
+});
+
+describe("a trial station's proposal is its trial decision (LL12)", () => {
+  // AgentWatch Trial's judge route: the Fix station decides the fix is the expectation line and proposes it.
+  async function trialCtx(decides = true) {
+    const ctx = await makeCtx();
+    await ctx.db.patch("projects_calls", { line_trial: { since: 1, by: OWNER, judge: { graph: "/g/judge.cast", cwd: "/g", name: "agentwatch_trial_judge", ...(decides ? { decides: "org_roles_quality" } : {}) } } });
+    await ctx.db.insert("org_roles", { _id: "org_roles_quality", short_id: "or-39", name: "Agent Quality lead", team_id: TEAM, status: "active", reports_to: { kind: "user", user_id: MATE }, created_at: 1 });
+    await ctx.db.insert("tasks", { _id: "tasks_judge", short_id: "ct-7", user_id: OWNER, team_id: TEAM, workspace: `team:${TEAM}`, project_id: "projects_calls", title: "A judge flags good intros", status: "in_progress", task_type: "task", priority: "medium", workflow_run_id: "workflow_runs_judge", created_at: 1, updated_at: 1 });
+    await ctx.db.insert("workflow_runs", {
+      _id: "workflow_runs_judge", user_id: OWNER, task_id: "tasks_judge", status: "running", workflow_name: "agentwatch_trial_judge", current_node_id: "fix",
+      node_statuses: [{ node_id: "repeats", status: "completed" }, { node_id: "fix", status: "running", session_id: "jx7fixx" }],
+      primary_conversation_id: "conversations_primary", workspace: `team:${TEAM}`, team_id: TEAM, created_at: 1, updated_at: 1,
+    });
+    await ctx.db.insert("conversations", { _id: "conversations_primary", session_id: "wf-judge", user_id: OWNER, team_id: TEAM, message_count: 1, workflow_run_id: "workflow_runs_judge", is_workflow_primary: true, created_at: 1, updated_at: 1 });
+    await ctx.db.insert("conversations", { _id: "conversations_fix", session_id: "sess-fix", short_id: "jx7fixx", user_id: OWNER, team_id: TEAM, message_count: 3, parent_conversation_id: "conversations_primary", created_at: 1, updated_at: 1 });
+    await run(propose, ctx, { ...scope(), summary: "Seed", ops: [{ op: "add", part: "Calls", text: "Card facts are true.", citations: [QUOTED] }] });
+    return ctx;
+  }
+  const retire = { summary: "Retire", ops: [{ op: "retire", id: "ex-callers-call-1", reason: "ruled out", citations: [BARE] }] };
+  const decisionOf = async (ctx: any, shortId: string) => (await ctx.db.query("session_decisions").collect()).find((d: any) => d.short_id === shortId);
+
+  test("it is asked on the trial rail, routed as the run's decisions are, and filed for the trial feed on the station's node", async () => {
+    const ctx = await trialCtx();
+    const out = await run(propose, ctx, { ...scope(), conversation_id: "sess-fix", ...retire });
+    expect({ ...out }).toMatchObject({ short_id: "xp-2", status: "open", card: expect.stringMatching(/^sd-/), trial_card: expect.stringMatching(/^tc-/) });
+    const d = await decisionOf(ctx, out.card);
+    expect(d).toMatchObject({ trial: true, task_id: "tasks_judge", silent: true, asked_user_ids: [MATE], options: [{ label: "Apply" }, { label: "Drop" }] });
+    expect(d.hops.map((h: any) => h.role_id)).toEqual(["org_roles_quality"]);
+    expect(await ctx.db.query("trial_cards").collect()).toMatchObject([{ short_id: out.trial_card, node_id: "fix", kind: "gate", decision_id: d._id, task_id: "tasks_judge", run_id: "workflow_runs_judge", status: "waiting" }]);
+  });
+
+  test("a trial naming no decider asks the owner's practice answer, in nobody's inbox", async () => {
+    const ctx = await trialCtx(false);
+    const out = await run(propose, ctx, { ...scope(), conversation_id: "sess-fix", ...retire });
+    expect(await decisionOf(ctx, out.card)).toMatchObject({ trial: true, asked_user_ids: [OWNER], hops: [] });
+    expect((await ctx.db.query("decision_inbox").collect())).toHaveLength(0);
+  });
+
+  test("a later gate of the run leaves it waiting, and its answer applies the proposal without moving the run", async () => {
+    const ctx = await trialCtx();
+    const out = await run(propose, ctx, { ...scope(), conversation_id: "sess-fix", ...retire });
+    const gate: any = await pauseAtGateCore(ctx, { userId: OWNER as any }, { run_id: "workflow_runs_judge" as any, node_id: "review", prompt: "Publish?", choices: [{ key: "P", label: "[P] Publish", target: "publish" }, { key: "N", label: "[N] Not now", target: "dropped" }] });
+    expect(gate.ok).toBe(true);
+    expect((await decisionOf(ctx, out.card)).status).toBe("pending");
+    const card = (await ctx.db.query("trial_cards").collect()).find((c: any) => c.short_id === out.trial_card);
+    expect(card.status).toBe("waiting");
+    // The trial feed reads it waiting, unsuperseded, though its run stands at another gate.
+    const feed = async () => (await run(cards, ctx, scope())).find((c: any) => c.short_id === out.trial_card);
+    expect({ ...(await feed()) }).toMatchObject({ status: "waiting", superseded: null, decision: { short_id: out.card } });
+    await answerTrialCardCore(ctx, MATE as any, out.trial_card, "1", undefined, 50);
+    expect((await feed()).status).toBe("answered");
+    expect((await run(show, ctx, scope())).doc).toMatchObject({ version: 2, how: "person", items: [{ status: "retired" }] });
+    expect((await ctx.db.query("trial_cards").collect()).find((c: any) => c.short_id === out.trial_card).status).toBe("answered");
+    const runRow = await ctx.db.get("workflow_runs_judge");
+    expect(runRow).toMatchObject({ status: "paused", gate_node_id: "review" });
+  });
+
+  test("an open proposal written while a trial asked nobody gets its decision from the backfill, once", async () => {
+    const ctx = await trialCtx();
+    const out = await run(propose, ctx, { ...scope(), conversation_id: "sess-fix", ...retire });
+    // As it stood before: the proposal open with no decision, no card.
+    await ctx.db.patch((await ctx.db.query("expectation_proposals").withIndex("by_short_id", (q: any) => q.eq("short_id", "xp-2")).first())._id, { decision_id: undefined });
+    for (const c of await ctx.db.query("trial_cards").collect()) await ctx.db.delete(c._id);
+    await ctx.db.delete((await decisionOf(ctx, out.card))._id);
+    expect(await askTrialProposals._handler(ctx, { dry: true })).toEqual([{ project: "Callers & Call Management", proposal: "xp-2", station: "ct-7" }]);
+    const [row] = await askTrialProposals._handler(ctx, {});
+    expect({ ...row }).toMatchObject({ proposal: "xp-2", station: "ct-7", card: expect.stringMatching(/^sd-/), trial_card: expect.stringMatching(/^tc-/) });
+    expect((await decisionOf(ctx, row.card))).toMatchObject({ trial: true, status: "pending", task_id: "tasks_judge" });
+    expect(await askTrialProposals._handler(ctx, {})).toEqual([]);
   });
 });
 
