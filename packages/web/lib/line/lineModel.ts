@@ -63,7 +63,7 @@ import {
   type LinePhaseKey, type ReportNode, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState,
 } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
-import { causeHistory, type CauseHistory, type DeployRow, type HistoryClose, type OccurrenceRow } from "./causeHistory";
+import { causeHistory, type CauseHistory, type DeployRow, type HandMerge, type HistoryClose, type OccurrenceRow } from "./causeHistory";
 import { attemptVerdict, cameBackCount, type MarkTone } from "./timeline";
 import { backTimes, reportArgument, unshippedGuard, reportFieldWords, saidSlot, signalQuotes, type CloseArgument, type CloseKind, type RunSaid } from "@codecast/shared/contracts/causeHistory";
 import { halfOfPhase } from "@codecast/shared/contracts/linePhases";
@@ -123,6 +123,8 @@ export type LineModelRows = {
   deploys?: ReadonlyArray<DeployRow>;
   /** The line profile's watch days, for a watch window whose end the cause no longer holds. */
   watchDays?: number | null;
+  /** Fix branches merged through their pull request by hand, by task id (problemPage fixMerges): each history reads it as its merge. */
+  handMerges?: ReadonlyMap<string, HandMerge>;
   /** Why a problem's own project starts nothing on its own, as a state word (lineFlow autoStartWord); null when it does. */
   holdOf?: (projectId: string | null) => string | null;
   /** What each problem waits on the viewer for, by task id: its Inbox group (lineInbox). A problem in the Inbox is "waiting on you", one definition everywhere. */
@@ -1106,7 +1108,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
         task, runs: allRuns, decisions: (rows.decisions ?? []).filter((d) => d.task_id === taskId || (!!d.workflow_run_id && allRuns.some((r) => r._id === d.workflow_run_id))),
-        signals: own, occurrences, deploys: rows.deploys, said, foldFixAt, watchDays: rows.watchDays ?? null, now,
+        signals: own, occurrences, deploys: rows.deploys, said, foldFixAt, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
     });
   }

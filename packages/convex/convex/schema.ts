@@ -4708,6 +4708,12 @@ export default defineSchema({
       v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string() })
     ),
     holder_key: v.optional(v.string()),
+    // A person handed the question to someone else (passCore): a teammate or a
+    // role. It then holds the decision whatever routing or grants say, and a
+    // role it was passed to may answer it without a grant.
+    passed_to: v.optional(
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number() })
+    ),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A
@@ -4950,6 +4956,14 @@ export default defineSchema({
   })
     .index("by_delivery_id", ["delivery_id"])
     .index("by_processed", ["processed"]),
+
+  // CI deliveries (check_run, check_suite, workflow_run) waiting for their
+  // repository's drain (githubWebhooks.drainCiEvents). A row lives seconds:
+  // the drain deletes it with the batch it folds.
+  github_ci_queue: defineTable({
+    repository: v.string(),
+    event_id: v.id("github_webhook_events"),
+  }).index("by_repository", ["repository"]),
 
   // Which event triggered a GitHub Actions check suite. A check_run names its
   // suite but not the event; the workflow_run delivery for the same suite does.
