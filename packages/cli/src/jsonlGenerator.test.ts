@@ -914,3 +914,14 @@ describe("renderConversationHandoff", () => {
     expect(text).toContain("cast read conv-oc");
   });
 });
+
+describe("hasResumableMessages", () => {
+  // A workflow station's conversation can hold nothing but workflow events. The
+  // daemon repaired it into an empty transcript every two minutes, the agent
+  // refused it ("No conversation found"), and the health check repaired it again.
+  test("an export of workflow events alone has nothing to resume", () => {
+    const event = { role: "assistant", subtype: "workflow_event", content: '{"__wf":{}}', timestamp: "2026-10-14T00:00:00Z" } as any;
+    expect(hasResumableMessages({ messages: [event, event] })).toBe(false);
+    expect(hasResumableMessages({ messages: [event, { role: "user", content: "go", timestamp: "2026-10-14T00:00:01Z" } as any] })).toBe(true);
+  });
+});

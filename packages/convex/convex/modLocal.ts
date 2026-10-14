@@ -88,21 +88,25 @@ export const cliPublish = mutation({
     if (!userId) return { error: "Unauthorized" };
     const mod = await ownMod(ctx, userId, args.name);
     if (!mod) return { error: `no mod named "${args.name}"` };
-    const text = JSON.stringify(args.value ?? null);
-    if (text.length > MAX_VALUE) return { error: `a published value holds at most ${MAX_VALUE / 1000} KB` };
-    const existing = await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id).eq("key", args.key)).first();
-    // An unchanged value is not a write: every tab re-receives the state set on each one.
-    if (existing && JSON.stringify(existing.value ?? null) === text && existing.device_name === args.device_name) return { ok: true, unchanged: true };
-    const row = { value: args.value ?? null, device_name: args.device_name, updated_at: Date.now() };
-    if (existing) await ctx.db.patch(existing._id, row);
-    else {
-      const count = (await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id)).take(MAX_KEYS + 1)).length;
-      if (count >= MAX_KEYS) return { error: `a mod publishes at most ${MAX_KEYS} keys` };
-      await ctx.db.insert("mod_state", { mod_id: mod._id, user_id: userId, key: args.key, ...row });
-    }
-    return { ok: true };
+    return await writeModState(ctx, mod, userId, args.key, args.value, args.device_name);
   },
 });
+
+/** One published value from a local half, latest wins. An unchanged value is not a write: every tab re-receives the state set on each one. */
+async function writeModState(ctx: any, mod: any, userId: Id<"users">, key: string, value: unknown, deviceName?: string) {
+  const text = JSON.stringify(value ?? null);
+  if (text.length > MAX_VALUE) return { error: `a published value holds at most ${MAX_VALUE / 1000} KB` };
+  const existing = await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id).eq("key", key)).first();
+  if (existing && JSON.stringify(existing.value ?? null) === text && existing.device_name === deviceName) return { ok: true, unchanged: true };
+  const row = { value: value ?? null, device_name: deviceName, updated_at: Date.now() };
+  if (existing) await ctx.db.patch(existing._id, row);
+  else {
+    const count = (await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id)).take(MAX_KEYS + 1)).length;
+    if (count >= MAX_KEYS) return { error: `a mod publishes at most ${MAX_KEYS} keys` };
+    await ctx.db.insert("mod_state", { mod_id: mod._id, user_id: userId, key, ...row });
+  }
+  return { ok: true };
+}
 
 /** Hand the pending UI calls for these mods to the daemon that runs them. */
 export const cliClaimCalls = mutation({
