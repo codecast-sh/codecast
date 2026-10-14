@@ -47,6 +47,7 @@ export * from "./orgTemplateBind";
 export * from "./snippets";
 export * from "./featureExplainers";
 export * from "./castPlayer";
+export * from "./pageEdge";
 export * from "./pageAnchor";
 export * from "./pageAgent";
 export * from "./castMotion";
