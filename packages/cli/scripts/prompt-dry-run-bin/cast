@@ -135,9 +135,10 @@ is_read() {
     pr) case "${2:-}" in ls|show|events|threads) return 0 ;; *) return 1 ;; esac ;;
     # Team chat's reads; marking read is its own verb (/cli/chat/mark-read).
     chat) case "${2:-}" in read|thread|channels|ls|search) return 0 ;; *) return 1 ;; esac ;;
-    # show, ls and kit (the report page kit: its guide, or a page written as
-    # served beside itself): a bare `cast decide "<question>"` posts a decision.
-    decide) case "${2:-}" in show|ls|kit) return 0 ;; *) return 1 ;; esac ;;
+    # show, ls, kit (the report page kit: its guide, or a page written as
+    # served beside itself) and brief (the presenting brief, printed): a bare
+    # `cast decide "<question>"` posts a decision.
+    decide) case "${2:-}" in show|ls|kit|brief) return 0 ;; *) return 1 ;; esac ;;
     # The CLI's own guides, printed.
     guide) return 0 ;;
     # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
@@ -163,6 +164,8 @@ is_read() {
     connector) case "${2:-}" in ls|readers) return 0 ;; *) return 1 ;; esac ;;
     # A finder's observations; add, move, merge and split write.
     signal) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
+    # Workflow runs and templates listed, a file validated; run, reask, create, push and install write.
+    workflow) case "${2:-}" in runs|list|validate) return 0 ;; *) return 1 ;; esac ;;
     *) return 1 ;;
   esac
 }
