@@ -45,6 +45,23 @@ export async function enqueueSyncAction(
     ...fields, delivered_revision: 0, position: 0,
   });
   if (existing) await ctx.db.patch(id, fields);
-  if (!existing?.pending && ctx.scheduler) await ctx.scheduler.runAfter(25, (internal as any).syncOutbox.drain, { id });
+  if (!existing?.pending && ctx.scheduler) await ensureDrainScheduled(ctx, scopeKey, id);
   return { id: String(id), revision, scope_key: scopeKey, entity_type: entityType, entity_id: entityId };
+}
+
+/**
+ * Schedule a drain for the scope unless one is already on its way. A drain
+ * delivers up to 32 of the scope's pending slots and keeps going while any
+ * remain, so a second one would wake to find nothing left: in prod 81% of
+ * drains did (2026-10-14). The marker is read on every newly pending slot but
+ * written only when the scope goes from idle to busy.
+ */
+async function ensureDrainScheduled(ctx: any, scopeKey: string, id: string): Promise<void> {
+  const marker = await ctx.db.query("sync_outbox_drains")
+    .withIndex("by_scope", (q: any) => q.eq("scope_key", scopeKey))
+    .unique();
+  if (marker?.scheduled) return;
+  if (marker) await ctx.db.patch(marker._id, { scheduled: true });
+  else await ctx.db.insert("sync_outbox_drains", { scope_key: scopeKey, scheduled: true });
+  await ctx.scheduler.runAfter(25, (internal as any).syncOutbox.drain, { id });
 }

@@ -19,4 +19,12 @@ export const syncOutboxTables = {
     .index("by_scope_entity", ["scope_key", "entity_id"])
     .index("by_pending", ["pending", "updated_at"])
     .index("by_scope_pending", ["scope_key", "pending", "updated_at"]),
+
+  // Whether a drain is on its way for a scope. A save that makes a slot pending
+  // schedules a drain only when none is, and the drain that finds the scope
+  // empty clears it. Saves write it only on that idle-to-busy edge.
+  sync_outbox_drains: defineTable({
+    scope_key: v.string(),
+    scheduled: v.boolean(),
+  }).index("by_scope", ["scope_key"]),
 };

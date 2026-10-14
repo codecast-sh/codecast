@@ -1,8 +1,9 @@
 // Mounts For you (line-journeys.md LJ8.1) on fixture needs of every kind:
-// only what can be answered now is listed (the groups named for the act), rows
-// with no buttons, the reader holding the open need under one head line (the
-// problem and its age), J and K walking the list without leaving it, and the
-// quiet pointers to Problems counted by the Problems list itself.
+// only the end decision is listed (under what the person is asked), never
+// what a station asked before its run got there nor the line's own chores (a
+// problem assigned, a fix to land, a twin to merge); rows with no buttons, the
+// reader holding the open need under one head line (the problem and its age),
+// J and K walking the list without leaving it, and no pointers elsewhere.
 import { afterAll, expect, mock, setDefaultTimeout, test } from "bun:test";
 import React, { act } from "react";
 import { JSDOM } from "jsdom";
@@ -38,8 +39,12 @@ const now = Date.UTC(2026, 9, 12, 12);
 const H = 3_600_000;
 const row = (kind: string, key: string, over: Record<string, unknown> = {}) => ({ key: `${kind}:${key}`, kind, at: now - H, projectId: "p1", title: `Problem ${key}`, ref: `ct-${key}`, detail: null, caseId: key, runId: null, cardId: null, cardRef: null, ...over });
 const groups = [
-  { kind: "question", label: "", rows: [row("question", "3", { title: "Quinn or Riley", note: "Akash took the call. Has Quinn left the account, or is Riley's record wrong?", at: now - 9 * H })] },
-  { kind: "confirm", label: "", rows: [row("confirm", "5", { title: "Card names come out cut", note: "One report. Is this a real problem?" })] },
+  { kind: "decide", label: "", rows: [row("decide", "3", { title: "Quinn or Riley", at: now - 9 * H, cardId: "d3", cardRef: "sd-3" }), row("decide", "5", { title: "Card names come out cut", cardId: "d5", cardRef: "sd-5" })] },
+  // A problem assigned to the viewer is the line's to carry (Problems' Not started), never For you's.
+  { kind: "mine", label: "", rows: [row("mine", "40", { title: "Held by hand" })] },
+  // What a station asked before a fix was presented is on Problems, never in this list.
+  { kind: "question", label: "", rows: [row("question", "30", { title: "One consistent rep", note: "Akash took the call. Has Quinn left the account, or is Riley's record wrong?" })] },
+  { kind: "confirm", label: "", rows: [row("confirm", "31", { title: "Grader faulted Eric", note: "One report. Is this a real problem?" })] },
   { kind: "failed", label: "", rows: [row("failed", "6", { runId: "r6", title: "Eval gate fails", fail: { key: "deadend:prove", step: "prove", label: "Prove: the fix still needs Cameron's yes before it ships.", raw: "" } })] },
   { kind: "stuck", label: "", rows: [row("stuck", "p1", { caseId: null, ref: null, waiting: 47, switchOff: true })] },
 ] as any;
@@ -64,58 +69,66 @@ document.body.appendChild(host);
 const root = createRoot(host);
 const selects: any[] = [];
 const q = (s: string) => host.querySelector(s) as HTMLElement | null;
+/** A need read where its problem names it (the problem's band), as For you no longer lists what a station asked early. */
+async function renderNeed(need: any) {
+  await act(async () => { root.render(React.createElement(WaitingItem, { key: need.key, need, now, head: false, asked: false, onProblem() {}, onRun() {} })); });
+}
 async function render(search: string, ws: any = workspace) {
   await act(async () => { root.render(React.createElement(ForYouView, { model: { steps: {}, runs: [] } as any, workspace: ws, selection: readLineSelection(new URLSearchParams(search)), select: (p: any, _c: any, o: any) => selects.push([p, o]), href: (p: any) => `/line?view=${p.view ?? ""}` })); });
 }
 
-test("only what can be answered now is listed, the reader's N of M is the list; a row is the problem's title and carries no button", async () => {
+test("only the end decision is listed, under what the person is asked; the reader's N of M is the list; a row is the problem's title and carries no button", async () => {
   await render("");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-row").length}`)).toEqual(["question:1", "confirm:1", "stopped:1"]);
-  expect(q("[data-line-foryou]")?.dataset.lineForyou).toBe("3");
-  expect(q(".fy-pos")?.textContent).toBe("1 of 3");
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-row").length}`)).toEqual(["decision:2"]);
+  expect(q(".fy-group-h")?.textContent).toBe("Ship these fixes?2");
+  expect(q("[data-line-foryou]")?.dataset.lineForyou).toBe("2");
+  expect(q(".fy-pos")?.textContent).toBe("1 of 2");
   // What is asked is the reader's; the list says what each item is about.
-  expect(q("[data-line-need-ref='ct-3'] .fy-ask")?.textContent).toBe("Quinn or Riley");
-  expect(q("[data-line-need-ref='ct-5'] .fy-ask")?.textContent).toBe("Card names come out cut");
-  // A step that finished and waits on a yes is For you's, in its own group.
-  expect(q("[data-line-need-ref='ct-6']")?.closest("[data-line-need-group]")?.getAttribute("data-line-need-group")).toBe("stopped");
+  expect(q("[data-line-need-ref='sd-3'] .fy-ask")?.textContent).toBe("Quinn or Riley");
+  expect(q("[data-line-need-ref='sd-5'] .fy-ask")?.textContent).toBe("Card names come out cut");
+  // A question, a new problem to confirm, a step that finished mid-run and a problem assigned by hand wait on nobody here.
+  for (const ref of ["ct-30", "ct-31", "ct-6", "ct-40"]) expect(q(`[data-line-need-ref='${ref}']`)).toBeNull();
   expect(host.querySelectorAll(".fy-row button").length).toBe(0);
+  // Nothing points elsewhere: the line's queue is on the line's own page.
+  expect(host.querySelectorAll("[data-line-pointer]").length).toBe(0);
   // Arriving names the first need in the address, in place.
-  expect(selects.at(-1)).toEqual([{ need: "ct-3", decision: null, card: null }, { replace: true }]);
+  expect(selects.at(-1)).toEqual([{ need: "sd-3", decision: null, card: null }, { replace: true }]);
 });
 
-test("what no answer can reach is one quiet pointer per Problems chip, counted by the Problems list, outside the walk", async () => {
-  await render("need=ct-3");
-  const pointers = [...host.querySelectorAll<HTMLElement>("[data-line-pointer]")];
-  // The stopped run waits on you now, so Needs a new ask has nothing to point at.
-  expect(pointers.map((p) => [p.dataset.linePointer, p.textContent])).toEqual([["notstarted", "Not started1"]]);
-  expect(host.querySelectorAll(".fy-row").length).toBe(3);
-});
-
-test("the reader's head names the problem once: its ref and title open it, then its age", async () => {
-  await render("need=ct-3");
+test("the reader's head carries no second name: the product, the age, a link to the problem, and the pager only with more than one", async () => {
+  await render("need=sd-3");
   const head = q("[data-line-foryou-head]")!;
-  expect(q("[data-line-foryou-problem]")?.textContent).toBe("ct-3Quinn or Riley");
+  // The decision's question names what it is about: no task id or raw title up here.
+  expect(head.textContent).not.toContain("ct-3");
+  expect(head.textContent).not.toContain("Quinn or Riley");
+  expect(head.querySelector(".fy-proj")?.textContent).toBe("Callers");
   expect(head.querySelector(".fy-age")?.textContent).toBe(`waiting ${ageShort(9 * H)}`);
+  expect(q("[data-line-foryou-problem]")?.textContent).toBe("Open the problem");
   expect(head.querySelector(".fy-process")).toBeNull();
-  // The body opens on what is asked: no second head inside it.
-  expect(q(".fy-reader-b [data-headless]")).not.toBeNull();
+  expect(head.querySelectorAll("[aria-label='Previous'], [aria-label='Next']").length).toBe(2);
+  // One item: nothing to page through.
+  await render("need=sd-3", { ...workspace, needs: needs.filter((n: any) => n.ref === "sd-3") });
+  expect(q(".fy-pos")).toBeNull();
+  expect(q("[data-line-foryou-head] [aria-label='Previous']")).toBeNull();
 });
 
-test("a question opens with its answer box; J moves to the next need without leaving the list", async () => {
+test("J moves to the next need without leaving the list; a question is read, with its answer box, where its problem names it", async () => {
   selects.length = 0;
-  await render("need=ct-3");
-  expect(q("[data-line-foryou-reader]")?.dataset.lineForyouReader).toBe("question");
-  expect(q("[data-line-ask-box]")).not.toBeNull();
-  expect(q(".fy-reader")?.textContent).toContain("Has Quinn left the account, or is Riley's record wrong?");
-  q("[data-line-need-ref='ct-3']")!.focus();
+  await render("need=sd-3");
+  expect(q("[data-line-foryou-reader]")?.dataset.lineForyouReader).toBe("decision");
+  q("[data-line-need-ref='sd-3']")!.focus();
   await act(async () => { q(".fy-list")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "j", bubbles: true })); });
-  expect(selects.at(-1)).toEqual([{ need: "ct-5", decision: null, card: null }, { replace: true }]);
+  expect(selects.at(-1)).toEqual([{ need: "sd-5", decision: null, card: null }, { replace: true }]);
+  await renderNeed(needs.find((n: any) => n.ref === "ct-30"));
+  expect(q("[data-line-ask-box]")).not.toBeNull();
+  expect(host.textContent).toContain("Has Quinn left the account, or is Riley's record wrong?");
 });
 
-test("a run that stopped needing a yes is For you's: its reader asks the yes in one line and offers it", async () => {
+test("a run that stopped needing a yes is not For you's; on its problem its reader asks the yes in one line and offers it", async () => {
   await render("need=ct-6");
-  expect(q("[data-line-foryou-reader]")?.dataset.lineForyouReader).toBe("stopped");
-  // For you's head names only the problem, so the reader asks it.
+  expect(q("[data-line-foryou-reader]")?.dataset.lineForyouReader).toBe("missing");
+  await renderNeed(needs.find((n: any) => n.ref === "ct-6"));
+  // Its host names only the problem, so the reader asks it.
   expect(q("[data-line-need-ask]")?.textContent).toBe("Prove finished: go on to Build?");
   expect(q("[data-line-start-again]")?.textContent).toBe("Go on to Build (new run)");
 });
@@ -142,6 +155,26 @@ test("the reader of a run that stopped needing a yes (its problem's band) shows 
   expect(started).toEqual([]);
   expect(updates).toEqual([]);
   useInboxStore.setState(real as any);
+});
+
+test("findings and a step's words under a need are one line each until opened: a long report never opens by itself", async () => {
+  const base = needs.find((n: any) => n.ref === "ct-6");
+  const long = "The call ran 40 minutes. " + "Every line of the transcript. ".repeat(400);
+  const before = useInboxStore.getState().signals;
+  await act(async () => { useInboxStore.setState({ signals: { ...(before ?? {}), f1: { _id: "f1", short_id: "sg-1", task_id: base.caseId, source: "person", kind: "bug", title: "Caller was cut off mid-pitch", detail_md: long, created_at: now - H, observed_at: now - H } } } as any); });
+  await act(async () => { root.render(React.createElement(WaitingItem, { key: "fold", need: base, now, head: false, onProblem() {}, onRun() {} })); });
+  const finding = q("[data-line-finding='sg-1']")!;
+  expect(finding).not.toBeNull();
+  expect(finding.hasAttribute("data-open")).toBe(false);
+  expect(finding.querySelector(".fr-open")).toBeNull();
+  const said = q("[data-line-need-said] .fr")!;
+  expect(said.hasAttribute("data-open")).toBe(false);
+  expect(q("[data-line-need-said] .lwn-said")).toBeNull();
+  await act(async () => { said.querySelector<HTMLButtonElement>(".fr-row")!.click(); });
+  expect(q("[data-line-need-said] .lwn-said")?.textContent).toContain("still needs Cameron's yes before it ships");
+  await act(async () => { finding.querySelector<HTMLButtonElement>(".fr-row")!.click(); });
+  expect(q("[data-line-finding='sg-1'] .fr-open")?.textContent).toContain("Every line of the transcript.");
+  await act(async () => { useInboxStore.setState({ signals: before } as any); });
 });
 
 test("a fix nobody answered offers its card's own answers: the recommended one first, the saved fix landed from its branch, Drop closing the problem with no run, Ask again priced as a new run", async () => {
@@ -179,20 +212,20 @@ test("a problem that left the list keeps its name, says what moved it, and offer
   expect(left.querySelector("[data-line-foryou-moved] dd")?.textContent).toBe("Run 3 started again 7m ago after a new finding");
   expect([...left.querySelectorAll(".fy-left-acts > *")].map((a) => a.textContent)).toEqual(["Next waitingJ", "Open the run", "Open the problem"]);
   await act(async () => { left.querySelector<HTMLButtonElement>("[data-line-foryou-next]")!.click(); });
-  expect(selects.at(-1)?.[0]).toMatchObject({ need: "ct-3" });
+  expect(selects.at(-1)?.[0]).toMatchObject({ need: "sd-3" });
 });
 
 test("an item answered while open leaves the list and the next one opens in its place", async () => {
-  await render("need=ct-3");
+  await render("need=sd-3");
   selects.length = 0;
-  await render("need=ct-3", { ...workspace, needs: needs.filter((n: any) => n.ref !== "ct-3") });
-  expect(selects.at(-1)).toEqual([{ need: "ct-5", decision: null, card: null }, { replace: true }]);
+  await render("need=sd-3", { ...workspace, needs: needs.filter((n: any) => n.ref !== "sd-3") });
+  expect(selects.at(-1)).toEqual([{ need: "sd-5", decision: null, card: null }, { replace: true }]);
 });
 
-test("one item and nothing else listed: the reader takes the whole width", async () => {
-  await render("need=ct-5", { ...workspace, needs: needs.filter((n: any) => n.ref === "ct-5"), ...empty });
+test("one item listed: the reader takes the whole width", async () => {
+  await render("need=sd-5", { ...workspace, needs: needs.filter((n: any) => n.ref === "sd-5"), ...empty });
   expect(q("[data-line-foryou]")?.hasAttribute("data-single")).toBe(true);
-  await render("need=ct-5");
+  await render("need=sd-5");
   expect(q("[data-line-foryou]")?.hasAttribute("data-single")).toBe(false);
 });
 
@@ -200,7 +233,7 @@ test("a new problem is confirmed real in one press, a note optional (ct-58683)",
   const writes: any[] = [];
   useInboxStore.setState({ updateTask: async (ref: string, patch: any) => { writes.push([ref, patch]); }, addTaskComment: async () => {} } as any);
   const conf = lineNeeds([{ kind: "confirm", label: "", rows: [row("confirm", "7", { title: "Grader faulted Eric", note: "The fix is probably in the grader prompt. A person needs to say what Eric's card showed." })] }] as any, { row: () => "line" });
-  await render("need=ct-7", { ...workspace, needs: conf, ...empty });
+  await renderNeed(conf[0]);
   expect(q("[data-line-ask-q]")?.textContent).toBe("Is this a real problem?");
   expect(q("[data-line-ask-cause]")).toBeNull();
   const yes = q("[data-line-ask-confirm]") as HTMLButtonElement;
@@ -214,7 +247,7 @@ test("a confirm whose open question weighs causes answers both at once: each cau
   useInboxStore.setState({ updateTask: async (ref: string, patch: any) => { writes.push([ref, patch]); }, addTaskComment: async () => {} } as any);
   // Grounding's note as saved, cut inside its second alternative.
   const conf = lineNeeds([{ kind: "confirm", label: "", rows: [row("confirm", "17", { title: "Grader faulted Eric", note: "The fix is probably in the grader prompt or in how card context is built, but the signal doesn't say which. A person needs to confirm whether the card's name set came from truncated data (a data or code bug) or from th\u2026" })] }] as any, { row: () => "line" });
-  await render("need=ct-17", { ...workspace, needs: conf, ...empty });
+  await renderNeed(conf[0]);
   // The question asked is its own, whole to a sentence end; each yes below answers it.
   expect(q("[data-line-ask-q]")?.textContent).toBe("Is it true that the card's name set came from truncated data (a data or code bug)?");
   expect(q("[data-line-ask-open]")).toBeNull();
@@ -228,7 +261,7 @@ test("a question said as a statement is asked as a question, each alternative a 
   const writes: any[] = [];
   useInboxStore.setState({ updateTask: async (ref: string, patch: any) => { writes.push([ref, patch]); }, addTaskComment: async () => {} } as any);
   const qn = lineNeeds([{ kind: "question", label: "", rows: [row("question", "8", { title: "One consistent rep", note: "Akash dealt with Quinn but the follow-ups were signed Riley. It can't be worked yet because the report says the persona rule is under review, and nothing says whether Quinn has actually left (so Riley is correct) or is still active (so the switch is the bug)." })] }] as any, { row: () => "line" });
-  await render("need=ct-8", { ...workspace, needs: qn, ...empty });
+  await renderNeed(qn[0]);
   expect(q("[data-line-ask-q]")?.textContent).toBe("Has Quinn actually left, or is Quinn still active?");
   const choices = [...host.querySelectorAll<HTMLButtonElement>("[data-line-ask-choice]")];
   expect(choices.map((c) => c.textContent)).toEqual(["Quinn has actually leftSo Riley is correct", "Quinn is still activeSo the switch is the bug"]);
@@ -248,7 +281,7 @@ test("a problem opened on a finding that says nothing asks no question: No suppo
       description: `Opened by a bug report from AgentWatch.\n\nAbout: the match judge\n\n**${rule}** (severity 5/10, ex-matching-engine-1)\n\nplaceholder\n\n1 finding in this AgentWatch cluster (match judge).` } },
   } as any);
   const qn = lineNeeds([{ kind: "question", label: "", rows: [row("question", "9", { title: rule, note: "The finding body is just 'placeholder'. Someone needs to open the linked cluster and name the violating change before work starts." })] }] as any, { row: () => "line" });
-  await render("need=ct-9", { ...workspace, needs: qn, ...empty });
+  await renderNeed(qn[0]);
   expect(q("[data-line-ask-kind]")?.getAttribute("data-line-ask-kind")).toBe("unsupported");
   expect(q("[data-line-ask-q]")?.textContent).toBe("No supporting finding");
   expect(host.textContent).not.toContain("open the linked cluster");
@@ -290,4 +323,53 @@ test("what the stopped step advised leads: a wait is the primary and parks the p
   expect(q("[data-line-start-again]")?.textContent).toBe("Reviewed: go on to Build (new run)");
   expect(q("[data-line-start-again]")?.hasAttribute("data-primary")).toBe(false);
   useInboxStore.setState(real as any);
+});
+
+test("a built fix opens with the decision its run's session presented, and nothing structured stands in for one that has none", async () => {
+  const before = { lineCards: useInboxStore.getState().lineCards, workflowRuns: useInboxStore.getState().workflowRuns };
+  const built = { ...needs.find((n: any) => n.ref === "ct-6"), kind: "review", key: "review:t-88", ref: "ct-88", caseId: "t-88", problemRef: "ct-88", title: "Warm offers ride the cold rail", runId: "r-88", fail: { key: "review:implement", step: "implement", label: "Handed off for review", raw: "", review: { ask: "Needs a look", gate: "Eval red" } } };
+  const opened: unknown[][] = [];
+  const draw = async (need: any, key: string) => { await act(async () => { root.render(React.createElement(WaitingItem, { key, need, head: false, onProblem() {}, onRun: (...a: unknown[]) => { opened.push(a); } })); }); };
+  await act(async () => { useInboxStore.setState({ workflowRuns: { ...before.workflowRuns, "r-88": { _id: "r-88", task_id: "t-88", status: "failed", node_statuses: [{ node_id: "prove", label: "Prove", status: "completed", session: { _id: "s-prove" } }, { node_id: "implement", label: "Implement", status: "failed", session: { _id: "s-build" } }, { node_id: "eval", status: "failed" }] } } } as any); });
+
+  // No session presented it: one line naming the step it is with, that session and the run. No gates, files or findings.
+  await draw(built, "none");
+  expect(q("[data-line-need-review]")?.getAttribute("data-line-need-review")).toBe("not-presented");
+  expect(q("[data-line-need-not-presented] > span")?.textContent).toBe("Waiting on Implement to present it");
+  expect(q("[data-line-need-session]")?.getAttribute("data-line-need-session")).toBe("s-build");
+  await act(async () => { q("[data-line-need-run]")!.click(); });
+  expect(opened).toEqual([["r-88", "t-88"]]);
+  expect(q("[data-line-decision]")).toBeNull();
+  expect(q(".lwn-col")!.children.length).toBe(1);
+  expect(q("[data-line-need-evidence]")).toBeNull();
+  // A plan approval the run once asked is not the fix presented.
+  await act(async () => { useInboxStore.setState({ lineCards: { ...(before.lineCards ?? {}), c86: { _id: "c86", short_id: "sd-86", task_id: "t-88", workflow_run_id: "r-88", gate_node_id: "plan_gate", status: "answered", created_at: now } } } as any); });
+  expect(q("[data-line-decision]")).toBeNull();
+  // The build's plumbing (branch, send back, land) is the run's: off its page no dock, on it the dock carries it.
+  expect(q("[data-line-need-dock]")).toBeNull();
+  await act(async () => { root.render(React.createElement(WaitingItem, { key: "run-page", need: built, head: false, runShown: "r-88", onProblem() {}, onRun() {} })); });
+  expect(q("[data-line-need-dock]")).not.toBeNull();
+
+  // The run's session presented it: its decision is the page, whatever another run's decision or this run's plan approval says.
+  await act(async () => { useInboxStore.setState({ lineCards: { ...(before.lineCards ?? {}), c87: { _id: "c87", short_id: "sd-87", task_id: "t-88", workflow_run_id: "r-old", status: "withdrawn", created_at: now }, c86: { _id: "c86", short_id: "sd-86", task_id: "t-88", workflow_run_id: "r-88", gate_node_id: "plan_gate", status: "answered", created_at: now }, c88: { _id: "c88", short_id: "sd-88", task_id: "t-88", workflow_run_id: "r-88", gate_node_id: "decide", status: "answered", created_at: now - H } } } as any); });
+  for (const kind of ["review", "unlanded"]) {
+    await draw({ ...built, kind, fail: kind === "review" ? built.fail : null }, kind);
+    expect(q("[data-line-need-review]")?.getAttribute("data-line-need-review")).toBe("decision");
+    expect(q("[data-line-need-review] > [data-line-decision]")?.getAttribute("data-line-decision")).toBe("sd-88");
+    expect(q("[data-line-need-not-presented]")).toBeNull();
+    expect(q("[data-line-need-dock] [data-line-need-run]")).not.toBeNull();
+  }
+  await act(async () => { useInboxStore.setState(before as any); });
+});
+
+test("a trial card no session presented is the same one line, never a panel of its figures", async () => {
+  const before = useInboxStore.getState().workflowRuns;
+  await act(async () => { useInboxStore.setState({ workflowRuns: { ...before, "r-34": { _id: "r-34", task_id: "t-34", status: "paused", node_statuses: [{ node_id: "review_words", label: "Reviewer", status: "running", session: { _id: "s-words" } }] } } } as any); });
+  const card = { ...needs.find((n: any) => n.ref === "ct-6"), kind: "decision", key: "decide:tc-34", ref: "tc-34", cardRef: "tc-34", decisionRef: null, trial: true, caseId: "t-34", problemRef: "ct-34", runId: "r-34", fail: null };
+  await act(async () => { root.render(React.createElement(WaitingItem, { key: "tc", need: card, head: false, onProblem() {}, onRun() {} })); });
+  expect(q("[data-line-need-not-presented]")?.getAttribute("data-line-need-not-presented")).toBe("preparing");
+  expect(q("[data-line-need-not-presented] > span")?.textContent).toBe("Reviewer is preparing this decision");
+  expect(q("[data-line-need-session]")?.getAttribute("data-line-need-session")).toBe("s-words");
+  expect(q("[data-line-trial-panel]")).toBeNull();
+  await act(async () => { useInboxStore.setState({ workflowRuns: before } as any); });
 });
