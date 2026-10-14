@@ -66,10 +66,13 @@ it is right.
   that make a useful preview: the hover card shows the first few filled ones.
   Read them with `$.data.list("objects", { where: { prefix } })` and write with
   `$.objects`.
-- The mod's `agents` text is how every other agent learns to use it. For an
-  object kind, it should say to mention an object by its short id in prose
-  (and to file one with `cast obj create` when a conversation turns up a new
-  one), not to draw a card for it.
+- The mod's `agents` text is how every other agent learns to use it: every
+  session the mod applies to starts with it. For an object kind, it should say
+  to mention an object by its short id in prose (and to file one with
+  `cast obj create` when a conversation turns up a new one), not to draw a
+  card for it. What changes as the mod runs (what it tracks now, which objects
+  matter this week) the mod keeps current itself with `$.agents.set(text)`
+  from either half, without a new version.
 - A fence is for a view that is not one object: a comparison, a live query, a
   chart of many. Declare it, draw it in `on("ui.render", { fence })`, and any
   agent's ```<lang> block renders that way for everyone who has the mod.

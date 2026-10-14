@@ -191,13 +191,17 @@ function nameScore(text: string, q: string): number {
 export function sessionMatchTier(conv: HaystackRow & { title?: string }, lowerQuery: string): { tier: 0 | 1 | 2 | 3; exact: number } | null {
   const q = lowerQuery.trim();
   if (!q) return { tier: 0, exact: 0 };
-  const name = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personifyAllNow()).name : null;
+  // The cached haystack holds the title and the worn name, so a typed word
+  // absent from it rules out every tier. This cheap reject is what lets a
+  // search scan the whole cache rather than only its most recent rows.
+  const hay = sessionSearchHaystack(conv);
+  if (!q.split(/\s+/).every((tok) => hay.includes(tok))) return null;
+  const name =conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personifyAllNow()).name : null;
   const best = Math.min(nameScore(searchTitle(conv), q), name ? nameScore(name, q) : Infinity);
   if (best <= 1) return { tier: 0, exact: best };
   if (best !== Infinity) return { tier: 1, exact: 0 };
   // Every typed word somewhere in what the session is about, in any order:
   // starting a word there, or only inside one.
-  const hay = sessionSearchHaystack(conv);
   if (matchScore(hay, q) === Infinity) return null;
   const words = textWords(hay);
   return { tier: q.split(/\s+/).every((tok) => words.some((w) => w.startsWith(tok))) ? 2 : 3, exact: 0 };
@@ -262,8 +266,6 @@ export const searchableSessionsSig = makeCollectionSig<InboxSession>(
     `${identitySig(s as any)}|${s.title ?? (s as { last_user_message?: string }).last_user_message ?? ""}|${s.subtitle ?? ""}|${s.idle_summary ?? ""}|${s.thread_state ?? ""}|${s.project_path ?? ""}|${s.author_name ?? ""}|${s.message_count ?? 0}`,
 );
 
-const INSTANT_SCAN_CAP = 1500;
-
 /** The preview line for an instant row: where in the session the query landed. */
 function instantSnippetFor(conv: InboxSession, lowerQuery: string): string | null {
   const candidates = [conv.idle_summary, conv.subtitle, conv.thread_state, conv.project_path];
@@ -290,9 +292,7 @@ export function instantSessionRows(
 
   const now = Date.now();
   const ranked: Array<{ row: SessionSearchRow; rank: number; tier: number }> = [];
-  const pool = Object.values(filterInboxScopeFromState(state));
-  const scan = pool.length > INSTANT_SCAN_CAP ? pool.slice(0, INSTANT_SCAN_CAP) : pool;
-  for (const conv of scan) {
+  for (const conv of Object.values(filterInboxScopeFromState(state))) {
     if (conv.is_subagent) continue;
     if (opts.mineOnly && meId && conv.user_id && conv.user_id !== meId) continue;
     const match = sessionMatchTier(conv, q);

@@ -5,6 +5,8 @@
 // itself); `$` adds the codecast side: publishing values the mod's UI reads,
 // answering the UI's calls, filing objects, and running `cast`.
 
+import { AGENT_NOTES_KEY } from "../contracts/mods";
+
 type Init = { type: "init"; name: string; manifest: any; siteUrl: string; apiToken: string; deviceName: string; castBin: string; castArgv?: string[] };
 type CallMsg = { type: "call"; id: string; method: string; args: unknown };
 type EventMsg = { type: "event"; event: string; payload: Record<string, unknown> };
@@ -19,6 +21,8 @@ export type RunResult = { code: number; stdout: string; stderr: string };
 export interface LocalApi {
   /** Publish a value the mod's UI reads with $.local.get(key) and redraws on. Coalesced to one write a second per key. */
   publish(key: string, value: unknown): void;
+  /** Set this mod's own instructions to agents: they follow the manifest's `agents` text in `cast mod guide` and in every session the mod applies to. Replaces the last text; "" clears it. */
+  agents: { set(text: string): Promise<void> };
   objects: {
     create(obj: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string }): Promise<{ short_id: string }>;
     update(shortId: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string }): Promise<void>;
@@ -77,6 +81,9 @@ async function run(argv: string[], opts: { cwd?: string; timeoutMs?: number } = 
 
 function makeApi(): LocalApi {
   return {
+    agents: {
+      set: async (text) => { await api("/cli/mods/publish-state", { name: init!.name, key: AGENT_NOTES_KEY, value: String(text ?? ""), device_name: init!.deviceName }); },
+    },
     publish(key, value) {
       pendingPublish.set(key, value);
       if (!publishTimer) publishTimer = setTimeout(flushPublish, 1000);

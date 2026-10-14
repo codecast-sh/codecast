@@ -51,6 +51,8 @@ export type HostBridge = {
   log: (modId: string, entries: { level: string; text: string }[]) => void;
   /** Queue a call to the mod's local half and resolve with its answer. */
   callLocal: (modId: string, method: string, args: unknown) => Promise<unknown>;
+  /** Set the mod's own instructions to agents ($.agents.set). */
+  setAgents: (modId: string, text: string) => Promise<void>;
 };
 
 let bridge: HostBridge | null = null;
@@ -588,6 +590,12 @@ export class ModRuntime {
         if (!this.row.is_mine) throw new Error("a local call reaches only your own mods");
         if (!bridge) throw new Error("not connected");
         return await bridge.callLocal(this.id, String(a0), a1 ?? null);
+      }
+      case "agents.set": {
+        if (!this.row.is_mine) throw new Error("only the mod's author sets its agent instructions");
+        if (!bridge) throw new Error("not connected");
+        await bridge.setAgents(this.id, String(a0 ?? ""));
+        return null;
       }
       case "me": {
         const u = store.currentUser;

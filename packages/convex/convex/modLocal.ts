@@ -3,6 +3,7 @@ import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import type { Id } from "./_generated/dataModel";
+import { AGENT_NOTES_KEY, AGENT_NOTES_MAX } from "@codecast/shared/contracts/mods";
 
 /**
  * The local tier of codecast mods (plan pl-839): the half of a mod that the
@@ -88,19 +89,39 @@ export const cliPublish = mutation({
     if (!userId) return { error: "Unauthorized" };
     const mod = await ownMod(ctx, userId, args.name);
     if (!mod) return { error: `no mod named "${args.name}"` };
-    const text = JSON.stringify(args.value ?? null);
-    if (text.length > MAX_VALUE) return { error: `a published value holds at most ${MAX_VALUE / 1000} KB` };
-    const existing = await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id).eq("key", args.key)).first();
-    // An unchanged value is not a write: every tab re-receives the state set on each one.
-    if (existing && JSON.stringify(existing.value ?? null) === text && existing.device_name === args.device_name) return { ok: true, unchanged: true };
-    const row = { value: args.value ?? null, device_name: args.device_name, updated_at: Date.now() };
-    if (existing) await ctx.db.patch(existing._id, row);
-    else {
-      const count = (await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id)).take(MAX_KEYS + 1)).length;
-      if (count >= MAX_KEYS) return { error: `a mod publishes at most ${MAX_KEYS} keys` };
-      await ctx.db.insert("mod_state", { mod_id: mod._id, user_id: userId, key: args.key, ...row });
-    }
-    return { ok: true };
+    return await writeModState(ctx, mod, userId, args.key, args.value, args.device_name);
+  },
+});
+
+/** One published value (latest wins), from a local half or the mod's UI. An unchanged value is not a write: every tab re-receives the state set on each one. */
+async function writeModState(ctx: any, mod: any, userId: Id<"users">, key: string, value: unknown, deviceName?: string) {
+  if (key === AGENT_NOTES_KEY && (typeof value !== "string" || value.length > AGENT_NOTES_MAX)) {
+    return { error: `a mod's agent instructions are text of at most ${AGENT_NOTES_MAX} characters` };
+  }
+  const text = JSON.stringify(value ?? null);
+  if (text.length > MAX_VALUE) return { error: `a published value holds at most ${MAX_VALUE / 1000} KB` };
+  const existing = await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id).eq("key", key)).first();
+  if (existing && JSON.stringify(existing.value ?? null) === text && existing.device_name === deviceName) return { ok: true, unchanged: true };
+  const row = { value: value ?? null, device_name: deviceName, updated_at: Date.now() };
+  if (existing) await ctx.db.patch(existing._id, row);
+  else {
+    const count = (await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", mod._id)).take(MAX_KEYS + 1)).length;
+    if (count >= MAX_KEYS) return { error: `a mod publishes at most ${MAX_KEYS} keys` };
+    await ctx.db.insert("mod_state", { mod_id: mod._id, user_id: userId, key, ...row });
+  }
+  return { ok: true };
+}
+
+/** The mod's own agent instructions, set from its UI (`$.agents.set`). Only its author's runtime writes them. */
+export const webSetAgents = mutation({
+  args: { mod_id: v.id("mods"), text: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not signed in");
+    const mod = await ctx.db.get(args.mod_id);
+    if (!mod || String(mod.user_id) !== String(userId)) throw new Error("only the mod's author sets its agent instructions");
+    const res = await writeModState(ctx, mod, userId, AGENT_NOTES_KEY, args.text);
+    if ("error" in res && res.error) throw new Error(res.error);
   },
 });
 

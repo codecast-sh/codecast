@@ -319,6 +319,15 @@ export type ModContext = {
   theme: "dark" | "light";
 };
 
+/**
+ * The state key a mod's own agent instructions live under, written at run time
+ * with `$.agents.set(text)` from either half. They follow the manifest's
+ * `agents` text in `cast mod guide` and in every session the mod applies to,
+ * so they are capped: each session carries them.
+ */
+export const AGENT_NOTES_KEY = "$agents";
+export const AGENT_NOTES_MAX = 4000;
+
 /** Every `$` method the host answers, by its dotted name. `cast mod inspect` reports these. */
 export const MOD_METHODS = [
   "data.list", "data.get", "data.count",
@@ -329,6 +338,7 @@ export const MOD_METHODS = [
   "docs.create",
   "objects.create", "objects.update", "objects.archive",
   "local.get", "local.meta", "local.call",
+  "agents.set",
   "http.fetch",
   "me",
 ] as const;

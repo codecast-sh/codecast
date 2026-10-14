@@ -26,6 +26,8 @@ export type LineNav = {
   projectId?: string;
   /** Go to a page outside the line (a decision's card), in the app's own navigation. */
   openPath?: (path: string) => void;
+  /** The same, in place of the page this address showed (Back skips it): a link that names something the line hands over. */
+  replacePath?: (path: string) => void;
 };
 
 const NO_NAV: LineNav = { openStep: () => {}, openRun: () => {}, stepHref: () => null, runHref: () => null };

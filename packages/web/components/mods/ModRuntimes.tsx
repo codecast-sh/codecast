@@ -31,6 +31,9 @@ export function ModRuntimes() {
       log: (modId, entries) => {
         void convex.mutation(api.modLogs.webLog, { id: modId, entries }).catch(() => {});
       },
+      setAgents: async (modId, text) => {
+        await convex.mutation(api.modLocal.webSetAgents, { mod_id: modId as any, text });
+      },
       callLocal: async (modId, method, args) => {
         const id = await convex.mutation(api.modCalls.webCall, { mod_id: modId, method, args });
         // The daemon that runs the half claims the call within seconds and writes the answer back.

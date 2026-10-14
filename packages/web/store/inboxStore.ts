@@ -33,7 +33,7 @@ import {
 import { rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
-import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
+import { declareViewNav, freshHomeLaunchPending, hasViewNavigated, recordNavEvent, settleFreshHomeLaunch, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks, type PendingEntry } from "./syncProtocol";
 import { syncTransaction } from "./syncTransaction";
 import { installStoreListenerCensus } from "./storeListenerCensus";
@@ -1405,6 +1405,8 @@ export type SessionDecisionItem = {
   trial?: boolean;
   holder?: { kind: "user" | "role"; id: string };
   holder_key?: string;
+  /** A person handed it to a teammate or a role (convex passCore). */
+  passed_to?: { kind: "user" | "role"; id: string; by: string; at: number };
   asked_user_ids?: string[];
   hops?: DecisionHop[];
   answered_by?: DecisionParty;
@@ -6178,6 +6180,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // viewer, leaves "Handled without you", and the reopenDecision side effect
   // does the server write.
   reopenDecision: (decisionId: string) => void;
+  // Hands an open question to a teammate (it leaves this viewer's queue) or a
+  // role (it stays here, held by the role); the passDecision side effect.
+  passDecision: (decisionId: string, to: { kind: "user" | "role"; id: string }) => void;
   // Stack verbs (D5): the draft moves first, named side effects follow.
   reorderStack: (stackId: string, decisionIds: string[]) => void;
   removeFromStack: (stackId: string, decisionId: string) => void;
@@ -7162,7 +7167,7 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized &&
-          !hasViewNavigated()) {
+          !hasViewNavigated() && !freshHomeLaunchPending()) {
         // A URL that names a conversation owns the view (bootLinkTarget).
         const linked = bootLinkTarget(table);
         if (linked !== undefined) {
@@ -9449,6 +9454,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
+    // Answered from a surface that read the decision's document (a session opened on it, its page): adopt that copy first.
+    adoptDecisionDraft(this, decisionId);
     answerDecisionDraft(this, decisionId, answer);
   }),
   // The words paint at once as a local echo; the discussDecision side effect
@@ -9474,9 +9481,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // not inside answerDecision, because the answer reaches the server only as
   // field patches on a row that already exists.
   adoptDecision: sync(function (this: Draft, decisionId: string) {
-    const detail = this.decisionDetails[decisionId];
-    if (this.sessionDecisions[decisionId] || !detail || !mayAnswerFromDocument(detail, String(this.currentUser?._id ?? ""))) return;
-    this.sessionDecisions[decisionId] = { ...detail.decision };
+    adoptDecisionDraft(this, decisionId);
   }),
 
   // One Ship control (docs/architecture/ship.md): every Ship press, the
@@ -9520,6 +9525,29 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete this.handledDecisions[decisionId];
     const detail = this.decisionDetails[decisionId];
     if (detail && row) detail.decision = { ...row };
+  }),
+  passDecision: action(function (this: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }) {
+    const row = this.sessionDecisions[decisionId] ?? this.decisionDetails[decisionId]?.decision;
+    if (!row || row.status !== "pending") return;
+    const now = Date.now();
+    row.passed_to = { ...to, by: String(this.currentUser?._id ?? ""), at: now };
+    row.holder = { kind: to.kind, id: to.id };
+    row.holder_key = `${to.kind}:${to.id}`;
+    if (to.kind === "user") row.asked_user_ids = [to.id];
+    else if (!(row.hops ?? []).some((h) => h.role_id === to.id)) row.hops = [...(row.hops ?? []), { role_id: to.id, at: now }];
+    row.updated_at = now;
+    const detail = this.decisionDetails[decisionId];
+    if (!detail) return;
+    if (detail.decision !== row) detail.decision = { ...row };
+    if (to.kind === "user") {
+      const m = (this.teamMembers ?? []).find((u: any) => String(u._id) === to.id);
+      detail.asked_users = [{ _id: to.id, name: m?.name ?? m?.email ?? "a teammate" }];
+      return;
+    }
+    const r = this.orgTree?.roles.find((x) => String(x._id) === to.id);
+    const role = r ? { _id: String(r._id), short_id: r.short_id, name: r.name, handle: r.handle, status: r.status } : null;
+    detail.holder_role = role;
+    if (!detail.ladder.some((h) => h.role_id === to.id)) detail.ladder = [...detail.ladder, { role_id: to.id, at: now, role }];
   }),
   reorderStack: action(function (this: Draft, stackId: string, decisionIds: string[]) {
     const stack = this.decisionStacks[stackId];
@@ -14569,6 +14597,13 @@ export function answersForOthers(detail: DecisionDetailItem, meId: string): bool
  * bound to a run, the answer goes into the session as a message. The
  * answerDecision action and a Ship press on a change card both answer here.
  */
+/** A decision's document copy becomes its row when the viewer may answer it and holds no queue row (adoptDecision). */
+function adoptDecisionDraft(draft: Draft, decisionId: string): void {
+  const detail = draft.decisionDetails[decisionId];
+  if (draft.sessionDecisions[decisionId] || !detail || !mayAnswerFromDocument(detail, String(draft.currentUser?._id ?? ""))) return;
+  draft.sessionDecisions[decisionId] = { ...detail.decision };
+}
+
 function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
   const row = draft.sessionDecisions[decisionId];
   // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
@@ -15179,8 +15214,12 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       // A link opens what it names; a remembered position comes back only
       // when the Assistant scope would list it (restorableIn).
       const homeAsked = linked === undefined && hostedHomeAsked(st.clientState?.ui);
+      // A fresh open onto the feed home goes to the new-session page
+      // (DashboardLayout opens it) rather than back to the last conversation.
+      const freshHome = linked === undefined && !homeAsked && freshHomeLaunchPending() && resolveInboxHome(st.clientState?.ui) !== "board";
+      if (!freshHome) settleFreshHomeLaunch();
       const restoreId = linked !== undefined ? linked
-        : !homeAsked && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
+        : !homeAsked && !freshHome && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
       if (homeAsked) {
         useInboxStore.setState({ showMySessions: true });
       } else if (restoreId && st.sessions[restoreId]) {

@@ -3,7 +3,7 @@ import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isTeamMember, resolveTeamForPath, type DirectoryMapping } from "./privacy";
-import { validateManifest } from "@codecast/shared/contracts/mods";
+import { AGENT_NOTES_KEY, validateManifest } from "@codecast/shared/contracts/mods";
 import type { Id } from "./_generated/dataModel";
 import { LOG_CAP } from "./modLogs";
 import { withDevice } from "./modLocal";
@@ -314,6 +314,12 @@ export const cliGuide = query({
       const { teamId } = resolveTeamForPath(mappings as DirectoryMapping[], args.project_path, undefined);
       rows = rows.filter((r: any) => !r.team_id || (teamId && String(r.team_id) === String(teamId)));
     }
+    // What each mod set for agents at run time ($.agents.set), beside its manifest's text.
+    const notes = new Map<string, string>();
+    for (const r of rows) {
+      const note = await ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", r._id).eq("key", AGENT_NOTES_KEY)).first();
+      if (typeof note?.value === "string" && note.value.trim()) notes.set(String(r._id), note.value.trim());
+    }
     return {
       mods: rows.map((r: any) => ({
         name: r.name,
@@ -321,6 +327,7 @@ export const cliGuide = query({
         description: r.description,
         mine: String(r.user_id) === String(userId),
         agents: r.manifest?.agents,
+        agents_live: notes.get(String(r._id)),
         fences: r.manifest?.fences ?? [],
         objects: (r.manifest?.objects ?? []).map((k: any) => ({ prefix: k.prefix, title: k.title, statuses: k.statuses, fields: k.fields ? Object.keys(k.fields) : [] })),
         panes: (r.manifest?.panes ?? []).map((p: any) => p.id),
