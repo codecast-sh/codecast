@@ -5,9 +5,10 @@
 // move does to load: this machine's CPU and memory before and after, and the
 // same for every host receiving sessions. Destinations default to spreading
 // across hosts (lib/resourceOffload assignDestinations). The planner's
-// reasoning sits behind disclosures. Checks no machine can prove are listed
-// once and confirmed by pressing Move; the confirmation is recorded per
-// session as such, never as a passed check. Blockers cannot be overridden.
+// reasoning sits behind disclosures, and sessions that stay are grouped by
+// reason. Checks no machine can prove are confirmed by pressing Move; the
+// confirmation is recorded per session as such, never as a passed check.
+// Blockers cannot be overridden.
 import React from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Cloud, Laptop, RotateCcw, X } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -35,6 +36,26 @@ function Disclosure({ label, children }: { label: React.ReactNode; children: Rea
         <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />{label}
       </button>
       {open && <div className="mt-2 space-y-3 pl-4 text-[11px] text-sol-text-muted">{children}</div>}
+    </div>
+  );
+}
+
+function groupBy(rows: Array<{ id: string; reason: string }>): Array<[string, string[]]> {
+  const m = new Map<string, string[]>();
+  for (const r of rows) m.set(r.reason, [...(m.get(r.reason) ?? []), r.id]);
+  return [...m].sort((a, b) => b[1].length - a[1].length);
+}
+
+function StayGroup({ reason, titles }: { reason: string; titles: string[] }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 text-left hover:text-sol-text">
+        <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+        <span className="flex-1 truncate text-sol-text-secondary">{reason}</span>
+        <span className="tabular-nums text-sol-text-dim">{titles.length}</span>
+      </button>
+      {open && <div className="mt-1 space-y-0.5 pl-5">{titles.map((t, i) => <div key={i} className="truncate">{t}</div>)}</div>}
     </div>
   );
 }
@@ -178,7 +199,6 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const going = picked.filter((c) => movable(c.perDestination[destOf(c)]));
   // Pressing Move confirms the items no check can prove, shown once below for the whole batch.
   const selections: OffloadSelection[] = going.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [...c.perDestination[destOf(c)].pending] }));
-  const toConfirm = [...new Set(going.flatMap((c) => c.perDestination[destOf(c)].pending))];
 
   // The server's dry run runs once on open, so its blockers show before anyone presses Move.
   const preflight = actions?.onPreflight;
@@ -204,12 +224,16 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const allChecked = canMove.length > 0 && picked.length === canMove.length;
   const setAll = (checked: boolean) => setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }])));
   const titleOf = (id: string) => byId.get(id)?.title ?? id;
-  const stayCount = blocked.length + plan.notOffered.length + unevaluated.length;
+  // Grouped by reason, largest first: a count per reason reads at a glance where a line per session does not.
+  const stayGroups = groupBy([
+    ...blocked.map((c) => ({ id: c.sessionId, reason: Object.values(c.perDestination).flatMap((r) => r.blockers)[0] ?? "Blocked" })),
+    ...plan.notOffered.map((n) => ({ id: n.sessionId, reason: n.reason })),
+    ...unevaluated.map((id) => ({ id, reason: "Not checked yet" })),
+  ]);
+  const stayCount = stayGroups.reduce((n, [, ids]) => n + ids.length, 0);
 
   const stopping = going.flatMap((c) => c.stops);
   const stoppingOutside = stopping.filter((p) => p.detached).length;
-  const stopsSummary = stopping.length === 0 ? (midTurn ? "Working sessions finish their turn first." : "Nothing is interrupted.")
-    : `${midTurn ? "Working sessions finish their turn first, then m" : "M"}oving stops ${stopping.length} ${stopping.length === 1 ? "process" : "processes"} on ${sourceName}${stoppingOutside ? `, ${stoppingOutside} of them left running outside the agents (tmux, background jobs)` : ""}.`;
   const off = actionsDisabledReason;
   const moveBlocked = !actions?.onStartOffload ? (off ?? "Moving is not available here") : going.length === 0 ? "Select at least one session" : undefined;
 
@@ -230,7 +254,11 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
         <div className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-load="source">
           <div className="flex items-center gap-2 text-[11px] text-sol-text-dim">
             <Laptop className="h-3.5 w-3.5" /><span className="truncate">{sourceName}</span>
-            {going.length > 0 && <span className="ml-auto tabular-nums">{fmtCpu(leaving.cpu)} · {fmtBytes(leaving.rss)} leave</span>}
+            {going.length > 0 && (
+              <span className="ml-auto tabular-nums" title={namedStops(stopping, 20)}>
+                {stopping.length} {stopping.length === 1 ? "process stops" : "processes stop"}{stoppingOutside ? <span className="text-sol-orange"> ({stoppingOutside} outside agents)</span> : null}
+              </span>
+            )}
           </div>
           <LoadBar label="CPU" before={source.before.cpu} after={going.length ? source.after.cpu : undefined} />
           <LoadBar label="Memory" before={source.before.memory} after={going.length ? source.after.memory : undefined} />
@@ -311,20 +339,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
             <div className="space-y-2 px-1">
               {stayCount > 0 && (
                 <Disclosure label={`${stayCount} stay${stayCount === 1 ? "s" : ""} here`}>
-                  {blocked.map((c) => (
-                    <div key={c.sessionId} data-candidate={c.sessionId}>
-                      <div className="text-sol-text-secondary">{titleOf(c.sessionId)}</div>
-                      {[...new Set(Object.values(c.perDestination).flatMap((r) => r.blockers))].map((b) => (
-                        <div key={b} className="flex gap-1.5 text-sol-red"><X className="mt-px h-3 w-3 shrink-0" />{b}</div>
-                      ))}
-                    </div>
-                  ))}
-                  {plan.notOffered.map((n) => (
-                    <div key={n.sessionId}><div className="text-sol-text-secondary">{titleOf(n.sessionId)}</div><div className="text-sol-text-dim">{n.reason}</div></div>
-                  ))}
-                  {unevaluated.map((id) => (
-                    <div key={id}><div className="text-sol-text-secondary">{titleOf(id)}</div><div className="text-sol-text-dim">Not part of this suggestion yet</div></div>
-                  ))}
+                  {stayGroups.map(([reason, ids]) => <StayGroup key={reason} reason={reason} titles={ids.map(titleOf)} />)}
                 </Disclosure>
               )}
               {canMove.length > 0 && (
@@ -357,13 +372,6 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
 
       {plan.destinations.length > 0 && (
         <footer className="space-y-2.5 border-t border-sol-border/20 px-5 pb-5 pt-3.5">
-          <div className="text-center text-[11px] text-sol-text-muted">{stopsSummary}</div>
-          {toConfirm.length > 0 && going.length > 0 && (
-            <details className="text-[11px] text-sol-text-muted">
-              <summary className="cursor-pointer select-none text-center hover:text-sol-text">You confirm {plural(toConfirm.length, "item")} not checked automatically</summary>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5">{toConfirm.map((p) => <li key={p}>{p}</li>)}</ul>
-            </details>
-          )}
           <Button
             type="button"
             variant="cyan"
@@ -373,7 +381,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
             onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
             className="w-full rounded-lg disabled:pointer-events-auto disabled:cursor-not-allowed"
           >
-            {toConfirm.length > 0 && going.length > 0 ? "Confirm and move" : "Move"} {going.length > 0 ? plural(going.length, "session") : "sessions"}
+            Move {going.length > 0 ? plural(going.length, "session") : "sessions"}
           </Button>
           {moveBlocked && off && <div className="text-center text-[10px] text-sol-text-dim">{off}</div>}
         </footer>
