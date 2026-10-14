@@ -90,23 +90,20 @@ export function useVaultLocalPath(
       useVaultStore.getState().openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
       router.replace(filesHref());
     };
-    // The scan leaves out what the repo rules hide (renders, build output) and
-    // stops at its entry cap, so a missing row is not a missing file: ask the
-    // daemon for this one path before saying so.
-    const ep = store.endpoint;
-    if (!ep) {
-      notInVault();
-      return;
-    }
+    // The file list is a scan (rule-filtered, capped, maybe a stale cached
+    // copy), so a missing row is not a missing file: ask the daemon. Only its
+    // "no such file" is a verdict; when it cannot be asked, open the path
+    // anyway and let the reader fetch it.
     let cancelled = false;
-    void locateVault(ep, target.abs).then((located) => {
+    void store.ensureEntry(rel).then((row) => {
       if (cancelled) return;
-      const row = located?.vault.id === activeVaultId ? located.entry : undefined;
-      if (!row || row.dir) return notInVault();
-      useVaultStore.getState().adoptLinkedFile(row);
-      openFile(row.path);
-    }).catch(() => {
-      if (!cancelled) notInVault();
+      if (row === null) return notInVault();
+      if (row?.dir) {
+        useVaultStore.getState().setDirsExpanded([...ancestorDirs(row.path), row.path], true);
+        router.replace(filesHref());
+        return;
+      }
+      openFile(row?.path ?? rel);
     });
     return () => { cancelled = true; };
   }, [target, connection, activeVaultId, scannedAt, router, targetLine]);

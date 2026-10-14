@@ -12,12 +12,15 @@
 //    graph's edges only record what the person chose, so the run ends there.
 // 3. Nothing merges. `cast line merge` asks orgLineMerge.check first, which
 //    refuses a trial run whatever graph it runs.
-// 4. What it costs: the team's model budget (judging, grouping, call nodes)
-//    and the sessions of the project's line runs, priced from each station
-//    session's token totals the way the Spend chart prices them.
+// 4. What it costs: billed money (the team's model budget for judging,
+//    grouping and call nodes, and hand entries named by the key that billed
+//    them) apart from subscription use (line-run sessions on Claude Code and
+//    Codex logins: tokens and quota, with their API list price as an
+//    equivalent only). The dispatcher's cap reads billed money; quota holds runs.
 
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { scopeArgs } from "./lib/ingestScopeArgs";
@@ -27,7 +30,10 @@ import { canAccessProject } from "./lib/access";
 import { liveRolesByHandle } from "./lib/orgAccess";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { readBudget } from "./lib/teamBudget";
+import { projectModelSpend } from "./lib/modelSpend";
 import { turnCost } from "./lib/usageDaily";
+import { fleetAccount } from "./ccAccountsShared";
+import { formatCountdown, labeledUsageWindows, livePercent, nextPressuredReset, USAGE_WARN_PERCENT, worstUsagePercent } from "@codecast/shared/contracts";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { BASE_CHECK, CARD_GATE_NODE_ID, validateChangeCard, verdictOfOption, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { findingConversation } from "@codecast/shared/contracts/judges";
@@ -35,10 +41,10 @@ import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, 
 export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
-import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, stationSession, type GateChoice } from "./workflow_runs";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
+import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawCore } from "./sessionDecisions";
 import { alignGateChoices } from "./lib/gateChoices";
-import { trialProjectOf, trialStackOf } from "./lib/trialDecision";
+import { fileTrialCard, trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
 import { parseMoveTally } from "./lib/moveTally";
 import { BEFORE_LINE, CLOSED_WITH, retireOnClose } from "./findingGroups";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -76,7 +82,7 @@ export async function askTrialGate(
   now: number,
 ): Promise<{ ok: true; trial_card: string; decision_id: Id<"session_decisions">; decision_short_id?: string } | { error: string }> {
   const open: Doc<"trial_cards">[] = await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect();
-  for (const row of open) if (row.status === "waiting") await ctx.db.patch(row._id, { status: "closed", updated_at: now });
+  for (const row of open) if (row.status === "waiting" && !(await proposalHolds(ctx, row.decision_id))) await ctx.db.patch(row._id, { status: "closed", updated_at: now });
 
   const station = await stationSession(ctx, args.asker_session_id, run._id);
   const own = station ? await openDecisionOf(ctx, station._id) : null;
@@ -140,32 +146,28 @@ export async function askTrialGate(
 
   // Earlier posts on this problem the run has moved past (a station that ran again posted again).
   const stale: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
-  for (const d of stale) if (d.trial && d._id !== decision._id) await withdrawCore(ctx, d as any, now);
+  for (const d of stale) if (d.trial && d._id !== decision._id && !(await proposalHolds(ctx, d._id))) await withdrawCore(ctx, d as any, now);
 
   const card = args.card && validateChangeCard(args.card).ok ? args.card : undefined;
   const proposal = args.proposal && validateProposalCard(args.proposal).ok ? args.proposal : undefined;
   const fix = args.judge_fix ? validateJudgeFixCard(args.judge_fix) : null;
   const judge_fix = fix?.ok ? fix.card : undefined;
-  const short_id = await nextShortId(ctx.db, "tc");
-  await ctx.db.insert("trial_cards", {
-    workspace: project.workspace ?? task.workspace,
-    ...(project.team_id ? { team_id: project.team_id } : {}),
-    project_id: project._id,
-    task_id: task._id,
-    run_id: run._id,
-    short_id,
-    node_id: args.node_id,
+  const short_id = await fileTrialCard(ctx, {
+    project, task, run, node_id: args.node_id, decision_id: decision._id,
     // The judge route's card is its run's last stop, answered by a person like a change card.
     kind: card || judge_fix || args.node_id === CARD_GATE_NODE_ID ? "card" : "gate",
-    decision_id: decision._id,
-    ...(card ? { card } : {}),
-    ...(proposal ? { proposal } : {}),
-    ...(judge_fix ? { judge_fix } : {}),
-    status: "waiting",
-    created_at: now,
-    updated_at: now,
-  });
+    card, proposal, judge_fix,
+  }, now);
   return { ok: true, trial_card: short_id, decision_id: decision._id, decision_short_id: decision.short_id };
+}
+
+/**
+ * Whether an expectation proposal's card is this decision: a station asked it
+ * off any gate (expectations.postCard), so no gate the run reaches later
+ * closes it, and it is answered as itself (answerTrialDecision).
+ */
+async function proposalHolds(ctx: Ctx, decisionId: Id<"session_decisions"> | undefined): Promise<boolean> {
+  return !!decisionId && !!(await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).first());
 }
 
 /** Whether a run belongs to a trial project: orgLineMerge.check refuses its merge. */
@@ -414,7 +416,9 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   }
   // A waiting card whose run moved on or ended without an answer reads closed; so does one whose problem
   // was merged into another, which the survivor's card supersedes (`superseded_by`, filled by `cards`).
-  const live = run && run.status === "paused" && run.gate_node_id === row.node_id;
+  // A proposal's card was asked off any gate (proposalHolds): it waits on its decision, wherever its run is.
+  const offGate = await proposalHolds(ctx, row.decision_id);
+  const live = offGate || (run && run.status === "paused" && run.gate_node_id === row.node_id);
   const mergedInto: Id<"tasks"> | null = task?.cause?.merged_into ?? null;
   const asked = await askedOf(ctx, row, run);
   // Who answered: the person, and the agent session that carried it when one did.
@@ -428,7 +432,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   const problem = await problemSuperseded(ctx, task);
   const superseded = supersededCard({
     waiting: recorded === "waiting",
-    run: run ? await runSuperseded(ctx, run, task) : null,
+    run: run && !offGate ? await runSuperseded(ctx, run, task) : null,
     run_at_gate: !!live,
     problem,
     covered: card?.reach?.covers ? coverage?.covered ?? null : null,
@@ -459,6 +463,8 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     options: asked?.options ?? (row.kind === "gate" && row.proposal ? proposalOptions(row.options ?? []) : row.options ?? []),
     /** The decision the asking station's session posted: its page leads the card, and its thread is where to talk it over. */
     decision: asked?.decision ?? null,
+    /** The role the card belongs to and the people it waits on, when it is not the trial owner's (audienceOf): it is in their For you and nobody else's. */
+    audience: await audienceOf(ctx, row, project, run),
     card: row.card,
     proposal: row.proposal as ProposalCard | undefined,
     /** The judge route's card (shared/contracts/judgeFix): a measured fix to a judge, its extractor or an expectation, for the project's reviewer. */
@@ -512,14 +518,9 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
   // A person's answer an agent carried names that session.
   const viaConv: Doc<"conversations"> | null = d.answered_by?.via ? await ctx.db.get(d.answered_by.via) : null;
   const viaShort = viaConv ? viaConv.short_id ?? null : null;
-  // Once the run has moved on, an answer keeps the letter its verdict had while it waited (S, R, D), so the same
-  // answer reads under the same key on every asking of a card, whatever order its author listed them in.
-  const letters = d.options.map((o) => VERDICT_KEY[verdictOfOption(o.label) ?? ""] ?? "");
-  const keyOf = (i: number) => (onIt && run!.gate_choices?.[i]?.key) || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1));
-  const options = d.options.map((o, i) => ({ key: keyOf(i), label: o.label, ...(o.description ? { description: o.description } : {}) }));
+  const keys = optionKeys(d, onIt ? run!.gate_choices : null);
+  const options = d.options.map((o, i) => ({ key: keys[i], label: o.label, ...(o.description ? { description: o.description } : {}) }));
   const chosen = d.status === "answered" && d.answer_index !== undefined ? options[d.answer_index] : undefined;
-  // A trial decision with a ladder is a role's (sessionDecisions.routeFor: a judge fix goes to the route's decider).
-  const forRole: Doc<"org_roles"> | null = d.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
   return {
     question: d.question,
     context_md: d.context_md,
@@ -533,15 +534,39 @@ async function askedOf(ctx: Ctx, row: Doc<"trial_cards">, run: Doc<"workflow_run
       status: d.status,
       report_slug: d.report_slug ?? null,
       session: conversation ? { _id: conversation._id, short_id: conversation.short_id ?? null, title: conversation.title ?? null } : null,
-      /** The people it is asked of: a card is in their For you and nobody else's. */
-      asked: (d.asked_user_ids ?? [d.user_id]).map(String),
-      /** The role it belongs to, when it is not the trial owner's: it hears first and answers or hands up to `asked`. */
-      for_role: forRole ? { _id: forRole._id, short_id: forRole.short_id ?? null, name: forRole.name, handle: forRole.handle ?? null } : null,
     },
   };
 }
 
+/**
+ * Who a card waits on when it is a role's and not the trial owner's practice
+ * answer: null for the owner's. A decision that climbed a ladder names its
+ * role and the people it is asked of (sessionDecisions.routeFor). A judge-route
+ * card with no such decision (written before the trial named the route's
+ * decider, or by a gate no session asked) belongs to that decider all the
+ * same, and waits on the person its line ends at.
+ */
+export async function audienceOf(ctx: Ctx, row: Doc<"trial_cards">, project: Doc<"projects"> | null, run: Doc<"workflow_runs"> | null) {
+  const d: Doc<"session_decisions"> | null = row.decision_id ? await ctx.db.get(row.decision_id) : null;
+  const climbed: Doc<"org_roles"> | null = d?.trial && d.hops?.length ? await ctx.db.get(d.hops[0].role_id) : null;
+  const role = climbed ?? (project ? await trialDeciderOf(ctx, project, run) : null);
+  if (!role) return null;
+  const asked = climbed ? d!.asked_user_ids ?? [d!.user_id] : (await routeToRole(ctx, role, row.created_at)).people;
+  return { asked: asked.map(String), role: { _id: role._id, short_id: role.short_id ?? null, name: role.name, handle: role.handle ?? null } };
+}
+
 const VERDICT_KEY: Record<string, string> = { ship: "S", revise: "R", drop: "D" };
+
+/**
+ * A card's option keys: the gate's keys while its run waits on it (what an
+ * answer routes by). Otherwise each keeps the letter its verdict had while it
+ * waited (S, R, D), so the same answer reads under the same key on every
+ * asking of a card, whatever order its author listed them in, else its number.
+ */
+function optionKeys(d: Pick<Doc<"session_decisions">, "options">, gateChoices: Array<{ key: string }> | null | undefined): string[] {
+  const letters = d.options.map((o) => VERDICT_KEY[verdictOfOption(o.label) ?? ""] ?? "");
+  return d.options.map((_, i) => gateChoices?.[i]?.key || (letters[i] && letters.indexOf(letters[i]) === i ? letters[i] : String(i + 1)));
+}
 
 type Supersedable = { task_id: Id<"tasks">; task_short_id: string; short_id: string; created_at: number; merged_into: Id<"tasks"> | null; superseded_by: { card?: string; task: string } | null };
 
@@ -622,16 +647,31 @@ export const cards = query({
   },
 });
 
-type RunPrice = { sessions: number; usd: number; tokens: number; unpriced_tokens: number };
-const newRunPrice = (): RunPrice => ({ sessions: 0, usd: 0, tokens: 0, unpriced_tokens: 0 });
+type KeyPrice = { sessions: number; tokens: number; usd: number };
+type RunPrice = { sessions: number; usd: number; tokens: number; unpriced_tokens: number; key: KeyPrice; providers: string[]; device?: string };
+const newRunPrice = (): RunPrice => ({ sessions: 0, usd: 0, tokens: 0, unpriced_tokens: 0, key: { sessions: 0, tokens: 0, usd: 0 }, providers: [] });
+
+/**
+ * What a session's tokens were billed to. Claude Code and Codex sessions run
+ * on the machine's subscription login (the launcher never hands them an API
+ * key: cli providerKeyLaunch.ts), so they spend an account's quota and bill
+ * nothing. Every other agent reads a provider key, which bills money.
+ */
+export function sessionBilling(agentType: string | undefined): { provider: "claude" | "codex" } | null {
+  if (agentType === "claude_code") return { provider: "claude" };
+  if (agentType === "codex") return { provider: "codex" };
+  return null;
+}
 
 /**
  * A line run's station sessions priced from their token totals (the Spend
  * chart's prices), added into `into`. A session already counted (`seen`) is
  * skipped; one on a model the price table does not name adds its tokens to
- * `unpriced_tokens`, never a guess.
+ * `unpriced_tokens`, never a guess. A session on a metered key also adds to
+ * `key`; the rest name the subscription provider they ran on.
  */
 async function priceRun(ctx: Ctx, run: Doc<"workflow_runs">, seen: Set<string>, into: RunPrice): Promise<RunPrice> {
+  if (run.runner_device) into.device ??= run.runner_device;
   const convs: any[] = [];
   for (const node of run.node_statuses ?? []) {
     if (!node.session_id || seen.has(node.session_id)) continue;
@@ -647,6 +687,9 @@ async function priceRun(ctx: Ctx, run: Doc<"workflow_runs">, seen: Set<string>, 
     // Counted once, by the conversation itself: a node may name its session by any of its ids.
     if (!conv || seen.has(`conv:${conv._id}`)) continue;
     seen.add(`conv:${conv._id}`);
+    // Its account carries the run's quota whether or not the session reported tokens (Codex sessions report none).
+    const billing = sessionBilling(conv.agent_type);
+    if (billing && !into.providers.includes(billing.provider)) into.providers.push(billing.provider);
     const u = conv.usage_totals;
     if (!u) continue;
     into.sessions++;
@@ -655,6 +698,11 @@ async function priceRun(ctx: Ctx, run: Doc<"workflow_runs">, seen: Set<string>, 
     const usd = turnCost(conv.model, { input_tokens: u.input, output_tokens: u.output, cache_read_input_tokens: u.cache_read, cache_creation_input_tokens: u.cache_write });
     if (usd > 0) into.usd += usd;
     else into.unpriced_tokens += tokens;
+    if (!billing) {
+      into.key.sessions++;
+      into.key.tokens += tokens;
+      into.key.usd += Math.max(0, usd);
+    }
   }
   return into;
 }
@@ -715,52 +763,296 @@ export const cost = query({
 });
 
 /**
- * What the trial has cost (the review page's header and `cast line trial`,
- * which the trial ledger reads): the team's model budget by purpose, this
- * month and the months since the trial began, and the line runs' sessions
- * priced from their token totals. A session on a model the price table does
- * not name (another backend's reviewer) counts its tokens, not a guess.
+ * What the trial has cost, in two kinds that never add (the review page's
+ * header and `cast line trial`, which the trial ledger reads):
+ * - billed: money. The trial's own model calls (judging, grouping, call nodes
+ *   on codecast's API key, charged to the project each served), the hand
+ *   entries named by the key that billed them, and any line-run session on a
+ *   metered provider key.
+ * - subscription: line-run sessions on Claude Code and Codex logins. They
+ *   spend account quota, not money; `list_usd` is their API list price, an
+ *   equivalent only. A session on a model the price table does not name counts
+ *   its tokens, not a guess.
  */
 export async function trialSpend(ctx: Ctx, project: Doc<"projects">, now = Date.now()) {
   const budget = await readBudget(ctx, project.workspace ?? "", now);
   const since = project.line_trial?.since ?? project.created_at;
-  const sinceMonth = new Date(since).toISOString().slice(0, 7);
-  const earlier = budget.history.filter((h: { month: string; spent_usd: number }) => h.month >= sinceMonth).reduce((s: number, h: { spent_usd: number }) => s + h.spent_usd, 0);
-  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-  let runs = 0;
-  const priced = newRunPrice();
-  const seen = new Set<string>();
-  for (const task of tasks) {
-    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
-    for (const run of taskRuns) {
-      if (run.created_at < since) continue;
-      runs++;
-      await priceRun(ctx, run, seen, priced);
-    }
+  // The trial's own model calls (model_spend_hours, charged to the project each call served), from the hour it began.
+  const model = await projectModelSpend(ctx, project._id, since);
+  // Each run's own price row (priceRunsTick): no task, run or session is read here, so a rerun or a dispatch never waits on them.
+  const prices = await runPricesOf(ctx, project);
+  const all = { sessions: 0, tokens: 0, usd: 0 };
+  const key = { sessions: 0, tokens: 0, usd: 0 };
+  let unpricedTokens = 0;
+  const providers = new Set<string>();
+  const devices = new Set<string>();
+  for (const p of prices) {
+    all.sessions += p.sessions;
+    all.tokens += p.tokens;
+    all.usd += p.usd;
+    unpricedTokens += p.unpriced_tokens;
+    key.sessions += p.key?.sessions ?? 0;
+    key.tokens += p.key?.tokens ?? 0;
+    key.usd += p.key?.usd ?? 0;
+    for (const x of p.providers ?? []) providers.add(x);
+    if (p.device) devices.add(p.device);
   }
-  const { sessions, usd: sessionUsd, unpriced_tokens: unpricedTokens } = priced;
   const round = (n: number) => Math.round(n * 100) / 100;
-  const modelUsd = budget.spent_usd + earlier;
-  const outside = project.line_trial?.outside ?? [];
+  const outside = (project.line_trial?.outside ?? []).map((o) => ({ usd: o.usd, what: o.what, billed_by: o.billed_by ?? UNNAMED_BILLER, at: o.at }));
+  const byKey = new Map<string, { billed_by: string; usd: number; entries: number }>();
+  for (const o of outside) {
+    const k = byKey.get(o.billed_by) ?? { billed_by: o.billed_by, usd: 0, entries: 0 };
+    k.usd += o.usd;
+    k.entries++;
+    byKey.set(o.billed_by, k);
+  }
+  const keys = [...byKey.values()].map((k) => ({ ...k, usd: round(k.usd) })).sort((a, b) => b.usd - a.usd);
   const outsideUsd = outside.reduce((s, o) => s + o.usd, 0);
   return {
     project_id: project._id,
     workspace: project.workspace,
     since,
-    budget: { cap_usd: budget.cap_usd, month: budget.month, spent_usd: round(budget.spent_usd), held_usd: round(budget.held_usd), by_purpose: budget.by_purpose, refused: budget.refused, earlier_months_usd: round(earlier) },
-    runs,
-    sessions,
-    session_usd: round(sessionUsd),
-    unpriced_tokens: unpricedTokens,
-    /** Spend outside codecast's accounting (`cast line trial spend add`), newest first. */
-    outside_usd: round(outsideUsd),
-    outside: [...outside].sort((a, b) => b.at - a.at).map((o) => ({ usd: o.usd, what: o.what, at: o.at })),
-    total_usd: round(modelUsd + sessionUsd + outsideUsd),
+    /** The trial's line runs since it began (max_runs counts these). */
+    runs: prices.length,
+    billed: {
+      usd: round(model.usd + outsideUsd + key.usd),
+      /** The trial's own model calls by purpose; `team_budget` is the workspace's month they draw from, for its cap and refusals. */
+      model: {
+        usd: round(model.usd),
+        calls: model.calls,
+        by_purpose: { judge: round(model.by_purpose.judge), grouping: round(model.by_purpose.grouping), call: round(model.by_purpose.call) },
+        team_budget: { cap_usd: budget.cap_usd, month: budget.month, spent_usd: round(budget.spent_usd), refused: budget.refused },
+      },
+      /** Hand entries (`cast line trial spend add`) by the key that billed them. */
+      keys,
+      /** Line-run sessions on a metered provider key. */
+      run_sessions: { sessions: key.sessions, tokens: key.tokens, usd: round(key.usd) },
+    },
+    subscription: {
+      sessions: all.sessions - key.sessions,
+      tokens: all.tokens - key.tokens,
+      /** What these tokens would cost at API list price: an equivalent, never billed. */
+      list_usd: round(all.usd - key.usd),
+      unpriced_tokens: unpricedTokens,
+      providers: [...providers].sort(),
+      /** The machines the runs ran on, whose accounts carry the quota. */
+      devices: [...devices].sort(),
+    },
+    /** The hand entries, newest first (`spend rm` names one by `at`). */
+    outside: outside.sort((a, b) => b.at - a.at),
     at: now,
   };
 }
 
-/** The trial's spend for one project (web store key `trialSpend`, keyed by project; `cast line trial`). */
+/** The name a hand entry recorded before entries named their biller carries. */
+export const UNNAMED_BILLER = "not named";
+
+/** One subscription account the trial's runs use, as its machine last reported it (the source `cast usage` reads). */
+export type TrialQuota = {
+  device: string;
+  provider: "claude" | "codex";
+  account: string;
+  /** The worst live window, the one that stops sessions first; null when the machine reported none. */
+  percent: number | null;
+  windows: Array<{ label: string; percent: number; resets_at?: number }>;
+  fetched_at: number | null;
+  /** When the soonest window at or past the warning line resets. */
+  resets_at: number | null;
+};
+
+/** Each subscription account the trial's runs use: the account each runner machine's sessions launch on, per provider the runs used. */
+export async function trialQuota(ctx: Ctx, project: Doc<"projects">, devices: readonly string[], providers: readonly string[], now: number): Promise<TrialQuota[]> {
+  const by = project.line_trial?.by;
+  if (!by) return [];
+  const out: TrialQuota[] = [];
+  for (const device of devices) {
+    const row: Doc<"devices"> | null = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", by).eq("device_id", device)).first();
+    if (!row) continue;
+    for (const provider of providers.length ? providers : ["claude"]) {
+      const accounts = provider === "codex" ? row.codex_accounts : row.cc_accounts;
+      if (!accounts) continue;
+      const fleet = provider === "codex" ? { email: accounts.active_email, profile: undefined as string | undefined } : fleetAccount(accounts, now);
+      const profile = accounts.profiles.find((p) => (fleet.profile ? p.name === fleet.profile : !!fleet.email && p.email === fleet.email));
+      const usage = profile?.usage ?? null;
+      out.push({
+        device: row.label || device,
+        provider: provider as "claude" | "codex",
+        account: profile?.name ?? fleet.email ?? "unknown",
+        percent: worstUsagePercent(usage, now),
+        windows: usage ? labeledUsageWindows(usage).map((w) => ({ label: w.label, percent: livePercent(w, now), ...(w.resets_at ? { resets_at: w.resets_at } : {}) })) : [],
+        fetched_at: usage?.fetched_at ?? null,
+        resets_at: nextPressuredReset(usage, now) ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+/** Why runs wait for quota, or null: an account the runs use is at or past the line `cast usage` warns at. */
+export function quotaHold(quota: readonly TrialQuota[], now: number): string | null {
+  const tight = quota.filter((q) => q.percent != null && q.percent >= USAGE_WARN_PERCENT).sort((a, b) => b.percent! - a.percent!)[0];
+  if (!tight) return null;
+  return `quota ${Math.round(tight.percent!)}% on ${tight.account} (${tight.provider}): runs wait${tight.resets_at ? ` for its reset in ${formatCountdown(tight.resets_at - now)}` : ""}`;
+}
+
+/** A trial project's runs since the trial began, walked through its problems (the sweep's and the reconciler's view). */
+async function trialRunsOf(ctx: Ctx, project: Doc<"projects">): Promise<Doc<"workflow_runs">[]> {
+  const since = project.line_trial?.since ?? project.created_at;
+  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
+  const out: Doc<"workflow_runs">[] = [];
+  for (const task of tasks) {
+    const taskRuns: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
+    out.push(...taskRuns.filter((r) => r.created_at >= since));
+  }
+  return out;
+}
+
+/** A trial project's run price rows since the trial began: one per run. */
+async function runPricesOf(ctx: Ctx, project: Doc<"projects">): Promise<Doc<"trial_run_prices">[]> {
+  const since = project.line_trial?.since ?? project.created_at;
+  return await ctx.db.query("trial_run_prices").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id).gte("run_created_at", since)).collect();
+}
+
+/** How long after a run last moved its sessions are taken to be done: its price then stands until the run moves again. */
+export const RUN_SETTLE_MS = 30 * 60_000;
+
+/** Whether a run's price may be out of date: never priced, priced before it split billed from subscription use, still live, ended too recently to stand, or moved since it was priced. */
+export function priceStale(run: Pick<Doc<"workflow_runs">, "status" | "updated_at">, price: Pick<Doc<"trial_run_prices">, "at" | "settled" | "key"> | null): boolean {
+  return !price || !price.key || !price.settled || isLiveRunStatus(run.status) || run.updated_at > price.at;
+}
+
+/** A trial's runs whose price may be out of date, and the project each prices under (priceRunsTick). Reads runs, never their sessions. */
+export const staleRunPrices = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const projects: Doc<"projects">[] = await ctx.db.query("projects").withIndex("by_trial_since", (q: any) => q.gt("line_trial.since", 0)).collect();
+    const out: Array<{ run: Id<"workflow_runs">; project: Id<"projects"> }> = [];
+    for (const p of projects) {
+      const prices = new Map((await runPricesOf(ctx, p)).map((r) => [String(r.run_id), r]));
+      for (const run of await trialRunsOf(ctx, p)) if (priceStale(run, prices.get(String(run._id)) ?? null)) out.push({ run: run._id, project: p._id });
+    }
+    return out;
+  },
+});
+
+/**
+ * These runs priced from their sessions now. A query, so the sessions it
+ * reads (live ones are written several times a second) never conflict with a
+ * write; writeRunPrices stores the answers.
+ */
+export const priceRuns = internalQuery({
+  args: { runs: v.array(v.object({ run: v.id("workflow_runs"), project: v.id("projects") })) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out = [];
+    for (const { run: id, project } of args.runs) {
+      const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
+      if (!run) continue;
+      const price = await priceRun(ctx, run, new Set(), newRunPrice());
+      out.push({ run: id, project, run_created_at: run.created_at, updated_at: run.updated_at, priced: { ...price, at: now, settled: !isLiveRunStatus(run.status) && now - run.updated_at > RUN_SETTLE_MS } });
+    }
+    return out;
+  },
+});
+
+const pricedV = v.object({
+  sessions: v.number(), usd: v.number(), tokens: v.number(), unpriced_tokens: v.number(),
+  key: v.object({ sessions: v.number(), tokens: v.number(), usd: v.number() }), providers: v.array(v.string()), device: v.optional(v.string()),
+  at: v.number(), settled: v.boolean(),
+});
+
+/**
+ * Stores runs' prices (priceRuns), only what changed. A settled price must
+ * describe the run as it is, so one priced before the run moved again is
+ * dropped and priced next tick.
+ */
+export const writeRunPrices = internalMutation({
+  args: { prices: v.array(v.object({ run: v.id("workflow_runs"), project: v.id("projects"), run_created_at: v.number(), updated_at: v.number(), priced: pricedV })) },
+  handler: async (ctx, args) => {
+    let wrote = 0;
+    for (const { run: id, project, run_created_at, updated_at, priced } of args.prices) {
+      if (priced.settled && (await ctx.db.get(id))?.updated_at !== updated_at) continue;
+      const was: Doc<"trial_run_prices"> | null = await ctx.db.query("trial_run_prices").withIndex("by_run", (q: any) => q.eq("run_id", id)).first();
+      if (!was) {
+        await ctx.db.insert("trial_run_prices", { project_id: project, run_id: id, run_created_at, ...priced });
+        wrote++;
+        continue;
+      }
+      const same = was.sessions === priced.sessions && was.usd === priced.usd && was.tokens === priced.tokens && was.unpriced_tokens === priced.unpriced_tokens && was.settled === priced.settled
+        && JSON.stringify(was.key ?? null) === JSON.stringify(priced.key) && (was.providers ?? []).join() === priced.providers.join() && was.device === priced.device;
+      if (same && (!priced.settled || was.at >= updated_at)) continue;
+      await ctx.db.patch(was._id, priced);
+      wrote++;
+    }
+    return wrote;
+  },
+});
+
+/** Reconciler: a trial's stored run prices and live count against reading every run and session now, so drift is measured, not assumed. */
+export const spendDrift = internalQuery({
+  args: { project: v.id("projects") },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.project);
+    if (!project) return null;
+    const runs = await trialRunsOf(ctx, project);
+    const prices = await runPricesOf(ctx, project);
+    const byRun = new Map(prices.map((r) => [String(r.run_id), r]));
+    const live = newRunPrice();
+    const seen = new Set<string>();
+    let alone = 0;
+    for (const run of runs) {
+      await priceRun(ctx, run, seen, live);
+      alone += (await priceRun(ctx, run, new Set(), newRunPrice())).sessions;
+    }
+    let walked = 0;
+    for (const t of (await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) as Doc<"tasks">[]) {
+      const run = t.workflow_run_id ? await ctx.db.get(t.workflow_run_id) : null;
+      if (run?.status === "running" || run?.status === "pending") walked++;
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    return {
+      runs: runs.length,
+      price_rows: prices.length,
+      unpriced_runs: runs.filter((r) => !byRun.has(String(r._id))).length,
+      stale_runs: runs.filter((r) => priceStale(r, byRun.get(String(r._id)) ?? null)).length,
+      stored: { sessions: prices.reduce((n, r) => n + r.sessions, 0), usd: round(prices.reduce((n, r) => n + r.usd, 0)) },
+      live: { sessions: live.sessions, usd: round(live.usd), key: { ...live.key, usd: round(live.key.usd) }, providers: live.providers },
+      /** Each session the runs nest, by the agent it ran and the account it launched on: the evidence behind billed vs subscription. */
+      accounts: await sessionAccounts(ctx, runs),
+      /** Sessions counted by more than one run when each run is priced alone. */
+      shared_sessions: alone - live.sessions,
+      running: { by_status: await runningIn(ctx, project), by_tasks: walked },
+    };
+  },
+});
+
+async function sessionAccounts(ctx: Ctx, runs: Doc<"workflow_runs">[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const run of runs) {
+    if (!run.primary_conversation_id) continue;
+    for (const c of (await ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", run.primary_conversation_id)).collect()) as Doc<"conversations">[]) {
+      const k = `${c.agent_type}:${c.agent_type === "codex" ? c.codex_account ?? "-" : c.cc_account ?? "-"}`;
+      out[k] = (out[k] ?? 0) + 1;
+    }
+  }
+  return out;
+}
+
+/** Keeps every trial run's price current (cron): prices the stale ones in small batches and stores them. */
+export const priceRunsTick = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ stale: number; wrote: number }> => {
+    const stale: Array<{ run: Id<"workflow_runs">; project: Id<"projects"> }> = await ctx.runQuery((internal as any).lineTrial.staleRunPrices, {});
+    let wrote = 0;
+    for (let i = 0; i < stale.length; i += 20) {
+      const prices = await ctx.runQuery((internal as any).lineTrial.priceRuns, { runs: stale.slice(i, i + 20) });
+      wrote += await ctx.runMutation((internal as any).lineTrial.writeRunPrices, { prices });
+    }
+    return { stale: stale.length, wrote };
+  },
+});
+
+/** The trial's spend for one project, and the quota of the accounts its runs use (web store key `trialSpend`, keyed by project; `cast line trial`). */
 export const spend = query({
   args: { ...scopeArgs, project: v.string() },
   handler: async (ctx, args) => {
@@ -769,7 +1061,7 @@ export const spend = query({
     if (!project || !(await canAccessProject(ctx, userId, project))) throw new Error(`No project "${args.project}" in this workspace`);
     if (!project.line_trial) throw new Error(`${project.title} is not a trial project`);
     const s = await trialSpend(ctx, project);
-    return { _id: project._id, ...s };
+    return { _id: project._id, ...s, cap_usd: project.line_trial.dispatch?.cap_usd ?? null, quota: await trialQuota(ctx, project, s.subscription.devices, s.subscription.providers, s.at) };
   },
 });
 
@@ -832,7 +1124,7 @@ export const setTrial = mutation({
 });
 
 /** Trial runs at once, at most: the machine running them is shared. */
-export const TRIAL_RUNNING_CAP = 3;
+export const TRIAL_RUNNING_CAP = 10;
 
 /**
  * Which graph a trial problem runs: one whose findings are cases against a
@@ -845,12 +1137,13 @@ export function routeOf(task: Pick<Doc<"tasks">, "cause">): "judge" | "product" 
 
 /** How many of a trial project's runs hold a machine now (a paused run waits on a card and holds none). */
 async function runningIn(ctx: Ctx, project: Doc<"projects">): Promise<number> {
+  // From the live runs, not the project's problems: a rerun reads a handful of runs, never every task.
   let running = 0;
-  const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-  for (const t of tasks) {
-    if (!t.workflow_run_id) continue;
-    const run = await ctx.db.get(t.workflow_run_id);
-    if (run?.status === "running" || run?.status === "pending") running++;
+  for (const status of ["running", "pending"] as const) {
+    for (const run of (await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect()) as Doc<"workflow_runs">[]) {
+      const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
+      if (task?.project_id === project._id && task.workflow_run_id === run._id) running++;
+    }
   }
   return running;
 }
@@ -920,16 +1213,19 @@ async function answerTrialDecision(ctx: Ctx, userId: Id<"users">, row: Doc<"tria
   if (!decision || decision.status !== "pending") throw new Error(`${row.short_id} is already ${decision?.status ?? "gone"}`);
   if (!(await userMayRead(ctx, userId, decision as any))) throw new Error("Trial card not found");
   const run: Doc<"workflow_runs"> | null = await ctx.db.get(row.run_id);
-  if (!run || run.status !== "paused" || String(run.gate_decision_id ?? "") !== String(decision._id)) {
+  // A proposal's card was asked off any gate: the run never waited on it, and its answer settles the proposal alone.
+  const gated = !(await proposalHolds(ctx, decision._id));
+  if (gated && (!run || run.status !== "paused" || String(run.gate_decision_id ?? "") !== String(decision._id))) {
     await ctx.db.patch(row._id, { status: "closed", updated_at: now });
     throw new Error(`${row.short_id}'s run is no longer waiting on it`);
   }
   const k = key.trim().toUpperCase();
-  const byKey = (run.gate_choices ?? []).findIndex((c: { key: string }) => c.key && c.key.toUpperCase() === k);
+  const keys = optionKeys(decision, gated ? run!.gate_choices : null);
+  const byKey = keys.findIndex((c) => c && c.toUpperCase() === k);
   const index = byKey >= 0 ? byKey : /^\d+$/.test(k) ? Number(k) - 1 : -1;
   const option = decision.options[index];
   // A gate key none of the session's options carries (the dispatcher's Revise to gather) routes as typed text.
-  const graphKey = !option && /^[A-Z]$/.test(k);
+  const graphKey = gated && !option && /^[A-Z]$/.test(k);
   if (!option && !graphKey) throw new Error(`${row.short_id} has no option ${key}`);
   const text = note?.trim().slice(0, 4000);
   const verdict = normalizeVerdict(decision as any, option
@@ -938,7 +1234,7 @@ async function answerTrialDecision(ctx: Ctx, userId: Id<"users">, row: Doc<"tria
   if ("error" in verdict) throw new Error(verdict.error);
   await finalizeAnswer(ctx, decision as any, verdict, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
   const label = option?.label ?? k;
-  if (standIn) await ctx.db.patch(row._id, { answer: { key: option ? run.gate_choices?.[index]?.key || String(index + 1) : k, label, ...(text ? { note: text } : {}), by: userId, at: now, stand_in: true, ...(via ? { via } : {}) } });
+  if (standIn) await ctx.db.patch(row._id, { answer: { key: option ? keys[index] : k, label, ...(text ? { note: text } : {}), by: userId, at: now, stand_in: true, ...(via ? { via } : {}) } });
   return { short_id: row.short_id, answer: label };
 }
 
@@ -1038,7 +1334,7 @@ export function stopOf(run: Pick<Doc<"workflow_runs">, "status" | "node_statuses
  * A run that died while it waited at one of its own cards: its gate ended with
  * no answer (a gate poll that failed, read as a withdrawn gate), so the runner
  * found no edge out of it. Its evidence and its proposal are all written; the
- * run picks up at that gate again (resumeAtGate). The card it left names it.
+ * run picks up at that gate again (resumeRunAt). The card it left names it.
  */
 export type GateLoss = { node: string; card: string; kind: "gate" | "card" };
 
@@ -1052,38 +1348,40 @@ export async function gateLossOf(ctx: Ctx, run: Pick<Doc<"workflow_runs">, "_id"
 }
 
 /**
- * The run continues at the gate it lost, on its own machine, from its
- * checkpoint (cli runResume.ts): the gate is asked again from the values the
- * run had made (its proposal, its proof), so a new card stands where the lost
- * one stood. fresh_branch makes the daemon read the graph file again, so the
- * stations after the gate are the current ones; a resume never resets the branch.
+ * What the trial may still start: its spend, the average run's billed money,
+ * the runs holding a machine, the billed dollars left under the dispatch cap
+ * after those, the runs left under max_runs, and the quota of the subscription
+ * accounts its runs use (`devices`: machines a pass would start on, besides
+ * those its runs ran on). Every path that starts or resumes a trial run (the
+ * dispatcher, a rerun from the page or the CLI) reads this one answer.
  */
-async function resumeAtGate(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
-  if (task.execution_status === "blocked") await ctx.db.patch(task._id, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device!, now });
-}
-
-/**
- * What the trial may still start: its spend, the average run's cost, the runs
- * holding a machine, the dollars left under the dispatch cap after those, and
- * the runs left under max_runs. Every path that starts or resumes a trial run
- * (the dispatcher, a rerun from the page or the CLI) reads this one answer.
- */
-export async function trialRoom(ctx: Ctx, project: Doc<"projects">, now: number, running?: number) {
+export async function trialRoom(ctx: Ctx, project: Doc<"projects">, now: number, running?: number, devices: readonly string[] = []) {
   const dispatch = project.line_trial?.dispatch;
   const spend = await trialSpend(ctx, project, now);
   const held = running ?? (await runningIn(ctx, project));
-  const perRun = spend.runs && spend.session_usd > 0 ? spend.session_usd / spend.runs : FIRST_RUN_USD;
-  const room = dispatch ? dispatch.cap_usd - spend.total_usd - held * perRun : Infinity;
+  const perRun = spend.runs ? spend.billed.run_sessions.usd / spend.runs : 0;
+  const room = dispatch ? dispatch.cap_usd - spend.billed.usd - held * perRun : Infinity;
   const runsLeft = dispatch?.max_runs === undefined ? Infinity : Math.max(0, dispatch.max_runs - spend.runs);
-  return { spend, perRun, running: held, room, runsLeft, cap_usd: dispatch?.cap_usd ?? null, max_runs: dispatch?.max_runs ?? null };
+  const quota = await trialQuota(ctx, project, [...new Set([...spend.subscription.devices, ...devices])], spend.subscription.providers, now);
+  return { spend, perRun, running: held, room, runsLeft, cap_usd: dispatch?.cap_usd ?? null, max_runs: dispatch?.max_runs ?? null, quota, quotaHold: quotaHold(quota, now) };
 }
 
-/** Why a rerun may not start now, or null: the machine's slots, the spend cap, and (for a new run, not a gate resume) the run limit. */
+/** How many runs fit in `room` billed dollars at `perRun` each: none once the cap is reached, any number while runs bill nothing. */
+export function runsAffordable(room: number, perRun: number): number {
+  if (room <= 0) return 0;
+  return perRun > 0 ? Math.floor(room / perRun) : Infinity;
+}
+
+/** The cap's hold in words: billed money against the cap. */
+function capHold(billed: number, cap: number, perRun: number): string {
+  return `billed $${billed.toFixed(0)} of $${cap.toFixed(0)}: ${perRun > 0 ? `another run (~$${perRun.toFixed(2)} billed) would cross the cap` : "the cap is reached"}`;
+}
+
+/** Why a rerun may not start now, or null: the machine's slots, the accounts' quota, the billed-money cap, and (for a new run, not a gate resume) the run limit. */
 export function rerunRefusal(r: Awaited<ReturnType<typeof trialRoom>>, newRun: boolean): string | null {
   if (r.running >= TRIAL_RUNNING_CAP) return `${r.running} trial runs are running; the cap is ${TRIAL_RUNNING_CAP}`;
-  if (r.room < r.perRun) return `spend $${r.spend.total_usd.toFixed(0)} of $${r.cap_usd!.toFixed(0)}: another run (~$${r.perRun.toFixed(0)}) would cross the cap`;
+  if (r.quotaHold) return r.quotaHold;
+  if (runsAffordable(r.room, r.perRun) < 1) return capHold(r.spend.billed.usd, r.cap_usd!, r.perRun);
   if (newRun && r.runsLeft <= 0) return `${r.spend.runs} of ${r.max_runs} runs used: the trial starts no more (cast line trial dispatch on --cap <usd> --max-runs <n>)`;
   return null;
 }
@@ -1161,7 +1459,7 @@ export const runs = query({
  * its daemon, which sets the earlier run's branch aside and starts from
  * origin/main (cli lineTrialBranch.ts), so the proof runs against unfixed code.
  * A run that died waiting at its own card picks up at that gate instead
- * (resumeAtGate): its evidence and proposal are already made. Both go through
+ * (resumeRunAt): its evidence and proposal are already made. Both go through
  * the same machine, spend and run-count check as the dispatcher (trialRoom);
  * a gate resume is the same run, so it spends no run of max_runs.
  */
@@ -1276,12 +1574,12 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
       return { task: task.short_id, run_id: run._id, resumed_at: null as string | null, rebuild: "main" as const, why: route.why };
     }
     if (route.to === "investigate" && !entry?.trim()) throw new Error(`${task.short_id}: ${route.why}, so its run goes back to work on them, and the caller names the graph's first station for that (cast line trial rerun ${task.short_id} --reask does)`);
-    const refused = rerunRefusal(await trialRoom(ctx, project, now), false);
+    const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, run.runner_device ? [run.runner_device] : []), false);
     if (refused) throw new Error(refused);
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
     const node = route.to === "investigate" ? entry!.trim() : at?.trim() || asker?.trim() || run.gate_node_id;
     for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
-    await resumeAtGate(ctx, userId, task, run, node, now);
+    await resumeRunAt(ctx as any, userId, run, node, now);
     // Taken back once the run no longer waits on it, so the withdrawal cannot fail the run.
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
@@ -1290,10 +1588,10 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   if (!run || !(run.status === "failed" || stopOf(run, task.status))) throw new Error(`${task.short_id}'s run ${run ? `is ${run.status}` : "does not exist"}; only a failed or stopped run is rerun here`);
   if (!run.runner_device) throw new Error(`${task.short_id}'s run names no machine: start it with cast line trial run ${task.short_id}`);
   const lost = await gateLossOf(ctx, run);
-  const refused = rerunRefusal(await trialRoom(ctx, project, now), !lost);
+  const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [run.runner_device]), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
-    await resumeAtGate(ctx, userId, task, run, lost.node, now);
+    await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
   const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
@@ -1402,9 +1700,6 @@ async function queueTrialRun(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, 
 
 // ── Dispatch ──
 
-/** What one run costs before any has run: the trial's first estimate. */
-const FIRST_RUN_USD = 10;
-
 /** `reopened`: the card whose fix was set aside with findings left (a Drop at the card, a re-ask the fix no longer answered). */
 export type DueProblem = { task: string; title: string; route: "judge" | "product"; findings: number; severity: number; regrouped: boolean; last_run: string | null; reopened?: string };
 
@@ -1472,24 +1767,26 @@ async function endOrphaned(ctx: Ctx, orphaned: Array<{ task: Doc<"tasks">; run: 
 
 /**
  * One dispatch pass over a trial project: start its most-needed due problems
- * while fewer than TRIAL_RUNNING_CAP runs hold the machine, and only while the
- * trial's spend, the runs in flight at the average run's cost, and the next
- * run's stay under the project's cap. Writes what it did (or why it held) on
- * the project only when that changed.
+ * while fewer than TRIAL_RUNNING_CAP runs hold the machine, the subscription
+ * accounts its runs use have quota, and the trial's billed money, the runs in
+ * flight at the average run's billed cost, and the next run's stay under the
+ * project's cap. Writes what it did (or why it held) on the project only when
+ * that changed.
  */
 export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: number, dry = false) {
   const dispatch = project.line_trial?.dispatch;
   if (!dispatch) throw new Error(`${project.title} does not dispatch: cast line trial dispatch on --project "${project.title}" --cap <usd>`);
   const { due, running, like, lost, orphaned } = await dueProblems(ctx, project);
   const ended = dry ? orphaned.map((o) => o.task.short_id) : await endOrphaned(ctx, orphaned, now);
-  const { spend, perRun, room, runsLeft } = await trialRoom(ctx, project, now, running);
+  const devices = Object.values(like).flatMap((r) => (r?.runner_device ? [r.runner_device] : []));
+  const { spend, perRun, room, runsLeft, quota, quotaHold: waitQuota } = await trialRoom(ctx, project, now, running, devices);
   const slots = Math.max(0, TRIAL_RUNNING_CAP - running);
-  const affordable = Math.max(0, Math.floor(room / perRun));
+  const affordable = waitQuota ? 0 : runsAffordable(room, perRun);
   // A run that died waiting at its own card picks up at that gate first: its evidence is made, and it is the same run (no run of max_runs).
   const r = Math.min(slots, lost.length, affordable);
   const resumed: string[] = [];
   if (!dry) for (const l of lost.slice(0, r)) {
-    await resumeAtGate(ctx, project.line_trial!.by, l.task, l.run, l.loss.node, now);
+    await resumeRunAt(ctx as any, project.line_trial!.by, l.run, l.loss.node, now);
     resumed.push(l.task.short_id);
   }
   // A proposal that recommends waiting goes back for the evidence the pipeline can gather first; each takes a slot like a start.
@@ -1503,8 +1800,9 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   let held: string | undefined;
   const unstarted = [...new Set(due.filter((d) => !like[d.route]).map((d) => d.route))];
   if (unstarted.length) held = `no earlier ${unstarted.map((r) => (r === "judge" ? "judge-route" : "product")).join(" or ")} run names a machine: start one with cast line trial run`;
+  else if (waitQuota && (startable.length || lost.length || waits.length)) held = waitQuota;
   else if (startable.length > n && n === runsLeft) held = `${spend.runs} of ${dispatch.max_runs} runs used: the trial starts no more`;
-  else if (startable.length > n && n < slots) held = `spend $${spend.total_usd.toFixed(0)} of $${dispatch.cap_usd.toFixed(0)}: another run (~$${perRun.toFixed(0)}) would cross the cap`;
+  else if (startable.length > n && n < slots) held = capHold(spend.billed.usd, dispatch.cap_usd, perRun);
   const started: string[] = [];
   if (!dry) {
     for (const d of startable.slice(0, n)) {
@@ -1522,12 +1820,16 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
     cap_usd: dispatch.cap_usd,
     max_runs: dispatch.max_runs ?? null,
     runs: spend.runs,
-    spent_usd: spend.total_usd,
+    /** Money billed so far: the cap limits this alone. */
+    billed_usd: spend.billed.usd,
+    /** A run's average billed money (its sessions on metered keys). */
     per_run_usd: Math.round(perRun * 100) / 100,
+    /** The subscription accounts the runs use, and how much of each window is spent. */
+    quota,
     running,
     cap: TRIAL_RUNNING_CAP,
     started,
-    /** Runs that died waiting at their own card, picked up at that gate (resumeAtGate), or due to be on a dry pass. */
+    /** Runs that died waiting at their own card, picked up at that gate (resumeRunAt), or due to be on a dry pass. */
     resumed: dry ? lost.slice(0, r).map((l) => l.task.short_id) : resumed,
     /** Proposal cards sent back to gather their own evidence (gatherDue), or due to be on a dry pass. */
     gathering: dry ? waits.slice(0, g).map((w) => w.short_id) : gathering,
@@ -1602,7 +1904,7 @@ export const dispatchTick = internalMutation({
   },
 });
 
-/** `cast line trial dispatch on|off --project <ref> [--cap <usd>] [--max-runs <n>]`: the trial starts its own runs under a spend cap (and a run count), or stops. */
+/** `cast line trial dispatch on|off --project <ref> [--cap <usd>] [--max-runs <n>]`: the trial starts its own runs under a cap on billed money (and a run count), or stops. */
 export const setDispatch = mutation({
   args: { ...scopeArgs, project: v.string(), cap_usd: v.optional(v.number()), max_runs: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -1646,9 +1948,11 @@ export const raiseLimits = mutation({
 });
 
 /**
- * `cast line trial spend add <usd> <what>`: spend the trial made outside
- * codecast's accounting (a shadow harness on another key, prompt dry runs on a
- * login). It joins the trial's total, so the dispatcher's cap counts it.
+ * `cast line trial spend add <usd> <what> --billed-by <key>`: money the trial
+ * was billed outside codecast's accounting (a shadow harness or evals on an API
+ * key). It joins the trial's billed money, which the dispatcher's cap reads.
+ * Subscription use (a dry run on a Claude login) bills nothing and is not
+ * recorded here.
  */
 /** The same spend recorded twice in this window is a repeat, not new spend: `spend add` refuses it unless forced. */
 export const OUTSIDE_REPEAT_MS = 60 * 60_000;
@@ -1666,20 +1970,35 @@ async function trialProjectForCli(ctx: Ctx, args: Record<string, any>) {
 }
 
 export const addOutsideSpend = mutation({
-  args: { ...scopeArgs, project: v.string(), usd: v.number(), what: v.string(), force: v.optional(v.boolean()) },
+  args: { ...scopeArgs, project: v.string(), usd: v.number(), what: v.string(), billed_by: v.optional(v.string()), force: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { userId, project } = await trialProjectForCli(ctx, args);
     if (!(args.usd > 0) || args.usd > 10_000) throw new Error("The amount is dollars, above 0");
     const what = args.what.trim().slice(0, 200);
     if (!what) throw new Error("Say what it was spent on");
+    const billed_by = args.billed_by?.trim().slice(0, 60);
+    if (!billed_by) throw new Error("Name the key or account that billed it (--billed-by, e.g. \"evals key\" or \"openrouter\")");
     const now = Date.now();
     const usd = Math.round(args.usd * 100) / 100;
     const twice = repeatedOutside(project.line_trial.outside ?? [], usd, what, now);
     if (twice && !args.force) throw new Error(`$${usd} for "${what}" was recorded ${Math.round((now - twice.at) / 60_000)} min ago (at ${twice.at}); pass --force if this is new spend`);
-    const outside = [...(project.line_trial.outside ?? []), { usd, what, at: now, by: userId }];
+    const outside = [...(project.line_trial.outside ?? []), { usd, what, billed_by, at: now, by: userId }];
     await ctx.db.patch(project._id, { line_trial: { ...project.line_trial, outside }, updated_at: now });
     const spend = await trialSpend(ctx, { ...project, line_trial: { ...project.line_trial, outside } }, now);
-    return { project: project.title, added_usd: Math.round(args.usd * 100) / 100, outside_usd: spend.outside_usd, total_usd: spend.total_usd, cap_usd: project.line_trial.dispatch?.cap_usd ?? null };
+    return { project: project.title, added_usd: usd, billed_by, key_usd: spend.billed.keys.find((k) => k.billed_by === billed_by)?.usd ?? usd, billed_usd: spend.billed.usd, cap_usd: project.line_trial.dispatch?.cap_usd ?? null };
+  },
+});
+
+/** Names the biller of hand entries recorded before entries named one: those whose words contain `match` (run from the dashboard or run.sh). */
+export const nameOutsideBillers = internalMutation({
+  args: { project: v.id("projects"), match: v.string(), billed_by: v.string() },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.project);
+    if (!project?.line_trial?.outside) return 0;
+    let named = 0;
+    const outside = project.line_trial.outside.map((o) => (o.billed_by || !o.what.includes(args.match) ? o : (named++, { ...o, billed_by: args.billed_by })));
+    if (named) await ctx.db.patch(project._id, { line_trial: { ...project.line_trial, outside } });
+    return named;
   },
 });
 
@@ -1695,7 +2014,7 @@ export const removeOutsideSpend = mutation({
     const now = Date.now();
     await ctx.db.patch(project._id, { line_trial: { ...project.line_trial, outside }, updated_at: now });
     const spend = await trialSpend(ctx, { ...project, line_trial: { ...project.line_trial, outside } }, now);
-    return { project: project.title, removed: { usd: gone.usd, what: gone.what, at: gone.at }, outside_usd: spend.outside_usd, total_usd: spend.total_usd };
+    return { project: project.title, removed: { usd: gone.usd, what: gone.what, billed_by: gone.billed_by ?? UNNAMED_BILLER, at: gone.at }, billed_usd: spend.billed.usd };
   },
 });
 

@@ -37,12 +37,15 @@ describe("a stopped trial run's acts", () => {
 });
 
 describe("raising a held trial's limits", () => {
-  // AgentWatch Trial on Oct 13: 115 of 115 runs, $1,480 spent against a $1,350 cap, a run ~$5.72.
+  // A trial whose runs bill an API key: 115 of 115 runs, $1,480 billed against a $1,350 cap, a run ~$5.72 billed.
   const held = { runs: 115, maxRuns: 115, spent: 1480.23, cap: 1350, perRun: 657.74 / 115 };
+  // Its runs on subscription accounts bill nothing: billed money under the cap holds nothing, however many runs it starts.
+  const onLogins = { runs: 176, maxRuns: 200, spent: 511, cap: 1900, perRun: 0 };
 
   test("both limits hold it, so a raise of runs alone would start nothing", () => {
     expect(limitsHit(held)).toEqual({ runs: true, spend: true });
     expect(limitsHit({ ...held, maxRuns: 200, cap: 5000 })).toEqual({ runs: false, spend: false });
+    expect(limitsHit(onLogins)).toEqual({ runs: false, spend: false });
   });
 
   test("the picked runs set the run limit and a spend cap with room for them", () => {
@@ -54,8 +57,9 @@ describe("raising a held trial's limits", () => {
     const l = raiseLimitsLedger({ project: "AgentWatch Trial", limits: held, pick: "10" });
     const row = (k: string) => l.rows.find((r) => r.k === k)?.v;
     expect(row("Run limit")).toBe("115 → 125");
-    expect(row("Spend limit")).toBe("$1,350 → $1,550");
-    expect(row("A run costs")).toContain("$6");
+    expect(row("Billed cap")).toBe("$1,350 → $1,550");
+    expect(row("A run bills")).toContain("$6");
+    expect(row("Runs spend")).toBe("Subscription quota");
     expect(l.pick?.options).toEqual(["10", "25", "50"]);
     expect(l.figures[0]).toEqual({ value: "10", label: "more runs it may start" });
     expect(l.blocked).toBeUndefined();
@@ -68,5 +72,7 @@ test("a rerun from main goes through the same review, and the trial's limit refu
   expect(l.blocked).toBe("115 of 115 runs used");
   expect(l.rows.map((r) => r.k)).not.toContain("Asks for");
   expect(trialRunLimit("115 of 115 runs used: the trial starts no more")).toBe("115 of 115 runs used");
+  expect(trialRunLimit("billed $1900 of $1900: the cap is reached")).toBe("billed $1900 of $1900");
+  expect(trialRunLimit("quota 91% on work (claude): runs wait for its reset in 1h")).toBe("quota 91% on work (claude)");
   expect(trialRunLimit("no dispatcher")).toBeNull();
 });
