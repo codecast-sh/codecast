@@ -163,7 +163,7 @@ test("a decision from a role's standing thread names the role that asks", async 
 // One decision, one place to read it: a plan gate attaches the plan as a
 // document, and the sheet draws it with the facts and the ladder the decision
 // page draws (DecisionSections), never a link out to read what is answered.
-test("the sheet reads an attached document, the task and the ladder in place, with no link to the page", async () => {
+test("the sheet reads an attached document and the task in place, with no link to the page, and no ladder when no role stood between", async () => {
   const { useInboxStore } = await import("../../../store/inboxStore");
   const decision: any = {
     _id: "d2", short_id: "sd-9", conversation_id: "c1", status: "pending", blocking: true, created_at: Date.now() - 60_000,
@@ -179,8 +179,36 @@ test("the sheet reads an attached document, the task and the ladder in place, wi
   const { pane, unmount } = await mount(<SessionDecisionCard item={plan} stepper={null} />);
   expect(pane.querySelector("[data-decision-doc]")!.textContent).toContain("Stale callbacks get a promise flag");
   expect(pane.textContent).toContain("ct-42");
-  expect(pane.textContent).toContain("went straight to Ashot");
+  expect(pane.textContent).not.toContain("The ladder");
   expect(pane.textContent).not.toContain("read the full decision");
   expect(pane.querySelector("a[href^='/decisions/']")).toBeNull();
   unmount();
+});
+
+test("a blocking card stays folded when the pane was just opened at a message: the jump asked for the thread", async () => {
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} targetNonce={Date.now()} />);
+  expect(pane.firstElementChild!.classList.contains("decision-fold")).toBe(true);
+  unmount();
+  // A target from long before the ask says nothing about it.
+  const stale = await mount(<SessionDecisionCard item={item(true)} stepper={null} targetNonce={Date.now() - 60_000} />);
+  expect(stale.pane.firstElementChild!.classList.contains("decision-sheet")).toBe(true);
+  stale.unmount();
+});
+
+test("scrolling up off the top of the sheet folds it and puts the thread on the ask", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const before = useInboxStore.getState().messages;
+  useInboxStore.setState({ messages: { ...before, c1: [
+    { _id: "m1", role: "user", content: "seat the roots" },
+    { _id: "m2", role: "assistant", content: "", tool_calls: [{ id: "t1", name: "Bash", input: "cast decide \"Run the one time root seat on prod now, or wait?\"" }] },
+    { _id: "m3", role: "assistant", content: "waiting" },
+  ] } } as any);
+  const scrolled: string[] = [];
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} scrollToMessage={(id) => scrolled.push(id)} />);
+  const sheet = pane.firstElementChild!;
+  await act(() => { sheet.dispatchEvent(new dom.window.WheelEvent("wheel", { deltaY: -40, bubbles: true })); });
+  expect(pane.firstElementChild!.classList.contains("decision-fold")).toBe(true);
+  expect(scrolled).toEqual(["m2"]);
+  unmount();
+  useInboxStore.setState({ messages: before } as any);
 });
