@@ -17,19 +17,19 @@ export type UnlandedFix = {
 };
 
 /** The newest run's approved fix when nothing merged or deployed it; null otherwise. `shipOutput`: what the newest
- *  run's landing step printed (problemPage landingOutput). `isTrial`: a trial records an answer and ships nothing. A fix
- *  merged by hand through its pull request is the caller's to exclude (problemPage fixMerges). */
+ *  run's landing step printed (problemPage landingOutput). `isTrial`: a trial records an answer and ships nothing. */
 export function unlandedFix(issue: Pick<LineIssue, "status" | "history">, opts: { isTrial?: (runId: string) => boolean; shipOutput?: string | null } = {}): UnlandedFix | null {
   const h = issue.history;
   const last: HistoryAttempt | undefined = h.attempts[h.attempts.length - 1];
-  if (!last || last.live || opts.isTrial?.(last.runId)) return null;
+  // A merged attempt is landed, whoever merged it (a fix merged by hand through its pull request included).
+  if (!last || last.live || last.merge || opts.isTrial?.(last.runId)) return null;
   const fix = { runId: last.runId, at: last.card?.answeredAt ?? last.end, ref: last.card?.ref ?? null, answeredBy: last.card?.answeredBy ?? null };
   // Answered Ship and refused only for being behind: approved, waiting to land (ct-58259), never a failure.
   const terminal = issue.status === "done" || issue.status === "dropped";
   const behind = !terminal && last.card?.status === "answered" && /^ship\b/i.test(last.card.answer ?? "") ? behindBase(opts.shipOutput) : null;
   if (behind) return { ...fix, behind };
   if (issue.status === "dropped" || h.regressed) return null;
-  if (last.ended !== "shipped" || last.unapproved || last.merge) return null;
+  if (last.ended !== "shipped" || last.unapproved) return null;
   // Anything merged or deployed is past this: the problem's band reads it as merged or in production.
   if (h.ships.some((s) => s.merge || s.deploys.length) || h.attempts.some((a) => a.merge && !a.live)) return null;
   return { ...fix, behind: null };

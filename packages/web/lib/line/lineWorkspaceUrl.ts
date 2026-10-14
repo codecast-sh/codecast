@@ -250,12 +250,12 @@ export function lineViewHome(view: LineView): LineSelectionPatch {
 }
 
 /** A view's name in the nav, in nav order. */
-export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "For you", problems: "Problems", line: "Line" };
+export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "For you", problems: "Problems", line: "Steps" };
 export const LINE_MODE_LABELS: Record<LineMode, string> = { table: "Table", map: "Map" };
 
 /** The second key of the go chord (G, then this) for each view. The shell binds no digit: an open decision answers
  *  on bare 1 to 9 (LJ5). */
-export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "l" };
+export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "s" };
 
 /** The view the second key of the go chord opens; null for any other key. */
 export const lineViewForGoKey = (key: string): LineView | null => LINE_VIEWS.find((v) => LINE_VIEW_KEYS[v] === key.toLowerCase()) ?? null;
