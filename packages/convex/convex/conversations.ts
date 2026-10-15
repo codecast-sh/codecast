@@ -8449,7 +8449,7 @@ async function buildUserSessionMaps(
 // on 2026-10-02 (ct-53363). Covers the named rows and the children enrichment
 // reads for them (the same newest-20 range enrichInboxSessionRow takes), keeps
 // only the viewer's own managed rows exactly as the user-wide read does, and
-// reads latestHeartbeat as the newest row of by_user_heartbeat, the same maximum.
+// takes the user's daemon liveness from the user row (see below).
 // Teammates read per named lead. The full scan pools every teammate its
 // windows hold; a lead with more live teammates than this is beyond any team
 // the product spawns.
@@ -8479,21 +8479,24 @@ export async function buildNamedSessionMaps(
   const covered = new Map<string, any>();
   for (const c of [...convs, ...childLists.flat()]) covered.set(c._id.toString(), c);
   const uid = userId.toString();
-  const [newest, rowLists] = await Promise.all([
-    ctx.db
-      .query("managed_sessions")
-      // Daemon rows only (hosted absent): a hosted row's heartbeat is a
-      // running turn, not a daemon, and a user with no daemon has only those.
-      .withIndex("by_user_hosted_heartbeat", (q: any) => q.eq("user_id", userId).eq("hosted", undefined))
-      .order("desc")
-      .first(),
+  // Whether the user's daemon is alive comes from the daemon's own beat on the
+  // user row (users.daemonHeartbeat writes it at most every 50 s), never from
+  // the newest managed_sessions heartbeat. That newest row is the top of an
+  // index every session heartbeat moves, so reading it made every named watch
+  // re-run on every heartbeat of every session the user ran: 16.8 full runs a
+  // second and the busiest hours at 88 to 92% CPU on 2026-10-12 to 14
+  // (ct-56547). The two agree whenever the daemon is beating its sessions; they
+  // differ only for a daemon alive with no session heartbeating, where the
+  // daemon's own beat is the truer answer to "is the daemon alive".
+  const [user, rowLists] = await Promise.all([
+    ctx.db.get(userId),
     Promise.all([...covered.values()].map((c: any) => ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
       .collect())),
   ]);
   const own = rowLists.flat().filter((s: any) => s.user_id?.toString() === uid);
-  return { maps: sessionMapsFromManagedRows(own, now, newest?.last_heartbeat), children: childLists.flat() };
+  return { maps: sessionMapsFromManagedRows(own, now, user?.daemon_last_seen), children: childLists.flat() };
 }
 
 // The one derivation of InboxSessionMaps from managed_sessions rows, shared by
@@ -9018,6 +9021,7 @@ async function enrichInboxSessionRow(
     cloud_workspace: (conv as any).cloud_workspace ?? null,
     cloud_seed: (conv as any).cloud_seed ?? null, local_mirror: (conv as any).local_mirror ?? null,
     cloud_context_too_large: (conv as any).cloud_context_too_large ?? null,
+    cloud_placement_progress: (conv as any).cloud_placement_progress ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     // Read by the web's isSub (inboxStore) via isAgentSpawnedConversation so
@@ -9197,6 +9201,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     cloud_workspace: child.cloud_workspace ?? null,
     cloud_seed: child.cloud_seed ?? null, local_mirror: child.local_mirror ?? null,
     cloud_context_too_large: child.cloud_context_too_large ?? null,
+    cloud_placement_progress: child.cloud_placement_progress ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
@@ -10924,6 +10929,10 @@ export function tallyInboxRows(
     // is plumbing, not a question. The workflow runner waits out the kinds
     // that recover on their own instead of reading the park as settled.
     blocked_on: string | null;
+    // Why the row's start failed (a machine's refusal, a cloud host's failed
+    // preparation), else null: a hand that never started reads idle forever,
+    // and the workflow runner fails its station on this instead of a timeout.
+    session_error: string | null;
     idle_summary: string | null;
     thread_state: string | null;
     thread_state_status: string | null;
@@ -11024,6 +11033,7 @@ export function tallyInboxRows(
       is_unresponsive: !!s.is_unresponsive,
       awaiting_input: !!s.awaiting_input,
       blocked_on: s.pending_api_error ? (s.pending_api_error_kind ?? "error") : null,
+      session_error: s.session_error || null,
       idle_summary: s.idle_summary || null,
       // The agent's own pinned state beats the generated blurb when both exist:
       // one is what the agent says is true now, the other is a description.
@@ -11074,17 +11084,31 @@ export const inboxForCLI = query({
     // so a --label query can hydrate its full filed set below. One fetch serves
     // the --label filter, the per-row label stamp, and the labels summary the
     // CLI renders for --labels / --by-label.
-    const allBuckets = await ctx.db
-      .query("inbox_buckets")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+    //
+    // A named watch (`cast sessions <id> -w`, no label view) shows only its own
+    // rows' labels and no summary, so it reads the filing of those
+    // conversations alone. The user-wide reads were most of its ~1,080 docs a
+    // run and re-ran every watch on any filing change (ct-56547).
+    const namedWatch = requestedIds.size > 0 && !args.label && !args.project_path;
+    const assignments = namedWatch
+      ? (await Promise.all([...requestedIds].map((id) => ctx.db
+        .query("bucket_assignments")
+        .withIndex("by_user_conversation", (q) => q.eq("user_id", userId).eq("conversation_id", id as Id<"conversations">))
+        .collect()))).flat()
+      : await ctx.db
+        .query("bucket_assignments")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+    const allBuckets = namedWatch
+      ? (await Promise.all([...new Set(assignments.flatMap((a) => a.bucket_id ? [a.bucket_id] : []))].map((id) => ctx.db.get(id))))
+        .filter((b): b is NonNullable<typeof b> => !!b && b.user_id.toString() === userId.toString())
+      : await ctx.db
+        .query("inbox_buckets")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
     const activeBuckets = allBuckets
       .filter((b) => !b.archived_at)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
-    const assignments = await ctx.db
-      .query("bucket_assignments")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
     const bucketNameById = new Map(activeBuckets.map((b) => [b._id.toString(), b.name]));
     const labelByConv = new Map<string, string>();
     for (const a of assignments) {
@@ -11198,7 +11222,7 @@ export const inboxForCLI = query({
     }
     const labels: Array<{ name: string; count: number }> = [];
     const seenLabelNames = new Set<string>();
-    for (const b of activeBuckets) {
+    for (const b of namedWatch ? [] : activeBuckets) {
       if (seenLabelNames.has(b.name)) continue;
       seenLabelNames.add(b.name);
       const ids = nameToConvIds.get(b.name) ?? new Set<string>();
