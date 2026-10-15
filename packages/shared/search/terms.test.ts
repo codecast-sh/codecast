@@ -29,6 +29,12 @@ const relevance = (query: string, texts: Array<{ content: string; own?: boolean 
 };
 
 describe("parseQueryTerms", () => {
+  test("a phone's curly quotes hold a phrase like straight ones", () => {
+    const terms = parseQueryTerms("“Home Depot”");
+    expect(terms.phrases).toEqual(["home depot"]);
+    expect(terms.words).toEqual([]);
+  });
+
   test("a lone letter is no word, but joins its neighbour", () => {
     const terms = parseQueryTerms(QUERY);
     expect(terms.words).toEqual(["pop", "warm", "intro", "video"]);
