@@ -1,5 +1,5 @@
-import { RESOURCE_STALE_MS, sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
-import { memoryUsed } from "../components/resources/resourceModel";
+import { sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
+import { freshness, memoryUsed } from "../components/resources/resourceModel";
 import type { OffloadPlan, OffloadCandidate, ResourceMachine, ResourceSession } from "../components/resources/types";
 import { eligibilityFor, type MigrationCandidate, type MigrationDevice } from "./migrationPlan";
 
@@ -15,11 +15,14 @@ export type OffloadPlanInput = {
 };
 
 export function freshResourceMachine(machine: ResourceMachine, now: number): boolean {
-  return machine.online && !!machine.snapshot && machine.receivedAt !== undefined && now - machine.receivedAt <= RESOURCE_STALE_MS && now - machine.snapshot.sample.at <= RESOURCE_STALE_MS && machine.snapshot.sample.at <= now + 30_000;
+  return freshness(machine, now) === "live";
 }
 
 export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
-  const { source, machines, sessions, devices, candidates, now } = input;
+  const { source, machines, sessions, candidates, now } = input;
+  // The source is reporting, so it is up even when its device heartbeat lags;
+  // otherwise every session reads as stranded on an offline machine.
+  const devices = input.devices.map(d => d.device_id === source.deviceId && !d.online ? { ...d, online: true } : d);
   const incident = sustainedResourcePressure(source.history, now);
   if (!incident || source.role !== "local" || !freshResourceMachine(source, now)) return null;
   const hosts = machines.filter(m => m.role === "cloud_linux" || m.role === "cloud_mac");
@@ -38,15 +41,16 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
     const migration = candidates.find(c => c._id === session.conversationId);
     const processes = source.snapshot!.processes.filter(p => p.sessionId === session.sessionId);
     const shared = source.snapshot!.processes.some(p => p.sharedSessionIds?.includes(session.sessionId));
-    const reason = session.pinned ? "Pinned sessions stay on this machine unless you move them manually"
+    // Short labels: the review groups sessions under them with a count.
+    const reason = session.pinned ? "Pinned"
       : input.blockedSessions?.[session.sessionId]
-      ?? (session.state === "dead" || session.state === "hibernated" ? "No live agent to offload"
-      : !migration ? "Migration eligibility has not been loaded for this session"
-      : !["claude", "claude_code", "claude-code", ""].includes((migration.agent_type ?? "").toLowerCase()) ? "This harness does not support session transfer yet"
-      : shared ? "This session shares a process with other sessions"
-      : processes.length === 0 ? "No exclusive process ownership was measured"
+      ?? (session.state === "dead" || session.state === "hibernated" ? "Not running"
+      : !migration ? "Not movable"
+      : !["claude", "claude_code", "claude-code", ""].includes((migration.agent_type ?? "").toLowerCase()) ? "Not Claude Code"
+      : shared ? "Shares a process"
+      : processes.length === 0 ? "No process found"
       : null);
-    if (reason || !migration) { plan.notOffered.push({ sessionId: session.sessionId, reason: reason ?? "No transfer candidate" }); continue; }
+    if (reason || !migration) { plan.notOffered.push({ sessionId: session.sessionId, reason: reason ?? "Not movable" }); continue; }
     const rss = processes.reduce((n, p) => n + p.rss, 0);
     const cpu = processes.reduce((n, p) => n + p.cpu, 0);
     const macRequired = processes.some(p => p.kind === "simulator" || /xcodebuild|simctl|codesign/i.test(p.name));
