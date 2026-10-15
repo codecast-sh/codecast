@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { Keyboard } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
@@ -9,10 +9,19 @@ import { InboxView } from '@/app/(tabs)/inbox';
 // list stays under the thumb that picked from it.
 let handoff = false;
 
-/** A conversation with the inbox behind it: a rightward drag slides the
- *  conversation aside to uncover the whole inbox (its lens and labels
- *  included), and picking a row there replaces this conversation in place, so
- *  moving between conversations never stacks screens. */
+const DrawerContext = createContext<{ open: () => void } | null>(null);
+
+/** The slide-out around the conversation on screen, for its header's menu
+ *  button; null where a session screen stands alone (a role's page). */
+export function useConversationDrawer() {
+  return useContext(DrawerContext);
+}
+
+/** A conversation with the app behind it: a rightward drag or the header's
+ *  menu button slides the conversation aside to uncover the inbox (its lens
+ *  and labels) and the app's other areas. Picking a row replaces this
+ *  conversation in place and picking an area leaves for it, so a
+ *  conversation is never something to go back from. */
 export function ConversationSlideOut({ id, children }: { id: string; children: ReactNode }) {
   const router = useRouter();
   const [startOpen] = useState(() => {
@@ -38,12 +47,12 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
     } as never);
   }, [id, router]);
 
-  const exit = useCallback(() => {
-    if (router.canGoBack()) router.back();
-    else router.replace('/(tabs)/inbox' as never);
-  }, [router]);
+  const exit = useCallback(() => router.navigate('/(tabs)/inbox' as never), [router]);
+
+  const drawer = useMemo(() => ({ open: () => setOpen(true) }), [setOpen]);
 
   return (
+    <DrawerContext.Provider value={drawer}>
     <SlideOutDrawer
       enabled
       open={open}
@@ -53,5 +62,6 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
     >
       {children}
     </SlideOutDrawer>
+    </DrawerContext.Provider>
   );
 }
