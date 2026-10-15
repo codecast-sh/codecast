@@ -8,9 +8,8 @@ import { formatProposeResult, formatShow, readProposalSource } from "./expectati
 describe("cast expectations output", () => {
   test("propose says what happened and who acts next", () => {
     expect(formatProposeResult({ short_id: "xp-3", status: "applied", version: 2, auto: true })).toBe("xp-3 applied as version 2: it only adds lines a person said, in their quoted words.");
-    expect(formatProposeResult({ short_id: "xp-4", status: "open", version: 2, card: "sd-9" })).toContain("card sd-9");
+    expect(formatProposeResult({ short_id: "xp-4", status: "open", version: 2, ask: true })).toContain("cast decide --proposal xp-4");
     expect(formatProposeResult({ short_id: "xp-5", status: "open", version: 2 })).toContain("cast expectations apply xp-5");
-    expect(formatProposeResult({ short_id: "xp-6", status: "open", version: 2, card_error: "--to x: no person" })).toContain("No card was posted: --to x: no person");
     expect(formatProposeResult({ short_id: "xp-7", status: "empty", version: 2 })).toContain("nothing to change");
   });
 
@@ -29,7 +28,7 @@ describe("cast expectations output", () => {
     }, 3_600_000);
     expect(out).toContain("Version 2 of 2, applied by Cam from xp-2: Sharpen");
     expect(out).toContain("Open: xp-3 (1 change, ");
-    expect(out).toContain("card sd-4\n  could not apply: changed in version 2");
+    expect(out).toContain("decision sd-4\n  could not apply: changed in version 2");
     expect(out).toContain("Context read up to 2026-10-05T17:00:00.000Z.");
   });
 
