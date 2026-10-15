@@ -293,6 +293,7 @@ describe("config mirror line", () => {
   test("parseHostMirrorStamp reads the stamp and tolerates an absent or garbled one", () => {
     expect(parseHostMirrorStamp("")).toBeNull();
     expect(parseHostMirrorStamp("cat: no such file")).toBeNull();
+    expect(parseHostMirrorStamp(JSON.stringify({ version: 1, hash: "", applied_at: "", files: {}, complete: false, capabilities: ["keeps-tracked"] }))).toBeNull();
     expect(parseHostMirrorStamp(JSON.stringify({ version: 1, hash: "abc", applied_at: "t", source_device_id: "d", files: { a: {}, b: {} } })))
       .toEqual({ hash: "abc", applied_at: "t", files: 2, source_device_id: "d" });
   });

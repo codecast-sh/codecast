@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyMirrorBundle, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
+import { applyMirrorBundle, mirrorVerifyAnswer, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
 import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
@@ -195,7 +195,7 @@ test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pi
   expect(pushes).toBe(6);
 });
 
-test("in a repo, only agent context travels; other files, gitignored ones too, are the seed's and the sync's, and host edits stay", async () => {
+test("in a repo, only untracked agent context travels; tracked files and other files, gitignored ones too, are git's, the seed's and the sync's", async () => {
   const local = temp();
   const remote = temp();
   const sourceRoot = path.join(local, "src", "app");
@@ -217,7 +217,7 @@ test("in a repo, only agent context travels; other files, gitignored ones too, a
   const parsed = await parseMirrorBundle(built.bytes);
   const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
   expect(result.errors).toEqual([]);
-  expect(read(targetRoot, "AGENTS.md")).toBe("new instructions\n");
+  expect(read(targetRoot, "AGENTS.md")).toBe("older instructions\n");
   expect(fs.existsSync(path.join(targetRoot, "docs/private.local.md"))).toBe(false);
   expect(read(targetRoot, "docs/clean.md")).toBe("the cloud session's edit\n");
   expect(fs.existsSync(path.join(targetRoot, "docs/plan-in-progress.md"))).toBe(false);
@@ -421,4 +421,32 @@ test("failed source inputs leave the previously mirrored files and stamp untouch
   expect(read(remote, ".codecast/mirror.json")).toBe(saved);
   const excluded = await buildHomeMirror({ ...opts, config: { ...opts.config, cloud_mirror_exclude: ".claude/skills/kept" } });
   expect(excluded.header.files.some((f) => f.path === skill)).toBe(false);
+});
+
+test("a host that keeps tracked files gets only a project's untracked agent config, never its git-tracked files", async () => {
+  const home = temp();
+  const root = path.join(home, "code/union-mobile");
+  write(root, "outreach/.claude/skills/deploy/SKILL.md", "tracked skill\n");
+  write(root, "outreach/backend/src/lib/apollo.ts", "export const tracked = 1;\n");
+  write(root, "CLAUDE.md", "tracked instructions\n");
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore" });
+  git("init", "-q");
+  git("add", ".");
+  git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  write(root, "CLAUDE.local.md", "untracked instructions\n");
+  write(root, "outreach/.claude/settings.local.json", "{}\n");
+  const paths = async (narrowProjects: boolean) => (await parseMirrorBundle((await buildHomeMirror({
+    home, hostHome: "/home/u", config: { user_id: "u" }, deviceId: "d", narrowProjects,
+    gitEnv: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    projects: [{ host: "u@host", sourceRoot: root, targetRoot: "/home/u/code/union-mobile" }],
+  })).bytes)).files.map((f) => f.path).filter((p) => p.startsWith("code/union-mobile/")).sort();
+  expect(await paths(true)).toEqual(["code/union-mobile/CLAUDE.local.md", "code/union-mobile/outreach/.claude/settings.local.json"]);
+});
+
+test("a host never mirrored still answers --verify with its receiver's capabilities", () => {
+  const home = temp();
+  const answer = mirrorVerifyAnswer(home);
+  expect(answer.capabilities).toContain("keeps-tracked");
+  expect(answer.hash).toBe("");
+  expect(answer.complete).toBe(false);
 });

@@ -197,10 +197,10 @@ export function registerCloudCommand(program: Command): void {
     .option("--into <dir>", "Staging mode: write every file verbatim under this directory")
     .action(async (opts: { stdin?: boolean; into?: string; verify?: boolean }) => {
       const { parseMirrorBundle } = await import("./mirror/bundle.js");
-      const { applyMirrorBundle, applyStagingBundle, readStamp, verifyMirrorStamp, withMirrorLock } = await import("./mirror/apply.js");
+      const { applyMirrorBundle, applyStagingBundle, readStamp, mirrorVerifyAnswer, withMirrorLock } = await import("./mirror/apply.js");
       const os = await import("node:os");
       if (opts.verify) {
-        const stamp = await withMirrorLock(os.homedir(), async () => verifyMirrorStamp(os.homedir()));
+        const stamp = await withMirrorLock(os.homedir(), async () => mirrorVerifyAnswer(os.homedir()));
         await writeStdout(JSON.stringify(stamp));
         return;
       }

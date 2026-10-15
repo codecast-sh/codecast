@@ -107,7 +107,7 @@ export interface BuildHomeMirrorOptions {
   projects?: ProjectRegistration[];
   /** Shared across the hosts of one tick; a fresh one is used when absent. */
   sources?: MirrorSourceCache;
-  /** Inside a repo, carry only agent context (for a host whose receiver keeps tracked files); the folder sync carries the rest. */
+  /** Inside a repo, carry only untracked agent context (for a host whose receiver keeps tracked files): git and the folder sync carry the rest. */
   narrowProjects?: boolean;
   /** Host-edited memories this push has taken in (memoryBack.ts). */
   reconciled?: Array<{ path: string; sha: string }>;
@@ -129,7 +129,7 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
       discovery = (async () => {
         sources.ledger.note(project.sourceRoot);
         if (!(await fs.promises.stat(project.sourceRoot)).isDirectory()) throw new Error(`project context root is not a directory: ${project.sourceRoot}`);
-        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, agentContextOnly: opts.narrowProjects, includeAncestors: true, config: opts.config, ledger: sources.ledger });
+        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: !opts.narrowProjects, agentContextOnly: opts.narrowProjects, includeAncestors: true, config: opts.config, ledger: sources.ledger });
       })();
       sources.discoveries.set(discoveryKey, discovery);
     }

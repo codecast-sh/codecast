@@ -120,7 +120,8 @@ function harness(w: ReturnType<typeof world>) {
     const stamp = verifyMirrorStamp(w.remote);
     expect(stamp?.complete).toBe(true);
     expect(stamp?.hash).toBe(stamps[`${w.host.user}@${w.host.address}`]!.hash);
-    expect(read(w.targetRoot, "AGENTS.md")).toBe(read(w.sourceRoot, "AGENTS.md"));
+    // Only the wide set carries a tracked file; a narrowing host keeps git's copy.
+    if (!stamps[`${w.host.user}@${w.host.address}`]?.keeps_tracked) expect(read(w.targetRoot, "AGENTS.md")).toBe(read(w.sourceRoot, "AGENTS.md"));
   };
   const noTrackedLost = () => {
     expect(deleted).toEqual([]);
@@ -166,11 +167,13 @@ test("host upgraded N to N+1 under laptop N+1: the laptop narrows only after the
   await h.push();
   // The upgrade is learned from the --verify read just before this push, so this push is already narrow.
   expect(h.carried[1]!.paths).not.toContain("work/app/docs/guide.md");
-  expect(h.carried[1]!.paths).toContain("work/app/AGENTS.md");
+  // Tracked, so git's: the laptop's uncommitted edit never overwrites the host's copy.
+  expect(h.carried[1]!.paths).not.toContain("work/app/AGENTS.md");
   expect(h.keepsTracked()).toBe(true);
   write(w.sourceRoot, "AGENTS.md", "project rules, third revision\n");
-  await h.push();
-  expect(h.carried[2]!.paths).toEqual(h.carried[1]!.paths);
+  // An edit to a tracked file changes nothing the narrow bundle carries.
+  await h.inStep();
+  expect(read(w.targetRoot, "AGENTS.md")).not.toBe(read(w.sourceRoot, "AGENTS.md"));
   h.noTrackedLost();
   // Released, not deleted: the laptop's edit stays on the host until the folder sync or a commit moves it.
   expect(read(w.targetRoot, "docs/guide.md")).toBe("guide, edited on the laptop\n");

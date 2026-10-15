@@ -441,7 +441,8 @@ export function parseHostMirrorStamp(out: string): HostMirrorStamp | null {
   if (!line) return null;
   try {
     const parsed = JSON.parse(line);
-    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string") return null;
+    // A host never mirrored answers with an empty stamp (no applied_at): "never".
+    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string" || !parsed.applied_at) return null;
     return {
       hash: parsed.hash,
       applied_at: typeof parsed.applied_at === "string" ? parsed.applied_at : "",
