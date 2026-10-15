@@ -131,7 +131,7 @@ the card.
    - attempt records remain: `createAttempt` (`backend/src/lib/agentWatch/remediations.ts`) still has two callers, an agent tool (`lib/agent/tools/issueTools.ts`) and the clusters route, and the regression triage still requeues attempts.
 
    Codecast's start switch decides when problems start (LL3). A finding marked wrong opens a problem against the AgentWatch judge or the builder of its input (LL11), fixed by a codecast session in Union's repo.
-2. **One judge moves to moments, in shadow.** Union's repo holds the comms judge's codecast twin (`.codecast/judges/comms.md`, `mode: shadow`) and its extractor (`.codecast/moments/contact-conversation.ts`). The comparison runs on the host (`~/.local/share/codecast/moments-shadow/union-comms-shadow/`): it replays contacts through the extractor and the judge, compares the findings with AgentWatch's, files nothing and writes nothing to Union. Union's backend posts no moment events yet.
+2. **One judge moves to moments, in shadow.** Union's repo holds the comms judge's codecast twin (`union-mobile/.codecast/judges/comms.md`, `mode: shadow`) and its extractor (`union-mobile/.codecast/moments/contact-conversation.ts`). The comparison runs on the host (`~/.local/share/codecast/moments-shadow/union-comms-shadow/`): it replays contacts through the extractor and the judge, compares the findings with AgentWatch's, files nothing and writes nothing to Union. Union's backend posts no moment events yet.
 3. **Judges move one at a time.** When a judge's shadow run matches or beats it, its file turns `mode: live` (LL8), and Union deletes its version of that judge.
 
 ## LL6. The words people see

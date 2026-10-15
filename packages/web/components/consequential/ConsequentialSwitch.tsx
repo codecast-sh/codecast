@@ -10,10 +10,11 @@
 // tested without a browser) and its two writes. The trigger is the site's own
 // control when it has one (`trigger`), so a chip, a switch or a row button all
 // open the same review.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
+import { useEventListener } from "../../hooks/useEventListener";
 
 /** A number the review leads with: how many start, how fast, how much. The label is a few words. */
 export type SwitchFigure = { value: string; label: string; tone?: "warn" };
@@ -87,21 +88,16 @@ export function ConsequentialSwitch({ on, ledger, onTurnOn, onTurnOff, trigger, 
   );
 }
 
+const CAPTURE = { capture: true };
+
 /** The review itself: controlled, for a site that opens it from somewhere other than a trigger of its own. */
 export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void }) {
   const cancel = useRef<HTMLButtonElement>(null);
-  const confirm = useRef(onConfirm);
-  confirm.current = onConfirm;
   const blocked = !!l.blocked;
-  useEffect(() => {
-    if (blocked) return;
-    // The modifier makes confirming a chord: a stray Enter, or one meant for the page behind, does nothing.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); confirm.current(); }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [blocked]);
+  // The modifier makes confirming a chord: a stray Enter, or one meant for the page behind, does nothing.
+  useEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); onConfirm(); }
+  }, blocked ? null : document, CAPTURE);
   const rows = l.stop ? [...l.rows, { k: "To stop", v: l.stop }] : l.rows;
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>

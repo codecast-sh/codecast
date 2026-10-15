@@ -113,7 +113,7 @@ export async function handOffRun(runId: string, argv: string[]): Promise<never> 
   try {
     if (Number(JSON.parse(fs.readFileSync(file, "utf-8")).pid) === process.pid) fs.unlinkSync(file);
   } catch {}
-  const { spawn } = await import("child_process");
+  const { spawn } = await import("../proc.js");
   const child = spawn(argv[0], argv.slice(1), { stdio: "inherit", env: process.env });
   const code = await new Promise<number>((resolve) => {
     child.on("exit", (c) => resolve(c ?? 1));

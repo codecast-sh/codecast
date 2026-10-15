@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { buildEntityUrl, entityRoute, objectHref, orgObjectOfRef, parseEntityUrl, personRefOf } from "./index";
 
-// A goal, a project, a role and a person each have one address, the Org
-// screen with that object's sheet open.
+// A goal and a project each have a page of their own; a role and a person
+// open on the Org screen.
 describe("the company's objects", () => {
-  test("every kind addresses /org/<ref>, a person by handle", () => {
-    expect(objectHref("initiative", "in-2")).toBe("/org/in-2");
-    expect(objectHref("project", "pj-mf3k2a")).toBe("/org/pj-mf3k2a");
+  test("goals and projects have their own pages; roles and people live under /org, a person by handle", () => {
+    expect(objectHref("initiative", "in-2")).toBe("/goals/in-2");
+    expect(objectHref("project", "pj-mf3k2a")).toBe("/projects/pj-mf3k2a");
     expect(objectHref("role", "or-7")).toBe("/org/or-7");
     expect(objectHref("person", "samvit")).toBe("/org/@samvit");
     expect(objectHref("person", "@samvit")).toBe("/org/@samvit");
@@ -15,11 +15,11 @@ describe("the company's objects", () => {
   });
 
   test("entityRoute and the public URL delegate to the same address", () => {
-    expect(entityRoute("initiative", "in-7")).toBe("/org/in-7");
-    expect(entityRoute("goals", "in-7")).toBe("/org/in-7");
+    expect(entityRoute("initiative", "in-7")).toBe("/goals/in-7");
+    expect(entityRoute("goals", "in-7")).toBe("/goals/in-7");
     expect(entityRoute("role", "or-4")).toBe("/org/or-4");
     expect(entityRoute("person", "samvit")).toBe("/org/@samvit");
-    expect(buildEntityUrl("project", "pj-abc")).toBe("https://codecast.sh/org/pj-abc");
+    expect(buildEntityUrl("project", "pj-abc")).toBe("https://codecast.sh/projects/pj-abc");
   });
 
   test("an /org/<ref> link reads back as the object it names", () => {

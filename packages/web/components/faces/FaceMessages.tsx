@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ArrowUpRight } from "lucide-react";
 import { dmKeyFor } from "@codecast/shared/chat";
 import { useInboxStore, type ChatMessageRow } from "../../store/inboxStore";
@@ -153,7 +154,7 @@ export function FaceMessages({
 
   // Reading it here is reading it: the DM's mark moves once the card has
   // been up a moment (a pointer passing over the face reads nothing).
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!dmId || !newestDm || !rows.some((r) => r.isDm && isNew(r))) return;
     const t = setTimeout(() => useInboxStore.getState().markChannelRead(dmId, newestDm.id), focus ? 0 : 1200);
     return () => clearTimeout(t);

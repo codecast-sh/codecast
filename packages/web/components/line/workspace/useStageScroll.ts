@@ -7,7 +7,8 @@
 // class, and restored into the pane of that class once the page has drawn it.
 // Timers, not animation frames: a background tab stalls frames, and the
 // content a page restores into arrives over several renders.
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
+import { useMountEffect } from "../../../hooks/useMountEffect";
 
 type Kept = { pane: string | null; top: number };
 const saved = new Map<string, Kept>();
@@ -18,7 +19,7 @@ const paneOf = (el: Element, stage: HTMLElement): string | null => (el === stage
  *  its loading state) is still listened to, and attaching costs the workspace no render. */
 export function useStageScroll(): (el: HTMLElement | null) => void {
   const detach = useRef<(() => void) | null>(null);
-  useEffect(() => () => detach.current?.(), []);
+  useMountEffect(() => () => detach.current?.());
   return useCallback((el: HTMLElement | null) => {
     detach.current?.();
     detach.current = el ? listen(el) : null;

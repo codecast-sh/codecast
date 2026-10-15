@@ -15,7 +15,7 @@ function world() {
     teams: [{ _id: TEAM, name: "Acme" }],
     org_roles: [
       { _id: "r_growth", short_id: "or-1", handle: "growth", status: "active", team_id: TEAM, trust: "understand" },
-      { _id: "r_infra", short_id: "or-2", handle: "infra", status: "paused", team_id: TEAM },
+      { _id: "r_infra", short_id: "or-2", handle: "infra", status: "paused", team_id: TEAM, trust: "understand" },
       { _id: "r_ops", short_id: "or-3", handle: "ops", status: "active", team_id: TEAM, trust: "decide" },
       { _id: "r_old", short_id: "or-4", handle: "old", status: "retired", team_id: TEAM, trust: "understand" },
       { _id: "r_head", short_id: "or-5", handle: "head-of-people", status: "active", team_id: TEAM, trust: "understand" },
@@ -40,7 +40,7 @@ describe("orgAutonomyDefault", () => {
     const { ctx, tables } = world();
     const dry = await performTurnOnExistingRoles(ctx, true);
     expect(dry.turned_on).toBe(0);
-    expect(tables.org_roles.map((r) => r.trust)).toEqual(["understand", undefined, "decide", "understand", "understand", "understand"]);
+    expect(tables.org_roles.map((r) => r.trust)).toEqual(["understand", "understand", "decide", "understand", "understand", "understand"]);
     const run = await performTurnOnExistingRoles(ctx, false);
     expect(run.turned_on).toBe(3);
     expect(Object.fromEntries(tables.org_roles.map((r) => [r.handle, r.trust]))).toEqual({
@@ -55,7 +55,7 @@ describe("orgAutonomyDefault", () => {
     const run = await performTurnOnExistingRoles(ctx, false, new Set(["r_growth"]));
     expect(run.turned_on).toBe(1);
     expect(tables.org_roles.find((r) => r.handle === "growth")!.trust).toBe("direct");
-    expect(tables.org_roles.find((r) => r.handle === "infra")!.trust).toBeUndefined();
+    expect(tables.org_roles.find((r) => r.handle === "infra")!.trust).toBe("understand");
     expect(run.rows.filter((r) => r.held).map((r) => r.handle).sort()).toEqual(["infra", "mine"]);
   });
 });

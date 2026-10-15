@@ -245,7 +245,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
         <ProblemTableHead range={range} sort={sort} onSort={setSort} grouped={!!filter.status} day={found && found !== "more" ? bucketWords(found.from, list.win.step) : null} />
       </div>
       {sections.length ? (
-        // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the rows are the controls; this only moves focus between them
+        // The rows are the controls; this only moves focus between them.
         <div className="lwp-rows" onKeyDown={moveRow}>
           <ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} />
         </div>

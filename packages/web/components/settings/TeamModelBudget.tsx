@@ -10,7 +10,7 @@
  * setTeamBudget action: the row shows the new cap at once, and the server's
  * answer replaces it.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Gauge } from "lucide-react";
 import { Button } from "../ui/button";
@@ -28,8 +28,13 @@ const monthName = (month: string) => new Date(`${month}-01T00:00:00Z`).toLocaleS
 export function TeamModelBudget({ teamId, isAdmin }: { teamId: Id<"teams">; isAdmin: boolean }) {
   const { data } = useSettingsData("teamBudget", String(teamId));
   const budget = data as (BudgetSummary & { team_id: string }) | null | undefined;
+  // The draft starts over from the server's cap whenever that cap changes.
   const [draft, setDraft] = useState("");
-  useEffect(() => { if (budget) setDraft(budget.cap_usd > 0 ? String(budget.cap_usd) : ""); }, [budget?.cap_usd]);
+  const [draftCap, setDraftCap] = useState<number | undefined>(undefined);
+  if (budget?.cap_usd !== draftCap) {
+    setDraftCap(budget?.cap_usd);
+    if (budget) setDraft(budget.cap_usd > 0 ? String(budget.cap_usd) : "");
+  }
   if (!budget) return null;
 
   const cap = budget.cap_usd;

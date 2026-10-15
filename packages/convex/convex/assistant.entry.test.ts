@@ -791,7 +791,7 @@ describe("hosted status rows stay off daemon surfaces", () => {
     expect(row?.agent_status).toBe("idle");
   });
 
-  test("a user with only hosted rows has no daemon heartbeat; a daemon row is found past newer hosted ones", async () => {
+  test("a user with only hosted rows has no daemon heartbeat; the daemon's own beat counts past newer hosted ones", async () => {
     const { t, user, authed } = await setup();
     const conversations: Id<"conversations">[] = [];
     for (let i = 0; i < 3; i++) {
@@ -810,9 +810,7 @@ describe("hosted status rows stay off daemon surfaces", () => {
     expect(conversations.every((id) => hostedOnly.live.includes(String(id)))).toBe(true);
 
     const daemonBeat = Date.now() - 60_000;
-    await t.run((ctx) => ctx.db.insert("managed_sessions", {
-      session_id: "elsewhere", user_id: user, pid: 42, started_at: daemonBeat, last_heartbeat: daemonBeat, agent_status: "idle",
-    }));
+    await t.run((ctx) => ctx.db.patch(user, { daemon_last_seen: daemonBeat }));
     expect((await named()).latestHeartbeat).toBe(Math.floor(daemonBeat / 60_000) * 60_000);
   });
 

@@ -40,7 +40,7 @@ block by "everything to end of file" destroys this paragraph.
 
 A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; work that needs the board's tracking is a task.
 
-**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, or the user asks. Tasks are internal by default; add `--human` only when the human must see and manage it themselves (a decision only they can make, a manual step). `--from-meeting` is only for tasks people decided in a meeting or conversation, never your own work; `--from-call cl-42` also links the task to that call, so it shows on the call's page.
+**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, or the user asks. Tasks are internal by default; add `--human` only when the human must see and manage it themselves (a decision only they can make, a manual step). `--from-meeting` is only for tasks people decided in a meeting or conversation, never your own work.
 
 **Finishing files nothing.** Follow-up work and bugs you find along the way are not tasks. Fix what you can within the work you were given; name the rest as suggested next steps in your reply, and the human decides what to pursue.
 
@@ -61,9 +61,8 @@ cast task create "Title" -p high               # --plan <id>, --parent <id>, --p
 cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
-cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
+cast task handoff <id> --status done --evidence "<what you verified>"
 cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
-cast doc create "Title" -c - | show <id> | search "<title>"
 ```
 
 `cast guide tasks` has the full command reference.

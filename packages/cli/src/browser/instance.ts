@@ -15,7 +15,7 @@
 import * as fs from "node:fs";
 import { prepareBrowserApp } from "./appIdentity.js";
 import * as path from "node:path";
-import { spawn } from "../proc.js";
+import { execFileSync, execSync, spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
 import { enablePageDomains, isReachable, TabUnresponsive, type EnablePatience } from "./recovery.js";
@@ -212,7 +212,6 @@ export function processActivity(pid: number): ProcessActivity | null {
       });
       return { cpu: Number(fields[11]) + Number(fields[12]), asleep: states.every((s) => s === "S" || s === "I") };
     }
-    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
     const [stat, time] = execFileSync("ps", ["-o", "stat=,time=", "-p", String(pid)], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim().split(/\s+/);
     return { cpu: parsePsTime(time), asleep: /^[SI]/.test(stat) };
   } catch {
@@ -373,7 +372,6 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
     // and helpers that inherit the flag but exit independently.
     for (const pid of strayPids(opts.userDataDir)) {
       try {
-        const { execSync } = require("node:child_process") as typeof import("node:child_process");
         const cmd = execSync(`ps -o command= -p ${pid}`, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
         if (!/--type=/.test(cmd)) return pid;
       } catch {
@@ -450,7 +448,6 @@ export async function freePort(): Promise<number> {
 /** Pids of any Chrome process still holding this user-data-dir. */
 export function strayPids(userDataDir: string): number[] {
   try {
-    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
     // `--` before the pattern: it begins with `--user-data-dir`, which pgrep
     // would otherwise read as an option and reject — silently finding nothing.
     //

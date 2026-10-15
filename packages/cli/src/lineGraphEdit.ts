@@ -17,7 +17,7 @@
 //     and the republish records it as a version of the graph.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { graphHash, graphNodeHashes, parseWorkflowSource, validateWorkflow } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { findNodeStmt, nodeAttrRaw, setNodeAttr } from "./repoLine.js";

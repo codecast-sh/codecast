@@ -417,7 +417,7 @@ describe("finishSession — the flip", () => {
     expect(canDaemonSeePendingMessage(msg as any, c, ME as any, LAPTOP)).toBe(false);
   });
 
-  test("siblings from one laptop folder share the host checkout; anyone else holding it refuses the handoff without throwing", async () => {
+  test("siblings from one laptop folder share the host checkout; a shared cloud session holding it refuses the handoff without throwing", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db, ["c1", "c2"]);
     const root = "/home/ubuntu/work/repo";
@@ -431,6 +431,7 @@ describe("finishSession — the flip", () => {
 
     const other = fixtures();
     conv(other, "c3").project_path = root;
+    conv(other, "c3").cloud_workspace = "shared";
     const { rows: one } = await startedBatch(other, ["c1"]);
     await performBeginSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, device_id: LAPTOP }, NOW);
     const refused = await performFinishSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, project_path: root, source_path: source }, NOW + 5);
