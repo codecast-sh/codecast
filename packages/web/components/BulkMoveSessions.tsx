@@ -18,8 +18,8 @@
 import React from "react";
 import { toast } from "sonner";
 import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag } from "lucide-react";
-import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse, useDevices } from "./DeviceBadge";
-import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
+import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
+import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
 import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
 import { useInboxStore, isConvexId, sortLabels, type InboxSession } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
@@ -28,13 +28,12 @@ import { fileSessionsAsRest } from "../store/undoActions";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { killSessionsLedger } from "./consequential/ledgers";
 
-/** The device rows of a "Move to…" submenu: laptops first, then cloud hosts. */
+/** The device rows of a "Move to…" submenu: laptops, team machines, then cloud hosts. */
 export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
-  const { locals, remotes, loaded } = useDevices();
+  const { locals, team, remotes, all: rows, loaded } = useMoveTargets();
   const move = useBulkMoveSessions();
   const everyOwner = sessions.length && sessions.every((s) => s.owner_device_id === sessions[0]?.owner_device_id) ? sessions[0]?.owner_device_id : null;
   if (!loaded) return <CtxItem disabled>Loading machines…</CtxItem>;
-  const rows = [...locals, ...remotes];
   if (rows.length === 0) return <CtxItem disabled>No machines — run the codecast daemon on one first</CtxItem>;
   return (
     <>
@@ -42,9 +41,10 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
         const here = d.device_id === everyOwner;
         const usable = d.online || (d.is_remote && deviceWakesOnUse(d));
         const note = d.online ? "" : usable ? "asleep — wakes on move" : "offline";
+        const runner = (d as { runner_name?: string | null }).runner_name;
         return (
           <React.Fragment key={d.device_id}>
-            {i === locals.length && locals.length > 0 && remotes.length > 0 && <CtxSeparator />}
+            {i > 0 && (i === locals.length || i === locals.length + team.length) && <CtxSeparator />}
             <CtxItem
               disabled={here || !usable}
               className={here ? RUNNING_HERE_ROW : undefined}
@@ -57,7 +57,7 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
               )}
               onSelect={() => { void move(sessions, d); onDone?.(); }}
             >
-              {deviceDisplayName(d)}
+              {deviceDisplayName(d)}{runner ? ` · ${runner}` : ""}
             </CtxItem>
           </React.Fragment>
         );
