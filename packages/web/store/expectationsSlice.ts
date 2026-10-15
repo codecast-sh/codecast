@@ -23,6 +23,7 @@ import {
   personEditApplies,
   personEditSummary,
   personOp,
+  proposalAnswerIndex,
   type Expectation,
   type ExpectationOp,
   type PersonEdit,
@@ -80,8 +81,10 @@ export function createExpectationsSlice(answerCard: AnswerCard): ExpectationsSli
     resolveExpectationProposal: action(function (this: any, projectId: string, proposal: string, verdict: "apply" | "drop") {
       const row = this.projectExpectations?.[projectId] as ProjectExpectationsRow | undefined;
       const card = row ? paintResolve(row, proposal, verdict, Date.now()) : undefined;
-      // Apply is the card's first option and Drop its second (EXPECTATION_CARD_OPTIONS).
-      if (card && this.sessionDecisions?.[card]?.status === "pending") answerCard(this, card, { index: verdict === "apply" ? 0 : 1 });
+      // The answer that does it, by its verb: the asking session wrote the answers (proposalAnswerIndex).
+      const decision = card ? this.sessionDecisions?.[card] : undefined;
+      const index = decision?.status === "pending" ? proposalAnswerIndex(decision.options ?? [], verdict) : -1;
+      if (card && index >= 0) answerCard(this, card, { index });
     }) as ExpectationsSliceActions["resolveExpectationProposal"],
   };
 }
