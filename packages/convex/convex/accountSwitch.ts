@@ -67,6 +67,7 @@ import {
   activeCodexProfile,
   codexAccountNeedsRestart,
   listOnlineDevices,
+  findFlowDevice,
 } from "./ccAccountsShared";
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { deliverSessionNotificationToParties } from "./notifications";
@@ -868,10 +869,9 @@ export const requestLoginFlow = mutation({
     if (!userId) throw new Error("Authentication failed: invalid token or session");
 
     const now = Date.now();
-    const { online, primary: freshestPrimary } = await listOnlineDevices(ctx, userId, now);
     const target = args.device_id
-      ? online.find((d) => d.device_id === args.device_id)
-      : freshestPrimary;
+      ? await findFlowDevice(ctx, userId, args.device_id, now)
+      : (await listOnlineDevices(ctx, userId, now)).primary;
     if (!target) {
       throw new Error(
         args.device_id
@@ -945,8 +945,7 @@ export const submitLoginCode = mutation({
     const userId = await getAuthenticatedUserId(ctx);
     if (!userId) throw new Error("Authentication required");
     const now = Date.now();
-    const { online } = await listOnlineDevices(ctx, userId, now);
-    const device = online.find((d) => d.device_id === args.device_id);
+    const device = await findFlowDevice(ctx, userId, args.device_id, now);
     if (!device) throw new Error("That device's daemon is offline");
     const flow = device.cc_login_flow;
     if (flow?.status !== "pending" || flow.started_at !== args.started_at || now - flow.started_at >= LOGIN_FLOW_STALE_MS) {
@@ -1502,9 +1501,10 @@ async function enqueueMintFlow(
   return { command_id: commandId, device_id: target.device_id, profile, email: row.email, started_at: startedAt };
 }
 
-async function onlineMintTarget(ctx: { db: any }, userId: Id<"users">, deviceIdArg: string | undefined, now: number): Promise<Doc<"devices">> {
-  const { online, primary: freshestPrimary } = await listOnlineDevices(ctx, userId, now);
-  const target = deviceIdArg ? online.find((d) => d.device_id === deviceIdArg) : freshestPrimary;
+async function mintTarget(ctx: { db: any }, userId: Id<"users">, deviceIdArg: string | undefined, now: number): Promise<Doc<"devices">> {
+  const target = deviceIdArg
+    ? await findFlowDevice(ctx, userId, deviceIdArg, now)
+    : (await listOnlineDevices(ctx, userId, now)).primary;
   if (!target) {
     throw new Error(deviceIdArg ? "That device's daemon is offline" : "No online daemon on a primary (non-remote) machine");
   }
@@ -1526,7 +1526,7 @@ export const requestMintToken = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const now = Date.now();
-    const target = await onlineMintTarget(ctx, userId, args.device_id, now);
+    const target = await mintTarget(ctx, userId, args.device_id, now);
     return await enqueueMintFlow(ctx, userId, target, args.profile, { force: args.force === true, now });
   },
 });
@@ -1556,7 +1556,7 @@ export const submitMintCode = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx);
     if (!userId) throw new Error("Authentication required");
-    const device = await onlineMintTarget(ctx, userId, args.device_id, Date.now());
+    const device = await mintTarget(ctx, userId, args.device_id, Date.now());
     if (device.cc_mint_flow?.status !== "pending" || device.cc_mint_flow.started_at !== args.started_at
       || Date.now() - args.started_at >= MINT_FLOW_STALE_MS) throw new Error("This mint has ended. Start again.");
     if (args.payload.provider !== "claude-mint-code" || args.payload.ct.length > 8192) throw new Error("Invalid approval code");
@@ -1580,7 +1580,7 @@ export const removeSetupToken = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const now = Date.now();
-    const target = await onlineMintTarget(ctx, userId, args.device_id, now);
+    const target = await mintTarget(ctx, userId, args.device_id, now);
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "switch_account" as const,

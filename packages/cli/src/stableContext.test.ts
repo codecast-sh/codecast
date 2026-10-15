@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import {
   buildStableContext,
+  STABLE_CONTEXT_BUDGET,
   ensureStableHookForLaunch,
   installStableHookCodex,
   installStableHookCursor,
@@ -64,7 +65,7 @@ describe("stable-context recording", () => {
     });
   });
 
-  test("appends where the session sits in the org after the feed, asked for by the session being started", async () => {
+  test("leads with where the session sits in the org, asked for by the session being started", async () => {
     const asked: Record<string, any> = {};
     const where = {
       workspace: { kind: "team", id: "t1", name: "Acme" },
@@ -85,7 +86,7 @@ describe("stable-context recording", () => {
     const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "team", global: false, cwd: "/repo", session: "conversations123" });
 
     expect(asked["https://example.site/cli/org/where"]).toEqual({ api_token: "secret", session: "conversations123" });
-    expect(built!.text).toMatch(/<\/stable-context>\n\n<org-context workspace="Acme">/);
+    expect(built!.text).toMatch(/^<org-context workspace="Acme">[\s\S]*<\/org-context>\n\n<stable-context mode="team">/);
     expect(built!.text).toContain("@growth Growth lead · reports to Ashot · looks after Growth");
   });
 
@@ -94,6 +95,26 @@ describe("stable-context recording", () => {
       new Response(String(input).endsWith("/cli/org/where") ? "null" : JSON.stringify({ conversations: [] }), { status: 200 })) as typeof fetch;
     const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "solo", global: false, cwd: "/repo" });
     expect(built!.text.endsWith("</stable-context>")).toBe(true);
+  });
+
+  test("fits the hook budget by dropping the oldest feed cards, never the mods' instructions", async () => {
+    const conversations = Array.from({ length: 15 }, (_, i) => ({
+      id: `conversation${i}`, title: `Card ${i}`, updated_at: Date.now() - i * 60_000, message_count: 40,
+      preview: Array.from({ length: 4 }, (_, j) => ({ line: j + 1, role: j % 2 ? "assistant" : "user", content: "x".repeat(300) })),
+    }));
+    const mods = [{ name: "union", title: "Union", agents: "Name Union rows by id. ".repeat(40), fences: [], objects: [{ prefix: "contact", title: "Contact", fields: [], external: true }] }];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith("/cli/mods/guide")) return new Response(JSON.stringify({ mods }), { status: 200 });
+      if (url.endsWith("/cli/org/where")) return new Response("null", { status: 200 });
+      return new Response(JSON.stringify({ conversations }), { status: 200 });
+    }) as typeof fetch;
+    const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "team", global: false, cwd: "/repo" });
+    expect(Buffer.byteLength(built!.text)).toBeLessThanOrEqual(STABLE_CONTEXT_BUDGET);
+    expect(built!.text.startsWith("<mods>")).toBe(true);
+    expect(built!.text).toContain("contact-<id>");
+    expect(built!.data.items.length).toBeGreaterThan(0);
+    expect(built!.data.items.length).toBeLessThan(15);
   });
 
   test("does not make an unkeyed recording request", async () => {

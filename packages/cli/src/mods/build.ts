@@ -25,6 +25,8 @@ export type ModBuild =
   | { ok: true; manifest: ModManifest; code: string; local?: { code: string; hash: string }; source: Record<string, string>; inspection: ModInspection; warnings: string[]; dir: string }
   | { ok: false; errors: string[]; dir: string };
 
+/** The mod's instructions to agents, in markdown beside the manifest. */
+export const AGENTS_FILE = "AGENTS.md";
 const SOURCE_EXT = /\.(tsx?|jsx?|json|md|css|svg|txt)$/;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".codecast"]);
 
@@ -66,8 +68,17 @@ export async function buildMod(dirArg: string): Promise<ModBuild> {
   } catch (err) {
     return { ok: false, dir, errors: [`${MANIFEST_FILE} is not valid JSON: ${(err as Error).message}`] };
   }
+  // The mod's instructions to agents ship as AGENTS.md beside the manifest:
+  // the one surface agents read rather than people. It rides in the manifest's
+  // `agents` field, so it is versioned, pushed and published with the rest.
+  const agentsPath = path.join(dir, AGENTS_FILE);
+  if (fs.existsSync(agentsPath) && raw && typeof raw === "object") {
+    if ((raw as any).agents !== undefined) return { ok: false, dir, errors: [`the instructions to agents live in ${AGENTS_FILE} or in ${MANIFEST_FILE}'s "agents", not both`] };
+    const text = fs.readFileSync(agentsPath, "utf8").trim();
+    if (text) (raw as any).agents = text;
+  }
   const check = validateManifest(raw);
-  if (!check.ok) return { ok: false, dir, errors: check.errors.map((e) => `${MANIFEST_FILE}: ${e}`) };
+  if (!check.ok) return { ok: false, dir, errors: check.errors.map((e) => (e.startsWith("agents ") && fs.existsSync(agentsPath) ? `${AGENTS_FILE}: ${e.replace(/^agents /, "")}` : `${MANIFEST_FILE}: ${e}`)) };
   const manifest = check.manifest;
   const main = path.join(dir, manifest.main ?? "ui.tsx");
   if (!fs.existsSync(main)) return { ok: false, dir, errors: [`the hooks module ${path.relative(dir, main)} does not exist (set "main" in ${MANIFEST_FILE})`] };

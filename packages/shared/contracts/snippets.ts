@@ -446,7 +446,7 @@ That URL renders everywhere: \`![alt](url)\` in a reply or message, \`<img src="
 
 **Charts take every Observable Plot mark and transform by name**, so fit the form to the data: \`dot\`, \`boxY\`, \`density\`, \`cell\` heatmaps, stacked \`areaY\`, \`arrow\`, \`vector\`, and on. Multi-series: \`fill\`/\`stroke\` as a field plus \`"color":{"legend":true}\`; facet with \`fx\`/\`fy\`; aggregate with transforms (\`"transform":{"kind":"binX","out":{"y":"count"}}\`, likewise \`groupX\`, \`hexbin\`, \`dodgeX\`, \`windowY\`) rather than pre-summing. \`"tip":true\` on a mark shows each value on hover. \`"y":{"grid":true}\` adds gridlines.
 
-**Explorable pages.** A canvas runs no code, so zooming, drilling into a treemap, switching what a view measures, or hovering across thousands of points belong in a self-contained HTML page with its own script (a CDN library such as D3 is fine) and its data inline. Style it with the same \`--sol-*\` tokens: codecast injects them into every published page and keeps them on the reader's palette, light or dark. Use a fluid width and fixed pixel heights so the frame can fit the page. \`cast publish page.html\`, then put the URL alone on its line: it embeds live in the reply at the page's height. Look at it before you reply (\`cast browser open <url>\`, \`shot\`, \`errors\`) and republish until it is right. A published page is unlisted and open to anyone holding the link; gate it only when the human asks.
+**Explorable pages.** A canvas runs no code, so zooming, drilling into a treemap, switching what a view measures, or hovering across thousands of points belong in a self-contained HTML page with its own script (a CDN library such as D3 is fine) and its data inline. Style it with the same \`--sol-*\` tokens: codecast injects them into every published page and keeps them on the reader's palette, light or dark. Use a fluid width and fixed pixel heights so the frame can fit the page; one meant to be read in the reply can be laid out for the conversation column, the width it embeds at. \`cast publish page.html\`, then put the URL alone on its line: it embeds live in the reply, short, and the reader expands it; \`<meta name="codecast:height" content="640">\` opens it at the height the page needs to read. Look at it before you reply (\`cast browser open <url>\`, \`shot\`, \`errors\`) and republish until it is right. A published page is unlisted and open to anyone holding the link; gate it only when the human asks.
 `;
 
 export const FORKS_SNIPPET_END = "<!-- /codecast-forks -->";
@@ -615,7 +615,7 @@ export const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
 export const PUBLISH_SNIPPET = `
 ## Publishing pages (cast publish)
 
-Publish a standalone deliverable (a report, dashboard, mockup, visualization) with \`cast publish <file|dir>\` and put its URL in your reply. A URL alone on its line embeds the live page in the conversation; inside a sentence it renders as a titled pill. Republishing a path updates the same URL and keeps versions. Markdown renders as a reading page, and a directory needs an \`index.html\`.
+Publish a standalone deliverable (a report, dashboard, mockup, visualization) with \`cast publish <file|dir>\` and put its URL in your reply. A URL alone on its line embeds the live page in the conversation, at the conversation's width; a page meant to be read there can be laid out for that column. Inside a sentence it renders as a titled pill. Republishing a path updates the same URL and keeps versions. Markdown renders as a reading page, and a directory needs an \`index.html\`.
 
 \`\`\`bash
 cast publish report.html [--task ct-N]   # → https://codecast.sh/a/<slug>; --task attaches it as evidence
@@ -638,7 +638,7 @@ cast publish report.html --task ct-N   # attach to the task as evidence at its c
 cast publish ls | rm <target> | open <target>
 \`\`\`
 
-\`[caption](url)\` adds your own caption to an embedded page. Video and audio in a bundle upload to media hosting and keep their relative paths; \`<video controls>\` plays in the styled cast player (\`cast publish video\` covers chapters and skinning).
+\`[caption](url)\` adds your own caption to an embedded page. An embed opens 420px tall, or shorter when the page is, and the reader can expand or drag it; when the page needs a set height to read (a dashboard that should show whole), declare it in the page's head: \`<meta name="codecast:height" content="640">\`. Video and audio in a bundle upload to media hosting and keep their relative paths; \`<video controls>\` plays in the styled cast player (\`cast publish video\` covers chapters and skinning).
 
 Versions are viewable (\`?v=N\`), diffable (\`?diff=A..B\`), restorable. \`--new\` mints a separate URL, \`--title\` overrides the title, and every command takes \`--json\`. Everything the page's owner panel does is also a command, so you need neither the file nor a browser (\`<target>\` is a slug or a path):
 

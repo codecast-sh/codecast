@@ -989,6 +989,24 @@ export async function listOnlineDevices(
   return { online, primary };
 }
 
+// The named device, if its daemon can still take a sign-in or mint flow. Both
+// start as queued daemon_commands rows, so a daemon whose beats run late (a busy
+// one lands them 60-100s apart, past DEVICE_ONLINE_MS) still runs them. The
+// horizon is the flows' own: a daemon unseen for LOGIN_FLOW_STALE_MS (equal to
+// MINT_FLOW_STALE_MS) could not finish one.
+export async function findFlowDevice(
+  ctx: { db: any },
+  userId: string,
+  deviceId: string,
+  now: number,
+): Promise<Doc<"devices"> | undefined> {
+  const device: Doc<"devices"> | null = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  return device && now - device.last_seen < LOGIN_FLOW_STALE_MS ? device : undefined;
+}
+
 // The earliest future reset among the given accounts' limit windows, or
 // undefined when no window reports one. What "wait for the window to roll"
 // means in wall-clock terms, for the auto-switch loop's retry and for a
