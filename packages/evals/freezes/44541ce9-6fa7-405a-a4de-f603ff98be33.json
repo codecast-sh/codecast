@@ -1,0 +1,28 @@
+{
+ "name": "anchor-brief role-one-line-fix",
+ "anchor": {
+  "kind": "message",
+  "id": "fixture:role-one-line-fix"
+ },
+ "subject": {
+  "kind": "synthetic",
+  "id": "anchor-brief:role-one-line-fix",
+  "title": "anchor-brief role-one-line-fix"
+ },
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "trigger": {
+  "type": "anchor-brief"
+ },
+ "meta": {
+  "surface": "anchor-brief",
+  "visibility": "public",
+  "snapshot": "fixtures/anchor-brief/role-one-line-fix.json"
+ },
+ "judge": "hands the header fix to a session (one it starts, or the webhooks worker already in that area) with the exact change, tells Mara where it went, and does not edit the guide itself",
+ "notes": null,
+ "tags": [
+  "scope"
+ ],
+ "id": "44541ce9-6fa7-405a-a4de-f603ff98be33",
+ "createdAt": "2026-10-14T16:00:00.000Z"
+}

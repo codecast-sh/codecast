@@ -26,6 +26,7 @@
  * agent config there, stamp-gated so an in-step host costs no ssh.
  */
 
+import type { CloudPlacementStep } from "@codecast/shared/contracts";
 import { spawnSync } from "node:child_process";
 import { lastErrorLine } from "../proc.js";
 import * as path from "node:path";
@@ -583,12 +584,15 @@ export interface PrepareCloudHostOptions {
   /** Recorded for the seed step; the wake itself is the same either way. */
   startFrom?: CloudStartFrom;
   onProgress?: Progress;
+  /** Each placement step as it begins (contracts/cloudPlacementProgress). */
+  onStep?: (step: CloudPlacementStep) => void;
 }
 
 export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   cloudCopyFiles(opts.seedCwd);
   const cloud = resolveCloudHost(opts.hostArg);
+  opts.onStep?.("wake");
   const up = await ensureUp(cloud, log);
   const host = toRemoteHost(up);
   const deviceId = await learnHostDeviceId(up, host);
@@ -598,6 +602,7 @@ export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<Prep
   const repoPath = remoteRepoPath(host, opts.repoRoot);
   // Host-home steps BEFORE the checkout: the known_hosts pin and the device
   // key are what let the host's own clone/fetch succeed.
+  opts.onStep?.("config");
   const home = await readyHostHome(host, { localGitRoot: opts.repoRoot, repoPath, cloudId: up.id, onProgress: log });
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath, repoRoot: opts.repoRoot, seedCwd: opts.seedCwd, previousAddress: cloud.address, ...(home.git ? { git: home.git } : {}) };
 }
@@ -632,6 +637,7 @@ export function refreshCloudCheckout(
 export async function prepareCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   const prepared = await wakeCloudHost(opts);
+  opts.onStep?.("checkout");
   refreshCloudCheckout(prepared, { moveHead: false }, log);
   await mirrorProjectContext(prepared.host, opts.repoRoot, prepared.repoPath, log, { cloudId: prepared.cloud.id, previousAddress: prepared.previousAddress, mirroredAlready: true });
   return prepared;
@@ -920,6 +926,23 @@ export async function acquireRemoteRootCheckout(host: RemoteHost, repoPath: stri
   await mirrorProjectContext(host, opts.localGitRoot ?? seedCwd, target.path, opts.onProgress ?? (() => {}), { cloudId: opts.cloudId, previousAddress: opts.previousAddress });
   await opts.onTargetAcquired?.(target.path);
   return target;
+}
+
+/**
+ * Make a checkout a move just pushed runnable where it landed: the host's own
+ * `cast ws root` over it (the manifest's secret files, install, generate), the
+ * step a shared placement runs, so the moved session finds its dependencies
+ * instead of a tree with no node_modules. The move carried the gitignored
+ * secret files already, so no input snapshot is staged. Never throws: the
+ * session moves either way, and the line says what the agent will find.
+ */
+export function readyMovedCheckout(host: RemoteHost, remoteRoot: string, run: typeof spawnSync = spawnSync): string {
+  const r = run("ssh", [...sshBase(host), `${host.user}@${host.address}`,
+    `${HOST_PATH}; cd ${shq(remoteRoot)} && cast ws root --skip-browser --json`,
+  ], { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
+  if (!r.error && r.status === 0) return "its setup ran there (cast ws root: secret files, dependencies installed)";
+  const detail = lastErrorLine(String(r.stderr ?? "")) ?? (r.error ? r.error.message : `exit ${r.status}`);
+  return `its setup FAILED there (cast ws root: ${detail}); install its dependencies before typechecking or starting a dev server`;
 }
 
 /**
