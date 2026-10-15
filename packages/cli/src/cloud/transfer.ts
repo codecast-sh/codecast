@@ -138,14 +138,34 @@ export function refreshRemoteCheckout(
   // The laptop fallbacks below keep the laptop's own origin and credentials.
   const hostOrigin = hostProbeOrigin(origin, { appToken: opts.appToken === true }).origin ?? origin;
   const q = shq(repoPath);
-  const exists = checked(remote(host, `if [ -e ${q} ] || [ -L ${q} ]; then echo present; else echo missing; fi`),
-    "inspect cloud checkout path") === "present";
+  const found = checked(remote(host,
+    `if [ -L ${q} ]; then echo link; elif [ -e ${q}/.git ]; then echo repo; elif [ -d ${q} ] && ! git -C ${q} rev-parse --git-dir >/dev/null 2>&1; then echo plain; elif [ -e ${q} ]; then echo other; else echo missing; fi`),
+  "inspect cloud checkout path");
+  // A plain folder where the checkout belongs (not inside another checkout)
+  // is the home mirror's doing on a fresh host: it copies the repo files a
+  // hook or skill names before any clone exists, and `git clone` refuses a
+  // folder that is not empty (autoscale's first real host, 2026-10-14). The
+  // clone adopts it: a file that differs from the repo's copy is kept in
+  // <repo>.pre-clone-<time> first, then git's tracked files are checked out;
+  // anything git does not track stays where it is. Nothing is lost.
+  const adopt = (source: string) => [
+    `set -eu; tmp=$(mktemp -d ${shq(`${repoPath}.clone.XXXXXX`)}); trap 'rm -rf "$tmp"' EXIT`,
+    `git clone -q --no-checkout --single-branch --no-tags --branch main -- ${source} "$tmp"`,
+    `mv "$tmp/.git" ${q}/.git; cd ${q}; git reset -q`,
+    `kept=${shq(`${repoPath}.pre-clone-`)}$(date +%s)`,
+    `git diff --name-only --diff-filter=M | while IFS= read -r f; do mkdir -p "$kept/$(dirname "$f")"; cp -p "$f" "$kept/$f"; done`,
+    `git checkout -q -f -- .`,
+    `if [ -d "$kept" ]; then echo "kept $kept"; fi`,
+  ].join("; ");
+  const cloneInto = (source: string) => found === "plain" ? adopt(source) : `git clone -q --single-branch --no-tags --branch main -- ${source} ${q}`;
   let viaLaptop = false;
-  if (!exists) {
+  if (found === "missing" || found === "plain") {
     // GIT_TERMINAL_PROMPT=0 beside the ssh config block's BatchMode: a host
     // without access fails fast into the laptop fallback, never hangs on a
     // credential prompt nobody can answer.
-    const clone = remote(host, `GIT_TERMINAL_PROMPT=0 git clone -q --single-branch --no-tags --branch main -- ${shq(hostOrigin)} ${q}`);
+    const clone = remote(host, `GIT_TERMINAL_PROMPT=0 ${cloneInto(shq(hostOrigin))}`);
+    const kept = /^kept (.+)$/m.exec(String(clone.stdout ?? ""))?.[1];
+    if (kept) onProgress(`files in ${repoPath} that differ from the repository kept in ${kept}`);
     if (clone.error || clone.status !== 0) {
       onProgress("host cannot clone origin — fetching fresh origin/main on laptop for a main-only bundle");
       withFreshMain(origin, (repo) => {
@@ -155,7 +175,7 @@ export function refreshRemoteCheckout(
         const fd = fs.openSync(bundle, "r");
         try {
           checked(remote(host,
-            `set -eu; umask 077; stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT; cat > "$stage/main.bundle"; git clone -q --single-branch --no-tags --branch main -- "$stage/main.bundle" ${q}`, fd),
+            `set -eu; umask 077; stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT; cat > "$stage/main.bundle"; ( ${cloneInto(`"$stage/main.bundle"`)} )`, fd),
           "transfer and clone main-only bundle");
         } finally {
           fs.closeSync(fd);

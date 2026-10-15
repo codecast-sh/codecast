@@ -50,8 +50,17 @@ propose --help` describes, with `since` and `until` set to the window you
 read, and submit it with `cast expectations propose <file> --project
 {{project.ref}}`. An addition applies on its own when the record shows a
 person said the words it quotes: a line they typed in chat, a decision they
-answered, what they said on a call. Every other change reaches the project's
-person as a card, and their answer is the only way it lands. When the window
+answered, what they said on a call. Every other change waits on the project's
+person, and only your own decision reaches them: post it with `cast decide
+--proposal <xp-N>`, following the presenting brief (`cast decide brief`). What
+they choose is how the project's conversations are judged from now on, so the
+page shows that on real cases where there are any (moments a judge flagged
+under a line as it reads, beside what it says under the proposed one, from
+`cast line judges try --proposal <xp-N>`), each line's words before and after,
+and where the team said it, plainly, its record behind a link rather than
+named in the words. An answer
+opening with Apply lands the proposal and one opening with Keep leaves the
+lines as they read. When the window
 held nothing for this project, propose it with no changes, so the next pass
 starts where this one ended.
 

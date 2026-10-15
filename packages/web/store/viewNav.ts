@@ -64,6 +64,31 @@ export function noteViewNavApplied(): void {
   appliedNavCount++;
 }
 
+// A fresh open of the app (a launch, a typed address or a new tab; not a
+// reload or back/forward) onto its home, with no conversation in the URL,
+// lands on the new-session page instead of the last conversation. Read once
+// at load, before any boot navigation rewrites the address. Pending until
+// DashboardLayout opens the page (or the boot settles elsewhere); meanwhile
+// hydration skips its restore and the adopt paths hold off, so nothing
+// flashes first.
+function readFreshHomeLaunch(): boolean {
+  if (typeof window === "undefined" || !window.location || typeof performance === "undefined") return false;
+  if (windowFlavor() !== "main") return false;
+  const nav = performance.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+  if (nav?.type !== "navigate") return false;
+  const page = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (page !== "/" && page !== "/inbox") return false;
+  return !new URLSearchParams(window.location.search).has("s");
+}
+let freshHomeLaunch: boolean | null = null;
+export function freshHomeLaunchPending(): boolean {
+  if (freshHomeLaunch === null) freshHomeLaunch = readFreshHomeLaunch();
+  return freshHomeLaunch;
+}
+export function settleFreshHomeLaunch(): void {
+  freshHomeLaunch = false;
+}
+
 export function windowFlavor(): string {
   if (typeof window === "undefined") return "ssr";
   return window.location?.pathname?.startsWith("/palette") ? "palette" : "main";
@@ -127,11 +152,14 @@ export function getNavLog(): NavEvent[] {
 // Always exposed (prod desktop is where this gets debugged).
 if (typeof window !== "undefined") {
   (window as any).__navLog = getNavLog;
+  // Pin the fresh-launch read to the address the window opened on.
+  freshHomeLaunchPending();
 }
 
 /** Test-only: clear the one-shot token, lifetime counter, and in-memory log. */
 export function _resetViewNavForTests(): void {
   pendingSource = null;
+  freshHomeLaunch = false;
   appliedNavCount = 0;
   navLog = [];
 }

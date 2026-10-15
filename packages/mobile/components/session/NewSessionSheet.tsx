@@ -1,8 +1,10 @@
 // The new session sheet, one per app (ComposeHost mounts it at the root, and
 // lib/compose opens it from any screen). It is prompt first for every agent:
-// the box has the keyboard as the sheet rises, and send starts the session
-// with those words as its first message. Machine, folder, model and the rest
-// are pre-filled rows that only need a tap when the default is wrong.
+// the box is the session screen's own composer (MessageComposer), so the first
+// message can carry images as a reply can, and send starts the session with it.
+// The sheet opens with the keyboard down so every choice is in view; agent,
+// machine, folder, model and the rest are pre-filled and only need a tap when
+// the default is wrong.
 import { StyleSheet, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActionSheetIOS } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { Component, useState, useRef, useMemo, type ReactNode } from 'react';
@@ -23,7 +25,8 @@ import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from 
 import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
-import { Composer } from '@/components/hosted/Composer';
+import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
+import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { Serif } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
@@ -201,7 +204,10 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // names no listed folder is offered as a chip of its own.
   const [folderQuery, setFolderQuery] = useState("");
   const folderRowRef = useRef<ScrollView>(null);
-  const agentRowRef = useRef<ScrollView>(null);
+  // The first message. The sheet remounts on every opening (ComposeHost), so
+  // the seed is the box's starting text.
+  const field = useComposerField(seed ?? '');
+  const images = useComposerImages(field.setValue);
   // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
@@ -302,10 +308,13 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
     finishSessionCreate(stubId, false);
   };
 
-  // The words, when there are any, are the session's first message: queued on
-  // the stub now and sent once the create has a real id (sendMessageWhenReady),
-  // as a message typed into the stub's own composer would be.
-  const handleSubmit = (text: string) => {
+  // The words and images, when there are any, are the session's first
+  // message: queued on the stub now and sent once the create has a real id
+  // (sendMessageWhenReady), as a message typed into the stub's own composer
+  // would be.
+  const handleSubmit = () => {
+    const text = nativeComposerText(field.inputRef.current as { _lastNativeText?: unknown } | null, field.value).trim();
+    const firstImages = images.optimisticImages();
     setSubmitError(null);
     const store = useInboxStore.getState();
     const agent_type = toConvexAgentType(agentId);
@@ -337,11 +346,9 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
       setSubmitError(mobileCreateErrorMessage("session", error));
       return;
     }
-    if (text) {
-      const clientId = store.addOptimisticMessage(stubId, text);
-      store.sendMessageWhenReady(stubId, text, undefined, clientId);
-    }
-    finishSessionCreate(stubId, !text);
+    const empty = !text && firstImages.length === 0;
+    if (!empty) dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages);
+    finishSessionCreate(stubId, empty);
   };
 
   // The launch model/effort rail for the selected agent — absent for clients
@@ -435,6 +442,39 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
 
   const stableModeItem = STABLE_MODES.find((m) => m.key === stableMode) ?? STABLE_MODES[0];
 
+  const agentChipsEl = (
+    <RNView style={modalStyles.agentRow}>
+      {agentOptions.map((a) => {
+        const active = agentId === a.id;
+        const accent = agentAccents[a.id];
+        return (
+          <TouchableOpacity
+            key={a.id}
+            style={[modalStyles.agentChip, active && { borderColor: accent + "90", backgroundColor: accent + "1c" }]}
+            onPress={() => {
+              setSubmitError(null);
+              // Re-tapping the active agent must not wipe a model/effort
+              // pick; the reset below is for actual switches only (the
+              // rails differ per client, so a pick can't carry over).
+              if (a.id === agentId) return;
+              setAgentId(a.id);
+              setModel("default");
+              setEffort("default");
+            }}
+            activeOpacity={0.7}
+          >
+            <RNView style={{ opacity: active ? 1 : 0.55 }}>
+              <AgentLogoSvg agentType={a.id} size={18} />
+            </RNView>
+            <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
+              {a.label}
+            </RNText>
+          </TouchableOpacity>
+        );
+      })}
+    </RNView>
+  );
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -457,6 +497,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               its sheet is the first ask. */}
           {hosted ? (
             <RNView style={{ marginTop: onlyHosted ? Spacing.sm : Spacing.lg }}>
+              {onlyHosted ? null : agentChipsEl}
               <AssistantStart
                 key={seed ?? ''}
                 seed={seed}
@@ -468,14 +509,22 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
             </RNView>
           ) : (<>
           <RNView style={modalStyles.prompt}>
-            <Composer
-              autoFocus
-              allowEmpty
+            {/* Starting an agent session needs no words, so send is always live. */}
+            <MessageComposer
+              field={field}
+              images={images}
               placeholder={`Ask ${agentOptions.find((a) => a.id === agentId)?.label ?? 'the agent'}`}
-              seed={seed ? { text: seed, at: 0 } : null}
+              canSend
               onSend={handleSubmit}
+              cardStyle={modalStyles.promptCard}
+              inputStyle={modalStyles.promptInput}
             />
           </RNView>
+          {/* The viewer's pinned agents (users.pinned_agents, registry order)
+              with the hosted assistant among them, wrapped so every one is in
+              view. It stays when the assistant is picked, so the pick can be
+              undone. */}
+          {onlyHosted ? null : agentChipsEl}
           <RNView style={modalStyles.folderSearch}>
             <FontAwesome name="folder-o" size={14} color={Theme.textMuted0} />
             <TextInput
@@ -587,57 +636,6 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           ) : null}
         </ScrollView>
 
-        {/* The agent row pins to the bottom as web's compose does, one
-            scrolling line of the viewer's pinned agents (users.pinned_agents,
-            registry order) with the hosted assistant among them. It stays when
-            the assistant is picked, so the pick can be undone. */}
-        {onlyHosted && hosted ? null : (
-        <RNView style={modalStyles.footer}>
-          {onlyHosted ? null : (
-            <ScrollView
-              ref={agentRowRef}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={modalStyles.chipRow}
-              style={modalStyles.chipScroller}
-              keyboardShouldPersistTaps="handled"
-            >
-              {agentOptions.map((a) => {
-                const active = agentId === a.id;
-                const accent = agentAccents[a.id];
-                return (
-                  <TouchableOpacity
-                    key={a.id}
-                    // The active agent can sit past the edge: its first layout
-                    // scrolls the row to it.
-                    onLayout={(e) => { if (active) agentRowRef.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - Spacing.lg), animated: false }); }}
-                    style={[modalStyles.agentChip, active && { borderColor: accent + "90", backgroundColor: accent + "1c" }]}
-                    onPress={() => {
-                      setSubmitError(null);
-                      // Re-tapping the active agent must not wipe a model/effort
-                      // pick; the reset below is for actual switches only (the
-                      // rails differ per client, so a pick can't carry over).
-                      if (a.id === agentId) return;
-                      setAgentId(a.id);
-                      setModel("default");
-                      setEffort("default");
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <RNView style={{ opacity: active ? 1 : 0.55 }}>
-                      <AgentLogoSvg agentType={a.id} size={18} />
-                    </RNView>
-                    <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
-                      {a.label}
-                    </RNText>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )}
-        </RNView>
-        )}
-
         {rail && (
           <ModelEffortSheet
             visible={modelSheetVisible}
@@ -704,6 +702,9 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   bodyContent: { paddingBottom: Spacing.lg },
   prompt: { marginTop: Spacing.sm, marginBottom: Spacing.md },
+  promptCard: { marginLeft: 0, marginRight: 0, marginTop: 0 },
+  promptInput: { minHeight: 72 },
+  agentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: Spacing.md },
   // Chip rows scroll edge to edge, past the sheet's side padding.
   chipScroller: { marginHorizontal: -Spacing.lg, flexGrow: 0 },
   chipRow: { flexDirection: "row", gap: 8, paddingHorizontal: Spacing.lg },
@@ -791,11 +792,5 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: Spacing.md,
-  },
-  footer: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.borderLight,
   },
 }));

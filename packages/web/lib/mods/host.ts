@@ -43,7 +43,7 @@ export type ModRow = {
 
 export type ModStatus = "loading" | "ready" | "failed";
 export type ModLogLine = { level: "log" | "warn" | "error"; text: string; at: number };
-export type RenderResult = { tree?: ModNode; error?: string; pass?: boolean };
+export type RenderResult = { tree?: ModNode; value?: unknown; error?: string; pass?: boolean };
 
 /** The app-side capabilities the host needs from React land, registered by ModRuntimes. */
 export type HostBridge = {
@@ -488,7 +488,7 @@ export class ModRuntime {
         clearTimeout(p.timer);
         this.renders.delete(msg.rid);
         if (msg.error) this.addLog("error", `render: ${msg.error}`);
-        p.resolve({ tree: msg.tree, error: msg.error, pass: msg.pass });
+        p.resolve({ tree: msg.tree, value: msg.value, error: msg.error, pass: msg.pass });
         return;
       }
       case "done": {

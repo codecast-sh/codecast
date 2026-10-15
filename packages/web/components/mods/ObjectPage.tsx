@@ -9,8 +9,8 @@ import { objectStatusIsDone, type ModSurface } from "@codecast/shared/contracts/
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { modHost, modNavigate } from "../../lib/mods/host";
-import { objectByShortId, objectKind, objectsHref, statusTone } from "../../lib/mods/objects";
-import { useModHostVersion, useModRows } from "../../lib/mods/useMods";
+import { objectKind, objectsHref, statusTone } from "../../lib/mods/objects";
+import { useModHostVersion, useModRows, useObjectRow } from "../../lib/mods/useMods";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ModSurfaceView } from "./ModSurface";
 import { FieldEditor } from "./objectFields";
@@ -20,7 +20,7 @@ export function ObjectPage({ id }: { id: string }) {
   useModRows();
   useModHostVersion();
   const shortId = id.toLowerCase();
-  const row = useInboxStore((s) => objectByShortId((s as any).modObjects, shortId));
+  const { row, loading, error } = useObjectRow(shortId);
   const kind = objectKind(shortId.split("-")[0]);
   const update = useInboxStore((s) => s.updateModObject);
   const [title, setTitle] = useState(row?.title ?? "");
@@ -32,11 +32,30 @@ export function ObjectPage({ id }: { id: string }) {
   const drawsPage = !!runtime?.hooks.some((h) => h.event === "ui.render" && (!h.matcher || h.matcher.object === kind?.prefix));
   const surface = useMemo<ModSurface | null>(() => (row && kind ? { kind: "object", id: kind.prefix, props: { object: row } } : null), [row, kind]);
 
+  if (!row && (loading || error)) {
+    return <div className="mx-auto max-w-xl px-6 py-16 text-center text-[13px] text-sol-text-muted">{loading ? `Loading ${shortId}…` : error}</div>;
+  }
   if (!row) {
     return (
       <div className="mx-auto max-w-xl px-6 py-16 text-center text-[13px] text-sol-text-muted">
         No object <span className="font-mono">{shortId}</span> in this workspace{kind ? "" : ", and no mod declares its kind"}.
         {kind ? <> <button className="text-sol-blue hover:underline" onClick={() => modNavigate(objectsHref(kind.prefix))}>All {(kind.plural ?? `${kind.title}s`).toLowerCase()}</button></> : null}
+      </div>
+    );
+  }
+  // Live from another system: the mod's own page under a title, nothing here to edit.
+  if (row.external) {
+    return (
+      <div className="mx-auto w-full max-w-4xl px-6 py-6">
+        <nav className="mb-3 flex items-center gap-1.5 text-[12px] text-sol-text-dim">
+          <DynamicIcon name={(kind?.icon ?? "box") as any} size={13} className="text-sol-violet" />
+          <span>{kind?.plural ?? `${kind?.title ?? "Object"}s`}</span>
+          <span>/</span>
+          <span className="font-mono">{row.short_id}</span>
+          {kind?.modTitle ? <span className="ml-auto">{kind.modTitle}</span> : null}
+        </nav>
+        <h1 className="text-[24px] font-semibold tracking-tight text-sol-text">{row.title}</h1>
+        {drawsPage && surface ? <div className="mt-5"><ModSurfaceView runtime={runtime} surface={surface} instance={row.short_id} /></div> : null}
       </div>
     );
   }
