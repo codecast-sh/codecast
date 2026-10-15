@@ -22,7 +22,38 @@ export interface HostReadiness {
   at: number;
 }
 
-export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image"] as const;
+export const CLOUD_HOST_ACTIONS = ["wake", "sleep", "setup", "image", "delete_image", "clone"] as const;
+
+/**
+ * The sizes the app offers for a new Linux host (the `clone` action: another
+ * host like this one), with their on-demand rate in us-west-2. The CLI's
+ * price table includes these, so the confirm screen and `cast hosts ls`
+ * quote the same number.
+ */
+export const CLOUD_HOST_SIZES = [
+  { type: "t3.large", vcpu: 2, memory_gb: 8, hourly_usd: 0.0832 },
+  { type: "t3.xlarge", vcpu: 4, memory_gb: 16, hourly_usd: 0.1664 },
+  { type: "t3.2xlarge", vcpu: 8, memory_gb: 32, hourly_usd: 0.3328 },
+] as const;
+export type CloudHostSize = (typeof CLOUD_HOST_SIZES)[number]["type"];
+export const isCloudHostSize = (t: unknown): t is CloudHostSize => CLOUD_HOST_SIZES.some((s) => s.type === t);
+
+/**
+ * Autoscale, set on a Linux host (its template): when no awake host has room
+ * for a new cloud session, the preparing laptop first wakes a sleeping host,
+ * then launches another like the template, up to `max_extra` hosts it added.
+ * Added hosts sleep on their own after the idle watchdog's minutes, so the
+ * standing cost of an idle fleet is disk. Lives on the template's device row
+ * (devices.cloud_autoscale); the laptop reads it at placement time.
+ */
+export interface CloudAutoscale {
+  enabled: boolean;
+  max_extra: number;
+  size: CloudHostSize;
+  at: number;
+}
+export const CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES = [1, 2, 3] as const;
+export const CLOUD_AUTOSCALE_DEFAULT_SIZE: CloudHostSize = "t3.xlarge";
 export type CloudHostAction = (typeof CLOUD_HOST_ACTIONS)[number];
 
 export interface CloudHostReport {
@@ -41,6 +72,8 @@ export interface CloudHostReport {
   /** Logins the laptop has but did not push, with why (a lapsed token, laptop paths). */
   logins_held: Array<{ id: string; reason: string }>;
   last_action?: { action: CloudHostAction; status: "running" | "ok" | "failed"; detail?: string; at: number };
+  /** Launched by autoscale (it counts against a template's max_extra). */
+  autoscaled?: boolean;
   at: number;
 }
 
