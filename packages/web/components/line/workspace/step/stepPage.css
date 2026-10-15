@@ -189,3 +189,6 @@ a.sp-row-ref:hover { color: var(--lw-ink); text-decoration: underline; text-unde
 .sp-fix-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .sp-fix-title { min-width: 32ch; flex: 1; font: inherit; font-size: var(--lw-fs-sm); padding: 4px 8px; border: 1px solid var(--lw-rule); border-radius: 6px; background: var(--lw-card); color: var(--lw-ink); }
 .sp-fix-acts { display: inline-flex; gap: 8px; align-items: center; }
+/* Narrow (a drawer on a phone): the counts wrap as whole chips. */
+.sp-counts { flex-wrap: wrap; }
+.sp-count { white-space: nowrap; }

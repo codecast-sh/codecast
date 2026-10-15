@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setSystemTime } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -315,6 +315,25 @@ describe("workflow/runner (dry-run)", () => {
     }`);
     await runWorkflow(g, { ...dryRun, cwd: tmpDir });
     expect(cap.logs.some(l => l.includes("max_visits"))).toBe(true);
+  });
+
+  test("an edge can route on a station's visit count before max_visits aborts", async () => {
+    // The loop leaves for `out` once impl has run twice, so its max_visits=2 never trips.
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      impl   [label="Impl", max_visits=2]
+      verify [label="Verify"]
+      out    [label="Out"]
+      exit   [shape=Msquare]
+      start  -> impl -> verify
+      verify -> out  [condition="impl.visits >= 2"]
+      verify -> impl [condition="outcome = success"]
+      out -> exit
+    }`);
+    const outcome = await runWorkflow(g, { ...dryRun, cwd: tmpDir });
+    expect(cap.logs.some(l => l.includes("max_visits"))).toBe(false);
+    expect(cap.logs.some(l => l.includes("Out"))).toBe(true);
+    expect(outcome).not.toBe("failure");
   });
 
   test("workflow reports invalid when validation errors exist", async () => {
@@ -811,6 +830,9 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(spawn.body.title).toBe("Ground");
     expect(stationTitle({ id: "prove", label: "Prove" }, { task_id: "ct-9" })).toBe("Prove · ct-9");
     expect(stationTitle({ id: "prove", label: "" }, {})).toBe("prove");
+    // The presenting station is named by its problem: its title is what a person meets in the decision's chat and page.
+    expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9", task_title: "Graded sims hidden\nby world runs" }, true)).toBe("Graded sims hidden by world runs");
+    expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9" }, true)).toBe("Present · ct-9");
   }, 30000);
 
   test("a live hand that reads needs input once, then works on, is not taken as settled", async () => {
@@ -831,6 +853,38 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
+  test("a hand parked on its own background work is not taken as settled", async () => {
+    // ct-59925, 2026-10-14: the Prove hand ended turns on an open replay and
+    // Monitor. A settle that reads "waiting" (or a declared dormant) files the
+    // row dormant; the run waits for the wake instead of reading the park as
+    // the hand's answer.
+    const parked = { id: "conv_hand", work_state: "dormant", is_live: true, agent_status: "waiting", message_count: 40 };
+    inboxReads = [parked, parked, parked];
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(4);
+  }, 30000);
+
+  test("a working hand whose daemon goes quiet is not taken as settled", async () => {
+    // The agentwatch Build station, 2026-10-14: the hand sat in one long tool
+    // call while its daemon's loop froze for 199s. With no heartbeat and no
+    // sync for two minutes the row read stopped, so needs_input and not live,
+    // and the run routed a working hand to failure. It pinned done at 06:12.
+    const live = (work_state: string) => ({ id: "conv_hand", work_state, is_live: true, agent_status: "working", message_count: 40 });
+    const dark = { id: "conv_hand", work_state: "needs_input", is_live: false, agent_status: "stopped", message_count: 40 };
+    inboxReads = [live("working"), dark, dark, dark, live("working")];
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(6);
+  }, 30000);
+
+  test("a hand that declared done settles even while its daemon is quiet", async () => {
+    inboxReads = [{ id: "conv_hand", work_state: "working", is_live: true, message_count: 40 } as any];
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+  }, 30000);
+
   test("a hand whose session holds no message and no result fails the station and is killed", async () => {
     // The agentwatch Propose step, 2026-10-12: the hand's transcript went to
     // another conversation, the watched one stayed empty, and the run moved on.
@@ -839,6 +893,38 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(await run()).toBe("failed");
     expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
     expect(calls.some(c => c.route === "/cli/workflow-runs/poll-gate")).toBe(false);
+  }, 30000);
+
+  test("a hand whose start failed fails the station with the error, not at the node's timeout", async () => {
+    // Union's Prove, 2026-10-14: the isolated hand's cloud preparation failed
+    // in six minutes and the row read idle, never live, until prove's
+    // three-hour timeout killed it.
+    const failed = { id: "conv_hand", work_state: "idle", is_live: false, message_count: 0, session_error: "cloud host preparation failed (exit 1): setup 'install' failed" };
+    let reads = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/inbox") && ++reads === 2) setSystemTime(new Date(Date.now() + 3 * 60_000));
+      return inner(url, init);
+    }) as typeof fetch;
+    inboxReads = [failed, failed, failed];
+    try {
+      expect(await run()).toBe("failed");
+    } finally {
+      setSystemTime();
+    }
+    expect(reads).toBe(2);
+    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(cap.logs.some(l => l.includes("jx7hand could not start") && l.includes("cloud host preparation failed"))).toBe(true);
+  }, 30000);
+
+  test("a hand that stopped on a login error and pinned nothing fails the station", async () => {
+    // The Mac mini's line runs, 2026-10-14: every station answered "Not logged
+    // in", settled as a pass, and the run routed on the task's old fields.
+    pinned = { state: "", status: "" };
+    inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 2, blocked_on: "auth" } as any];
+    expect(await run()).toBe("failed");
+    expect(calls.some(c => c.route === "/cli/workflow-runs/poll-gate")).toBe(false);
+    expect(cap.logs.some(l => l.includes("jx7hand stopped on an auth error"))).toBe(true);
   }, 30000);
 
   test("a hand that pinned its result passes even before its transcript has synced", async () => {
