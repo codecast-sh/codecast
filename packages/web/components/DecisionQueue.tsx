@@ -9,6 +9,7 @@ import { InboxConversation } from "../app/inbox/QueuePageClient";
 import { useDecisionQueue, DecisionStepperContext, type DecisionStepper } from "../hooks/useDecisionQueue";
 import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { PreloadPublishedPage } from "./PublishedPageEmbed";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // One decision at a time, full width, keyboard driven: answer and it advances;
@@ -82,9 +83,12 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
   }, [currentId]);
 
   if (!current || !stepper) return <QueueEmpty resolved={resolvedCount} onExit={onExit} />;
+  // The decision answering or skipping lands on: its page loads ahead, so it shows at once.
+  const next = queue.length > 1 ? queue[(position + 1) % queue.length] : null;
 
   return (
     <DecisionStepperContext.Provider value={stepper}>
+      {next?.reportSlug && next.source === "decide" && <PreloadPublishedPage slug={next.reportSlug} decision={next.key.replace(/^decide:/, "")} />}
       <div className="h-full">
         <InboxConversation
           key={current.conversationId}

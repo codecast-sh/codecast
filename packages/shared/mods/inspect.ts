@@ -72,6 +72,7 @@ export function inspectModSource(files: Record<string, string>, manifest: ModMan
   for (const p of manifest.panes ?? []) if (!served("pane", p.id)) unserved.push(`pane "${p.id}"`);
   for (const f of manifest.fences ?? []) if (!served("fence", f.lang)) unserved.push(`fence "${f.lang}"`);
   for (const s of manifest.sidebar ?? []) if (!served("sidebar", s.id)) unserved.push(`sidebar "${s.id}"`);
+  for (const k of manifest.objects ?? []) if (k.external && !hooks.some((h) => h === "object.resolve" || h === `object.resolve{object:${k.prefix}}`)) unserved.push(`external object "${k.prefix}" (on("object.resolve", { object: "${k.prefix}" }))`);
   for (const c of manifest.commands ?? []) if (!hooks.some((h) => h === "command.run" || h.includes(`command:${c.id}`))) unserved.push(`command "${c.id}"`);
   const unused: string[] = [];
   const read = manifest.permissions?.read;

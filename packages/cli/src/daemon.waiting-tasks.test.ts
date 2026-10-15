@@ -748,7 +748,11 @@ describe("hook idle settle: the tail read off the loop is the one the settle use
     expect(body.length).toBeGreaterThan(5000);
     expect(body).toContain("readFileTailAsync(transcript)");
     expect(body).toContain("{ primed: true, tail }");
-    expect(body).toContain("opts?.tail,");
+    expect(body).toContain("opts?.tail)");
+    // The settle reads the transcript the Stop hook named (ct-59925), checked
+    // to be this session's own, before it falls back to the file index.
+    expect(body).toContain("const transcript = hookTranscriptFor(sessionId, data);");
+    expect(body).toContain("resolveTurnEndStatus(sessionId, transcript, opts?.tail)");
     expect(body).not.toContain("readFileTailSync");
     // A newer status that lands during the hop wins: the ts guards run
     // before the primed re-entry reaches the settle.

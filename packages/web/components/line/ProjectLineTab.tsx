@@ -67,7 +67,8 @@ function Versions({ versions }: { versions: LineVersion[] }) {
               <th className="font-normal py-1 pr-3 text-right">Dropped</th>
               <th className="font-normal py-1 pr-3 text-right" title="Stopped before an answer: a step failed, looped or ran out of time">Stopped</th>
               <th className="font-normal py-1 pr-3 text-right">Reopened</th>
-              <th className="font-normal py-1 text-right">Cost</th>
+              <th className="font-normal py-1 pr-3 text-right">Billed</th>
+              <th className="font-normal py-1 text-right" title="Subscription sessions at API list price: an equivalent, not billed">List price</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-sol-border/20">
@@ -85,7 +86,8 @@ function Versions({ versions }: { versions: LineVersion[] }) {
                 <td className="py-1.5 pr-3 text-right text-sol-text">{v.dropped}</td>
                 <td className={v.stopped ? "py-1.5 pr-3 text-right text-sol-orange" : "py-1.5 pr-3 text-right text-sol-text"}>{v.stopped}</td>
                 <td className={v.reopened ? "py-1.5 pr-3 text-right text-sol-red" : "py-1.5 pr-3 text-right text-sol-text"}>{v.reopened}</td>
-                <td className="py-1.5 text-right text-sol-text-muted">{usd(v.costUsd)}</td>
+                <td className="py-1.5 pr-3 text-right text-sol-text-muted">{usd(v.billedUsd)}</td>
+                <td className="py-1.5 text-right text-sol-text-dim">{usd(v.listUsd)}</td>
               </tr>
             ))}
           </tbody>

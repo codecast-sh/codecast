@@ -296,6 +296,24 @@ describe("orgLine admission (LE6)", () => {
     expect(res.started.map((s) => s.task_id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"]);
   });
 
+  test("a cause grounding held on a fact is its lead role's ask, never a candidate; one parked for more findings asks nobody", async () => {
+    const { ctx, tables } = fixtures({
+      extra: {
+        initiatives,
+        tasks: [
+          cause({ _id: "tasks_ready" }),
+          cause({ _id: "tasks_q", short_id: "ct-7", title: "Rep left?", readiness: "needs_context", readiness_note: "Has Quinn left, or is Riley wrong?", cause: { signal_count: 3, first_seen: 1, last_seen: 1, fingerprints: ["f"] }, created_at: NOW - 5000 }),
+          cause({ _id: "tasks_wait", readiness: "needs_context", readiness_note: "One case so far, so it waits for more findings." }),
+          cause({ _id: "tasks_running", readiness: "needs_context", readiness_note: "Which?", workflow_run_id: "workflow_runs_x" }),
+          cause({ _id: "tasks_other", readiness: "needs_context", readiness_note: "Which?", project_id: "projects_elsewhere" }),
+        ],
+      },
+    });
+    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
+    expect(q.items.map((i) => i.task_id)).toEqual(["tasks_ready"]);
+    expect(q.asks).toEqual([{ task_id: "tasks_q", short_id: "ct-7", title: "Rep left?", note: "Has Quinn left, or is Riley wrong?", findings: 3 }]);
+  });
+
   test("a project goal_ref reads the project's priority", async () => {
     const { ctx, tables } = fixtures({
       extra: {

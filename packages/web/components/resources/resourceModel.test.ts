@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { attribute, buildRows, machineTotals } from "./resourceModel";
+import { attribute, buildRows, freshness, machineTotals } from "./resourceModel";
 import { buildScenario } from "./fixtures";
 
 const now = 1_800_000_000_000;
@@ -34,5 +34,22 @@ describe("attribute", () => {
       const rows = buildRows([laptop], sessions, g);
       expect(rows.reduce((a, r) => a + r.usage.rss, 0)).toBeCloseTo(t.rss, 0);
     }
+  });
+});
+
+describe("freshness", () => {
+  const now = 1_800_000_000_000;
+  const machine = (online: boolean, ageMs: number) => {
+    const m = buildScenario("pressure", now).machines.find((x) => x.role === "local" && x.snapshot)!;
+    return { ...m, online, receivedAt: now - ageMs, snapshot: { ...m.snapshot!, sample: { ...m.snapshot!.sample, at: now - ageMs } } };
+  };
+
+  test("a fresh report is live even when the device heartbeat has lapsed", () => {
+    expect(freshness(machine(false, 30_000), now)).toBe("live");
+  });
+
+  test("an old report reads stale while online and offline once the heartbeat lapses", () => {
+    expect(freshness(machine(true, 10 * 60_000), now)).toBe("stale");
+    expect(freshness(machine(false, 10 * 60_000), now)).toBe("offline");
   });
 });

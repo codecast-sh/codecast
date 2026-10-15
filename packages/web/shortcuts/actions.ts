@@ -245,6 +245,7 @@ export function useGlobalShortcutActions() {
     const store = useInboxStore.getState();
     const zen = store.clientState.ui?.zen_mode ?? false;
     if (!zen) checkMilestone('m-first-zen');
+    store.setZenNavOpen(false);
     store.updateClientUI({ zen_mode: !zen });
   }, []));
 
@@ -280,7 +281,8 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {
     const store = useInboxStore.getState();
-    store.setNavCollapsed(!selectNavCollapsed(store));
+    if (store.clientState.ui?.zen_mode) store.setZenNavOpen(!store.zenNavOpen);
+    else store.setNavCollapsed(!selectNavCollapsed(store));
   }, []));
 
   useShortcutAction('sidebar.toggleRight', useCallback(() => {

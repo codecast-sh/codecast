@@ -334,7 +334,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       setSendingAnyway(false);
     }
   };
+  const cloudPlacing = useInboxStore((s) => !!conversationId && s.sessions[conversationId]?.cloud_placement === "pending");
   const bannerState = pendingBannerState(agentStatus, {
+    cloudPlacing,
     retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
     idleGraceElapsed,

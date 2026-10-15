@@ -236,6 +236,9 @@ describe("guard cast: served reads", () => {
     // What a connected product lets codecast read is a read; a connector's own verbs run actions.
     expect(classify("connector", "readers", "union")).toBe("read");
     expect(classify("connector", "resolve", "union", "x")).toBe("write");
+    // Workflow runs and templates are listed; starting or re-asking a run writes.
+    for (const verb of ["runs", "list"]) expect(classify("workflow", verb)).toBe("read");
+    for (const verb of ["run", "reask"]) expect(classify("workflow", verb, "x")).toBe("write");
     // The report page kit and the CLI's guides print; a bare decide still posts.
     expect(classify("decide", "kit", "page.html")).toBe("read");
     expect(classify("guide", "visual")).toBe("read");
