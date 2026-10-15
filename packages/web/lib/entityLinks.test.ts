@@ -223,7 +223,7 @@ describe("buildEntityUrl", () => {
     expect(buildEntityUrl("plan", "pl-42")).toBe("https://codecast.sh/plans/pl-42");
     expect(buildEntityUrl("session", CONVEX_ID)).toBe(`https://codecast.sh/conversation/${CONVEX_ID}`);
     expect(buildEntityUrl("doc", CONVEX_ID)).toBe(`https://codecast.sh/docs/${CONVEX_ID}`);
-    expect(buildEntityUrl("project", "pj-1")).toBe("https://codecast.sh/org/pj-1");
+    expect(buildEntityUrl("project", "pj-1")).toBe("https://codecast.sh/projects/pj-1");
   });
 
   test("accepts url-segment aliases and a custom base (trailing slash trimmed)", () => {
@@ -600,9 +600,9 @@ describe("initiatives (in-N)", () => {
     expect(entityMentionRegex().exec("the @[checkout in-app] flow")?.slice(1, 3)).toEqual(["checkout in-app", undefined]);
   });
 
-  test("an initiative routes to its sheet on the Org screen and its url parses back, old addresses included", () => {
-    expect(entityRoute("initiative", "in-7")).toBe("/org/in-7");
-    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/org/in-7");
+  test("an initiative routes to its own goal page and its url parses back, old addresses included", () => {
+    expect(entityRoute("initiative", "in-7")).toBe("/goals/in-7");
+    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/goals/in-7");
     expect(parseEntityUrl("https://codecast.sh/org/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/goals/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/initiatives/in-7")).toEqual({ type: "initiative", id: "in-7" });

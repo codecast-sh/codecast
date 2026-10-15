@@ -76,15 +76,14 @@ describe("useSyncCore owns the full feeder mount set", () => {
   test("the recovery probe and the subscription share ONE args constant", () => {
     const live = read(join(WEB_ROOT, "hooks", "useLiveInboxSessions.ts"));
     expect(live.includes("export const LIST_INBOX_SESSIONS_ARGS")).toBe(true);
-    // The one sanctioned args shape, now behind the sync-role gate: the
+    // The args shape, whichever reader wraps it (the split reader now): the
     // constant when this window hosts its own feeds, "skip" as a follower
     // (docs/architecture/sync-host.md).
-    // The args shape, whichever reader wraps it: this call moved to
-    // useQueryNoThrow, and what matters is the constant when this window hosts
-    // its own feeds and "skip" as a follower.
-    expect(live.includes('(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip")')).toBe(true);
+    expect(live.includes('(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip"')).toBe(true);
+    // The probe reads the same constant; querySplitWhole adds the `_probe`
+    // token that makes each read a fresh round trip.
     const syncSrc = read(join(WEB_ROOT, "hooks", "useSyncInboxSessions.ts"));
-    expect(syncSrc.includes("{ ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }")).toBe(true);
+    expect(syncSrc.includes("querySplitWhole(convex, api.conversations.listInboxSessions, LIST_INBOX_SESSIONS_ARGS,")).toBe(true);
     // No hand-built listInboxSessions args anywhere in the two files: every
     // call is either the constant or the constant + probe token.
     for (const src of [live, syncSrc]) {

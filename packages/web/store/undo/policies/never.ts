@@ -263,6 +263,17 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   landLineRun: never("machine control: it picks a run up at Rebase on its machine and lands the fix; a revert is the way back"),
   resumeLineRun: never("machine control: it restarts a run's runner on its machine; the run itself is the way back"),
   removeTaskStub: never("internal: takes back a create the server refused, which never landed"),
+  askLineAgent: never("machine control: it files the cause and starts its run in one write; cancelling the run is the way back"),
+  tryLineStep: never("machine control: the graph's machine runs each chosen case at once; the try's rows are its record"),
+  editLineGraph: never("machine control: the daemon rewrites the graph on its host, and the step is set back in the same editor"),
+  labelDecision: never("settings: the viewer's own label on a decision, taken back in the same control (a null verdict)"),
+  makeProblemOfFinding: CREATE,
+  moveFindingOut: never("create: the server files the findings under a new problem it mints; merging it back is the way back"),
+  mergeProblem: never("machine control: the server moves the twin's findings and drops it; reopening the twin is the way back"),
+  trialClose: never("send: the problem leaves Stopped for everyone watching the trial; reopening its task is the way back"),
+  passDecision: never("send: the decision reaches the person or role it was passed to, who is told at once"),
+  setModLocalDevice: SETTINGS,
+  setTeamBudget: SETTINGS,
 
   // A project's expectations (LM5): every change is a version judges grade against
   editExpectations: never("send: a line or a retirement becomes a proposal a person reads, and an applied one is a version judges grade against; a later retirement takes a line back"),

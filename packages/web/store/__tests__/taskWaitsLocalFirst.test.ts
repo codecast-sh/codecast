@@ -16,7 +16,8 @@ describe("task waits local-first", () => {
   });
 
   it("paints the wait at once and follows the server's set after", () => {
-    useInboxStore.getState().addWait("ct-1", { id: "wx", target: { kind: "pr_merged", repository: "", pr_number: 42 } });
+    // An asyncAction: with no dispatch wired its promise rejects, while the paint stays.
+    void useInboxStore.getState().addWait("ct-1", { id: "wx", target: { kind: "pr_merged", repository: "", pr_number: 42 } }).catch(() => {});
     let task = useInboxStore.getState().tasks[TASK_ID] as any;
     expect(task.waits.map((w: any) => [w.id, w.state])).toEqual([["wx", "waiting"]]);
     expect(useInboxStore.getState().pending[`tasks:${TASK_ID}:waits`]).toBeUndefined();

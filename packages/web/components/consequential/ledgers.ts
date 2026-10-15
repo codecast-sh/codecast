@@ -16,7 +16,7 @@ export function roleAutonomyLedger(r: { name: string; handle: string; caps: { ha
     subject: `${r.name} · @${r.handle}`,
     hands: { its: ["Approach", "Next step", "What to start"], yours: ["Approving fixes", r.merges ? "Limits" : "Merge, deploy", "Switching it off"] },
     figures: [
-      n != null ? dayLimitFigure(n) : { value: "∞", label: "a day, no cap", tone: "warn" },
+      n != null ? dayLimitFigure(n) : { value: "∞", label: "a day, no limit", tone: "warn" },
       { value: String(r.usedToday ?? 0), label: "used today" },
       ...(n != null ? [dayCostFigure(r.cost, n)] : r.cost ? [costFigure(r.cost, 1, "a session")] : []),
     ],
@@ -24,7 +24,7 @@ export function roleAutonomyLedger(r: { name: string; handle: string; caps: { ha
       { k: "Area", v: areaOf(r.projects) },
       { k: "Runs on", v: "Its machine · repo, shell" },
       r.merges ? { k: "Merges", v: "On its own", tone: "warn" } : { k: "Merges", v: MERGES_NEVER, tone: "ok" },
-      { k: "Tokens", v: r.caps.tokens_per_day != null ? `${compact(r.caps.tokens_per_day)} a day, max` : "No cap", ...(r.caps.tokens_per_day == null ? { tone: "warn" as const } : {}) },
+      { k: "Tokens", v: r.caps.tokens_per_day != null ? `${compact(r.caps.tokens_per_day)} a day, max` : "No limit", ...(r.caps.tokens_per_day == null ? { tone: "warn" as const } : {}) },
       priceRow(r.cost),
       RUNNING_ROW,
     ],
