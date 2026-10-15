@@ -175,7 +175,7 @@ describe("daemon restart gating", () => {
 
   test("the split brain sweeps match off the process table, not pgrep", () => {
     const daemon = src("daemon.ts");
-    expect(functionBody(index, "stopDaemon")).toContain("findOtherDaemonPids(snapshotProcessTable(");
+    expect(functionBody(index, "stopDaemon")).toContain("ownDaemonPids(snapshotProcessTable(");
     expect(functionBody(daemon, "sweepOrphanDaemons")).toContain("findOtherDaemonRows(await snapshotProcessTableAsync(");
     for (const source of [index, daemon]) {
       expect(source).not.toContain("pgrep -f 'daemon");

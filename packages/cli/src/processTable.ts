@@ -380,6 +380,12 @@ export function findOtherDaemonRows(procs: ProcRow[], selfPid = process.pid): Pr
   return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command));
 }
 
+/** This user's other daemons: on a shared box every person runs one, and
+ *  `cast stop` stops only its own. A row without a uid column is kept. */
+export function ownDaemonPids(procs: ProcRow[], selfPid = process.pid, uid = process.getuid?.()): number[] {
+  return findOtherDaemonRows(procs, selfPid).filter((p) => uid === undefined || p.uid === undefined || p.uid === uid).map((p) => p.pid);
+}
+
 /** The same list, as pids, for callers that only probe or signal once. */
 export function findOtherDaemonPids(procs: ProcRow[], selfPid = process.pid): number[] {
   return findOtherDaemonRows(procs, selfPid).map((p) => p.pid);

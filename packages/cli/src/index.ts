@@ -147,7 +147,8 @@ import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextF
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
-import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
+import { ownDaemonPids, snapshotProcessTable } from "./processTable.js";
+import { autostartDisabledByEnv, findSystemDaemonUnit } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
@@ -1028,16 +1029,18 @@ function getLaunchdDaemonPid(): number | null {
 }
 
 /**
- * A provisioned cloud host runs its daemon as the systemd unit
- * codecast-daemon.service (browser/provisionLinux.ts, Restart=always). Start,
- * stop and restart there go through the unit: a daemon started beside it
- * makes the unit's own copy exit as "already running" and leaves the unit
- * inactive, so the next `cast hosts update` fails its restart (2026-09-30).
+ * A provisioned cloud host runs its daemon as a system unit
+ * (browser/provisionLinux.ts, Restart=always), and a shared box may run one
+ * per user from a template; findSystemDaemonUnit names the one for THIS user.
+ * Start, stop and restart there go through the unit: a daemon started beside
+ * it makes the unit's own copy exit as "already running" and leaves the unit
+ * crash-looping (2026-09-30, 2026-10-15). Starting uses `restart`, which
+ * starts an inactive unit and is the verb a shared box grants its users.
  */
-const SYSTEMD_DAEMON_UNIT = "/etc/systemd/system/codecast-daemon.service";
 function systemdDaemon(action: "start" | "stop"): boolean {
-  if (process.platform !== "linux" || !fs.existsSync(SYSTEMD_DAEMON_UNIT)) return false;
-  return spawnSync("sudo", ["-n", "systemctl", action, "codecast-daemon.service"], { stdio: "ignore", timeout: 60_000 }).status === 0;
+  const unit = findSystemDaemonUnit();
+  if (!unit) return false;
+  return spawnSync("sudo", ["-n", "systemctl", action === "start" ? "restart" : "stop", unit], { stdio: "ignore", timeout: 60_000 }).status === 0;
 }
 
 function kickstartManagedDaemon(): boolean {
@@ -1088,6 +1091,7 @@ function ensureDaemonRunning(): void {
     } catch {}
     return;
   }
+  if (autostartDisabledByEnv()) return;
   try {
     startDaemonQuiet();
   } catch {}
@@ -1098,6 +1102,8 @@ function startDaemonQuiet(): void {
   ensureConfigDir();
   if (isDaemonRunning()) return;
   if (systemdDaemon("start")) return;
+  // Never beside this user's unit, even when it could not be started from here.
+  if (findSystemDaemonUnit()) return;
 
   if (kickstartManagedDaemon()) {
     return;
@@ -1535,24 +1541,40 @@ function stopDaemon(): void {
   // person, and `ps` on a loaded machine has run for 26s. The pid file SIGTERM
   // above already covers the normal case, so a `ps` that times out costs this
   // one invocation its split brain catch and nothing else.
-  try {
-    for (const orphanPid of findOtherDaemonPids(snapshotProcessTable({ timeout: 5_000 }))) {
-      try {
-        process.kill(orphanPid, "SIGTERM");
-        pidsToWait.add(orphanPid);
-        killedAny = true;
-      } catch {}
-    }
-  } catch {}
+  const sweep = () => {
+    try {
+      for (const orphanPid of ownDaemonPids(snapshotProcessTable({ timeout: 5_000 }))) {
+        try {
+          process.kill(orphanPid, "SIGTERM");
+          pidsToWait.add(orphanPid);
+          killedAny = true;
+        } catch {}
+      }
+    } catch {}
+  };
+  sweep();
 
   // The daemon drains its retry queue before it exits, so give it more room
   // than the old 5s: killing it here would skip the pid file release, the
   // daemon.version and daemon.build cleanup and the stop lifecycle log.
-  for (const pid of pidsToWait) {
-    if (!waitForPidExit(pid, DAEMON_STOP_SIGKILL_MS)) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-      waitForPidExit(pid, 2000);
+  const waitAll = () => {
+    for (const pid of pidsToWait) {
+      if (!waitForPidExit(pid, DAEMON_STOP_SIGKILL_MS)) {
+        try { process.kill(pid, "SIGKILL"); } catch {}
+        waitForPidExit(pid, 2000);
+      }
     }
+    pidsToWait.clear();
+  };
+  waitAll();
+  // A daemon can be started while this stop waits (a `cast` command's
+  // auto-start, a just-started daemon's own children): `cast stop` right after
+  // `cast login` left one running beside the system unit (2026-10-15). Sweep
+  // again until a pass finds none.
+  for (let pass = 0; pass < 3; pass++) {
+    sweep();
+    if (pidsToWait.size === 0) break;
+    waitAll();
   }
 
   if (killedAny) {
@@ -1620,7 +1642,13 @@ function startDaemon(): void {
     return;
   }
   if (systemdDaemon("start")) {
-    console.log("Daemon started (codecast-daemon.service)");
+    console.log(`Daemon started (${findSystemDaemonUnit()})`);
+    return;
+  }
+  const unit = findSystemDaemonUnit();
+  if (unit) {
+    console.error(`This user's daemon runs under the system unit ${unit}, which could not be started from here. Start it with: sudo systemctl enable --now ${unit}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -1755,7 +1783,9 @@ async function runOnboarding(config: Config): Promise<void> {
     return;
   }
 
-  if (!isDaemonRunning()) {
+  if (autostartDisabledByEnv()) {
+    console.log("CODECAST_NO_AUTOSTART is set: not starting the daemon here; whatever supervises it starts it.");
+  } else if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
   }
@@ -9084,6 +9114,8 @@ function removeWslAutostart(): void {
 
 function ensureAutostart(): boolean {
   const platform = process.platform;
+  // Something else supervises the daemon: a second, user-level one would race it.
+  if (autostartDisabledByEnv() || findSystemDaemonUnit()) return false;
   try {
     if (platform === "linux" && isWSL() && ensureWslAutostart()) {
       return true;
