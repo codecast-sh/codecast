@@ -41,10 +41,10 @@ describe("the Head of People prompt", () => {
   });
 });
 
-// The opening is the structure role's (org-staffing.md S30), in the shape of
-// every role's opening: whom it reports to, its job, how it wakes, where its
-// sessions go, and where it remembers, in about 200 words. The right hand is
-// the Executive Assistant's opening (executiveAssistantPrompt.ts), not this one.
+// The opening is the structure role's (org-staffing.md S30): whom it
+// reports to and its job. How it wakes, where its sessions go and where it
+// remembers is every standing role's (anchors.ts), so it is not repeated here.
+// The right hand is the Executive Assistant's opening, not this one.
 describe("the Head of People opening", () => {
   const o = headOfPeopleOpening({ workspace: "Acme", person: "Ada" });
 
@@ -58,13 +58,7 @@ describe("the Head of People opening", () => {
     expect(o).toContain("with your recommendation attached");
     expect(o).toContain("What no lead owns is yours to look after");
     expect(o).not.toContain("right hand");
-    expect(o).toContain("Start every turn with `cast brief`");
-    expect(o).not.toContain("cast escalate");
-    expect(o).toContain("raise in this thread");
-    expect(o).toContain("Your brief is your memory between turns");
-    const words = o.split(/\s+/).length;
-    expect(words).toBeGreaterThan(150);
-    expect(words).toBeLessThan(260);
+    expect(o).not.toContain("Start every turn");
   });
 
   test("its job paragraph is the charter", () => {

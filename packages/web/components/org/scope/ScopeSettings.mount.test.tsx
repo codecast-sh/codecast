@@ -62,6 +62,24 @@ async function verify() {
   const growth = tree.roles.find((r) => r.handle !== "head-of-people" && r.status === "active")!;
   const root_ = tree.roles.find((r) => r.handle === "head-of-people");
 
+  // ── leeway to hire: off by default; a press opens the review and only its confirm turns it on; on, one press turns it off ──
+  await render({ ...growth, trust: "direct" } as OrgRole);
+  const hires = () => q<HTMLButtonElement>("[data-hire-leeway-switch]")!;
+  assert.equal(hires().getAttribute("data-hire-leeway-switch"), "off");
+  const hiresBefore = calls.length;
+  await act(async () => { hires().click(); });
+  assert.equal(calls.length, hiresBefore, "the switch alone lets it hire nothing");
+  assert.equal(q("[data-switch-review]")!.getAttribute("data-switch-review"), "Hires without approval");
+  assert.ok(document.querySelector('[data-switch-figure="approvals a hire"]'));
+  await act(async () => { document.querySelector<HTMLButtonElement>("[data-switch-confirm]")!.click(); });
+  assert.equal(calls.pop(), 'update:{"hires_freely":true}');
+  await render({ ...growth, trust: "direct", hires_freely: true } as OrgRole);
+  assert.equal(hires().getAttribute("data-hire-leeway-switch"), "on");
+  await act(async () => { hires().click(); });
+  assert.equal(calls.pop(), 'update:{"hires_freely":false}');
+  await render({ ...growth, trust: "direct" } as OrgRole, false);
+  assert.ok(hires().disabled, "a viewer who cannot edit reads it");
+
   // ── a hired role: the switch is on, and one click turns it off through the stored field ──
   await render({ ...growth, trust: "direct" } as OrgRole);
   const sw = q<HTMLButtonElement>("[data-autonomy-switch]")!;

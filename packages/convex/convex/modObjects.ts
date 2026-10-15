@@ -65,6 +65,7 @@ async function createFor(ctx: any, userId: Id<"users">, args: { prefix: string; 
   const teamId = args.team_id;
   const kind = await kindFor(ctx, userId, teamId, prefix);
   if (!kind) return { error: `no mod you can see declares "${prefix}" objects (a mod's manifest lists its kinds under "objects")` };
+  if (kind.external) return { error: `${kind.title} objects live in another system and are never created here: write ${prefix}-<its id> and it draws live` };
   const status = args.status ?? kind.statuses?.[0];
   const bad = checkStatus(kind, status) ?? checkFields(kind, args.fields);
   if (bad) return { error: bad };

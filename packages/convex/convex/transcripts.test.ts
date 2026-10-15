@@ -1320,11 +1320,18 @@ describe("pacing the words to a fed agent", () => {
       .toEqual({ deliver: true, lane: "context", held: false });
   });
 
-  test("the gap holds only a lull's flush: a hold's catch up and the gap's closing run deliver", () => {
+  test("a turn's end inside the gap waits too; the gap's closing run and a hold's catch up deliver", () => {
     const route = { context_at: 100_000 };
+    // The pass that answered the last context chunk ended ten seconds after it.
     const now = 100_000 + 10_000;
-    expect(sessionDeliveryVerdict({ reason: "settle", now, route, pacing: ember, unsent: [seg("so the build is red", now - CATCH_UP_QUIET_MS - 1)] }).deliver).toBe(true);
-    expect(sessionDeliveryVerdict({ reason: "hold_expired", now, route, pacing: ember, unsent: [seg("so the build is red", now - CATCH_UP_QUIET_MS - 1)] }).deliver).toBe(true);
+    const unsent = (at: number) => [seg("so the build is red", at - CATCH_UP_QUIET_MS - 1)];
+    expect(sessionDeliveryVerdict({ reason: "settle", now, route, pacing: ember, unsent: unsent(now) }))
+      .toEqual({ deliver: false, wait: "gap", at: 100_000 + CONTEXT_MIN_GAP_MS });
+    const closing = 100_000 + CONTEXT_MIN_GAP_MS;
+    expect(sessionDeliveryVerdict({ reason: "settle", now: closing, route, pacing: ember, unsent: unsent(closing) }))
+      .toEqual({ deliver: true, lane: "context", held: true });
+    expect(sessionDeliveryVerdict({ reason: "hold_expired", now, route, pacing: ember, unsent: unsent(now) }).deliver).toBe(true);
+    expect(sessionDeliveryVerdict({ reason: "route_added", now, route, pacing: ember, unsent: unsent(now) }).deliver).toBe(true);
   });
 
   test("a busy agent's context waits, with the watermark untouched", () => {

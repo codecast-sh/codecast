@@ -10,8 +10,8 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { objectStatusIsDone, type ModObjectKind } from "@codecast/shared/contracts/mods";
-import { useInboxStore } from "../../store/inboxStore";
-import { objectByShortId, objectHref, objectKind, statusTone } from "../../lib/mods/objects";
+import { objectHref, objectKind, statusTone } from "../../lib/mods/objects";
+import { useObjectRow } from "../../lib/mods/useMods";
 import { useHoverCard } from "../../hooks/useHoverCard";
 import { useRevealRef } from "../../lib/revealHost";
 import { HoverCardClose } from "../../lib/hoverCardsOff";
@@ -27,7 +27,7 @@ const CARD_FIELDS = 5;
 
 export function ModObjectPill({ shortId }: { shortId: string }) {
   const id = shortId.toLowerCase();
-  const row = useInboxStore((s) => objectByShortId((s as any).modObjects, id));
+  const { row, loading, error } = useObjectRow(id);
   const kind = objectKind(id.split("-")[0]);
   const done = objectStatusIsDone(kind, row?.status);
   const label = row?.title ?? id;
@@ -86,7 +86,7 @@ export function ModObjectPill({ shortId }: { shortId: string }) {
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
         <HoverCardClose.Provider value={closeNow}>
           <Link href={href} onClick={onOpen} className="block p-3 no-underline cursor-pointer">
-            {row && kind ? <ObjectHoverContent row={row} kind={kind} /> : <div className="text-[11px] text-sol-text-dim">{kindTitle} {id} is not in this workspace</div>}
+            {row && kind ? <ObjectHoverContent row={row} kind={kind} /> : <div className="text-[11px] text-sol-text-dim">{loading ? `Loading ${kindTitle.toLowerCase()} ${id}…` : error ?? `${kindTitle} ${id} is not in this workspace`}</div>}
           </Link>
           {canReveal && (
             <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
