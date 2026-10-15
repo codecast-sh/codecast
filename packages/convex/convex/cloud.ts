@@ -22,9 +22,9 @@ import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, CLOUD_LEAVE_OUT_MAX, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES, CLOUD_HOST_ACTIONS, isCloudHostSize, CLOUD_LEAVE_OUT_MAX, CLOUD_PLACEMENT_LINE_CHARS, CLOUD_PLACEMENT_LINES_MAX, CLOUD_PLACEMENT_STEPS, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
 import { resolveConversationRefRanked } from "./conversationSessionLookup";
-import { cloudHostReportValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
+import { cloudHostReportValidator, cloudPlacementProgressValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 // The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
@@ -186,6 +186,7 @@ export const placeConversation = mutation({
       cloud_placement_token: undefined,
       cloud_placement_failed_at: undefined,
       cloud_context_too_large: undefined,
+      cloud_placement_progress: undefined,
       session_error: undefined,
       updated_at: Date.now(),
     });
@@ -317,11 +318,44 @@ export const reportPlacementFailure = mutation({
     if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const, reason: "not_yours" };
     const fence = placementFence(conv, args.placement_token);
     if (fence) return { recorded: false as const, reason: fence };
+    const progress = (conv as any).cloud_placement_progress;
     await ctx.db.patch(args.conversation_id, {
       session_error: args.error,
       cloud_placement_failed_at: Date.now(),
+      ...(progress && progress.token === args.placement_token ? { cloud_placement_progress: { ...progress, failed_at: Date.now() } } : {}),
       cloud_context_too_large: args.context_too_large?.files.length ? { ...args.context_too_large, files: args.context_too_large.files.slice(0, CLOUD_LEAVE_OUT_MAX) } : undefined,
       updated_at: Date.now(),
+    });
+    return { recorded: true as const };
+  },
+});
+
+/**
+ * The laptop's `cast cloud start` child reports where the placement stands:
+ * the host, the step, its last lines. Fenced like every placement write: a
+ * child whose park was superseded writes nothing, and the record must carry
+ * the park's own token.
+ */
+export const reportPlacementProgress = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    progress: cloudPlacementProgressValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const, reason: "not_yours" };
+    const fence = placementFence(conv, args.progress.token);
+    if (fence) return { recorded: false as const, reason: fence };
+    const { lines, steps } = args.progress;
+    await ctx.db.patch(args.conversation_id, {
+      cloud_placement_progress: {
+        ...args.progress,
+        steps: steps.slice(-CLOUD_PLACEMENT_STEPS.length * 2),
+        lines: lines.slice(-CLOUD_PLACEMENT_LINES_MAX).map((l) => l.slice(0, CLOUD_PLACEMENT_LINE_CHARS)),
+      },
     });
     return { recorded: true as const };
   },
@@ -1002,13 +1036,43 @@ export const reportCloudHost = mutation({
 });
 
 /**
+ * Settings > Machines: turn autoscale on or off with this Linux host as the
+ * template. Only the policy is stored; the laptop that prepares a placement
+ * reads it and does the waking and launching (cli cloud/hostHeadroom).
+ */
+export async function performSetCloudAutoscale(ctx: any, userId: Id<"users">, hostDeviceId: string, policy: { enabled: boolean; max_extra: number; size: string }) {
+  const host = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).filter((q: any) => q.eq(q.field("device_id"), hostDeviceId)).first();
+  if (!host?.is_remote) throw new Error("Not a cloud host of yours");
+  if (!/linux/i.test(host.platform ?? "")) throw new Error("Autoscale adds Linux hosts; a Mac needs a dedicated host first");
+  if (!(CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES as readonly number[]).includes(policy.max_extra)) throw new Error(`autoscale adds 1 to ${Math.max(...CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES)} hosts`);
+  if (!isCloudHostSize(policy.size)) throw new Error(`unknown host size ${policy.size}`);
+  await ctx.db.patch(host._id, { cloud_autoscale: { enabled: policy.enabled, max_extra: policy.max_extra, size: policy.size, at: Date.now() } });
+}
+
+/** The caller's autoscale policies that are on, by template device: what `cast cloud start` reads before choosing a host. */
+export const autoscalePolicies = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+    return devices
+      .filter((d: any) => d.cloud_autoscale?.enabled)
+      .map((d: any) => ({ device_id: d.device_id as string, max_extra: d.cloud_autoscale.max_extra as number, size: d.cloud_autoscale.size as string }));
+  },
+});
+
+/**
  * The web's action on a cloud host: queued on the laptop that manages it (its
  * cloud_host report names it), else the most recently seen online laptop.
  * The host's row shows it as running at once; the laptop's next report
  * carries the outcome.
  */
-export async function performCloudHostAction(ctx: any, userId: Id<"users">, hostDeviceId: string, action: CloudHostAction, imageId?: string) {
+export async function performCloudHostAction(ctx: any, userId: Id<"users">, hostDeviceId: string, action: CloudHostAction, arg?: string) {
   if (!CLOUD_HOST_ACTIONS.includes(action)) throw new Error(`unknown action ${action}`);
+  // The one argument an action takes: the image to delete, or the size of the
+  // new host a clone launches (CLOUD_HOST_SIZES, the sizes the app prices).
+  if (action === "clone" && !isCloudHostSize(arg)) throw new Error(`unknown host size ${arg}`);
   const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
   const host = devices.find((d: any) => d.device_id === hostDeviceId);
   if (!host?.is_remote) throw new Error("Not a cloud host of yours");
@@ -1019,7 +1083,7 @@ export async function performCloudHostAction(ctx: any, userId: Id<"users">, host
   const commandId = await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "cloud_host_action" as const,
-    args: JSON.stringify({ host_device_id: hostDeviceId, action, ...(imageId ? { image_id: imageId } : {}) }),
+    args: JSON.stringify({ host_device_id: hostDeviceId, action, ...(action === "clone" ? { instance_type: arg } : arg ? { image_id: arg } : {}) }),
     created_at: now,
     target_device_id: manager.device_id,
   });
