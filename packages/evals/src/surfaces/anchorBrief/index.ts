@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
@@ -33,6 +36,19 @@ export interface AnchorBriefSnap extends StandingWorld {
   facts?: Parameters<typeof bootstrapMessage>[0];
   /** A fixture: the messages the session gets after its opening, in order. */
   turns?: FixtureTurn[];
+  /** A fixture: the checkout the session starts in, as path to content; absent, it starts in an empty run dir. */
+  repo?: Record<string, string>;
+}
+
+/** Writes a fixture's checkout under the run dir and returns it, so the agent has the code a real seat would. */
+function checkoutOf(snap: AnchorBriefSnap, runDir: string): string | undefined {
+  if (!snap.repo) return undefined;
+  const root = join(runDir, 'repo');
+  for (const [path, body] of Object.entries(snap.repo)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  }
+  return root;
 }
 
 /** A chat wake's facts; the reply deadline is prod's unless the fixture sets one. */
@@ -104,7 +120,8 @@ const impl: SurfaceImpl = {
   async replay(snap: AnchorBriefSnap, ctx) {
     const serveDir = servedDirFor(snap, ctx, meta);
     const then = (snap.turns ?? []).map(turnText);
-    const a = await ctx.agent({ prompt: withHarnessNote(openingOf(snap), snap), serveDir, model: ctx.model, maxTurns: 80, ...(then.length ? { then } : {}) });
+    const cwd = checkoutOf(snap, ctx.runDir);
+    const a = await ctx.agent({ prompt: withHarnessNote(openingOf(snap), snap), serveDir, model: ctx.model, maxTurns: 80, ...(then.length ? { then } : {}), ...(cwd ? { cwd } : {}) });
     return { reply: a.turns.slice(gradedFrom(snap) - 1).flat().join('\n\n') };
   },
 
@@ -117,7 +134,8 @@ const impl: SurfaceImpl = {
   judgeMoment: (snap: AnchorBriefSnap): ConvoMessage[] => momentOf(snap, snap.opening || !snap.facts ? openingOf(snap) : agentLine(snap.facts)),
 
   // A chat wake tells the agent to fill its placeholder with `cast chat reply`; that write is the wake's, so it is allowed for the wake's own placeholder and nothing else.
-  allowedRefusals: (snap: AnchorBriefSnap) => Object.keys(placeholderTurns(snap)).map((ph) => `^chat reply ["']?${ph}\\b`),
+  // A turn after the opening may hand work to a session (the label's delegates gate grades it), so a spawn there is the role's choice, not a leak.
+  allowedRefusals: (snap: AnchorBriefSnap) => [...Object.keys(placeholderTurns(snap)).map((ph) => `^chat reply ["']?${ph}\\b`), ...(snap.turns?.length ? ['^spawn\\b'] : [])],
 
   productionReply: (snap: AnchorBriefSnap) => (snap.reply?.length ? { messages: toConvoMessages(toRows(snap.reply)) } : null),
 };

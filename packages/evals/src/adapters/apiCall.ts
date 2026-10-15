@@ -17,14 +17,17 @@ let cachedKey: string | null | undefined;
 
 /**
  * The evals' API key: CODECAST_EVALS_ANTHROPIC_KEY, else the macOS keychain
- * item; none in test mode. Never ANTHROPIC_API_KEY, which a harness child
- * would read and bill agent reps to.
+ * item; none in test mode, or when the variable is `none` (calls then go
+ * through the harness's Claude Code login, as on a machine with no key).
+ * Never ANTHROPIC_API_KEY, which a harness child would read and bill agent
+ * reps to.
  */
 export function evalsApiKey(): string | null {
   // A test run never reaches the API, whatever key the machine holds.
   if (testMode()) return null;
   if (cachedKey !== undefined) return cachedKey;
   const fromEnv = process.env.CODECAST_EVALS_ANTHROPIC_KEY?.trim();
+  if (fromEnv === 'none') return (cachedKey = null);
   if (fromEnv) return (cachedKey = fromEnv);
   if (process.platform !== 'darwin') return (cachedKey = null);
   const r = spawnSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], { encoding: 'utf8' });
