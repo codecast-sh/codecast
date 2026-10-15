@@ -13,6 +13,7 @@ import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { chosenOptions } from "../../lib/decisionLinks";
 import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
+import { PassDecision } from "./PassDecision";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -71,6 +72,10 @@ function GenericAnswerControls({
   const setValue = useCallback((key: string, fn: (v: any) => any) => patchDraft((cur) => ({ values: { ...cur.values, [key]: fn(cur.values?.[key] ?? values[key]) } })), [patchDraft, values]);
   const togglePick = useCallback((n: number) => patchDraft((cur) => togglePicked(cur, n)), [patchDraft]);
   const [error, setError] = useState<string | null>(null);
+  // Where it can be dismissed it can be handed on, except a trial's question
+  // and a hosted assistant's (only its owner answers).
+  const canPass = !!onDismiss && !hosted && !decision.trial && decision.status === "pending";
+  const [passOpen, setPassOpen] = useState(false);
 
   const answerSingle = useCallback((index: number) => onAnswer({ index }), [onAnswer]);
   const answerText = useCallback(() => {
@@ -100,7 +105,7 @@ function GenericAnswerControls({
   useWatchEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!answerKeyAllowed(e, keyScope)) return;
+      if (passOpen || !answerKeyAllowed(e, keyScope)) return;
       const target = e.target as HTMLElement | null;
       const editing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.tagName === "SELECT");
       if (editing) {
@@ -127,10 +132,11 @@ function GenericAnswerControls({
         return;
       }
       if ((e.key === "x" || e.key === "X") && onDismiss) { e.preventDefault(); e.stopImmediatePropagation(); onDismiss(); }
+      if ((e.key === "p" || e.key === "P") && canPass) { e.preventDefault(); e.stopImmediatePropagation(); setPassOpen(true); }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, keyScope, kind, decision.options.length, answerSingle, answerText, submit, onDismiss, togglePick, setOtherOpen]);
+  }, [keys, keyScope, kind, decision.options.length, answerSingle, answerText, submit, onDismiss, togglePick, setOtherOpen, passOpen, canPass]);
 
   const compact = size !== "full";
   const submitBtn = (
@@ -271,7 +277,12 @@ function GenericAnswerControls({
           </div>
         </div>
       )}
-      {dismissBtn && <div className="mt-3 flex items-center gap-4">{dismissBtn}</div>}
+      {dismissBtn && (
+        <div className="mt-3 flex items-center gap-4 text-[11px] text-sol-text-dim">
+          {canPass && <PassDecision decisionId={decision._id} open={passOpen} onOpenChange={setPassOpen} keys={keys} />}
+          {dismissBtn}
+        </div>
+      )}
     </div>
   );
 }

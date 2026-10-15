@@ -9,7 +9,7 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, trialProjectOf, trialSpend } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -335,6 +335,11 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
       run("ruled", "completed", NOW - 100),
       run("live", "running", NOW - 10, { runner_device: "dev-mac" }),
     );
+    // The machine is busy but for two slots, whatever the cap: the passes below fill exactly those two.
+    for (let i = 0; i < TRIAL_RUNNING_CAP - 3; i++) {
+      tables.tasks.push(task(`busy${i}`, "in_review", { workflow_run_id: `workflow_runs_busy${i}` }));
+      tables.workflow_runs.push(run(`busy${i}`, "running", NOW - 20, { runner_device: "dev-mac" }));
+    }
     tables.trial_cards.push({ _id: "trial_cards_1", run_id: "workflow_runs_ruled", kind: "card", status: "answered", answer: { key: "S", label: "Ship", by: HOST, at: NOW } });
     tables.signals = [...findings("never", 3, 5), ...findings("big", 5, 4), ...findings("regrouped", 3, 7), ...findings("stale", 9, 9), ...findings("ruled", 9, 9), ...findings("live", 9, 9), ...findings("closed", 9, 9)];
     tables.workflows = [{ _id: "workflows_trial", name: "agentwatch_trial", nodes: [], edges: [] }];
@@ -347,7 +352,7 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     const { due, running, like } = await dueProblems(ctx, (await ctx.db.get(TRIAL))!);
     expect(due.map((d) => d.task)).toEqual(["ct-big", "ct-regrouped", "ct-never"]);
     expect(due.find((d) => d.task === "ct-regrouped")).toMatchObject({ regrouped: true, last_run: "completed" });
-    expect(running).toBe(1);
+    expect(running).toBe(TRIAL_RUNNING_CAP - 2);
     expect(like.product?._id).toBe("workflow_runs_live" as any);
     expect(like.judge).toBeNull();
   });
@@ -393,12 +398,87 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(tables.projects[0].line_trial.dispatch.last).toMatchObject({ at: NOW, started: ["ct-big", "ct-regrouped"] });
   });
 
-  test("a pass that would cross the cap starts nothing and says why", async () => {
+  /** A settled price row for one run: `usd` its sessions at list price, `key` the part on a metered key. */
+  const priceRow = (run: string, usd: number, sessions: number, extra: Record<string, any> = {}) => ({ _id: `trial_run_prices_${run}`, project_id: TRIAL, run_id: `workflow_runs_${run}`, run_created_at: NOW - 100, sessions, usd, tokens: 1000, unpriced_tokens: 0, key: { sessions: 0, tokens: 0, usd: 0 }, providers: ["claude"], device: "dev-mac", at: NOW, settled: true, ...extra });
+
+  test("the cap limits billed money only: subscription runs worth far more than it at list price still start", async () => {
     const { ctx, tables } = world(5);
+    tables.trial_run_prices = [priceRow("a", 400, 30), priceRow("b", 300, 20)];
+    const r = await dispatchPass(ctx, (await ctx.db.get(TRIAL))!, NOW);
+    expect(r.started).toEqual(["ct-big", "ct-regrouped"]);
+    expect(r).toMatchObject({ billed_usd: 0, per_run_usd: 0, held: null });
+  });
+
+  test("a run on a metered key bills: past the cap at its billed cost nothing starts, and the hold says billed money", async () => {
+    const { ctx, tables } = world(20);
+    tables.trial_run_prices = [priceRow("a", 30, 4, { key: { sessions: 2, tokens: 500, usd: 12 } })];
     const r = await dispatchPass(ctx, (await ctx.db.get(TRIAL))!, NOW);
     expect(r.started).toEqual([]);
-    expect(r.held).toContain("would cross the cap");
+    expect(r.held).toBe("billed $12 of $20: another run (~$12.00 billed) would cross the cap");
     expect(tables.daemon_commands.length).toBe(0);
+  });
+
+  test("the trial's model spend is its own project's calls from when it began, not the workspace's month", async () => {
+    const { ctx, tables } = world(1000);
+    tables.budgets = [];
+    tables.team_budgets = [{ _id: "team_budgets_1", workspace: `team:${TEAM}`, cap_usd: 400, month: new Date(NOW).toISOString().slice(0, 7), spent_usd: 287, held_usd: 0, by_purpose: { judge: 129, grouping: 0.25, call: 158 }, refused: 1, history: [], updated_at: NOW }];
+    const hour = (at: number) => Math.floor(at / 3_600_000) * 3_600_000;
+    tables.model_spend_hours = [
+      { _id: "msh_1", workspace: `team:${TEAM}`, project_id: TRIAL, hour: hour(NOW), usd: 3, calls: 40, by_purpose: { judge: 2, grouping: 0, call: 1 } },
+      { _id: "msh_2", workspace: `team:${TEAM}`, project_id: REAL, hour: hour(NOW), usd: 50, calls: 9, by_purpose: { judge: 50, grouping: 0, call: 0 } },
+      { _id: "msh_3", workspace: `team:${TEAM}`, project_id: TRIAL, hour: hour(NOW) - 10 * 3_600_000, usd: 70, calls: 5, by_purpose: { judge: 70, grouping: 0, call: 0 } },
+    ];
+    const spend = await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW);
+    expect(spend.billed.model).toMatchObject({ usd: 3, calls: 40, by_purpose: { judge: 2, grouping: 0, call: 1 }, team_budget: { cap_usd: 400, spent_usd: 287, refused: 1 } });
+    expect(spend.billed.usd).toBe(3);
+  });
+
+  test("a problem's cost: judging and its runs' call nodes and key sessions are billed; its subscription sessions are a list-price equivalent only", async () => {
+    const { ctx, tables } = world(1000);
+    tables.workflow_runs.push(run("priced", "completed", NOW - 100, { task_id: "tasks_big", primary_conversation_id: "conversations_pp", node_statuses: [{ node_id: "grade", status: "completed", started_at: NOW - 90, completed_at: NOW - 80, cost_usd: 0.3 }] }));
+    const usage = { input: 1_000_000, output: 0, cache_read: 0, cache_write: 0 };
+    tables.conversations.push(
+      { _id: "conversations_c1", session_id: "s1", user_id: HOST, message_count: 1, parent_conversation_id: "conversations_pp", agent_type: "claude_code", model: "claude-opus-4-8", usage_totals: usage },
+      { _id: "conversations_c2", session_id: "s2", user_id: HOST, message_count: 1, parent_conversation_id: "conversations_pp", agent_type: "opencode", model: "claude-opus-4-8", usage_totals: usage },
+    );
+    const c = await problemCost(ctx, tables.tasks.find((t: any) => t._id === "tasks_big"));
+    expect(c.sessions).toBe(2);
+    expect(c.run_list_usd).toBeGreaterThan(0);
+    expect(c.run_billed_usd).toBeCloseTo(0.3 + c.run_list_usd, 2);
+    expect(c.billed_usd).toBe(c.run_billed_usd + c.judge_usd);
+  });
+
+  test("a session's billing follows its agent: Claude Code and Codex logins are subscription, any other agent's key bills", () => {
+    expect(sessionBilling("claude_code")).toEqual({ provider: "claude" });
+    expect(sessionBilling("codex")).toEqual({ provider: "codex" });
+    expect(sessionBilling("opencode")).toBeNull();
+    expect(sessionBilling("pi")).toBeNull();
+  });
+
+  /** The runner machine's Claude account, its 5h window at `percent`. */
+  function machine(w: ReturnType<typeof world>, percent: number) {
+    w.tables.devices = [{ _id: "devices_mac", user_id: HOST, device_id: "dev-mac", label: "MacBook", cc_accounts: { active_email: "a@x.com", profiles: [{ name: "work", email: "a@x.com", usage: { fetched_at: NOW - 60_000, session: { percent, resets_at: NOW + 3_600_000 }, weekly: { percent: 40, resets_at: NOW + 86_400_000 } } }] } }];
+  }
+
+  test("runs wait for quota: an account the runs use at the warning line holds the pass and a rerun, and says which account and when it resets", async () => {
+    const w = world(1000);
+    machine(w, 91);
+    w.tables.trial_run_prices = [priceRow("a", 50, 6)];
+    const r = await dispatchPass(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW);
+    expect(r.started).toEqual([]);
+    expect(r.held).toBe("quota 91% on work (claude): runs wait for its reset in 1h");
+    expect(r.quota).toEqual([expect.objectContaining({ device: "MacBook", provider: "claude", account: "work", percent: 91 })]);
+    lostAt(w, "lost", "decide", "card");
+    await expect(rerunCore(w.ctx, HOST, "ct-lost", NOW)).rejects.toThrow("quota 91% on work");
+    const ok = world(1000);
+    machine(ok, 60);
+    expect((await dispatchPass(ok.ctx, (await ok.ctx.db.get(TRIAL))!, NOW)).started).toEqual(["ct-big", "ct-regrouped"]);
+  });
+
+  test("quotaHold names the tightest account past the warning line, and none under it", () => {
+    const q = (account: string, percent: number | null) => ({ device: "m", provider: "claude" as const, account, percent, windows: [], fetched_at: NOW, resets_at: null });
+    expect(quotaHold([q("a", 50), q("b", null)], NOW)).toBeNull();
+    expect(quotaHold([q("a", 86), q("b", 99)], NOW)).toBe("quota 99% on b (claude): runs wait");
   });
 
   test("a run limit holds next to the dollar cap: at the limit nothing starts, one under it one starts (sd-577: no runs past those used)", async () => {
@@ -416,14 +496,56 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(r).toMatchObject({ max_runs: used + 1, runs: used });
   });
 
-  test("spend outside codecast counts toward the cap: the total is one number (ledger 2026-10-12: ~$250 outside)", async () => {
-    const { ctx, tables } = world(100);
-    tables.projects[0].line_trial.outside = [{ usd: 95, what: "shadow + dry runs", at: NOW, by: HOST }];
+  test("the trial's spend sums each run's price row and reads no task, run or session: a rerun or dispatch never waits on ~500 conversations", async () => {
+    const { ctx, tables } = world(1000);
+    tables.trial_run_prices = [
+      priceRow("stale", 12.5, 3, { unpriced_tokens: 5, key: { sessions: 1, tokens: 200, usd: 2.5 } }),
+      priceRow("live", 4, 2, { unpriced_tokens: 5, providers: ["claude", "codex"] }),
+      priceRow("before", 50, 9, { run_created_at: NOW - 5000 }),
+    ];
     const project = (await ctx.db.get(TRIAL))!;
-    expect((await trialSpend(ctx, project, NOW)).total_usd).toBe(95);
+    for (const t of ["tasks", "workflow_runs", "conversations"]) tables[t] = new Proxy([], { get: () => { throw new Error(`trialSpend read ${t}`); } }) as any;
+    expect(await trialSpend(ctx, project, NOW)).toMatchObject({
+      runs: 2,
+      billed: { usd: 2.5, run_sessions: { sessions: 1, tokens: 200, usd: 2.5 } },
+      subscription: { sessions: 4, tokens: 1800, list_usd: 14, unpriced_tokens: 10, providers: ["claude", "codex"], devices: ["dev-mac"] },
+    });
+  });
+
+  test("a run started for a trial problem opens its price row, so the trial's run count holds before the run is priced", async () => {
+    const { ctx, tables } = world(1000);
+    const before = (await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW)).runs;
+    const r = await dispatchPass(ctx, (await ctx.db.get(TRIAL))!, NOW);
+    expect(r.started.length).toBeGreaterThan(0);
+    expect((await trialSpend(ctx, (await ctx.db.get(TRIAL))!, NOW)).runs).toBe(before + r.started.length);
+    expect(tables.trial_run_prices.every((p: any) => p.project_id === TRIAL && p.usd === 0 && !p.settled)).toBe(true);
+  });
+
+  test("a run's price is priced again while the run is live, ended recently, or moved after it was priced", () => {
+    const settled = { at: NOW, settled: true, key: { sessions: 0, tokens: 0, usd: 0 } };
+    // Priced before billed and subscription use were told apart: priced again.
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS }, { at: NOW, settled: true })).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS }, null)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - RUN_SETTLE_MS }, settled)).toBe(false);
+    expect(priceStale({ status: "running", updated_at: NOW - RUN_SETTLE_MS }, settled)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW + 1 }, settled)).toBe(true);
+    expect(priceStale({ status: "completed", updated_at: NOW - 1 }, { ...settled, settled: false })).toBe(true);
+  });
+
+  test("hand entries are billed money, grouped by the key that billed them, and count toward the cap (ledger 2026-10-12: ~$250 on the evals key)", async () => {
+    const { ctx, tables } = world(100);
+    tables.projects[0].line_trial.outside = [
+      { usd: 60, what: "judge A/B", billed_by: "evals key", at: NOW - 2, by: HOST },
+      { usd: 30, what: "shadow", billed_by: "evals key", at: NOW - 1, by: HOST },
+      { usd: 10, what: "verify round", at: NOW, by: HOST },
+    ];
+    const project = (await ctx.db.get(TRIAL))!;
+    const spend = await trialSpend(ctx, project, NOW);
+    expect(spend.billed.usd).toBe(100);
+    expect(spend.billed.keys).toEqual([{ billed_by: "evals key", usd: 90, entries: 2 }, { billed_by: UNNAMED_BILLER, usd: 10, entries: 1 }]);
     const r = await dispatchPass(ctx, project, NOW);
     expect(r.started).toEqual([]);
-    expect(r.held).toContain("$95 of $100");
+    expect(r.held).toBe("billed $100 of $100: the cap is reached");
   });
 
   test("a proposal whose author recommends waiting goes back once to gather its own evidence, in a run slot, instead of asking (tc-23)", async () => {
@@ -482,12 +604,13 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     lostAt(w, "lost", "proposal_gate");
     const used = (await trialSpend(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW)).runs;
     w.tables.projects[0].line_trial.dispatch.max_runs = used;
+    const before = w.tables.workflow_runs.length;
     const r = await dispatchPass(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW);
     expect(r.resumed).toEqual(["ct-lost"]);
     expect(r.started).toEqual([]);
     expect(r.due.map((d: any) => d.task)).not.toContain("ct-lost");
     expect(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_lost")).toMatchObject({ status: "running", current_node_id: "proposal_gate", fail_reason: undefined, fresh_branch: true });
-    expect(w.tables.workflow_runs.length).toBe(6);
+    expect(w.tables.workflow_runs.length).toBe(before);
     expect(w.tables.tasks.find((t: any) => t._id === "tasks_lost").execution_status).toBeUndefined();
     expect(w.tables.daemon_commands.map((c: any) => [c.command, JSON.parse(c.args).workflow_run_id, c.target_device_id])).toEqual([["run_workflow", "workflow_runs_lost", "dev-mac"]]);
     expect(w.tables.projects[0].line_trial.dispatch.last.started).toEqual(["ct-lost"]);
@@ -504,8 +627,8 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(await rerunCore(w.ctx, HOST, "ct-lost", NOW)).toMatchObject({ task: "ct-lost", run_id: "workflow_runs_lost", resumed_at: "decide" });
     const broke = world(1000);
     lostAt(broke, "lost", "decide", "card");
-    broke.tables.projects[0].line_trial.outside = [{ usd: 999, what: "x", at: NOW, by: HOST }];
-    await expect(rerunCore(broke.ctx, HOST, "ct-lost", NOW)).rejects.toThrow("would cross the cap");
+    broke.tables.projects[0].line_trial.outside = [{ usd: 1000, what: "x", billed_by: "evals key", at: NOW, by: HOST }];
+    await expect(rerunCore(broke.ctx, HOST, "ct-lost", NOW)).rejects.toThrow("billed $1000 of $1000: the cap is reached");
   });
 
   /** A problem paused at its change card: the card's author read `read` and its fix reaches `covers`. */
@@ -608,6 +731,9 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
 describe("what a trial card reads beside its words", () => {
   test("a problem whose case is filed against a judge or an extractor is review tooling, not the product (ct-59532, ct-59527)", () => {
     expect(toolingOf({ cause: { issue_key: "judge:codecast:comms", fingerprints: [] } } as any)).toBe("judge");
+    // ct-59688: a problem gathered from two judges' cases, keyed per ruled finding, with no issue key, is still the judge route.
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "extractor:match:sg-2733"] } } as any)).toBe("judge");
+    expect(routeOf({ cause: { fingerprints: ["judge:codecast:match:sg-2713", "evidence:contacts/x:ex-3:aa"] } } as any)).toBe("product");
     expect(toolingOf({ cause: { issue_key: "extractor:union-moments:contact-conversation", fingerprints: [] } } as any)).toBe("extractor");
     expect(toolingOf({ cause: { fingerprints: ["evidence:contacts/x:ex-agentwatch-trial-34:fa10997c"] } } as any)).toBeNull();
   });

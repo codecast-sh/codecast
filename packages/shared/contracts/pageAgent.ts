@@ -1,14 +1,15 @@
 // The publishing session of a published page, as the page and the thread show
-// it: one quiet chip. Decided once, on the server (?meta=1's agent.chip), so
-// the in-page bar and the conversation embed cannot read the same state apart.
+// it: one quiet chip, the state word set after the session's own name.
+// Decided once, on the server (?meta=1's agent.chip), so the in-page bar and
+// the conversation embed cannot read the same state apart.
 
 export type PageAgentChip = "idle" | "working" | "updating" | "needs_input";
 
 export const PAGE_AGENT_LABELS: Record<PageAgentChip, string> = {
-  idle: "Agent idle",
-  working: "Agent working",
-  updating: "Agent is updating",
-  needs_input: "Agent needs input",
+  idle: "idle",
+  working: "working",
+  updating: "updating",
+  needs_input: "needs input",
 };
 
 // A send the agent has not picked up yet still reads as "updating" this long,
