@@ -21,6 +21,12 @@ declare module "codecast-mod" {
     (event: "mod.start", hook: Hook<{ context: Context }, void>): void;
     (event: "ui.render", matcher: { pane: string } | { fence: string } | { sidebar: string } | { object: string }, hook: Hook<RenderEvent, Node>): void;
     (event: "ui.render", hook: Hook<RenderEvent, Node>): void;
+    /**
+     * An external kind's row, live: answer with what its pill, hover card and page show. Return
+     * undefined while it loads (read it through $.local.get or $.data and the pill redraws when it
+     * lands), null when the id names nothing.
+     */
+    (event: "object.resolve", matcher: { object: string }, hook: Hook<ResolveEvent, ResolvedObject | null>): void;
     (event: "command.run", matcher: { command: string }, hook: Hook<{ command: string }, void>): void;
     (event: "command.run", hook: Hook<{ command: string }, void>): void;
     (event: "session.state", hook: Hook<SessionStateEvent, void>): void;
@@ -37,6 +43,11 @@ declare module "codecast-mod" {
    * to answer the event yourself.
    */
   export type Hook<E, R> = ($: Api, e: Readonly<E>, next: (e?: E) => Promise<R>) => R | Promise<R>;
+
+  /** Which external object to resolve: `object` is the kind's prefix, `id` the other system's id as written after it (8 hex or a whole uuid). */
+  export type ResolveEvent = { object: string; id: string; context: Context };
+  /** An external object's row. Fields are the kind's declared fields; the page's own drawing still comes from ui.render { object }, with this row as props.object. */
+  export type ResolvedObject = { title: string; status?: string; fields?: Record<string, unknown>; body?: string };
 
   export type RenderEvent = {
     surface: "pane" | "fence" | "sidebar" | "object";
@@ -166,7 +177,7 @@ declare module "codecast-mod" {
       create(doc: { title: string; content: string }): Promise<{ id: string }>;
     };
     /**
-     * The mod's local half (manifest "local"), running on your machines where you approved it.
+     * The mod's local half (manifest "local"), running on each of your machines where it is on.
      * get() reads a value it published with $.publish, and a surface that reads one redraws when it
      * changes. call() runs one of its on("local.call", { method }) hooks and resolves with the answer.
      */
@@ -201,7 +212,7 @@ declare module "codecast-mod" {
     commands?: { id: string; title: string; keywords?: string; icon?: string }[];
     fences?: { lang: string; description?: string }[];
     sidebar?: { id: string; title: string }[];
-    /** What agents should know to use this mod well: its objects, its fences, when to reach for them. `cast mod guide` prints it to every agent that asks. */
+    /** What agents should know to use this mod well: its objects, its fences, when to reach for them. Write it in AGENTS.md beside the manifest; every session the mod applies to starts with it, and `cast mod guide` prints it. */
     agents?: string;
     /**
      * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
@@ -225,6 +236,12 @@ declare module "codecast-mod" {
       /** In order: the first is where a new object starts, the last means done. */
       statuses?: string[];
       fields?: Record<string, { type: "text" | "markdown" | "number" | "enum" | "person" | "ref" | "date" | "bool" | "url"; label?: string; options?: string[] }>;
+      /**
+       * The rows live in another system: ids are `<prefix>-<first 8 hex of its uuid>` (or the whole
+       * uuid), nothing is stored, and any id written anywhere draws live from your
+       * on("object.resolve", { object: "<prefix>" }, ...) hook. No creating, no tracking.
+       */
+      external?: boolean;
     }[];
   };
 

@@ -65,6 +65,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // layouts and internal scroll regions. Centering them in a padded column
   // would break them.
   /^\/sessions(\/|$)/,
+  // The session map: one zoomable canvas, edge to edge (components/sessionMap).
+  /^\/map$/,
   /^\/anchor(\/|$)/,
   /^\/admin\//,
   // Agent config: file list + editor, owns its canvas the way /sessions does.

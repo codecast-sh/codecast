@@ -13,9 +13,10 @@
 // moment as its own, so a person's or a run's title is never overwritten
 // while a finding it was written over stays.
 //
-// A title too long to list (a judge's whole sentence, with its call ids and
-// timestamps) also gets a list name beside it (`cause.named`), from the same
-// pass and budget. The title stays whole for the problem's page.
+// Every title also gets a list name beside it (`cause.named`), from the same
+// pass and budget: a finder's title carries its evidence (call ids, hashes,
+// thread timestamps, a judge's whole sentence) and lists and decision heads
+// show the name. The title stays whole for the problem's page.
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
@@ -31,7 +32,7 @@ export const RETITLE_BATCH = 5;
 /** Findings a rename reads, newest first. */
 export const RETITLE_FINDINGS = 20;
 const TITLE_MAX = 90;
-/** A title longer than this is a judge's whole sentence, not a name a list can show: the sweep names it. */
+/** Longest list name the naming call may write. */
 export const LIST_NAME_MAX = 80;
 export const RETITLE_AUTHOR = "retitle";
 
@@ -52,12 +53,12 @@ export function retitleDue(title: string, titled: Titled | undefined, live: stri
   return titled.from.some((id) => now.has(id)) ? null : "retitle";
 }
 
-/** Whether a problem needs a list name: its title (less the judge's "Not met:") is too long to list, and no name was written for it. */
+/** Whether a problem needs a list name: no name was written for its title as it stands. */
 export function nameDue(title: string, named: { for: string } | undefined): boolean {
-  return title.replace(/^not met:\s*/i, "").trim().length > LIST_NAME_MAX && named?.for !== title;
+  return named?.for !== title;
 }
 
-const NAME_SYSTEM = `You name a problem in a product's quality review. The list of problems shows only this name, and a busy executive scans it to pick one to open: one plain clause under ${LIST_NAME_MAX} characters saying what went wrong, in the product's terms. Keep the problem's own subject (what failed, for whom) and leave out its evidence: no ids, call or thread numbers, timestamps, dates, quotes or people's names. Never shorten the meaning into a vaguer one.
+const NAME_SYSTEM = `You name a problem in a product's quality review. The list of problems shows only this name, and a busy executive scans it to pick one to open: one plain clause under ${LIST_NAME_MAX} characters saying what went wrong, in the product's terms. Keep the problem's own subject (what failed, for whom) and leave out its evidence: no ids, call or thread numbers, timestamps, dates, quotes or people's names. Never shorten the meaning into a vaguer one; a title that already says it that way keeps its own words.
 
 Answer with JSON only: {"name": "..."}`;
 
@@ -101,7 +102,10 @@ export function parseRetitle(text: string | undefined): { title: string; descrip
 
 const quoteOf = (md: string | undefined) => /^> (.+)$/m.exec(md ?? "")?.[1]?.trim();
 
-type RetitleJob = { kind?: "name"; task_id: Id<"tasks">; title: string; from: string[]; workspace: string; team_id?: Id<"teams">; findings: RetitleFinding[]; conversations: number };
+type RetitleJob = { kind?: "name"; task_id: Id<"tasks">; title: string; from: string[]; workspace: string; team_id?: Id<"teams">; project_id?: Id<"projects">; findings: RetitleFinding[]; conversations: number };
+
+/** A job's call is charged to its workspace's budget and its problem's project. */
+const scopeOfJob = (job: RetitleJob) => ({ workspace: job.workspace, ...(job.team_id ? { team_id: job.team_id } : {}), ...(job.project_id ? { project_id: job.project_id } : {}) });
 
 /** One pass's reads: baselines are written by `baseline`, renames come back as jobs. */
 export const due = internalQuery({
@@ -124,11 +128,12 @@ export const due = internalQuery({
             from: ids,
             workspace: task.workspace,
             ...(task.team_id ? { team_id: task.team_id } : {}),
+            ...(task.project_id ? { project_id: task.project_id } : {}),
             findings: live.slice(0, RETITLE_FINDINGS).map((s) => ({ title: s.title, ...(quoteOf(s.detail_md) ? { quote: quoteOf(s.detail_md) } : {}) })),
             conversations: new Set(live.map((s) => s.moment ?? s.fingerprint)).size,
           });
         } else if (nameDue(task.title, task.cause.named) && jobs.length < RETITLE_BATCH) {
-          jobs.push({ kind: "name", task_id: task._id, title: task.title, from: ids, workspace: task.workspace, ...(task.team_id ? { team_id: task.team_id } : {}), findings: [], conversations: 0 });
+          jobs.push({ kind: "name", task_id: task._id, title: task.title, from: ids, workspace: task.workspace, ...(task.team_id ? { team_id: task.team_id } : {}), ...(task.project_id ? { project_id: task.project_id } : {}), findings: [], conversations: 0 });
         }
       }
     }
@@ -196,7 +201,7 @@ export const sweep = internalAction({
     for (const job of jobs) {
       if (job.kind === "name") {
         const req = nameRequest(job.title);
-        const reply = await runModelCall(ctx, { workspace: job.workspace, ...(job.team_id ? { team_id: job.team_id } : {}) }, "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "json" }, "Problem name", 30_000);
+        const reply = await runModelCall(ctx, scopeOfJob(job), "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "json" }, "Problem name", 30_000);
         if (!reply.ok) { renamed.push({ task_id: String(job.task_id), was: job.title, error: reply.reason }); continue; }
         // An unusable answer is stored as "" (asked, no name; the list cuts the title): asking again mostly gets the same answer.
         const name = parseName(reply.text) ?? "";
@@ -205,7 +210,7 @@ export const sweep = internalAction({
         continue;
       }
       const req = retitleRequest(job.title, job.findings, job.conversations);
-      const reply = await runModelCall(ctx, { workspace: job.workspace, ...(job.team_id ? { team_id: job.team_id } : {}) }, "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "json" }, "Problem rename", 30_000);
+      const reply = await runModelCall(ctx, scopeOfJob(job), "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "json" }, "Problem rename", 30_000);
       const named = reply.ok ? parseRetitle(reply.text) : null;
       if (!named) { renamed.push({ task_id: String(job.task_id), was: job.title, error: reply.ok ? "unreadable reply" : reply.reason }); continue; }
       if (!dry) await ctx.runMutation(internal.lineRetitle.apply, { task_id: job.task_id, was: job.title, from: job.from, ...named });
