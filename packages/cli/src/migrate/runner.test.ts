@@ -46,6 +46,7 @@ function world(opts: {
   resumeNeverExecutes?: boolean;
   transferError?: string;
   hostLoginGap?: string;
+  hostRoom?: { refuse?: string; small?: string };
   cancelAfterPolls?: number;
   deviceOnline?: boolean;
 }) {
@@ -91,6 +92,7 @@ function world(opts: {
     deviceOnline: async (d) => { calls.push(["deviceOnline", d]); return opts.deviceOnline ?? true; },
     prepareHost: async (d) => { calls.push(["prepareHost", d]); },
     hostLoginGap: async () => opts.hostLoginGap ?? null,
+    hostRoom: async () => opts.hostRoom ?? {},
     transferToCloud: async (f, o) => {
       calls.push(["transferToCloud", f.session_id, o.skipTree, o.pushedHead]);
       if (opts.transferError) throw new Error(opts.transferError);
@@ -250,6 +252,27 @@ describe("migrateRow — a session to the cloud", () => {
     expect(out.outcome).toBe("failed");
     expect(out.detail).toContain("has no Claude login");
     expect(w.kinds()).toEqual(["begin", "fail"]);
+  });
+
+  // jx72f3a: moved onto a t3.medium with swap 80% full, where its typecheck
+  // was OOM-killed and its dev server died within seconds.
+  test("a host out of memory is refused before the session is stopped", async () => {
+    const w = world({ statuses: ["idle"], hostRoom: { refuse: "swap 1.6 of 2.0 GB used" } });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(out.detail).toContain("has no room for another session (swap 1.6 of 2.0 GB used)");
+    expect(out.detail).toContain("left running here");
+    expect(w.kinds()).toEqual(["begin", "fail"]);
+  });
+
+  test("a host smaller than the repo needs takes the session, and the notice says what will not run there", async () => {
+    const w = world({ statuses: ["idle"], hostRoom: { small: "it has 3.7 GB of memory and this repo needs 12.0 GB" } });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("done");
+    const finish = w.calls.find((c) => c[0] === "finish")?.[2] as { verification: string };
+    expect(finish.verification).toStartWith("heads match. This host is too small");
+    expect(finish.verification).toContain("3.7 GB of memory");
+    expect(finish.verification).toContain("cast check");
   });
 
   test("a resume that errors on the destination is reported as a failure of the moved session", async () => {

@@ -18,12 +18,13 @@ export const CLOUD_LEAVE_OUT_MAX = 200;
 
 /**
  * How long one `cast cloud start` may run: a cold EC2 boot, a clone, an
- * install and the home mirror, on a laptop that may be heavily loaded. The
+ * install and the home mirror, on a laptop that may be heavily loaded, and
+ * when autoscale adds a host, its launch and provisioning (10 to 20 min). The
  * daemon kills its child past this, the server keeps a claimed cloud_spawn
  * live this long, and a placement waits this long for another push to the
  * same host to release the mirror lock.
  */
-export const CLOUD_START_RUN_MS = 25 * 60 * 1000;
+export const CLOUD_START_RUN_MS = 45 * 60 * 1000;
 
 export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
   return d.is_remote === true && /^(linux|darwin|macos)$/i.test(d.platform ?? "");
