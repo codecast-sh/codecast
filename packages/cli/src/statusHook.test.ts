@@ -106,6 +106,14 @@ describe("codecast-status hook event mapping", () => {
     expect(out.session_boundary).toBeUndefined();
   });
 
+  // ct-59925. The settle reads the transcript the Stop hook was handed for open
+  // background work, never the daemon's index, which can miss a fresh session.
+  test("Stop forwards transcript_path", () => {
+    const out = runHook({ session_id: "stop-path", hook_event_name: "Stop", transcript_path: "/tmp/stop-path.jsonl" });
+    expect(out.status).toBe("idle");
+    expect(out.transcript_path).toBe("/tmp/stop-path.jsonl");
+  });
+
   // ct-49533. Before this, a resume reported nothing: the row kept a status
   // from before the session was restarted, and the settle classifier filled
   // the vacuum with a verdict for a turn that never happened.
