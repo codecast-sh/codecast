@@ -6,7 +6,7 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -42,7 +42,7 @@ import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { startHostedConversationFor } from "./assistant/entry";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
-import { enqueueCloudSpawn, performCloudHostAction, performSetLocalMirror } from "./cloud";
+import { enqueueCloudSpawn, performCloudHostAction, performSetCloudAutoscale, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
@@ -702,6 +702,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // patches sessionDecisions and decisionStacks on the draft first; these are
   // the server writes the optimistic rows reconcile against.
   reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
+  // A person hands an open question to a teammate or a role; refused by return.
+  passDecision: async (ctx, userId, [decisionId, to]: [string, PassTarget]) => passCore(ctx, userId, decisionId, to),
   // A person's words to the session that owns a decision (decisionDiscussion.ts).
   // A refusal is returned, not thrown: the outbox would redrive a throw forever.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
@@ -1416,9 +1418,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     performSetLocalMirror(ctx as any, userId, convId as Id<"conversations">, { enable, deviceId, ...(typeof opts === "boolean" ? { overwrite: opts } : opts ?? {}) }),
 
   // Settings > Machines: wake, sleep, apply setup, save or delete an image on a
-  // cloud host. The web marks the action running on the roster draft.
-  cloudHostAction: async (ctx, userId, [hostDeviceId, action, imageId]: [string, CloudHostAction, string | undefined]) =>
-    performCloudHostAction(ctx as any, userId, hostDeviceId, action, imageId),
+  // cloud host, or launch another like it (`arg`: the image, or the size).
+  // The web marks the action running on the roster draft.
+  cloudHostAction: async (ctx, userId, [hostDeviceId, action, arg]: [string, CloudHostAction, string | undefined]) =>
+    performCloudHostAction(ctx as any, userId, hostDeviceId, action, arg),
+  // Settings > Machines' autoscale switch on a Linux host (the template). The
+  // web paints the roster row; this stores the policy the laptop reads.
+  setCloudAutoscale: async (ctx, userId, [hostDeviceId, policy]: [string, { enabled: boolean; max_extra: number; size: string }]) =>
+    performSetCloudAutoscale(ctx as any, userId, hostDeviceId, policy),
 
   // Settings > Machines. The web drops the rows from `machineRoster` on the
   // draft; that list is not a dispatch table, so this is the only server write.

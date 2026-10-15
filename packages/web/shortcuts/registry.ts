@@ -216,9 +216,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   // section and comes back on its own at the next wake.
   { key: 'alt+z', action: 'session.snooze', skipInputCheck: true, description: 'Snooze session…' },
   { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
+  // Ctrl+N opens the new-session popup over the current view; Ctrl+Alt+N the
+  // same surface as a page in the main window. Ctrl+Shift+N is the desktop's
+  // system-wide chord for the popup, so in the app it opens the popup too.
   { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
-  { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
-  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
+  { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (page)' },
+  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'New session (popup)' },
   // The docked composer: small, non-modal, any number at once. M as in mini.
   // Ctrl+Shift+N stays the desktop's global chord for the compose popup.
   // worksInModal because the same chord minimizes the center modal, whose

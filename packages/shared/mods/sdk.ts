@@ -184,6 +184,15 @@ async function onMessage(msg: HostToFrame): Promise<void> {
     }
     case "render": {
       const surface: ModSurface = msg.surface;
+      if (surface.kind === "resolve") {
+        try {
+          const value = await dispatch("object.resolve", { object: surface.id, id: surface.props.id, context }, makeApi(msg.key, "ui"), () => null);
+          post({ type: "rendered", rid: msg.rid, value: serializeValue(value ?? null, msg.key, new Map()) });
+        } catch (err) {
+          post({ type: "rendered", rid: msg.rid, error: errorText(err) });
+        }
+        return;
+      }
       const e = { surface: surface.kind, [surface.kind]: surface.id, props: surface.props ?? {}, context };
       try {
         let passed = false;

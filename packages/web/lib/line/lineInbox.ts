@@ -113,6 +113,8 @@ export type LineInboxInput = {
   trialProjects?: ReadonlySet<string>;
   /** The viewer: a problem assigned to them waits on them, since the line never starts a problem a person holds. */
   viewer?: string | null;
+  /** Tasks a run's decision is about that are not line problems in view, by id: the decision still names its problem. */
+  otherTasks?: ReadonlyMap<string, { title: string; short_id: string | null; project_id: string | null }>;
   now: number;
 };
 
@@ -136,6 +138,8 @@ export type TrialInboxCard = {
   decision?: { _id: string; short_id: string | null; status: string } | null;
   /** Sent back to rebuild on main: on its way to the next card, so it waits on nobody now. */
   rebuilding?: unknown;
+  /** It settles an expectations proposal: its Apply writes the project's expectations. */
+  expectations?: boolean;
   /** The run waits at a step its line no longer has: no answer has anywhere to go until it is asked again. */
   stale_gate?: boolean;
   /** Where its run stands: a card no session posted is answered straight into its run's gate while the run is paused. */
@@ -269,6 +273,19 @@ function orParts(text: string): string[] {
   return out.map((x) => x.replace(/^[\s,]+|[\s,]+$/g, "")).filter(Boolean);
 }
 
+/** The alternatives' end: a clause after them that says why the answer matters (", since the fix lives in a different
+ *  place for each", ": say which, because that decides if the fix is code, prompt or telephony") is not one of them. */
+function alternativesEnd(text: string): string {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (/^[:;]\s/.test(text.slice(i, i + 2)) || /^,\s+(?:since|because|as|given|so that|which)\b/i.test(text.slice(i)))) return text.slice(0, i);
+  }
+  return text;
+}
+
 /**
  * The ask as the question it is (LJ6.2). Grounding names what it does not know as a statement ("nothing says whether
  * Quinn has actually left (so Riley is correct) or is still active (so the switch is the bug)"); a person answers a
@@ -284,7 +301,7 @@ export function askAsQuestion(ask: string): { question: string; choices: AskChoi
   // "Say which behavior it is about, and whether the rule covers it": the whether is one part of a larger ask, and
   // asking it alone would drop the rest. Such an ask is read as written.
   if (/\b(?:and|but)\s*$|,\s*$/i.test(t.slice(0, m.index).trim()) || /\bwhether\b/i.test(m[1])) return { question: t, choices: [] };
-  const alts = orParts(m[1]);
+  const alts = orParts(alternativesEnd(m[1]));
   // Cut at the note's cap, its end is lost. When the cut fell inside a later alternative ("whether A or from th…"),
   // A is whole: it is asked as a yes or no, A is its one-press answer, and the lost alternative is what the
   // "Something else" box is for. Cut inside the first alternative, nothing is whole and it is read as written.
@@ -331,11 +348,12 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
   const isFix = (x: (typeof input.decisions)[number]) => isLineCard(x) || (x.status === "pending" && !!x.workflow_run_id && !!x.task_id && byId.has(x.task_id));
   for (const d of input.decisions.filter((x) => isFix(x) && !x.trial).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))) {
     const t = d.task_id ? byId.get(d.task_id) : undefined;
-    // A card whose problem is not in view still names itself: its own question and ref.
-    const own = t ? null : { title: oneLine(d.question) ?? "A card", ref: d.short_id ?? null };
+    // A card whose problem is not a line problem in view still names the task it is about, else its own question and ref.
+    const other = !t && d.task_id ? input.otherTasks?.get(d.task_id) : undefined;
+    const own = t ? null : other ? { title: other.title, ref: other.short_id, projectId: other.project_id } : { title: oneLine(d.question) ?? "A card", ref: d.short_id ?? null };
     const card = (d as { card?: { headline?: string; recommend?: { verdict?: string } | null } | null }).card;
     // A card names its fix in its headline; a plain decision asks its own question.
-    rows.push({ ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: t ? oneLine(card?.headline) ?? decisionAsk(d.question) : null, runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null });
+    rows.push({ ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: t || other ? oneLine(card?.headline) ?? decisionAsk(d.question) : null, runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null });
   }
 
   // Trial cards, oldest first: each is a trial run paused at its gate, waiting on the answer (trialCardWaits). One its
@@ -353,7 +371,7 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
       at: c.created_at, ask: trialAsk(c), runId: c.run_id, cardId: c._id, cardRef: c.short_id, decisionRef: c.decision?.short_id ?? c.decision?._id ?? null, trial: true,
       ...(answerable ? (() => { const h = trialHoldChip(c as unknown as TrialCardRow); return { hold: h?.words ?? null, holdLabel: h?.label ?? null }; })() : { hold: c.stale_gate ? "The step this run waits at was removed from the line, so an answer has nowhere to go" : "No session asked this card, so there is nobody to answer", holdLabel: reaskWhy(c) }), failing: card?.checks?.filter((k) => !k.ok).length ?? 0,
       // A judge fix carries its measured verdict ("better"), not a recommendation of its own.
-      recommend: card?.recommend?.verdict ?? c.judge_fix?.ab?.verdict ?? null, publishes: !!c.judge_fix,
+      recommend: card?.recommend?.verdict ?? c.judge_fix?.ab?.verdict ?? null, publishes: !!c.judge_fix || !!c.expectations,
     });
   }
 

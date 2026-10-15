@@ -11,15 +11,12 @@ import { FACE_CARD_WIDTH } from "../../lib/faces/layout";
 // Reads by member id and subscribes only while mounted: the row itself never
 // subscribes to session churn for the sake of a card nobody is looking at.
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, MessageSquare, X } from "lucide-react";
+import { ArrowRight, ChevronRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenSession } from "../../hooks/useOpenSession";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
-import { useOpenDm } from "../../hooks/useOpenDm";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import { dmUnreadOf } from "../../lib/faces/faceRow";
-import { formatRelative } from "../../lib/utils";
 import { PRESENCE_META, localTimeLine, memberDisplayName, presenceLine, teammateWhereabouts } from "../presence/memberPresence";
 import { useMemberActivity } from "../presence/useMemberActivity";
 import { useMemberHuddle } from "../presence/useMemberHuddle";
@@ -113,24 +110,6 @@ function FaceCardBody({
 
   const huddle = useMemberHuddle(member, viewerId, liveRoom, displayName);
   const readFocus = useFaceChatFocus(memberId);
-  const openDm = useOpenDm();
-  const messageThem = () => {
-    onClose();
-    openDm([memberId]);
-  };
-
-  // The unread count their face wears, said in words with the line itself,
-  // so the badge on the row has an obvious way through to the message.
-  // Subscribed by signature: the rail row is a fresh object on every push.
-  const dmSig = useInboxStore((s) => {
-    const d = isSelf ? null : dmUnreadOf(s, memberId);
-    return d ? `${d.channelId}|${d.unread}|${d.at ?? ""}` : "";
-  });
-  const dm = useMemo(
-    () => (dmSig ? dmUnreadOf(useInboxStore.getState(), memberId) : null),
-    [dmSig, memberId],
-  );
-
   // Where they are: the session they have open, by the palette's own rule
   // (teammateWhereabouts). Only the title is subscribed, never the row.
   const where = useMemo(() => teammateWhereabouts([member], viewerId, "")[0]?.conversationId ?? null, [member, viewerId]);
@@ -148,29 +127,6 @@ function FaceCardBody({
   const setStatus = (status: "available" | "busy" | "away") => {
     useInboxStore.getState().setMyStatus(status);
   };
-
-  // The unread DM said in words: the messages section's stand-in.
-  const dmLine = dm && (
-    <button
-      type="button"
-      className="face-card-dm"
-      title={`Open your conversation with ${displayName}`}
-      onClick={messageThem}
-    >
-      <span className="face-card-dm-head">
-        <MessageSquare className="face-card-dm-icon" />
-        <span className="face-card-dm-count">
-          {dm.unread > 99 ? "99+" : dm.unread} new message{dm.unread === 1 ? "" : "s"}
-        </span>
-        {dm.at && <span className="face-card-dm-at">{formatRelative(dm.at, now)}</span>}
-        <span className="face-card-dm-go">
-          Reply
-          <ArrowRight className="face-card-dm-arrow" />
-        </span>
-      </span>
-      {dm.preview && <span className="face-card-dm-preview">{dm.preview}</span>}
-    </button>
-  );
 
   return (
     <div
@@ -217,11 +173,10 @@ function FaceCardBody({
         )}
       </Who>
 
-      {/* What they have been saying, with a reply box, above the ways to
-          reach them. With nothing from them in this window, the unread DM
-          line stands in. Your own card and an agent's have neither. */}
+      {/* The conversation with them and a reply box, above the ways to
+          reach them. Your own card and an agent's have neither. */}
       {!isSelf && !member.is_bot && (
-        <FaceMessages memberId={memberId} name={displayName} focus={readFocus} onLeave={onClose} fallback={dmLine} />
+        <FaceMessages memberId={memberId} name={displayName} focus={readFocus} onLeave={onClose} />
       )}
 
       {/* Where they are, and the one gesture that goes there with them. */}
@@ -275,7 +230,7 @@ function FaceCardBody({
         // An agent: nothing here calls or messages it (the server refuses a
         // DM to a bot). Its profile is the door above.
         <div className="face-card-agent">Agent: talk to it in its session or a channel</div>
-      ) : (
+      ) : !isSelf && !callsEnabled ? null : (
       <div className="face-card-actions" data-switch={isSelf ? "1" : undefined}>
         {isSelf ? (
           // Your own card is the status switch: the one action that makes
@@ -299,8 +254,7 @@ function FaceCardBody({
             roomKey={faceKey?.roomKey ?? ""}
             ringIds={[memberId]}
             huddle={callsEnabled ? huddle : undefined}
-            show={callsEnabled ? ["talk", "ring", "message"] : ["message"]}
-            onMessage={messageThem}
+            show={["talk", "ring"]}
             size="sm"
             className="face-actions-fill"
           />

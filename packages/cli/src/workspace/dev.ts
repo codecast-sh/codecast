@@ -23,6 +23,7 @@ import { execSync, spawn } from "../proc.js";
 import { codecastPath } from "../codecastDir.js";
 import { worktreeEnv } from "../worktreeEnv.js";
 import { isPortFree } from "./ports.js";
+import { memoryDeath, oomKillCount, thisMachineTooSmall } from "../repoNeed.js";
 import type { ServiceSpec, WorkspaceManifest } from "./types.js";
 
 export interface DevService {
@@ -176,6 +177,8 @@ export interface StartOptions {
   /** Wait at most this long for readiness (default: the service's ready_timeout_sec, else 180). */
   timeoutSec?: number;
   onWait?: (svc: DevService, seconds: number) => void;
+  /** A line worth saying before the wait: this machine is smaller than the repo needs. */
+  onNote?: (line: string) => void;
 }
 
 /** Ensure one service is serving in this checkout; reuse it when it already is. */
@@ -206,6 +209,7 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   fs.mkdirSync(path.dirname(log), { recursive: true });
   const fd = fs.openSync(log, "w");
   const command = svc.spec.start!;
+  const oomBefore = oomKillCount();
   const child = spawn("bash", ["-c", command], {
     cwd: opts.checkout,
     env: runEnv as NodeJS.ProcessEnv,
@@ -217,13 +221,22 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   const closeFd = () => { try { fs.closeSync(fd); } catch { /* closed */ } };
   child.once("spawn", closeFd);
   child.once("error", closeFd);
+  // How it ended, if it ends while we wait: a memory kill is reported as one.
+  let killed = false;
+  child.once("exit", (code, signal) => { killed = signal === "SIGKILL" || code === 137; });
   child.unref();
   if (!child.pid) return { name: svc.name, state: "failed", reason: `could not start: ${command}` };
   const record: DevRecord = {
     name: svc.name, pid: child.pid, port, url, command, cwd: opts.checkout, log, startedAt: new Date().toISOString(),
   };
   writeRecord(opts.checkout, record);
+  const small = thisMachineTooSmall(opts.checkout);
+  if (small) opts.onNote?.(small);
   const status = await waitReady(svc, record, probe, opts);
+  if (status.state === "failed" && status.reason === "the server exited") {
+    const memory = memoryDeath({ what: `the ${svc.name} server`, killed, oomBefore, oomAfter: oomKillCount(), repoRoot: opts.checkout });
+    if (memory) return { ...status, reason: memory };
+  }
   return status.state === "running" ? { ...status, state: "started" } : status;
 }
 
