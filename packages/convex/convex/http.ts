@@ -1544,6 +1544,8 @@ http.route({
           to: body.to,
           // LE11: the change card the decision is about.
           card: body.card,
+          // LM5: the expectations proposal the decision settles.
+          proposal: body.proposal,
         });
       }
 
@@ -4195,6 +4197,7 @@ cliRoute("/cli/org/proposal/accept-all", async (ctx, body) => ctx.runMutation((a
 cliRoute("/cli/org/proposal/decide-ask", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decideAsk, body));
 cliRoute("/cli/org/proposal/withdraw", async (ctx, body) => ctx.runMutation((api as any).orgProposals.withdraw, body));
 cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api as any).orgProposals.revise, body));
+cliRoute("/cli/org/proposal/hire", async (ctx, body) => ctx.runMutation((api as any).orgProposals.decideHire, body));
 // Roles hired from a template (docs/architecture/org-hire.md W8): the template
 // as a server object, the instance row and its record, lessons back to the
 // publisher. Reads are one equality against the caller's workspace key or the
@@ -4836,6 +4839,8 @@ cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(ap
 cliRoute("/cli/workflow-runs/live-on-device", async (ctx, body) => ctx.runMutation(api.workflow_runs.liveRunsForDevice, body));
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
+// `cast workflow reask`: a run's decision asked again by the stations as they are now.
+cliRoute("/cli/workflow-runs/reask", async (ctx, body) => ctx.runMutation(api.workflow_runs.reaskFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.

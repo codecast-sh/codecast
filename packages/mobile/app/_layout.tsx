@@ -283,13 +283,21 @@ function RootLayoutNav() {
                       header is off from the first frame. reveal=1 is a session
                       the new session sheet just started: pushed with no
                       transition under the sheet, so it is already there when
-                      the sheet slides away. */}
+                      the sheet slides away. swap=1 is a conversation picked
+                      from another's inbox panel, replacing it in place. */}
                   <Stack.Screen
                     name="session/[id]"
                     options={({ route }) => ({
                       title: 'Conversation',
                       headerShown: false,
-                      animation: (route.params as { reveal?: string } | undefined)?.reveal ? 'none' : 'default',
+                      animation: (() => {
+                        const p = route.params as { reveal?: string; swap?: string } | undefined;
+                        return p?.reveal || p?.swap ? 'none' : 'default';
+                      })(),
+                      // A rightward drag on a conversation uncovers the inbox
+                      // behind it (components/inbox/ConversationSlideOut), so
+                      // the edge swipe is that panel's, not a pop.
+                      gestureEnabled: false,
                     })}
                   />
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />

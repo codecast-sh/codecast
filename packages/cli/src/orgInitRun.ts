@@ -327,6 +327,17 @@ export async function listProposals(deps: OrgInitDeps, options: any): Promise<vo
   }
 }
 
+export async function decideHire(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
+  if (!/^op-\d+$/.test(ref) || !!options.approve === !!options.reject) fail(`Usage: cast org hire op-N --approve|--reject [--note <text>]; got ${ref}`);
+  const from_session = deps.callingSession();
+  if (!from_session) fail("cast org hire runs inside a role's standing session; a person decides a hire on the proposal's card");
+  const r = await deps.cliPost("/cli/org/proposal/hire", { proposal: ref, verdict: options.approve ? "accept" : "skip", from_session, ...(options.note ? { text: options.note } : {}) });
+  if (!r || r.error) fail(r?.error ?? `Could not decide ${ref}.`);
+  if (options.json) { console.log(JSON.stringify(r, null, 2)); return; }
+  for (const row of r.results ?? []) console.log(`  ${statusTag(row.status)} ${row.line ?? ""}${row.note ? ` ${fmt.muted(row.note)}` : ""}`);
+  console.log(`${fmt.success("✓")} ${fmt.highlight(ref)} ${options.approve ? "approved" : "rejected"}${r.remaining ? fmt.muted(` · ${r.remaining} still applying`) : ""}`);
+}
+
 // ── apply ────────────────────────────────────────────────────────────────────
 
 export async function apply(deps: OrgInitDeps, ref: string, options: any): Promise<void> {

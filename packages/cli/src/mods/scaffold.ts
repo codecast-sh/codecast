@@ -2,7 +2,7 @@
 // command and a fence) so the first `cast mod dev` shows something real, and
 // the author edits from there instead of from an empty file.
 
-import { MANIFEST_FILE, TYPES_FILE, authoringTypes } from "./build.js";
+import { AGENTS_FILE, MANIFEST_FILE, TYPES_FILE, authoringTypes } from "./build.js";
 
 function titleOf(name: string): string {
   return name.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
@@ -94,6 +94,9 @@ export const register: Register = (on) => {
   return {
     [MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
+    // What every session this mod applies to is told about it. Rewrite it as
+    // the mod grows: its objects, its blocks, and when an agent should reach for them.
+    [AGENTS_FILE]: `When a point deserves a callout, write a \`\`\`${name}-note block holding it in markdown; it draws as a note card.\n`,
     "ui.tsx": ui,
     "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
     [TYPES_FILE]: authoringTypes(),

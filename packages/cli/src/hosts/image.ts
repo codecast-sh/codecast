@@ -136,6 +136,21 @@ export function latestBaseImage(opts: { region: string; profile?: string }, plat
 }
 
 /**
+ * Canonical's current Ubuntu 24.04 x86_64 image in the region: what a Linux
+ * host starts from when there is no codecast image yet. Provisioning installs
+ * everything on top, so a plain image only makes the first boot longer.
+ */
+export function ubuntuImage(opts: { region: string; profile?: string }): ImageRef | null {
+  try {
+    const out = aws(opts, ["ssm", "get-parameter", "--name", "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"]);
+    const id = out?.Parameter?.Value;
+    return typeof id === "string" && /^ami-[a-f0-9]+$/.test(id) ? { id, name: "Ubuntu 24.04 (Canonical)", created: out.Parameter.LastModifiedDate ?? "", platform: "linux" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * cloud-init user data for a host launched from a codecast image: once per
  * instance, early in boot, before the codecast daemon starts.
  */

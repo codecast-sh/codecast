@@ -41,6 +41,7 @@ import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { openCompose } from '@/lib/compose';
 import { ComposeButton } from '@/components/session/ComposeButton';
+import { InboxLensBar } from '@/components/inbox/InboxLensBar';
 
 /** How a hosted inbox section draws: its same-name suffixes, whether it
  *  waits on the person (the accent dot), and whether it never folds. */
@@ -144,6 +145,19 @@ class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactN
 }
 
 export default function InboxScreen() {
+  return <InboxView />;
+}
+
+/** The inbox list. The tab shows it whole; a conversation's slide-out panel
+ *  shows it as `panel`, where a row opens in place of the conversation
+ *  (`onOpenSession`) and `currentId`'s row is marked as the one on screen. */
+export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
+  panel?: boolean;
+  currentId?: string;
+  onOpenSession?: (conversationId: string, messageId?: string) => void;
+  /** The panel's title leaves for the inbox tab. */
+  onExit?: () => void;
+} = {}) {
   const Theme = useTheme();
   // Both list memos below bake palette values into React nodes.
   const scheme = useActiveScheme();
@@ -174,6 +188,10 @@ export default function InboxScreen() {
     router.setParams({ ask: undefined });
   }, [ask, openNewSession, router]);
   const isSearching = searchQuery.trim().length >= 2;
+  const openSession = useCallback((conversationId: string, messageId?: string) => {
+    if (onOpenSession) onOpenSession(conversationId, messageId);
+    else router.push(`/session/${conversationId}${messageId ? `?message=${messageId}` : ''}`);
+  }, [onOpenSession, router]);
 
   // The rows as the shared chokepoint places them (hooks/useInboxPlacement):
   // the same computation the slide-out panel's counts and web run. The body
@@ -434,7 +452,8 @@ export default function InboxScreen() {
       titleSuffix={titleSuffix}
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
-      onPress={() => router.push(`/session/${s._id}`)}
+      selected={currentId === s._id}
+      onPress={() => openSession(s._id)}
       onDismiss={() => handleStash(s._id)}
       onLongPress={() => handleSessionLongPress(s)}
       awaiting={questionIds.has(s._id)}
@@ -442,7 +461,7 @@ export default function InboxScreen() {
       roleSessions={roleSessionsByLead.get(s._id)}
       onOpenRole={s.role?.short_id ? () => router.push(`/org/${s.role!.short_id}`) : undefined}
     />
-  ), [router, handleStash, handleSessionLongPress, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
+  ), [router, openSession, currentId, handleStash, handleSessionLongPress, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -707,7 +726,7 @@ export default function InboxScreen() {
                 key={s._id}
                 session={s as SessionData}
                 variant="stashed"
-                onPress={() => router.push(`/session/${s._id}`)}
+                onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
                 onKill={() => confirmKill(s._id)}
               />
@@ -725,7 +744,7 @@ export default function InboxScreen() {
                 key={s._id}
                 session={s as SessionData}
                 variant="killed"
-                onPress={() => router.push(`/session/${s._id}`)}
+                onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
               />
             ))
@@ -736,7 +755,7 @@ export default function InboxScreen() {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed, scheme, words, hostedMode]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKill, confirmKillAllStashed, scheme, words, hostedMode]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
@@ -764,9 +783,9 @@ export default function InboxScreen() {
   }, [listHeight > 0, activeProjectFilter, activeBucketFilter]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={panel ? ['top', 'bottom', 'left'] : ['top']}>
       <RNView style={styles.header}>
-        <TouchableOpacity
+        {!panel && <TouchableOpacity
           style={styles.menuBtn}
           onPress={() => { void Haptics.selectionAsync(); setInboxDrawerOpen(true); }}
           activeOpacity={0.6}
@@ -775,11 +794,11 @@ export default function InboxScreen() {
           accessibilityLabel="Projects, labels and views"
         >
           <Feather name="menu" size={21} color={Theme.text} />
-        </TouchableOpacity>
+        </TouchableOpacity>}
         {filterName ? (
           <RNView style={styles.filterTitle}>
             <RNView style={[styles.filterDot, { backgroundColor: filterColor }]} />
-            <RNText style={[styles.headerTitle, styles.headerTitleShrink]} numberOfLines={1} onPress={() => setInboxDrawerOpen(true)}>{filterName}</RNText>
+            <RNText style={[styles.headerTitle, styles.headerTitleShrink]} numberOfLines={1} onPress={panel ? onExit : () => setInboxDrawerOpen(true)}>{filterName}</RNText>
             {shownCount > 0 && !isSearching && <RNText style={styles.headerCount}>{shownCount}</RNText>}
             <TouchableOpacity onPress={clearFilter} hitSlop={10} accessibilityLabel="Show all sessions">
               <Feather name="x-circle" size={17} color={Theme.textMuted0} />
@@ -787,7 +806,7 @@ export default function InboxScreen() {
           </RNView>
         ) : (
           <>
-            <RNText style={styles.headerTitle}>Inbox</RNText>
+            <RNText style={styles.headerTitle} onPress={panel ? onExit : undefined}>Inbox</RNText>
             {shownCount > 0 && !isSearching && <RNText style={styles.headerCount}>{shownCount}</RNText>}
           </>
         )}
@@ -809,6 +828,8 @@ export default function InboxScreen() {
         )}
         <ComposeButton />
       </RNView>
+
+      {!isSearching && <InboxLensBar />}
 
       {(searchOpen || searchQuery.length > 0) && (
         <RNView style={styles.searchContainer}>
@@ -843,7 +864,7 @@ export default function InboxScreen() {
         <SearchErrorBoundary resetKey={debouncedQuery}>
           <SearchResults
             query={searchQuery}
-            onOpenSession={(conversationId, messageId) => router.push(`/session/${conversationId}${messageId ? `?message=${messageId}` : ''}`)}
+            onOpenSession={openSession}
           />
         </SearchErrorBoundary>
       ) : (

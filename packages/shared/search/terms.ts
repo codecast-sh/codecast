@@ -11,6 +11,8 @@
 // HOW it matched is the ranking signal: a whole word beats the inside of a
 // longer one, and query words found side by side beat the same words scattered.
 
+import { normalizeQueryQuotes } from "./tokenize";
+
 export type ParsedTerms = {
   phrases: string[];
   words: string[];
@@ -46,6 +48,7 @@ const SEPARATOR_RUN = "[\\s\\-_]*";
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function parseQueryTerms(query: string): ParsedTerms {
+  query = normalizeQueryQuotes(query);
   const phrases: string[] = [];
   const rawWords: string[] = [];
   const regex = /"([^"]+)"|(\S+)/g;
