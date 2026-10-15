@@ -147,6 +147,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
     const act = r.stand.act;
     if (!act) return null;
     // Grounding found nothing to change: the person closes it, here as on its page.
+    if (act === "fixed") return <CloseProblem taskRef={r.issue.ref ?? r.id} title="Close it: main already carries its fix" label="Close as fixed" primary={false} />;
     if (act === "close") return <CloseProblem taskRef={r.issue.ref ?? r.id} title="Close it: the line found nothing to change" label="Close: nothing to change" primary={false} />;
     // A twin folded under its older problem: the line would run the same defect twice, so it merges in.
     if (act === "mergeinto" && r.dupOf && r.issue.ref) {
@@ -246,7 +247,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
       {sections.length ? (
         // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the rows are the controls; this only moves focus between them
         <div className="lwp-rows" onKeyDown={moveRow}>
-          <ProblemTable sections={sections} now={workspace.now} range={range} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} />
+          <ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} />
         </div>
       ) : (
         <div className="lw-empty lwp-none" data-line-problems-none="">

@@ -5,13 +5,13 @@ import "./chat.css";
 // The image picker in a framed composer's foot row. Picked files go through the
 // same drop handler MessageInput fills, so they land in its thumbnail strip and
 // upload pipeline exactly like a paste or a drop.
-export function ComposerAttachButton({ dropRef }: { dropRef: MutableRefObject<((files: File[]) => void) | null> }) {
+export function ComposerAttachButton({ dropRef, className = "ch-composer-attach" }: { dropRef: MutableRefObject<((files: File[]) => void) | null>; className?: string }) {
   const pickerRef = useRef<HTMLInputElement | null>(null);
   return (
     <>
       <button
         type="button"
-        className="ch-composer-attach"
+        className={className}
         title="Attach an image"
         aria-label="Attach an image"
         onClick={() => pickerRef.current?.click()}
