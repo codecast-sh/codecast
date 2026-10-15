@@ -447,6 +447,22 @@ decision card (`convex/lineTrial.ts`).
   `cast line trial rerun --reask` asks such a gate again from its station,
   which writes its decision anew. Cards from before keep their own question,
   options and answer.
+- **An expectation proposal is a station's trial decision too.** A station
+  that runs `cast expectations propose` in a trial project (the judge route's
+  Fix, when the fix is the expectation line) asks the proposal itself, with
+  `cast decide --proposal xp-N` (its own question, answers and page, the-line-model.md
+  LM5), on the same rail: flagged `trial`, bound to the
+  run's task, routed as that run's other decisions are (the judge route's
+  decider, else the trial owner's practice answer), and filed as a
+  `trial_cards` row on the station's node (also when another session re-asks
+  it: it routes and files as the station that proposed it), so it is in For you with the run's
+  other trial decisions and on the review page under Our tooling. It was
+  asked off any gate: no later gate of the run closes it, and its answer
+  applies or drops the proposal without moving the run
+  (`lineTrial.answerTrialDecision`). The run can wait on it as on any
+  decision (`cast task dep --blocked-by sd-N`). A trial proposal from a
+  session that is no station of a run in that trial asks nobody and waits on
+  the review page's Our tooling lane.
 - **Nothing ships.** The trial graph has no push, merge or watch station, its
   card's answers end at nodes that record them, `orgLineMerge.check` refuses a
   trial run's merge whatever graph it runs, and the role sweep never starts a
@@ -483,12 +499,18 @@ decision card (`convex/lineTrial.ts`).
   sweep resumes each at the same card (a waiting trial card counts as an open
   gate, `gate_card`), and `cast line trial rerun <ct-N> --reask` asks a
   waiting card again on current stations.
-- **What it costs.** `lineTrial.spend` (`cast line trial`, the page's header):
-  the team's model budget by purpose since the trial began, plus the line
-  runs' station sessions priced from their token totals as the Spend chart
-  prices them, plus spend outside codecast (`cast line trial spend add`; the
-  same amount and words within an hour is refused as a repeat unless
-  `--force`, and `spend rm <at>` takes an entry back).
+- **What it costs.** `lineTrial.spend` (`cast line trial`, the page's header)
+  reports two kinds that never add. Billed money: the team's model budget by
+  purpose since the trial began, the money billed outside codecast (`cast
+  line trial spend add --billed-by <key>`, grouped by that key; the same
+  amount and words within an hour is refused as a repeat unless `--force`,
+  and `spend rm <at>` takes an entry back), and any line-run session on a
+  metered provider key. Subscription use: the line runs' Claude Code and Codex
+  sessions, which run on the machine's logins and bill nothing; their tokens,
+  their API list price as an equivalent only, and the quota of the accounts
+  they run on (the usage snapshots each machine reports, the source `cast
+  usage` reads). The dispatcher's `cap_usd` limits billed money; quota at the
+  `cast usage` warning line (85%) holds runs (`lineTrial.trialRoom`).
 
 ## LL13. Closing a problem without a fix
 

@@ -36,7 +36,8 @@ export type ReportRun = {
   gate_answer?: string;
   gate_decision_short_id?: string;
   gate_decision_status?: string;
-  card_cost_usd?: number;
+  card_billed_usd?: number;
+  card_list_usd?: number;
   graph_hash?: string;
   /** Each station's own hash in that graph (runner graphNodeHashes), so two versions say which stations changed. */
   graph_nodes?: Array<{ id: string; h: string }>;
@@ -440,15 +441,18 @@ const DOES: Record<string, string> = {
   prove_line: "Names the recorded runs where the line itself did what the problem describes",
   red: "Runs the test before the change, to see it fail; for a change to the line, checks the named runs against the records",
   dissolve: "Closes the problem when it does not reproduce",
+  unproven: "Stops when the problem could be neither shown nor ruled out",
   implement: "Builds the change",
   implement_line: "Builds a change to the line itself",
   ask: "A person answers the builder's question, or drops the problem",
   reopen: "Sends the change back to build with the person's note",
+  stopped: "Stops when the planner or the builder cannot go on, and leaves the problem open with why",
   verify: "Runs the project's checks",
   green: "Runs the test with the change, to see it pass",
   eval: "Runs the evals before and after the change",
   unscored: "Stops when the evals cannot score the change",
   review: "Reviews the diff against the problem",
+  rejected: "Stops when the reviewer rejects the change, and leaves the problem open with the note",
   card_draft: "Gathers the facts you decide on: the change, its proof and its cost",
   card_write: "Writes that summary in plain words",
   card: "Checks the summary is complete before it reaches you",
@@ -1172,7 +1176,7 @@ export function causeRunEntries(runs: ReadonlyArray<ReportRun>, newest = runs[0]
 
 // ── versions: what each graph delivered (LE14) ───────────────────────────────
 
-export type LineVersion = { hash: string; first: number; last: number; runs: number; shipped: number; revised: number; dropped: number; stopped: number; reopened: number; costUsd: number | null; live: number; nodes: ReportRun["graph_nodes"] | null; change: string };
+export type LineVersion = { hash: string; first: number; last: number; runs: number; shipped: number; revised: number; dropped: number; stopped: number; reopened: number; billedUsd: number | null; listUsd: number | null; live: number; nodes: ReportRun["graph_nodes"] | null; change: string };
 
 const stationName = (id: string) => stepLabel({ id, label: SHIPPED_LINE.nodes.find((n) => n.id === id)?.label });
 const names = (ids: string[]) => (ids.length > 2 ? `${ids.length} stations` : ids.map(stationName).join(" and "));
@@ -1203,7 +1207,7 @@ export function lineVersions(runs: ReadonlyArray<ReportRun>, reopenedAt: (taskId
   for (const r of runs) {
     if (!isLineRun(r.node_statuses)) continue;
     const hash = r.graph_hash || "unrecorded";
-    const v = out.get(hash) ?? { hash, first: r.created_at, last: r.created_at, runs: 0, shipped: 0, revised: 0, dropped: 0, stopped: 0, reopened: 0, costUsd: null, live: 0, nodes: null, change: "" };
+    const v = out.get(hash) ?? { hash, first: r.created_at, last: r.created_at, runs: 0, shipped: 0, revised: 0, dropped: 0, stopped: 0, reopened: 0, billedUsd: null, listUsd: null, live: 0, nodes: null, change: "" };
     v.runs++;
     v.first = Math.min(v.first, r.created_at);
     v.last = Math.max(v.last, r.created_at);
@@ -1217,7 +1221,10 @@ export function lineVersions(runs: ReadonlyArray<ReportRun>, reopenedAt: (taskId
     if (ran(r, "reopen")) v.revised++;
     if (r.status === "failed" && end?.kind !== "shipped" && end?.kind !== "dropped") v.stopped++;
     if (r.status === "running" || r.status === "paused" || r.status === "pending") v.live++;
-    if (typeof r.card_cost_usd === "number") v.costUsd = (v.costUsd ?? 0) + r.card_cost_usd;
+    if (typeof r.card_billed_usd === "number") {
+      v.billedUsd = (v.billedUsd ?? 0) + r.card_billed_usd;
+      v.listUsd = (v.listUsd ?? 0) + (r.card_list_usd ?? 0);
+    }
     out.set(hash, v);
   }
   // Each recorded version against the one that ran before it.

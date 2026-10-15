@@ -44,12 +44,12 @@ test("handleSwitch decides placement and builds its payload with the pure helper
   expect(handleSwitch).toContain("cloudStartFrom: resolveCloudStartFrom(useInboxStore.getState().clientState.ui),");
   // The shared toggle re-parks an existing row (only when the folder would park) so the
   // isolated cloud_spawn in flight is superseded rather than left to build a worktree.
-  const toggle = between("onToggleShared={() => {", "{!picking && recentProjects.length > 0");
+  const toggle = between("onToggleShared: () => {", "startFrom: cloudStartFrom,");
   expect(toggle).toContain("setCloudSharedCheckout(isolated)");
   expect(toggle).toContain('storeSession?.cloud_placement === "pending"');
   expect(toggle).toContain("handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true })");
   // The start-from pick re-parks a pending row the same way (ct-49433).
-  const startFrom = between("onSetStartFrom={(v) => {", "{!picking && recentProjects.length > 0");
+  const startFrom = between("onSetStartFrom: (v) => {", "const pickPlacement");
   expect(startFrom).toContain("setCloudStartFrom(v)");
   expect(startFrom).toContain('storeSession?.cloud_placement === "pending"');
   expect(startFrom).toContain("handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true })");
@@ -78,5 +78,5 @@ test("the agent-box special case and the inline chip row are gone", () => {
   expect(switcher).not.toContain("deviceWakesOnUse(d)");
   expect(switcher).toContain("<MachineChips");
   expect(switcher).toContain("<SessionModeToggles");
-  expect(switcher).toContain("cloudToggleEnabled={cloudToggleAvailable(machineChips, cloudMode)}");
+  expect(switcher).toContain("cloudToggleEnabled: cloudToggleAvailable(machineChips, cloudMode),");
 });

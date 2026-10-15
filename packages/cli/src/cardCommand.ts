@@ -155,17 +155,19 @@ async function branchBase({ cwd, head }: { cwd: string; head: string }, main = "
 }
 
 /**
- * What reaching the card took: the minutes the runs' stations worked and the
- * tokens and dollars of every session they ran (lineTrial.problemCost's run
- * part). A run's wall clock is not its work: a card asked again after a night
- * at its gate read "Built in 1059 min" for a 41 minute build. Where the
- * server does not say the working minutes, the stations' own start-to-finish
- * times are summed here, a waiting gate (no finish) left out.
+ * What reaching the card took: the minutes the runs' stations worked, the
+ * tokens their sessions read and wrote, the money the runs billed (call
+ * nodes, sessions on a metered key) and their subscription sessions at API
+ * list price, an equivalent never billed (lineTrial.problemCost's run part).
+ * A run's wall clock is not its work: a card asked again after a night at its
+ * gate read "Built in 1059 min" for a 41 minute build. Where the server does
+ * not say the working minutes, the stations' own start-to-finish times are
+ * summed here, a waiting gate (no finish) left out.
  */
-export function runCost(runs: Array<{ node_statuses?: Array<{ started_at?: number; completed_at?: number }> }>, priced?: { tokens?: number; run_usd?: number; minutes?: number } | null): { tokens: number; minutes: number; usd: number } {
+export function runCost(runs: Array<{ node_statuses?: Array<{ started_at?: number; completed_at?: number }> }>, priced?: { tokens?: number; run_billed_usd?: number; run_list_usd?: number; minutes?: number } | null): { tokens: number; minutes: number; usd: number; list_usd: number } {
   let ms = 0;
   for (const r of runs) for (const n of r.node_statuses ?? []) if (n.started_at !== undefined && n.completed_at !== undefined) ms += Math.max(0, n.completed_at - n.started_at);
-  return { tokens: priced?.tokens ?? 0, minutes: priced?.minutes ?? ms / 60_000, usd: priced?.run_usd ?? 0 };
+  return { tokens: priced?.tokens ?? 0, minutes: priced?.minutes ?? ms / 60_000, usd: priced?.run_billed_usd ?? 0, list_usd: priced?.run_list_usd ?? 0 };
 }
 
 /**
