@@ -36,7 +36,7 @@ describe("joinRoom rejoin after lease lapse", () => {
             const eqs: Array<[string, any]> = [];
             builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
             const hit = rows.filter((r) => !deleted.includes(r._id) && eqs.every(([f, v]) => String(r[f]) === String(v)));
-            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+            return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
         get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : id === "t1" ? { _id: "t1", name: "T", features: { calls: true, chat: true } } : rows.find((r) => r._id === id) ?? null),
@@ -76,7 +76,7 @@ describe("heartbeat sweeps the room it beats in", () => {
             const eqs: Array<[string, any]> = [];
             builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
             const hit = rows.filter((r) => !deleted.includes(r._id) && eqs.every(([f, v]) => String(r[f]) === String(v)));
-            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+            return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
         get: async (id: string) => rows.find((r) => r._id === id) ?? null,
@@ -170,7 +170,7 @@ describe("joinRoom: stamping a deliberate step into a burst", () => {
             const eqs: Array<[string, any]> = [];
             builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
             const hit = rows.filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
-            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+            return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
         get: async (id: string) =>
@@ -292,7 +292,7 @@ function fakeCtx() {
           const hit = (rows[t] ?? []).filter(
             (r) => eqs.every(([f, v]) => String(r[f]) === String(v)) && gtes.every(([f, v]) => (r[f] ?? 0) >= v),
           );
-          return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
         },
       }),
       get: async (id: string) => {
@@ -1171,7 +1171,7 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
             const hit = (tables[t] ?? []).filter(
               (r) => !deleted.includes(r._id) && eqs.every(([f, v]) => String(r[f]) === String(v)),
             );
-            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+            return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
           },
         }),
         get: async (id: string) =>
