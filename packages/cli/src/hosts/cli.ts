@@ -38,12 +38,15 @@ import { deviceId } from "../remote/device.js";
 import { ssh, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
-import { cloudSeedLabel } from "@codecast/shared/contracts";
+import { CLOUD_HOST_SIZES, cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
-import { registerHostCreateCommand } from "./create.js";
+import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
+import { registerHostResizeCommand } from "./resize.js";
 import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
+import { sharedOwnerSteps } from "../browser/sharedHost.js";
+import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 
 const OK = fmt.success(icons.check);
 
@@ -67,13 +70,55 @@ export const EC2_HOURLY_USD: Record<string, number> = {
   "t3.micro": 0.0104,
   "t3.small": 0.0208,
   "t3.medium": 0.0416,
-  "t3.large": 0.0832,
-  "t3.xlarge": 0.1664,
+  ...Object.fromEntries(CLOUD_HOST_SIZES.map((size) => [size.type, size.hourly_usd])),
   "m5.large": 0.096,
   "m5.xlarge": 0.192,
   "c5.large": 0.085,
   "c5.xlarge": 0.17,
+  "r6a.large": 0.1134,
+  "r6a.xlarge": 0.2268,
+  "r6a.2xlarge": 0.4536,
+  "r6a.4xlarge": 0.9072,
+  "r6a.8xlarge": 1.8144,
+  "r7a.large": 0.15215,
+  "r7a.xlarge": 0.3043,
+  "r7a.2xlarge": 0.6086,
+  "r7a.4xlarge": 1.2172,
+  "r7a.8xlarge": 2.4344,
+  "r7i.large": 0.1323,
+  "r7i.xlarge": 0.2646,
+  "r7i.2xlarge": 0.5292,
+  "r7i.4xlarge": 1.0584,
+  "r7i.8xlarge": 2.1168,
+  "r8g.large": 0.11782,
+  "r8g.xlarge": 0.23564,
+  "r8g.2xlarge": 0.47128,
+  "r8g.4xlarge": 0.94256,
+  "r8g.8xlarge": 1.88512,
 };
+
+/**
+ * Report a host as soon as provisioning learns its device: the server prepares
+ * (rather than plainly starts) launches only on a host some laptop reports on,
+ * and the daemon's own pass may be 15 minutes away. Best effort; that pass
+ * reports it anyway.
+ */
+async function reportHostNow(id: string): Promise<void> {
+  const h = readHosts().find((entry) => entry.id === id);
+  if (!h?.deviceId) return;
+  try {
+    const { buildCloudHostReport } = await import("../cloud/hostReports.js");
+    const { client, api, token } = await (await import("../remote/cli.js")).convexClient();
+    await client.mutation(api.cloud.reportCloudHost, { api_token: token, host_device_id: h.deviceId, report: buildCloudHostReport(h, deviceId()) });
+  } catch { /* the daemon's next report covers it */ }
+}
+
+/** The provision summary's auto-stop line: what the host costs while it sits idle. */
+export function idleStopLine(idleMinutes: number): string {
+  return idleMinutes > 0
+    ? `idle auto-stop: ${idleMinutes}m — after that it powers itself off and costs only its disk`
+    : "idle auto-stop: disabled — it stays up, billing its hourly rate, until you stop it (cast hosts sleep)";
+}
 
 /** gp3 storage, USD per GiB-month. This is the whole bill of a sleeping host. */
 export const GP3_USD_PER_GIB_MONTH = 0.08;
@@ -441,7 +486,8 @@ export function parseHostMirrorStamp(out: string): HostMirrorStamp | null {
   if (!line) return null;
   try {
     const parsed = JSON.parse(line);
-    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string") return null;
+    // A host never mirrored answers with an empty stamp (no applied_at): "never".
+    if (!parsed || typeof parsed !== "object" || typeof parsed.hash !== "string" || !parsed.applied_at) return null;
     return {
       hash: parsed.hash,
       applied_at: typeof parsed.applied_at === "string" ? parsed.applied_at : "",
@@ -886,6 +932,7 @@ export function buildHostsCommand(parent: Command): Command {
   const hosts = parent.command("hosts").description(commandGroup("hosts").description);
   registerHostKeepaliveCommand(hosts);
   registerHostCreateCommand(hosts);
+  registerHostResizeCommand(hosts, EC2_HOURLY_USD);
 
   hosts
     .command("ls", { isDefault: true })
@@ -930,8 +977,11 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--user <name>", "SSH user (ubuntu for Linux, ec2-user for Mac)")
     .option("--provision", "Install tools, sync configuration, and start the remote service")
     .option("--service-user <name>", "With --provision, create a separate Mac login with SSH and passwordless sudo")
-    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string }) => {
+    .option("--idle <minutes>", "With --provision, auto-stop after this many idle minutes (0 disables; default 20)")
+    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string; idle?: string }) => {
       if (o.serviceUser && !o.provision) die("--service-user requires --provision");
+      if (o.idle !== undefined && !o.provision) die("--idle requires --provision");
+      if (o.idle !== undefined) { try { checkIdleMinutes(o.idle); } catch (err) { die((err as Error).message); } }
       const previous = readHosts().find((entry) => entry.id === instanceId);
       const host: CloudHost = {
         id: instanceId, provider: "aws", region: o.region, user: o.user ?? "ubuntu",
@@ -942,24 +992,53 @@ export function buildHostsCommand(parent: Command): Command {
       if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
       upsertHost({ ...previous, ...host, platform: s.platform, user: o.user ?? previous?.user ?? (s.platform === "darwin" ? "ec2-user" : "ubuntu"), address: s.address });
       console.log(`${OK} registered ${instanceId} (${s.platform === "darwin" ? "Mac" : "Linux"}, ${s.state})`);
-      if (o.provision) await hosts.parseAsync(["provision", instanceId, ...(o.serviceUser ? ["--service-user", o.serviceUser] : [])], { from: "user" });
+      if (o.provision) await hosts.parseAsync(provisionArgv(instanceId, o), { from: "user" });
     });
 
   hosts
     .command("provision [id]")
     .description("Set up a Linux or Mac host: agent tools, config sync, and an unattended daemon")
-    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
+    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables; default 20, and 0 on a shared host)")
     .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
+    .option("--shared", "A host several people share, each with their own Linux user and logins: no laptop logins go there, every daemon is a peer, it never auto-stops")
+    .option("--add-user <linux-user>", "Add a person to a shared host: their user, tools and daemon; prints the sign-ins they run there")
+    .option("--github <login>", "With --add-user, let them ssh in with their GitHub account's public keys")
     .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
     .option("--service-user <name>", "Create a separate Mac login with SSH and passwordless sudo; preserves the current login")
     .option("--base", "Build codecast's base Mac image on this fresh AWS Mac instead (codecast maintainers): nothing personal goes on it")
-    .action(async (id: string | undefined, o: { idle: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean }) => {
+    .action(async (id: string | undefined, o: { idle?: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean; shared?: boolean; addUser?: string; github?: string }) => {
       const h = pick(id, "no cloud host registered");
-      const idle = parseInt(o.idle, 10);
-      if (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(idle)) die("Idle minutes must be a nonnegative whole number");
+      if (o.github && !o.addUser) die("--github requires --add-user");
+      if (o.addUser && o.shared) die("--add-user adds a person to a host that is already shared: provision with --shared first, then --add-user");
+      if (o.addUser) {
+        const { addUserToHost } = await import("../browser/provisionLinux.js");
+        const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+        try {
+          const r = addUserToHost(toRemoteHost(up), o.addUser, { github: o.github, address: up.address ?? h.address ?? h.id }, (m) => console.log(fmt.muted(`  ${m}`)));
+          console.log(`${OK} ${o.addUser} added to ${h.id}`);
+          console.log(`  ssh keys: ${r.keys}`);
+          console.log(`  agents:   ${r.agents}`);
+          console.log(`  units:    ${r.units}`);
+          console.log(`\n  ${o.addUser} finishes on the host, with their own accounts:`);
+          for (const step of r.steps) console.log(`    ${step}`);
+        } catch (err) {
+          die((err as Error).message);
+        }
+        return;
+      }
+      if (o.idle !== undefined && (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(parseInt(o.idle, 10)))) die("Idle minutes must be a nonnegative whole number");
+      if (o.shared && (h.platform === "darwin" || h.provider === "scaleway-mac")) die("--shared is for Linux hosts");
+      // A shared host's owner daemon must be rewritten as a peer, or it stays a remote device on the laptop's logins.
+      if (o.shared && !o.daemon) die("--shared needs the daemon step: it turns the owner's daemon into a peer");
       const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
       console.log(`provisioning ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      // Shared stays shared, even provisioned from a laptop that never knew: the host keeps the record.
+      const shared = o.shared === true || h.shared === true ||
+        (up.platform !== "darwin" && up.provider !== "scaleway-mac" && remoteExec(toRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
+      const idle = parseInt(o.idle ?? (shared ? "0" : "20"), 10);
+      // The idle watchdog sees only the host's own login, so it would power off under everyone else.
+      if (shared && idle !== 0) die("A shared host never auto-stops: its idle watchdog cannot see the other people's sessions", "drop --idle, or pass --idle 0");
       try {
         if (o.base) {
           if (up.platform !== "darwin") die("the base image is a Mac image");
@@ -983,6 +1062,7 @@ export function buildHostsCommand(parent: Command): Command {
           patchHost(up.id, { deviceId: report.deviceId, platform: "darwin", idleStopMinutes: 0 });
           console.log(`${OK} Mac ready: ${report.version}, device ${report.deviceId}`);
           await settleMacDesktop(up, remote, report);
+          await reportHostNow(up.id);
           console.log(fmt.muted("  Mac auto-stop is disabled. AWS dedicated host charges continue until the host is released."));
           return;
         }
@@ -992,9 +1072,11 @@ export function buildHostsCommand(parent: Command): Command {
         // is refused while sessions are live) must not leave `cast hosts reach`
         // and forward-agent asking for a provision that already happened.
         const report = await provisionLinuxHost(toRemoteHost(up), {
-          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity,
-          onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION }); },
+          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity, shared,
+          // A shared host's browser runs as its own login, and any user on the box can reach its debugging port.
+          onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION, ...(shared ? { shared: true, browserSync: false } : {}) }); },
         }, (m) => console.log(fmt.muted(`  ${m}`)));
+        await reportHostNow(up.id);
         console.log(`${OK} ${h.id} is a full remote service`);
         console.log(`  chrome:   ${report.chrome.trim()}`);
         console.log(`  cast:     ${report.cast.trim()}`);
@@ -1004,8 +1086,13 @@ export function buildHostsCommand(parent: Command): Command {
         console.log(`  git key:  ${report.git.trim()}`);
         console.log(`  agents:   ${report.agents.trim()}`);
         console.log(`  tools:    ${report.tools.trim()}`);
-        console.log(fmt.muted(`  idle auto-stop: ${idle ? `${idle}m` : "disabled"} — it powers itself off and costs only its disk`));
+        console.log(fmt.muted(`  ${idleStopLine(idle)}`));
         console.log(fmt.muted(`  watch it: cast hosts view`));
+        if (shared) {
+          console.log(`\n  shared host: no laptop's Claude login goes there, so its own login signs in with yours:`);
+          for (const step of sharedOwnerSteps(up.user, up.address ?? h.id)) console.log(`    ${step}`);
+          console.log(fmt.muted(`  add a person: cast hosts provision ${h.id} --add-user <linux-user> --github <login>`));
+        }
       } catch (err) {
         die((err as Error).message);
       }

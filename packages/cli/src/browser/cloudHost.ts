@@ -59,6 +59,8 @@ export interface CloudHost {
   tailnet?: TailnetRecord;
   /** Stop the machine after this long with nothing using it. 0 disables. */
   idleStopMinutes?: number;
+  /** Launched by autoscale (cloud/hostHeadroom): counts against the template's max_extra. */
+  autoscaled?: boolean;
   /** The codecast device id of the daemon on the box, learned over SSH the
    * first time a session is placed there (cloud/prepare.ts). Lets the daemon
    * map a wake request (a device id) back to an instance it can boot. */
@@ -77,6 +79,9 @@ export interface CloudHost {
   reach?: import("../cloud/reach.js").ReachFolder[];
   /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */
   watchdogVersion?: number;
+  /** Several people share this host, each with their own Linux user, logins
+   * and peer daemon (browser/sharedHost.ts). Set by `cast hosts provision --shared`. */
+  shared?: boolean;
   /** Refuse cookie carries into this host's browser (a host shared with
    * teammates). Default: allowed. Set by hand in hosts.json today; a CLI
    * switch must write it through patchHost. Read by cloud/browserSync.ts. */
@@ -244,7 +249,7 @@ function aws(args: string[], region: string, profile?: string): any {
   }
 }
 
-function describeInstance(host: CloudHost): any {
+export function describeInstance(host: CloudHost): any {
   const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
   return r?.Reservations?.[0]?.Instances?.[0];
 }

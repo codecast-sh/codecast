@@ -1,4 +1,5 @@
 import { execFileSync } from "../proc.js";
+import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { sshBase, type RemoteHost } from "../remote/session-move.js";
 
 export function hostReleaseScript(platform: "linux" | "darwin", systemLinks = true): string {
@@ -44,7 +45,8 @@ cp "$stage/cast" "$target.next"
 chmod 755 "$target.next"
 mv -f "$target.next" "$target"
 ln -sf cast "$HOME/.local/bin/codecast"
-${platform === "linux" && systemLinks ? 'sudo ln -sf "$target" /usr/local/bin/cast\nsudo ln -sf "$target" /usr/local/bin/codecast' : ""}
+${platform === "linux" && systemLinks ? `# A shared host keeps /usr/local/bin free of links into homes (docs/architecture/shared-hosts.md).
+if [ ! -e ${SHARED_HOST_MARKER} ]; then sudo ln -sf "$target" /usr/local/bin/cast; sudo ln -sf "$target" /usr/local/bin/codecast; fi` : ""}
 printf 'CAST-RELEASE=%s\\n' "$expected"`;
 }
 

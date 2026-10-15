@@ -113,6 +113,12 @@ export interface HostSpec {
   run: string[];
   /** Simulator platforms a cloud Mac gets (Xcode, the runtime, axe), e.g. ["iOS"]. Ignored on Linux hosts. */
   simulators?: string[];
+  /**
+   * The memory a host needs, in GB, for a session in this repo to do its real
+   * work there: its typecheck, its dev server and a browser beside a few
+   * agents. New hosts are sized to it and placements prefer hosts that have it.
+   */
+  memory_gb?: number;
 }
 
 /**

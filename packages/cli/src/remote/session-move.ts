@@ -35,6 +35,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { readLocalCredential, readLocalCredentialAsync } from "../ccKeychain.js";
 import { remapContextPaths } from "../cloud/mirror/transform.js";
 import { mirrorUntouchedInCheckoutScript } from "../cloud/mirror/apply.js";
+import { SHARED_HOST_PUSH_GUARD, SHARED_HOST_REFUSAL, SHARED_HOST_REFUSED_STATUS } from "./sharedHostGuard.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -584,7 +585,7 @@ export async function gitPullWorktree(
 
 /** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
 function credentialPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json"];
+  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json`];
 }
 
 export interface CredentialPushOutcome {
@@ -639,7 +640,12 @@ export function remoteClaudeLoginLive(host: RemoteHost): boolean {
 export function copyCredentialToRemote(host: RemoteHost): CredentialPushOutcome {
   const gate = readPushableCredential();
   if (!gate.cred) return { pushed: false, reason: gate.reason };
-  execFileSync("ssh", credentialPushArgs(host), { input: gate.cred });
+  try {
+    execFileSync("ssh", credentialPushArgs(host), { input: gate.cred });
+  } catch (err) {
+    if ((err as { status?: number }).status === SHARED_HOST_REFUSED_STATUS) return { pushed: false, reason: SHARED_HOST_REFUSAL };
+    throw err;
+  }
   return { pushed: true, cred: gate.cred };
 }
 
@@ -664,7 +670,7 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error(`ssh exited ${code}: ${stderr.slice(0, 200)}`));
+      else reject(new Error(code === SHARED_HOST_REFUSED_STATUS ? SHARED_HOST_REFUSAL : `ssh exited ${code}: ${stderr.slice(0, 200)}`));
     });
     child.stdin.write(cred);
     child.stdin.end();
@@ -681,7 +687,7 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
 
 /** ssh argv that writes stdin to the remote's provider-key store (0600 via umask). */
 function providerKeysPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/provider-keys.json"];
+  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/provider-keys.json`];
 }
 
 export interface ProviderKeysPushOutcome {
@@ -709,7 +715,7 @@ export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: stri
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve();
-      else reject(new Error(`ssh exited ${code}: ${stderr.slice(0, 200)}`));
+      else reject(new Error(code === SHARED_HOST_REFUSED_STATUS ? SHARED_HOST_REFUSAL : `ssh exited ${code}: ${stderr.slice(0, 200)}`));
     });
     if (blob !== null) { child.stdin.write(blob); }
     child.stdin.end();
@@ -726,7 +732,7 @@ export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: stri
 
 /** ssh argv that runs the receiver with the bundle JSON on stdin. */
 function agentAuthPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `umask 077; python3 -c ${shq(AGENT_AUTH_RECEIVER)}`];
+  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; python3 -c ${shq(AGENT_AUTH_RECEIVER)}`];
 }
 
 export interface AgentAuthPushOutcome {
@@ -751,6 +757,7 @@ export const AGENT_AUTH_OTHER_USER_REASON = "host holds another user's logins";
 export function parseAgentAuthReceiverOutput(stdout: string, status: number | null, stderr = ""): AgentAuthPushOutcome {
   const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
   if (status === 3 || lines.includes("refused:other-user")) return { pushed: false, kept: [], reason: AGENT_AUTH_OTHER_USER_REASON };
+  if (status === SHARED_HOST_REFUSED_STATUS) return { pushed: false, kept: [], reason: SHARED_HOST_REFUSAL };
   const applied = [...lines].reverse().find((l) => l.startsWith("applied "));
   if (status !== 0 || !applied) {
     const detail = stderr.trim().split("\n").filter(Boolean).pop() ?? lines.filter((l) => l.startsWith("error:")).pop() ?? "";

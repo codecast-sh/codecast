@@ -147,7 +147,8 @@ import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextF
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
-import { findOtherDaemonPids, snapshotProcessTable } from "./processTable.js";
+import { ownDaemonPids, snapshotProcessTable } from "./processTable.js";
+import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
@@ -1028,16 +1029,20 @@ function getLaunchdDaemonPid(): number | null {
 }
 
 /**
- * A provisioned cloud host runs its daemon as the systemd unit
- * codecast-daemon.service (browser/provisionLinux.ts, Restart=always). Start,
- * stop and restart there go through the unit: a daemon started beside it
- * makes the unit's own copy exit as "already running" and leaves the unit
- * inactive, so the next `cast hosts update` fails its restart (2026-09-30).
+ * A provisioned cloud host runs its daemon as a system unit
+ * (browser/provisionLinux.ts, Restart=always), and a shared box may run one
+ * per user from a template; findSystemDaemonUnit names the one for THIS user.
+ * Start, stop and restart there go through the unit: a daemon started beside
+ * it makes the unit's own copy exit as "already running" and leaves the unit
+ * crash-looping (2026-09-30, 2026-10-15). A template instance starts with
+ * `enable --now`, so it also comes back after a reboot, and that is the verb
+ * a shared box grants its users.
  */
-const SYSTEMD_DAEMON_UNIT = "/etc/systemd/system/codecast-daemon.service";
 function systemdDaemon(action: "start" | "stop"): boolean {
-  if (process.platform !== "linux" || !fs.existsSync(SYSTEMD_DAEMON_UNIT)) return false;
-  return spawnSync("sudo", ["-n", "systemctl", action, "codecast-daemon.service"], { stdio: "ignore", timeout: 60_000 }).status === 0;
+  const unit = findSystemDaemonUnit();
+  if (!unit) return false;
+  const verb = action === "stop" ? ["stop"] : isTemplateInstance(unit) ? ["enable", "--now"] : ["start"];
+  return spawnSync("sudo", ["-n", "systemctl", ...verb, unit], { stdio: "ignore", timeout: 60_000 }).status === 0;
 }
 
 function kickstartManagedDaemon(): boolean {
@@ -1056,6 +1061,8 @@ function ownsDaemonInstallation(): boolean {
 }
 
 function ensureDaemonRunning(): void {
+  // Whatever supervises the daemon also restarts it, version bounces included.
+  if (autostartDisabledByEnv()) return;
   const config = readConfig();
   if (!config?.auth_token) return;
   if (isDaemonRunning()) {
@@ -1098,6 +1105,8 @@ function startDaemonQuiet(): void {
   ensureConfigDir();
   if (isDaemonRunning()) return;
   if (systemdDaemon("start")) return;
+  // Never beside this user's unit, even when it could not be started from here.
+  if (findSystemDaemonUnit()) return;
 
   if (kickstartManagedDaemon()) {
     return;
@@ -1535,24 +1544,40 @@ function stopDaemon(): void {
   // person, and `ps` on a loaded machine has run for 26s. The pid file SIGTERM
   // above already covers the normal case, so a `ps` that times out costs this
   // one invocation its split brain catch and nothing else.
-  try {
-    for (const orphanPid of findOtherDaemonPids(snapshotProcessTable({ timeout: 5_000 }))) {
-      try {
-        process.kill(orphanPid, "SIGTERM");
-        pidsToWait.add(orphanPid);
-        killedAny = true;
-      } catch {}
-    }
-  } catch {}
+  const sweep = () => {
+    try {
+      for (const orphanPid of ownDaemonPids(snapshotProcessTable({ timeout: 5_000 }))) {
+        try {
+          process.kill(orphanPid, "SIGTERM");
+          pidsToWait.add(orphanPid);
+          killedAny = true;
+        } catch {}
+      }
+    } catch {}
+  };
+  sweep();
 
   // The daemon drains its retry queue before it exits, so give it more room
   // than the old 5s: killing it here would skip the pid file release, the
   // daemon.version and daemon.build cleanup and the stop lifecycle log.
-  for (const pid of pidsToWait) {
-    if (!waitForPidExit(pid, DAEMON_STOP_SIGKILL_MS)) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-      waitForPidExit(pid, 2000);
+  const waitAll = () => {
+    for (const pid of pidsToWait) {
+      if (!waitForPidExit(pid, DAEMON_STOP_SIGKILL_MS)) {
+        try { process.kill(pid, "SIGKILL"); } catch {}
+        waitForPidExit(pid, 2000);
+      }
     }
+    pidsToWait.clear();
+  };
+  waitAll();
+  // A daemon can be started while this stop waits (a `cast` command's
+  // auto-start, a just-started daemon's own children): `cast stop` right after
+  // `cast login` left one running beside the system unit (2026-10-15). Sweep
+  // again until a pass finds none.
+  for (let pass = 0; pass < 3; pass++) {
+    sweep();
+    if (pidsToWait.size === 0) break;
+    waitAll();
   }
 
   if (killedAny) {
@@ -1620,7 +1645,13 @@ function startDaemon(): void {
     return;
   }
   if (systemdDaemon("start")) {
-    console.log("Daemon started (codecast-daemon.service)");
+    console.log(`Daemon started (${findSystemDaemonUnit()})`);
+    return;
+  }
+  const unit = findSystemDaemonUnit();
+  if (unit) {
+    console.error(`This user's daemon runs under the system unit ${unit}, which could not be started from here. Start it with: sudo systemctl enable --now ${unit}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -1755,7 +1786,9 @@ async function runOnboarding(config: Config): Promise<void> {
     return;
   }
 
-  if (!isDaemonRunning()) {
+  if (autostartDisabledByEnv()) {
+    console.log("CODECAST_NO_AUTOSTART is set: not starting the daemon here; whatever supervises it starts it.");
+  } else if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
   }
@@ -7054,6 +7087,11 @@ program
     const { ConvexClient } = await import("convex/browser");
     const stateClient = new ConvexClient(config.convex_url!);
     process.on("SIGINT", () => { try { stateClient.close(); } catch {} process.exit(0); });
+    // A watch belongs to whoever started it. When that process dies we are
+    // reparented, and nothing reads us anymore; a quiet watch never writes, so
+    // EPIPE never comes. Leftover ones piled up by the dozen for days.
+    const startedUnder = process.ppid;
+    setInterval(() => { if (process.ppid !== startedUnder) { try { stateClient.close(); } catch {} process.exit(0); } }, 15_000);
 
     const narrowed = [
       ids.length ? `${ids.length} id${ids.length === 1 ? "" : "s"}` : "",
@@ -9082,8 +9120,24 @@ function removeWslAutostart(): void {
   } catch {}
 }
 
+/** A user-level codecast.service from before a system unit took over would start a second daemon beside it. */
+function retireUserDaemonService(): void {
+  const servicePath = path.join(process.env.HOME || "", ".config", "systemd", "user", "codecast.service");
+  try {
+    if (!fs.readFileSync(servicePath, "utf-8").includes("ExecStart=")) return;
+    spawnSync("systemctl", ["--user", "disable", "codecast.service"], { stdio: "ignore", timeout: 15_000 });
+    fs.unlinkSync(servicePath);
+  } catch {}
+}
+
 function ensureAutostart(): boolean {
   const platform = process.platform;
+  // Something else supervises the daemon: a second, user-level one would race it.
+  if (autostartDisabledByEnv()) return false;
+  if (findSystemDaemonUnit()) {
+    retireUserDaemonService();
+    return false;
+  }
   try {
     if (platform === "linux" && isWSL() && ensureWslAutostart()) {
       return true;
@@ -14054,7 +14108,7 @@ org
   .description("Move a role or a session under another role or person")
   .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
   .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
-  .option("--note <text>", stdinText("A line the agent reads with the move (\"You now report to X. <note>\")"))
+  .option("--note <text>", stdinText("A line the agent reads with the move, after \"You now report to X\""))
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {
@@ -21048,6 +21102,26 @@ workflow
     if (options.json) { printJson(runs); return; }
     const { formatRunsTable } = await import("./taskShow.js");
     console.log(formatRunsTable(runs));
+  });
+
+workflow
+  .command("reask <task>")
+  .description("Ask a line run's decision again on the stations as they are now: the run picks up at the station that presents the decision (the one its gate names as asker), which posts its own question, and the old decision is withdrawn. For a run waiting on a decision, or one that failed while standing at it. Run it on the machine that holds the run")
+  .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph)")
+  .option("--json", "Machine-readable output")
+  .action(async (task: string, options: { at?: string; json?: boolean }) => {
+    const fail = (message: string): never => { console.error(message); process.exit(2); };
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
+    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
+    if (!row) fail(`${task} has no run`);
+    if (row.runner_device && row.runner_device !== deviceId()) fail(`${task}'s run lives on another machine (${row.runner_device}): ask it again there, so its runner is stopped and its station reads that machine's work`);
+    // The server's refusals first (a closed or trial problem, a run not at a decision), so a runner is stopped only for a run that will move.
+    await cliPost("/cli/workflow-runs/reask", { run_id: row._id, check: true });
+    const { prepareReask } = await import("./workflow/reask.js");
+    const plan = await prepareReask({ getCliEndpoint, detectCurrentSessionId }, row._id, task, options.at).catch((e: Error) => fail(e.message));
+    const r = await cliPost("/cli/workflow-runs/reask", { run_id: row._id, ...(options.at ? { at: options.at } : {}), ...(plan.asker ? { asker: plan.asker } : {}) });
+    if (options.json) { printJson(r); return; }
+    console.log(`${task}: asked again from ${r.resumed_at}${r.replaced ? `; ${r.replaced} is withdrawn` : ""} (run ${r.run_id}).`);
   });
 
 workflow

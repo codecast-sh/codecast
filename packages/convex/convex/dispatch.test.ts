@@ -1413,7 +1413,7 @@ describe("createSession — dropdown-targeted cloud host launches (ct-49427)", (
       users: [{ _id: ME }, { _id: BOT, is_bot: true, name: "Mr Bot", team_id: TEAM }],
       team_memberships: [{ _id: "member", user_id: ME, team_id: TEAM, role: "member" }],
       devices: [
-        { _id: "dev_host", user_id: ME, device_id: HOST, label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, last_seen: 0, local_project_roots: ["/home/ubuntu/work/app"] },
+        { _id: "dev_host", user_id: ME, device_id: HOST, label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, last_seen: 0, local_project_roots: ["/home/ubuntu/work/app"], cloud_host: { managed_by: "laptop", state: "stopped", at: 0 } },
         { _id: "dev_laptop", user_id: ME, device_id: "laptop", label: "macOS - MacBook", platform: "darwin", is_remote: false, last_seen: opts.laptopOnline === false ? 0 : Date.now(), local_project_roots: ["/Users/me/src/app"] },
         { _id: "dev_box", user_id: BOT, device_id: "bot-box", label: "Linux - ip-10-0-0-1", platform: "linux", is_remote: true, last_seen: Date.now(), local_project_roots: ["/home/bot/work/app"] },
       ],

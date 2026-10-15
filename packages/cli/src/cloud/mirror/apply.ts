@@ -555,6 +555,19 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
   return { ...stamp, hash: complete ? stamp.hash : "", complete, capabilities: [...MIRROR_RECEIVER_CAPABILITIES] };
 }
 
+/**
+ * The --verify answer: the verified stamp, or for a host never mirrored an
+ * empty one that still names this receiver's capabilities. Without them a
+ * fresh host read as an old receiver and got the wide bundle, which wrote
+ * the laptop's tracked repo files into a checkout not yet cloned.
+ */
+export function mirrorVerifyAnswer(home: string): MirrorStamp {
+  return verifyMirrorStamp(home) ?? {
+    version: 1, hash: "", source_device_id: "", source_user_id: "", applied_at: "",
+    files: {}, managed_roots: [], complete: false, capabilities: [...MIRROR_RECEIVER_CAPABILITIES],
+  };
+}
+
 /** After a prune: drop directories the removal emptied, up to (not including) the managed root. */
 function removeEmptyParents(home: string, rel: string, root: string): void {
   let dir = path.posix.dirname(rel);

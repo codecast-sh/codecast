@@ -107,7 +107,7 @@ export interface BuildHomeMirrorOptions {
   projects?: ProjectRegistration[];
   /** Shared across the hosts of one tick; a fresh one is used when absent. */
   sources?: MirrorSourceCache;
-  /** Inside a repo, carry only agent context (for a host whose receiver keeps tracked files); the folder sync carries the rest. */
+  /** Inside a repo, carry only untracked agent context (for a host whose receiver keeps tracked files): git and the folder sync carry the rest. */
   narrowProjects?: boolean;
   /** Host-edited memories this push has taken in (memoryBack.ts). */
   reconciled?: Array<{ path: string; sha: string }>;
@@ -129,7 +129,7 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
       discovery = (async () => {
         sources.ledger.note(project.sourceRoot);
         if (!(await fs.promises.stat(project.sourceRoot)).isDirectory()) throw new Error(`project context root is not a directory: ${project.sourceRoot}`);
-        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, agentContextOnly: opts.narrowProjects, includeAncestors: true, config: opts.config, ledger: sources.ledger });
+        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: !opts.narrowProjects, agentContextOnly: opts.narrowProjects, includeAncestors: true, config: opts.config, ledger: sources.ledger });
       })();
       sources.discoveries.set(discoveryKey, discovery);
     }
@@ -460,7 +460,7 @@ async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorSt
  * a transform and a credential scan of every file (2026-09-22: 139s and 32s of
  * CPU per host per minute, freezing the daemon).
  */
-const buildCache = new Map<string, { hash: string; ledger: MirrorLedger; files: Map<string, string> }>();
+const buildCache = new Map<string, { hash: string; ledger: MirrorLedger; files: Map<string, string>; warnings: Set<string> }>();
 
 /** The paths whose content differs between two bundle manifests, for the log. */
 function changedPaths(before: Map<string, string>, after: Map<string, string>): string[] {
@@ -521,12 +521,14 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
         const changed = changedPaths(previous.files, files);
         deps.log(`bundle for ${key} changed (${changed.length} file(s)): ${changed.slice(0, 6).join(", ")}${changed.length > 6 ? ", …" : ""}`);
       }
-      if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger, files }); else buildCache.delete(cacheKey);
-      // Compatibility warnings describe the bundle, so they are worth a line when the bundle is new, not on every rebuild of the same one.
-      // A wake shows one line for them (dozens of docs name a macOS path); the log and the dry run keep each.
       const warnings = summary?.warnings ?? [];
+      if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger, files, warnings: new Set(warnings) }); else buildCache.delete(cacheKey);
+      // Compatibility warnings are worth a line when they are new. Any edit in a mirrored
+      // file (memory notes change all day) rebuilds the bundle, and logging every warning
+      // on each rebuild wrote ~10k lines a minute (2026-10-14).
+      // A wake shows one line for them (dozens of docs name a macOS path); the dry run keeps each.
       if (opts.onProgress && warnings.length) opts.onProgress(`context compatibility: ${warnings.length} file(s) name macOS-only commands or paths; cast hosts sync --dry-run lists them`);
-      else if (previous?.hash !== built.hash) for (const warning of warnings) deps.log(`context compatibility: ${warning}`);
+      else for (const warning of warnings) if (!previous?.warnings.has(warning)) deps.log(`context compatibility: ${warning}`);
       return built;
     };
     let built: BuiltBundle | undefined;
