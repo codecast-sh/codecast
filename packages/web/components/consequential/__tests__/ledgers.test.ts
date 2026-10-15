@@ -4,7 +4,7 @@ import * as L from "../ledgers";
 import { ledgerLines, roleOnlineLedger } from "../roleOnline";
 import { assertGlance } from "./glance";
 
-const cost = { avgUsd: 6.99, runs: 5, scope: "workspace" as const };
+const cost = { billedUsd: 6.99, listUsd: 0, runs: 5, scope: "workspace" as const };
 
 test("every ledger reads at a glance: no sentence, no long value", () => {
   const all = [
@@ -39,7 +39,7 @@ test("failing checks are the loudest thing on a merge, and the button says it me
 test("a role's review splits what it decides from what stays with you", () => {
   const l = L.roleAutonomyLedger({ name: "Lead", handle: "x", caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 }, projects: ["A"], merges: false, cost });
   assert.deepEqual(l.hands!.yours, ["Approving fixes", "Merge, deploy", "Switching it off"]);
-  assert.equal(l.figures.find((f) => f.label === "a day, est.")!.value, "~$42");
+  assert.equal(l.figures.find((f) => f.label === "a day, billed")!.value, "~$42");
 });
 
 test("the phone's alert gets the same facts as lines", () => {

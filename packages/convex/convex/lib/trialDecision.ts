@@ -107,3 +107,48 @@ export async function settleTrialCard(ctx: Ctx, decisionId: Id<"session_decision
     if (row.status === "waiting") await ctx.db.patch(row._id, { status: status === "answered" ? "answered" : "closed", updated_at: now });
   }
 }
+
+/**
+ * The node a station ran in its run, else the node the run stands at. The
+ * runner names a station's session by its session id, its short id, or the
+ * conversation id's first characters (the short form `cast` prints).
+ */
+export function stationNodeOf(run: Pick<Doc<"workflow_runs">, "node_statuses" | "current_node_id">, station: Pick<Doc<"conversations">, "session_id" | "short_id"> & { _id?: unknown }): string {
+  const ids = new Set([station.session_id, station.short_id].filter(Boolean));
+  const conversationId = station._id ? String(station._id) : "";
+  const named = (id: string) => ids.has(id) || (id.length >= 7 && conversationId.startsWith(id));
+  const ran = [...(run.node_statuses ?? [])].reverse().find((n) => !!n.session_id && named(n.session_id));
+  return ran?.node_id ?? run.current_node_id ?? "";
+}
+
+/**
+ * File a trial decision for the trial feed: the trial_cards row that indexes
+ * it by run, node and task, which the review page and For you list. Its
+ * question, options, page and answer are the decision's; the row keeps the
+ * structured facts a gate checked (the change, proposal or judge-fix card).
+ */
+export async function fileTrialCard(
+  ctx: Ctx,
+  f: { project: Doc<"projects">; task: Doc<"tasks">; run: Pick<Doc<"workflow_runs">, "_id">; node_id: string; decision_id: Id<"session_decisions">; kind: "card" | "gate"; card?: unknown; proposal?: unknown; judge_fix?: unknown },
+  now: number,
+): Promise<string> {
+  const short_id = await nextShortId(ctx.db, "tc");
+  await ctx.db.insert("trial_cards", {
+    workspace: f.project.workspace ?? f.task.workspace,
+    ...(f.project.team_id ? { team_id: f.project.team_id } : {}),
+    project_id: f.project._id,
+    task_id: f.task._id,
+    run_id: f.run._id,
+    short_id,
+    node_id: f.node_id,
+    kind: f.kind,
+    decision_id: f.decision_id,
+    ...(f.card ? { card: f.card } : {}),
+    ...(f.proposal ? { proposal: f.proposal } : {}),
+    ...(f.judge_fix ? { judge_fix: f.judge_fix } : {}),
+    status: "waiting",
+    created_at: now,
+    updated_at: now,
+  });
+  return short_id;
+}

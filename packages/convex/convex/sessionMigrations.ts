@@ -50,6 +50,7 @@ import { enqueueTargetedResume, findPullableConversation, performMoveSessionToDe
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
+import { listLiveManagedSessions } from "./lib/liveSessions";
 import { DAEMON_COMMAND_TTL_MS, fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
@@ -300,6 +301,18 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
       if (c.status === "completed" || c.inbox_killed_at || c.is_subagent) continue;
       out.push(c);
     }
+  }
+  // The per-device window is the newest 300 by creation, and a machine running
+  // spawned workers and workflow steps creates that many in a day, so a session
+  // live since yesterday falls out of it. Every live session's conversation is a
+  // candidate whatever its age.
+  const seen = new Set(out.map((c) => String(c._id)));
+  for (const s of await listLiveManagedSessions(ctx, userId, { aliveMs: 24 * 60 * 60 * 1000 })) {
+    if (!s.conversation_id || seen.has(String(s.conversation_id))) continue;
+    seen.add(String(s.conversation_id));
+    const c = await ctx.db.get(s.conversation_id);
+    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at || c.is_subagent) continue;
+    out.push(c);
   }
   return out;
 }

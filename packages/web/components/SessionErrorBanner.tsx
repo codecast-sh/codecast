@@ -18,6 +18,7 @@ import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
 import { classifyApiErrorBanner, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
+import { AddCloudHost } from "./settings/AddCloudHost";
 
 const mib = (bytes: number) => `${Math.ceil(bytes / 1048576)} MiB`;
 
@@ -71,7 +72,7 @@ export function SessionErrorBanner({
   /** `leave_out` is the answer to a cloud placement over the context cap. */
   onResume?: (extra?: { leave_out?: string[] }) => void;
 }) {
-  const { devices } = useDevices();
+  const { devices, byId } = useDevices();
   // A cloud placement over the context cap is a question, not a dead end:
   // the row names what would have to stay behind for the context to fit.
   const tooLarge = useInboxStore((s) => (sessionId ? s.sessions[sessionId]?.cloud_context_too_large : null));
@@ -122,6 +123,10 @@ export function SessionErrorBanner({
           <span className="opacity-80"> — or move this session to another machine from the header chip.</span>
         )}
       </div>
+      {/* Every cloud host was full: the answer is another host, offered right here. */}
+      {/no room for another session/.test(error) && ownerDeviceId && byId.get(ownerDeviceId) && (
+        <AddCloudHost like={byId.get(ownerDeviceId)!} label="Add a cloud host" className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0" />
+      )}
       {onResume && !safety && tooLarge?.files.length ? (
         <button onClick={() => onResume({ leave_out: tooLarge.files.map((f) => f.path) })} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
           Leave out and start

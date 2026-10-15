@@ -32,6 +32,7 @@ import { computeWorkspaceKey, resolveWorkspaceKey, type WorkspaceKey } from "./l
 import { pageThreadParticipants, purgeThread, touchThread } from "./threadReads";
 import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
 import { eTokenFor, gateFailure, isExpired, kTokenFor } from "./lib/artifactGates";
+import { decisionPageSlugs, findDecision, userMayRead } from "./lib/decisionAccess";
 import { bumpWindow } from "./ipRateLimit";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
@@ -230,15 +231,19 @@ export const bySlug = internalQuery({
       ? await teammatesWhoCanSee(ctx, artifact.user_id)
       : new Set<string>();
     // Session TITLE for the bar chip — a short id means nothing to viewers.
+    // Its one- or two-word name is what the conversation embed's chip shows.
     let session_title: string | null = null;
+    let session_short_title: string | null = null;
     if (artifact.session_conversation_id) {
       const conv = await ctx.db.get(artifact.session_conversation_id);
       session_title = conv?.title ?? null;
+      session_short_title = conv?.short_title ?? null;
     }
     return {
       ...artifact,
       author_name: user?.name ?? null,
       session_title,
+      session_short_title,
       views: stats?.view_count ?? 0,
       comment_count: open.length,
       // Publicly visible shape for the in-page bar (?meta=1): every viewer of
@@ -1809,14 +1814,18 @@ export const teamEditAuth = internalQuery({
   },
 });
 
-// The owner's own way through their page's gates, for an embed inside the app
-// (a decision's full proposal): the unlock tokens the serve route reads (`k`
-// for a password, `e` for the email wall) and the metadata getShared hides on
-// a gated page. Only the signed-in owner gets them, and an expired page stays
-// shut for everyone, as the serve route keeps it. Null otherwise, so the embed
-// links out instead of framing a password form.
+// The way through a page's gates for a signed-in reader inside the app: the
+// unlock tokens the serve route reads (`k` for a password, `e` for the email
+// wall) and the metadata getShared hides on a gated page. Its owner gets them,
+// and so does anyone who may read the decision the page was filed on (its
+// report or an option's page, `decision`): the people it asks and readers of
+// the session that asked it. A trial gates its decision pages because they
+// quote a customer; the gate keeps the public link shut, never the decision's
+// own readers. An expired page stays shut for everyone, as the serve route
+// keeps it. Null otherwise, so the embed links out instead of framing a
+// password form.
 export const ownerUnlock = query({
-  args: { slug: v.string() },
+  args: { slug: v.string(), decision: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
@@ -1824,7 +1833,8 @@ export const ownerUnlock = query({
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
-    if (!artifact || artifact.user_id !== userId || isExpired(artifact)) return null;
+    if (!artifact || isExpired(artifact)) return null;
+    if (artifact.user_id !== userId && !(await readsDecisionFiling(ctx, userId, args.slug, args.decision))) return null;
     return {
       k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
       e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
@@ -1833,6 +1843,65 @@ export const ownerUnlock = query({
     };
   },
 });
+
+// Everything an embed needs to frame a page, for several pages in one round trip: what getShared tells anyone,
+// plus, on a gated page, the way through its gates that ownerUnlock gives the signed-in reader. One row per page,
+// keyed by slug: `missing` (deleted or never existed), `locked` (gated, and this viewer has no way in), or the
+// page's title and version with `k`/`e` when its gates need them. The client keeps these rows (store pageEmbeds),
+// so a page seen before frames at once on the next mount, and a surface can warm the pages it is about to show.
+export const embedInfo = query({
+  args: { pages: v.array(v.object({ slug: v.string(), decision: v.optional(v.string()) })) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const seen = new Set<string>();
+    const rows = [];
+    for (const { slug, decision } of args.pages.slice(0, 50)) {
+      if (seen.has(slug)) continue;
+      seen.add(slug);
+      const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", slug)).first();
+      if (!artifact) {
+        rows.push({ slug, missing: true as const });
+        continue;
+      }
+      const gated = !!artifact.password_hash || !!artifact.email_gate || isExpired(artifact);
+      if (gated) {
+        const mayUnlock = !!userId && !isExpired(artifact)
+          && (artifact.user_id === userId || (await readsDecisionFiling(ctx, userId, slug, decision)));
+        if (!mayUnlock) {
+          rows.push({ slug, gated: true as const, locked: true as const, kind: artifact.kind ?? "html" });
+          continue;
+        }
+        rows.push({
+          slug,
+          gated: true as const,
+          title: artifact.title,
+          version: artifact.version,
+          kind: artifact.kind ?? "html",
+          k: artifact.password_hash ? await kTokenFor(artifact.password_hash, slug) : null,
+          e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, slug) : null,
+        });
+        continue;
+      }
+      const user = await ctx.db.get(artifact.user_id);
+      rows.push({
+        slug,
+        gated: false as const,
+        title: artifact.title,
+        version: artifact.version,
+        kind: artifact.kind ?? "html",
+        user: user ? { name: user.name ?? null } : null,
+      });
+    }
+    return rows;
+  },
+});
+
+/** Whether the viewer may read the decision `ref` names and that decision filed the page `slug`. */
+async function readsDecisionFiling(ctx: QueryCtx, userId: Id<"users">, slug: string, ref: string | undefined): Promise<boolean> {
+  if (!ref) return false;
+  const row = await findDecision(ctx, ref);
+  return !!row && decisionPageSlugs(row).includes(slug) && (await userMayRead(ctx, userId, row));
+}
 
 // Viewer metadata for link unfurls and the (legacy) wrapper page. Exposes no
 // more than the slug already grants.

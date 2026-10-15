@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changeSays, reviewGates, reviewMove, sendBackNote } from "../fixReview";
+import { fixHolder, reviewGates, reviewMove, sendBackNote } from "../fixReview";
 import { branchStanding } from "../mergeFixLedger";
 
 const nodes = (s: string) => s.split(" ").map((x) => { const [node_id, status] = x.split(":"); return { node_id, status }; });
@@ -25,21 +25,23 @@ describe("reviewGates", () => {
   });
 });
 
-describe("changeSays", () => {
-  test("the newest behaviour change, without its prefix or task ref", () => {
-    expect(changeSays([
-      { subject: "test(needs): feeTerms agreed on a call must save (fails until ct-57567 is fixed)" },
-      { subject: "fix(needs): save fee terms the contact agreed to when we proposed them" },
-      { subject: "fix(needs): fee terms put to a contact save only when they agreed" },
-      { subject: "test(prompts): regenerate replay fidelity fixtures after rebase onto main" },
-    ])).toEqual({ line: "Fee terms put to a contact save only when they agreed", more: 1 });
-    expect(changeSays([{ subject: "fix(followup-playbook): provider outage failures no longer count toward the cold nudge retry cap (ct-58682)" }])?.line)
-      .toBe("Provider outage failures no longer count toward the cold nudge retry cap");
+describe("fixHolder", () => {
+  const ran = [
+    { node_id: "prove", status: "completed", label: "Prove", session: { _id: "s1" } },
+    { node_id: "red", status: "completed" },
+    { node_id: "implement", status: "failed", label: "Implement", session: { _id: "s2" } },
+    { node_id: "eval", status: "failed" },
+  ];
+  test("the step the run ended at, when it ran a session", () => {
+    expect(fixHolder(ran, "implement")).toEqual({ step: "implement", label: "Implement", sessionId: "s2", preparing: false });
   });
-
-  test("nothing but tests and reverts says nothing", () => {
-    expect(changeSays([{ subject: "test: a" }, { subject: "revert(x): b" }])).toBeNull();
-    expect(changeSays([])).toBeNull();
+  test("else the step at work, else the last that ran a session", () => {
+    expect(fixHolder(ran, "eval")?.sessionId).toBe("s2");
+    expect(fixHolder([...ran, { node_id: "card_write", status: "running", session: { _id: "s3" } }], null)).toMatchObject({ step: "card_write", sessionId: "s3", preparing: true });
+  });
+  test("a run that ran no session has nobody to open", () => {
+    expect(fixHolder([{ node_id: "red", status: "completed" }])).toBeNull();
+    expect(fixHolder(null)).toBeNull();
   });
 });
 
