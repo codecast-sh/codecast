@@ -66,10 +66,14 @@ it is right.
   that make a useful preview: the hover card shows the first few filled ones.
   Read them with `$.data.list("objects", { where: { prefix } })` and write with
   `$.objects`.
-- The mod's `agents` text is how every other agent learns to use it. For an
-  object kind, it should say to mention an object by its short id in prose
-  (and to file one with `cast obj create` when a conversation turns up a new
-  one), not to draw a card for it.
+- `AGENTS.md` beside the manifest is the mod's surface for agents, the way a
+  pane is its surface for people: every session the mod applies to starts
+  with it (a team's mod in that team's projects, a personal mod everywhere),
+  and it ships, versions and publishes with the rest. Write it for an agent
+  that has never seen the mod: what the mod adds, and when to reach for each
+  part. For an object kind, that means mentioning an object by its short id
+  in prose (and filing one with `cast obj create` when a conversation turns up
+  a new one), not drawing a card for it. Keep it current as the mod grows.
 - A fence is for a view that is not one object: a comparison, a live query, a
   chart of many. Declare it, draw it in `on("ui.render", { fence })`, and any
   agent's ```<lang> block renders that way for everyone who has the mod.

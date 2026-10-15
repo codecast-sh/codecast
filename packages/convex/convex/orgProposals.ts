@@ -5,7 +5,7 @@ import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { resolveSessionConversation, workspaceKey } from "./lib/access";
 import { resolveActor } from "./lib/actor";
@@ -240,8 +240,10 @@ export async function performCreateProposal(
   }
 
   // No queue card: the proposal lives as a card in the author's conversation
-  // (org-staffing.md S24), where the person reads and decides it.
-  return { id: proposalId, short_id, status: "open", author, changes, link: PROPOSAL_LINK(short_id), ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
+  // (org-staffing.md S24), where the person reads and decides it. A role's
+  // hire also reaches the lead above it, or applies at once (routeHire).
+  const hire = await routeHire(ctx, userId, (await ctx.db.get(proposalId))!, conversation);
+  return { id: proposalId, short_id, status: hire.applied ? (await ctx.db.get(proposalId))!.status : "open", author, changes, link: PROPOSAL_LINK(short_id), ...hire, ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
 }
 
 /**
@@ -526,13 +528,15 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * runMutation's writes back); the test harness has no runMutation and runs
  * the change inline, which covers the throws that happen before any write.
  */
-export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean; log_head?: OrgBatchHead }): Promise<any> {
+export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean; log_head?: OrgBatchHead; lead?: boolean }): Promise<any> {
   // The person's gate runs on the call they made; a continuation is the same
   // act carried on by the server, scheduled only from inside that call.
   if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
-  await requireAdmin(ctx, userId, proposal);
+  // `lead`: a hire a lead above approved (performDecideHire), whose authority
+  // is the line, already checked; never set by a client.
+  if (!args.lead) await requireAdmin(ctx, userId, proposal);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   const now = Date.now();
   // `kinds` narrows the sweep ("Accept group" on the pane's records card,
@@ -577,7 +581,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // tried: a refusal is reported once, never retried in a loop.
   const tried = [...(args.tried ?? []), ...pending.map((c) => String(c._id))];
   if (remaining > 0 && (ctx as any).scheduler) {
-    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, log_head: logHead, ...(args.leave_sessions ? { leave_sessions: true } : {}) });
+    await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, log_head: logHead, ...(args.leave_sessions ? { leave_sessions: true } : {}), ...(args.lead ? { lead: true } : {}) });
   }
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { proposal: proposal.short_id, results, resolved, remaining: (ctx as any).scheduler ? remaining : 0, applied: results.filter((r) => r.status === "applied").length, failed: results.filter((r) => r.status === "failed").length };
@@ -618,6 +622,122 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
   return { ask: args.ask, title: ask.title, proposal: proposal.short_id, results, resolved, remaining: 0, applied: 0, failed: 0, skipped: results.length };
 }
 
+// ── Hires: a role's own permanent reports ───────────────────────────────────
+// A role may propose a new role under itself (a hire). Besides a person, any
+// lead above the hiring role may decide it, from its own standing session,
+// and a role a person gave `hires_freely` brings its hires online itself. No
+// depth, span or count limit; a hire starts on the normal defaults.
+
+/** Does this change hire a permanent report under `author`: a new role whose
+ *  reports_to names the author by handle or short id. */
+export function isHireUnder(change: OrgChange, author: { handle: string; short_id?: string }): boolean {
+  if (change.kind !== "role" || typeof change.reports_to !== "string") return false;
+  const to = change.reports_to.trim().toLowerCase();
+  return to === `@${author.handle.toLowerCase()}` || (!!author.short_id && to === author.short_id.toLowerCase());
+}
+
+/** The roles above `role`, nearest first, up to the first person. */
+export async function rolesAbove(ctx: Ctx, role: any): Promise<any[]> {
+  const out: any[] = [];
+  const seen = new Set([String(role._id)]);
+  let at = role;
+  while (at?.reports_to?.kind === "role" && !seen.has(String(at.reports_to.role_id))) {
+    seen.add(String(at.reports_to.role_id));
+    at = await ctx.db.get(at.reports_to.role_id);
+    if (at) out.push(at);
+  }
+  return out;
+}
+
+/** The hiring role of a proposal and its hires still waiting, or null when
+ *  the proposal is not a role's hire: some waiting change is not a role
+ *  under its author. */
+async function hireOf(ctx: Ctx, proposal: ProposalRow, rows: ChangeRow[]): Promise<{ author: any; hires: ChangeRow[] } | null> {
+  if (proposal.author.kind !== "role") return null;
+  const author: any = await ctx.db.get(proposal.author.id as Id<"org_roles">);
+  if (!author || author.status === "retired") return null;
+  const hires = rows.filter(decidable);
+  return hires.length && hires.every((c) => isHireUnder(c.change, author)) ? { author, hires } : null;
+}
+
+/**
+ * A lead decides a hire from its standing session: the hiring role's parent
+ * or any role above it, or the hiring role itself when a person gave it
+ * `hires_freely`. Accept runs the accept all core (apply order, the stamp, a
+ * transaction per change); skip marks each skipped. Each decided row carries
+ * who decided it, and the hiring role is told.
+ */
+export async function performDecideHire(
+  ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> },
+  userId: Id<"users">,
+  args: { proposal: string; verdict: "accept" | "skip"; from_session?: string; text?: string; provision?: boolean },
+): Promise<any> {
+  if (!args.from_session) throw new Error("A hire is decided by a lead from its standing session, or by a person on the proposal's card");
+  const conversation = await resolveSessionConversation(ctx as any, userId, args.from_session);
+  if (!conversation) throw new Error("Session not found");
+  const actor = await resolveActor(ctx as any, userId, conversation);
+  if (actor.kind !== "role" || !actor.role) throw new Error("Only a role's standing session decides a hire; a person decides it on the proposal's card");
+  const proposal = await findProposal(ctx, args.proposal);
+  if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
+  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
+  const hire = await hireOf(ctx, proposal, await changesOf(ctx, proposal._id));
+  if (!hire) throw new Error(`${proposal.short_id} is not a hire: a lead decides only a proposal whose every waiting change is a new role under the role that posted it; a person decides the rest`);
+  const self = String(actor.role._id) === String(hire.author._id);
+  if (self ? !hire.author.hires_freely : !(await rolesAbove(ctx, hire.author)).some((r) => String(r._id) === String(actor.role!._id))) {
+    throw new Error(self
+      ? `@${hire.author.handle} does not bring its own hires online: a lead above it or the person at the top of its line decides ${proposal.short_id}`
+      : `@${actor.role.handle} is not above @${hire.author.handle}: its parent, a lead above that, or the person at the top of the line decides ${proposal.short_id}`);
+  }
+  return decideHireAs(ctx, userId, proposal, hire, actor.role, args);
+}
+
+async function decideHireAs(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, proposal: ProposalRow, hire: { author: any; hires: ChangeRow[] }, by: any, args: { verdict: "accept" | "skip"; text?: string; provision?: boolean }): Promise<any> {
+  const now = Date.now();
+  const self = String(by._id) === String(hire.author._id);
+  const words = args.text?.trim() || (self ? `Brought online by @${by.handle}` : `${args.verdict === "accept" ? "Approved" : "Rejected"} by @${by.handle}`);
+  for (const row of hire.hires) await ctx.db.patch(row._id, { reply: { verdict: args.verdict === "accept" ? "approve" : "reject", text: words, at: now, by: userId } });
+  let out: any;
+  if (args.verdict === "accept") {
+    out = await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: hire.hires.map((c) => c.seq), provision: args.provision, continuation: true, lead: true, log_head: { door: "proposal", gesture: "accept_hire", key: `proposal:${proposal._id}:hire:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } } });
+  } else {
+    const results = [];
+    for (const row of hire.hires) results.push(await skipOne(ctx, userId, proposal, row, now, args.provision ?? true));
+    await ctx.db.patch(proposal._id, { updated_at: now });
+    out = { proposal: proposal.short_id, results, resolved: await resolveIfDone(ctx, proposal, now), applied: 0, failed: 0, remaining: 0 };
+  }
+  if (!self) {
+    const lines = hire.hires.map((c) => `@${String((c.change as any).handle).replace(/^@/, "")}`).join(", ");
+    await tellRole(ctx, hire.author._id, { content: `${proposal.short_id}: @${by.handle} ${args.verdict === "accept" ? "approved" : "rejected"} your hire of ${lines}.${args.text?.trim() ? ` "${args.text.trim()}"` : ""}`, client_id: `hire-decided:${proposal._id}:${now}` });
+  }
+  return { ...out, decided_by: { role: by.handle, self } };
+}
+
+/**
+ * Where a new hire goes once posted. A role with `hires_freely` brings it
+ * online at once. Otherwise, when the hiring role reports to a role, the
+ * card goes to that lead's thread (the `op-N` line draws it) so the one who
+ * may approve sees it; a role that reports to a person posted it in its own
+ * thread, which is already that person's card.
+ */
+async function routeHire(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, proposal: ProposalRow, conversation: any): Promise<{ routed_to?: string; applied?: boolean }> {
+  const hire = await hireOf(ctx, proposal, await changesOf(ctx, proposal._id));
+  if (!hire) return {};
+  if (hire.author.hires_freely) {
+    await decideHireAs(ctx, userId, proposal, hire, hire.author, { verdict: "accept" });
+    return { applied: true };
+  }
+  if (hire.author.reports_to?.kind !== "role") return {};
+  const lead: any = await ctx.db.get(hire.author.reports_to.role_id);
+  if (!lead || lead.status === "retired") return {};
+  const names = hire.hires.map((c) => `@${String((c.change as any).handle).replace(/^@/, "")}`).join(", ");
+  const sent = await tellRole(ctx, lead._id, {
+    content: `@${hire.author.handle} asks to hire ${names} as a permanent report.\n\n${proposal.short_id}\n\nYou lead @${hire.author.handle}, so you may decide it: \`cast org hire ${proposal.short_id} --approve\` or \`--reject\` with a word why. The person at the top of the line may decide it too.`,
+    client_id: `hire-routed:${proposal._id}`,
+    ...(conversation ? { from_conversation_id: conversation._id } : {}),
+  });
+  return sent ? { routed_to: lead.handle } : {};
+}
+
 /** Changes one accept all call applies before it hands the rest on. */
 export const ACCEPT_ALL_CHUNK = 12;
 
@@ -643,11 +763,11 @@ export function acceptAllChunk<T extends { change: OrgChange }>(all: T[]): T[] {
 
 /** The rest of an accept all, in its own transaction (see performAcceptAll). */
 export const acceptAllContinue = internalMutation({
-  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()), leave_sessions: v.optional(v.boolean()), log_head: v.optional(v.any()) },
+  args: { user_id: v.id("users"), proposal_id: v.id("org_proposals"), kinds: v.optional(v.array(v.string())), seqs: v.optional(v.array(v.number())), provision: v.boolean(), tried: v.array(v.string()), leave_sessions: v.optional(v.boolean()), log_head: v.optional(v.any()), lead: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<any> => {
     const proposal = await ctx.db.get(args.proposal_id);
     if (!proposal || proposal.status !== "open") return null;
-    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true, leave_sessions: args.leave_sessions, log_head: args.log_head });
+    return performAcceptAll(ctx as any, args.user_id, { proposal: proposal.short_id, kinds: args.kinds, seqs: args.seqs, provision: args.provision, tried: args.tried, continuation: true, leave_sessions: args.leave_sessions, log_head: args.log_head, lead: args.lead });
   },
 });
 
@@ -1148,6 +1268,12 @@ export const decideAsk = mutation({
   // `leave_sessions` is the person's one edit on an ask accepted whole (R1).
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), proposal: v.string(), ask: v.number(), verdict: v.union(v.literal("accept"), v.literal("skip")), seen: verdictSeen, leave_sessions: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => performDecideAsk(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
+});
+
+/** A lead decides a hire from its standing session (`cast org hire`). */
+export const decideHire = mutation({
+  args: { api_token: v.optional(v.string()), from_session: v.string(), proposal: v.string(), verdict: v.union(v.literal("accept"), v.literal("skip")), text: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performDecideHire(ctx, await requireCaller(ctx, api_token, undefined), args),
 });
 
 export const acceptAll = mutation({

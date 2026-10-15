@@ -4,6 +4,7 @@ import {
   collectInboxSessionsPaginated,
   computeInboxSessions,
   computeSessionsLiveness,
+  inboxForCLI,
   splitInboxList,
   _resetChildAuqProbeCacheForTests,
 } from "./conversations";
@@ -388,13 +389,20 @@ describe("named sessions read alone classify as the full inbox does", () => {
     const rides = !!raw && (rollupParentIdOf(raw) !== null || isUnderRole(raw));
     return rides ? rest : { ...rest, bucket };
   };
-  // The schema's real indexes: the narrow path reads latestHeartbeat as the
-  // newest daemon row of by_user_hosted_heartbeat, which only an index ordered
-  // by last_heartbeat answers the way convex does.
-  const indexedDb = (world: GenWorld) => makeFakeDb(
-    { users: [{ _id: ME, name: "Me", email: "me@example.com" }], messages: [], ...world },
-    { indexes: schemaIndexes(schema as any) },
-  );
+  // The schema's real indexes. The named path takes the user's daemon
+  // liveness from the user row's daemon_last_seen, which the daemon writes as
+  // it beats its sessions, so the world's user carries the newest beat of its
+  // daemon rows: the two paths are compared where the daemon is beating.
+  const indexedDb = (world: GenWorld) => {
+    const beats = ((world as any).managed_sessions ?? [])
+      .filter((m: any) => String(m.user_id) === ME && !m.hosted && typeof m.last_heartbeat === "number")
+      .map((m: any) => m.last_heartbeat as number);
+    const daemon_last_seen = beats.length ? Math.max(...beats) : undefined;
+    return makeFakeDb(
+      { users: [{ _id: ME, name: "Me", email: "me@example.com", daemon_last_seen }], messages: [], ...world },
+      { indexes: schemaIndexes(schema as any) },
+    );
+  };
   test("every named row and its child rows match the full build, fold aside", async () => {
     let compared = 0;
     for (const seed of SEEDS) {
@@ -440,10 +448,49 @@ describe("named sessions read alone classify as the full inbox does", () => {
     });
     await computeInboxSessions({ db: wrapped }, ME as any, { show_all: true, projection: true, extraConvIds: named, namedOnly: true });
     // The reads that made a watch re-run on any write to any of the user's
-    // sessions: the five conversation windows, the owner window and the
-    // user wide managed_sessions read. None may run on the named path.
-    const userWide = indexes.filter((i) => /conversations\.by_user_(plain_updated|pinned|live_)|session_owners\.by_user$|managed_sessions\.by_user_id$/.test(i));
+    // sessions: the five conversation windows, the owner window, and any
+    // user wide managed_sessions read, including the newest-heartbeat probe
+    // every session heartbeat moves (16.8 runs a second, 2026-10-14). None
+    // may run on the named path.
+    const userWide = indexes.filter((i) => /conversations\.by_user_(plain_updated|pinned|live_)|session_owners\.by_user$|managed_sessions\.by_user/.test(i));
     expect(userWide).toEqual([]);
-    expect(indexes).toContain("managed_sessions.by_user_hosted_heartbeat");
+  }, 120_000);
+
+  test("a named watch reads only its own rows' filing and still stamps their labels", async () => {
+    const world = genWorld(SEEDS[0], 80, EPOCH, ME);
+    const top = world.conversations.filter((c: any) => !c.is_subagent && !c.parent_conversation_id);
+    const [filed, other] = [top[0]._id, top[1]._id];
+    const tables: any = {
+      ...clone(world),
+      inbox_buckets: [
+        { _id: "inbox_buckets_a", user_id: ME, name: "Parked", sort_order: 0 },
+        { _id: "inbox_buckets_b", user_id: ME, name: "Elsewhere", sort_order: 1 },
+      ],
+      bucket_assignments: [
+        { _id: "bucket_assignments_1", user_id: ME, conversation_id: filed, bucket_id: "inbox_buckets_a" },
+        { _id: "bucket_assignments_2", user_id: ME, conversation_id: top[5]._id, bucket_id: "inbox_buckets_b" },
+      ],
+    };
+    const db = indexedDb(tables);
+    const indexes: string[] = [];
+    const wrapped = new Proxy(db, {
+      get(target: any, prop: string) {
+        if (prop !== "query") return target[prop];
+        return (table: string) => {
+          const q = target.query(table);
+          const withIndex = q.withIndex.bind(q);
+          q.withIndex = (name: string, fn?: any) => { indexes.push(`${table}.${name}`); return withIndex(name, fn); };
+          return q;
+        };
+      },
+    });
+    const ctx = { db: wrapped, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } };
+    const out = await (inboxForCLI as any)._handler(ctx, { api_token: "t", show_all: true, session_ids: [filed, other] });
+    const row = (id: string) => out.sessions.find((r: any) => r.id === id);
+    expect(row(filed)?.label).toBe("Parked");
+    expect(row(other)?.label).toBeNull();
+    expect(out.labels).toEqual([]);
+    // Any user wide filing read makes every watch re-run on any label edit.
+    expect(indexes.filter((i) => /^(inbox_buckets|bucket_assignments)\.by_user_id$/.test(i))).toEqual([]);
   }, 120_000);
 });

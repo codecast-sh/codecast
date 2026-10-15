@@ -91,6 +91,12 @@ export type ModObjectKind = {
   /** The status lifecycle, in order. The first is where a new object starts; the last means done. */
   statuses?: string[];
   fields?: Record<string, ModObjectField>;
+  /**
+   * The rows live in another system and are named by that system's own ids:
+   * `<prefix>-<first 8 hex of its uuid>` (or the whole uuid). Nothing is stored;
+   * the declaring mod answers `object.resolve` with the row, live.
+   */
+  external?: boolean;
 };
 
 export const OBJECT_PREFIX_RE = /^[a-z]{2,8}$/;
@@ -100,10 +106,12 @@ export const RESERVED_OBJECT_PREFIXES: ReadonlySet<string> = new Set([
 ]);
 /** Text payload an object reference rides in through markdown, like `doc:` and `msg:`. */
 export const OBJECT_REF_PREFIX = "obj:";
-/** An object short id: `<prefix>-<number>`. */
+/** An object short id: `<prefix>-<number>` for a stored object. */
 export const OBJECT_SHORT_ID_RE = /^([a-z]{2,8})-(\d{1,7})$/;
-/** Scans prose for object short ids; a match only becomes a reference when its prefix is a registered kind. */
-export const OBJECT_REF_SCAN_SOURCE = "\\b[a-z]{2,8}-\\d{1,7}\\b";
+/** An external object's id: `<prefix>-<8 hex>` or `<prefix>-<uuid>`, the other system's own id. */
+export const EXTERNAL_OBJECT_ID_RE = /^([a-z]{2,8})-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8})$/;
+/** Scans prose for object ids of both shapes; a match only becomes a reference when its prefix is a kind that takes that shape. */
+export const OBJECT_REF_SCAN_SOURCE = "\\b[a-z]{2,8}-(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8}|\\d{1,7})\\b";
 
 export function objectStatusIsDone(kind: Pick<ModObjectKind, "statuses"> | undefined, status: string | undefined): boolean {
   const list = kind?.statuses;
@@ -138,7 +146,7 @@ export type ModManifest = {
    * and reaches the app through what it publishes and the calls the UI makes.
    */
   local?: { main: string; description?: string };
-  /** What agents should know to use this mod well (its objects, its fences, when to reach for them). `cast mod guide` prints it. */
+  /** What agents should know to use this mod well (its objects, its fences, when to reach for them), usually from AGENTS.md beside the manifest. Every session the mod applies to starts with it, and `cast mod guide` prints it. */
   agents?: string;
 };
 
@@ -217,7 +225,8 @@ export function validateManifest(raw: unknown): ManifestCheck {
       if (seen.has(`objects:${prefix}`)) errors.push(`objects: "${prefix}" is declared twice`);
       seen.add(`objects:${prefix}`);
       if (typeof o.title !== "string" || !o.title) errors.push(`objects: "${prefix}" needs a title`);
-      for (const key of Object.keys(o)) if (!["prefix", "title", "plural", "icon", "statuses", "fields"].includes(key)) errors.push(`objects: "${prefix}" has an unknown key "${key}"`);
+      for (const key of Object.keys(o)) if (!["prefix", "title", "plural", "icon", "statuses", "fields", "external"].includes(key)) errors.push(`objects: "${prefix}" has an unknown key "${key}"`);
+      if (o.external !== undefined && typeof o.external !== "boolean") errors.push(`objects: "${prefix}".external must be true or false`);
       if (o.statuses !== undefined && (!isList(o.statuses) || !o.statuses.every((x) => typeof x === "string" && x))) errors.push(`objects: "${prefix}".statuses must be a list of names`);
       if (o.fields !== undefined) {
         if (!o.fields || typeof o.fields !== "object" || Array.isArray(o.fields)) errors.push(`objects: "${prefix}".fields must be an object of name -> { type }`);
@@ -277,10 +286,15 @@ export type ModSurface =
   | { kind: "fence"; id: string; props: { code: string; meta?: string } }
   | { kind: "sidebar"; id: string; props?: Record<string, unknown> }
   /** An object's page: the declaring mod draws it, `id` is the kind's prefix and props.object the row. */
-  | { kind: "object"; id: string; props: { object: Record<string, unknown> } };
+  | { kind: "object"; id: string; props: { object: Record<string, unknown> } }
+  /** An external object's live row: the declaring mod's `object.resolve` hook answers with data, not a tree. `id` is the kind's prefix. */
+  | { kind: "resolve"; id: string; props: { id: string } };
+
+/** The row a mod's `object.resolve` hook answers with: what the pill, hover card and page show for an external object. */
+export type ResolvedObject = { title: string; status?: string; fields?: Record<string, unknown>; body?: string };
 
 /** The events a hooks module can hook, with what each matcher may name. */
-export const MOD_EVENTS = ["mod.start", "ui.render", "command.run", "session.state", "data.change"] as const;
+export const MOD_EVENTS = ["mod.start", "ui.render", "object.resolve", "command.run", "session.state", "data.change"] as const;
 export type ModEventName = (typeof MOD_EVENTS)[number];
 
 // -- Protocol ---------------------------------------------------------------
@@ -299,7 +313,8 @@ export type FrameToHost =
   | { type: "booted" }
   | { type: "ready"; hooks: { event: string; matcher?: Record<string, unknown> }[] }
   | { type: "load-failed"; error: string }
-  | { type: "rendered"; rid: string; tree?: ModNode; error?: string; pass?: boolean }
+  /** `value` answers a "resolve" surface (with `pass` while the answer is still on its way), `tree` every other. */
+  | { type: "rendered"; rid: string; tree?: ModNode; value?: unknown; error?: string; pass?: boolean }
   | { type: "done"; rid: string; error?: string }
   /**
    * `origin` says what the call serves: "ui" a drawn surface (its handlers run

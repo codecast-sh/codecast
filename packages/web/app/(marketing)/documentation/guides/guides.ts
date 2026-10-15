@@ -102,7 +102,7 @@ export const GUIDES: Guide[] = [
     slug: "t3-code",
     published: "2026-10-12",
     title: "Use Codecast with T3 Code",
-    dek: "Threads you start in T3 Code appear in Codecast with no setup, so your team can read, search and share them. What you get on top, and what stays in T3 Code.",
+    dek: "Threads you start in T3 Code appear in Codecast with no setup, beside every session you run anywhere else, ready to search, steer and share. What you get on top, and what stays in T3 Code.",
     category: "Working together",
   },
   {

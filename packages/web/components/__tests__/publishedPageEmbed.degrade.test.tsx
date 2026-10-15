@@ -4,7 +4,7 @@
 // artifact and a plain web link, each alone on its line, opened in the
 // dashboard shell over a convex transport that answers every query "Could not
 // find public function" (test-helpers/missingBackend.tsx). The page's title
-// and author (artifacts.getShared) and the link's unfurl (linkPreviews.get)
+// and author (artifacts.embedInfo) and the link's unfurl (linkPreviews.get)
 // only dress the card, so each embed still renders its frame or its address,
 // and the message around them stays.
 // Run: cd packages/web && bun test --isolate components/__tests__/publishedPageEmbed.degrade.test.tsx
@@ -56,7 +56,7 @@ test("a published page, a Claude artifact and a link render in a message with ev
     expect(html).toContain("example.com");
     // The words around the embeds are still the message.
     expect(page.text()).toContain("Published it here:");
-    for (const fn of ["artifacts:getShared", "linkPreviews:get"]) expect(backend.refused).toContain(fn);
+    for (const fn of ["artifacts:embedInfo", "linkPreviews:get"]) expect(backend.refused).toContain(fn);
   } finally {
     await page.unmount();
   }
