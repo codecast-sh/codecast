@@ -58,7 +58,7 @@ export function formatShow(r: ShowResult, now: number = Date.now()): string {
   out.push(`Version ${r.doc.version} of ${r.current_version}, applied by ${r.doc.applied_by}${r.doc.how === "auto" ? " (applied on its own: additions a person said)" : r.doc.how === "stand_in" ? " (a session standing in, in a trial)" : ""}${r.doc.proposal ? ` from ${r.doc.proposal}` : ""}: ${r.doc.summary}`);
   const open = r.proposals.filter((p) => p.status === "open");
   for (const p of open) {
-    out.push(`Open: ${p.short_id} (${p.changes} change${p.changes === 1 ? "" : "s"}, ${formatAge(now - p.created_at)}) ${p.summary}${p.card ? `, card ${p.card}` : ""}${p.refused ? `\n  could not apply: ${p.refused}` : ""}`);
+    out.push(`Open: ${p.short_id} (${p.changes} change${p.changes === 1 ? "" : "s"}, ${formatAge(now - p.created_at)}) ${p.summary}${p.card ? `, decision ${p.card}` : ""}${p.refused ? `\n  could not apply: ${p.refused}` : ""}`);
   }
   if (r.cursor) out.push(`Context read up to ${new Date(r.cursor).toISOString()}.`);
   return out.join("\n") + "\n";
@@ -67,11 +67,11 @@ export function formatShow(r: ShowResult, now: number = Date.now()): string {
 /** The show result as `--json` prints it: the cursor also as a time, so a reader never converts epoch ms to find where its window starts. */
 export const showJson = (r: ShowResult) => ({ ...r, cursor_at: r.cursor ? new Date(r.cursor).toISOString() : null });
 
-export function formatProposeResult(r: { short_id: string; status: string; version: number; auto?: boolean; card?: string; card_error?: string }): string {
+export function formatProposeResult(r: { short_id: string; status: string; version: number; auto?: boolean; ask?: boolean }): string {
   if (r.status === "empty") return `${r.short_id} recorded the window read; nothing to change (version ${r.version}).`;
   if (r.status === "applied") return `${r.short_id} applied as version ${r.version}: it only adds lines a person said, in their quoted words.`;
-  if (r.card) return `${r.short_id} waits on the project's person: card ${r.card}. Their answer applies or drops it.`;
-  return `${r.short_id} is open against version ${r.version}. A person applies it with: cast expectations apply ${r.short_id}${r.card_error ? `\n(No card was posted: ${r.card_error})` : ""}`;
+  if (r.ask) return `${r.short_id} is open against version ${r.version} and waits on the project's person. Nobody is asked yet: ask them yourself with cast decide --proposal ${r.short_id}, an answer opening with Apply to land it and one opening with Keep to leave the lines as they are.`;
+  return `${r.short_id} is open against version ${r.version}. A person applies it with: cast expectations apply ${r.short_id}`;
 }
 
 export function registerExpectationsCommand(program: Command, deps: PublishDeps): void {
@@ -127,8 +127,8 @@ Markdown form (JSON is the same fields: {summary, since?, until?, ops: [{op, ...
 Source kinds: call, chat, session, task, decision, commit, file, doc, desk, call_grade, signal, other.
 A proposal that only adds lines applies on its own when each line quotes, with its date, a person's own words
 the record holds (a chat line they typed, a decision they answered, or what they said on a call) and says what
-that quote says, in words the two share. Anything else waits for the project's person: a card in their queue
-when a session proposes it.
+that quote says, in words the two share. Anything else waits for the project's person, and the session that
+proposed it asks them with its own decision: cast decide --proposal xp-N.
 since/until record the window of team context read; the newest until is the next read's start.`)
     .action(async (file: string, options: { project?: string; team?: string; hold?: boolean; json?: boolean }) => {
       let proposal;

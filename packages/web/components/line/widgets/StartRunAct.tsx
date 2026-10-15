@@ -55,7 +55,7 @@ export function StartRunAct({ taskId, projectId, problem, label = "Start again",
     <>
       {typeof state === "object" && <span className="lw-act-error" role="alert">{state.error}</span>}
       <button type="button" className="lw-act" data-primary={primary ? "" : undefined} aria-haspopup="dialog" disabled={state === "starting"} onClick={() => setReview(true)} data-line-start-again={taskId}>
-        {icon}{state === "starting" ? "Starting the run" : priced ? `${label} (new run${cost ? `, ~${usd(cost.avgUsd)}` : ""})` : `${label}${about ? `, about ${about}` : ""}`}
+        {icon}{state === "starting" ? "Starting the run" : priced ? `${label} (new run${cost ? `, ~${usd(cost.billedUsd)} billed` : ""})` : `${label}${about ? `, about ${about}` : ""}`}
       </button>
       {review && <SwitchReview ledger={startAgainLedger({ problem, project, branch, cost, about, goOn, hold, sendBack, reprove })} onClose={() => setReview(false)} onConfirm={start} />}
     </>

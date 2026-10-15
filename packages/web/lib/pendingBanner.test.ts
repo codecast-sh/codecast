@@ -254,3 +254,11 @@ describe("serverPendingBubbles", () => {
     expect(pendingMessageHoldScreen("serverpending_c", { ...held, status: "injected" })).toBeUndefined();
   });
 });
+
+test("a message waiting on a cloud placement never offers kill and restart: there is no agent yet", () => {
+  const late = { retryEligible: true, restartInFlight: false, idleGraceElapsed: true, bootGraceElapsed: true, messageReachedSession: false };
+  expect(pendingBannerState(undefined, late)).toBe("stuck");
+  expect(pendingBannerState(undefined, { ...late, cloudPlacing: true })).toBe("none");
+  // A restart the person already pressed keeps its progress.
+  expect(pendingBannerState(undefined, { ...late, cloudPlacing: true, restartInFlight: true })).toBe("stuck");
+});

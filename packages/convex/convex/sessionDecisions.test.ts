@@ -26,6 +26,7 @@ import {
   reroutePendingDecisionsForConversation,
   handUpLapsedCore,
   HOP_DEADLINE_MS,
+  passCore,
 } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
@@ -927,21 +928,22 @@ describe("review wave 1 regressions", () => {
 // A request goes up the reporting line (org-staffing.md S28, ct-55574): a
 // decision from a session under a role is the role's to read first, and the
 // person's queue holds only what the lead that reports to them asks.
+// Both roles seated, so each can be told: the lead on conversations_standing,
+// the head (which reports to BOSS) on conversations_head.
+async function seated() {
+  const world = seed();
+  const { ctx } = world;
+  await ctx.db.insert("anchors", { _id: "anchors_lead", conversation_id: "conversations_standing", status: "active" });
+  await ctx.db.insert("anchors", { _id: "anchors_head", conversation_id: "conversations_head", status: "active" });
+  await ctx.db.patch("org_roles_lead", { anchor_id: "anchors_lead" });
+  await ctx.db.patch("org_roles_head", { anchor_id: "anchors_head" });
+  await ctx.db.patch("conversations_standing", { org_role_id: "org_roles_head", anchor_id: "anchors_lead" });
+  await ctx.db.insert("conversations", { _id: "conversations_head", session_id: "sess-head", user_id: HOST, team_id: TEAM, message_count: 2, standing_role_id: "org_roles_head", anchor_id: "anchors_head" });
+  return world;
+}
+const linesIn = (tables: Record<string, any[]>, conv: string) => tables.pending_messages.filter((m) => m.conversation_id === conv).map((m) => String(m.content));
+
 describe("a decision goes up the reporting line", () => {
-  // Both roles seated, so each can be told: the lead on conversations_standing,
-  // the head (which reports to BOSS) on conversations_head.
-  async function seated() {
-    const world = seed();
-    const { ctx } = world;
-    await ctx.db.insert("anchors", { _id: "anchors_lead", conversation_id: "conversations_standing", status: "active" });
-    await ctx.db.insert("anchors", { _id: "anchors_head", conversation_id: "conversations_head", status: "active" });
-    await ctx.db.patch("org_roles_lead", { anchor_id: "anchors_lead" });
-    await ctx.db.patch("org_roles_head", { anchor_id: "anchors_head" });
-    await ctx.db.patch("conversations_standing", { org_role_id: "org_roles_head", anchor_id: "anchors_lead" });
-    await ctx.db.insert("conversations", { _id: "conversations_head", session_id: "sess-head", user_id: HOST, team_id: TEAM, message_count: 2, standing_role_id: "org_roles_head", anchor_id: "anchors_head" });
-    return world;
-  }
-  const linesIn = (tables: Record<string, any[]>, conv: string) => tables.pending_messages.filter((m) => m.conversation_id === conv).map((m) => String(m.content));
 
   test("a lead's decision reaches the person it reports to, and is no message in its own thread", async () => {
     const { ctx, tables } = await seated();
@@ -1192,3 +1194,57 @@ describe("a change card on a decision (LE11)", () => {
   });
 });
 
+
+// A person hands an open question to someone else (passCore): a teammate takes
+// it into their queue, a role is woken on it and may answer it without a grant,
+// and neither ownership moves nor holder refreshes take it back.
+describe("passing a decision", () => {
+  test("to a teammate: it leaves the asked people's queues and enters theirs, and rerouting keeps it there", async () => {
+    const { ctx, tables } = seed();
+    await askApproach(ctx);
+    const id = tables.session_decisions[0]._id;
+    expect(await passCore(ctx, HOST, "sd-1", { kind: "user", id: BOSS })).toEqual({ passed: true });
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids).toEqual([BOSS]);
+    expect(row.holder).toEqual({ kind: "user", id: BOSS });
+    expect(row.passed_to).toMatchObject({ kind: "user", id: BOSS, by: HOST });
+    expect(tables.decision_inbox.map((i) => [i.user_id, i.status])).toEqual([[BOSS, "pending"]]);
+    expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([id]);
+    await reroutePendingDecisionsForConversation(ctx, "conversations_ask" as any, NOW);
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([BOSS]);
+  });
+
+  test("to someone off the session's team, a bot, or a stranger's decision is refused", async () => {
+    const { ctx, tables } = seed({ users: [{ _id: HOST, name: "Host" }, { _id: BOSS, name: "Boss" }, { _id: OWNER2, name: "Owner Two" }, { _id: "users_bot", name: "Bot", is_bot: true }] });
+    await askApproach(ctx);
+    expect(await passCore(ctx, HOST, "sd-1", { kind: "user", id: OWNER2 })).toEqual({ error: "Owner Two is not on this session's team" });
+    expect(await passCore(ctx, HOST, "sd-1", { kind: "user", id: "users_bot" })).toEqual({ error: "Pass it to a person or a role" });
+    expect(await passCore(ctx, "users_nobody" as any, "sd-1", { kind: "user", id: BOSS })).toEqual({ error: "Unauthorized: not your decision" });
+    expect(tables.session_decisions[0].passed_to).toBeUndefined();
+  });
+
+  test("to a role: the role is woken, holds it, and its session answers without a grant", async () => {
+    const { ctx, tables } = await seated();
+    await askApproach(ctx, "sess-plain");
+    expect(tables.session_decisions[0].holder).toEqual({ kind: "user", id: HOST });
+    expect(await passCore(ctx, HOST, "sd-1", { kind: "role", id: "org_roles_head" })).toEqual({ passed: true });
+    const row = tables.session_decisions[0];
+    expect(row.holder).toEqual({ kind: "role", id: "org_roles_head" });
+    expect(row.hops.map((h: any) => h.role_id)).toContain("org_roles_head");
+    expect(linesIn(tables, "conversations_head").some((l) => l.includes("sd-1"))).toBe(true);
+    // The people keep the card, held by the role, so any of them can still answer.
+    expect(personMayResolve(row, HOST)).toBe(true);
+    const r = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-head", answer_index: 1 });
+    expect(r.error).toBeUndefined();
+    expect(r.answered_by).toEqual({ kind: "role", id: "org_roles_head" });
+    expect(tables.session_decisions[0].status).toBe("answered");
+  });
+
+  test("to a role with no running session is refused and changes nothing", async () => {
+    const { ctx, tables } = seed();
+    await askApproach(ctx, "sess-plain");
+    expect(await passCore(ctx, HOST, "sd-1", { kind: "role", id: "org_roles_head" })).toEqual({ error: "Head has no running session to hear it" });
+    expect(tables.session_decisions[0].holder).toEqual({ kind: "user", id: HOST });
+  });
+});

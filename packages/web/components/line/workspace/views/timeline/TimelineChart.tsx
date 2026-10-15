@@ -12,6 +12,7 @@
 import { memo, useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { backTimes, type CauseHistory, type HistoryAttempt, type HistoryClose } from "../../../../../lib/line/causeHistory";
 import {
+  defaultRange, rangeDomain, TIME_RANGES, type TimeRange,
   alignDown, attemptEndWords, attemptMarkWords, attemptTone, bucketCounts, bucketStep, bucketWords, closeStepLabel, comebackTimes, momentWords, notDeployed, shownWatches, spanWords, timeTicks,
   type Domain, type MarkTone,
 } from "../../../../../lib/line/timeline";
@@ -90,6 +91,31 @@ function packLanes(marks: ReadonlyArray<AttemptMark>, x: (t: number) => number, 
     out.set(m.key, { lane, w: Math.max(span, m.minW) });
   }
   return out;
+}
+
+/** A flag's left edge, moved left so all of it stays inside the plot (which clips at its right edge): a flag at the newest moment reads whole. */
+const flagInside = (fx: number, w: number, width: number) => Math.max(GUTTER, Math.min(fx, width - PAD_R - w - 1));
+
+const RANGE_WORDS: Record<TimeRange, string> = { "24h": "24h", "7d": "7d", "30d": "30d", all: "All" };
+
+/** The window a chart shows: a range preset (opening on the smallest that holds the history), or a span dragged to zoom. */
+export function useTimelineDomain(h: CauseHistory, now: number) {
+  const [range, setRange] = useState<TimeRange>(() => defaultRange(h, now));
+  const [zoom, setZoom] = useState<Domain | null>(null);
+  const domain = useMemo(() => zoom ?? rangeDomain(range, h, now), [zoom, range, h, now]);
+  const pickRange = useCallback((r: TimeRange) => { setRange(r); setZoom(null); }, []);
+  const onZoom = useCallback((d: Domain) => setZoom(d), []);
+  const onReset = useCallback(() => setZoom(null), []);
+  return { range: zoom ? null : range, pickRange, domain, onZoom, onReset };
+}
+
+/** The range presets over a chart; none is pressed while zoomed. */
+export function TimeRangeSeg({ range, pick }: { range: TimeRange | null; pick: (r: TimeRange) => void }) {
+  return (
+    <span className="lw-seg" role="tablist" aria-label="Time range">
+      {TIME_RANGES.map((r) => <button key={r} type="button" role="tab" aria-selected={range === r} onClick={() => pick(r)} data-line-timeline-range={r}>{RANGE_WORDS[r]}</button>)}
+    </span>
+  );
 }
 
 export type TimelineChartProps = {
@@ -181,11 +207,13 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
         const first = prev.text.match(/^#(\d+)/)![1];
         prev.text = `#${first} to #${c.n} ${closeWord(c)}`;
         prev.w = prev.text.length * 6 + 14;
+        prev.fx = flagInside(prev.fx, prev.w, width);
         prev.runId = c.runId;
         continue;
       }
       const text = `#${c.n} ${closeWord(c)}`;
-      flags.push({ key: c.runId, cx, fx: prev ? Math.max(cx, prev.fx + prev.w + 4) : cx, text, w: text.length * 6 + 14, kind: c.kind, runId: c.runId });
+      const w = text.length * 6 + 14;
+      flags.push({ key: c.runId, cx, fx: flagInside(prev ? Math.max(cx, prev.fx + prev.w + 4) : cx, w, width), text, w, kind: c.kind, runId: c.runId });
     }
     for (const { c } of closes) {
       const step = closeStepLabel(c.step, labelOf);
@@ -219,8 +247,8 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
       const a = h.attempts.find((p) => p.runId === s.runId);
       if (s.merge) {
         tips.set(`m:${s.runId}`, {
-          title: `Run #${a?.n ?? "?"}'s fix merged into ${s.merge.into}`,
-          lines: [`Commit ${s.merge.sha.slice(0, 7)}, from ${s.merge.branch}`, momentWords(s.merge.at), ...(s.deploys.length ? [] : [s.words])],
+          title: s.merge.byHand ? `Run #${a?.n ?? "?"}'s fix merged by hand` : `Run #${a?.n ?? "?"}'s fix merged into ${s.merge.into}`,
+          lines: [s.merge.byHand ? `Pull request ${s.merge.prUrl}` : `Commit ${s.merge.sha.slice(0, 7)}, from ${s.merge.branch}`, momentWords(s.merge.at), ...(s.deploys.length ? [] : [s.words])],
           tone: "ok",
         });
       } else {
@@ -278,7 +306,7 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
     }
     const ticks = timeTicks([d0, d1], Math.max(3, Math.floor(plotW / 92)));
     return { tips, step, max, bars, marks, lanes, laneCount, attTop, shipTop, axisTop, height, ticks, unreadBefore, closes, flags, comebacks, hasRuns, hasShips };
-  }, [h, d0, d1, plotW, x, now, labelOf, offTopic]);
+  }, [h, d0, d1, width, plotW, x, now, labelOf, offTopic]);
 
   const { tips, step, max, bars, marks, lanes, attTop, shipTop, axisTop, height, ticks, unreadBefore, closes, flags, comebacks, hasRuns, hasShips } = drawn;
   // The marks through every lane end at the last lane drawn.
@@ -596,7 +624,7 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
             })}
             {flags.map((f) => (
               <g key={`f${f.key}`} className="lwt-close" data-kind={f.kind} data-tip={`c:${f.runId}`} onClick={() => onPick({ kind: "attempt", runId: f.runId })}>
-                {f.fx > f.cx && <path className="lwt-close-leader" d={`M${f.cx} 17 L${f.fx} 10`} />}
+                {(f.cx < f.fx || f.cx > f.fx + f.w) && <path className="lwt-close-leader" d={`M${f.cx} 17 L${f.cx < f.fx ? f.fx : f.fx + f.w} 10`} />}
                 <path d={`M${f.fx} 3 h${f.w} l-5 7 l5 7 h-${f.w} z`} />
                 <text x={f.fx + 5} y={14}>{f.text}</text>
               </g>
@@ -609,13 +637,15 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
               if (dpl.at < d0 || dpl.at > d1) return null;
               const dx = x(dpl.at);
               const label = dpl.target ?? "deploy";
+              const fw = label.length * 6.2 + 14;
+              const fx = flagInside(dx, fw, width);
               return (
                 <g key={dpl.id} className="lwt-deploy" data-tip={`d:${dpl.id}`} onClick={() => onPick({ kind: "attempt", runId: dpl.runId })}>
                   <line x1={dx} x2={dx} y1={FLAG_H - 4} y2={laneEnd} />
-                  <rect className="lwt-hitbox" x={dx - 4} y={0} width={label.length * 6.2 + 20} height={FLAG_H} />
+                  <rect className="lwt-hitbox" x={fx - 4} y={0} width={fw + 6} height={FLAG_H} />
                   <rect className="lwt-hitbox" x={dx - 4} y={FLAG_H} width={8} height={laneEnd - FLAG_H} />
-                  <path d={`M${dx} 3 h${label.length * 6.2 + 14} l-5 7 l5 7 h-${label.length * 6.2 + 14} z`} />
-                  <text x={dx + 5} y={14}>{label}</text>
+                  <path d={`M${fx} 3 h${fw} l-5 7 l5 7 h-${fw} z`} />
+                  <text x={fx + 5} y={14}>{label}</text>
                 </g>
               );
             })}

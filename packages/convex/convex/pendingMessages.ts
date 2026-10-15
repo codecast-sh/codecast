@@ -550,6 +550,8 @@ export async function enqueuePendingMessage(
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
     ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? clearedThreadStateFields() : {}),
+    // New input opens a new turn, which owes its own report (workerSettle.ts).
+    ...(conversation.reported_to_parent_at ? { reported_to_parent_at: undefined } : {}),
   });
 
   // A line into a standing session is one of the role's wakes today (the
@@ -960,6 +962,9 @@ export async function performSessionSend(
     human: !fromRef && !args.raw,
     queue: !!args.queue && !!args.direct,
   });
+  if (senderConversation && !args.raw && !args.direct && String(senderConversation.parent_conversation_id) === String(target._id)) {
+    await ctx.db.patch(senderConversation._id, { reported_to_parent_at: Date.now() });
+  }
 
   // Immediate liveness signal so the CLI can warn "the session looks offline" right away,
   // rather than the sender only finding out via the cron's delayed notice. The
