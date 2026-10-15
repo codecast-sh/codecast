@@ -6,7 +6,7 @@
  */
 
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import { CLOUD_START_RUN_MS } from "@codecast/shared/contracts";
 import { readHosts, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { learnHostDeviceId } from "./prepare.js";

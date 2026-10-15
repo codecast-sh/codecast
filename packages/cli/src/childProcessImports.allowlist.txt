@@ -8,7 +8,6 @@
 src/browser/appIdentity.ts 1
 src/browser/cloudHost.ts 1
 src/browser/credentials.ts 1
-src/browser/instance.ts 4
 src/browser/liveView.ts 1
 src/browser/localChrome.ts 1
 src/browser/profile.ts 1

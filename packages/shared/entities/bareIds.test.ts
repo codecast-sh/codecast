@@ -21,11 +21,13 @@ describe("bare ids in prose", () => {
     expect(ids(bareEntityIdRegex(), "(tr-42)")).toEqual(["tr-42"]);
   });
 
-  test("a role and a project read as ids, and open their sheet on the Org screen", () => {
+  test("a role, a project and a goal read as ids, and open their own addresses", () => {
     expect(ids(bareEntityIdRegex(), "ask or-3 about pj-mf3k2a under in-2")).toEqual(["or-3", "pj-mf3k2a", "in-2"]);
     expect(entityTypeFromId("or-3")).toBe("role");
     expect(entityTypeFromId("pj-mf3k2a")).toBe("project");
-    for (const id of ["or-3", "pj-mf3k2a", "in-2"]) expect(entityRoute(entityTypeFromId(id)!, id)).toBe(`/org/${id}`);
+    expect(entityRoute(entityTypeFromId("or-3")!, "or-3")).toBe("/org/or-3");
+    expect(entityRoute(entityTypeFromId("pj-mf3k2a")!, "pj-mf3k2a")).toBe("/projects/pj-mf3k2a");
+    expect(entityRoute(entityTypeFromId("in-2")!, "in-2")).toBe("/goals/in-2");
   });
 
   test("a word that starts like a role or a goal stays prose", () => {
