@@ -1,12 +1,14 @@
 "use client";
 // One problem's page (line-journeys.md LJ8.3). Its job: decide whether this
 // problem is real and is being handled. Top to bottom: what is wrong in one
-// line; where its newest run stands (StageTrack, the one statement of state);
+// line; its life on one time axis (findings, runs, the deploys that carried a
+// fix, and whether it came back after); where its newest run stands (StageTrack, the one statement of state);
 // the act band (what waits on a person, answerable here, or the facts that
 // show nothing is owed); the findings as real things, each opened in place;
 // and what the line did about it, run by run. Nothing else.
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { useCollectionRows } from "../../../../../hooks/useCollectionRows";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useOpenFixDecision } from "../../../../../hooks/useFixDecision";
@@ -20,7 +22,7 @@ import { needOfCase, stoppedAsk } from "../../../../../lib/line/lineNeeds";
 import type { LineIssue } from "../../../../../lib/line/lineModel";
 import { errorWords, problemHeadName } from "../../../../../lib/line/problemTable";
 import { errorTitle } from "@codecast/shared/contracts/ingest";
-import { bandLine, cameBack, citedMerge, fixMergesSig, type FixPullRequest, landingOutput, movedOut, problemBand, problemHeading, problemStatement, runMovedTo, statementAdds, sinceCloseGroups, workRows, type BandNote, type BandTask } from "../../../../../lib/line/problemPage";
+import { bandLine, cameBack, citedMerge, landingOutput, movedOut, problemBand, problemHeading, problemStatement, runMovedTo, statementAdds, sinceCloseGroups, workRows, type BandNote, type BandTask } from "../../../../../lib/line/problemPage";
 import { stageTrack, type StageOf } from "../../../../../lib/line/stageTrack";
 import { causeDoubt } from "../../../../../lib/line/lineTrace";
 import { failCause } from "../../../../../lib/line/runReport";
@@ -32,12 +34,16 @@ import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import type { ReaderSignal } from "../../../widgets/FindingReader";
 import { StageTrack } from "../../../widgets/StageTrack";
+import { useLineNav } from "../../../widgets/parts";
 import { LineDecisionPrefetch } from "../../../widgets/LineDecision";
 import type { LineViewProps } from "../types";
 import { ProblemBand } from "./ProblemBand";
 import { ProblemFindings, type FixMark } from "./ProblemFindings";
 import { ProblemWork } from "./ProblemWork";
+import { TimelineChart, TimeRangeSeg, useTimelineDomain, type TimelinePick } from "../timeline/TimelineChart";
+import type { CauseHistory } from "../../../../../lib/line/causeHistory";
 import "./problem.css";
+import "../timeline/timeline.css";
 
 const signalSig = (s: ReaderSignal & { retired?: unknown }) => `${s._id}|${s.observed_at ?? 0}|${s.subject ?? ""}|${s.judge ?? ""}|${s.judge_review?.state ?? ""}|${(s.detail_md ?? "").length}|${s.retired ? 1 : 0}`;
 /** Focus inside a decision or a need's reader: its own keys answer it, so the page's keys stand down (LJ5). */
@@ -64,6 +70,12 @@ export function ProblemPage({ model, workspace, selection, select, href, order }
     return t && !t.cause ? t : null;
   });
 
+  // A task the store holds that no finding raised (filed by hand, then run on the line) has no problem page: the
+  // address hands over to the task itself, whole, and Back skips this hop.
+  const { replacePath } = useLineNav();
+  const taskPage = plainTask && workspace.ready ? `/tasks/${plainTask.short_id ?? plainTask._id}` : null;
+  useWatchEffect(() => { if (taskPage) replacePath?.(taskPage); }, [taskPage, replacePath]);
+
   // Esc returns to the list; j and k walk it. None of them reaches into a decision or an answer box.
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (!active || !issue || selection.run || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || hasOpenModal() || keyBelongsElsewhere(e.target) || inReader(e.target)) return;
@@ -77,8 +89,8 @@ export function ProblemPage({ model, workspace, selection, select, href, order }
   // cold, not missing. Once it has, a name nothing here holds is not found, with the way back.
   if (!issue) {
     if (!workspace.ready) return <div className="lw-skeleton" aria-busy data-line-view="problem">{[70, 92, 54].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
-    // A task the store holds that no finding raised is not a problem here: name it by its ref and open the task itself.
-    if (plainTask) return <div className="lw-empty" data-line-view="problem" data-line-problem-missing={selection.case ?? ""} data-line-problem-task=""><b>Not a problem on the line</b><span className="pp-ref">{plainTask.short_id ?? plainTask._id}</span><a className="lw-act" data-primary="" href={`/tasks/${plainTask.short_id ?? plainTask._id}`}>Open the task</a><button type="button" className="lw-act" onClick={() => open(null)}>All problems</button></div>;
+    // A task no finding raised is opening on its own page (above).
+    if (plainTask) return <div className="lw-skeleton" aria-busy data-line-view="problem" data-line-problem-task={plainTask.short_id ?? plainTask._id}>{[70, 92, 54].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
     return <div className="lw-empty" data-line-view="problem" data-line-problem-missing={selection.case ?? ""}><b>Not found</b><span className="pp-ref">{selection.case}</span><button type="button" className="lw-act" onClick={() => open(null)}>All problems</button></div>;
   }
   return <ProblemBody key={issue.id} issue={issue} model={model} workspace={workspace} selection={selection} select={select} href={href} prev={prev} next={next} open={open} />;
@@ -142,10 +154,8 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
     const rows = (st as unknown as { workflowRuns?: Record<string, { node_statuses?: Array<{ node_id: string; result_preview?: string }> }> }).workflowRuns;
     return run ? landingOutput(rows?.[run.id]?.node_statuses) : null;
   });
-  // The fix branch's pull request, merged: a person landed the run's branch by hand when the line's merge step was off.
-  const prMergedSig = useInboxStore((st) => fixMergesSig((st as unknown as { pullRequests?: Record<string, FixPullRequest> }).pullRequests, (id) => (id === issue.id ? issue.ref : null)));
-  const prMerged = useMemo(() => new Map<string, { at: number; url: string }>(JSON.parse(prMergedSig)).get(issue.id) ?? null, [prMergedSig, issue.id]);
   const stageOf = useCallback<StageOf>((node) => model.steps[node]?.stage ?? null, [model.steps]);
+  const labelOf = useCallback((id: string) => model.steps[id]?.label, [model.steps]);
   // Grounding's doubt that the findings match the problem (ct-58022: a removal request filed under calling hours).
   const doubt = useMemo(() => (task ? causeDoubt(task as Parameters<typeof causeDoubt>[0]) : null), [task]);
 
@@ -160,12 +170,12 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
   const approverId = (answeredDetail?.decision as { answered_by?: { id?: string } | null } | undefined)?.answered_by?.id ?? answered?.answeredBy ?? null;
   const approver = approverId ? workspace.names.get(approverId) ?? null : null;
   const band = useMemo(() => problemBand({
-    issue, history: h, run, need, row, task, now, stageOf, shipOutput, notes, holderName, prMerged, approver,
+    issue, history: h, run, need, row, task, now, stageOf, shipOutput, notes, holderName, approver,
     decision: openDecision ? { ref: decisionRef(openDecision), since: openDecision.created_at ?? null, mine } : null,
     // A trial project's runs start under its dispatcher, not a lead's switch: it is on, unless its dispatcher holds.
     lineOn: projectId && workspace.trialProjects.has(projectId) ? true : admission ? admission.on : null, idle: projectId ? workspace.trialHeld?.get(projectId) ?? null : null,
     offTopic: offTopic.size, trial: !!newestId && isTrial(newestId),
-  }), [issue, h, run, need, row, task, now, stageOf, shipOutput, notes, holderName, approver, prMerged, openDecision, mine, admission, projectId, workspace.trialProjects, workspace.trialHeld, offTopic, newestId, isTrial]);
+  }), [issue, h, run, need, row, task, now, stageOf, shipOutput, notes, holderName, approver, openDecision, mine, admission, projectId, workspace.trialProjects, workspace.trialHeld, offTopic, newestId, isTrial]);
   const line = bandLine(band);
   const waiting = band.kind === "need" || band.kind === "decision" || band.kind === "unanswered";
   // A fix that waits on an answer, or was asked and never answered, stands at Present: nothing after it counts as done.
@@ -260,6 +270,8 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
       {/* One name on every page (the list's, the reader's, this one); the statement it names follows whole. */}
       <h2 className="pp-title">{heading}</h2>
       {errorLine ? <p className="pp-statement" data-pp-error><code>{errorLine}</code></p> : statementAdds(statement, heading, signals) && <p className="pp-statement">{statement}</p>}
+      <ProblemTimeline history={h} labelOf={labelOf} now={now} offTopic={offTopic} signals={signals} selectedRun={selection.run ?? null}
+        onRun={(runId) => onRun(runId, issue.id)} onFinding={(ref) => select({ finding: ref }, undefined, { push: true })} />
       {/* A closed problem's band states when and how in its facts: the line would only say it twice. */}
       <StageTrack stages={stages} line={band.kind === "closed" ? null : line} onStage={run ? (step) => onStep(run.id, step) : undefined} />
 
@@ -275,6 +287,36 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
       <ProblemWork rows={work} now={now} bandShowsNewest={waiting} onRun={(runId) => onRun(runId, issue.id)} onProblem={onProblem} row={selection.row} onRow={(row) => select({ row }, undefined, { replace: true })} />
       <NeighbourDecisions ids={[prev, next]} />
     </div>
+  );
+}
+
+/** The problem's life on one axis, leading its page: findings, runs, merges, the deploys that carried a fix, the watch
+ *  after it, and what came back. A bar or a comeback opens its newest finding below; a run opens the run. */
+function ProblemTimeline({ history: h, labelOf, now, offTopic, signals, selectedRun, onRun, onFinding }: {
+  history: CauseHistory; labelOf: (id: string) => string | undefined; now: number; offTopic: ReadonlySet<number>;
+  signals: ReadonlyArray<ReaderSignal>; selectedRun: string | null; onRun: (runId: string) => void; onFinding: (ref: string) => void;
+}) {
+  const { range, pickRange, domain, onZoom, onReset } = useTimelineDomain(h, now);
+  const [pick, setPick] = useState<TimelinePick | null>(null);
+  const onPick = useCallback((p: TimelinePick) => {
+    if (p.kind === "attempt") { onRun(p.runId); return; }
+    setPick(p);
+    const back = p.kind === "comeback" ? [...h.regressions, ...h.recurrences].find((r) => r.afterRunId === p.runId) : null;
+    const [from, to] = p.kind === "bucket" ? [p.from, p.to] : back ? [back.at, back.until ?? Infinity] : [0, 0];
+    const at = (s: ReaderSignal) => s.observed_at || s.created_at;
+    const inSpan = signals.filter((s) => at(s) >= from && at(s) < to);
+    // A bucket opens its newest finding; a comeback its first, the one that said the fix did not hold.
+    const s = p.kind === "bucket" ? inSpan.reduce<ReaderSignal | null>((m, x) => (!m || at(x) > at(m) ? x : m), null) : inSpan.reduce<ReaderSignal | null>((m, x) => (!m || at(x) < at(m) ? x : m), null);
+    if (!s) return;
+    const ref = s.short_id ?? s._id;
+    onFinding(ref);
+    requestAnimationFrame(() => document.querySelector(`[data-line-finding="${CSS.escape(ref)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  }, [h, signals, onRun, onFinding]);
+  return (
+    <section className="pp-timeline lwt-vars" data-line-problem-timeline="">
+      <div className="pp-timeline-h"><TimeRangeSeg range={range} pick={pickRange} /></div>
+      <TimelineChart history={h} labelOf={labelOf} domain={domain} now={now} selectedRun={selectedRun} pick={pick} onPick={onPick} onZoom={onZoom} onReset={onReset} offTopic={offTopic} />
+    </section>
   );
 }
 

@@ -1,15 +1,23 @@
 import { useState } from "react";
-import { Activity, ChevronDown, Clock, List, Tag, Workflow, Zap } from "lucide-react";
-import type { InboxViewMode } from "../store/inboxStore";
+import { Activity, ChevronDown, Clock, FolderKanban, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import type { InboxViewMode, OrgLensMode } from "../store/inboxStore";
 import { FilterOptionList } from "./FilterDropdown";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
-export function InboxViewMenu({ value, onChange, hasLabels, hasPlans, hasTriggers }: {
+const ORG_LENS_OPTIONS: Record<OrgLensMode, { label: string; icon: typeof List }> = {
+  project: { label: "By project", icon: FolderKanban },
+  goal: { label: "By goal", icon: Target },
+  reports: { label: "By reports", icon: Network },
+};
+
+export function InboxViewMenu({ value, onChange, hasLabels, hasPlans, orgLenses = [], hasTriggers }: {
   value: InboxViewMode;
   onChange: (value: InboxViewMode) => void;
   hasLabels: boolean;
   hasPlans: boolean;
+  /** The org lenses with something to group by, in menu order. */
+  orgLenses?: readonly OrgLensMode[];
   hasTriggers: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -19,6 +27,7 @@ export function InboxViewMenu({ value, onChange, hasLabels, hasPlans, hasTrigger
     { key: "time", label: "By created", icon: Clock },
     ...(hasLabels ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
     ...(hasPlans ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
+    ...orgLenses.map((key) => ({ key, ...ORG_LENS_OPTIONS[key] })),
     ...(hasTriggers ? [{ key: "trigger", label: "By trigger", icon: Zap }] : []),
   ];
   const current = options.find((option) => option.key === value) ?? options[0];

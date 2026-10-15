@@ -5,7 +5,7 @@
  * it imports nothing of theirs.
  */
 import { v } from "convex/values";
-import { CLOUD_HOST_ACTIONS, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, SYNC_SKIP_REASONS } from "@codecast/shared/contracts";
+import { CLOUD_HOST_ACTIONS, CLOUD_HOST_SIZES, CLOUD_PLACEMENT_STEPS, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, SYNC_SKIP_REASONS } from "@codecast/shared/contracts";
 
 // A cloud host's own readiness (its heartbeat) and its managing laptop's report
 // (AWS state, cost, images, held logins, last action): contracts/cloudHostReport.ts.
@@ -39,6 +39,15 @@ export const cloudHostReportValidator = v.object({
     detail: v.optional(v.string()),
     at: v.number(),
   })),
+  autoscaled: v.optional(v.boolean()),
+  at: v.number(),
+});
+
+// Autoscale set on a template host (contracts/cloudHostReport.ts CloudAutoscale).
+export const cloudAutoscaleValidator = v.object({
+  enabled: v.boolean(),
+  max_extra: v.number(),
+  size: v.union(...CLOUD_HOST_SIZES.map((s) => v.literal(s.type))),
   at: v.number(),
 });
 
@@ -66,5 +75,20 @@ export const localMirrorValidator = v.object({
   device_id: v.string(),
   status: v.union(...LOCAL_MIRROR_STATUSES.map((s) => v.literal(s))),
   ...localMirrorFields,
+  at: v.number(),
+});
+
+// Where a cloud placement stands (contracts/cloudPlacementProgress.ts),
+// written by the preparing laptop's child onto the conversation.
+export const cloudPlacementStepValidator = v.union(...CLOUD_PLACEMENT_STEPS.map((s) => v.literal(s)));
+export const cloudPlacementProgressValidator = v.object({
+  token: v.string(),
+  host_id: v.string(),
+  host_device_id: v.optional(v.string()),
+  moved_from: v.optional(v.object({ host_id: v.string(), host_device_id: v.optional(v.string()), why: v.string() })),
+  steps: v.array(v.object({ step: cloudPlacementStepValidator, at: v.number() })),
+  started_at: v.number(),
+  lines: v.array(v.string()),
+  failed_at: v.optional(v.number()),
   at: v.number(),
 });
