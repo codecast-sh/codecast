@@ -25,7 +25,7 @@ import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwit
   deviceWakesOnUse,
   posixRepoBasename,
 } from "@codecast/shared/contracts";
-import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice } from "./sessionLaunch";
+import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice, retainSessionCreator } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
@@ -757,22 +757,21 @@ export async function performReassignToDevice(
   if (!conv) throw new Error("not your conversation");
   const replay = args.request_id !== undefined && await findSessionCommandByRequest(ctx, userId, args.request_id);
   if (replay) return { ok: true, command_id: replay._id, device_id: args.device_id, label: "" };
-  // A session the caller OWNS but a teammate RUNS can't be re-homed by a plain
-  // device restamp — the destination daemon runs under the caller's account, so
-  // the account must follow the device. Route it through the cross-user
-  // reparent, which authorizes runner-or-owner and rejects non-owners itself.
-  if (conv.user_id.toString() !== userId.toString()) {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+    .first();
+  // A session the caller OWNS but a teammate RUNS, or a move onto a team
+  // machine, can't be re-homed by a plain device restamp — the destination
+  // daemon runs under another account, so the account must follow the device.
+  // Route it through the cross-user reparent, which authorizes itself.
+  if (conv.user_id.toString() !== userId.toString() || !device) {
     return performReparentSessionToDevice(ctx, userId, {
       session_id: args.conversation_id,
       device_id: args.device_id,
       request_id: args.request_id,
     });
   }
-  const device = await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
-    .first();
-  if (!device) throw new Error("Unknown device");
 
   const prevOwner = (conv as any).owner_device_id as string | undefined;
 
@@ -886,9 +885,12 @@ export const reassignToDevice = mutation({
 // is pinned (author_user_id) so it survives the user_id rewrite. Owners are
 // untouched — the device axis and the owner axis move independently.
 //
-// Narrow by design: you may only pull onto YOUR OWN device. Moving a session
-// onto a third party's machine would need their consent and credential, which we
-// never transfer. Factored out so tests can drive it with an explicit userId.
+// The destination is YOUR OWN device, or a team machine you may start sessions
+// on (resolveSessionLaunchDevice: an agent box, or a teammate's machine shared
+// with your team — the share is the consent). On a team machine the account
+// follows the device to ITS runner, and the caller stays an owner, exactly as
+// a session started there. Only a session you run or own goes to a team
+// machine. Factored out so tests can drive it with an explicit userId.
 // The destination daemon can only clone the repo if it knows the git remote —
 // but git_remote_url stamping is unreliable (ct-38666: daemon-created
 // conversations often lack it). Resolve it at pull time from the best source:
@@ -927,16 +929,16 @@ export async function performReparentSessionToDevice(
       `No session found for "${args.session_id}" that you run or own, or that is visible to your team`,
     );
   }
-  const isRunner = conv.user_id.toString() === userId.toString();
+  const device = await resolveSessionLaunchDevice(ctx, userId, args.device_id);
+  if (!device) throw new Error("Unknown device: choose one of your machines or one your team shares");
+  // Whose daemon and account the session runs under after the move.
+  const runnerId: Id<"users"> = device.user_id;
+  const onTeamMachine = runnerId.toString() !== userId.toString();
+  if (onTeamMachine && (await checkConversationAccess(ctx, userId, conv)) !== "owner") {
+    throw new Error("Only a session you run or own can move to a team machine");
+  }
 
-  // The target device must be the CALLER's own — you pull onto your machine.
-  const device = await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
-    .first();
-  if (!device) throw new Error("Unknown device (you can only reparent onto your own device)");
-
-  const crossUser = !isRunner; // account actually changes hands
+  const crossUser = conv.user_id.toString() !== runnerId.toString(); // account actually changes hands
   const previousConversation = { ...conv };
 
   // Facts for the destination's reorientation notice (sessionMoveNotice.ts).
@@ -961,7 +963,7 @@ export async function performReparentSessionToDevice(
     : null;
   const nameOf = (u: any): string | undefined => u?.name || u?.email || undefined;
   const fromUser = crossUser ? nameOf(await ctx.db.get(conv.user_id)) : undefined;
-  const toUser = crossUser ? nameOf(await ctx.db.get(userId)) : undefined;
+  const toUser = crossUser ? nameOf(await ctx.db.get(runnerId)) : undefined;
 
   const patch: any = {
     owner_device_id: args.device_id,
@@ -971,12 +973,15 @@ export async function performReparentSessionToDevice(
     ...(await unparkForMove(ctx, conv, device)),
   };
   if (crossUser) {
-    // Account follows device: the caller now runs + bills it. Pin the author
-    // (the pre-move runner) the first time it crosses accounts so it survives.
+    // Account follows device: the destination's runner now runs + bills it.
+    // Pin the author (the pre-move runner) the first time it crosses accounts
+    // so it survives.
     if (!conv.author_user_id) patch.author_user_id = conv.user_id;
-    patch.user_id = userId;
+    patch.user_id = runnerId;
   }
   await ctx.db.patch(conv._id, patch);
+  // Moved onto a team machine: the caller keeps the session as an owner.
+  if (onTeamMachine) await retainSessionCreator(ctx, conv._id, userId, runnerId);
 
   if (deviceChanged) {
     await insertMachineSwitchDivider(ctx, conv, { to: device, from: priorDevice });
@@ -1003,9 +1008,9 @@ export async function performReparentSessionToDevice(
     .collect()) staleManaged.set(row._id.toString(), row);
   for (const row of staleManaged.values()) await ctx.db.delete(row._id);
 
-  // Resume on the caller's daemon: the command goes in the CALLER's queue
-  // (user_id: userId), targeted at their device. A teammate's daemon polls its
-  // own user's queue, so this reaches the right machine. The destination daemon
+  // Resume on the destination's daemon: the command goes in its RUNNER's queue
+  // (the caller, or a team machine's account), targeted at that device. A
+  // daemon polls its own user's queue, so this reaches the right machine. The destination daemon
   // resolves its own local checkout (clones if missing) — the source machine's
   // project_path is only a hint. `reparented` marks it so the daemon takes the
   // fresh-machine resume path (clone + transcript from Convex) rather than
@@ -1016,7 +1021,7 @@ export async function performReparentSessionToDevice(
   // missing) git_remote_url — see resolveRemoteForReparent.
   const remoteUrl = await resolveRemoteForReparent(ctx, conv, args.remote_url);
   const commandId = await ctx.db.insert("daemon_commands", {
-    user_id: userId,
+    user_id: runnerId,
     command: "resume_session" as const,
     request_id: args.request_id,
     args: JSON.stringify({
@@ -1048,7 +1053,9 @@ export async function performReparentSessionToDevice(
     });
   }
 
-  if (crossUser) await notifySessionExecutionTaken(ctx, previousConversation, userId, device.label, priorDevice?.label, !!priorDeviceId && deviceChanged);
+  // The takeover notice says the session now bills to the caller; a move onto
+  // a team machine bills to that machine's account, so it sends none.
+  if (crossUser && !onTeamMachine) await notifySessionExecutionTaken(ctx, previousConversation, userId, device.label, priorDevice?.label, !!priorDeviceId && deviceChanged);
   return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label, cross_user: crossUser };
 }
 

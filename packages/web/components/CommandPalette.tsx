@@ -32,8 +32,8 @@ import { commitModelChange } from "../lib/modelSwitchWeb";
 import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useOnlyHostedAgent, usePinnedAgentIds } from "../hooks/usePinnedAgents";
-import { useDevices, deviceDisplayName, deviceWakesOnUse, rosterDeviceOf, type Device } from "./DeviceBadge";
-import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
+import { deviceDisplayName, deviceWakesOnUse, rosterDeviceOf, type Device } from "./DeviceBadge";
+import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
@@ -476,7 +476,7 @@ export function ActionSubmenu({
   const [agentStep, setAgentStep] = useState<"pick" | "message">("pick");
   // "Move to machine": the roster and the mover (batch rail for laptop↔cloud,
   // re-home for laptop→laptop — see components/BulkMoveSessions).
-  const { devices: rosterDevices, locals: rosterLocals, remotes: rosterRemotes } = useDevices();
+  const { all: moveTargets } = useMoveTargets();
   const bulkMove = useBulkMoveSessions();
   const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
@@ -760,12 +760,12 @@ export function ActionSubmenu({
     }
     if (mode === "device") {
       const everyOwner = targets.length && targets.every((t: any) => t.owner_device_id === targets[0]?.owner_device_id) ? targets[0]?.owner_device_id : null;
-      return [...rosterLocals, ...rosterRemotes]
+      return moveTargets
         .map((d: any) => {
           const usable = d.online || (d.is_remote && deviceWakesOnUse(d));
           const state = d.is_remote
             ? (d.online ? "cloud host" : usable ? "cloud host · asleep, wakes on move" : "cloud host · offline")
-            : (d.online ? "laptop" : "laptop · offline");
+            : `${d.runner_name ? `${d.runner_name}'s machine` : "laptop"}${d.online ? "" : " · offline"}`;
           return { key: d.device_id, label: `${deviceDisplayName(d)} — ${state}${d.device_id === everyOwner ? " · running here" : ""}`, active: d.device_id === everyOwner, icon: d.is_remote ? Cloud : Laptop, usable: usable && d.device_id !== everyOwner };
         })
         .filter((row) => row.label.toLowerCase().includes(q));
@@ -842,7 +842,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, assignPeople, assignRoles, pinnedAgents]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, moveTargets, orgRoles, assignPeople, assignRoles, pinnedAgents]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -1014,7 +1014,7 @@ export function ActionSubmenu({
 
     if (mode === "device") {
       if (item.usable === false) { toast.error(item.label.includes("running here") ? "Already running there" : "That machine is offline"); return; }
-      const device = rosterDevices.find((d: any) => d.device_id === item.key);
+      const device = moveTargets.find((d: any) => d.device_id === item.key);
       if (device) void bulkMove(targets, device);
       onClose();
       return;
@@ -1121,7 +1121,7 @@ export function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, onClose, updateTask, updatePlan, updateDoc, teamMembers, search, taskStatuses, pathname, renameId, rosterDevices, bulkMove]);
+  }, [items, target, targets, targetType, mode, onClose, updateTask, updatePlan, updateDoc, teamMembers, search, taskStatuses, pathname, renameId, moveTargets, bulkMove]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
