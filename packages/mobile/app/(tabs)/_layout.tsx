@@ -3,6 +3,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Tabs, usePathname } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { InboxDrawer } from '@/components/inbox/InboxDrawer';
+import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { View as RNView,
   StyleSheet,
@@ -116,9 +117,10 @@ export default function TabLayout() {
   const chatHidden = hosted && !activeTeamId;
   // The slide-out panel belongs to the inbox: its drag is live only there.
   const onInbox = usePathname() === '/inbox';
+  const drawerOpen = useInboxDrawerOpen();
 
   return (
-    <SlideOutDrawer enabled={onInbox} drawer={<InboxDrawer />}>
+    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={<InboxDrawer />}>
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Theme.text,

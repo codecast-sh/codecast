@@ -122,6 +122,10 @@ export interface RunnerIo {
   /** Why the cloud host could not run a Claude session now (it has no live
    *  login and this machine has none to give it), or null when it can. */
   hostLoginGap(deviceId: string): Promise<string | null>;
+  /** Whether the cloud host can take one more session now (cloud/hostHeadroom):
+   *  `refuse` when it is out of memory, `small` when it has room but less memory
+   *  than the session's repo declares it needs to typecheck and run its dev server. */
+  hostRoom(deviceId: string, facts: Extract<BeginResult, { ok: true }>): Promise<{ refuse?: string; small?: string }>;
   transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
   /** The reorientation notice for the moved agent, from what the transfer proved. */
@@ -259,9 +263,18 @@ export async function migrateRow(
 
     // A session moved to a host with no login resumes on "Login expired", and
     // stopping it here already killed what it ran in the background: refuse first.
+    // A host out of memory stalls every step of the move in swap and then the
+    // session itself: refuse while the session still runs here.
+    let small: string | undefined;
     if (facts.direction === "to_cloud") {
       const gap = await io.hostLoginGap(facts.to_device_id);
       if (gap) return fail(`${facts.to_label ?? "the cloud host"} has no Claude login (${gap}); the session was left running here`);
+      const room = await io.hostRoom(facts.to_device_id, facts);
+      if (room.refuse) return fail(`${facts.to_label ?? "the cloud host"} has no room for another session (${room.refuse}); the session was left running here. Free memory there (stop sessions on it) or move it to a bigger host`);
+      if (room.small) {
+        small = room.small;
+        io.log(`${tag}: ${facts.to_label ?? "the cloud host"} is smaller than this repo needs (${small}); moving it anyway`);
+      }
     }
 
     // ── 2. quiesce the current owner so the transcript is final ─────────────
@@ -328,6 +341,9 @@ export async function migrateRow(
     } else {
       await io.report(id, { status: "transferring", stage: "pulling worktree + transcript from the cloud host" });
       transfer = await io.transferToLocal(facts);
+    }
+    if (small) {
+      transfer = { ...transfer, verification: `${transfer.verification}. This host is too small for the repo's real work: ${small}. Expect its whole-program typecheck (cast check) and dev server (cast dev) to run out of memory here; run them through a worker on a bigger machine (cast spawn --subagent) or ask for the host to be resized (cast hosts resize)` };
     }
     io.log(`${tag}: ${transfer.verification}`);
 
