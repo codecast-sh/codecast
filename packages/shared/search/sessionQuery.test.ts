@@ -16,6 +16,11 @@ const NOW = Date.UTC(2026, 8, 29, 12, 0, 0);
 const DAY = 86_400_000;
 
 describe("parseSessionQuery", () => {
+  test("a phone's curly quotes hold a phrase like straight ones", () => {
+    expect(parseSessionQuery("“home depot” order", NOW).text).toBe('"home depot" order');
+    expect(parseSessionQuery("file:„docs/a b.md”", NOW).files).toEqual(["docs/a b.md"]);
+  });
+
   test("plain text passes through with its phrases quoted", () => {
     const q = parseSessionQuery('auth "token refresh" bug', NOW);
     expect(q.text).toBe('auth "token refresh" bug');

@@ -79,6 +79,7 @@ import {
   oneLine,
   plainPreview,
   searchSnippet, holdsQueryPhrases, emailLocalHandle } from "./chatText";
+import { parseQueryTerms } from "@codecast/shared/search";
 import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
@@ -1138,7 +1139,7 @@ export const searchMessages = query({
     // rows post-index, so it widens the pool rather than starving the page.
     // Quoted phrases filter post-index too (the index has no phrases), so they
     // widen it the same way.
-    const narrowed = !!args.from_user_id || args.q.includes('"');
+    const narrowed = !!args.from_user_id || parseQueryTerms(args.q).phrases.length > 0;
     const take = limit * (narrowed ? 6 : 2);
     const hits = await ctx.db
       .query("chat_messages")

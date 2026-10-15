@@ -19,8 +19,8 @@ import type { PushToTalk } from "../../../hooks/useWalkie";
 //
 // A faithful stand in, never a stub: the real hooks/useWalkie with exactly one
 // export replaced, the hook that would otherwise open a microphone; and the
-// real hooks/useChatSync with the DM opener replaced, so a Message press is
-// counted rather than routed.
+// real hooks/useChatSync with the DM's server feeder replaced, so the card
+// reads the conversation the test seeds into the store.
 const realWalkieHooks = await import("../../../hooks/useWalkie");
 const ptt: PushToTalk = {
   holding: false,
@@ -40,9 +40,11 @@ mock.module("../../../hooks/useOpenSession", () => ({ ...realOpenSession, useOpe
 const realMissingRow = await import("../../../hooks/useMissingSessionRow");
 mock.module("../../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, useMissingSessionRow: () => null }));
 
-let openedDms: string[][] = [];
+const realChatSync = await import("../../../hooks/useChatSync");
+mock.module("../../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}) }));
+
 mock.module("../../../hooks/useOpenDm", () => ({
-  useOpenDm: () => (ids: string[]) => openedDms.push(ids),
+  useOpenDm: () => () => {},
   useOpenChatPath: () => () => {},
 }));
 
@@ -108,6 +110,8 @@ const { faceRowSize, floatingRowSize } = await import("../../../lib/faces/layout
 const { EngagementCard } = await import("../EngagementCard");
 const { walkieStageWords } = await import("../../../hooks/useWalkie");
 const { useInboxStore } = await import("../../../store/inboxStore");
+const { dmKeyFor } = await import("@codecast/shared/chat");
+const { activeTeamIdOf } = await import("../../../lib/activeTeam");
 
 afterAll(() => {
   mock.module("../../../lib/calls/callManager", () => realCallManager);
@@ -170,7 +174,6 @@ afterEach(async () => {
   root = null;
   host?.remove();
   host = null;
-  openedDms = [];
   ptt.holding = false;
   setTiles([]);
   walkieOver = {};
@@ -337,7 +340,7 @@ describe("the link is how 'I am talking to them' reads", () => {
 // ── the gesture ─────────────────────────────────────────────────────────────
 
 describe("a face opens one card", () => {
-  test("a click pins the card with Talk, Huddle and Message; Escape closes it; Message opens the DM", async () => {
+  test("a click pins the card with Talk and Huddle over a reply box; Escape closes it", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
     const circle = h.circle(ANN);
     expect(circle.getAttribute("aria-expanded")).toBe("false");
@@ -346,25 +349,40 @@ describe("a face opens one card", () => {
     const card = h.q("[data-member-card]")!;
     expect(card).not.toBeNull();
     expect(card.textContent).toContain("Ann");
-    const words = h.all(".face-action-word").map((w) => w.textContent);
-    expect(words).toEqual(["Talk", "Huddle", "Message"]);
+    expect(h.all(".face-action-word").map((w) => w.textContent)).toEqual(["Talk", "Huddle"]);
+    expect(h.q<HTMLInputElement>(".fc-reply input")?.placeholder).toBe("Message Ann…");
     await act(async () => {
       circle.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(h.q("[data-member-card]")).toBeNull();
-    await h.click(circle);
-    await h.click(h.all(".face-action").find((b) => b.textContent?.includes("Message"))!);
-    expect(openedDms).toEqual([[ANN]]);
-    expect(h.q("[data-member-card]")).toBeNull();
   });
 
-  test("calls off: the card still names them and offers Message, and nothing else", async () => {
+  test("calls off: the card names them and keeps the reply box, with no call buttons", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { callsEnabled: false }));
-    const circle = h.circle(ANN);
-    expect(circle.getAttribute("aria-expanded")).toBe("false");
-    await h.click(circle);
+    await h.click(h.circle(ANN));
     expect(h.q("[data-member-card]")).not.toBeNull();
-    expect(h.all(".face-action-word").map((w) => w.textContent)).toEqual(["Message"]);
+    expect(h.all(".face-action-word")).toEqual([]);
+    expect(h.q(".fc-reply input")).not.toBeNull();
+  });
+
+  test("the card shows your DMs with them, both sides, and still shows them after it closes and reopens", async () => {
+    const DM = "chatchannels:dm-ann";
+    const now = Date.now();
+    useInboxStore.setState({
+      chatChannels: { [DM]: { _id: DM, kind: "dm", dm_key: dmKeyFor(activeTeamIdOf(useInboxStore.getState()) ?? "", [ME, ANN]) } },
+      chatMessages: {
+        m1: { _id: "m1", channel_id: DM, user_id: ANN, content: "is the deploy green?", created_at: now - 120_000 },
+        m2: { _id: "m2", channel_id: DM, user_id: ME, content: "yes, shipped", created_at: now - 60_000 },
+      },
+      chatReads: {},
+    } as any);
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+    const read = () => h.all(".fc-row").map((r) => [r.dataset.me ? "me" : "them", r.querySelector(".fc-text")?.textContent]);
+    await h.click(h.circle(ANN));
+    expect(read()).toEqual([["them", "is the deploy green?"], ["me", "yes, shipped"]]);
+    await h.click(h.q(".face-card-close")!);
+    await h.click(h.circle(ANN));
+    expect(read()).toEqual([["them", "is the deploy green?"], ["me", "yes, shipped"]]);
   });
 
   test("the card closes from its own close button", async () => {

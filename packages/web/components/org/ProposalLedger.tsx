@@ -27,6 +27,9 @@ import { askNames } from "./staffingAsks";
 import { RecordGroupRow } from "./RecordGroupRow";
 import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { newRolesLedger } from "../consequential/roleOnline";
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 
 type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
 /** What a ref of the batch names a proposal by. */
@@ -183,7 +186,35 @@ function useFocusChange(changes: readonly OrgProposalChange[]): OrgProposalChang
 function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }: { proposal: Proposal; batch: ProposalBatch; card: SubjectCard; number?: number; focusId: string | null } & Omit<React.ComponentProps<typeof ProposalSubjectCard>, "card" | "answer" | "onAnswer" | "focused">) {
   const { answer, onAnswer, revised } = useCardAnswer(proposal, batch.key, batch.comments, card, number);
   const focused = !!focusId && [...card.changes, ...card.carried, ...card.riders].some((c) => c._id === focusId);
-  return <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? onAnswer : undefined} focused={focused} revisedNew={revised || undefined} {...rest} />;
+  const hireReview = useHireReview();
+  const roles = newRolesOf(card.changes);
+  // Approving a new role starts its standing session: the press opens the
+  // review first, and its confirm puts the approval.
+  const answerOrReview = onAnswer && roles.length ? (a: SubjectAnswer | null) => (a?.verdict === "approve" && answer?.verdict !== "approve" ? hireReview.open(roles, () => onAnswer(a)) : onAnswer(a)) : onAnswer;
+  return (
+    <>
+      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} {...rest} />
+      {hireReview.element}
+    </>
+  );
+}
+
+/** The new roles a set of changes would create, still waiting, as the online review reads them. A hired role starts on unless the change says otherwise. */
+function newRolesOf(changes: readonly OrgProposalChange[]) {
+  return changes.flatMap((c) => (c.change.kind === "role" && isOrgChangeDecidable(c.status)
+    ? [{ handle: c.change.handle.replace(/^@/, ""), name: c.change.name, startsOnItsOwn: c.change.trust ? autonomyOn(c.change.trust) : true, sessionsPerDay: c.change.caps?.hands_per_day ?? 6 }]
+    : []));
+}
+
+/** The shared confirm before approving new roles: `open` shows the review, and its confirm runs `go`. */
+function useHireReview(): { open: (roles: ReturnType<typeof newRolesOf>, go: () => void) => void; element: React.ReactNode } {
+  const host = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? "The approver");
+  const [pending, setPending] = useState<{ roles: ReturnType<typeof newRolesOf>; go: () => void } | null>(null);
+  return {
+    open: (roles, go) => setPending({ roles, go }),
+    // React events from the portaled dialog bubble through the card; the stop keeps a press there from toggling the card.
+    element: pending && <span className="contents" {...LEDGER_STOP}><SwitchReview ledger={newRolesLedger(pending.roles, host)} onClose={() => setPending(null)} onConfirm={() => { pending.go(); setPending(null); }} /></span>,
+  };
 }
 
 function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { proposal: Proposal; batch: ProposalBatch; group: RecordGroupCard; focus: OrgProposalChange | null; lone: boolean; open: boolean; onOpen: (v: boolean) => void }) {
@@ -268,6 +299,7 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
   className?: string;
 }) {
   const answers = proposalAnswersOf(batch.comments, proposal._id);
+  const hireReview = useHireReview();
   // The entries "Approve the rest" put an answer on, so a second press takes back only those.
   const [put, setPut] = useState<string[]>([]);
   const [leaveLocal, setLeaveLocal] = useState(false);
@@ -289,8 +321,9 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
       setPut([]);
       return;
     }
-    for (const e of rest) write(e.ref, approve(leave));
-    setPut(rest.map((e) => e.key));
+    const go = () => { for (const e of rest) write(e.ref, approve(leave)); setPut(rest.map((e) => e.key)); };
+    const roles = entries.records ? [] : newRolesOf(entries.cards.filter((c) => rest.some((e) => e.key === c.key)).flatMap((c) => c.changes));
+    if (roles.length) hireReview.open(roles, go); else go();
   };
   const onLeave = (v: boolean) => {
     setLeaveLocal(v);
@@ -317,6 +350,7 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
       )}
       {/* A closing row with nothing in it draws no rule. */}
       {(above || left || right || outcome) && <LedgerClosingRow className={cn("mt-2", className)} above={above} left={left} right={right} outcome={outcome} />}
+      {hireReview.element}
     </>
   );
 }

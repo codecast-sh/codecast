@@ -7,6 +7,8 @@ describe("chat search text", () => {
     expect(holdsQueryPhrases("the **call**\npage never loads", '"call page"')).toBe(true);
     expect(holdsQueryPhrases("Open the Call Page now", '"call page"')).toBe(true);
     expect(holdsQueryPhrases("anything at all", "call page")).toBe(true);
+    expect(holdsQueryPhrases("i'm home and situated", "“home depot”")).toBe(false);
+    expect(holdsQueryPhrases("grab it at Home Depot", "“home depot”")).toBe(true);
   });
 
   test("the snippet window lands on a quoted phrase deep in a message", () => {

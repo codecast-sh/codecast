@@ -81,6 +81,9 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and rebase.exit_code = 1", { outcome: "failure", "rebase.exit_code": "2" }, false],
     ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "2" }, true],
     ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "1" }, false],
+    // A planner that pinned blocked stops the run; a blocked handoff left on the task by an earlier run does not.
+    ["handoff = blocked and station_blocked = plan", { handoff: "blocked", station_blocked: "plan" }, true],
+    ["handoff = blocked and station_blocked = plan", { handoff: "blocked" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {
@@ -179,6 +182,10 @@ describe("$node.json.<path>", () => {
     expect(extractJsonOutput('{"a":1}')).toEqual({ a: 1 });
     expect(extractJsonOutput("notes\n```json\n{\"a\":1}\n```\nmore\n```json\n{\"a\":2}\n```\n")).toEqual({ a: 2 });
     expect(extractJsonOutput("plain text")).toBeUndefined();
+    // a report whose JSON quotes code (a proposal quoting a prompt block) still parses
+    const quoted = { outcome: "proposed", proposal_md: "The cause:\n```ts\nconst x = 1;\n```\nThe fix." };
+    expect(extractJsonOutput(`Proposed.\n\n\`\`\`json\n${JSON.stringify(quoted, null, 1)}\n\`\`\`\n`)).toEqual(quoted);
+    expect(extractJsonOutput("```json\n{\"a\":1}\n```\nlater\n```json\nnot json\n```")).toEqual({ a: 1 });
     expect(extractJsonOutput("42")).toBeUndefined();
   });
 

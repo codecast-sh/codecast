@@ -18,13 +18,17 @@ const { entityRemarkPlugins } = await import("../remarkEntityIds");
 const { EntityAwareLink, EntityAwareCode } = await import("../../components/EntityIdPill");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { isObjectRef, objectKinds } = await import("./objects");
+const { modHost } = await import("./host");
 
 (globalThis as any).__inboxStore = useInboxStore;
+
+const PEOPLE = { name: "people", objects: [{ prefix: "contact", title: "Contact", icon: "contact", external: true, fields: { role: { type: "text", label: "Role" } } }] };
 
 function seed(objects: Record<string, any>) {
   useInboxStore.setState({
     mods: {
       m1: { _id: "m1", name: "bug-desk", title: "Bug Desk", manifest: { name: "bug-desk", objects: [{ prefix: "bug", title: "Bug", icon: "bug", statuses: ["open", "fixed"] }] } },
+      m2: { _id: "m2", name: "people", title: "People", manifest: PEOPLE },
     },
     modObjects: objects,
   } as any);
@@ -77,6 +81,38 @@ describe("mod object references in prose", () => {
   test("ids inside inline code are left alone", async () => {
     seed({});
     expect(await render("run `cast obj show bug-14`")).not.toContain('href="/o/bug-14"');
+  });
+});
+
+describe("external object references in prose", () => {
+  test("an external kind's own ids pill with nothing stored; numeric and other-kind look-alikes stay prose", async () => {
+    seed({});
+    expect(isObjectRef("contact-3f9a21bc")).toBe(true);
+    expect(isObjectRef("contact-3f9a21bc-1111-2222-3333-444455556666")).toBe(true);
+    expect(isObjectRef("bug-3f9a21bc")).toBe(false);
+    expect(isObjectRef("contact-form")).toBe(false);
+    const html = await render("Ask contact-3f9a21bc, not the contact-form or bug-3f9a21bc.");
+    expect(html).toContain('href="/o/contact-3f9a21bc"');
+    expect(html).not.toContain('href="/o/contact-form"');
+    expect(html).not.toContain('href="/o/bug-3f9a21bc"');
+  });
+
+  test("the pill is titled with the row the declaring mod resolves, live", async () => {
+    seed({});
+    const asked: unknown[] = [];
+    const runtime = {
+      id: "m2", status: "ready", hooks: [], row: { name: "people", is_mine: true, manifest: PEOPLE },
+      render: async (_key: string, surface: any) => { asked.push(surface); return { value: { title: "David Nolan, The Proper Group", fields: { role: "Fractional CEO" } } }; },
+      onInvalidate: () => () => {}, onStatus: () => () => {}, release: () => {}, invalidate: () => {},
+    };
+    (modHost as any).runtimes.set("m2", runtime);
+    try {
+      const html = await render("Top of the list: contact-3f9a21bc.");
+      expect(asked).toEqual([{ kind: "resolve", id: "contact", props: { id: "3f9a21bc" } }]);
+      expect(html).toContain("David Nolan, The Proper Group");
+    } finally {
+      (modHost as any).runtimes.delete("m2");
+    }
   });
 });
 

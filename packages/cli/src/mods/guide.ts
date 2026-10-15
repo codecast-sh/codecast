@@ -9,7 +9,7 @@ export type GuideMod = {
   mine?: boolean;
   agents?: string;
   fences: { lang: string; description?: string }[];
-  objects: { prefix: string; title: string; statuses?: string[]; fields: string[] }[];
+  objects: { prefix: string; title: string; statuses?: string[]; fields: string[]; external?: boolean }[];
 };
 
 /** Whether a mod gives agents anything to use: its own instructions, a block they can write, or objects they can name. */
@@ -24,7 +24,9 @@ export function formatModGuide(mods: GuideMod[]): string {
     if (m.description) out.push(m.description);
     if (m.agents) out.push("", m.agents);
     for (const f of m.fences) out.push(`- \`\`\`${f.lang} blocks draw through it${f.description ? `: ${f.description}` : ""}`);
-    for (const k of m.objects) {
+    const external = m.objects.filter((k) => k.external);
+    if (external.length) out.push(`- Ids that draw live, read from where the row lives (the first 8 characters of its id after the prefix; nothing to create first): ${external.map((k) => `${k.prefix}-<id>`).join(", ")}`);
+    for (const k of m.objects.filter((k) => !k.external)) {
       out.push(`- ${k.title} objects (${k.prefix}-N): mention one by its short id in prose and it reads as a live reference; file a new one with cast obj create ${k.prefix} "<title>"${k.fields.length ? " [--set <field>=<value>]" : ""}`);
       if (k.fields.length) out.push(`  fields: ${k.fields.join(", ")}${k.statuses?.length ? `; statuses: ${k.statuses.join(" -> ")}` : ""}  (cast obj kinds has their types)`);
     }

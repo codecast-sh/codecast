@@ -18,7 +18,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, headOfPeopleIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performRehomeSessions, performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
+import { performRehomeSessions, performReparentSession, personName, roleMayHoldSession } from "./sessionOwnership";
 import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -2173,6 +2173,28 @@ export const move = mutation({
 export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.optional(v.boolean()), trust: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
+});
+// Leeway to hire (org schema `hires_freely`): on, the role brings its own
+// hires online with no lead or person approving (orgProposals.routeHire).
+// Human only and logged, like the line's merge step.
+export async function performSetHiresFreely(ctx: any, userId: Id<"users">, args: { role_id: string; on: boolean; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Hiring without approval");
+  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  if (role.status === "retired") throw new Error("That role is retired");
+  const was = !!role.hires_freely;
+  if (was !== args.on) {
+    const now = Date.now();
+    await ctx.db.patch(role._id, { hires_freely: args.on, updated_at: now });
+    await ctx.db.insert("org_role_history", {
+      role_id: role._id, user_id: userId, actor_type: "user", action: "hires_freely", field: "hires_freely",
+      old_value: String(was), new_value: String(args.on), created_at: now,
+    });
+  }
+  return await ctx.db.get(role._id);
+}
+export const setHiresFreely = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.boolean(), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performSetHiresFreely(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const setAuthority = mutation({
   args: {
