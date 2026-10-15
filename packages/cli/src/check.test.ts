@@ -403,8 +403,10 @@ describe("idle exit", () => {
     const base = { startedAt: t - 2 * IDLE_EXIT_MS, inProgress: false };
     expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS - 1 }, t)).toBe(true);
     expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS + 1 }, t)).toBe(false);
-    // A pass that just finished is as good as an ask.
-    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 }, t)).toBe(false);
+    // The first pass finishing is as good as an ask: someone waited for it.
+    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 1000 }, t)).toBe(false);
+    // Passes that edits trigger afterwards do not keep an unasked watcher alive.
+    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 } as any, t)).toBe(true);
     // A first pass still building on a loaded machine is not idle, however old.
     expect(shouldIdleExit({ ...base, inProgress: true, askedAt: t - 3 * IDLE_EXIT_MS }, t)).toBe(false);
   });
