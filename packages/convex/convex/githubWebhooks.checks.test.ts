@@ -423,7 +423,7 @@ describe("a settled check asks whether the branch still merges", () => {
     const ctx = context(checkRunPayload({ conclusion: "success" }), "completed", "check_run");
     await (processCheckRunEvent as any)._handler(ctx, { event_id: "event_1" });
 
-    const refresh = ctx._scheduled.filter((s: any) => s.args?.pr_id === PR && s.args?.attempt === 0);
+    const refresh = ctx._scheduled.filter((s: any) => s.args?.pr_ids?.includes(PR) && s.args?.attempt === 0);
     expect(refresh).toHaveLength(1);
     expect(refresh[0].delay).toBe(10 * 1000);
   });

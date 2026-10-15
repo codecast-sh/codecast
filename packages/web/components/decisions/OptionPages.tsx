@@ -1,16 +1,14 @@
 "use client";
 
 import { ArrowUpRight, Check, Columns2 } from "lucide-react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore, type SessionDecisionItem } from "../../store/inboxStore";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { pageFrameSrc, pageShareUrl } from "../../lib/publishedPageUrls";
 import { PageThumb } from "../PageThumb";
+import { usePageInfo } from "../../hooks/usePageInfo";
 import { openBrowserPane } from "../../lib/stage";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import "./decisions.css";
 
-const api = _api as any;
 
 // Option pages (docs/architecture/the-line.md L6): when an option carries a
 // published page, the options compare as a row of cards above the option
@@ -24,7 +22,7 @@ export function OptionPages({
   onAnswer,
   chosen,
 }: {
-  decision: Pick<SessionDecisionItem, "options" | "status">;
+  decision: Pick<SessionDecisionItem, "options" | "status"> & { _id?: string };
   answerable?: boolean;
   onAnswer?: (index: number) => void;
   chosen?: ReadonlySet<number>;
@@ -41,6 +39,7 @@ export function OptionPages({
             label={o.label.replace(" (Recommended)", "")}
             slug={o.page_slug}
             picked={!!chosen?.has(i)}
+            decisionId={decision._id}
             onAnswer={canAnswer ? () => onAnswer!(i) : undefined}
           />
         ) : null,
@@ -49,20 +48,21 @@ export function OptionPages({
   );
 }
 
-function OptionPageCard({ index, label, slug, picked, onAnswer }: { index: number; label: string; slug: string; picked: boolean; onAnswer?: () => void }) {
+function OptionPageCard({ index, label, slug, picked, decisionId, onAnswer }: { index: number; label: string; slug: string; picked: boolean; decisionId?: string; onAnswer?: () => void }) {
   // The artifacts store row (fed by listForWeb) names the page when the
-  // viewer owns it or a teammate shared it; getShared is the enrichment for
-  // a page outside that set. The frame and the thumb need neither.
+  // viewer owns it or a teammate shared it; the page's embed info names any
+  // page and holds the way past its gates. The thumb needs neither.
   const s = useTrackedStore([
     (st) => (st as any).artifacts?.[slug]?.title,
     (st) => (st as any).artifacts?.[slug]?.version,
     (st) => (st as any).artifacts?.[slug]?.has_thumb,
   ]);
   const row = (s as any).artifacts?.[slug] as { title?: string; version?: number; has_thumb?: boolean; has_password?: boolean; email_gate?: boolean } | undefined;
-  const { data: meta } = useQueryNoThrow(api.artifacts.getShared, row ? "skip" : { slug });
+  // A gated page (a trial's, which quotes a customer) opens in the pane for the decision's readers, past its password.
+  const { info: meta, keys } = usePageInfo(slug, decisionId);
   const title: string = row?.title ?? meta?.title ?? "Published page";
   const version = row?.version ?? meta?.version ?? 0;
-  const openPane = () => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) });
+  const openPane = () => openBrowserPane({ kind: "url", url: `${pageFrameSrc(slug)}${keys.replace(/^&/, "?")}` });
 
   return (
     <div className="decision-option-page" data-option-page={index} data-picked={picked ? "true" : "false"}>
