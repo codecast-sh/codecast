@@ -15,7 +15,7 @@ import { listImages } from "../hosts/image.js";
 import { collectAgentAuthBundle, laptopHome } from "../remote/agentAuth.js";
 import { remoteHome } from "../remote/session-move.js";
 import { toRemoteHost } from "../browser/cloudHost.js";
-import type { CloudHostAction, CloudHostReport } from "@codecast/shared/contracts";
+import { CLOUD_HOST_SIZES, isCloudHostSize, type CloudHostAction, type CloudHostReport } from "@codecast/shared/contracts";
 
 export function buildCloudHostReport(host: CloudHost, managedBy: string, now = Date.now()): CloudHostReport {
   const facts = inspectHost(host);
@@ -41,6 +41,7 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
     ...(cost.diskMonthlyUsd !== null ? { disk_monthly_usd: Math.round(cost.diskMonthlyUsd * 100) / 100 } : {}),
     ...(facts.volumeGiB !== undefined ? { disk_gib: facts.volumeGiB } : {}),
     ...(host.idleStopMinutes !== undefined ? { idle_stop_minutes: host.idleStopMinutes } : {}),
+    ...(host.autoscaled ? { autoscaled: true } : {}),
     images,
     logins_held: held,
     at: now,
@@ -48,8 +49,12 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
 }
 
 /** The `cast` arguments that carry out a web action on a host. */
-export function hostActionArgs(action: CloudHostAction, hostId: string, imageId?: string): string[] {
+export function hostActionArgs(action: CloudHostAction, hostId: string, imageId?: string, instanceType?: string): string[] {
   switch (action) {
+    case "clone":
+      // Linux only: a Mac needs a dedicated host allocated first (24-hour minimum).
+      if (!isCloudHostSize(instanceType)) throw new Error(`clone needs a host size (${CLOUD_HOST_SIZES.map((s) => s.type).join(", ")})`);
+      return ["hosts", "create", "linux", "--like", hostId, "--type", instanceType];
     case "wake": return ["hosts", "wake", hostId];
     case "sleep": return ["hosts", "sleep", hostId];
     case "setup": return ["hosts", "setup", hostId, "--force"];
@@ -92,10 +97,10 @@ export class HostReports {
     }
   }
 
-  async act(args: { host_device_id: string; action: CloudHostAction; image_id?: string }): Promise<string> {
+  async act(args: { host_device_id: string; action: CloudHostAction; image_id?: string; instance_type?: string }): Promise<string> {
     const hostId = this.deps.hostIdForDevice(args.host_device_id);
     if (!hostId) throw new Error("this laptop does not manage that cloud host");
-    const cmd = hostActionArgs(args.action, hostId, args.image_id);
+    const cmd = hostActionArgs(args.action, hostId, args.image_id, args.instance_type);
     const started = Date.now();
     this.lastAction.set(args.host_device_id, { action: args.action, status: "running", at: started });
     const r = await this.deps.runCast(cmd, { timeoutMs: 30 * 60_000 });

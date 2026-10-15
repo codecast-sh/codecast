@@ -152,6 +152,9 @@ elif [ "$EVENT" = "Stop" ]; then
   # identity every completion-reactive consumer keys on so a second turn
   # under one unchanged status still announces once.
   TURN_COMPLETED_AT=$(date +%s)
+  # The settle reads this transcript for open background work, so it never
+  # waits on the daemon's file index to learn a fresh session's path.
+  TRANSCRIPT_PATH="\${HOOK_transcript_path:-}"
 elif [ "$EVENT" = "PermissionRequest" ]; then
   # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
   # generic Notification ('Claude needs your permission', no tool name), it

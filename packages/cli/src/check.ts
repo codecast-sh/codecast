@@ -204,6 +204,8 @@ export interface WatchState {
   errors?: number;
   /** When someone last asked; the watcher exits after IDLE_EXIT_MS without one. */
   askedAt?: number;
+  /** When the first pass finished: the build an asker waited for. */
+  firstFinishedAt?: number;
   /** The compiler this watcher runs. Absent means the tree had none and PATH's tsc is in use. */
   tsc?: string;
 }
@@ -211,14 +213,16 @@ export interface WatchState {
 export const IDLE_EXIT_MS = 45 * 60_000;
 
 /**
- * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of
- * the last ask and the last finished pass. A pass in flight never counts as
+ * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of the
+ * last ask and the first finished pass. A pass in flight never counts as
  * idle: on a loaded machine a first pass can outlive the idle window, and a
- * watcher that quit then threw the whole build away (seen 2026-09-17).
+ * watcher that quit then threw the whole build away (seen 2026-09-17). Later
+ * passes do not count: an agent editing the tree triggers them without anyone
+ * asking, and two such watchers burned 150% CPU for nobody (2026-10-14).
  */
-export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "finishedAt" | "startedAt">, now = Date.now()): boolean {
+export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt">, now = Date.now()): boolean {
   if (state.inProgress) return false;
-  const last = Math.max(state.askedAt ?? 0, state.finishedAt ?? 0, state.startedAt);
+  const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
   return now - last > IDLE_EXIT_MS;
 }
 /** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
@@ -412,6 +416,7 @@ export function watchReducer(dir: string, state: WatchState) {
       buffer = [];
       state.inProgress = false;
       state.finishedAt = Date.now();
+      state.firstFinishedAt ??= state.finishedAt;
       state.errors = ev.errors;
       writeWatchState(dir, state);
       return;

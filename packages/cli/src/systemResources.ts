@@ -96,13 +96,27 @@ export function parseMacMemory(vm: string, swap: string, pressure: string, total
   };
 }
 
-export function parseLinuxMemory(text: string) {
+export function parseLinuxMemory(text: string, psi = "") {
   const kb = (key: string) => Number(text.match(new RegExp(`^${key}:\\s+(\\d+)`, "m"))?.[1]) * 1024;
   const available = kb("MemAvailable"), swap = kb("SwapTotal") - kb("SwapFree");
   return {
     ...(Number.isFinite(available) ? { memoryAvailable: available } : {}),
     ...(Number.isFinite(swap) ? { swapUsedBytes: swap } : {}),
+    pressure: parseLinuxPressure(psi),
   };
+}
+
+/**
+ * Linux memory pressure from PSI (/proc/pressure/memory): the share of the
+ * last minute that every task (`full`) or some task (`some`) stalled waiting
+ * for memory. A box swapping its working set in and out stalls long before the
+ * OOM killer fires, which is the state this names critical.
+ */
+export function parseLinuxPressure(psi: string): "normal" | "elevated" | "critical" | "unknown" {
+  const avg60 = (kind: string) => Number(psi.match(new RegExp(`^${kind} .*?avg60=([\\d.]+)`, "m"))?.[1]);
+  const full = avg60("full"), some = avg60("some");
+  if (!Number.isFinite(full) || !Number.isFinite(some)) return "unknown";
+  return full >= 10 ? "critical" : full >= 2 || some >= 10 ? "elevated" : "normal";
 }
 
 let previousCpu: { idle: number; total: number } | undefined;
@@ -182,8 +196,11 @@ function cpuPercent(): number | undefined {
 
 async function readMemory(total: number) {
   if (process.platform === "linux") {
-    const text = await resourceProbe("meminfo", () => fs.readFile("/proc/meminfo", "utf8"), 3000).then(s => s ?? "");
-    return { ...parseLinuxMemory(text), pressure: "unknown" as const };
+    const [text, psi] = await Promise.all([
+      resourceProbe("meminfo", () => fs.readFile("/proc/meminfo", "utf8"), 3000).then(s => s ?? ""),
+      resourceProbe("psi", () => fs.readFile("/proc/pressure/memory", "utf8"), 3000).then(s => s ?? ""),
+    ]);
+    return parseLinuxMemory(text, psi);
   }
   if (process.platform === "darwin") {
     const run = (name: string, args: string[]) => resourceProbe(name, () => execFileAsync(name, args, { timeout: 3000, killSignal: "SIGKILL", maxBuffer: 64 * 1024 }), 3000).then(r => r?.stdout ?? "");
