@@ -293,7 +293,7 @@ describe("enqueueStartSession cloud placement chokepoint", () => {
   const USER = "users_1" as any;
   const BOT = "users_bot" as any;
   const CONVERSATION = "conversations_1" as any;
-  const host = (user = USER) => ({ _id: `dev_host_${user}`, user_id: user, device_id: `host-${user}`, label: "Linux - ip-1-2-3-4", platform: "linux", is_remote: true, last_seen: stale, local_project_roots: ["/home/ubuntu/work/app"] });
+  const host = (user = USER) => ({ _id: `dev_host_${user}`, user_id: user, device_id: `host-${user}`, label: "Linux - ip-1-2-3-4", platform: "linux", is_remote: true, last_seen: stale, local_project_roots: ["/home/ubuntu/work/app"], cloud_host: { managed_by: "laptop", state: "stopped", at: 0 } });
   const laptop = (user = USER) => ({ _id: `dev_laptop_${user}`, user_id: user, device_id: `laptop-${user}`, label: "mac", platform: "darwin", is_remote: false, last_seen: fresh, local_project_roots: ["/Users/me/src/app"] });
   const row = (over: Record<string, any> = {}) => ({ _id: CONVERSATION, user_id: USER, session_id: "sess", project_path: "/Users/me/src/app", git_root: "/Users/me/src/app", owner_device_id: `laptop-${USER}`, ...over });
   const db = (conv: any, devices = [host(), laptop()], users: any[] = [{ _id: USER }]) =>

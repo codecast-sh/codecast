@@ -385,7 +385,8 @@ export async function parkOnCloudHost(
  *
  * Only when the CALLER is the runner: a team agent box's runner is the bot,
  * whose provisioned device heartbeats is_remote+linux too, and parking a
- * teammate's box spawn would strand it. Never for a bot runner, a row already
+ * teammate's box spawn would strand it. Never for a remote device no laptop
+ * reports on (not a managed host), a bot runner, a row already
  * pending or already holding a worktree, an account with no local device
  * (nothing could prepare), or a path the host already holds / nobody claims
  * (cloudPlacementFor !== "park": native starts plainly, ambiguous is left to
@@ -409,7 +410,11 @@ export async function cloudPlacementNeeded(
     .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.runnerUserId))
     .collect();
   const target = devices.find((d: any) => d.device_id === opts.targetDeviceId);
-  if (!target || !deviceWakesOnUse(target)) return null;
+  // Only a host some laptop manages (it reports on it: cloud_host) can be
+  // prepared. Another remote machine — a second user's daemon on the same
+  // box, a peer server — gets the plain start it was named for, and its own
+  // daemon makes the worktree.
+  if (!target || !deviceWakesOnUse(target) || !target.cloud_host) return null;
   const runner = await ctx.db.get(opts.runnerUserId);
   if (runner?.is_bot) return null;
   const locals = devices.filter((d: any) => !d.is_remote);

@@ -7,7 +7,7 @@ import { agentLoginsBundleFor, armInterruptGuard, fetchRootOccupant, freshWorktr
 
 import { checkoutRefusal, cloudSeedRef, CloudSeedNameError, finishSeededWorktree } from "./transfer";
 import { NODE_22_VERSION, type HostToolsReport } from "./hostTools";
-import { cloudStartArgs, cloudStartSkipReason, launchModelKey, parkedRowStillPending, seedPlacementArg } from "./cli";
+import { cloudStartArgs, cloudStartHostArg, cloudStartSkipReason, launchModelKey, parkedRowStillPending, seedPlacementArg } from "./cli";
 
 const FREE = HOST_MIN_FREE_BYTES * 10;
 
@@ -72,6 +72,16 @@ describe("parkedRowStillPending — `cast cloud start` only places a row still w
     expect(parkedRowStillPending({ cloud_placement: null })).toBe(false);
     expect(parkedRowStillPending({})).toBe(false);
     expect(parkedRowStillPending({ cloud_placement: undefined })).toBe(false);
+  });
+
+  test("cloudStartHostArg: a device no registered host claims is refused, never handed to the default host", () => {
+    const hosts = [{ id: "i-01eb", deviceId: "c99e" }];
+    expect(cloudStartHostArg(hosts, { deviceId: "c99e" })).toEqual({ hostArg: "i-01eb" });
+    expect(cloudStartHostArg(hosts, { deviceId: "c116" })).toEqual({ error: expect.stringContaining("c116 is not a cloud host registered") });
+    expect(cloudStartHostArg([], { deviceId: "c116" })).toHaveProperty("error");
+    expect(cloudStartHostArg(hosts, { host: "i-02", deviceId: "c116" })).toEqual({ hostArg: "i-02" });
+    expect(cloudStartHostArg([{ id: "i-new" }], { deviceId: "c116" })).toEqual({});
+    expect(cloudStartHostArg(hosts, {})).toEqual({});
   });
 
   test("cloudStartSkipReason: a pathless park is a clean skip, not a failure to stamp on the row", () => {

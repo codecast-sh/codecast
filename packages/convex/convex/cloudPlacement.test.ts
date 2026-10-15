@@ -21,7 +21,7 @@ const now = () => Date.now();
 const online = () => now() - 10_000;
 const asleep = () => now() - DEVICE_ONLINE_MS - 60_000;
 
-const host = () => ({ _id: "dev_host", user_id: ME, device_id: "host", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, last_seen: asleep(), local_project_roots: ["/home/ubuntu/work/app"] });
+const host = () => ({ _id: "dev_host", user_id: ME, device_id: "host", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, last_seen: asleep(), local_project_roots: ["/home/ubuntu/work/app"], cloud_host: { managed_by: "laptop", state: "stopped", at: now() } });
 const laptop = (over: Record<string, any> = {}) => ({ _id: "dev_laptop", user_id: ME, device_id: "laptop", label: "macOS - MacBook", platform: "darwin", is_remote: false, last_seen: online(), local_project_roots: ["/Users/me/src/app"], ...over });
 const oldLaptop = (over: Record<string, any> = {}) => ({ _id: "dev_old", user_id: ME, device_id: "old-laptop", label: "macOS - Old", platform: "darwin", is_remote: false, last_seen: online() - 5_000, local_project_roots: [], ...over });
 
@@ -76,6 +76,13 @@ describe("cloudPlacementNeeded — the chokepoint's upgrade rule", () => {
     expect(await cloudPlacementNeeded({ db }, { ...base(), targetDeviceId: "nope" })).toBeNull();
     const macDb = fixture({ devices: [{ ...host(), platform: "darwin", local_project_roots: ["/Users/codecast/work/app"] }, laptop()] });
     expect(await cloudPlacementNeeded({ db: macDb }, { ...base(), paths: ["/Users/codecast/work/app/.codecast/worktrees/x"] })).toBeNull();
+  });
+
+  test("a remote device no laptop manages (another user's daemon on the box) → null: a plain start there", async () => {
+    const { cloud_host: _, ...peer } = { ...host(), _id: "dev_peer", device_id: "peer", last_seen: online() };
+    const db = fixture({ devices: [host(), peer, laptop()] });
+    expect(await cloudPlacementNeeded({ db }, { ...base(), targetDeviceId: "peer" })).toBeNull();
+    expect((await cloudPlacementNeeded({ db }, base()))?.device_id).toBe("host");
   });
 
   test("a runner with no local device → null (nothing could prepare)", async () => {

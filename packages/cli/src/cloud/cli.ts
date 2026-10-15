@@ -12,7 +12,7 @@ import { writeStdout } from "../agentContext.js";
 import { addCloudMirrorExcludes } from "../config/readLocalConfig.js";
 import { findContextTooLarge } from "./mirror/discovery.js";
 import type { Command } from "commander";
-import { hostForDevice } from "../browser/cloudHost.js";
+import { readHosts } from "../browser/cloudHost.js";
 import { convexClient } from "../remote/cli.js";
 import { CLOUD_LEAVE_OUT_MAX, normalizeCloudWorkspace, type CloudStartFrom, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import {
@@ -93,6 +93,27 @@ export function cloudStartSkipReason(
   if (!parkedRowStillPending(target)) return "not_pending";
   if (!target.git_root && !target.project_path) return "no_path";
   return null;
+}
+
+/**
+ * Which registered host `cast cloud start` prepares for a row owned by
+ * `deviceId`: the explicit --host, else the host whose daemon is that device.
+ * A device no registered host claims is refused, never handed to the default
+ * host — another user's daemon on the same box is a different device, and
+ * preparing the registered host for it placed the row on the wrong machine.
+ * Only a host whose device id is still unlearned (added, not yet provisioned)
+ * keeps the default fallback, since it may be that device.
+ */
+export function cloudStartHostArg(
+  hosts: { id: string; deviceId?: string }[],
+  opts: { host?: string; deviceId?: string },
+): { hostArg?: string } | { error: string } {
+  if (opts.host) return { hostArg: opts.host };
+  if (!opts.deviceId) return {};
+  const owner = hosts.find((h) => h.deviceId === opts.deviceId);
+  if (owner) return { hostArg: owner.id };
+  if (hosts.some((h) => !h.deviceId)) return {};
+  return { error: `device ${opts.deviceId} is not a cloud host registered on this machine (cast hosts ls); start it there directly` };
 }
 
 export function registerCloudCommand(program: Command): void {
@@ -246,7 +267,12 @@ export function registerCloudCommand(program: Command): void {
       }
       const { seedCwd, repoRoot } = resolveSeedRoots(localPath);
       const deviceId: string | undefined = opts.device ?? target.owner_device_id ?? undefined;
-      const hostArg = opts.host ?? (deviceId ? hostForDevice(deviceId)?.id : undefined);
+      const pick = cloudStartHostArg(readHosts(), { host: opts.host, deviceId });
+      if ("error" in pick) {
+        console.error(pick.error);
+        process.exit(1);
+      }
+      const { hostArg } = pick;
 
       const say = (m: string) => console.log(`  ${m}`);
       const mode: CloudWorkspaceMode = normalizeCloudWorkspace(opts.workspace ?? target.cloud_workspace);
