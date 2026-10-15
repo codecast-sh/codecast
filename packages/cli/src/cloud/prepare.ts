@@ -26,6 +26,7 @@
  * agent config there, stamp-gated so an in-step host costs no ssh.
  */
 
+import type { CloudPlacementStep } from "@codecast/shared/contracts";
 import { spawnSync } from "node:child_process";
 import { lastErrorLine } from "../proc.js";
 import * as path from "node:path";
@@ -583,12 +584,15 @@ export interface PrepareCloudHostOptions {
   /** Recorded for the seed step; the wake itself is the same either way. */
   startFrom?: CloudStartFrom;
   onProgress?: Progress;
+  /** Each placement step as it begins (contracts/cloudPlacementProgress). */
+  onStep?: (step: CloudPlacementStep) => void;
 }
 
 export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   cloudCopyFiles(opts.seedCwd);
   const cloud = resolveCloudHost(opts.hostArg);
+  opts.onStep?.("wake");
   const up = await ensureUp(cloud, log);
   const host = toRemoteHost(up);
   const deviceId = await learnHostDeviceId(up, host);
@@ -598,6 +602,7 @@ export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<Prep
   const repoPath = remoteRepoPath(host, opts.repoRoot);
   // Host-home steps BEFORE the checkout: the known_hosts pin and the device
   // key are what let the host's own clone/fetch succeed.
+  opts.onStep?.("config");
   const home = await readyHostHome(host, { localGitRoot: opts.repoRoot, repoPath, cloudId: up.id, onProgress: log });
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath, repoRoot: opts.repoRoot, seedCwd: opts.seedCwd, previousAddress: cloud.address, ...(home.git ? { git: home.git } : {}) };
 }
@@ -632,6 +637,7 @@ export function refreshCloudCheckout(
 export async function prepareCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   const prepared = await wakeCloudHost(opts);
+  opts.onStep?.("checkout");
   refreshCloudCheckout(prepared, { moveHead: false }, log);
   await mirrorProjectContext(prepared.host, opts.repoRoot, prepared.repoPath, log, { cloudId: prepared.cloud.id, previousAddress: prepared.previousAddress, mirroredAlready: true });
   return prepared;
