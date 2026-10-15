@@ -376,7 +376,8 @@ await program.parseAsync(process.argv);
     expect(hostProbeOrigin("https://github.com/o/r.git").origin).toBe("git@github.com:o/r.git");
     expect(hostProbeOrigin("https://github.com/o/r.git", { appToken: true }).origin).toBe("https://github.com/o/r.git");
     expect(hostProbeOrigin("git@github.com:o/r.git", { appToken: true }).origin).toBe("https://github.com/o/r.git");
-    expect(body).toContain("git clone -q --single-branch --no-tags --branch main -- ${shq(hostOrigin)} ${q}");
+    expect(body).toContain("git clone -q --single-branch --no-tags --branch main -- ${source} ${q}");
+    expect(body).toContain("cloneInto(shq(hostOrigin))");
     expect(body).toContain("git fetch -q --no-tags --no-recurse-submodules -- ${shq(hostOrigin)} '+refs/heads/main:refs/remotes/origin/main'");
     expect(body).toContain("git remote set-url origin ${shq(hostOrigin)} && git checkout");
     expect(body.match(/withFreshMain\(origin, /g)).toHaveLength(2);
@@ -554,10 +555,18 @@ exec ${realGit} "$@"
     expect(fs.readFileSync(path.join(remote, "user-work"), "utf-8")).toBe("preserve me");
   });
 
-  test("refuses an existing non-repository directory", () => {
+  test("adopts a plain folder at the checkout path (the home mirror's copies on a fresh host) and loses nothing", () => {
     write(remote, "user-work", "preserve me");
-    expect(() => refreshRemoteCheckout(host, laptop, remote)).toThrow("inspect cloud checkout");
+    write(remote, "app.txt", "the laptop's edited copy\n");
+    const said: string[] = [];
+    expect(refreshRemoteCheckout(host, laptop, remote, (m) => said.push(m)).via).toBe("host");
+    expect(git(remote, "rev-parse", "--show-toplevel")).toBe(fs.realpathSync(remote));
+    // Untracked files stay; a tracked file that differed is kept aside, then checked out.
     expect(fs.readFileSync(path.join(remote, "user-work"), "utf-8")).toBe("preserve me");
+    expect(git(remote, "status", "--porcelain")).toBe("?? user-work");
+    const kept = fs.readdirSync(path.dirname(remote)).find((n) => n.startsWith(`${path.basename(remote)}.pre-clone-`))!;
+    expect(fs.readFileSync(path.join(path.dirname(remote), kept, "app.txt"), "utf-8")).toBe("the laptop's edited copy\n");
+    expect(said.some((m) => m.includes(kept))).toBe(true);
   });
 
   test("failed fallback push is fatal and does not expose transport output", () => {

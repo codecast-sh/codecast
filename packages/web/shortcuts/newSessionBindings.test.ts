@@ -1,9 +1,9 @@
 import { test, expect, describe } from "bun:test";
 import { SHORTCUTS, matchShortcut, altChordDirection, type ShortcutAction } from "./registry";
 
-// Ctrl+N opens the compose modal; Ctrl+Alt+N (⌃⌥N) opens a full new session in the
-// main window. This guards that swap (a prior commit had Ctrl+N opening the full
-// page) AND the macOS Option-key trap: ⌥ composes letters, so ⌥N arrives as the
+// Ctrl+N (and Ctrl+Shift+N, the desktop's system-wide chord) opens the
+// new-session popup; Ctrl+Alt+N opens the same surface as a page in the main
+// window. This guards that split AND the macOS Option-key trap: ⌥ composes letters, so ⌥N arrives as the
 // tilde dead key (e.key "Dead", never "n") — the chord must still match via e.code.
 
 // Mirror the dispatcher's resolution: first SHORTCUTS def that matches wins. The
@@ -15,8 +15,13 @@ function resolveAction(e: Partial<KeyboardEvent>): ShortcutAction | null {
 }
 
 describe("new-session key bindings", () => {
-  test("Ctrl+N opens the compose modal, not the full page", () => {
+  test("Ctrl+N opens the popup, not the page", () => {
     expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).toBe("session.compose");
+  });
+
+  test("tooltips name Ctrl+N for the popup and Ctrl+Alt+N for the page (the first binding of each action)", () => {
+    expect(SHORTCUTS.find((d) => d.action === "session.compose")?.key).toBe("ctrl+n");
+    expect(SHORTCUTS.find((d) => d.action === "session.create")?.key).toBe("ctrl+alt+n");
   });
 
   test("Ctrl+Shift+N stays the palette compose; Ctrl+Shift+M is the docked composer and fires over the open modal", () => {
@@ -42,7 +47,7 @@ describe("new-session key bindings", () => {
     expect(resolveAction({ key: "j", code: "KeyN", ctrlKey: true })).not.toBe("session.compose");
   });
 
-  test("Ctrl+N (no Alt) never resolves to the full-page action", () => {
+  test("Ctrl+N (no Alt) never resolves to the page", () => {
     expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).not.toBe("session.create");
   });
 });
