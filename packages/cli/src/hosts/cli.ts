@@ -38,7 +38,7 @@ import { deviceId } from "../remote/device.js";
 import { ssh, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
-import { cloudSeedLabel } from "@codecast/shared/contracts";
+import { CLOUD_HOST_SIZES, cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { registerHostCreateCommand } from "./create.js";
@@ -67,8 +67,7 @@ export const EC2_HOURLY_USD: Record<string, number> = {
   "t3.micro": 0.0104,
   "t3.small": 0.0208,
   "t3.medium": 0.0416,
-  "t3.large": 0.0832,
-  "t3.xlarge": 0.1664,
+  ...Object.fromEntries(CLOUD_HOST_SIZES.map((size) => [size.type, size.hourly_usd])),
   "m5.large": 0.096,
   "m5.xlarge": 0.192,
   "c5.large": 0.085,

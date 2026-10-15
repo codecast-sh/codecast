@@ -5,8 +5,9 @@
 // the two store homes a fix decision can sit in: sessionDecisions (the viewer's
 // own queue, the full row) and lineCards (every line card in the workspace,
 // a slim row). Pure, so a test reads it.
+import { PHASE_ORDER, guessPhase } from "@codecast/shared/contracts/linePhases";
 
-export type FixDecisionRow = { _id: string; short_id?: string; status: string; task_id?: string; workflow_run_id?: string; created_at?: number; card?: unknown };
+export type FixDecisionRow = { _id: string; short_id?: string; status: string; task_id?: string; workflow_run_id?: string; gate_node_id?: string; created_at?: number; card?: unknown };
 type Rows = Record<string, FixDecisionRow> | undefined;
 
 /** A decision is a fix decision when a run asked it about a problem. */
@@ -46,6 +47,24 @@ export function openFixDecisionFor(own: Rows, line: Rows, taskId: string | null 
   return taskId ? openFixDecisions(own, line).get(taskId) ?? null : null;
 }
 
+/** A gate before the fix is built (a run from when the line asked for its plan's approval, or let its builder ask):
+ *  what it asked is not the fix presented. */
+const asksBeforeTheFix = (gate: string | undefined): boolean => !!gate && PHASE_ORDER.indexOf(guessPhase(gate)) < PHASE_ORDER.indexOf("decide");
+
+/**
+ * The decision a run presented its fix as, whatever became of it since (still open, answered, lapsed): the newest of
+ * that run's about the problem, from either store home. Null when no session of the run has presented one.
+ */
+export function runFixDecision(own: Rows, line: Rows, taskId: string | null | undefined, runId: string | null | undefined): FixDecisionRow | null {
+  if (!taskId || !runId) return null;
+  let best: FixDecisionRow | null = null;
+  for (const rows of [line, own]) for (const d of Object.values(rows ?? EMPTY) as FixDecisionRow[]) {
+    if (d.task_id !== taskId || d.workflow_run_id !== runId || asksBeforeTheFix(d.gate_node_id)) continue;
+    if (!best || (d.created_at ?? 0) >= (best.created_at ?? 0)) best = d;
+  }
+  return best;
+}
+
 /**
  * The problem a decision named by ref (short id or row id) is about, from either store home; undefined when
  * neither holds it. A view that leads a problem with a decision from the address checks this first, so a
@@ -69,10 +88,17 @@ export function trialWords<D extends { question: string; options: ReadonlyArray<
     .replace(/^ship this change\?\s*/i, "Would you ship this? ")
     .replace(/^(ship|build|merge|apply)\b/i, (m) => `Would you ${m.toLowerCase()}`)
     .trim();
-  // The answers stay the plain verbs a person presses (Ship, Revise, Drop); what each does shows after the press, and
+  // An answer the session wrote in its own words keeps what it wrote under it: the fact that sizes the choice and
+  // what happens next. A bare verb (Ship, Revise, Drop) stays bare: what it does shows after the press, and
   // "nothing ships" is said once, by the trial mark, never on every option.
-  return { ...d, question, options: d.options.map(({ description: _d, ...o }: { label: string; description?: string }) => o) as unknown as D["options"] };
+  return { ...d, question, options: d.options.map((o: { label: string; description?: string }) => { if (!BARE_VERB.test(o.label.trim())) return o; const { description: _d, ...bare } = o; return bare; }) as unknown as D["options"] };
 }
+
+/** Whether a decision's answers are only routing verbs, with no words of the session's own: the fixed controls may stand in for them. */
+export const bareVerbAnswers = (options: ReadonlyArray<{ label: string }>): boolean => options.every((o) => BARE_VERB.test(o.label.trim()));
+
+/** An option that is only a routing verb. */
+const BARE_VERB = /^(?:\[[^\]]*\]\s*)?(?:ship|revise|drop|publish|not now|build it|approve|skip)$/i;
 
 const WOULD: Record<string, string> = { "not now": "Would hold off", "build it": "Would build it", approve: "Would approve", skip: "Would skip" };
 

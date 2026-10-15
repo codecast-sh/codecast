@@ -77,6 +77,19 @@ describe("org intents", () => {
     expect(none.orgTree!.roles[0].total).toBe(roleBefore);
   });
 
+  it("a session move carries the session row's role in the same tick, as the server writes it", () => {
+    type Row = { org_role_id?: string | null; standing_role_id?: string | null };
+    const top = ORG_FIXTURE.people[0].sessions[0];
+    const withRows = (rows: Record<string, Row>) => ({ orgTree: clone(), orgIntents: [], sessions: rows }) as OrgSliceData & { sessions: Record<string, Row> };
+    const rowAfter = (rows: Record<string, Row>, ...args: any[]) => (run(withRows(rows), "reparentOrgSession", top._id, ...args) as OrgSliceData & { sessions: Record<string, Row> }).sessions[top._id];
+
+    expect(rowAfter({ [top._id]: {} }, { kind: "role", role_id: ROLE }).org_role_id).toBe(ROLE);
+    expect(rowAfter({ [top._id]: { org_role_id: ROLE } }, { kind: "user", user_id: SAM }).org_role_id).toBeNull();
+    // A remove has no single new parent, and a role's standing agent never moves.
+    expect(rowAfter({ [top._id]: { org_role_id: ROLE } }, { kind: "user", user_id: SAM, mode: "remove" }).org_role_id).toBe(ROLE);
+    expect(rowAfter({ [top._id]: { standing_role_id: "other", org_role_id: "other" } }, { kind: "role", role_id: ROLE }).org_role_id).toBe("other");
+  });
+
   it("a role reparent and a follow toggle replay onto a stale push and clear on echo", () => {
     let st: OrgSliceData = { orgTree: clone(), orgIntents: [] };
     st = run(st, "reparentOrgRole", ROLE, { kind: "user", user_id: SAM });

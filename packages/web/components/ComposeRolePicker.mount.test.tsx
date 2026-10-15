@@ -53,11 +53,12 @@ async function verifyPicker() {
     input.dispatchEvent(new (dom.window as any).Event("input", { bubbles: true }));
   });
 
-  // Closed: one pill, with its chord as keycaps.
+  // Closed: my reachable roles as one-click chips, then the opener with its chord as keycaps.
   await render();
-  const pill = q<HTMLButtonElement>("button")!;
-  assert.match(pill.textContent!, /To a role/);
-  assert.match(pill.textContent!, /R$/);
+  const opener = () => qa("button").find((b) => /role/.test(b.textContent!) && !b.hasAttribute("data-handle"))!;
+  assert.deepEqual(qa("button[data-handle]").map(handleOf), ["@growth", "@head-of-people"]);
+  assert.match(opener().textContent!, /Other role/);
+  assert.match(opener().textContent!, /R$/);
   assert.equal(q("input"), null);
 
   // ⌥R opens it (capture phase on window), the caret lands in the filter.
@@ -121,7 +122,26 @@ async function verifyPicker() {
   await act(async () => q<HTMLButtonElement>("[aria-label='Start a fresh session instead']")!.click());
   assert.deepEqual(picks, ["growth", null]);
   await render();
-  assert.match(q("button")!.textContent!, /To a role/);
+  assert.match(opener().textContent!, /Other role/);
+
+  // The new-session page hosts the picker with no dialog around it: ⌥R opens it there too.
+  const host = (wrap: Record<string, string> | null) => act(async () => root.render(
+    React.createElement("div", wrap,
+      React.createElement(ComposeRolePicker, { picked: null, onPick: () => {}, onDone: () => {} }),
+      React.createElement("textarea", { id: "msg" })),
+  ));
+  await host(null);
+  await key(dom.window, { altKey: true, code: "KeyR" });
+  assert.ok(q("input"), "⌥R opens the picker on the new-session page");
+  await key(q("input")!, { key: "Escape" });
+  // A docked composer answers only while it holds focus.
+  await host({ role: "dialog" });
+  (document.activeElement as HTMLElement | null)?.blur();
+  await key(dom.window, { altKey: true, code: "KeyR" });
+  assert.equal(q("input"), null, "an unfocused dock ignores ⌥R");
+  await act(async () => q<HTMLTextAreaElement>("#msg")!.focus());
+  await key(dom.window, { altKey: true, code: "KeyR" });
+  assert.ok(q("input"), "a focused dock opens on ⌥R");
 
   await act(async () => root.unmount());
   closeDomWindow(dom);
