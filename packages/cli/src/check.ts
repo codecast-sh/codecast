@@ -43,6 +43,7 @@ import { acquireFileLock } from "./lockFile.js";
 import { isPidAlive } from "./workspace/chrome.js";
 import { startLaunchdJob, unloadOwnLaunchdJob } from "./launchdJob.js";
 import { machineCap } from "./machineCaps.js";
+import { memoryDeath, oomKillCount, thisMachineTooSmall } from "./repoNeed.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
 export interface CheckProject {
@@ -204,6 +205,8 @@ export interface WatchState {
   errors?: number;
   /** When someone last asked; the watcher exits after IDLE_EXIT_MS without one. */
   askedAt?: number;
+  /** When the first pass finished: the build an asker waited for. */
+  firstFinishedAt?: number;
   /** The compiler this watcher runs. Absent means the tree had none and PATH's tsc is in use. */
   tsc?: string;
 }
@@ -211,14 +214,16 @@ export interface WatchState {
 export const IDLE_EXIT_MS = 45 * 60_000;
 
 /**
- * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of
- * the last ask and the last finished pass. A pass in flight never counts as
+ * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of the
+ * last ask and the first finished pass. A pass in flight never counts as
  * idle: on a loaded machine a first pass can outlive the idle window, and a
- * watcher that quit then threw the whole build away (seen 2026-09-17).
+ * watcher that quit then threw the whole build away (seen 2026-09-17). Later
+ * passes do not count: an agent editing the tree triggers them without anyone
+ * asking, and two such watchers burned 150% CPU for nobody (2026-10-14).
  */
-export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "finishedAt" | "startedAt">, now = Date.now()): boolean {
+export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt">, now = Date.now()): boolean {
   if (state.inProgress) return false;
-  const last = Math.max(state.askedAt ?? 0, state.finishedAt ?? 0, state.startedAt);
+  const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
   return now - last > IDLE_EXIT_MS;
 }
 /** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
@@ -412,6 +417,7 @@ export function watchReducer(dir: string, state: WatchState) {
       buffer = [];
       state.inProgress = false;
       state.finishedAt = Date.now();
+      state.firstFinishedAt ??= state.finishedAt;
       state.errors = ev.errors;
       writeWatchState(dir, state);
       return;
@@ -434,6 +440,7 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
+  const oomBefore = oomKillCount();
   const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
@@ -474,13 +481,19 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   await new Promise<void>((resolve) => {
     child.on("exit", (code, signal) => {
       console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter(Boolean).join("\n")}`);
+      // The last line is what an asker reads: a memory kill says so, with the machine's numbers.
+      const killed = memoryDeath({ what: `the ${project} typecheck (tsc)`, killed: signal === "SIGKILL", oomBefore, oomAfter: oomKillCount(), repoRoot: root });
+      if (killed) console.log(killed);
       resolve();
     });
     // A tsc that never starts (none in the tree and none on PATH) emits only
     // this, never exit: without it the watcher would wait forever with a pass
     // marked in flight, and every ask would wait on it.
     child.on("error", (err) => {
-      console.log(`tsc did not start: ${err.message}`);
+      const missing = (err as NodeJS.ErrnoException).code === "ENOENT" && !own;
+      console.log(missing
+        ? `tsc did not start: this tree has no TypeScript installed (its dependencies are missing) and none is on PATH. Install them (the setup install in .codecast/workspace.toml, e.g. bun install), then ask again`
+        : `tsc did not start: ${err.message}`);
       resolve();
     });
   });
@@ -774,6 +787,8 @@ async function startWhenSlotFrees(
             const evicted = makeRoom(max, opts.kill, Date.now(), opts.protect);
             if (evicted) {
               for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay under ${max} watchers on this machine`);
+              const small = thisMachineTooSmall(root);
+              if (small) opts.note(small);
               opts.start(root, target);
               logWatcherEvent("start", { project, root });
               fs.rmSync(queuedAtPath(dir), { force: true });
