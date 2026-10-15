@@ -86,15 +86,15 @@ describe("the server's echo", () => {
 describe("resolveExpectationProposal", () => {
   const open = { short_id: "xp-2", status: "open", summary: "Retire", changes: 1, base_version: 1, created_at: 1, card_id: CARD, ops: [{ op: "retire", id: "ex-callers-call-1", reason: "ruled out", citations: [QUOTE] }] };
 
-  it("Apply lands the change and answers the card the queue holds, as the queue would", () => {
+  it("Apply lands the change and answers the decision with its Apply answer, wherever the session put it", () => {
     useInboxStore.setState({
       projectExpectations: { [PID]: row({ proposals: [open] }) },
-      sessionDecisions: { [CARD]: { _id: CARD, status: "pending", silent: true, conversation_id: "c1", question: "Apply?", options: [{ label: "Apply" }, { label: "Drop" }] } },
+      sessionDecisions: { [CARD]: { _id: CARD, status: "pending", silent: true, conversation_id: "c1", question: "Should callers stop citing it?", options: [{ label: "Keep the line" }, { label: "Narrow it" }, { label: "Apply: retire it" }] } },
     } as any);
     s().resolveExpectationProposal(PID, "xp-2", "apply");
     expect(s().projectExpectations[PID].proposals[0]).toMatchObject({ status: "applied", applied_version: 2 });
     expect(doc().items[0].status).toBe("retired");
-    expect(s().sessionDecisions[CARD]).toMatchObject({ status: "answered", answer_index: 0 });
+    expect(s().sessionDecisions[CARD]).toMatchObject({ status: "answered", answer_index: 2 });
     expect(calls[0]).toEqual(["resolveExpectationProposal", [PID, "xp-2", "apply"]]);
   });
 

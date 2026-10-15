@@ -1640,7 +1640,7 @@ export const INBOX_ROW_FIELDS = [
   "anchor_id", "is_anchor", "org_role_id", "standing_role_id", "role", "acting_user_id",
   "character_avatar", "character_name", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
-  "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large",
+  "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",
   "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",
   // The viewer stamps (stampInboxViewerFields).
   "owned_by_me", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
