@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "./proc.js";
 import { extractJsonOutput } from "./workflow/condition.js";
 
 // ── the template edit, applied to a rendered brief ───────────────────────────

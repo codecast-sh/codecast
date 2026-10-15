@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { entityRoute, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { entityRoute, isOrgObjectKind, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
 
@@ -100,8 +100,10 @@ const PAGE_ROUTES: Record<string, string> = {
  * matching, and the two app paths that aren't objects are handled here.
  */
 export function mobileRouteForUrl(url: string): string | null {
+  // The company's objects (a role, a person) are addressed under /org, which
+  // the org handler below maps to the phone's org screens.
   const ref = parseEntityUrl(url);
-  if (ref) return mobileEntityRoute(ref.type, ref.id);
+  if (ref && !isOrgObjectKind(ref.type)) return mobileEntityRoute(ref.type, ref.id);
 
   let path: string;
   try {

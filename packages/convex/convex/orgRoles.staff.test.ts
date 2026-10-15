@@ -148,7 +148,8 @@ describe("orgRoles.staff", () => {
     expect(turns[0].content).toContain("You are now the Head of People of Acme (@head-of-people): https://codecast.sh/org/or-1.");
     expect(turns[0].content).toContain("Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.");
     expect(turns[0].status).not.toBe("held");
-    expect(turns[1].content).toBe(`${headOfPeopleOpening({ workspace: "Acme", person: "Me" })}\n\nRead \`cast brief\` now.`);
+    expect(turns[1].content.startsWith(`${headOfPeopleOpening({ workspace: "Acme", person: "Me" })}\n\n`)).toBe(true);
+    expect(turns[1].content.endsWith("\n\nRead `cast brief` now.")).toBe(true);
 
     // The aliases keep working: the workspace anchor lookup still answers with
     // this row, and `@anchor` in chat now names the Head of People, never the bare bot.

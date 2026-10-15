@@ -116,7 +116,7 @@ diff or a before/after table, live and actionable.
 
 - **Edit a prompt**: writes the prompt file the graph names, in the repo that
   holds the graph, through the machine that published it (the line edit path,
-  generalized from `.codecast/line/` to any published graph). Every save is a
+  generalized from a repo's `<repo>/.codecast/line/` to any published graph). Every save is a
   version of the step.
 - **Try**: runs the edited step on chosen past cases in a sandbox that refuses
   writes, on the publishing machine: the case's recorded input with the edit

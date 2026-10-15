@@ -223,6 +223,9 @@ describe("daemon plist runs the agent fleet unclamped", () => {
 
   test("declares ProcessType Interactive", () => {
     expect(current).toMatch(/<key>ProcessType<\/key>\s*<string>Interactive<\/string>/);
+  });
+
+  test.if(process.platform === "darwin")("the plist lints as valid", () => {
     expect(spawnSync("plutil", ["-lint", "-"], { input: current }).status).toBe(0);
   });
 

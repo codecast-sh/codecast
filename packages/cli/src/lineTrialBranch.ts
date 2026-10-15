@@ -8,7 +8,7 @@
 // worktree and branch start from origin/main.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { lineRunDir, runSlug } from "./workflow/runner.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 
