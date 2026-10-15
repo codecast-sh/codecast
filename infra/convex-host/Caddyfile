@@ -1,8 +1,16 @@
-# Route split, matching the Railway proxy: the SITE origin (3211) serves HTTP
-# actions and anything the CLI or a browser calls by path; the BACKEND origin
-# (3210) serves the Convex API and file storage. Getting this split wrong fails
-# silently — the request reaches a port that answers, just not the one that
-# knows the route.
+# Route split: HTTP actions (anything the CLI or a browser calls by path) live
+# on the backend under /http/, and the Convex API and file storage at its root.
+# Getting this split wrong fails silently — the request reaches a port that
+# answers, just not the route that knows it.
+#
+# HTTP actions go to 3210 with the /http prefix added HERE, never to the
+# backend's site port (3211). That port is `dev_site_proxy`
+# (crates/local_backend/src/proxy.rs): it adds the same prefix and forwards to
+# 3210, through a service hard-coded to 4 requests at a time. At ~13 HTTP
+# actions a second, with model calls holding a slot for 10s, every request
+# behind it queued: 2026-10-13 the same action answered in 0.1s on
+# 3210/http and in 5 to 17s on 3211, for every `cast` command, webhook, sign
+# in and published page.
 #
 # TLS: convex.codecast.sh is DNS-only in Cloudflare, NOT proxied (verified
 # 2026-09-13: no cf-ray, server: railway-hikari). Clients therefore talk to this
@@ -22,20 +30,10 @@
 }
 
 convex.codecast.sh {
-	handle /.well-known/* {
-		reverse_proxy 127.0.0.1:3211
-	}
-	handle /api/auth/* {
-		reverse_proxy 127.0.0.1:3211
-	}
-	handle /api/github-app/* {
-		reverse_proxy 127.0.0.1:3211
-	}
-	handle /api/webhooks/* {
-		reverse_proxy 127.0.0.1:3211
-	}
-	handle /cli/* {
-		reverse_proxy 127.0.0.1:3211
+	@http_actions path /.well-known/* /api/auth/* /api/github-app/* /api/webhooks/* /cli/*
+	handle @http_actions {
+		rewrite * /http{uri}
+		reverse_proxy 127.0.0.1:3210
 	}
 	handle /api/storage/* {
 		reverse_proxy 127.0.0.1:3210 {

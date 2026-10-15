@@ -7,12 +7,12 @@
 //   route a judge calls.
 // - `propose`: store a proposal. One that only adds lines a person said, each
 //   with the quote the record holds and about what that quote says, applies
-//   on its own; anything else waits
-//   for the project's person, as a card in their queue when an agent session
-//   proposed it.
+//   on its own; anything else waits for the project's person. A session that
+//   proposed it asks them itself (`cast decide --proposal`, presenter.md),
+//   and the answer to that decision settles it (lib/expectationsApply).
 // - `resolve`: a person applies or drops a proposal (the CLI, the web). When
-//   the proposal has a card the person holds, that card is answered, so the
-//   queue and the Line tab settle one decision (lib/expectationsApply).
+//   the proposal has a decision the person holds, that decision is answered,
+//   so the queue and the Line tab settle one decision.
 // - `personEditCore` / `resolveProposalCore`: the web's two writes (line-map.md
 //   LX3, LX5), reached through dispatch: a person's own line or retirement,
 //   and Apply / Drop on an open proposal.
@@ -29,13 +29,12 @@ import { canAccessProject, computeWorkspaceKey } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { nextShortId } from "./counters";
-import { askCore, finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
-import { removeWaitCore } from "./taskWaits";
+import { finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { answererOf } from "./orgLine";
 import { personName } from "./sessionOwnership";
 import { expectationOpValidator } from "./expectationsSchema";
-import { EXPECTATION_CARD_OPTIONS, latestExpectations, performApply } from "./lib/expectationsApply";
+import { latestExpectations, performApply } from "./lib/expectationsApply";
 import {
   applyOps,
   autoApplies,
@@ -50,8 +49,8 @@ import {
   personEditApplies,
   personEditSummary,
   personOp,
+  proposalAnswerIndex,
   renderExpectations,
-  renderProposal,
   type ExpectationCitation,
   type ExpectationOp,
   type ExpectationsVersion,
@@ -396,11 +395,15 @@ export const lines = query({
  * finding can be traced to the words it was graded against.
  */
 export const brief = query({
-  args: { api_token: v.string(), version: v.optional(v.number()), ...scopeArgs },
+  // `proposal`: the document as it would read with that open proposal applied,
+  // so a session judges the same moments under the proposed lines (`cast line
+  // judges try --proposal`) before it asks a person to apply them.
+  args: { api_token: v.string(), version: v.optional(v.number()), proposal: v.optional(v.string()), ...scopeArgs },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx, args.api_token);
     const { project } = await projectInScope(ctx, userId, args);
-    const { doc } = await readExpectations(ctx, project, args.version);
+    const read = await readExpectations(ctx, project, args.version);
+    const doc = args.proposal ? await withProposal(ctx, project, read.doc, args.proposal) : read.doc;
     return {
       project: { id: String(project._id), title: project.title },
       version: doc?.version ?? 0,
@@ -412,6 +415,17 @@ export const brief = query({
     };
   },
 });
+
+/** A document with an open proposal of the same project applied over it, as the next version would read. */
+async function withProposal(ctx: Ctx, project: Doc<"projects">, doc: ExpectationsVersion | null, ref: string): Promise<ExpectationsVersion> {
+  const proposal = await proposalByRef(ctx, ref);
+  if (!proposal || String(proposal.project_id) !== String(project._id)) notFound(`Proposal ${ref.trim()} not found in ${project.title}`);
+  if (proposal!.status !== "open") throw new Error(`${proposal!.short_id} is ${proposal!.status}`);
+  const version = (doc?.version ?? 0) + 1;
+  const applied = applyOps({ items: doc?.items ?? [], prefix: doc?.prefix ?? "x", next_n: doc?.next_n ?? 1 }, proposal!.ops, version, proposal!.base_version);
+  if (!applied.ok) throw new Error(`${proposal!.short_id} cannot apply:\n${applied.errors.join("\n")}`);
+  return { ...(doc as ExpectationsVersion), version, items: applied.items, next_n: applied.next_n };
+}
 
 /** The person a project's cards go to (LM4): the head of its owning role's chain, else the project's owner. */
 async function projectPerson(ctx: Ctx, project: Doc<"projects">): Promise<Id<"users">> {
@@ -512,32 +526,6 @@ async function copiesAppliedLines(ctx: Ctx, project: Doc<"projects">, ops: Expec
 }
 
 /**
- * Put an open proposal in the project's person's queue from the session that
- * proposed it. A trial project asks nobody (LL12): its proposals wait on the
- * trial review page's Our tooling lane, never in a person's queue.
- */
-async function postCard(ctx: Ctx, userId: Id<"users">, conversation: any, project: Doc<"projects">, proposal: any, current: any[]): Promise<{ card?: string; card_error?: string }> {
-  if (project.line_trial) return {};
-  const person = await projectPerson(ctx, project);
-  const n = proposal.ops.length;
-  const asked = await askCore(ctx as any, { userId }, {
-    session_id: conversation.session_id,
-    question: `Apply ${n} change${n === 1 ? "" : "s"} to ${project.title}'s expectations (${proposal.short_id})?`,
-    options: [
-      { label: EXPECTATION_CARD_OPTIONS[0], description: `They become version ${proposal.base_version + 1}, which judges grade against from then on.` },
-      { label: EXPECTATION_CARD_OPTIONS[1], description: `The proposal closes; the expectations stay at version ${proposal.base_version}.` },
-    ],
-    context_md: renderProposal(proposal, current),
-    blocking: false,
-    silent: true,
-    to: [String(person)],
-  });
-  if (asked?.error) return { card_error: asked.error };
-  await ctx.db.patch(proposal._id, { decision_id: asked.id });
-  return { card: asked.short_id };
-}
-
-/**
  * `cast expectations propose`: store a proposal against the current version.
  * Every change is checked against the document now, so a proposal that cannot
  * apply is refused with the reason instead of waiting on a person. With no
@@ -609,8 +597,9 @@ async function proposeCore(
     const applied = await performApply(ctx, proposal, userId, how, now);
     if (applied.ok) return { short_id, status: "applied", version: applied.version, auto: how === "auto" };
   }
-  const card = conversation ? await postCard(ctx, userId, conversation, project, proposal, latest?.items ?? []) : {};
-  return { short_id, status: "open", version: base, ...card };
+  // The session that proposed it asks the person itself (`cast decide
+  // --proposal`), in the reader's words and with the cases it settles.
+  return { short_id, status: "open", version: base, ...(conversation ? { ask: true } : {}) };
 }
 
 /** The project a web write names, when the signed-in person can open it. */
@@ -642,9 +631,10 @@ export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: s
 /**
  * A person applies or drops a proposal (LM5): from a terminal or the web,
  * never from an agent session, which proposes and leaves the answer to the
- * person (resolveProposalCore). A trial project asks nobody (LL12), so there
- * an agent session answers as a stand-in, the way it answers a trial run's
- * earlier gates, and the version records that it did.
+ * person (resolveProposalCore). In a trial project (LL12) an agent session
+ * may answer as a stand-in, the way it answers a trial run's earlier gates:
+ * the version records that it did, and the proposal's trial decision is
+ * withdrawn rather than answered in the person's name.
  */
 export const resolve = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), action: v.union(v.literal("apply"), v.literal("drop")), conversation_id: v.optional(v.string()) },
@@ -684,8 +674,8 @@ export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposa
   const now = Date.now();
   const card = proposal!.decision_id ? await ctx.db.get(proposal!.decision_id) : null;
   // A stand-in never answers the person's card: the card is withdrawn below.
-  if (!opts.standIn && card?.status === "pending" && personMayResolve(card, userId)) {
-    await finalizeAnswer(ctx as any, card, { status: "answered", answer_index: EXPECTATION_CARD_OPTIONS.indexOf(action === "apply" ? "Apply" : "Drop") }, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
+  if (!opts.standIn && card?.status === "pending" && personMayResolve(card, userId) && proposalAnswerIndex(card.options ?? [], action) >= 0) {
+    await finalizeAnswer(ctx as any, card, { status: "answered", answer_index: proposalAnswerIndex(card.options ?? [], action) }, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
     const after = await ctx.db.get(proposal!._id);
     if (after?.status !== want) throw new Error(`${proposal!.short_id} cannot apply:\n${after?.refused ?? "the document changed under it"}`);
     return { short_id: proposal!.short_id, status: want, ...(after.applied_version ? { version: after.applied_version } : {}) };
@@ -702,52 +692,6 @@ export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposa
   if (card?.status === "pending") await withdrawCore(ctx as any, card, now);
   return { short_id: proposal!.short_id, ...result };
 }
-
-/**
- * One-off repair (packages/convex/run.sh expectations:settleTrialCards): a
- * trial project's open proposals leave every person's queue. Each pending card
- * is withdrawn and unlinked, and a task waiting on that card stops waiting
- * (the proposal waits on the trial review page instead). A proposal written
- * against an older version is re-based onto the current one when its changes
- * still apply there, or keeps the reason it cannot. `dry` reports only.
- */
-export const settleTrialCards = internalMutation({
-  args: { dry: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-    const projects: Doc<"projects">[] = (await ctx.db.query("projects").collect()).filter((p: Doc<"projects">) => !!p.line_trial);
-    const out: Array<{ project: string; proposal: string; card?: string; withdrawn?: boolean; unwaited?: string[]; rebased?: string; refused?: string }> = [];
-    for (const project of projects) {
-      const latest = await latestExpectations(ctx, project._id);
-      const version = latest?.version ?? 0;
-      const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
-      const open: Doc<"expectation_proposals">[] = (await ctx.db.query("expectation_proposals").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).collect()).filter((p: any) => p.status === "open");
-      for (const p of open) {
-        const row: (typeof out)[number] = { project: project.title, proposal: p.short_id };
-        const card = p.decision_id ? await ctx.db.get(p.decision_id) : null;
-        if (card) {
-          row.card = card.short_id;
-          const waiting = tasks.filter((t) => (t.waits ?? []).some((w: any) => w.kind === "decision" && String(w.decision).toLowerCase() === String(card.short_id).toLowerCase()));
-          row.unwaited = waiting.map((t) => t.short_id);
-          row.withdrawn = card.status === "pending";
-          if (!args.dry) {
-            for (const t of waiting) await removeWaitCore(ctx as any, project.line_trial!.by, t.short_id, { ref: card.short_id });
-            if (card.status === "pending") await withdrawCore(ctx as any, card, now);
-            await ctx.db.patch(p._id, { decision_id: undefined, updated_at: now });
-          }
-        }
-        if (p.base_version < version) {
-          const trial = applyOps({ items: latest?.items ?? [], prefix: latest?.prefix ?? "x", next_n: latest?.next_n ?? 1 }, p.ops, version + 1, p.base_version);
-          if (trial.ok) row.rebased = `${p.base_version} -> ${version}`;
-          else row.refused = trial.errors.join("\n");
-          if (!args.dry) await ctx.db.patch(p._id, trial.ok ? { base_version: version, refused: undefined, updated_at: now } : { refused: row.refused, updated_at: now });
-        }
-        out.push(row);
-      }
-    }
-    return out;
-  },
-});
 
 /**
  * An operator withdraws a proposal that should never have been made (a test
