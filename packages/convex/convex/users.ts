@@ -22,13 +22,22 @@ import { startedBefore } from "./pathStats";
 import { isStaff } from "./lib/staff";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
-import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
+import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/access";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
-import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
+import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, dayStartUtc } from "./lib/userSend";
+import {
+  ACTIVITY_DAY_MS,
+  activityLiveFrom,
+  collectIntervalsInWindow,
+  fetchUserActivityDays,
+  type ActivityDayRow,
+  type ActivityScope,
+  type ScopedInterval,
+} from "./lib/activityDaily";
 import { fetchUserUsageDays } from "./lib/usageDaily";
-import { bucketPunchcardRows, type ActivityInterval } from "./lib/activityPunchcard";
+import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
@@ -1713,29 +1722,22 @@ export const getPublicActivityHeatmap = query({
       .first();
     if (!user || !user.public_profile_enabled || user.hide_activity) return [];
 
-    const intervals = await collectUserActivityIntervals(
+    const { days, live } = await loadUserActivity(
       ctx,
       null,
       { user_id: user._id, days: args.days },
-      { countAll: true }
+      { countAll: true },
     );
 
-    const buckets: Record<string, { hours: number; sessions: number; msgs: number; projects: Set<string> }> = {};
-    for (const iv of intervals) {
-      const date = new Date(iv.end).toISOString().split("T")[0];
-      const b = (buckets[date] ||= { hours: 0, sessions: 0, msgs: 0, projects: new Set() });
-      b.sessions++;
-      b.hours += iv.hours;
-      b.msgs += iv.msgs;
-      if (iv.project) b.projects.add(iv.project);
-    }
-    return Object.entries(buckets)
+    return [...bucketActivityDays(days, live)]
       .map(([date, d]) => ({
         date,
         hours: Math.round(d.hours * 100) / 100,
         sessions: d.sessions,
         msgs: Math.round(d.msgs),
-        projects: d.projects.size,
+        // A rolled-up day counts its own distinct projects; the live window
+        // still has the paths, so take whichever the day drew from.
+        projects: Math.max(d.projectCount, d.projects.size),
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
   },
@@ -1913,122 +1915,87 @@ export const getUserAbstractActivity = query({
   },
 });
 
-// Hybrid read strategy shared by the day heatmap and the hour punchcard:
-//   - Recent window (last 7 days): stream `conversations` directly.
-//     Source of truth for in-progress sessions, but heavy docs
-//     (1024-dim title_embedding + git_diff blobs), so we keep the window
-//     tight to stay under the 100MB bytes-read cap.
-//   - Older days: use lightweight `team_activity_events` and
-//     `session_insights` (no embeddings/diffs). They lag real time but
-//     have settled by day +1, so they're accurate for historical buckets.
-// `preferCompleted` processes session_completed events before session_started
-// ones so the record carrying duration + message_count wins the dedupe. The
-// legacy day heatmap keeps insertion order (started usually wins) so its
-// historical buckets stay stable.
-async function collectUserActivityIntervals(
+// ── Profile activity: rolled-up days + a live window ──
+// `user_activity_daily` holds one small row per (user, team, UTC day), so a
+// year of activity is ~370 rows instead of the tens of thousands of session
+// rows it is derived from (that read blew Convex's system-operation ceiling and
+// the profile heatmap failed outright). Only today and yesterday are still
+// read raw, where one day is a few hundred documents — see lib/activityDaily.ts.
+//
+// Who sees what: the owner and the anonymized public graph read the day row's
+// totals; a teammate reads its `shared_*` counters, the same team-visibility
+// rule `getProfileVisibilityPredicate` applies to the live window. Someone who
+// is not the owner and not scoped to a team they share sees nothing.
+type ActivityRequest = { user_id: Id<"users">; team_id?: Id<"teams">; days?: number };
+
+async function loadUserActivity(
   ctx: any,
   viewerId: Id<"users"> | null,
-  args: { user_id: Id<"users">; team_id?: Id<"teams">; days?: number },
-  opts?: { preferCompleted?: boolean; countAll?: boolean }
-): Promise<ActivityInterval[]> {
-  const numDays = args.days ?? 365;
+  args: ActivityRequest,
+  opts?: { countAll?: boolean },
+): Promise<{ days: ActivityDayRow[]; live: ScopedInterval[] }> {
   const now = Date.now();
-  const cutoff = now - numDays * 24 * 60 * 60 * 1000;
-  const recentCutoff = now - 7 * 24 * 60 * 60 * 1000;
-  const HOUR = 3600000;
-  const CAP = 8 * HOUR;
+  const from = dayStartUtc(now - (args.days ?? 365) * ACTIVITY_DAY_MS);
+  const liveFrom = Math.max(activityLiveFrom(now), from);
 
-  const intervals: ActivityInterval[] = [];
-  const seen = new Set<string>();
+  const isOwner = !!viewerId && viewerId.toString() === args.user_id.toString();
+  const unrestricted = !!opts?.countAll || isOwner;
+  // Not the owner: the viewer must be a member of the team they scope to.
+  // The day rows are pre-summed, so this gate stands in for the membership
+  // half of getProfileVisibilityPredicate, which only sees the live window.
+  if (!unrestricted && (!viewerId || !args.team_id || !(await isTeamMember(ctx, viewerId, args.team_id))))
+    return { days: [], live: [] };
+  const scope: ActivityScope = unrestricted ? "total" : "shared";
 
-  // Credit each session on its **last activity day** (`updated_at`), not its
-  // start day. This matches the user's mental model — "today's hours" means
-  // sessions I was working on today, even if they began earlier in the week.
-  // Long sessions are common in this codebase (workflow/orchestrate), so
-  // start-day bucketing would hide today's work on multi-day sessions.
-  // Subagent/child sessions are included (no parent filter) to match the
-  // pre-existing query semantics and the 5422-session header total.
-  // Privacy gate: don't count a teammate's private conversations toward their
-  // public heatmap (owner sees all). Private convs are still marked `seen` so
-  // the events/insights fallback branches below can't re-introduce them.
-  // countAll = the anonymized public contribution graph: every session counts
-  // (GitHub-style "private contributions" squares), but only as a per-day tally
-  // — the caller returns no titles/ids, so nothing about content leaks.
-  const isVisible = opts?.countAll
+  const days = await fetchUserActivityDays(ctx, args.user_id, args.team_id, from, liveFrom, scope);
+  const raw = await collectIntervalsInWindow(ctx, args.user_id, liveFrom, now + 1);
+  const isVisible = unrestricted
     ? () => true
     : await getProfileVisibilityPredicate(ctx, viewerId!, args.user_id, args.team_id);
-  const recentConvos = args.team_id
-    ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
-        q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
-    : ctx.db.query("conversations").withIndex("by_user_updated", (q: any) =>
-        q.eq("user_id", args.user_id).gte("updated_at", recentCutoff));
-  for await (const c of recentConvos) {
-    const upd = c.updated_at ?? c.started_at;
-    if (!upd) continue;
-    seen.add(String(c._id));
-    if (!isVisible(c)) continue;
-    const durMs = c.started_at ? Math.max(0, upd - c.started_at) : 0;
-    intervals.push({
-      start: upd - durMs,
-      end: upd,
-      hours: Math.min(durMs, CAP) / HOUR,
-      msgs: c.message_count ?? 0,
-      project: basenameOf(c.git_root || c.project_path),
-    });
-  }
-
-  const events = await ctx.db
-    .query("team_activity_events")
-    .withIndex("by_actor_timestamp", (q: any) =>
-      q.eq("actor_user_id", args.user_id).gte("timestamp", cutoff)
+  const live = raw
+    .filter(
+      (iv) =>
+        (!args.team_id || String(iv.team_id) === String(args.team_id)) &&
+        // An event/insight interval carries no privacy facts (its conversation
+        // is gone): it counts for a teammate only as part of a team, exactly as
+        // the shared day counters treat it.
+        (iv.conv ? isVisible(iv.conv) : unrestricted || !!iv.team_id),
     )
-    .collect();
+    // A session that began before the live window is credited to its last
+    // activity day either way; clamping its start keeps the punchcard from
+    // spreading that credit back over days the rolled-up rows already hold.
+    .map((iv) => (iv.start < liveFrom ? { ...iv, start: liveFrom } : iv));
+  return { days, live };
+}
 
-  const eventPasses = opts?.preferCompleted
-    ? [
-        events.filter((e: any) => e.event_type === "session_completed"),
-        events.filter((e: any) => e.event_type === "session_started"),
-      ]
-    : [events];
-  for (const pass of eventPasses) {
-    for (const e of pass) {
-      if (e.timestamp < cutoff || e.timestamp >= recentCutoff) continue;
-      if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
-      if (e.event_type !== "session_started" && e.event_type !== "session_completed") continue;
-      const cid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
-      if (seen.has(cid)) continue;
-      seen.add(cid);
-      // `e.timestamp` is when the event fired: for `session_completed` that's
-      // the end of activity; for `session_started` it's the start. Both are
-      // reasonable proxies for "activity day" — the original query used the
-      // same field, so historical buckets stay stable across this change.
-      const durMs = e.event_type === "session_completed" ? e.metadata?.duration_ms : undefined;
-      intervals.push({
-        start: e.timestamp - (durMs ?? 0.5 * HOUR),
-        end: e.timestamp,
-        hours: durMs ? Math.min(durMs, CAP) / HOUR : 0.5,
-        msgs: e.metadata?.message_count ?? 0,
-      });
-    }
+const utcDate = (ts: number) => new Date(ts).toISOString().split("T")[0];
+
+type DayBucket = { hours: number; sessions: number; msgs: number; projects: Set<string>; projectCount: number };
+
+/** Per-UTC-day totals from the rolled-up rows plus the live window. */
+function bucketActivityDays(days: ActivityDayRow[], live: ScopedInterval[]): Map<string, DayBucket> {
+  const buckets = new Map<string, DayBucket>();
+  const bucketFor = (date: string) => {
+    let b = buckets.get(date);
+    if (!b) buckets.set(date, (b = { hours: 0, sessions: 0, msgs: 0, projects: new Set(), projectCount: 0 }));
+    return b;
+  };
+  const sum = (a: number[]) => a.reduce((t, v) => t + v, 0);
+  for (const d of days) {
+    const b = bucketFor(utcDate(d.day_start));
+    b.hours += sum(d.hours);
+    b.msgs += sum(d.msgs);
+    b.sessions += d.day_sessions;
+    b.projectCount += d.projects;
   }
-
-  const insights = await ctx.db
-    .query("session_insights")
-    .withIndex("by_actor_generated_at", (q: any) =>
-      q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
-    )
-    .collect();
-
-  for (const ins of insights) {
-    if (ins.generated_at >= recentCutoff) continue;
-    if (args.team_id && String(ins.team_id) !== String(args.team_id)) continue;
-    const cid = String(ins.conversation_id);
-    if (seen.has(cid)) continue;
-    seen.add(cid);
-    intervals.push({ start: ins.generated_at - 0.5 * HOUR, end: ins.generated_at, hours: 0.5, msgs: 0 });
+  for (const iv of live) {
+    const b = bucketFor(utcDate(iv.end));
+    b.hours += iv.hours;
+    b.msgs += iv.msgs;
+    b.sessions++;
+    if (iv.project) b.projects.add(iv.project);
   }
-
-  return intervals;
+  return buckets;
 }
 
 export const getUserActivityHeatmap = query({
@@ -2044,17 +2011,9 @@ export const getUserActivityHeatmap = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const intervals = await collectUserActivityIntervals(ctx, userId, args);
+    const { days, live } = await loadUserActivity(ctx, userId, args);
 
-    const buckets: Record<string, { hours: number; sessions: number }> = {};
-    for (const iv of intervals) {
-      const date = new Date(iv.end).toISOString().split("T")[0];
-      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-      buckets[date].sessions++;
-      buckets[date].hours += iv.hours;
-    }
-
-    return Object.entries(buckets)
+    return [...bucketActivityDays(days, live)]
       .map(([date, data]) => ({
         date,
         hours: Math.round(data.hours * 100) / 100,
@@ -2078,12 +2037,12 @@ export const getUserActivityPunchcard = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const [intervals, sendDays, usageDays] = await Promise.all([
-      collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true }),
+    const [{ days, live }, sendDays, usageDays] = await Promise.all([
+      loadUserActivity(ctx, userId, args),
       fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
       fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365),
     ]);
-    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays, usageDays);
+    return bucketPunchcardRows(live, args.tz_offset_minutes ?? 0, sendDays, usageDays, days);
   },
 });
 
@@ -2105,16 +2064,11 @@ export const getPublicActivityPunchcard = query({
       .first();
     if (!user || !user.public_profile_enabled || user.hide_activity) return [];
 
-    const [intervals, sendDays] = await Promise.all([
-      collectUserActivityIntervals(
-        ctx,
-        null,
-        { user_id: user._id, days: args.days },
-        { preferCompleted: true, countAll: true }
-      ),
+    const [{ days, live }, sendDays] = await Promise.all([
+      loadUserActivity(ctx, null, { user_id: user._id, days: args.days }, { countAll: true }),
       fetchUserSendDays(ctx, user._id, undefined, args.days ?? 365),
     ]);
-    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays);
+    return bucketPunchcardRows(live, args.tz_offset_minutes ?? 0, sendDays, undefined, days);
   },
 });
 
