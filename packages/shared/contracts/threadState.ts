@@ -180,15 +180,23 @@ export const THREAD_STATE_RESULT_MAX_CHARS = 32_000;
  * when there is none, it does not parse, or it is past the result cap.
  */
 export function threadStateResult(text: string): string | null {
-  const blocks = [...text.matchAll(/```json[ \t]*\n([\s\S]*?)\n[ \t]*```/g)];
-  const last = blocks[blocks.length - 1]?.[1]?.trim();
-  if (!last || last.length > THREAD_STATE_RESULT_MAX_CHARS) return null;
-  try {
-    JSON.parse(last);
-  } catch {
-    return null;
+  // A block closes at the first fence after which its body parses: the json's own strings may hold fences (a markdown
+  // proposal), and a report piped from a file without a final newline closes on the json's last line.
+  let last: string | null = null;
+  for (const open of text.matchAll(/```json[ \t]*\n/g)) {
+    const from = open.index! + open[0].length;
+    for (let at = text.indexOf("```", from); at !== -1; at = text.indexOf("```", at + 3)) {
+      const body = text.slice(from, at).trim();
+      try {
+        JSON.parse(body);
+      } catch {
+        continue;
+      }
+      last = body;
+      break;
+    }
   }
-  return last;
+  return last && last.length <= THREAD_STATE_RESULT_MAX_CHARS ? last : null;
 }
 
 export function clearedThreadStateFields(): {

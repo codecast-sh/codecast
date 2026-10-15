@@ -71,6 +71,7 @@ export function momentView(m: Doc<"moments">, now?: number) {
     event_at: m.event_at,
     ...(m.extracted_at ? { extracted_at: m.extracted_at, gap_ms: m.gap_ms } : {}),
     ...(m.extractor_version ? { extractor_version: m.extractor_version } : {}),
+    ...(m.who ? { who: m.who } : {}),
     storage: m.storage ?? "host",
     kept: now == null ? !!m.body_key : liveBodyKey(m, now) !== null,
     ...(m.body_expires_at ? { body_expires_at: m.body_expires_at } : {}),
