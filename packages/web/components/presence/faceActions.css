@@ -1,5 +1,5 @@
-/* The three buttons under a face: Talk, Ring, Message. Blunt on purpose —
-   a word and an icon, full contrast, a warm fill while talking. */
+/* The three buttons under a face: Talk, Ring, Message. A word and an icon
+   each; Talk turns red and says Stop while you are talking. */
 .face-actions {
   display: inline-flex;
   flex-wrap: wrap;
@@ -7,66 +7,18 @@
   justify-content: center;
   gap: 6px;
 }
-/* A BUTTON IS A PLATE, NOT A BOX. No border: a soft fill in the ink, a
-   hairline of light along its top edge and a hairline of shade under it,
-   so it sits on the card instead of being drawn on it. The word in medium
-   weight; the icon a shade quieter until the pointer arrives. */
+/* The faces are THE button's (components/ui/button): Talk secondary, Ring
+   in the calls' violet, Message outline. Here only the row's shape. */
 .face-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: color-mix(in srgb, var(--sol-text) 7%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--sol-bg) 55%, transparent),
-    0 1px 1px color-mix(in srgb, var(--sol-text) 7%, transparent);
-  color: var(--sol-text);
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 90ms ease;
 }
-.face-action:active:not(:disabled) {
-  transform: translateY(0.5px);
-  box-shadow: inset 0 1px 1px color-mix(in srgb, var(--sol-text) 10%, transparent);
-}
-.face-actions-sm .face-action {
-  padding: 4px 9px;
-  font-size: 11px;
-}
-.face-action-icon {
-  width: 14px;
-  height: 14px;
-  color: var(--sol-text-muted);
-}
-.face-action:hover:not(:disabled) .face-action-icon,
-.face-action-talk-on .face-action-icon {
-  color: inherit;
-}
-.face-action:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--sol-text) 12%, transparent);
-}
-.face-action:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-/* One ink for the three: a word and its icon, the same on every button, so
-   the row reads as one set. Colour is for a STATE, not a verb. */
-/* TALKING. The button is the state: warm, filled, and it says Stop. */
+/* TALKING. The button is the state: red, it says Stop, and it breathes. */
 .face-action-talk-on {
-  background: var(--walkie-tx) !important;
-  border-color: var(--walkie-tx) !important;
-  color: var(--sol-bg) !important;
   animation: face-action-talk-breathe 1.6s ease-in-out infinite;
 }
 @keyframes face-action-talk-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--walkie-tx) 45%, transparent); }
-  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--walkie-tx) 0%, transparent); }
+  0%, 100% { box-shadow: var(--btn-face), 0 0 0 0 color-mix(in srgb, var(--sol-red) 45%, transparent); }
+  50%      { box-shadow: var(--btn-face), 0 0 0 5px color-mix(in srgb, var(--sol-red) 0%, transparent); }
 }
 .face-actions-reason {
   flex-basis: 100%;
@@ -79,61 +31,15 @@
   .face-action-talk-on { animation: none; }
 }
 
-/* In a row of equal buttons (the avatar bar's hover card): the key takes its
-   share of the row and wears the row's shape, so Talk, Huddle and Message
-   read as one set rather than a pill among rectangles. */
-/* ONE CONTROL, THREE CELLS. On a card that is mostly buttons, three pills
-   are three boxes; a segmented plate is one object with three answers on it.
-   The cells share the plate, hairlines part them, and the pointed at cell
-   lifts as a lighter tile. */
+/* In a row of equal buttons (the avatar bar's hover card): each takes an
+   equal share of the row. */
 .face-actions-fill {
   flex: 1 1 0;
   display: flex;
   flex-wrap: wrap;
   min-width: 0;
-  gap: 0;
-  padding: 3px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 5%, transparent);
+  gap: 6px;
 }
 .face-actions-fill .face-action {
   flex: 1 1 0;
-  position: relative;
-  justify-content: center;
-  border-radius: 7px;
-  padding: 6px 8px;
-  background: transparent;
-  box-shadow: none;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-}
-.face-actions-fill .face-action + .face-action::before {
-  content: "";
-  position: absolute;
-  left: -0.5px;
-  top: 22%;
-  height: 56%;
-  width: 1px;
-  background: color-mix(in srgb, var(--sol-text) 12%, transparent);
-  transition: opacity 120ms ease;
-}
-.face-actions-fill .face-action:hover:not(:disabled) {
-  background: var(--sol-bg-alt);
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--sol-text) 14%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 6%, transparent);
-}
-.face-actions-fill .face-action:hover:not(:disabled)::before,
-.face-actions-fill .face-action:hover:not(:disabled) + .face-action::before {
-  opacity: 0;
-}
-.face-actions-fill .face-action:active:not(:disabled) {
-  transform: none;
-  background: color-mix(in srgb, var(--sol-text) 10%, transparent);
-  box-shadow: none;
-}
-.face-actions-fill .face-action-talk-on {
-  border-radius: 7px;
 }

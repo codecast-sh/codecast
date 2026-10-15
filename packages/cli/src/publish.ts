@@ -39,7 +39,7 @@ import {
   type ArtifactLsRow,
 } from "./publishCommand.js";
 import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
-import { CAST_PLAYER_GUIDE, describePageAnchor, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
+import { CAST_PLAYER_GUIDE, describePageAnchor, pageEmbedUrl, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
 import { readPageData, runPublishData } from "./publishData.js";
 import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
@@ -648,6 +648,20 @@ export async function publishOnce(
   return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [] };
 }
 
+const EDGE_WARM_TIMEOUT_MS = 3_000;
+
+/** Ask the edge for a page just published, so the first reader's embed is answered from its copy rather than the
+ *  origin. Bounded and silent: a publish never waits long on it or fails for it. A gated page is never held at the
+ *  edge, so it is not asked for. */
+async function warmEdge(deps: PublishDeps, result: any, access: Record<string, unknown> | undefined): Promise<void> {
+  if (!result?.slug || !result.version || result.unchanged) return;
+  if (access?.password || access?.email_gate) return;
+  const { siteUrl } = deps.getCliEndpoint();
+  // Pinned to the version (an embed that knew it), and bare (an embed that started before it knew anything).
+  const urls = ["dark", "light"].flatMap((theme) => [pageEmbedUrl(siteUrl, result.slug, theme, "", result.version), pageEmbedUrl(siteUrl, result.slug, theme)]);
+  await Promise.all(urls.map((u) => fetch(u, { signal: AbortSignal.timeout(EDGE_WARM_TIMEOUT_MS) }).then((r) => r.arrayBuffer(), () => undefined).catch(() => undefined)));
+}
+
 async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
   const absPath = path.resolve(target);
   if (!fs.existsSync(absPath)) {
@@ -701,6 +715,7 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   } else {
     printPublishResult(result, title, access, showsVideo);
   }
+  await warmEdge(deps, result, access);
   if (options.open && result?.url) await open(result.url).catch(() => {});
   if (!options.watch) return;
 

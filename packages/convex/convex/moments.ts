@@ -43,6 +43,7 @@ import {
   DEFAULT_QUIET_MS,
   MOMENT_LIMITS,
   momentWindow,
+  momentWho,
   parseExtractorOutput,
   type ExtractorInput,
   type MomentEventItem,
@@ -317,12 +318,14 @@ export const markReady = internalMutation({
     body_key: v.optional(v.string()),
     /** Absent for a source that keeps its bodies. */
     body_expires_at: v.optional(v.number()),
+    who: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<boolean> => {
     const m = await ctx.db.get(args.moment_id);
     if (!m || m.status !== "extracting") return false;
     await ctx.db.patch(m._id, {
       status: "ready",
+      who: args.who,
       extractor_version: args.extractor_version,
       extracted_at: args.extracted_at,
       gap_ms: args.gap_ms,
@@ -405,6 +408,7 @@ export const complete = action({
       gap_ms: record.gap_ms,
       blocks: record.blocks.length,
       body_bytes: json.length,
+      ...(momentWho(record) ? { who: momentWho(record)! } : {}),
       ...(bodyKey ? { body_key: bodyKey, ...(keep ? {} : { body_expires_at: extractedAt + MOMENT_LIMITS.retention_ms }) } : {}),
     });
     // Another hand back of this claim already settled it, and judged it.
@@ -505,7 +509,7 @@ export async function judgeInputsOf(record: Pick<MomentRecord, "blocks">): Promi
  * person who set the source up (the way promoted signals file, X6).
  */
 async function judgeMoment(ctx: any, f: Finishing, record: MomentRecord, only?: string[]): Promise<JudgeOutcome[]> {
-  const scope = { workspace: f.moment.workspace, ...(f.moment.team_id ? { team_id: f.moment.team_id } : {}) };
+  const where = { workspace: f.moment.workspace, ...(f.moment.team_id ? { team_id: f.moment.team_id } : {}) };
   const outcomes: JudgeOutcome[] = [];
   const rulings = await rulingsOn(ctx, f.moment.workspace, record);
   const inputs = await judgeInputsOf(record);
@@ -529,7 +533,8 @@ async function judgeMoment(ctx: any, f: Finishing, record: MomentRecord, only?: 
     const spec: JudgeSpec = { name: judge.name, moment: judge.moment_kind, model: judge.model, max_tokens: judge.max_tokens, projects: judge.projects, mode: judge.mode, prompt: judge.prompt };
     // The judge's clock is the time the facts describe: now for a live read, the as-of time for a replay.
     const clock = Math.min(Date.now(), record.at ?? Date.now());
-    const result = await runModelCall(ctx, scope, "judge", judgeRequest(spec, briefs, record, clock, rulings), `Judge ${judge.name}`);
+    // Charged to the projects whose expectations it grades.
+    const result = await runModelCall(ctx, { ...where, project_ids: judge.project_ids }, "judge", judgeRequest(spec, briefs, record, clock, rulings), `Judge ${judge.name}`);
     if (!result.ok) {
       const status = result.reason === "budget" ? "skipped" : "failed";
       await ctx.runMutation(internal.moments.recordRun, { ...base, status, reason: result.error, findings: 0, cost_usd: result.cost_usd });
@@ -544,7 +549,7 @@ async function judgeMoment(ctx: any, f: Finishing, record: MomentRecord, only?: 
       continue;
     }
     const startedAt = Date.now();
-    const filedNow = judge.mode === "live" ? await fileFindings(ctx, f, judge, briefs, parsed.findings.filter((x) => inScope(x.expectation)), record, scope, { messages: inputs.messages, fresh: scoped }) : { ids: [], keys: [], held: [], waiting: [] };
+    const filedNow = judge.mode === "live" ? await fileFindings(ctx, f, judge, briefs, parsed.findings.filter((x) => inScope(x.expectation)), record, where, { messages: inputs.messages, fresh: scoped }) : { ids: [], keys: [], held: [], waiting: [] };
     const signalIds = filedNow.ids;
     // Judged again: this moment now stands behind what the run filed or found again, and no longer behind
     // what it filed before and did not find now, which leaves its problems once no moment stands behind it.

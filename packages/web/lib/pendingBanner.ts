@@ -225,7 +225,7 @@ export function pendingMessageReachedSession(messageId: string, pending?: Pendin
 //             live agent's input queue, or is still within a grace window → show nothing.
 export function pendingBannerState(
   agentStatus: LiveAgentStatus | undefined,
-  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean },
+  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean; cloudPlacing?: boolean },
 ): PendingBannerState {
   // Durable, server-persisted proof the message physically landed in the session's pane
   // (pending_messages → "injected"/"delivered"; the daemon resets it to "pending" if the
@@ -237,6 +237,10 @@ export function pendingBannerState(
   if (opts.messageReachedSession) return "none";
   if (opts.restartInFlight) return "stuck";
   if (!opts.retryEligible) return "none";
+  // The session has no agent yet: a laptop is still preparing its cloud host,
+  // and the placement strip above names the host, the step and the time. No
+  // agent exists to kill and restart, and the message starts with it.
+  if (opts.cloudPlacing) return "none";
   // Agent alive and mid-turn: it has a live type-ahead input box, and the daemon has
   // already pasted the message straight into Claude Code's native queue (ensureTmuxReady's
   // busy path), so it WILL submit when the turn ends. Show nothing — the pending stripe on

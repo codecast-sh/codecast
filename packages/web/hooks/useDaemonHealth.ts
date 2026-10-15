@@ -162,6 +162,13 @@ export const isDegradedDaemonHealth = (h: DaemonHealth): boolean =>
 export const blocksDelivery = (h: DaemonHealth): boolean =>
   isDegradedDaemonHealth(h) && !(h.kind === "overloaded" && h.freezeMs < OVERLOADED_FREEZE_MS);
 
+// Narrower again, for a message the daemon has not yet put into its session.
+// The sync backlog counts transcript UPLOADS (machine to server), which cannot
+// hold a message travelling the other way; blaming it hid the real reason, a
+// start the daemon refused, behind "1 conversation waiting to sync".
+export const holdsUndeliveredMessage = (h: DaemonHealth): boolean =>
+  blocksDelivery(h) && h.kind !== "sync_stalled" && h.kind !== "syncing";
+
 // One machine's row from the device roster (devices.listDevices), as the
 // heartbeat writes it: last_seen plus the per-device health fields.
 export interface DaemonDeviceRow {

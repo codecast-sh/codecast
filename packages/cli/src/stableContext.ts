@@ -53,6 +53,15 @@ export interface BuiltStableContext {
   data: StableContextData;
 }
 
+/**
+ * The most text a session-start hook may hand an agent. Claude Code delivers
+ * hook output whole up to about 9.8KB; past that the agent sees a 2KB preview
+ * and a file path, so everything after the opening lines is lost. 702 of 748
+ * sessions in three days of 2026-10 were cut that way, and with them every
+ * mod's and the org's instructions, which came last.
+ */
+export const STABLE_CONTEXT_BUDGET = 9_000; // bytes
+
 /** Fetch the feed and render the <stable-context> block. Returns undefined on
  * any failure — injection is an optional enhancement, never a boot blocker. */
 export async function buildStableContext(
@@ -90,11 +99,9 @@ export async function buildStableContext(
     const result = (await response.json()) as any;
     if (!response.ok || result?.error) return undefined;
 
-    const conversations = ((result.conversations ?? []) as any[])
+    let conversations = ((result.conversations ?? []) as any[])
       .filter((conv) => !isExcludedStableItem(String(conv.id ?? ""), exclude))
       .slice(0, limit);
-
-    const feed = stripAnsi(formatFeedResults({ ...result, conversations }, { projectPath }));
     const verifyNote =
       "This is a snapshot from session start — `cast feed` / `cast sessions` give the current picture. " +
       "Before attributing work to a session or messaging it about its work, check its evidence: `cast diff <id>` shows the files it changed, `cast read <id>` its recent turns. " +
@@ -102,6 +109,19 @@ export async function buildStableContext(
     const instruction = opts.mode === "team"
       ? `This gives you bigger-picture visibility on what has been and is being worked on by the team.\n${verifyNote}`
       : `This gives you bigger-picture visibility on what you have been and are currently working on.\n${verifyNote}`;
+
+    // What agents must act on (the org, the mods' objects and blocks) leads;
+    // the feed is background and gives up its oldest conversations to fit.
+    const lead = `${await orgBlock}${await modsBlock}`.trim();
+    const render = () => {
+      const feed = stripAnsi(formatFeedResults({ ...result, conversations }, { projectPath }));
+      return `${lead ? `${lead}\n\n` : ""}<stable-context mode="${opts.mode}">\n${instruction}\n\n${feed}\n</stable-context>`;
+    };
+    let text = render();
+    while (Buffer.byteLength(text) > STABLE_CONTEXT_BUDGET && conversations.length) {
+      conversations = conversations.slice(0, -1);
+      text = render();
+    }
 
     const items: StableContextItem[] = conversations.map((conv) => ({
       id: String(conv.id),
@@ -117,11 +137,7 @@ export async function buildStableContext(
     }));
 
     return {
-      text: `<stable-context mode="${opts.mode}">
-${instruction}
-
-${feed}
-</stable-context>${await orgBlock}${await modsBlock}`,
+      text,
       data: { mode: opts.mode, global: opts.global, injected_at: Date.now(), items },
     };
   } catch {

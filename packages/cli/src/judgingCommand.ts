@@ -151,6 +151,7 @@ export function registerJudgingCommands(line: Command, deps: PublishDeps): void 
     .argument("<moments...>", "Moment files: the JSON an extractor printed (blocks, refs, at), or - for stdin")
     .option("--team <name|id|personal>", "Workspace whose budget pays and whose projects' expectations it reads")
     .option("--prompt", "Print the exact request for the first moment and send nothing")
+    .option("--proposal <xp-N>", "Judge under the expectations as they would read with this open proposal applied")
     .option("--json", "Machine-readable output")
     .addHelpText("after", `
 A judge file is a header between two --- lines, then its prompt:
@@ -174,14 +175,28 @@ An extractor (.codecast/moments/<kind>.ts) reads the event on stdin and prints o
               {"type": "text", "title": "...", "text": "..."}],
    "refs": [{"label": "thread", "id": "t_81", "table": "threads"}], "at": "<iso>"}
 Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
-    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; prompt?: boolean; json?: boolean }) => {
+    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; prompt?: boolean; json?: boolean; proposal?: string }) => {
       const root = await repoRoot(process.cwd());
       const { spec, file } = readJudge(root, judgeRef);
       const briefs: ExpectationsBrief[] = [];
+      // A proposal belongs to one project: the judge's other projects read their lines as they stand.
+      let proposed = false;
+      const briefOf = async (scope: Record<string, unknown>) => {
+        if (!options.proposal) return apiPost(deps, "/cli/expectations/brief", scope, { read: true });
+        try {
+          const b = await apiPost(deps, "/cli/expectations/brief", { ...scope, proposal: options.proposal }, { read: true });
+          proposed = true;
+          return b;
+        } catch (err) {
+          if (!/not found in/.test(err instanceof Error ? err.message : String(err))) throw err;
+          return apiPost(deps, "/cli/expectations/brief", scope, { read: true });
+        }
+      };
       for (const project of spec.projects) {
-        const b = await apiPost(deps, "/cli/expectations/brief", await scopeFor(deps, options.team, false, project), { read: true });
+        const b = await briefOf(await scopeFor(deps, options.team, false, project));
         briefs.push(narrowBrief({ project: b.project.title, version: b.version, text: b.text, ids: b.ids ?? [] }, spec.parts));
       }
+      if (options.proposal && !proposed) fail(`${options.proposal} is not a proposal of ${spec.projects.join(", ")}, the projects ${spec.name} grades against`);
       if (!briefs.some((b) => b.ids.length)) console.error(fmt.warning(`None of ${spec.projects.join(", ")} has active expectations, so every finding will be set aside: propose them first (cast expectations propose).`));
       const ids = briefs.flatMap((b) => b.ids);
       const version = (await fileVersion(file)).slice(0, 10);
@@ -202,7 +217,8 @@ Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
           else console.log(`# ${spec.name} ${version} on ${spec.model}, up to ${spec.max_tokens} tokens out\n\n## System\n${request.system}\n\n## Prompt\n${request.prompt}`);
           return;
         }
-        const result = await callModel(deps, await scopeFor(deps, options.team, false), request, `Judge try ${spec.name}`);
+        // Charged to the judge's first project, the one whose expectations it grades.
+        const result = await callModel(deps, await scopeFor(deps, options.team, false, spec.projects[0]), request, `Judge try ${spec.name}`);
         const outcome: TryOutcome = { moment: name, result };
         if (result.ok) {
           const parsed = parseJudgeReply(result.text, ids);

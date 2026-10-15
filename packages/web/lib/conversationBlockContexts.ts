@@ -26,3 +26,8 @@ export const HostedAskingContext = createContext<boolean>(false);
 // the ask, so the receipt leaves out the steps still waiting on it rather than
 // say the card's question a second time.
 export const HostedCardShownContext = createContext<boolean>(false);
+
+// Identity of the message a markdown body belongs to, provided by the
+// conversation view (MessageIdentityProvider). Absent on surfaces with no
+// conversation: share pages, docs.
+export const MessageIdentity = createContext<{ conversationId: string; messageId: string } | null>(null);
