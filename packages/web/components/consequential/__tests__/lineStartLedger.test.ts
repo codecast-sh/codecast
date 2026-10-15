@@ -63,7 +63,7 @@ test("everything waiting starts: one count, and a borrowed price says where from
 test("a lead with no daily cap: the review says no cap, loudly, and the queue runs at the places", () => {
   const l = lineStartLedger({ project: "Agent Quality", admission: { ...OFF, handsCap: null, queued: 66 }, waiting: 66, ready: 66, cost: { billedUsd: 6.99, listUsd: 0, runs: 5, scope: "workspace" } });
   assertGlance(l);
-  assert.equal(fig(l, "a day, no cap"), "∞");
+  assert.equal(fig(l, "a day, no limit"), "∞");
   assert.equal(fig(l, "all, billed"), "~$461");
   assert.equal(row(l, "Then")!.v, "61 more, 5 at a time");
 });
@@ -71,12 +71,12 @@ test("a lead with no daily cap: the review says no cap, loudly, and the queue ru
 test("a role with no daily cap gets one picked in the review: the figures read the pick, never an endless day", () => {
   const a: LineAdmission = { role: { id: "r", handle: "callers-lead", paused: false }, on: false, slots: 5, busy: 0, hands: null, handsCap: null, queued: 27 };
   const l = lineStartLedger({ project: "Callers", admission: a, ready: 27, dayCap: 10 });
-  assert.deepEqual(l.pick, { k: "A day", options: ["5", "10", "20", "No cap"], value: "10" });
+  assert.deepEqual(l.pick, { k: "A day", options: ["5", "10", "20", "No limit"], value: "10" });
   assert.ok(l.figures.some((f) => f.label === "a day, max" && f.value === "10"));
   assert.ok(!l.figures.some((f) => f.value === "∞"));
   assert.equal(l.rows.find((r) => r.k === "Then")?.v, "22 more, 10 a day");
   // Picking no cap says so, loudly; a role that has a cap is offered no pick.
-  assert.equal(lineStartLedger({ project: "Callers", admission: a, ready: 27, dayCap: null }).pick?.value, "No cap");
+  assert.equal(lineStartLedger({ project: "Callers", admission: a, ready: 27, dayCap: null }).pick?.value, "No limit");
   assert.equal(lineStartLedger({ project: "Callers", admission: { ...a, handsCap: 6, hands: 0 }, ready: 27, dayCap: 10 }).pick, undefined);
   assertGlance(l);
 });

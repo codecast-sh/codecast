@@ -177,9 +177,9 @@ describe("command tree targeting", () => {
   });
   test("links use canonical routes", () => {
     expect(paletteObjectPath("session", { _id: "s" })).toBe("/conversation/s");
-    // A company object opens its sheet on the Org screen; a project's board is a verb of its own.
-    expect(paletteObjectPath("project", { _id: "p", short_id: "pj-abc" })).toBe("/org/pj-abc");
-    expect(paletteObjectPath("initiative", { _id: "g", short_id: "in-2" })).toBe("/org/in-2");
+    // A goal and a project open their own pages; a role and a person open on the Org screen.
+    expect(paletteObjectPath("project", { _id: "p", short_id: "pj-abc" })).toBe("/projects/pj-abc");
+    expect(paletteObjectPath("initiative", { _id: "g", short_id: "in-2" })).toBe("/goals/in-2");
     expect(paletteObjectPath("role", { _id: "r", short_id: "or-7" })).toBe("/org/or-7");
     expect(paletteObjectPath("person", { _id: "u1", member: { _id: "u1", username: "sam", github_username: "samvit" } })).toBe("/org/@samvit");
     // Without a GitHub handle the address is the user id, as every pill writes it (personRefOf).

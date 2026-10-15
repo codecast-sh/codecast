@@ -24,7 +24,7 @@ import { DiffStat, MetaDot } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
 import { ImageGalleryProvider } from "../ImageGallery";
-import { MarkdownImageSize } from "../tools/MarkdownImages";
+import { MarkdownImageSize } from "../../lib/markdownImageSize";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";

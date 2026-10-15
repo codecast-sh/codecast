@@ -106,8 +106,8 @@ describe("CharterBlock", () => {
     await t.click(owner);
     const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) => a.getAttribute("href") === `/org/${role.short_id}`);
     assert.ok(link, "owner link to /org/or-N");
-    // The advisory budget line.
-    assert.match(body, /Daily limit400ktokens\/day ·2hands\/dayadvisory/);
+    // A budget stays on the record; the block draws no line for it.
+    assert.doesNotMatch(body, /Daily limit/);
     assert.equal(document.querySelector("[data-charter]")?.getAttribute("data-charter"), "project");
     t.unmount();
   }, SLOW);
@@ -130,7 +130,6 @@ describe("CharterBlock", () => {
     assert.doesNotMatch(body, /^ ?Charter/, "the fold already says Charter");
     assert.doesNotMatch(body, /Make the inbox the place/, "the sheet edits what it is for above the fold");
     assert.match(body, /Signs it works2/);
-    assert.match(body, /Daily limit/);
     // An empty charter in the fold is its fields, never the "No charter yet" line.
     await t.render({ charter: {}, plain: true, hideGoal: true, hideOwner: true });
     assert.doesNotMatch(t.text(), /No charter yet/);
@@ -168,10 +167,6 @@ describe("CharterBlock", () => {
     await t.click(t.button(full.non_goals[0]));
     await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "");
     assert.deepEqual(t.patches.at(-1), { non_goals: [] });
-    // Budget: tokens parse from "800k".
-    await t.click(t.button("400k"));
-    await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "800k");
-    assert.deepEqual(t.patches.at(-1), { budget: { tokens_per_day: 800_000, hands_per_day: 2 } });
     t.unmount();
   }, SLOW);
 
@@ -260,28 +255,6 @@ describe("CharterBlock", () => {
     t.unmount();
   }, SLOW);
 
-  it("a budget written tokens first has the echo's key order (sorted, as Convex returns it), so the field lock retires", async () => {
-    const t = await setup();
-    await t.render({ charter: { goal: "x" } });
-    await t.click(t.button("tokens"));
-    await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "400k");
-    assert.deepEqual(t.patches.at(-1), { budget: { tokens_per_day: 400_000 } });
-    // The row now carries the tokens only budget; hands land second and
-    // would otherwise be appended after tokens.
-    await t.render({ charter: { goal: "x", budget: { tokens_per_day: 400_000 } } });
-    await t.click(t.button("hands"));
-    await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "2");
-    const budget = (t.patches.at(-1) as any).budget;
-    assert.deepEqual(Object.keys(budget), ["hands_per_day", "tokens_per_day"], "sorted keys, the echo's order");
-    assert.equal(JSON.stringify(budget), JSON.stringify({ hands_per_day: 2, tokens_per_day: 400_000 }));
-    // Clearing both leaves null (the wire's clear), not an empty object.
-    await t.render({ charter: { goal: "x", budget: { hands_per_day: 2 } } });
-    await t.click(t.button("2"));
-    await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "");
-    assert.deepEqual(t.patches.at(-1), { budget: null });
-    t.unmount();
-  }, SLOW);
-
   it("chip menus are keyboard complete: focus lands on the first item, arrows walk, Escape closes and returns focus to the chip", async () => {
     const t = await setup();
     await t.render({ charter: full });
@@ -312,7 +285,7 @@ describe("CharterBlock", () => {
     const t = await setup();
     await t.render({ charter: full });
     const names = t.buttons().map((b) => b.getAttribute("aria-label")).filter(Boolean) as string[];
-    for (const n of ["Edit What it is for", "Edit Sign it works 1", "Edit Sign it works 2", "Edit New sign it works", "Edit Non goal 1", "Edit Risk 1", "Edit Daily limit tokens per day", "Edit Daily limit hands per day", "Remove Risk 1"]) {
+    for (const n of ["Edit What it is for", "Edit Sign it works 1", "Edit Sign it works 2", "Edit New sign it works", "Edit Non goal 1", "Edit Risk 1", "Remove Risk 1"]) {
       assert.ok(names.includes(n), `${n} in ${names.join(" | ")}`);
     }
     await t.click(t.button(/Make the inbox/));

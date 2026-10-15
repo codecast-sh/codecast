@@ -1,8 +1,9 @@
 import type { Components } from "react-markdown";
-import { createContext, useContext, useState, useCallback, Children } from "react";
+import { useContext, useState, useCallback, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery, useGalleryMessageId } from "../ImageGallery";
 import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
+import { MarkdownImageSize, type ImageSize } from "../../lib/markdownImageSize";
 
 const MD_IMAGE_COLLAPSED_HEIGHT = 160;
 // Width over height at which an unhinted image leaves the narrow default and
@@ -11,17 +12,6 @@ const WIDE_ASPECT = 2;
 
 // A portrait image shown whole stops at this height, so a phone screen reads at a glance.
 const WHOLE_PORTRAIT_MAX_HEIGHT = 440;
-
-/** How an author asked an image to render, through the markdown title slot:
- *  `![caption](url "wide")`. `wide` takes the column and shows the whole image,
- *  `small` is a thumbnail, `whole` shows all of it at its own shape (a
- *  landscape across the column, a portrait at full height up to
- *  WHOLE_PORTRAIT_MAX_HEIGHT), anything else is auto (narrow, collapsed past
- *  MD_IMAGE_COLLAPSED_HEIGHT, widened for strips). */
-export type ImageSize = "auto" | "wide" | "small" | "whole";
-
-/** The size an unhinted image takes: auto in a transcript, whole where images are the point (an article). */
-export const MarkdownImageSize = createContext<ImageSize>("auto");
 
 function imageSizeFromTitle(title: string | null | undefined, fallback: ImageSize): ImageSize {
   const hint = title?.trim().toLowerCase();

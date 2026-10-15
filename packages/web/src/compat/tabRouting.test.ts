@@ -29,7 +29,9 @@ describe("isNonTabRoute", () => {
   });
 
   it("leaves the renamed list pages to the router, which moves them into Org", () => {
-    for (const p of ["/projects", "/team"]) expect(isNonTabRoute(p)).toBe(true);
+    for (const p of ["/team", "/company"]) expect(isNonTabRoute(p)).toBe(true);
+    // Projects and goals are pages of their own, inside the shell.
+    for (const p of ["/projects", "/goals"]) expect(isNonTabRoute(p)).toBe(false);
   });
 
   // Public profiles live at the ROOT as a bare handle (/:username), rendered

@@ -15,7 +15,7 @@ const starts: any[] = [];
 const joins: string[] = [];
 const state = { callOccupancy: {} as Record<string, any[]>, call: { roomKey: null } };
 mock.module("../../../lib/teamFeatures", () => ({ useCallsAvailable: () => true }));
-mock.module("../../../store/inboxStore", () => ({ useInboxStore: (select: any) => select(state), useTrackedStore: () => state }));
+mock.module("../../../store/inboxStore", () => ({ useInboxStore: Object.assign((select: any) => select(state), { getState: () => state }), useTrackedStore: () => state }));
 mock.module("../../../lib/calls/actions", () => ({ startHuddle: async (opts: any) => { starts.push(opts); }, joinCall: async (room: string) => { joins.push(room); } }));
 mock.module("../../../lib/faces/faceRow", () => ({ roomHeldAsBurst: () => false }));
 mock.module("../../../hooks/useFaceRow", () => ({ useFaceRowSelect: () => false }));
@@ -26,53 +26,53 @@ mock.module("../../../lib/avatarCache", () => ({ AvatarImg: () => null }));
 mock.module("../../calls/GuestDoor", () => ({ GuestInvite: () => null }));
 mock.module("../../../hooks/useLiveRooms", () => ({ useGuestsWaiting: () => [] }));
 const { HuddleButton } = await import("../../calls/OccupancyChip");
+// The real gate every huddle start passes through (lib/calls/huddleStart):
+// with a window hosting its confirm dialog the request waits there, and the
+// dialog's Cancel and Start are closeHuddleStart and runHuddleStart.
+const gate = await import("../../../lib/calls/huddleStart");
 const root = createRoot(document.getElementById("root")!);
 const roomKey = "channel:design";
 const render = (count?: number, room = roomKey) => act(async () => root.render(<HuddleButton roomKey={room} channelMemberCount={count} anchorTitle="#design" />));
 const button = () => document.querySelector<HTMLButtonElement>("[data-huddle-idle]")!;
-const dialog = () => document.querySelector('[role="dialog"]');
-const clickText = (text: string) => act(async () => [...document.querySelectorAll("button")].find((b) => b.textContent === text)!.click());
-const settle = () => act(() => new Promise<void>((r) => setTimeout(r, 30)));
 
-await render(7);
-await act(async () => button().click());
-assert.equal(dialog(), null);
-assert.deepEqual(starts.pop(), { roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true });
+// A window that draws no dialog starts at once rather than queue one nobody sees.
 await render(8);
 await act(async () => button().click());
-await settle();
-assert.ok(dialog());
-assert.match(dialog()!.textContent!, /8 members.*7 other members/);
+assert.equal(gate.pendingHuddleStart(), null);
+assert.deepEqual(starts.pop(), { roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true });
+
+const unregister = gate.registerHuddleStartHost();
+// The request waits for the confirm and carries how many members the buzz reaches.
+await act(async () => button().click());
+assert.equal(gate.pendingHuddleStart()?.channelMemberCount, 8);
+assert.equal(gate.pendingHuddleStart()?.ringChannel, true);
 assert.equal(starts.length, 0);
 assert.equal(joins.length, 0);
-await clickText("Cancel");
-await settle();
-assert.equal(dialog(), null);
-assert.equal(document.activeElement, button());
+// Cancel starts nothing.
+gate.closeHuddleStart();
+assert.equal(gate.pendingHuddleStart(), null);
 assert.equal(starts.length, 0);
+// Start buzzes the channel.
 await act(async () => button().click());
-await settle();
-await clickText("Start and buzz everyone");
-await settle();
-assert.equal(dialog(), null);
-assert.equal(starts.length, 1);
-await act(async () => button().click());
-await settle();
-await act(async () => document.activeElement!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-await settle();
-assert.equal(dialog(), null);
-assert.equal(starts.length, 1);
+gate.runHuddleStart(gate.pendingHuddleStart()!);
+assert.equal(gate.pendingHuddleStart(), null);
+assert.deepEqual(starts, [{ roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true }]);
+// A channel whose member count is not known yet cannot start.
 await render();
 assert.equal(button().disabled, true);
+// An occupied room is joined at once, no confirm.
 state.callOccupancy[roomKey] = [{ user_id: "other", user_name: "Other" }];
 await render(8);
 await act(async () => document.querySelector<HTMLButtonElement>("#root button")!.click());
 assert.deepEqual(joins, [roomKey]);
 assert.equal(starts.length, 1);
-assert.equal(dialog(), null);
+assert.equal(gate.pendingHuddleStart(), null);
+// An empty session room confirms, then joins.
 await render(undefined, "session:abc");
 await act(async () => button().click());
+gate.runHuddleStart(gate.pendingHuddleStart()!);
 assert.deepEqual(joins, [roomKey, "session:abc"]);
+unregister();
 await act(async () => root.unmount());
 dom.window.close();
 process.exitCode = 0;

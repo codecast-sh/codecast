@@ -44,7 +44,7 @@ export type SwitchLedger = {
   keep?: string;
   /** Why it cannot be done from here; the confirm button is disabled and says this. */
   blocked?: string;
-  /** A limit the person sets as part of the act ("A day": 5, 10, 20, No cap): the pressed option is `value`, and the
+  /** A limit the person sets as part of the act ("A day": 5, 10, 20, No limit): the pressed option is `value`, and the
    *  figures already read it. The site applies it with the confirm (SwitchReview onPick). */
   pick?: { k: string; options: ReadonlyArray<string>; value: string };
 };

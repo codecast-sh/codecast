@@ -62,6 +62,15 @@ const ALLOWED: ReadonlyArray<[string, string]> = [
   ["packages/web/lib/line/shippedLine.generated.ts", "size budget"],
   // A sample request a person might give the assistant: a trip's money.
   ["packages/web/components/simple/assistantPromise.ts", "rough budget"],
+  // The team's monthly model spend for the learning loop (LL10): billing, not a role's limit.
+  ["packages/web/components/settings/TeamModelBudget.tsx", "Model budget"],
+  ["packages/web/components/settings/TeamModelBudget.tsx", "Monthly cap"],
+  // A problem's severity for the people it reached: their trust, not a role's stage.
+  ["packages/web/components/tasks/impact.ts", "breaks trust"],
+  ["packages/web/components/tasks/ProblemSummary.tsx", "contact's trust"],
+  // A line's billed spend cap: the Line's run money, not a role's limit.
+  ["packages/web/components/line/workspace/stages/DispatchStage.tsx", "Billed, cap"],
+  ["packages/web/lib/line/trialStopLedgers.ts", "Billed cap"],
 ];
 // A command name (`cast cap`) is not the word.
 const COMMAND = /cast cap\b/g;

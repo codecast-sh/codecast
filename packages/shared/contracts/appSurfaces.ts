@@ -45,6 +45,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("questions", "agent questions waiting for an answer"),
   dash("line", "the line: findings, problems, runs, cards, watch and closed, as one flow"),
   dash("expectations", "every project's expectations: how its product should behave, with breaks per line"),
+  dash("trial", "trial runs of the line: each gate a card, answered as a rehearsal that ships nothing"),
   dash("line/settings", "one project's line: its finders, principles, check commands and limits, editable in its file"),
   dash("decisions/stacks", "decision stacks: open first with progress and due, done ones folded"),
   dash("threads", "thread list"),
