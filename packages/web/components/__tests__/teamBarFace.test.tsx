@@ -39,11 +39,13 @@ const ptt: PushToTalk = {
 };
 mock.module("../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
 
-let openedDms: string[][] = [];
 mock.module("../../hooks/useOpenDm", () => ({
-  useOpenDm: () => (ids: string[]) => openedDms.push(ids),
+  useOpenDm: () => () => {},
   useOpenChatPath: () => () => {},
 }));
+// The card's DM feeder is a server query: the card reads the store instead.
+const realChatSync = await import("../../hooks/useChatSync");
+mock.module("../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}) }));
 
 const nav = { pushed: [] as string[] };
 mock.module("next/navigation", () => ({
@@ -192,7 +194,6 @@ beforeEach(() => {
   floating.floating = false;
   floating.set = [];
   nav.pushed = [];
-  openedDms = [];
   closeCallStage();
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Me" },
@@ -334,7 +335,7 @@ describe("the header draws the model's row", () => {
 // ── the chrome around the row ───────────────────────────────────────────────
 
 describe("the one card under a face", () => {
-  test("opens after a dwell on a face: the person, what they are doing, the profile door and the three actions, and no second photo", async () => {
+  test("opens after a dwell on a face: the person, what they are doing, the profile door, the reply box and the call actions, and no second photo", async () => {
     const h = await mount();
     await h.fire(h.face(ANN), "mouseover");
     expect(h.q("[data-member-card]")).toBeNull();
@@ -348,8 +349,9 @@ describe("the one card under a face", () => {
     expect(card.textContent).toContain("Ann");
     // The face on the row is the picture; the card never repeats it.
     expect(card.querySelector("img")).toBeNull();
-    // Talk, a huddle, Message: the three things you can do, on the card.
-    expect(h.all("[data-member-card] .face-action-word").map((w) => w.textContent)).toEqual(["Talk", "Huddle", "Message"]);
+    // Talk and a huddle under the reply box: what you can do, on the card.
+    expect(h.all("[data-member-card] .face-action-word").map((w) => w.textContent)).toEqual(["Talk", "Huddle"]);
+    expect(card.querySelector(".fc-reply input")).not.toBeNull();
     // The profile door.
     await h.fire(card.querySelector("[data-door]")!, "click");
     expect(nav.pushed).toEqual(["/org/@ann"]);
@@ -373,11 +375,6 @@ describe("the one card under a face", () => {
       await Bun.sleep(260);
     });
     expect(h.q("[data-member-card]")).not.toBeNull();
-    // Message on the card opens the DM and the card goes.
-    const message = h.all("[data-member-card] .face-action").find((b) => b.textContent?.includes("Message"))!;
-    await h.fire(message, "click");
-    expect(openedDms).toEqual([[ANN]]);
-    expect(h.q("[data-member-card]")).toBeNull();
   });
 
   test("a hovered card lets go when the pointer leaves, and switches faces at once", async () => {
