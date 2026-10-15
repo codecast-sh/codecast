@@ -537,6 +537,7 @@ jobs:
           src/ccKeychain.callers.test.ts
           src/cloud/reach.test.ts
           src/daemon.process-terminal.e2e.test.ts
+          src/daemon.watchdog-supervision.test.ts
           src/desktopUpdate.test.ts
           src/disclaim.test.ts
           src/remote/device.async.test.ts

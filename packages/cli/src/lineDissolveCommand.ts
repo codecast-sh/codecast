@@ -19,7 +19,7 @@
 //                                that coaches them owns it
 //
 // The run's own repository answers whether a named commit or branch landed.
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";

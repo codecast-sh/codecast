@@ -17,6 +17,7 @@ import { isTrackedLineProfile, fenceTargetOf } from "./configFence";
 function checkout(): string {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "repo-line-")));
   fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   return root;
 }
 
