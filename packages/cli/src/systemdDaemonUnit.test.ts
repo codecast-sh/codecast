@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autostartDisabledByEnv, daemonUnitFor } from "./systemdDaemonUnit";
+import { autostartDisabledByEnv, daemonUnitFor, isTemplateInstance } from "./systemdDaemonUnit";
 import { ownDaemonPids, type ProcRow } from "./processTable";
 
 const unit = (user: string, exec = "/usr/local/bin/cast _daemon") => `[Service]\nUser=${user}\nExecStart=${exec}\nRestart=always\n`;
@@ -13,6 +13,11 @@ describe("daemonUnitFor — the system unit running THIS user's daemon", () => {
   test("the host's own unit for its user, a template instance for everyone else", () => {
     expect(daemonUnitFor(box, "ubuntu")).toBe("codecast-daemon.service");
     expect(daemonUnitFor(box, "jbtest2")).toBe("codecast-daemon-user@jbtest2.service");
+    expect(daemonUnitFor(box, "root")).toBeNull();
+  });
+  test("a template instance starts with enable --now; the host's own unit with start", () => {
+    expect(isTemplateInstance("codecast-daemon-user@jbtest2.service")).toBe(true);
+    expect(isTemplateInstance("codecast-daemon.service")).toBe(false);
   });
   test("another user's unit is never ours; no daemon unit means none", () => {
     expect(daemonUnitFor([box[0]!], "jbtest2")).toBeNull();

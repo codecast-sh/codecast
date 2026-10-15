@@ -148,7 +148,7 @@ import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { ownDaemonPids, snapshotProcessTable } from "./processTable.js";
-import { autostartDisabledByEnv, findSystemDaemonUnit } from "./systemdDaemonUnit.js";
+import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
@@ -1034,13 +1034,15 @@ function getLaunchdDaemonPid(): number | null {
  * per user from a template; findSystemDaemonUnit names the one for THIS user.
  * Start, stop and restart there go through the unit: a daemon started beside
  * it makes the unit's own copy exit as "already running" and leaves the unit
- * crash-looping (2026-09-30, 2026-10-15). Starting uses `restart`, which
- * starts an inactive unit and is the verb a shared box grants its users.
+ * crash-looping (2026-09-30, 2026-10-15). A template instance starts with
+ * `enable --now`, so it also comes back after a reboot, and that is the verb
+ * a shared box grants its users.
  */
 function systemdDaemon(action: "start" | "stop"): boolean {
   const unit = findSystemDaemonUnit();
   if (!unit) return false;
-  return spawnSync("sudo", ["-n", "systemctl", action === "start" ? "restart" : "stop", unit], { stdio: "ignore", timeout: 60_000 }).status === 0;
+  const verb = action === "stop" ? ["stop"] : isTemplateInstance(unit) ? ["enable", "--now"] : ["start"];
+  return spawnSync("sudo", ["-n", "systemctl", ...verb, unit], { stdio: "ignore", timeout: 60_000 }).status === 0;
 }
 
 function kickstartManagedDaemon(): boolean {
@@ -1059,6 +1061,8 @@ function ownsDaemonInstallation(): boolean {
 }
 
 function ensureDaemonRunning(): void {
+  // Whatever supervises the daemon also restarts it, version bounces included.
+  if (autostartDisabledByEnv()) return;
   const config = readConfig();
   if (!config?.auth_token) return;
   if (isDaemonRunning()) {
@@ -1091,7 +1095,6 @@ function ensureDaemonRunning(): void {
     } catch {}
     return;
   }
-  if (autostartDisabledByEnv()) return;
   try {
     startDaemonQuiet();
   } catch {}
@@ -9112,10 +9115,24 @@ function removeWslAutostart(): void {
   } catch {}
 }
 
+/** A user-level codecast.service from before a system unit took over would start a second daemon beside it. */
+function retireUserDaemonService(): void {
+  const servicePath = path.join(process.env.HOME || "", ".config", "systemd", "user", "codecast.service");
+  try {
+    if (!fs.readFileSync(servicePath, "utf-8").includes("ExecStart=")) return;
+    spawnSync("systemctl", ["--user", "disable", "codecast.service"], { stdio: "ignore", timeout: 15_000 });
+    fs.unlinkSync(servicePath);
+  } catch {}
+}
+
 function ensureAutostart(): boolean {
   const platform = process.platform;
   // Something else supervises the daemon: a second, user-level one would race it.
-  if (autostartDisabledByEnv() || findSystemDaemonUnit()) return false;
+  if (autostartDisabledByEnv()) return false;
+  if (findSystemDaemonUnit()) {
+    retireUserDaemonService();
+    return false;
+  }
   try {
     if (platform === "linux" && isWSL() && ensureWslAutostart()) {
       return true;

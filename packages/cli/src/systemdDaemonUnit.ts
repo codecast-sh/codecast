@@ -19,7 +19,7 @@ export function daemonUnitFor(units: { name: string; content: string }[], user: 
     if (!lines.some((l) => l.startsWith("ExecStart=") && /\s_daemon(\s|$)/.test(l))) continue;
     const owner = lines.find((l) => l.startsWith("User="))?.slice("User=".length).trim();
     if (owner === user) return name;
-    if ((owner === "%i" || owner === "%I") && name.endsWith("@.service")) template ??= `${name.slice(0, -"@.service".length)}@${user}.service`;
+    if ((owner === "%i" || owner === "%I") && name.endsWith("@.service") && user !== "root") template ??= `${name.slice(0, -"@.service".length)}@${user}.service`;
   }
   return template;
 }
@@ -32,6 +32,11 @@ export function findSystemDaemonUnit(user = os.userInfo().username, dir = "/etc/
     try { return [{ name, content: fs.readFileSync(path.join(dir, name), "utf-8") }]; } catch { return []; }
   });
   return daemonUnitFor(units, user);
+}
+
+/** `name@instance.service`: one person's copy of a shared box's template unit. */
+export function isTemplateInstance(unit: string): boolean {
+  return /@[^@/]+\.service$/.test(unit);
 }
 
 /** CODECAST_NO_AUTOSTART=1: something else (a system unit, a container entrypoint) runs the daemon. */
