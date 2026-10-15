@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useState, type RefObject } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { createPortal } from "react-dom";
 import { ArrowUpRight } from "lucide-react";
 import { peopleOf } from "@codecast/shared/team/memberKind";
@@ -88,7 +89,7 @@ function useAnchor(barRef: RefObject<HTMLElement | null>, id: string | null): An
 export function FaceChatLayer({ barRef }: { barRef: RefObject<HTMLElement | null> }) {
   const st = useFaceChat();
 
-  useEffect(
+  useWatchEffect(
     () =>
       registerFaceChatLayer({
         canShow: (id) => {
@@ -105,7 +106,7 @@ export function FaceChatLayer({ barRef }: { barRef: RefObject<HTMLElement | null
   // Pointing at the face that is talking means you want its card: the bubble
   // folds into the count rather than sit on top of the card.
   const bubbleAuthor = st.bubble?.phase === "in" ? st.bubble.authorId : null;
-  useEffect(() => {
+  useWatchEffect(() => {
     const bar = barRef.current;
     if (!bar || !bubbleAuthor) return;
     const onOver = (e: PointerEvent) => {
@@ -131,15 +132,16 @@ function Bubble({ bubble, barRef }: { bubble: FaceBubble; barRef: RefObject<HTML
 
   // Wait for the face (it may be sliding into the row), then show; a face
   // that never comes sends the lines out as toasts.
-  useEffect(() => {
+  const seated = !!anchor;
+  useWatchEffect(() => {
     if (bubble.phase !== "wait") return;
-    if (anchor) {
+    if (seated) {
       const t = setTimeout(() => faceBubbleShown(bubble.key), 24);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => faceBubbleFailed(bubble.key), SEAT_WAIT_MS);
     return () => clearTimeout(t);
-  }, [bubble.phase, bubble.key, !!anchor]);
+  }, [bubble.phase, bubble.key, seated]);
 
   if (!anchor) return null;
   const { left, top, notch } = placement(anchor, BUBBLE_W);

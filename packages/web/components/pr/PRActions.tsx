@@ -347,13 +347,13 @@ export function MergeMenu({ pr }: { pr: any }) {
   const setMethod = (next: MergeMethod) => useInboxStore.getState().updateClientUI({ pr_merge_method: next });
   const setDeleteBranch = (next: boolean) => useInboxStore.getState().updateClientUI({ pr_delete_branch: next });
   const [busy, setBusy] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
 
   if (prStateKey(pr) !== "open") return null;
   const state = mergeStateMeta(pr);
   const blocked = pr.mergeable === false || pr.mergeable_state === "blocked" || pr.mergeable_state === "dirty";
   const reason = blocked ? state?.label : pr.checks_state === "pending" ? "Checks are still running" : undefined;
 
-  const [reviewing, setReviewing] = useState(false);
   // A merge lands on the base branch and is undone only by a revert: every path to it opens the review first.
   const ask = () => setReviewing(true);
   const go = async () => {

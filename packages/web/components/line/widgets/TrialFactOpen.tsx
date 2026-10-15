@@ -4,7 +4,8 @@
 // did not run named, the problem's findings the change reaches and the ones it
 // misses, and the branch's diff read from a checkout that publishes the
 // repository. A figure the person is asked to ship on opens the thing it counts.
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
 import type { TrialCardRow } from "../../../hooks/useSyncTrial";
 import type { FactOpen } from "../../trial/TrialFactsStrip";
@@ -22,7 +23,7 @@ import "./trialFactOpen.css";
 export function TrialFactOpen({ card: c, open }: { card: TrialCardRow; open: FactOpen }) {
   // A figure low on screen opens below the fold: the press would read as doing nothing. Bring what it opened into view.
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.scrollIntoView({ block: "nearest" }); }, [open]);
+  useWatchEffect(() => { ref.current?.scrollIntoView({ block: "nearest" }); }, [open]);
   return (
     <div ref={ref} className="tfo" data-trial-fact-open={open}>
       {open === "proof" && <Proof card={c} />}

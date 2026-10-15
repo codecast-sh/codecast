@@ -370,7 +370,7 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect(first.releases[0]).toMatchObject({ class: "structure", changes: { routines_added: ["seo", "ads"] } });
     const social = (m: any) => { m.routines.push({ id: "social", title: "Social post", every: "1d", prompt: "org/social.md" }); };
     await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1", social), digest: D(2) })).rejects.toThrow("growth@2.0.1 is a structure release (routine social added), so it needs a minor version bump over 2.0.0; 2.0.1 is a patch bump. Publish it as 2.1.0 or later.");
-    await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", (m) => { m.role.caps.tokens_per_day = 1; }), digest: D(2) })).rejects.toThrow(/an authority release \(Daily token limit: 200,000 to 1\)/);
+    await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", (m) => { m.role.line = "growth"; }), digest: D(2) })).rejects.toThrow(/an authority release \(Line it runs: none to growth\)/);
     // A dry run answers the same and writes nothing.
     const dry = await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", social), digest: D(2), dry_run: true });
     expect(dry).toMatchObject({ dry_run: true, action: "released", class: "structure", previous: "2.0.0", changes: { routines_added: ["social"] } });

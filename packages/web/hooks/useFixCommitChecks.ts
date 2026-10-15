@@ -3,7 +3,8 @@
 // demand, not a synced table: the last answer per commit is kept for the tab so
 // a revisit paints at once, and it is read again every two minutes while
 // checks are still running. Null until the first answer, and when the read fails.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { CommitLive, FixBranch, FixCommitChecks } from "@codecast/convex/convex/lineFixChecks";
@@ -23,7 +24,7 @@ export function useFixCommitChecks(projectId: string | null, sha: string | null,
   const key = projectId && sha ? `${projectId}:${sha}:${failedRun ?? ""}` : null;
   const read = useAction(api.lineFixChecks.fixCommitChecks);
   const [result, setResult] = useState<FixCommitChecks | null>(() => (key ? last.get(key) ?? null : null));
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!key) return;
     setResult(last.get(key) ?? null);
     let live = true;
@@ -68,7 +69,7 @@ export function useCommitLive(projectId: string | null, sha: string | null): Com
   const key = projectId && sha && deploys.length ? `${projectId}:${sha}:${newest}` : null;
   const read = useAction(api.lineFixChecks.commitLive);
   const [result, setResult] = useState<CommitLive | null>(() => (key ? liveRead.get(key) ?? null : null));
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!key) return;
     setResult(liveRead.get(key) ?? null);
     let live = true;
@@ -94,7 +95,7 @@ export function useFixBranch(projectId: string | null, branch: string | null, ru
   const read = useRef(action);
   read.current = action;
   const [result, setResult] = useState<FixBranch | null>(() => (key ? branchRead.get(key) ?? null : null));
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!key) return;
     setResult(branchRead.get(key) ?? null);
     let live = true;

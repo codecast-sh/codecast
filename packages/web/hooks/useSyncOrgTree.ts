@@ -3,8 +3,9 @@
 // replaces it as the server recomputes. Scoped by the active team pointer
 // (clientState.ui.active_team_id; absent = the personal workspace), or by the
 // org scope while a surface with a workspace of its own is open (useOrgScope).
-import { useEffect } from "react";
+
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useWatchEffect } from "./useWatchEffect";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import type { OrgTree } from "../components/org/orgTypes";
@@ -67,7 +68,7 @@ export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?
  *  feeders follow it and a push for another workspace is refused (orgSlice orgTreeFor). Null: the app's
  *  active workspace. For a surface that reads a workspace of its own (WorkspaceScopeProvider). */
 export function useOrgScope(key: string | null): void {
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!key) return;
     useInboxStore.setState({ orgScope: key });
     return () => { if (useInboxStore.getState().orgScope === key) useInboxStore.setState({ orgScope: null }); };

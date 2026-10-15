@@ -5,7 +5,8 @@
 // (decisionDiscussion.ts) and its reply lands here, under the question, so
 // nobody has to find the session to have the conversation. The same block
 // sits on the decision page, the queue card and the change card.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import Link from "next/link";
 import { ArrowUpRight, MessageSquare } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -36,7 +37,7 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
   // The box takes focus when a person opens it, never because it was drawn open: a page that always shows it (a line
   // decision's chat column) keeps its own keys on arrival.
   const wasOpen = useRef(open);
-  useEffect(() => { if (open && !wasOpen.current) box.current?.focus(); wasOpen.current = open; }, [open]);
+  useWatchEffect(() => { if (open && !wasOpen.current) box.current?.focus(); wasOpen.current = open; }, [open]);
 
   const ownerName = (owner?.via === "asker" && askerName) || owner?.name || "the session that owns it";
   const send = () => {

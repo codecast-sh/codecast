@@ -57,6 +57,7 @@ function fakeCtx(seed: Record<string, any[]> = {}) {
             );
             return {
               collect: async () => rows,
+              take: async (n: number) => rows.slice(0, n),
               first: async () => rows[0] ?? null,
               unique: async () => {
                 if (rows.length > 1) throw new Error("not unique");
