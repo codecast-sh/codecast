@@ -1232,6 +1232,7 @@ export const listDevices = query({
         // A cloud host's readiness and its laptop's report: each changes only when its content does.
         host_readiness: d.host_readiness ?? undefined,
         cloud_host: d.cloud_host ?? undefined,
+        cloud_autoscale: d.cloud_autoscale ?? undefined,
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,
         loop_freeze_ms: d.loop_freeze_ms ?? undefined,

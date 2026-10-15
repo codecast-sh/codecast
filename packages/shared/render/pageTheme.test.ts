@@ -33,9 +33,9 @@ describe("injectPageTheme", () => {
     }
   });
 
-  test("never measures a frame that is not laid out yet", () => {
+  test("never measures a frame that is not laid out yet, and carries the declared height", () => {
     const script = /<script>([\s\S]*?)<\/script>/.exec(injectPageTheme("<head></head>"))![1]!;
-    const posted: number[] = [];
+    const posted: { height: number; preferred: number | null }[] = [];
     const listeners: Record<string, () => void> = {};
     const size = { w: 0, h: 0, content: 0 };
     const win = {
@@ -44,7 +44,7 @@ describe("injectPageTheme", () => {
       scrollY: 0,
       self: 1, top: 2,
       location: { search: "" },
-      parent: { postMessage: (m: { height: number }) => posted.push(m.height) },
+      parent: { postMessage: (m: { height: number; preferred: number | null }) => posted.push({ height: m.height, preferred: m.preferred }) },
       addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; },
     };
     const body = { getBoundingClientRect: () => ({ bottom: size.content }) };
@@ -52,8 +52,10 @@ describe("injectPageTheme", () => {
       body,
       documentElement: { setAttribute() {}, get scrollHeight() { return Math.max(size.content, size.h); } },
       getElementById: () => ({ textContent: "" }),
+      querySelector: (sel: string) => (sel === 'meta[name="codecast:height"]' && meta.content ? { getAttribute: () => meta.content } : null),
       addEventListener() {},
     };
+    const meta = { content: "" };
     class RO { observe() {} constructor(_fn: () => void) {} }
     new Function("window", "document", "innerWidth", "innerHeight", "ResizeObserver", "getComputedStyle", "location",
       `with (window) { ${script} }`)(win, doc, 0, 0, RO, () => ({ marginBottom: "0" }), win.location);
@@ -64,6 +66,11 @@ describe("injectPageTheme", () => {
     // Laid out: the real height arrives with the resize.
     Object.assign(size, { w: 1000, h: 600, content: 4000 });
     listeners.resize!();
-    expect(posted).toEqual([4000]);
+    expect(posted).toEqual([{ height: 4000, preferred: null }]);
+    // A page that declares the height it opens at sends it with the next report.
+    meta.content = "640";
+    size.content = 4100;
+    listeners.resize!();
+    expect(posted.at(-1)).toEqual({ height: 4100, preferred: 640 });
   });
 });

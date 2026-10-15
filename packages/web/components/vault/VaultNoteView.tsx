@@ -16,6 +16,7 @@ import { useVaultStore } from "../../store/vaultStore";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { headingSlugs } from "../../lib/vault/parseNote";
 import { VaultProperties } from "./VaultProperties";
+import { useVaultEntryState } from "./useVaultEntry";
 import type { VaultViewMode } from "../../lib/vault/viewMode";
 
 // Compat re-export: several vault modules import this from here.
@@ -53,8 +54,7 @@ export const VaultNoteView = memo(function VaultNoteView({
   const body = useVaultStore((s) => s.bodies[path]);
   const isRemote = useVaultStore((s) => s.isRemote);
   const loading = useVaultStore((s) => !!s.loadingPaths[path]);
-  const exists = useVaultStore((s) => !!s.files[path]);
-  const ignored = useVaultStore((s) => !!s.files[path]?.ignored);
+  const entryState = useVaultEntryState(path);
   const endpoint = useVaultStore((s) => s.endpoint);
 
   const title = noteDisplayName(path.slice(path.lastIndexOf("/") + 1));
@@ -70,12 +70,13 @@ export const VaultNoteView = memo(function VaultNoteView({
     if (isRemote && !body) void useVaultStore.getState().loadRemoteBody(path);
   }, [isRemote, path, !!body]);
 
-  // An ignored note (a generated .md, a worktree's copy of the docs) is
-  // deliberately left out of the scan's prefetch so it never reaches the index;
-  // opening it is the one moment it is wanted, so it is fetched like code is.
+  // Bodies normally arrive with the scan, but some never do: an ignored note
+  // (a generated .md, a worktree's copy of the docs) is left out of the
+  // prefetch so it never reaches the index, and a note the scan missed (newer
+  // than a cached list) only joined it when opened. Fetch it like code is.
   useWatchEffect(() => {
-    if (ignored && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
-  }, [ignored, path, !!body, endpoint]);
+    if (!isRemote && entryState === "present" && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
+  }, [isRemote, entryState, path, !!body, endpoint]);
 
   // Re-render (and re-resolve every wiki link) whenever the index changes — a
   // new note can turn a dangling link live without this note re-parsing.
@@ -129,7 +130,7 @@ export const VaultNoteView = memo(function VaultNoteView({
     return () => cancelAnimationFrame(raf);
   }, [targetLine, path, !!body]);
 
-  if (!exists && !body) {
+  if (entryState === "missing" && !body) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-muted">
         <FileText className="w-8 h-8 opacity-30" />
@@ -196,7 +197,7 @@ export const VaultNoteView = memo(function VaultNoteView({
                   <VaultMarkdown content={markdown} />
                 </FoldScopeContext.Provider>
               </div>
-            ) : loading ? (
+            ) : loading || entryState === "asking" ? (
               <div className="text-sm text-sol-text-dim py-8">Loading note…</div>
             ) : (
               <div className="text-sm text-sol-text-dim py-8">
