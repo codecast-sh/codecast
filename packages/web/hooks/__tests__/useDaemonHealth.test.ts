@@ -10,6 +10,7 @@ import {
   OVERLOADED_FREEZE_MS,
   isDegradedDaemonHealth,
   blocksDelivery,
+  holdsUndeliveredMessage,
   sigCell,
   deviceHealthInput,
   OVERLOADED_HOUR_MS,
@@ -409,6 +410,16 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(blocksDelivery({ kind: "quiet", quietMs: 1 })).toBe(true);
     expect(blocksDelivery({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
     expect(blocksDelivery({ kind: "ok" })).toBe(false);
+  });
+
+  // Cam, 2026-10-15: one transcript stuck uploading for 87 min was reported as
+  // the reason a message never reached a session the daemon had refused to start.
+  it("an upload backlog never explains a message the daemon has not delivered", () => {
+    const backlog = { pending: 1, messages: 0, conversations: 1 };
+    expect(holdsUndeliveredMessage({ kind: "sync_stalled", ...backlog, stalledMs: 5_236_450 })).toBe(false);
+    expect(holdsUndeliveredMessage({ kind: "syncing", ...backlog, behindMs: 600_000, noProgressMs: 1_000 })).toBe(false);
+    expect(holdsUndeliveredMessage({ kind: "quiet", quietMs: 1 })).toBe(true);
+    expect(holdsUndeliveredMessage({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
   });
 });
 
