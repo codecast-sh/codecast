@@ -95,6 +95,22 @@ export const EC2_HOURLY_USD: Record<string, number> = {
   "r8g.8xlarge": 1.88512,
 };
 
+/**
+ * Report a host as soon as provisioning learns its device: the server prepares
+ * (rather than plainly starts) launches only on a host some laptop reports on,
+ * and the daemon's own pass may be 15 minutes away. Best effort; that pass
+ * reports it anyway.
+ */
+async function reportHostNow(id: string): Promise<void> {
+  const h = readHosts().find((entry) => entry.id === id);
+  if (!h?.deviceId) return;
+  try {
+    const { buildCloudHostReport } = await import("../cloud/hostReports.js");
+    const { client, api, token } = await (await import("../remote/cli.js")).convexClient();
+    await client.mutation(api.cloud.reportCloudHost, { api_token: token, host_device_id: h.deviceId, report: buildCloudHostReport(h, deviceId()) });
+  } catch { /* the daemon's next report covers it */ }
+}
+
 /** The provision summary's auto-stop line: what the host costs while it sits idle. */
 export function idleStopLine(idleMinutes: number): string {
   return idleMinutes > 0
@@ -1014,6 +1030,7 @@ export function buildHostsCommand(parent: Command): Command {
           patchHost(up.id, { deviceId: report.deviceId, platform: "darwin", idleStopMinutes: 0 });
           console.log(`${OK} Mac ready: ${report.version}, device ${report.deviceId}`);
           await settleMacDesktop(up, remote, report);
+          await reportHostNow(up.id);
           console.log(fmt.muted("  Mac auto-stop is disabled. AWS dedicated host charges continue until the host is released."));
           return;
         }
@@ -1026,6 +1043,7 @@ export function buildHostsCommand(parent: Command): Command {
           idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity,
           onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION }); },
         }, (m) => console.log(fmt.muted(`  ${m}`)));
+        await reportHostNow(up.id);
         console.log(`${OK} ${h.id} is a full remote service`);
         console.log(`  chrome:   ${report.chrome.trim()}`);
         console.log(`  cast:     ${report.cast.trim()}`);
