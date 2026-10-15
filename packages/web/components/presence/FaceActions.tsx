@@ -10,6 +10,7 @@
 // No icon stands alone: a button here is a word, and an icon beside it.
 import { Headphones, MessageSquare, Mic, Square } from "lucide-react";
 import { requestHuddleStart } from "../../lib/calls/huddleStart";
+import { Button } from "../ui/button";
 import { talkToggleProps, walkieJoinReason, type PushToTalk } from "../../hooks/useWalkie";
 import "./faceActions.css";
 
@@ -46,11 +47,14 @@ export function FaceActions({
 }) {
   const talking = ptt.holding;
   const ringBlocked = walkieJoinReason(roomKey);
+  const btnSize = size === "sm" ? "xs" : "sm";
   return (
     <span className={`face-actions face-actions-${size} ${className}`} role="group" aria-label="Talk, ring or message">
       {show.includes("talk") && (
-        <button
+        <Button
           type="button"
+          variant={talking ? "red" : "secondary"}
+          size={btnSize}
           className={`face-action face-action-talk${talking ? " face-action-talk-on" : ""}`}
           disabled={!!blocked && !talking}
           data-walkie-state={ptt.dropped ? "dropped" : ptt.capturing ? "live" : talking ? "opening" : "idle"}
@@ -65,11 +69,13 @@ export function FaceActions({
         >
           {talking ? <Square className="face-action-icon" /> : <Mic className="face-action-icon" />}
           <span className="face-action-word">{talking ? "Stop" : "Talk"}</span>
-        </button>
+        </Button>
       )}
       {show.includes("ring") && (
-        <button
+        <Button
           type="button"
+          variant="violet"
+          size={btnSize}
           className="face-action face-action-ring"
           disabled={huddle ? huddle.waiting : !!ringBlocked || ringIds.length === 0}
           title={huddle ? huddle.title : (ringBlocked ?? "Ring them and start a huddle, a real call both ways")}
@@ -82,11 +88,13 @@ export function FaceActions({
         >
           <Headphones className="face-action-icon" />
           <span className="face-action-word">{huddle ? huddle.label : "Ring"}</span>
-        </button>
+        </Button>
       )}
       {show.includes("message") && onMessage && (
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size={btnSize}
           className="face-action face-action-message"
           title="Open the conversation"
           onClick={(e) => {
@@ -97,7 +105,7 @@ export function FaceActions({
         >
           <MessageSquare className="face-action-icon" />
           <span className="face-action-word">Message</span>
-        </button>
+        </Button>
       )}
       {/* The reason Talk cannot start, said in words under the buttons. */}
       {blocked && !talking && show.includes("talk") && <span className="face-actions-reason">{blocked}</span>}

@@ -6,7 +6,7 @@
 // imported, so the markdown pipeline (which the store's own graph reaches) can
 // call this without a cycle.
 
-import { OBJECT_REF_SCAN_SOURCE, OBJECT_SHORT_ID_RE, type ModObjectKind } from "@codecast/shared/contracts/mods";
+import { EXTERNAL_OBJECT_ID_RE, OBJECT_REF_SCAN_SOURCE, OBJECT_SHORT_ID_RE, type ModObjectKind } from "@codecast/shared/contracts/mods";
 import { activeWorkspaceKeyOf } from "../workspaceScope";
 
 type KindEntry = ModObjectKind & { mod: string; modTitle?: string };
@@ -37,10 +37,17 @@ export function objectKind(prefix: string | undefined): KindEntry | undefined {
   return prefix ? objectKinds().get(prefix) : undefined;
 }
 
-/** True when `text` is `<prefix>-<n>` for a declared kind. */
+/** The kind an external id (`contact-3f9a21bc`) names and the other system's id inside it, when its prefix is an external kind. */
+export function externalObjectRef(text: string): { kind: KindEntry; id: string } | undefined {
+  const m = EXTERNAL_OBJECT_ID_RE.exec((text || "").toLowerCase());
+  const kind = m ? objectKinds().get(m[1]) : undefined;
+  return kind?.external ? { kind, id: m![2] } : undefined;
+}
+
+/** True when `text` is `<prefix>-<n>` for a declared kind, or an external id for an external kind. */
 export function isObjectRef(text: string): boolean {
   const m = OBJECT_SHORT_ID_RE.exec((text || "").toLowerCase());
-  return !!m && objectKinds().has(m[1]);
+  return (!!m && objectKinds().has(m[1])) || !!externalObjectRef(text);
 }
 
 export function objectRefScanRegex(): RegExp {

@@ -145,3 +145,22 @@ export function useWorkspaceCollection<T = any>(
     [memberSig, key, fieldSig ? coll : null],
   );
 }
+
+/**
+ * The rows of `table` in any of `keys`, for a surface that lists across the
+ * workspaces the viewer reads at once (the line's For you). Each key keeps the
+ * one boundary rule; an empty list reads nothing.
+ */
+export function useWorkspacesCollection<T = any>(
+  table: WorkspaceScopedTable,
+  sig: ((row: T) => string) | null | undefined,
+  keys: readonly (WorkspaceKey | null)[],
+): T[] {
+  const fieldSig = sig === null ? null : (sig ?? (defaultFieldSig as (row: T) => string));
+  const list = useMemo(() => [...new Set(keys.filter((k): k is WorkspaceKey => !!k))].sort(), [keys.join("\n")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const s = useTrackedStore([(st) => list.map((k) => membershipSig((st as any)[table], k, fieldSig, table)).join("\u0001")]);
+  const coll = (s as any)[table] as Record<string, T>;
+  const memberSig = list.map((k) => membershipSig(coll, k, fieldSig, table)).join("\u0001");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- memberSig stands in for the churny collection ref
+  return useMemo(() => list.flatMap((k) => workspaceRows(table, coll, k)), [memberSig, list, fieldSig ? coll : null]);
+}

@@ -3,12 +3,13 @@
 // asks a mod to draw one surface and redraws it when the mod says so or when
 // the data it read changes.
 
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { ModNode, ModSurface } from "@codecast/shared/contracts/mods";
+import type { ModNode, ModSurface, ResolvedObject } from "@codecast/shared/contracts/mods";
 import { useInboxStore, isConvexId } from "../../store/inboxStore";
 import { useSyncCollection } from "../../hooks/useSyncCollection";
 import { modHost, type ModRow, type ModRuntime } from "./host";
+import { externalObjectRef, objectByShortId } from "./objects";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const api = _api as any;
@@ -42,7 +43,7 @@ export function useModRuntime(name: string | undefined): ModRuntime | undefined 
   return name ? modHost.byName(name) : undefined;
 }
 
-export type SurfaceState = { tree: ModNode | undefined; error: string | null; loading: boolean; pass: boolean; status: ModRuntime["status"] | "missing"; retry?: () => void };
+export type SurfaceState = { tree: ModNode | undefined; value?: unknown; error: string | null; loading: boolean; pass: boolean; status: ModRuntime["status"] | "missing"; retry?: () => void };
 
 /**
  * One drawn surface of a mod. `instance` keeps two mounts of the same surface
@@ -74,6 +75,7 @@ export function useModSurface(runtime: ModRuntime | undefined, surface: ModSurfa
         if (!alive || mine !== seq.current) return;
         setState((s) => ({
           tree: res.error ? s.tree : res.tree,
+          value: res.error ? s.value : res.value,
           error: res.error ?? null,
           loading: false,
           pass: !!res.pass,
@@ -97,4 +99,27 @@ export function useModSurface(runtime: ModRuntime | undefined, surface: ModSurfa
   useWatchEffect(() => () => runtime?.release(key), [runtime, key]);
 
   return { ...state, retry: runtime ? () => runtime.invalidate(key) : undefined };
+}
+
+/** What an object id names: `external` when the row is live from another system (read-only, nothing stored). */
+export type ObjectRow = { short_id: string; title: string; status?: string; fields?: Record<string, any>; body?: string; external?: boolean; [k: string]: any };
+
+/**
+ * The row an object id names. A stored id (`bug-14`) reads the store; an
+ * external id (`contact-3f9a21bc`) asks the declaring mod's `object.resolve`
+ * hook, which redraws like any surface when the data it read changes.
+ * `loading` holds while that answer is on its way.
+ */
+export function useObjectRow(shortId: string): { row: ObjectRow | undefined; loading: boolean; error: string | null } {
+  useModHostVersion();
+  const id = shortId.toLowerCase();
+  const stored = useInboxStore((s) => objectByShortId((s as any).modObjects, id));
+  const ext = externalObjectRef(id);
+  const runtime = ext ? modHost.byName(ext.kind.mod) : undefined;
+  const surface = useMemo<ModSurface | null>(() => (ext ? { kind: "resolve", id: ext.kind.prefix, props: { id: ext.id } } : null), [ext?.kind.prefix, ext?.id]);
+  const res = useModSurface(runtime, surface, `${id}:${useId()}`);
+  if (!ext) return { row: stored, loading: false, error: null };
+  const v = res.value as ResolvedObject | null | undefined;
+  const row = v?.title ? { ...v, short_id: id, external: true } : undefined;
+  return { row, loading: !!runtime && res.loading && !row, error: res.error };
 }
