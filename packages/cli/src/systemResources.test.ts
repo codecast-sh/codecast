@@ -45,7 +45,12 @@ describe("machine resource attribution", () => {
     const vm = "page size of 16384 bytes\nPages free: 1.\nPages inactive: 2.\nPages speculative: 3.\nPages occupied by compressor: 4.";
     expect(parseMacMemory(vm, "used = 1.50G", "kern.memorystatus_vm_pressure_level: 1", 1e9)).toEqual({ memoryAvailable: 98304, compressedBytes: 65536, swapUsedBytes: 1.5 * 1024 ** 3, pressure: "normal" });
     expect(parseMacMemory("", "", "", 1e9)).toEqual({ pressure: "unknown" });
-    expect(parseLinuxMemory("MemAvailable: 200 kB\nSwapTotal: 100 kB\nSwapFree: 40 kB")).toEqual({ memoryAvailable: 204800, swapUsedBytes: 61440 });
+    expect(parseLinuxMemory("MemAvailable: 200 kB\nSwapTotal: 100 kB\nSwapFree: 40 kB")).toEqual({ memoryAvailable: 204800, swapUsedBytes: 61440, pressure: "unknown" });
+    const psi = (full: number, some = full) => `some avg10=0 avg60=${some} avg300=0 total=1\nfull avg10=0 avg60=${full} avg300=0 total=1`;
+    expect(parseLinuxMemory("MemAvailable: 200 kB", psi(0.3)).pressure).toBe("normal");
+    expect(parseLinuxMemory("MemAvailable: 200 kB", psi(3)).pressure).toBe("elevated");
+    expect(parseLinuxMemory("MemAvailable: 200 kB", psi(1, 12)).pressure).toBe("elevated");
+    expect(parseLinuxMemory("MemAvailable: 200 kB", psi(11.5)).pressure).toBe("critical");
   });
 });
 

@@ -93,6 +93,8 @@ export type Device = {
   /** A cloud host's own readiness (its heartbeat) and its managing laptop's report (Settings > Machines). */
   host_readiness?: import("@codecast/shared/contracts").HostReadiness;
   cloud_host?: import("@codecast/shared/contracts").CloudHostReport;
+  /** Autoscale with this host as the template (devices.cloud_autoscale). */
+  cloud_autoscale?: import("@codecast/shared/contracts").CloudAutoscale;
   /** What keeps this machine from reading a cloud agent provider (its heartbeat): it is not connected to that one. */
   cloud_agent_blocks?: import("@codecast/shared/contracts").CloudAgentSetupBlock[];
   online: boolean;

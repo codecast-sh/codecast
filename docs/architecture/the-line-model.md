@@ -110,7 +110,12 @@ an invented line from riding in on an unrelated real quote, and they cannot
 tell a faithful line from one that reuses the quote's words to say something
 else, so every version records how it applied (`how: "auto"` or `"person"`)
 and a person can retire any line of it. Any other change waits for the project's
-person, as a card in their queue whose Apply lands it. `cast expectations show|propose|apply|drop`
+person, and the session that proposed it asks them itself: one decision
+(`cast decide --proposal xp-N`) written under the presenting brief, with the
+cases the change settles judged under both wordings (`cast line judges try
+--proposal`). An answer opening with Apply lands it, one opening with Keep
+closes it, and any other course leaves it open for that session
+(`lib/expectationsApply`). `cast expectations show|propose|apply|drop`
 is the CLI; `/cli/expectations/brief` is what a judge reads (the active lines
 with ids under the version to cite). The line template's
 `expectations-daily` routine is the proposer; its cursor is the newest window
