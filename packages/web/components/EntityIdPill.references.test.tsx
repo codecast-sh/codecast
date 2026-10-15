@@ -150,7 +150,6 @@ function fakeQuery(fn: unknown, args: any) {
     return undefined;
   }
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
-  if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
   if (name === "replays:webGetReplay") return args?.ref === "rp-7" ? FAKE_REPLAY : null;
   if (name === "ingest:webGetSource") return [FAKE_SOURCE].find((r) => r.short_id === args?.ref || r._id === args?.ref) ?? null;
   const rows = ROWS[name];
@@ -200,7 +199,15 @@ const SEEDED_TASK = {
 // `bun test` run. The pill reads via getState(), so a real seeded row behaves
 // identically.
 const { useInboxStore } = await import("../store/inboxStore");
-useInboxStore.setState({ tasks: { [SEEDED_TASK._id]: SEEDED_TASK }, pullRequests: { [FAKE_PR._id]: FAKE_PR } } as any);
+useInboxStore.setState({
+  tasks: { [SEEDED_TASK._id]: SEEDED_TASK },
+  pullRequests: { [FAKE_PR._id]: FAKE_PR },
+  // Embeds paint from the page info the store keeps (artifacts.embedInfo), one row per slug.
+  pageEmbeds: {
+    [PAGE_SLUG]: { _id: PAGE_SLUG, ...FAKE_PAGE },
+    Gone12345678: { _id: "Gone12345678", slug: "Gone12345678", missing: true },
+  },
+} as any);
 
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { MemoryRouter } = await import("react-router");

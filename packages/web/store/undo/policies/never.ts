@@ -238,6 +238,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   // Machine and agent control
   convCommand: MACHINE,
   cloudHostAction: MACHINE,
+  setCloudAutoscale: SETTINGS,
   restartSession: MACHINE,
   hibernateSession: MACHINE,
   moveSessionToDevice: MACHINE,
