@@ -14,7 +14,7 @@ const n = (node_id: string, i: number, status = "completed", extra: Record<strin
 // ct-56750's shipped run, as the store holds it (node outcomes and all).
 const shippedRun: ReportRun = {
   _id: "run1", status: "completed", task_id: "t1", current_node_id: "exit", graph_hash: "862f27511a65a9de",
-  gate_node_id: "decide", gate_response: "S", gate_decision_short_id: "sd-389", gate_decision_status: "answered", gate_answer: "Ship", card_cost_usd: 1.25,
+  gate_node_id: "decide", gate_response: "S", gate_decision_short_id: "sd-389", gate_decision_status: "answered", gate_answer: "Ship", card_billed_usd: 1.25,
   gate_choices: [{ key: "S", label: "[S] Ship", target: "ship" }, { key: "R", label: "[R] Revise", target: "reopen" }, { key: "D", label: "[D] Drop", target: "drop" }],
   node_statuses: [
     n("start", 0), n("ground", 1, "completed", { session_id: "jx71x8m" }), n("analyze", 2), n("prove", 3), n("red", 4), n("implement", 5, "completed", { session_id: "jx75mhs" }),
@@ -27,8 +27,8 @@ const shippedRun: ReportRun = {
 describe("phases", () => {
   test("every station of the shipped line sits in exactly one phase", () => {
     const stations = SHIPPED_LINE.nodes.map((x) => x.id).filter((id) => id !== "start" && id !== "exit");
-    // merge stays placed for runs from before the line dropped it.
-    const placed = LINE_PHASES.flatMap((p) => p.stations).filter((id) => id !== "merge");
+    // merge and the two early gates stay placed for runs from before the line dropped them.
+    const placed = LINE_PHASES.flatMap((p) => p.stations).filter((id) => !["merge", "plan_gate", "ask"].includes(id));
     expect(new Set(placed).size).toBe(placed.length);
     expect([...stations].sort()).toEqual([...placed].sort());
   });
@@ -41,8 +41,8 @@ describe("runPath", () => {
   test("groups the stations it reached by phase and folds the rest", () => {
     expect(path.map((p) => p.key)).toEqual(["understand", "prove", "build", "check", "decide", "ship"]);
     expect(phase("understand").steps.map((s) => s.id)).toEqual(["ground", "analyze"]);
-    expect(phase("understand").folded.map((s) => s.id).sort()).toEqual(["park", "plan", "plan_gate"]);
-    expect(phase("prove").folded.map((s) => s.id)).toEqual(["prove_line", "dissolve"]);
+    expect(phase("understand").folded.map((s) => s.id).sort()).toEqual(["park", "plan"]);
+    expect(phase("prove").folded.map((s) => s.id)).toEqual(["prove_line", "dissolve", "unproven"]);
   });
 
   test("a gate reads as its answer, never a raw key, and is not a failure", () => {
@@ -169,14 +169,14 @@ describe("runOutcome", () => {
 
 describe("lineVersions", () => {
   test("one row per graph: runs, shipped, revised, dropped, reopened after ship, cost", () => {
-    const revised: ReportRun = { ...shippedRun, _id: "r3", task_id: "t3", node_statuses: [...shippedRun.node_statuses!, n("reopen", 13)], card_cost_usd: 0.75, created_at: T0 + 5 };
-    const dropped: ReportRun = { ...shippedRun, _id: "r4", task_id: "t4", graph_hash: "aaaa", card_cost_usd: undefined, node_statuses: [n("ground", 1), n("decide", 2), n("drop", 3)], created_at: T0 - 5 };
+    const revised: ReportRun = { ...shippedRun, _id: "r3", task_id: "t3", node_statuses: [...shippedRun.node_statuses!, n("reopen", 13)], card_billed_usd: 0.75, created_at: T0 + 5 };
+    const dropped: ReportRun = { ...shippedRun, _id: "r4", task_id: "t4", graph_hash: "aaaa", card_billed_usd: undefined, node_statuses: [n("ground", 1), n("decide", 2), n("drop", 3)], created_at: T0 - 5 };
     const notLine: ReportRun = { _id: "r5", status: "completed", node_statuses: [n("implement", 1)], created_at: T0, updated_at: T0 };
     const reopened = (task: string) => (task === "t1" ? [T0 + 99_000] : []);
     const rows = lineVersions([shippedRun, revised, dropped, notLine], reopened);
     expect(rows).toEqual([
-      { hash: "862f27511a65a9de", first: T0, last: T0 + 5, runs: 2, shipped: 2, revised: 1, dropped: 0, stopped: 0, reopened: 1, costUsd: 2, live: 0, nodes: null, change: "Edited; which stations was not recorded yet" },
-      { hash: "aaaa", first: T0 - 5, last: T0 - 5, runs: 1, shipped: 0, revised: 0, dropped: 1, stopped: 0, reopened: 0, costUsd: null, live: 0, nodes: null, change: "First recorded version" },
+      { hash: "862f27511a65a9de", first: T0, last: T0 + 5, runs: 2, shipped: 2, revised: 1, dropped: 0, stopped: 0, reopened: 1, billedUsd: 2, listUsd: 0, live: 0, nodes: null, change: "Edited; which stations was not recorded yet" },
+      { hash: "aaaa", first: T0 - 5, last: T0 - 5, runs: 1, shipped: 0, revised: 0, dropped: 1, stopped: 0, reopened: 0, billedUsd: null, listUsd: null, live: 0, nodes: null, change: "First recorded version" },
     ]);
   });
 
