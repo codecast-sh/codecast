@@ -1,0 +1,42 @@
+/* Open proposals to a project's expectations (ExpectationsDocument Proposals):
+   one row each, its decision's question in full, the fact that sizes it,
+   who it waits on, and the rule's change folded under it. */
+.xq { display: flex; flex-direction: column; gap: 8px; container-type: inline-size; }
+.xq-head { margin: 0; display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; color: var(--sol-text); }
+.xq-head-n { color: var(--sol-yellow); font-size: 15px; }
+.xq-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); }
+
+.xq-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  padding: 10px 0 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+.xq-open { grid-column: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; color: inherit; text-decoration: none; border-radius: 4px; }
+.xq-open:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 3px; }
+.xq-q { font-size: 13.5px; line-height: 1.35; color: var(--sol-text); text-wrap: pretty; }
+.xq-open:hover .xq-q { color: var(--sol-blue); }
+.xq-apply { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 1.35; color: var(--sol-text-muted); }
+
+.xq-side { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding-top: 1px; }
+.xq-state { font-size: 11.5px; white-space: nowrap; color: var(--sol-text-dim); }
+.xq-state[data-you] { color: var(--sol-yellow); font-weight: 600; }
+.xq-age { font-size: 11px; color: var(--sol-text-dim); }
+
+.xq-diff { grid-column: 1 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px 1px 0; font-size: 11.5px; color: var(--sol-text-dim); background: none; border: 0; cursor: pointer; }
+.xq-diff:hover { color: var(--sol-text-muted); }
+.xq-chev { width: 12px; height: 12px; transition: transform 140ms ease-out; }
+.xq-diff[aria-expanded="true"] .xq-chev { transform: rotate(90deg); }
+.xq-changes { grid-column: 1 / -1; list-style: none; margin: 2px 0 2px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; border-radius: 6px; background: color-mix(in srgb, var(--sol-bg-alt) 70%, transparent); }
+.xq-refused { grid-column: 1 / -1; font-size: 11.5px; color: var(--sol-orange); }
+
+@container (max-width: 520px) {
+  .xq-row { grid-template-columns: minmax(0, 1fr); }
+  .xq-side { grid-column: 1; grid-row: auto; flex-direction: row; align-items: baseline; gap: 8px; }
+}
+.xq-act { grid-column: 1 / -1; }
+.xq-unasked { display: flex; flex-direction: column; gap: 8px; }
+.xq-answer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.xq-then { font-size: 11px; color: var(--sol-text-dim); }

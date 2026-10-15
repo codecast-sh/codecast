@@ -17,7 +17,7 @@ import { stoppedNeedingYes } from "../../../../../lib/line/lineNeeds";
 import { stepLabel } from "../../../../../lib/line/runReport";
 import { bucketAt, buildOverview, DEFAULT_RANGE, finderShifts, isOverviewRange, overviewWindow, problemFigures } from "../../../../../lib/line/problemsOverview";
 import { isStatusKey, type ProblemFacts, type ProblemNeed } from "../../../../../lib/line/problemStatus";
-import { fixMergesSig, landingOutput, newestRuns, type FixPullRequest } from "../../../../../lib/line/problemPage";
+import { landingOutput, newestRuns } from "../../../../../lib/line/problemPage";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { goalOfRefs, inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
 import {
@@ -67,10 +67,7 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
   const projectNames = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title])), [workspace.projects]);
   const projectName = useMemo(() => (id: string | null) => (id ? projectNames.get(id) ?? "" : ""), [projectNames]);
 
-  // Fixes merged by hand through their pull request (fixMerges): the band reads them as merged, as the page does.
-  const mergesSig = useInboxStore((st) => fixMergesSig((st as unknown as { pullRequests?: Record<string, FixPullRequest> }).pullRequests, (id) => (workspace.rows.tasks as LineCauseTask[]).find((t) => t._id === id)?.short_id));
   const facts = useMemo(() => {
-    const merges = new Map<string, { at: number; url: string }>(JSON.parse(mergesSig));
     const labelOf = (id: string | null | undefined) => (id ? model.steps[id]?.label ?? stepLabel({ id, label: id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) }) : null);
     const need = new Map<string, ProblemNeed>();
     for (const n of workspace.needs) if (n.caseId && !need.has(n.caseId)) need.set(n.caseId, { kind: n.kind, mine: true, step: labelOf(n.fail?.step), runId: n.runId, ask: n.kind === "stopped" || n.kind === "duplicate" ? n.ask : null, why: n.kind === "reask" ? n.why : null, trial: n.trial && !n.publishes });
@@ -117,16 +114,16 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
         return {
           need: need.get(id) ?? null, failed: failed.get(id) ?? null, silent: silent.get(id) ?? null, stage: stage.get(id) ?? null, task,
           awaitsFindings: task?.readiness === "needs_context" && waitsForFindings(task.readiness_note),
-          failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
+          failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), lead: task?.project_id ? workspace.admissions.get(task.project_id)?.role?.handle ?? null : null, idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
           notes: (task as { comments?: ProblemFacts["notes"] } | null)?.comments, trial: trial.has(id),
-          aboutSteps: lineStepsOf(task?.cause?.fingerprints), prMerged: merges.get(id) ?? null,
+          aboutSteps: lineStepsOf(task?.cause?.fingerprints),
           handoff: (task as { verification_evidence?: string | null } | null)?.verification_evidence ?? null,
           shipOutput: landingOutput(newest.get(id)?.node_statuses as Parameters<typeof landingOutput>[0]),
           gate: gateOf(newest.get(id), holderOf),
         };
       },
     };
-  }, [mergesSig, model.steps, model.runs, workspace.needs, workspace.allInbox, workspace.rows.tasks, workspace.rows.runs, workspace.decisions, workspace.admissions, workspace.trialProjects, workspace.trialHeld, workspace.trialRuns, workspace.problems, workspace.names, workspace.now]);
+  }, [model.steps, model.runs, workspace.needs, workspace.allInbox, workspace.rows.tasks, workspace.rows.runs, workspace.decisions, workspace.admissions, workspace.trialProjects, workspace.trialHeld, workspace.trialRuns, workspace.problems, workspace.names, workspace.now]);
 
   // A problem only a lesson filed is a note to the line, not something wrong with the product: it is not listed.
   const lessons = useMemo(() => lessonOnlyIds(workspace.sources), [workspace.sources]);
