@@ -783,7 +783,7 @@ describe("session file index: no cold sync walk on the loop while a refresh is i
       // before the first read of it.
       const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf-8");
       const body = source.slice(source.indexOf("export async function awaitRecentSessionFile"));
-      const wait = body.indexOf("await ensureSessionFileIndex();");
+      const wait = body.indexOf("await ensureSessionFileLookups();");
       expect(wait).toBeGreaterThan(-1);
       expect(wait).toBeLessThan(body.indexOf("findSessionFile(sessionId, { staleOk: true })"));
     } finally {

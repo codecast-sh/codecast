@@ -244,7 +244,7 @@ function aws(args: string[], region: string, profile?: string): any {
   }
 }
 
-function describeInstance(host: CloudHost): any {
+export function describeInstance(host: CloudHost): any {
   const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
   return r?.Reservations?.[0]?.Instances?.[0];
 }
