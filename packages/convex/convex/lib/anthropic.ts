@@ -36,6 +36,8 @@ export interface MeteredCall {
   reply: ModelReply | null;
   /** Null when the API reported none (no response, a timeout, an error without usage). */
   usage: ModelUsage | null;
+  /** Why there is no reply, in the API's words when it gave any. */
+  error?: string;
 }
 
 /**
@@ -140,22 +142,25 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
       const body = await response.text();
       console.error(`${args.label} API error:`, response.status, body.slice(0, 300));
       let usage: ModelUsage | null = null;
+      let message = `the model API answered ${response.status}`;
       try {
-        usage = usageOf(JSON.parse(body));
+        const parsed = JSON.parse(body);
+        usage = usageOf(parsed);
+        if (typeof parsed?.error?.message === "string") message = `${message}: ${parsed.error.message}`;
       } catch {}
-      return { reply: null, usage };
+      return { reply: null, usage, error: message };
     }
     const data = await response.json();
     const text = replyText(data);
     if (!text) {
       console.error(`${args.label} empty reply:`, data.stop_reason, (data.content ?? []).map((b: any) => b?.type).join(","));
-      return { reply: null, usage: usageOf(data) };
+      return { reply: null, usage: usageOf(data), error: `the model gave no answer (stopped: ${data.stop_reason ?? "unknown"})` };
     }
     const usage = usageOf(data) ?? { input_tokens: 0, output_tokens: 0 };
     return { reply: { text, usage, stop_reason: data.stop_reason ?? null }, usage };
   } catch (error) {
     console.error(`${args.label} failed:`, error);
-    return { reply: null, usage: null };
+    return { reply: null, usage: null, error: abort.signal.aborted ? "the model call timed out" : "the model call failed" };
   } finally {
     if (timer) clearTimeout(timer);
   }
