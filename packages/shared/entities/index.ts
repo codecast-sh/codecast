@@ -47,9 +47,8 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   plan: "/plans",
   session: "/conversation",
   doc: "/docs",
-  // The company's objects (goals, projects, roles, people) each open as a
-  // sheet on the Org screen, `/org/<ref>` (objectHref). A project's work
-  // board stays at `/projects/<pj-…>`, reached from the sheet.
+  // The company's objects resolve through objectHref: a goal and a project
+  // have pages of their own, a role and a person live under `/org/<ref>`.
   project: "/org",
   initiative: "/org",
   role: "/org",
@@ -197,12 +196,12 @@ export function entityRoute(type: string, id: string): string | null {
 // ---------------------------------------------------------------------------
 // The company's objects
 //
-// A goal, a project, a role and a person each have one address: the Org
-// screen with that object's sheet open, `/org/in-2`, `/org/pj-mf3k2a`,
-// `/org/or-7`, `/org/@samvit`. Every link, pill, palette row and map node
-// that means "this object" is built here. A project's work board keeps its
-// own page (`/projects/<pj-…>`), and a person's activity profile its own
-// (`/team/<handle>`); those are views of the object, not its address.
+// A goal, a project, a role and a person each have one address. Goals and
+// projects are usable without the Org screen, so they keep pages of their
+// own (`/goals/in-2`, `/projects/pj-mf3k2a`); a role and a person open on the
+// Org screen (`/org/or-7`, `/org/@samvit`). Every link, pill, palette row and
+// map node that means "this object" is built here. A person's activity
+// profile (`/team/<handle>`) is a view of the person, not their address.
 // ---------------------------------------------------------------------------
 
 export type OrgObjectKind = "initiative" | "project" | "role" | "person";
@@ -219,7 +218,6 @@ export function isOrgObjectKind(type: string | null | undefined): type is OrgObj
 export function objectHref(kind: OrgObjectKind, ref: string): string {
   const r = ref.trim();
   if (kind === "person") return `/org/@${encodeURIComponent(r.replace(/^@/, ""))}`;
-  // Goals and projects are pages of their own; roles and people live on the Org screen.
   if (kind === "initiative") return `/goals/${encodeURIComponent(r)}`;
   if (kind === "project") return `/projects/${encodeURIComponent(r)}`;
   return `/org/${encodeURIComponent(r)}`;

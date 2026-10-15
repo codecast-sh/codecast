@@ -14,7 +14,8 @@
 // station asked is its trial decision's card, and one no station asked is
 // drawn with the Expectations page's own Proposal.
 import { findingConversation } from "@codecast/shared/contracts/judges";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatCountdown, USAGE_WARN_PERCENT } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink, RotateCcw } from "lucide-react";
@@ -123,7 +124,7 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
   const { ready } = useSyncTrial();
   // This workspace's projects arrived and none is a trial: the page moves on to the next line workspace (TrialReviewPage).
   // The store is read here, after the feeder's own effect has synced the answer in.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!ready || !onNoTrial) return;
     const rows = Object.values(((useInboxStore.getState() as { trialProjects?: Record<string, { workspace?: string }> }).trialProjects) ?? {});
     if (!rows.some((p) => p?.workspace === scope)) onNoTrial();
