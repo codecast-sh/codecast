@@ -151,7 +151,7 @@ export const StepPage = memo(function StepPage({ model, workspace: ws, selection
     <div className="sp" data-line-step-page={step.id} data-kind={step.kind} data-tab={tab}>
       <header className="sp-head" ref={setHead}>
         <nav className="sp-crumb" aria-label="Where this is">
-          <a href={href({ step: null, tab: null, show: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); select({ step: null, tab: null, show: null }); }} data-line-step-back>Line</a>
+          <a href={href({ step: null, tab: null, show: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); select({ step: null, tab: null, show: null }); }} data-line-step-back>Steps</a>
           <ChevronRight aria-hidden />
           <span aria-current="page">{step.label}</span>
         </nav>

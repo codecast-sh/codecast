@@ -74,7 +74,8 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
+import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectNotice";
 import { Surface, hiddenPageRedirect, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
@@ -463,6 +464,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const s = useTrackedStore([
     s => s.clientStateInitialized,
     s => s.clientState.ui?.zen_mode,
+    s => s.zenNavOpen,
     s => selectNavCollapsed(s),
     s => s.clientState.layouts?.dashboard,
     // Slot sizes: a workbench switch rewrites these, and the panels below
@@ -511,6 +513,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = selectNavCollapsed(s);
+  // Zen hides the sidebar, but Ctrl+[ or the left edge peek still reach it.
+  const navHidden = isZenMode ? !s.zenNavOpen : sidebarCollapsed;
   // This document is the Chat or Work window (lib/desktopApps): the app's
   // own bar stands in for the top bar, and no rail or peek is drawn around
   // its page. A hook: a window made from the warm spare becomes one after
@@ -612,6 +616,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
   const isOnCrosstalkPage = pathname === "/crosstalk";
+  const isOnSessionMapPage = pathname === "/map";
   // Browsing a repository: the index, its history, its source and its blame all
   // own the whole canvas.
   const isOnRepoPage = pathname === "/repo" || (pathname?.startsWith("/repo/") ?? false);
@@ -630,7 +635,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnGoalsPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnGoalsPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnSessionMapPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -815,15 +820,30 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     }
     const ctx = store.currentConversation;
     // The project-filter chip the user scoped the inbox to — honor it before the
-    // URL directory filter or the last conversation's git root.
-    if (activeProjectPath) {
-      return { path: activeProjectPath, gitRoot: activeProjectPath, agentType: ctx.agentType };
+    // URL directory filter or the last conversation's git root. Both name a
+    // project; ownCheckoutPath turns a teammate's copy of it into ours.
+    const mine = { sessions: store.sessions, recentProjects: store.recentProjects, machineRoster: liveMachineRoster(store) };
+    const chipPath = ownCheckoutPath(activeProjectPath, { ...mine, name: activeProjectFilter });
+    if (chipPath) {
+      return { path: chipPath, gitRoot: chipPath, agentType: ctx.agentType };
     }
-    if (directoryFilter) {
-      return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
+    const dirPath = ownCheckoutPath(directoryFilter, mine);
+    if (dirPath) {
+      return { path: dirPath, gitRoot: dirPath === directoryFilter ? ctx.gitRoot || dirPath : dirPath, agentType: ctx.agentType };
     }
     const ctxRoot = seedable(ctx.gitRoot) ? ctx.gitRoot : undefined;
-    return { path: ctxRoot, gitRoot: ctxRoot, agentType: ctx.agentType };
+    if (ctxRoot) return { path: ctxRoot, gitRoot: ctxRoot, agentType: ctx.agentType };
+    // Nothing open yet (a fresh launch): the project of the conversation this
+    // client was last in, else of the latest session with one on our machines.
+    const rootOf = (r: { git_root?: string; project_path?: string } | undefined) => r?.git_root || r?.project_path;
+    const lastFocused = store.lastFocusedConversationId ? store.sessions[store.lastFocusedConversationId] : undefined;
+    const last = seedable(rootOf(lastFocused)) ? lastFocused : Object.values(store.sessions)
+      .filter((r) => (r.message_count ?? 0) > 0 && !r.is_subagent && seedable(rootOf(r)))
+      .reduce<typeof lastFocused>((best, r) => (!best || r.updated_at > best.updated_at ? r : best), undefined);
+    const lastRoot = rootOf(last);
+    return lastRoot
+      ? { path: lastRoot, gitRoot: lastRoot, agentType: ctx.agentType ?? last?.agent_type }
+      : { path: undefined, gitRoot: undefined, agentType: ctx.agentType };
   }, [directoryFilter, sessionListActiveId]);
 
   // Every "New Session" affordance opens the floating compose popup (ComposeView
@@ -842,7 +862,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // ghost sweep reaps. Isolated lives as a toggle inside NewSessionView, so it's
   // reachable here too without a separate eager-create path. Project can be empty
   // (the null-state ProjectSwitcher lets the user pick before sending).
-  const handleNewFullSession = useCallback(() => {
+  // `main`: always into the main view, never the session rail (a fresh
+  // launch, before the route has settled on the inbox).
+  const handleNewFullSession = useCallback((opts?: { main?: boolean }) => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     const store = useInboxStore.getState();
     // The selected conversation's agent carries over; the default
@@ -859,7 +881,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       // first send sticks — same contract as the compose popup.
       create: (sid) => store.createSessionFromStub(sid, { agentType, projectPath: path, gitRoot: gitRoot || path || undefined }),
     });
-    if (isOnInboxPage || isOnConversationPage) {
+    if (isOnInboxPage || isOnConversationPage || opts?.main) {
       store.setCurrentSession(stubId);
     } else if (selectSessionRailOpen(store)) {
       useInboxStore.setState({ sidePanelSessionId: stubId });
@@ -867,6 +889,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       router.push(`/conversation/${stubId}?focus=1`);
     }
   }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage]);
+
+  // A fresh open of the app lands on the new-session page (store/viewNav
+  // freshHomeLaunchPending), once hydration has put the store in place.
+  const clientStateInitialized = useInboxStore((st) => st.clientStateInitialized);
+  useWatchEffect(() => {
+    if (!clientStateInitialized || !freshHomeLaunchPending()) return;
+    settleFreshHomeLaunch();
+    handleNewFullSession({ main: true });
+  }, [clientStateInitialized, handleNewFullSession]);
 
   // Bridge for the Electron "New Session" affordances (the palette's "open full"
   // hand-off, the app menu / dock / tray) — fired via the NEW_SESSION_EVENT DOM
@@ -972,10 +1003,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useFollowMode();
   useShortcutContext('desktop', isDesktopApp);
 
-  // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
-  // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
-  // window. Isolated-worktree creation lives as a toggle inside the compose surface.
-  useShortcutAction('session.create', handleNewFullSession);
+  // Ctrl+N / Ctrl+Shift+N → the new-session popup (modal overlay here; the
+  // always-on-top window on desktop). Ctrl+Alt+N and the + button → the same
+  // surface as a page in the main window.
+  useShortcutAction('session.create', () => handleNewFullSession());
 
   // Handlers receive the dispatch source ("key" | "named"); never let it reach
   // openCompose's initialQuery.
@@ -1004,7 +1035,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The Work window carries a rail of its own (the pinned rail and the Work
   // group, lib/desktopApps `nav`); the Chat window's page carries its rail.
   const appRail = appWindow ? DESKTOP_APPS[appWindow].nav === "sidebar" : false;
-  const sidebarHidden = appRail ? isMobile : !!hideSidebar || isZenMode || sidebarCollapsed || isMobile || !!appWindow;
+  const sidebarHidden = appRail ? isMobile : !!hideSidebar || navHidden || isMobile || !!appWindow;
 
   // Animated collapse/expand: panels are flex-grow sized with no built-in
   // transition, so we enable one (globals.css `.sidebar-animating`) only for
@@ -1070,7 +1101,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Hover-peek: with a side panel collapsed, touching the screen edge slides the
   // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
-  const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile && !appWindow;
+  const peekEnabled = navHidden && !hideSidebar && !isMobile && !appWindow;
 
   // The context slot owns the rail's width. Its size field serves whichever
   // pane holds the edge — a percent for the session list, pixels for the
@@ -1330,7 +1361,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label={words.newConversation} action="session.create">
               <TopbarButton
                 onClick={(e) => {
-                  openCompose();
+                  handleNewFullSession();
                   tipActions.whisper('session.create', e);
                 }}
                 aria-label={words.newConversation}
