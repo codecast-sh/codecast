@@ -44,6 +44,8 @@ import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
 import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
+import { sharedOwnerSteps } from "../browser/sharedHost.js";
+import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 
 const OK = fmt.success(icons.check);
 
@@ -995,18 +997,47 @@ export function buildHostsCommand(parent: Command): Command {
   hosts
     .command("provision [id]")
     .description("Set up a Linux or Mac host: agent tools, config sync, and an unattended daemon")
-    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
+    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables; default 20, and 0 on a shared host)")
     .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
+    .option("--shared", "A host several people share, each with their own Linux user and logins: no laptop logins go there, every daemon is a peer, it never auto-stops")
+    .option("--add-user <linux-user>", "Add a person to a shared host: their user, tools and daemon; prints the sign-ins they run there")
+    .option("--github <login>", "With --add-user, let them ssh in with their GitHub account's public keys")
     .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
     .option("--service-user <name>", "Create a separate Mac login with SSH and passwordless sudo; preserves the current login")
     .option("--base", "Build codecast's base Mac image on this fresh AWS Mac instead (codecast maintainers): nothing personal goes on it")
-    .action(async (id: string | undefined, o: { idle: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean }) => {
+    .action(async (id: string | undefined, o: { idle?: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean; shared?: boolean; addUser?: string; github?: string }) => {
       const h = pick(id, "no cloud host registered");
-      const idle = parseInt(o.idle, 10);
-      if (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(idle)) die("Idle minutes must be a nonnegative whole number");
+      if (o.github && !o.addUser) die("--github requires --add-user");
+      if (o.addUser && o.shared) die("--add-user adds a person to a host that is already shared: provision with --shared first, then --add-user");
+      if (o.addUser) {
+        const { addUserToHost } = await import("../browser/provisionLinux.js");
+        const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+        try {
+          const r = addUserToHost(toRemoteHost(up), o.addUser, { github: o.github, address: up.address ?? h.address ?? h.id }, (m) => console.log(fmt.muted(`  ${m}`)));
+          console.log(`${OK} ${o.addUser} added to ${h.id}`);
+          console.log(`  ssh keys: ${r.keys}`);
+          console.log(`  agents:   ${r.agents}`);
+          console.log(`  units:    ${r.units}`);
+          console.log(`\n  ${o.addUser} finishes on the host, with their own accounts:`);
+          for (const step of r.steps) console.log(`    ${step}`);
+        } catch (err) {
+          die((err as Error).message);
+        }
+        return;
+      }
+      if (o.idle !== undefined && (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(parseInt(o.idle, 10)))) die("Idle minutes must be a nonnegative whole number");
+      if (o.shared && (h.platform === "darwin" || h.provider === "scaleway-mac")) die("--shared is for Linux hosts");
+      // A shared host's owner daemon must be rewritten as a peer, or it stays a remote device on the laptop's logins.
+      if (o.shared && !o.daemon) die("--shared needs the daemon step: it turns the owner's daemon into a peer");
       const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
       console.log(`provisioning ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      // Shared stays shared, even provisioned from a laptop that never knew: the host keeps the record.
+      const shared = o.shared === true || h.shared === true ||
+        (up.platform !== "darwin" && up.provider !== "scaleway-mac" && remoteExec(toRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
+      const idle = parseInt(o.idle ?? (shared ? "0" : "20"), 10);
+      // The idle watchdog sees only the host's own login, so it would power off under everyone else.
+      if (shared && idle !== 0) die("A shared host never auto-stops: its idle watchdog cannot see the other people's sessions", "drop --idle, or pass --idle 0");
       try {
         if (o.base) {
           if (up.platform !== "darwin") die("the base image is a Mac image");
@@ -1040,8 +1071,9 @@ export function buildHostsCommand(parent: Command): Command {
         // is refused while sessions are live) must not leave `cast hosts reach`
         // and forward-agent asking for a provision that already happened.
         const report = await provisionLinuxHost(toRemoteHost(up), {
-          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity,
-          onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION }); },
+          idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity, shared,
+          // A shared host's browser runs as its own login, and any user on the box can reach its debugging port.
+          onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION, ...(shared ? { shared: true, browserSync: false } : {}) }); },
         }, (m) => console.log(fmt.muted(`  ${m}`)));
         await reportHostNow(up.id);
         console.log(`${OK} ${h.id} is a full remote service`);
@@ -1055,6 +1087,11 @@ export function buildHostsCommand(parent: Command): Command {
         console.log(`  tools:    ${report.tools.trim()}`);
         console.log(fmt.muted(`  ${idleStopLine(idle)}`));
         console.log(fmt.muted(`  watch it: cast hosts view`));
+        if (shared) {
+          console.log(`\n  shared host: no laptop's Claude login goes there, so its own login signs in with yours:`);
+          for (const step of sharedOwnerSteps(up.user, up.address ?? h.id)) console.log(`    ${step}`);
+          console.log(fmt.muted(`  add a person: cast hosts provision ${h.id} --add-user <linux-user> --github <login>`));
+        }
       } catch (err) {
         die((err as Error).message);
       }

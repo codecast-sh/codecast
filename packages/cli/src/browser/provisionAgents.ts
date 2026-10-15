@@ -13,6 +13,7 @@
  * same ones cloud/hostTools.ts runs on every wake.
  */
 
+import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { INSTALLABLE_CLIENTS, type InstallableClient } from "../remote/agentAuth.js";
 import { clientInstallSnippet, HOST_TOOLS_PATH, NODE_FLOOR_MAJOR, nodeInstallSnippet, safeVersion } from "../cloud/hostTools.js";
 export { NODE_22_VERSION } from "../cloud/hostTools.js";
@@ -54,7 +55,7 @@ ${nodeInstallSnippet(NODE_FLOOR_MAJOR)}`);
   if (opts.upgradeCodex) lines.push(codexCompatibilityScript(versions.codex));
   lines.push(`for b in ${INSTALLABLE_CLIENTS.join(" ")}; do
   p=$(command -v "$b" 2>/dev/null || true)
-  if [ -n "$p" ] && [ "$(uname -s)" = Linux ] && sudo -n true >/dev/null 2>&1; then sudo -n ln -sf "$p" "/usr/local/bin/$b" >/dev/null 2>&1 || true; fi
+  if [ -n "$p" ] && [ "$(uname -s)" = Linux ] && [ ! -e ${SHARED_HOST_MARKER} ] && sudo -n true >/dev/null 2>&1; then sudo -n ln -sf "$p" "/usr/local/bin/$b" >/dev/null 2>&1 || true; fi
 done
 for b in ${INSTALLABLE_CLIENTS.join(" ")}; do
   if command -v "$b" >/dev/null 2>&1; then v=$("$b" --version 2>/dev/null </dev/null | head -1 | tr -cd 'A-Za-z0-9._ ()-' | head -c 60 || true); echo "$b=$v"; else echo "$b=missing"; fi

@@ -30,6 +30,7 @@
  * ~/.codecast/host-tools.json for `cast hosts ls`.
  */
 
+import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lastErrorLine, spawnSync } from "../proc.js";
@@ -852,7 +853,7 @@ if [ "$node_major" -lt ${minMajor} ]; then
   if [ -x "$HOME/.local/node-${ver}/bin/node" ]; then
     mkdir -p "$HOME/.local/bin"
     for b in node npm npx; do ln -sf "$HOME/.local/node-${ver}/bin/$b" "$HOME/.local/bin/$b"; done
-    if [ "$(uname -s)" = Linux ] && sudo -n true >/dev/null 2>&1; then for b in node npm npx; do sudo -n ln -sf "$HOME/.local/node-${ver}/bin/$b" "/usr/local/bin/$b" >/dev/null 2>&1 || true; done; fi
+    if [ "$(uname -s)" = Linux ] && [ ! -e ${SHARED_HOST_MARKER} ] && sudo -n true >/dev/null 2>&1; then for b in node npm npx; do sudo -n ln -sf "$HOME/.local/node-${ver}/bin/$b" "/usr/local/bin/$b" >/dev/null 2>&1 || true; done; fi
     node_installed=1
   fi
 fi`;

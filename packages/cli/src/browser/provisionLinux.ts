@@ -34,6 +34,8 @@ import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
+import { SHARED_HOST_REFUSAL } from "../remote/sharedHostGuard.js";
+import { addUserRootScript, addUserSelfScript, enableUserDaemonScript, isLinuxUserName, sharedHostMarkScript, sharedHostSetupScript, teammateSteps, USER_DAEMON_UNIT, userToolPath } from "./sharedHost.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
@@ -284,8 +286,30 @@ echo PROVISION-BASE-OK`;
   // to its own runtime.
 }
 
-/** The daemon systemd unit; installed after the cast binary and config exist. */
-export function daemonUnitScript(): string {
+/**
+ * The daemon systemd unit; installed after the cast binary and config exist.
+ * On a shared host (sharedHost.ts) the owner's daemon is a peer like every
+ * other user's: not a remote device, its Claude token from its own
+ * ~/.codecast/claude.env, and its own tools on PATH, since /usr/local/bin
+ * holds no links into homes there.
+ */
+export function daemonUnitScript(opts: { shared?: boolean } = {}): string {
+  const cast = opts.shared ? "/home/ubuntu/.local/bin/cast" : "/usr/local/bin/cast";
+  const marker = opts.shared
+    ? `# A shared host's daemons are peers, never remote devices (docs/architecture/shared-hosts.md).
+install -d -m 700 /home/ubuntu/.codecast && rm -f /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}`
+    : `# The marker makes the box a remote device for any daemon started here, not
+# only the one this unit starts (remote/device.ts).
+install -d -m 700 /home/ubuntu/.codecast && : > /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}`;
+  const env = opts.shared
+    ? `Environment=CODECAST_CLOUD=1
+Environment=HOME=/home/ubuntu
+Environment=PATH=${userToolPath("/home/ubuntu")}
+EnvironmentFile=-/home/ubuntu/.codecast/claude.env`
+    : `Environment=CODECAST_REMOTE_DEVICE=1
+Environment=CODECAST_CLOUD=1
+Environment=HOME=/home/ubuntu
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/bin`;
   return `set -euo pipefail
 tmux_pids=$(bash -c ${shq(DAEMON_CGROUP_TMUX_SCRIPT)})
 if [ -n "$tmux_pids" ]; then
@@ -293,23 +317,20 @@ if [ -n "$tmux_pids" ]; then
   exit 1
 fi
 if sudo systemctl cat codecast-daemon.service >/dev/null 2>&1; then sudo systemctl stop codecast-daemon.service; fi
-CODECAST_NO_AUTO_UPDATE=1 /usr/local/bin/cast stop
-# The marker makes the box a remote device for any daemon started here, not
-# only the one this unit starts (remote/device.ts).
-install -d -m 700 /home/ubuntu/.codecast && : > /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}
+${opts.shared ? `# This unit runs the owner's daemon, so a per-user one for the owner (a hand-built host) must not run beside it.
+sudo systemctl disable --now ${USER_DAEMON_UNIT}ubuntu.path ${USER_DAEMON_UNIT}ubuntu.service >/dev/null 2>&1 || true
+` : ""}CODECAST_NO_AUTO_UPDATE=1 ${cast} stop
+${marker}
 sudo tee /etc/systemd/system/codecast-daemon.service >/dev/null <<'UNIT'
 [Unit]
-Description=codecast daemon (remote device)
+Description=codecast daemon (${opts.shared ? "shared host owner" : "remote device"})
 After=network-online.target
 Wants=network-online.target
 [Service]
 User=ubuntu
-Environment=CODECAST_REMOTE_DEVICE=1
-Environment=CODECAST_CLOUD=1
-Environment=HOME=/home/ubuntu
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/bin
+${env}
 WorkingDirectory=/home/ubuntu
-ExecStart=/usr/local/bin/cast _daemon
+ExecStart=${cast} _daemon
 Restart=always
 RestartSec=5
 KillMode=process
@@ -664,6 +685,8 @@ export async function provisionLinuxHost(
   host: RemoteHost,
   opts: {
     idleStopMinutes: number; skipDaemon?: boolean; gitIdentity?: string;
+    /** A host several people share (sharedHost.ts): no laptop logins go there and every daemon is a peer. */
+    shared?: boolean;
     /** Called once the base stack (packages, idle watchdog) is on the host, whatever a later step does. */
     onBaseInstalled?: () => void;
   },
@@ -674,6 +697,8 @@ export async function provisionLinuxHost(
   const base = runScript(host, baseProvisionScript(opts.idleStopMinutes), 600_000);
   if (!base.includes("PROVISION-BASE-OK")) throw new Error(`base provisioning did not complete:\n${base.slice(-800)}`);
   opts.onBaseInstalled?.();
+  // Before any credential step: from here on the host itself refuses every laptop's pushes.
+  if (opts.shared && !runScript(host, sharedHostMarkScript(), 60_000).includes("SHARED-MARK-OK")) throw new Error("could not mark the host shared");
 
   onProgress("installing bun runtime…");
   remoteExec(
@@ -699,10 +724,10 @@ export async function provisionLinuxHost(
   const agents = parseAgentCliReport(agentsOut);
   onProgress(`  ${agents}`);
 
-  onProgress("pushing codecast identity + claude credential…");
+  onProgress(opts.shared ? "pushing codecast identity (shared host: no claude credential)…" : "pushing codecast identity + claude credential…");
   await pushCodecastConfig(host);
-  const cred = copyCredentialToRemote(host);
-  if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
+  const cred = opts.shared ? { pushed: false, reason: SHARED_HOST_REFUSAL } : copyCredentialToRemote(host);
+  if (!cred.pushed && !opts.shared) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
 
   onProgress("agent logins + host tools + host git setup + mirroring instruction files and agent config…");
   const { readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
@@ -713,6 +738,7 @@ export async function provisionLinuxHost(
     localGitRoot,
     repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined,
     gitIdentity: opts.gitIdentity,
+    pushLogins: !opts.shared,
   });
   const mirror = homeReport.mirror;
   const git = homeReport.git?.pubkey ?? "no key (host git setup did not run)";
@@ -752,9 +778,15 @@ export async function provisionLinuxHost(
   let device = "daemon skipped";
   if (!opts.skipDaemon) {
     onProgress("starting the daemon service…");
-    const unit = runScript(host, daemonUnitScript(), 60_000);
+    const unit = runScript(host, daemonUnitScript({ shared: opts.shared }), 60_000);
     if (!unit.includes("DAEMON-UNIT-OK")) throw new Error(`daemon unit install failed:\n${unit.slice(-400)}`);
     device = remoteExec(host, "systemctl is-active codecast-daemon.service", 20_000);
+  }
+
+  if (opts.shared) {
+    onProgress("shared host: per-user daemon units, no links into homes, claude first-run answered…");
+    const shared = runScript(host, sharedHostSetupScript(), 60_000);
+    if (!shared.includes("SHARED-HOST-OK")) throw new Error(`shared host setup did not complete:\n${shared.slice(-400)}`);
   }
 
   const services = remoteExec(
@@ -778,13 +810,56 @@ export async function provisionLinuxHost(
   };
 }
 
-/** Run a multi-line script on the box via `bash -s` over stdin. */
-function runScript(host: RemoteHost, script: string, timeoutMs: number): string {
+export interface AddUserReport {
+  /** How many ssh keys the user got from GitHub, or "unchanged". */
+  keys: string;
+  /** The agent CLIs the user now has, one `<bin>=<version|missing>` each, plus node. */
+  agents: string;
+  /** `path=<state> daemon=<state>` of the user's units. */
+  units: string;
+  /** What the person runs on the host to finish. */
+  steps: string[];
+}
+
+/**
+ * Add a person to a shared host (sharedHost.ts): their Linux user and GitHub
+ * ssh keys, their own bun, cast, agent CLIs and node, Claude's first-run
+ * screens answered, and their daemon armed to start once they sign in.
+ * Idempotent; re-running refreshes keys and tools. Their logins are theirs to
+ * make on the host (the returned steps); nothing of this laptop's goes there.
+ */
+export function addUserToHost(
+  host: RemoteHost,
+  user: string,
+  opts: { github?: string; address: string },
+  onProgress: (m: string) => void = () => {},
+): AddUserReport {
+  if (host.user !== "ubuntu") throw new Error("Linux provisioning requires an Ubuntu image and the ubuntu SSH user");
+  if (!isLinuxUserName(user)) throw new Error(`not a Linux user name: ${user} (lowercase letters, digits, - and _)`);
+  if (user === host.user) throw new Error(`${user} is the host's own login; it was set up by provisioning`);
+  onProgress(`creating ${user}${opts.github ? ` with github.com/${opts.github}'s ssh keys` : ""}…`);
+  const root = runScript(host, addUserRootScript(user, opts.github), 120_000);
+  if (!root.includes("ADD-USER-ROOT-OK")) throw new Error(`adding ${user} did not complete:\n${root.slice(-400)}`);
+  onProgress(`installing ${user}'s own bun, cast, agent CLIs and node (a few minutes)…`);
+  const self = runScript(host, addUserSelfScript(readInstalledClientVersions()), 1_200_000, `sudo -u ${user} -H bash -s`);
+  if (!self.includes("ADD-USER-SELF-OK")) throw new Error(`${user}'s tools did not finish installing:\n${self.slice(-800)}`);
+  const units = runScript(host, enableUserDaemonScript(user), 60_000).trim();
+  if (!units.includes("path=active")) throw new Error(`${user}'s daemon could not be armed: ${units.slice(-300)}`);
+  return {
+    keys: root.match(/^keys=(.*)$/m)?.[1] ?? "unchanged",
+    agents: parseAgentCliReport(self),
+    units,
+    steps: teammateSteps(user, opts.address),
+  };
+}
+
+/** Run a multi-line script on the box via `bash -s` over stdin (or `command`, e.g. as another user). */
+function runScript(host: RemoteHost, script: string, timeoutMs: number, command = "bash -s"): string {
   try {
     return execFileSync(
       "ssh",
       ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-       "-o", "BatchMode=yes", `${host.user}@${host.address}`, "bash -s"],
+       "-o", "BatchMode=yes", `${host.user}@${host.address}`, command],
       { input: script, encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] },
     );
   } catch (err) {

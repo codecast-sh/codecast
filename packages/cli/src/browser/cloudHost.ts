@@ -77,6 +77,9 @@ export interface CloudHost {
   reach?: import("../cloud/reach.js").ReachFolder[];
   /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */
   watchdogVersion?: number;
+  /** Several people share this host, each with their own Linux user, logins
+   * and peer daemon (browser/sharedHost.ts). Set by `cast hosts provision --shared`. */
+  shared?: boolean;
   /** Refuse cookie carries into this host's browser (a host shared with
    * teammates). Default: allowed. Set by hand in hosts.json today; a CLI
    * switch must write it through patchHost. Read by cloud/browserSync.ts. */
