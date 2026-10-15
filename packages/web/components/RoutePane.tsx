@@ -37,6 +37,7 @@ const ModPane = lazyPage("@/app/m/page", () => import("@/app/m/page"));
 const ModObjects = lazyPage("@/app/objects/page", () => import("@/app/objects/page"));
 const ModObject = lazyPage("@/app/o/page", () => import("@/app/o/page"));
 const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
+const SessionMap = lazyPage("@/app/map/page", () => import("@/app/map/page"));
 // A web page as a pane: the address rides the query string (?u= / ?watch=).
 const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
 // One component for the Org screen and every object's sheet on it, so opening
@@ -169,6 +170,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/objects\/([^/]+)$/, paramNames: ["prefix"], component: ModObjects },
   { pattern: /^\/o\/([^/]+)$/, paramNames: ["id"], component: ModObject },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
+  { pattern: /^\/map$/, paramNames: [], component: SessionMap },
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/org$/, paramNames: [], component: OrgScope },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },

@@ -100,7 +100,7 @@ test("the full card draws every section from the contract", async () => {
   expect(container.querySelector("[data-cc-proof-fixed] [title]")!.getAttribute("title")).toContain("12 of 12 pass");
   // The goal is one muted line in the cause header; every section and fact is named one way.
   expect(container.querySelector(".cc-goal")!.textContent).toContain(`serves ${card.goal.name}`);
-  expect(Array.from(container.querySelectorAll(".cc-label")).map((k) => k.textContent)).toEqual(["What is wrong", "Proof", "Examples", "Checks", "Diff", "Risk", "Cost"]);
+  expect(Array.from(container.querySelectorAll(".cc-label")).map((k) => k.textContent)).toEqual(["What is wrong", "Proof", "Examples", "Checks", "Diff", "Risk", "Billed"]);
   // Passing checks fold into a count in the facts and open on a click.
   // The proof counts as one of them, so every surface says one number.
   expect(container.querySelector("[data-cc-checks]")!.textContent).toBe("4 of 4 pass");
@@ -186,12 +186,13 @@ test("an example input shows only when its Before does not already quote it", ()
 test("a settled card says what happened in place of the recommendation", async () => {
   const answered = { ...decision, status: "answered", answer_index: 0, resolved_at: Date.now() - 47 * 60_000 };
   const outcome = cardOutcome(answered, "Ashot", Date.now())!;
-  expect(outcome.pill).toBe("Shipped by Ashot · 47m ago");
-  expect(outcome.verdict).toBe("Shipped");
+  // A Ship answer approves the change: whether it landed is the run's to say.
+  expect(outcome.pill).toBe("Approved to ship by Ashot · 47m ago");
+  expect(outcome.verdict).toBe("Approved to ship");
   expect(outcome.tone).toBe("green");
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={outcome.line} />);
   expect(container.querySelector("article [data-cc-recommended]")).toBeNull();
-  expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Shipped");
+  expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Approved to ship");
   await unmount();
   const revised = cardOutcome({ ...answered, answer_index: 1, answer_text: "Revise: keep the greeting" }, "Ashot", Date.now())!;
   expect(revised.pill.startsWith("Sent back to revise by Ashot")).toBe(true);
