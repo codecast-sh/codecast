@@ -13,6 +13,7 @@ import { deviceDisplayName } from "@codecast/shared/contracts";
 import { DeviceDot, DeviceIcon, deviceAccentClasses } from "./DeviceBadge";
 import { machineChipNote, machineChipTitle, type SessionMachine } from "../lib/sessionMachines";
 import { listedMachines } from "../lib/machinePicker";
+import { formatHostLoad, type HostLoad } from "../lib/hostLoad";
 
 export type MachineChipsProps = {
   machines: SessionMachine[];
@@ -22,23 +23,26 @@ export type MachineChipsProps = {
   onPick: (d: SessionMachine) => void;
   /** Opens the place where your own machines are shared (Settings → Devices). */
   onShare?: () => void;
+  /** Each cloud host's current load, by device id: free memory beside its name, yellow when tight. */
+  loads?: ReadonlyMap<string, HostLoad>;
 };
 
 /** A machine someone on your team opened to you, or an agent box. */
 const isTeamMachine = (d: SessionMachine) => d.bot_name !== undefined;
 
-function chipLabel(d: SessionMachine, roster: SessionMachine[]) {
+function chipLabel(d: SessionMachine, roster: SessionMachine[], load?: HostLoad) {
   const note = machineChipNote(d, roster);
   return (
     <>
       {deviceDisplayName(d)}
       {d.bot_name !== undefined && ` · ${d.runner_name || d.bot_name || "agent box"}`}
       {note && <span className={note === "gone" ? "text-sol-red/80" : "opacity-70"}>{` · ${note}`}</span>}
+      {load && <span className={load.tight ? "text-sol-yellow" : "opacity-70"} title={formatHostLoad(load)}>{` · ${load.freeGb < 10 ? load.freeGb.toFixed(1) : Math.round(load.freeGb)} GB free`}</span>}
     </>
   );
 }
 
-export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare }: MachineChipsProps) {
+export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads }: MachineChipsProps) {
   // Notes and titles judge each chip against the whole roster (a host is
   // "gone" relative to its siblings); only the row leaves dead machines out.
   const machines = listedMachines(roster, selectedDeviceId);
@@ -59,7 +63,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
           }`}
         >
           <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-          <span className="truncate max-w-[14rem]">{chipLabel(d, roster)}</span>
+          <span className="truncate max-w-[16rem]">{chipLabel(d, roster, d.is_remote ? loads?.get(d.device_id) : undefined)}</span>
           <DeviceDot online={d.online} />
         </button>
       );

@@ -43,7 +43,7 @@ import { commitModelChange, notifyModelToast as notifyToast } from "../lib/model
  * paints currentUser (a localFirst singleton) and dispatches the write; a
  * refusal puts the old pin back and toasts like any dispatch.
  */
-function useDefaultModelPin(agentType: string | undefined) {
+export function useDefaultModelPin(agentType: string | undefined) {
   const clientId = modelAgentKey(agentType);
   const defaultKey = useInboxStore(
     (s) => ((s as any).currentUser?.default_models ?? {})[clientId] as string | undefined,
@@ -64,6 +64,9 @@ export interface ModelEffortRowsProps {
   /** Keep the surrounding menu open after a model pick (a multi-step panel
    *  that collects the choice instead of committing it). */
   keepOpen?: boolean;
+  /** Only the model list, or only the effort levels (the new-session foot
+   *  gives each its own menu). Omitted, both. */
+  part?: "model" | "effort";
 }
 
 /**
@@ -80,6 +83,7 @@ export function ModelEffortRows({
   onSelect,
   ownerDeviceId,
   keepOpen = false,
+  part,
 }: ModelEffortRowsProps) {
   const { dynamic, featured, all } = useDynamicModels(agentType, ownerDeviceId);
   const [search, setSearch] = useState("");
@@ -146,6 +150,22 @@ export function ModelEffortRows({
       </DropdownMenuItem>
     );
   };
+  if (part === "effort") {
+    return (
+      <>
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+        {rail.efforts.map((level: string) => {
+          const active = level === "default" ? !effort : level === effort;
+          return (
+            <DropdownMenuItem key={level} onSelect={() => { if (!active) onSelect({ effort: level }); }} className="flex items-center gap-2 text-xs">
+              <span className={`w-3 text-center ${active ? "text-sol-cyan" : "text-transparent"}`}>●</span>
+              <span className={active ? "text-sol-text font-medium" : "text-sol-text-secondary"}>{level}</span>
+            </DropdownMenuItem>
+          );
+        })}
+      </>
+    );
+  }
   return (
     <>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
@@ -168,7 +188,7 @@ export function ModelEffortRows({
           </div>
         </>
       )}
-      {cfg.efforts.length > 0 && !lane && <>
+      {part !== "model" && cfg.efforts.length > 0 && !lane && <>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
         {/* Chips size to their label and wrap — clients with many effort levels
@@ -211,55 +231,97 @@ export function ModelEffortMenu(props: ModelEffortRowsProps) {
 }
 
 
+/** A picker trigger in the new-session composer foot: a quiet text button. */
+export const FOOT_PICK = "inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs whitespace-nowrap text-sol-text-muted hover:text-sol-text hover:bg-sol-bg/60 data-[state=open]:bg-sol-bg/60 data-[state=open]:text-sol-text transition-colors";
+
+/**
+ * A blank session's launch model and effort, read off the live row, with the
+ * rows' props (including the commit) and the words a trigger shows. "Default"
+ * names what it launches when the person pinned a default model.
+ */
+export function useLaunchModel(conversationId: string) {
+  const live = useLiveSessionMeta(conversationId);
+  const agentType = live?.agentType ?? "claude_code";
+  const { defaultKey } = useDefaultModelPin(agentType);
+  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  const modelKey = modelFitsAgent(live?.model, agentType)
+    ? modelOptionKey(live?.model, agentType)
+    : "default";
+  const opt = cfg?.models.find((m) => m.key === modelKey)
+    ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
+  // A cloud agent launch runs at its provider's effort, whatever one was picked before.
+  const cloudLaunch = !!cloudAgentProviderForLaunch(agentType, modelKey);
+  const label = modelKey === "default" && defaultKey
+    ? findModelOption(agentType, defaultKey)?.label ?? defaultKey
+    : opt?.label ?? "Model";
+  const rowProps: ModelEffortRowsProps = {
+    agentType,
+    modelKey,
+    effort: live?.effort,
+    midSession: false,
+    ownerDeviceId: live?.ownerDeviceId,
+    onSelect: (sel) => {
+      void commitModelChange({
+        conversationId,
+        agentType,
+        current: { model: live?.model, effort: live?.effort },
+        sel,
+        blank: true,
+      });
+    },
+  };
+  return { cfg, rowProps, label, cloudLaunch, effort: live?.effort ?? null };
+}
+
+const Chevron = () => (
+  <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+);
+
 /**
  * Launch model/effort pill for the new-session surface — sits in the agent
  * pill row and relaunches the blank session with --model/--effort flags via
  * reconfigureSession (the same idempotent respawn the agent pills use).
  */
 export function LaunchModelPill({ conversationId }: { conversationId: string }) {
-  const live = useLiveSessionMeta(conversationId);
-  const agentType = live?.agentType ?? "claude_code";
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  const { cfg, rowProps, label, cloudLaunch, effort } = useLaunchModel(conversationId);
   if (!cfg) return null;
-
-  const modelKey = modelFitsAgent(live?.model, agentType)
-    ? modelOptionKey(live?.model, agentType)
-    : "default";
-  const opt = cfg.models.find((m) => m.key === modelKey)
-    ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
-  // A cloud agent launch runs at its provider's effort, whatever one was picked before.
-  const glyph = cloudAgentProviderForLaunch(agentType, modelKey) ? null : effortGlyph(live?.effort);
-
+  const glyph = cloudLaunch ? null : effortGlyph(effort);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
+          type="button"
           className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60 font-mono"
           title="Model and effort for this session"
         >
-          {opt?.label ?? "Model"}
+          {label}
           {glyph && <span className="opacity-80">{glyph}</span>}
-          <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
+          <Chevron />
         </button>
       </DropdownMenuTrigger>
-      <ModelEffortMenu
-        agentType={agentType}
-        modelKey={modelKey}
-        effort={live?.effort}
-        midSession={false}
-        ownerDeviceId={live?.ownerDeviceId}
-        onSelect={(sel) => {
-          void commitModelChange({
-            conversationId,
-            agentType,
-            current: { model: live?.model, effort: live?.effort },
-            sel,
-            blank: true,
-          });
-        }}
-      />
+      <ModelEffortMenu {...rowProps} />
+    </DropdownMenu>
+  );
+}
+
+/** The new-session foot's effort menu. Hidden where the agent takes no effort
+ *  from codecast (a cloud agent launch, a client without levels). */
+export function LaunchEffortPill({ conversationId }: { conversationId: string }) {
+  const { cfg, rowProps, cloudLaunch, effort } = useLaunchModel(conversationId);
+  if (!cfg || cfg.efforts.length === 0 || cloudLaunch) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className={FOOT_PICK} title="Effort for this session">
+          <span className={effort ? "capitalize" : "text-sol-text-dim"}>{effort ?? "effort"}</span>
+          <Chevron />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[9rem]">
+        <ModelEffortRows {...rowProps} part="effort" />
+      </DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -268,7 +330,7 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
  *  Library). Picking one stamps the row; a definition that names a client
  *  flips the agent pill too, and its model rides the create through the
  *  server's resolveSpawnDefinition. Hidden until the workspace has one. */
-export function AgentDefinitionPill({ conversationId }: { conversationId: string }) {
+export function AgentDefinitionPill({ conversationId, variant = "chip" }: { conversationId: string; variant?: "chip" | "ghost" }) {
   const definitions = useAgentDefinitions();
   const live = useLiveSessionMeta(conversationId);
   if (definitions.length === 0) return null;
@@ -283,7 +345,8 @@ export function AgentDefinitionPill({ conversationId }: { conversationId: string
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all font-mono ${
+          type="button"
+          className={variant === "ghost" ? `${FOOT_PICK} ${current ? "!text-sol-cyan" : ""}` : `inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border whitespace-nowrap transition-all font-mono ${
             current ? "border-sol-cyan/50 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
           }`}
           title="Launch as a named agent definition"

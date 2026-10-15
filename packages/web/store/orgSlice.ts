@@ -264,6 +264,8 @@ export type OrgUpdateRoleInput = {
   // People who report to the role (org-roles-run-work.md R6); dispatch diffs
   // the list against the tree and routes it to orgRoles.setReports.
   reports_user_ids?: string[];
+  // Leeway to hire; dispatch routes it to orgRoles.setHiresFreely.
+  hires_freely?: boolean;
 };
 
 export type OrgSliceActions = {
@@ -1359,6 +1361,12 @@ export function createOrgSlice(): OrgSliceImpl {
       const tree = this.orgTree;
       const parent = reparentTreeParent(target);
       const row = _opts?.row;
+      // The session row carries the role too (role chips, the session map):
+      // it moves in the same tick, and the echo of the conversation confirms it.
+      // Mirrors performReparentSession: a role's own standing session never
+      // moves, and any person target but a remove clears the role.
+      const session = (this as OrgDraft & { sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }> }).sessions?.[conversationId];
+      if (session && !session.standing_role_id && (target.kind === "role" || target.mode !== "remove")) session.org_role_id = target.kind === "role" ? target.role_id : null;
       // Move the tree only when it is mounted and can place the move; recording
       // an intent for a session in no bucket the page did not hand over would
       // replay a no-op until its TTL. A `remove` has no single new parent, so
