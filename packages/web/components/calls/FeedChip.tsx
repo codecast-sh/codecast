@@ -5,7 +5,7 @@ import { identitySig } from "../../lib/sessionIdentity";
 import { SessionFace } from "../identity";
 
 // A live transcript route rendered as a chip: what kind, where, removable by
-// its adder. Shared by the call stage's thread and the call page so a feed
+// anyone in the huddle. Shared by the call stage's thread and the call page so a feed
 // reads the same wherever it appears. The label follows the store, so a
 // session added before its row lands takes its name when it does; a caller
 // that already knows the name passes `label`.

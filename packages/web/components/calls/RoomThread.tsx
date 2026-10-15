@@ -562,7 +562,7 @@ export function RoomThread({
                 <FeedChip
                   route={r}
                   label={agent?.name}
-                  removable={canRemove && !!myUserId && r.added_by === myUserId}
+                  removable={canRemove}
                   onRemove={() => void removeFeed(r.kind, r.target)}
                 />
                 {agent?.working && transcribing && (

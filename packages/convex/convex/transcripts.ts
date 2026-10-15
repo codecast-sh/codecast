@@ -576,10 +576,16 @@ export const removeRoute = mutation({
     if (!t) throw new Error("Transcript not found");
     const route = t.routes.find((r) => r.kind === args.kind && r.target === args.target);
     if (!route) return;
-    // The scribe manages the run; everyone else manages only their own routes.
+    // The scribe and the adder may take a route back at any time. While the
+    // huddle runs, so may anyone in it, through addRoute's door: an agent in
+    // the room hears everyone, so everyone it hears may show it out.
     const isScribe = String(t.started_by) === String(userId);
     const isAdder = route.added_by && String(route.added_by) === String(userId);
-    if (!isScribe && !isAdder) throw new Error("Not your route");
+    const inRoom =
+      t.status === "live" &&
+      !isRecRoomKey(t.room_key) &&
+      (await authorizeRoom(ctx, userId, t.room_key)).ok;
+    if (!isScribe && !isAdder && !inRoom) throw new Error("Not your route");
     await dropRoute(ctx, t, args.kind, args.target);
   },
 });
