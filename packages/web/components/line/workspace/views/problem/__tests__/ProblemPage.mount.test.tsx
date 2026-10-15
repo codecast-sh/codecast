@@ -113,7 +113,11 @@ describe("ProblemPage", () => {
     expect(state).toMatch(/^In production .+, 2 since$/);
     expect(text(page).split(state).length).toBe(2);
     expect(page.getAttribute("data-band")).toBe("production");
-    for (const gone of [".lwt-from", ".lwt-stats", ".lwt-chart", ".lwp-pill", ".lwt-brief", "[data-line-came-from]"]) expect(page.querySelector(gone)).toBeNull();
+    for (const gone of [".lwt-from", ".lwt-stats", ".lwp-pill", ".lwt-brief", "[data-line-came-from]"]) expect(page.querySelector(gone)).toBeNull();
+    // The page leads with the problem's life on one axis, above where its newest run stands.
+    expect(page.querySelector("[data-line-problem-timeline] .lwt-chart")).not.toBeNull();
+    const order = [...page.querySelectorAll(".pp-title, [data-line-problem-timeline], [data-line-stage-track]")].map((e) => e.matches(".pp-title") ? "title" : e.matches("[data-line-stage-track]") ? "stage" : "timeline");
+    expect(order).toEqual(["title", "timeline", "stage"]);
     // The old labels, as labels: a finding's own words may say "came from".
     expect(text(page)).not.toMatch(/Came from|First seen|Newest|Brief for the next run|card unanswered/);
     // The band's facts: merged with its pull request, in production on its date, findings since.
@@ -128,11 +132,13 @@ describe("ProblemPage", () => {
     root.unmount();
   });
 
-  test("findings open in place, whole: the newest first; a judge's opens its moment; a person's shows all its words and the link it points to", async () => {
+  test("findings open in place, whole: one line each on arrival; a judge's opens its moment; a person's shows all its words and the link it points to", async () => {
     const { host, root } = await mount(props(build([second, base])));
     const rows = [...host.querySelectorAll(".fr")];
     expect(rows.map((r) => r.getAttribute("data-line-finding"))).toEqual(["sg-12", "sg-11", "sg-10"]);
-    // The newest is open on arrival: a judge finding opens the moment it read, and can be marked wrong.
+    // Nothing is open on arrival (a finding can hold a whole call). Opened, a judge finding shows the moment it read, and can be marked wrong.
+    expect(host.querySelector(".fr[data-open]")).toBeNull();
+    await click(rows[0].querySelector(".fr-row"));
     expect(rows[0].querySelector('[data-line-finding-open="moment"]')).not.toBeNull();
     expect(rows[0].querySelector("[data-line-moment]")).not.toBeNull();
     expect(text(rows[0].querySelector('[data-line-judge-wrong="open"]'))).toBe("Judge is wrong");
