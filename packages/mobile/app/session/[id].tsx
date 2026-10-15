@@ -3,7 +3,7 @@ import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from '@codecast/web/li
 import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast/web/lib/sessionAgentActions';
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
-import { ConversationSlideOut } from '@/components/inbox/ConversationSlideOut';
+import { ConversationSlideOut, useConversationDrawer } from '@/components/inbox/ConversationSlideOut';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
@@ -3046,17 +3046,20 @@ function SessionHeaderBar({ children, inFlow = false }: { children?: ReactNode; 
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  // Inside a conversation's slide-out the leading button opens it (the inbox
+  // and every other area live there); a screen standing alone goes back.
+  const drawer = useConversationDrawer();
   return (
     <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }, inFlow && { position: 'relative' }]}>
       <TouchableOpacity
-        onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)/inbox' as never))}
+        onPress={drawer ? drawer.open : () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/inbox' as never))}
         style={styles.headerIconBtn}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }}
         activeOpacity={0.6}
         accessibilityRole="button"
-        accessibilityLabel="Back"
+        accessibilityLabel={drawer ? 'Inbox and other areas' : 'Back'}
       >
-        <FontAwesome name="chevron-left" size={18} color={Theme.text} />
+        {drawer ? <Feather name="menu" size={20} color={Theme.text} /> : <FontAwesome name="chevron-left" size={18} color={Theme.text} />}
       </TouchableOpacity>
       {children}
     </RNView>

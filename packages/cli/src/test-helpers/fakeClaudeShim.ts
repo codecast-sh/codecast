@@ -154,6 +154,14 @@ stty kill '^K' 2>/dev/null || true
 # drains, re-pastes twice and gives up AGENT_STDIN_NOT_READY. Without echoctl
 # the raw ESC[200~ reaches tmux, which drops the unknown sequence.
 stty -echoctl 2>/dev/null || true
+# ENTER SUBMITS, C-j IS A NEWLINE, the way Claude's composer reads them. An
+# idle composer receives typed input with C-j between lines and one Enter at
+# the end (typedComposerInput), so the two keys must stay distinct. inlcr with
+# icrnl swaps them in the tty: Enter (CR) arrives as LF and ends the line, C-j
+# (LF) arrives as CR and stays inside it, and submit turns those CRs back into
+# newlines. The read stays canonical, so the C-k kill above still works (a
+# bash read -d would switch the tty to cbreak and lose both).
+stty inlcr icrnl 2>/dev/null || true
 
 has_paste_start() { case "$1" in *$'\\033'"[200~"*) return 0 ;; *) return 1 ;; esac; }
 has_paste_end() { case "$1" in *$'\\033'"[201~"*) return 0 ;; *) return 1 ;; esac; }
@@ -165,6 +173,7 @@ strip_paste_markers() {
 
 submit() {
   [ -z "$1" ] && return 0
+  set -- "\${1//$'\\r'/$'\\n'}"
   emit_user_message "$1"
   # Echo back so daemon JSONL watcher has something to sync. Single-line only:
   # a multi-line echo would make the pane's own output look like stuck input to
