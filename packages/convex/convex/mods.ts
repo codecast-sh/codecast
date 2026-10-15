@@ -322,7 +322,7 @@ export const cliGuide = query({
         mine: String(r.user_id) === String(userId),
         agents: r.manifest?.agents,
         fences: r.manifest?.fences ?? [],
-        objects: (r.manifest?.objects ?? []).map((k: any) => ({ prefix: k.prefix, title: k.title, statuses: k.statuses, fields: k.fields ? Object.keys(k.fields) : [] })),
+        objects: (r.manifest?.objects ?? []).map((k: any) => ({ prefix: k.prefix, title: k.title, statuses: k.statuses, fields: k.fields ? Object.keys(k.fields) : [], ...(k.external ? { external: true } : {}) })),
         panes: (r.manifest?.panes ?? []).map((p: any) => p.id),
       })),
     };

@@ -24,4 +24,12 @@ describe("mods contract guards", () => {
     expect(i.calls).toContain("local.get");
     expect(i.missing).toContain('permissions.read "tasks"');
   });
+
+  test("an external kind takes a boolean flag and must answer object.resolve", () => {
+    const manifest = { name: "people", objects: [{ prefix: "contact", title: "Contact", external: true }] };
+    expect(validateManifest(manifest).ok).toBe(true);
+    expect(validateManifest({ name: "people", objects: [{ prefix: "contact", title: "Contact", external: "yes" }] }).ok).toBe(false);
+    expect(inspectModSource({ "ui.tsx": `on("ui.render", { object: "contact" }, async () => null)` }, manifest as any).unserved.join()).toContain('external object "contact"');
+    expect(inspectModSource({ "ui.tsx": `on("object.resolve", { object: "contact" }, async () => null)` }, manifest as any).unserved).toEqual([]);
+  });
 });

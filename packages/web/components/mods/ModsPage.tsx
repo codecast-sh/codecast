@@ -8,6 +8,7 @@ import { Switch } from "../ui/switch";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts/registry";
 import { ModLogList } from "./ModLogList";
+import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { modHost, modNavigate, type ModRow } from "../../lib/mods/host";
 import { permissionsSig } from "@codecast/shared/contracts/mods";
 import { useModHostVersion, useModRows } from "../../lib/mods/useMods";
@@ -94,6 +95,7 @@ function ModCard({ row }: { row: ModRow }) {
   useModHostVersion();
   const runtime = modHost.get(row._id);
   const [open, setOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const m = row.manifest ?? ({} as ModRow["manifest"]);
   const errors = runtime?.logs.filter((l) => l.level === "error") ?? [];
   const status = !row.enabled ? "off" : runtime?.status === "failed" ? "failed" : runtime?.status === "ready" ? "running" : row.is_mine === false && !runtime ? "shared" : "starting";
@@ -135,12 +137,18 @@ function ModCard({ row }: { row: ModRow }) {
       <div className="flex flex-wrap gap-1.5 px-4 pt-3">
         {(m.panes ?? []).map((p) => <Chip key={`p${p.id}`} icon="panel-right">{p.title}</Chip>)}
         {(m.commands ?? []).map((c) => <Chip key={`c${c.id}`} icon="command">{c.title}</Chip>)}
+        {m.agents ? (
+          <button onClick={() => setAgentsOpen((v) => !v)} aria-expanded={agentsOpen} className="rounded-md hover:bg-sol-bg-alt">
+            <Chip icon="bot">for agents</Chip>
+          </button>
+        ) : null}
         {(m.objects ?? []).map((o) => <Chip key={`o${o.prefix}`} icon={o.icon ?? "box"}>{o.plural ?? `${o.title}s`} · {o.prefix}-N</Chip>)}
         {(m.fences ?? []).map((f) => <Chip key={`f${f.lang}`} icon="code">```{f.lang}</Chip>)}
         {m.permissions?.read ? <Chip icon="eye">reads {m.permissions.read === "*" ? "everything" : m.permissions.read.join(", ")}</Chip> : null}
         {m.permissions?.write ? <Chip icon="pen-line">writes {m.permissions.write === "*" ? "everything" : m.permissions.write.join(", ")}</Chip> : null}
         {m.permissions?.fetch ? <Chip icon="globe">fetches {m.permissions.fetch === "*" ? "anywhere" : m.permissions.fetch.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</Chip> : null}
       </div>
+      {agentsOpen && m.agents ? <div className="mx-4 mt-3 max-h-72 overflow-auto rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2 text-[12.5px]"><MarkdownRenderer content={m.agents} /></div> : null}
       {row.is_mine !== false && row.has_local ? <LocalHalf row={row} /> : null}
       <div className="mt-3 flex items-center gap-3 border-t border-sol-border px-4 py-2">
         <button onClick={() => setOpen((v) => !v)} className="text-[12px] text-sol-text-muted hover:text-sol-text">

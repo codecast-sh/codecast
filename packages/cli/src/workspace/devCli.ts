@@ -71,6 +71,7 @@ export function registerDevCommand(program: Command): void {
           checkout, manifest,
           timeoutSec: o.timeout ? Number(o.timeout) : undefined,
           onWait: o.json ? undefined : (s, sec) => console.log(fmt.muted(`  ${s.name}: waiting for it to answer (${sec}s)`)),
+          onNote: o.json ? undefined : (line) => console.log(fmt.muted(`  ${line}`)),
         });
         results.push(status);
         if (!o.json) printStatus(status);

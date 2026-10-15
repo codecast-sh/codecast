@@ -10,6 +10,8 @@ import { DynamicIcon } from "lucide-react/dynamic";
 import { Button as UIButton } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { EntityIdPill } from "../EntityIdPill";
+import { ModObjectPill } from "./ModObjectPill";
+import { isObjectRef } from "../../lib/mods/objects";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { CodeBlock } from "../CodeBlock";
 import { ShadowCanvas, type CanvasEvent } from "../HtmlSnippet";
@@ -326,6 +328,7 @@ function Badge({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
 /** A reference pill sized for UI, not prose: the pill sizes itself to 1em of whatever surrounds it. */
 function Ref({ id, label }: { id: string; label?: string }) {
   if (!id) return null;
+  if (isObjectRef(id)) return <span className="inline-flex min-w-0 text-[13px] leading-snug"><ModObjectPill shortId={id} /></span>;
   return <span className="inline-flex min-w-0 text-[13px] leading-snug"><EntityIdPill shortId={id} label={label} fallback={<span className="font-mono text-[12px] text-sol-text-muted">{label ?? id}</span>} /></span>;
 }
 

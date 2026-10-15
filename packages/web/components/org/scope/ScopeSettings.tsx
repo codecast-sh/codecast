@@ -33,12 +33,37 @@ import { SlackConnect } from "../../anchor/SlackConnect";
 import { OrgObjectLink } from "../company/OrgObjectLink";
 import { ConsequentialSwitch } from "../../consequential/ConsequentialSwitch";
 import { roleAutonomyLedger } from "../../consequential/ledgers";
+import { hireLeewayLedger } from "../../consequential/roleOnline";
 import { useRunCost } from "../../consequential/useRunCost";
 import { HandingOverSection, MergeStepSwitch, SplitRoleSection, SuccessionSection } from "./RoleHandoffSections";
 
 const NO_INTENTS: OrgIntent[] = [];
 
 const api = _api as any;
+
+/** A switch whose on position costs something: the ConsequentialSwitch trigger, green when on. */
+function PillSwitch({ on, label, press, reviewing, disabled, data }: { on: boolean; label: string; press: () => void; reviewing: boolean; disabled: boolean; data: Record<string, string> }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      aria-haspopup={on ? undefined : "dialog"}
+      aria-expanded={on ? undefined : reviewing}
+      disabled={disabled}
+      onClick={press}
+      {...data}
+      className="inline-flex items-center gap-2.5 rounded-full pl-1 pr-3 h-8 border transition-colors disabled:cursor-default disabled:opacity-60"
+      style={{ borderColor: on ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: on ? "color-mix(in srgb, var(--sol-green) 10%, transparent)" : undefined }}
+    >
+      <span className="relative inline-block w-9 h-5 rounded-full transition-colors" style={{ background: on ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-text-dim) 35%, transparent)" }}>
+        <span className="absolute top-0.5 w-4 h-4 rounded-full transition-[left]" style={{ left: on ? 18 : 2, background: "var(--sol-bg)" }} />
+      </span>
+      <span className="text-[12.5px] font-semibold" style={{ color: on ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{on ? "On" : "Off"}</span>
+    </button>
+  );
+}
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -288,28 +313,21 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
           ledger={roleAutonomyLedger({ name: role.name, handle: role.handle, caps, projects: role.scope.project_ids.map((id) => (useInboxStore.getState().projects as Record<string, { title?: string }>)[id]?.title ?? "a project"), cost: runCost, usedToday: counters?.hands ?? null, merges: lineRow?.merge?.on ?? !!role.line_merge })}
           onTurnOn={() => onUpdate({ trust: trustForSwitch(true) })}
           onTurnOff={() => onUpdate({ trust: trustForSwitch(false) })}
-          trigger={({ press, reviewing }) => (
-        <button
-          type="button"
-          role="switch"
-          aria-checked={startsOnItsOwn}
-          aria-label={AUTONOMY_LABEL}
-          aria-haspopup={startsOnItsOwn ? undefined : "dialog"}
-          aria-expanded={startsOnItsOwn ? undefined : reviewing}
-          disabled={!canEdit || isRoot}
-          onClick={press}
-          data-autonomy-switch={startsOnItsOwn ? "on" : "off"}
-          className="inline-flex items-center gap-2.5 rounded-full pl-1 pr-3 h-8 border transition-colors disabled:cursor-default disabled:opacity-60"
-          style={{ borderColor: startsOnItsOwn ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: startsOnItsOwn ? "color-mix(in srgb, var(--sol-green) 10%, transparent)" : undefined }}
-        >
-          <span className="relative inline-block w-9 h-5 rounded-full transition-colors" style={{ background: startsOnItsOwn ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-text-dim) 35%, transparent)" }}>
-            <span className="absolute top-0.5 w-4 h-4 rounded-full transition-[left]" style={{ left: startsOnItsOwn ? 18 : 2, background: "var(--sol-bg)" }} />
-          </span>
-          <span className="text-[12.5px] font-semibold" style={{ color: startsOnItsOwn ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{startsOnItsOwn ? "On" : "Off"}</span>
-        </button>
-          )}
+          trigger={({ press, reviewing }) => <PillSwitch on={startsOnItsOwn} label={AUTONOMY_LABEL} press={press} reviewing={reviewing} disabled={!canEdit || isRoot} data={{ "data-autonomy-switch": startsOnItsOwn ? "on" : "off" }} />}
         />
       </Section>
+
+      {!isRoot && (
+        <Section title="Hires without approval">
+          <ConsequentialSwitch
+            on={!!role.hires_freely}
+            ledger={hireLeewayLedger({ name: role.name, handle: role.handle })}
+            onTurnOn={() => onUpdate({ hires_freely: true })}
+            onTurnOff={() => onUpdate({ hires_freely: false })}
+            trigger={({ press, reviewing }) => <PillSwitch on={!!role.hires_freely} label="Hires without approval" press={press} reviewing={reviewing} disabled={!canEdit} data={{ "data-hire-leeway-switch": role.hires_freely ? "on" : "off" }} />}
+          />
+        </Section>
+      )}
 
       <Section title="Limits" hint="The most it may do in one day; none unless you set one. When it reaches one it waits for tomorrow and says so in its notes; nothing reaches you.">
         <details data-role-limits>

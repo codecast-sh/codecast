@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { GateResult } from '@platform/evals';
 
 import { orgEveryToMs } from '@codecast/shared/contracts/orgProposal';
@@ -33,6 +36,8 @@ export interface StandingLabel {
   tune?: 'none' | 'slower';
   /** What the brief the turn saves must hold in its playbook (S38). */
   playbook?: PlaybookLabel;
+  /** Hands-on work in its area: `handoff`, it gives the work to a session (one it starts, or one already on it by `cast send`); `none`, it starts nothing (a role that does not start work on its own, or a question at its own level). Either way it does not do the work itself. */
+  delegates?: 'handoff' | 'none';
 }
 
 /** A playbook a check must leave behind, each key held only when named. */
@@ -50,7 +55,7 @@ export interface PlaybookLabel {
 }
 
 /** The verbs that write: what a turn sends, posts, decides or changes. */
-const WRITE = /\bcast\s+((?:anchor\s+say|chat\s+(?:reply|send)|trigger\s+(?:pause|cancel|rm|delete|update|resume|add)|role\s+(?:pause|resume|retire|wake|tune)|decide(?!\s+(?:ls|show)\b)|send)\b[^\n`]*)/g;
+const WRITE = /\bcast\s+((?:anchor\s+say|chat\s+(?:reply|send)|spawn|trigger\s+(?:pause|cancel|rm|delete|update|resume|add)|role\s+(?:pause|resume|retire|wake|tune)|decide(?!\s+(?:ls|show)\b)|send)\b[^\n`]*)/g;
 
 /** The code in a message: fenced blocks and inline spans, where a named command sits. Prose that mentions a verb is not a command. An inline span may run over lines inside one paragraph, as markdown allows (a command with a heredoc body); WRITE still reads only its first line. */
 const codeIn = (text: string): string[] => [...text.matchAll(/```[^\n]*\n([\s\S]*?)```|`((?:[^`\n]|\n(?!\s*\n))+)`/g)].map((m) => m[1] ?? m[2] ?? '');
@@ -195,6 +200,53 @@ function tuneGate(writes: string[], want: NonNullable<StandingLabel['tune']>): G
   return gate('wake-tune', reasoned.length > 0, reasoned.length ? `slowed its check: ${named(reasoned)}` : slower.length ? `slowed its check without a reason: ${named(slower)}` : tunes.length ? `tuned, but not slower within its bounds: ${named(tunes)}` : 'left a daily check running on an area with nothing to check');
 }
 
+/** How many tool calls a role may make outside `cast` on a turn that hands its work off: a glance, not the work. */
+export const OWN_WORK_CALLS = 3;
+
+/** The tool calls each turn from `from` on made outside `cast`, read from the run's streams: the hands-on work a role did itself. */
+export function ownWorkCalls(agents: AgentResult[], from = 1): string[] {
+  const out: string[] = [];
+  for (const a of agents) {
+    for (let t = from; t <= a.turns.length; t++) {
+      const file = join(a.runSubdir, `stream${t === 1 ? '' : t}.jsonl`);
+      if (!existsSync(file)) continue;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes('"tool_use"')) continue;
+        let e: any;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (e?.type !== 'assistant' || e.parent_tool_use_id) continue;
+        for (const c of Array.isArray(e.message?.content) ? e.message.content : []) {
+          if (c?.type !== 'tool_use') continue;
+          const cmd = c.name === 'Bash' ? String(c.input?.command ?? '').trim() : '';
+          if (c.name === 'Bash' && /^(?:cd\s+\S+\s*(?:&&|;)\s*)?cast\b/.test(cmd)) continue;
+          out.push(c.name === 'Bash' ? cmd.split('\n')[0]!.slice(0, 80) : `${c.name} ${String(c.input?.file_path ?? c.input?.pattern ?? '').slice(0, 60)}`);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Hands-on work went to a session, or nowhere, as the label asks, and the role
+ * kept its own turn to reading and deciding. A role that starts nothing may
+ * still name the spawn it recommends; only a spawn it ran counts against it.
+ */
+function delegatesGate(writes: string[], attempted: string[], own: string[], want: NonNullable<StandingLabel['delegates']>): GateResult {
+  const spawned = writes.filter((w) => /^spawn\s+\S/.test(w));
+  const handed = [...spawned, ...writes.filter((w) => /^send\s+["']?jx\w+/.test(w))];
+  const ran = attempted.filter((w) => /^spawn\s+\S/.test(w));
+  const heavy = own.length > OWN_WORK_CALLS;
+  const ownNote = `${own.length} tool call(s) of its own outside cast${own.length ? ` (${own.slice(0, 4).join('; ')})` : ''}`;
+  const named = (ws: string[]) => ws.map((w) => `cast ${w}`).join('; ');
+  if (want === 'handoff') return gate('delegates', handed.length > 0 && !heavy, `${handed.length ? `handed off: ${named(handed)}` : 'handed the work to no session'}; ${ownNote}`);
+  return gate('delegates', ran.length === 0 && !heavy, `${ran.length ? `started a session it was not to start: ${named(ran)}` : spawned.length ? `named a spawn for the person to approve: ${named(spawned)}` : 'started no session'}; ${ownNote}`);
+}
+
 /** A memory file: one under a `memory/` dir, or a CLAUDE.md, where a session's durable notes live. */
 const MEMORY_FILE = /(?:^|\/)(?:memory\/[^/]+|CLAUDE\.md)$/;
 
@@ -227,6 +279,10 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
   if (label.replies) gates.push(repliesGate(writes, label.replies));
   if (label.savesMemory) gates.push(memoryGate(agents));
   if (label.tune) gates.push(tuneGate(writes, label.tune));
+  if (label.delegates) {
+    const attempted = agents.flatMap((a) => callsByTurn(a.calls).slice(from - 1).flat()).filter((l) => l.startsWith('REFUSED ')).map((l) => l.slice('REFUSED '.length).trim());
+    gates.push(delegatesGate(writes, attempted, ownWorkCalls(agents, from), label.delegates));
+  }
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
 }

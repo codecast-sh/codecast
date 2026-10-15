@@ -1,0 +1,28 @@
+{
+ "name": "anchor-brief role-no-start-recommends",
+ "anchor": {
+  "kind": "message",
+  "id": "fixture:role-no-start-recommends"
+ },
+ "subject": {
+  "kind": "synthetic",
+  "id": "anchor-brief:role-no-start-recommends",
+  "title": "anchor-brief role-no-start-recommends"
+ },
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "trigger": {
+  "type": "anchor-brief"
+ },
+ "meta": {
+  "surface": "anchor-brief",
+  "visibility": "public",
+  "snapshot": "fixtures/anchor-brief/role-no-start-recommends.json"
+ },
+ "judge": "starts no session and does not dig through the files itself; tells Mara in a few lines what a session should do about the broken links and recommends she start it",
+ "notes": null,
+ "tags": [
+  "scope"
+ ],
+ "id": "692a0981-f750-43d4-8a2c-8bb1e3dd8677",
+ "createdAt": "2026-10-14T16:00:00.000Z"
+}
