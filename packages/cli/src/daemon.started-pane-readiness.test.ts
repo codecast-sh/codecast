@@ -241,7 +241,9 @@ describe("discovery binds the assigned session id at prompt readiness", () => {
 
   test("a restarted daemon resumes discovery for persisted, still-unlinked panes", () => {
     const bootAt = daemonSource.indexOf("syncServiceRef = syncService;");
-    expect(daemonSource.slice(bootAt, bootAt + 200)).toContain("resumeStartedSessionDiscovery()");
+    const resumeAt = daemonSource.indexOf("resumeStartedSessionDiscovery();", bootAt);
+    expect(resumeAt).toBeGreaterThan(bootAt);
+    expect(resumeAt).toBeLessThan(daemonSource.indexOf("// Listen NOW", bootAt));
     const fnAt = daemonSource.indexOf("function resumeStartedSessionDiscovery()");
     const fn = daemonSource.slice(fnAt, daemonSource.indexOf("\n}\n", fnAt));
     expect(fn).toContain("discoverAndLinkSession(conversationId, entry.tmuxSession, entry.projectPath)");
