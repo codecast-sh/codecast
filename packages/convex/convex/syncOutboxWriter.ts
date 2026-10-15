@@ -4,6 +4,7 @@ import {
   type ActionExtra, type LifecycleEntity, type SyncAckCollector, type SyncOp,
 } from "./syncLog";
 import type { ChangeEntity } from "./changeLog";
+import { claimDrain } from "./lib/drainMarker";
 
 export function attachSyncOutbox(ctx: any, collector: SyncAckCollector): void {
   collector.receipts = [];
@@ -45,6 +46,11 @@ export async function enqueueSyncAction(
     ...fields, delivered_revision: 0, position: 0,
   });
   if (existing) await ctx.db.patch(id, fields);
-  if (!existing?.pending && ctx.scheduler) await ctx.scheduler.runAfter(25, (internal as any).syncOutbox.drain, { id });
+  if (!existing?.pending && ctx.scheduler && await claimDrain(ctx, outboxDrainKey(scopeKey))) {
+    await ctx.scheduler.runAfter(25, (internal as any).syncOutbox.drain, { id });
+  }
   return { id: String(id), revision, scope_key: scopeKey, entity_type: entityType, entity_id: entityId };
 }
+
+/** The drain marker key for a sync scope. */
+export const outboxDrainKey = (scopeKey: string) => `outbox:${scopeKey}`;
