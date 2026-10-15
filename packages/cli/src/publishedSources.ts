@@ -10,7 +10,7 @@
 // version in order. One commit per publish that changed anything.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { evalsHomeDir } from "./evals/evalsBridge.js";
 
 export const publishedSourcesDir = (home = evalsHomeDir()) => path.join(home, "published");

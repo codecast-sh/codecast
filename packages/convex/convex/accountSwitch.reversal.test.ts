@@ -145,6 +145,7 @@ describe("account recovery keeps limit evidence separate from activity", () => {
   test("recent activity does not revive an expired incident in resume-only mode", async () => {
     const f = fixture();
     f.device.cc_auto_switch = false;
+    (f.device as any).cc_auto_continue = true;
     f.conversation.pending_api_error_at = f.now - AUTO_CONTINUE_WINDOW_MS - 1;
     f.conversation.updated_at = f.now;
     expect(await f.run()).toMatchObject({ acted: "nothing_blocked" });

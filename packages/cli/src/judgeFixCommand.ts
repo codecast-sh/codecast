@@ -25,7 +25,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";

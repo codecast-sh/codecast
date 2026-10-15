@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { foreignProse, referenceGuidance, renderFencedTaskRecord } from "@codecast/shared/tasks";
 import { blockAt } from "./test-helpers/sourceRegion";
+import { supersededLine, taskGraphSections } from "./taskGraphCommands";
 
 const source = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const action = blockAt(source, source.indexOf(".action(", source.indexOf('work\n  .command("context")'))).text.replace(/^\s*\.action\(/, "const action = (");
@@ -20,7 +21,7 @@ test("task context executes the shared fence at the CLI action and leaves JSON i
   };
   const lines: string[] = [];
   let json: unknown;
-  const deps = { console: { log: (text = "") => lines.push(text) }, cliPost: async () => result, printJson: (v: unknown) => { json = v; }, ASSIGNEE_MEANS: "owner", inlineForeignText, renderFencedTaskRecord, fenceForeignText, referenceGuidance, foreignProse, FOREIGN_TEXT_CAPS };
+  const deps = { console: { log: (text = "") => lines.push(text) }, cliPost: async () => result, printJson: (v: unknown) => { json = v; }, ASSIGNEE_MEANS: "owner", inlineForeignText, renderFencedTaskRecord, fenceForeignText, referenceGuidance, foreignProse, FOREIGN_TEXT_CAPS, supersededLine, taskGraphSections };
   const run = new Function(...Object.keys(deps), code + ";return action;")(...Object.values(deps));
   await run("ct-1", {});
   const text = lines.join("\n");
