@@ -103,6 +103,9 @@ const LastDeploy = ({ d }: { d: { at: number; url: string | null } | null }) => 
   </span>
 );
 
+
+/** A merge links its pull request, or the commit that landed it on main when none did (tasks.landed). */
+const mergeLinkWords = (link: string) => (/\/commit\//.test(link) ? "the commit" : "the pull request");
 export function ProblemBand(p: ProblemBandProps) {
   const { band: b } = p;
   const branch = useRunBranch(b.kind === "approved" ? b.runId : null, b.kind === "approved" ? p.taskId : null);
@@ -225,14 +228,14 @@ export function ProblemBand(p: ProblemBandProps) {
     case "merged":
       facts = <>
         {/* The merge's hour beside the last deploy's: whether that deploy could have carried it reads at a glance. */}
-        <Fact k="Merged">{dayTimeWords(b.mergedAt)}{b.link ? <Out href={b.link}>the pull request</Out> : b.sha ? <code className="pb-sha">{b.sha.slice(0, 7)}</code> : null}</Fact>
+        <Fact k="Merged">{dayTimeWords(b.mergedAt)}{b.link ? <Out href={b.link}>{mergeLinkWords(b.link)}</Out> : b.sha ? <code className="pb-sha">{b.sha.slice(0, 7)}</code> : null}</Fact>
         {b.recorded === "known" && <Fact k="In production" tone="warn">No<LastDeploy d={b.lastDeploy} />{b.lastDeploy && b.lastDeploy.at > b.mergedAt && <span data-line-deploy-after> · after the merge, did not carry it</span>}</Fact>}
         {b.recorded === "none" && <Fact k="In production">Not recorded for this project</Fact>}
       </>;
       break;
     case "production":
       facts = <>
-        {b.mergedAt != null && <Fact k="Merged">{dayTimeWords(b.mergedAt)}{b.link ? <Out href={b.link}>the pull request</Out> : b.sha ? <code className="pb-sha">{b.sha.slice(0, 7)}</code> : null}</Fact>}
+        {b.mergedAt != null && <Fact k="Merged">{dayTimeWords(b.mergedAt)}{b.link ? <Out href={b.link}>{mergeLinkWords(b.link)}</Out> : b.sha ? <code className="pb-sha">{b.sha.slice(0, 7)}</code> : null}</Fact>}
         <Fact k="In production" tone="ok">{deployWhen(b.liveAt)}{b.target ? ` · ${b.target}` : ""}{b.deployUrl && <Out href={b.deployUrl}>the deploy</Out>}</Fact>
         {b.watch === "watching" && b.watchEnd != null && <Fact k="Watch ends">{dayWords(b.watchEnd)}</Fact>}
         {/* What the headline counts: findings and the line's own failures on the fault. */}

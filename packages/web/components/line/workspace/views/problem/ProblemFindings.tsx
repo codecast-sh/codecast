@@ -56,10 +56,10 @@ export function ProblemFindings({ signals, expected, ready, fix, home, back, fin
     return { rows: kept.filter((s) => !apart.has(s)), asks: kept.filter((s) => apart.has(s)), times: (s: ReaderSignal) => (repeats.size ? 1 + (n.get(repeatKey(s)) ?? 0) : 1), empty };
   }, [signals, title]);
   const refOf = (s: ReaderSignal) => s.short_id ?? s._id;
-  // The first is open on arrival; the address names another; a person opens up to three.
+  // Every finding is one line on arrival (one can hold a whole call); the address may name one open; a person opens up to three.
   const [opened, setOpened] = useState<string[] | null>(null);
   // With nothing listed, the first finding apart opens: its move out is the act.
-  const first = rows[0] ? refOf(rows[0]) : asks[0] ? refOf(asks[0]) : null;
+  const first = rows[0] ? null : asks[0] ? refOf(asks[0]) : null;
   const open = opened ?? (finding ? [finding] : first ? [first] : []);
   // The address moving on its own (Back, Forward, a link) sets what is open: as it reads on arrival at that address.
   const wrote = useRef(finding);

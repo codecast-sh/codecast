@@ -14,6 +14,12 @@
 
 export const PAGE_THEME_MESSAGE = "codecast:theme";
 export const PAGE_HEIGHT_MESSAGE = "codecast:height";
+// A gate standing in front of a page (its password form, its email wall, its
+// expiry notice) says so to the window framing it, before anything else, so an
+// embed that started loading before it knew the page's gates can tell the
+// gate from the page and keep it hidden until it has the way through.
+export const PAGE_GATE_MESSAGE = "codecast:gate";
+export const PAGE_GATE_SIGNAL = `<script>try{if(window.parent!==window)window.parent.postMessage({type:${JSON.stringify(PAGE_GATE_MESSAGE)}},"*")}catch(e){}</script>`;
 
 /** The tokens a framed page receives, by name without the leading dashes. */
 export const PAGE_THEME_TOKENS = [
@@ -59,7 +65,9 @@ const DEFAULT_CSS =
 // <html> names the mode for pages that branch on it. Height: only when framed,
 // the bottom of <body> (the document's scrollHeight never drops below the
 // frame, so alone it could never shrink it), or the scrollHeight when content
-// overflows the frame, posted on every change. A frame not laid out yet (a
+// overflows the frame, posted on every change. With it rides the height the
+// page asks to open at, from <meta name="codecast:height" content="640">. A
+// frame not laid out yet (a
 // background tab loads it at 0x0) is never measured: its text wraps at zero
 // width into a page a hundred times its real height, and the host would grow
 // the frame to that. The frame's first real size arrives as a resize.
@@ -71,7 +79,7 @@ try{var t=new URLSearchParams(location.search).get("theme");if(t==="dark"||t==="
 var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
 window.addEventListener("message",function(e){var m=e.data;if(e.source!==window.parent||!m||m.type!==${JSON.stringify(PAGE_THEME_MESSAGE)})return;var mode=m.theme==="dark"||m.theme==="light"?m.theme:null;if(m.tokens&&typeof m.tokens==="object")put(mode,m.tokens);else if(mode)put(mode,D[mode]);});
 if(!framed||typeof ResizeObserver==="undefined")return;
-var last=0;function report(){var b=document.body;if(!b||!innerWidth||!innerHeight)return;var h=Math.ceil(b.getBoundingClientRect().bottom+window.scrollY+(parseFloat(getComputedStyle(b).marginBottom)||0));if(d.scrollHeight>innerHeight)h=Math.max(h,d.scrollHeight);if(h>0&&h!==last){last=h;window.parent.postMessage({type:${JSON.stringify(PAGE_HEIGHT_MESSAGE)},height:h},"*");}}
+var last=0;function report(){var b=document.body;if(!b||!innerWidth||!innerHeight)return;var h=Math.ceil(b.getBoundingClientRect().bottom+window.scrollY+(parseFloat(getComputedStyle(b).marginBottom)||0));if(d.scrollHeight>innerHeight)h=Math.max(h,d.scrollHeight);if(h>0&&h!==last){last=h;var pm=document.querySelector('meta[name="codecast:height"]'),p=pm?parseInt(pm.getAttribute("content")||"",10):NaN;window.parent.postMessage({type:${JSON.stringify(PAGE_HEIGHT_MESSAGE)},height:h,preferred:p>0?p:null},"*");}}
 function watch(){var ro=new ResizeObserver(report);ro.observe(d);if(document.body)ro.observe(document.body);report();}
 if(document.body)watch();else document.addEventListener("DOMContentLoaded",watch);
 window.addEventListener("load",report);window.addEventListener("resize",report);

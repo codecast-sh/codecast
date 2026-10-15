@@ -1,24 +1,32 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, Columns2, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { usePageInfo } from "../hooks/usePageInfo";
+import { hasStoredAuthToken } from "../lib/localAuth";
+import { adoptFrame, claimFrame, frameKey, frameLoaded, hasParkedFrame, placeFrame, preloadFrame, releaseFrame, type PageHeight } from "../lib/pageFramePool";
+import { useTheme } from "./ThemeProvider";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
-import { PAGE_HEIGHT_MESSAGE } from "../../shared/render/pageTheme";
+import { PAGE_GATE_MESSAGE, PAGE_HEIGHT_MESSAGE } from "../../shared/render/pageTheme";
+import { useEventListener } from "../hooks/useEventListener";
 import { useFrameTheme } from "../hooks/useFrameTheme";
 import { usePageNotes } from "../hooks/usePageNotes";
-import { usePageAgent, type PageAgent } from "../hooks/usePageAgent";
+import { sessionName, usePageAgent, type PageAgent } from "../hooks/usePageAgent";
+import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
+import { useInboxStore } from "../store/inboxStore";
+import { MessageIdentity } from "../lib/conversationBlockContexts";
 import { PAGE_AGENT_LABELS } from "@codecast/shared/contracts";
 import { useNativeBrowserPane } from "../hooks/useNativeBrowserPane";
 import { copyToClipboard } from "../lib/utils";
 import { isDesktop } from "../lib/desktop";
 import { openBrowserPane } from "../lib/stage";
-import { pageFrameSrc, pageShareUrl } from "../lib/publishedPageUrls";
-import { claudeArtifactUrl } from "../lib/entityLinks";
+import { pageEmbedSrc, pageFrameSrc, pageShareUrl } from "../lib/publishedPageUrls";
+import { claudeArtifactUrl, entityRoute } from "../lib/entityLinks";
 import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { ClaudeIcon } from "./BrandIcons";
-import { HeightGrip, savedGripHeight } from "./HeightGrip";
+import { HeightGrip } from "./HeightGrip";
 import { KeyCap } from "./KeyCap";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -163,35 +171,49 @@ function PagePill({ icon, text, title, href, hoverClass, pane }: {
 // Published codecast pages (`cast publish` output)
 // ---------------------------------------------------------------------------
 
-/** Viewer metadata for the header/caption. Enrichment only — the frame renders
- *  without it — so a failed query degrades the chrome, never the embed. */
-function usePageMeta(slug: string) {
-  const { data } = useQueryNoThrow(api.artifacts.getShared, { slug });
-  return data as
-    | { title: string; kind: string; version: number; gated: boolean; user: { name: string | null } | null }
-    | null
-    | undefined;
-}
 
-/** The page's agent, as a quiet chip: a dot and a word, the dot breathing
- *  while the agent is on the page. The same chip the page's own bar shows. */
+/** The page's agent, as a quiet chip: the publishing session's name and its
+ *  state, the dot breathing while the agent is on the page. The same state the
+ *  page's own bar shows. A link to that session. */
 function PageAgentStatus({ agent }: { agent: PageAgent }) {
+  const openLinkedSession = useOpenLinkedSession();
   const tone =
     agent.chip === "needs_input" ? "text-sol-yellow" :
     agent.chip === "updating" ? "text-sol-red" :
     agent.chip === "working" ? "text-sol-blue" : "text-sol-text-dim";
   const busy = agent.chip === "working" || agent.chip === "updating";
+  const name = sessionName(agent) ?? agent.session?.short_id ?? "Session";
+  const convId = agent.session?.conversation_id ?? null;
+  const href = convId ? entityRoute("session", convId) : null;
+  const body = (
+    <>
+      <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full bg-current ${busy ? "page-embed__agent-dot--busy" : "opacity-70"}`} aria-hidden />
+      <span className="max-w-[16ch] truncate">{name}</span>
+      <span className="opacity-70">{PAGE_AGENT_LABELS[agent.chip]}</span>
+    </>
+  );
+  const className = `page-embed__agent inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-1.5 font-mono text-[10.5px] ${tone}`;
+  const title = agent.chip === "updating"
+    ? "A comment was sent to the session that made this page; it reloads here when a new version lands."
+    : agent.session?.title || "The session that made this page.";
+  if (!href) return <span className={className} role="status" title={title}>{body}</span>;
   return (
-    <span
-      className={`page-embed__agent inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-1.5 font-mono text-[10.5px] ${tone}`}
+    <a
+      href={href}
+      className={`${className} hover:underline`}
       role="status"
-      title={agent.chip === "updating"
-        ? "A comment was sent to the session that made this page; it reloads here when a new version lands."
-        : "The session that made this page."}
+      title={title}
+      onClick={(e) => {
+        // A session already in the store takes the stage like any session
+        // reference; anything else (or a modified click) follows the href.
+        const row = convId ? useInboxStore.getState().sessions[convId] : null;
+        if (!row || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        openLinkedSession(row);
+      }}
     >
-      <span className={`h-1.5 w-1.5 rounded-full bg-current ${busy ? "page-embed__agent-dot--busy" : "opacity-70"}`} aria-hidden />
-      {PAGE_AGENT_LABELS[agent.chip]}
-    </span>
+      {body}
+    </a>
   );
 }
 
@@ -301,10 +323,12 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
  *  floating over its top corner, the resize edge under it, the caption
  *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
  *  stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, children }: {
+export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, bare = false, children }: {
   title: string;
   href: string;
   actions: ReactNode;
+  /** The page is part of the surface around it (a decision's own page): no toolbar, no fold, no resize edge. */
+  bare?: boolean;
   /** A quiet status beside the title in the toolbar. */
   status?: ReactNode;
   /** Also hold the status on the page's top edge while the toolbar is away:
@@ -359,9 +383,9 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
         <span className="page-embed__edge" aria-hidden />
         <span ref={stageRef} className="page-embed__stage relative block overflow-hidden rounded-[10px]" style={{ height }}>
           {children}
-          {!loaded && <span className="page-embed__shimmer" aria-hidden />}
+          {!loaded && <span className="page-embed__shimmer" role="status"><span className="page-embed__loading">Loading the page</span></span>}
         </span>
-        <TooltipProvider delayDuration={350} skipDelayDuration={150}>
+        {!bare && <TooltipProvider delayDuration={350} skipDelayDuration={150}>
           <span className="page-embed__bar" role="toolbar" aria-label={`${title} actions`}>
             {titleLink}
             {status}
@@ -373,9 +397,9 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
               </Tool>
             )}
           </span>
-        </TooltipProvider>
+        </TooltipProvider>}
         {statusPinned && status && <span className="page-embed__status" aria-hidden>{status}</span>}
-        {grip}
+        {!bare && grip}
       </span>
       {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
@@ -385,28 +409,92 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
 const EMBED_HEIGHT = 420;
 // Expanding doubles the frame.
 const EMBED_EXPAND_FACTOR = 2;
-// The frame height a reader drags to, kept across embeds and reloads.
-const EMBED_HEIGHT_KEY = "codecast.pageEmbed.height";
 const EMBED_MIN_HEIGHT = 120;
+// The tallest a page may ask to open at.
+const EMBED_MAX_PREFERRED = 2000;
 
-/** The height a framed published page reports its content needs (see
- *  shared/render/pageTheme.ts). Null until the page reports, and for a report
+/** The height a framed published page reports its content needs, and the
+ *  height it asks to open at (`<meta name="codecast:height">`; see
+ *  shared/render/pageTheme.ts). Null until the page reports; a content height
  *  too small to be a real layout (a page whose content is all absolutely
- *  positioned measures its body at a few pixels). */
-function useReportedHeight(frameRef: RefObject<HTMLIFrameElement | null>): number | null {
-  const [height, setHeight] = useState<number | null>(null);
+ *  positioned measures its body at a few pixels) is ignored. */
+function useReportedHeight(frameRef: RefObject<HTMLIFrameElement | null>) {
+  const [height, setHeight] = useState<{ content: number | null; preferred: number | null }>({ content: null, preferred: null });
+  const take = useCallback((m: { type?: unknown; height?: unknown; preferred?: unknown } | null) => {
+    if (m?.type !== PAGE_HEIGHT_MESSAGE || typeof m.height !== "number" || !Number.isFinite(m.height)) return;
+    if (m.height < EMBED_MIN_HEIGHT) return;
+    const content = Math.round(m.height);
+    const preferred = typeof m.preferred === "number" && Number.isFinite(m.preferred)
+      ? Math.min(EMBED_MAX_PREFERRED, Math.max(EMBED_MIN_HEIGHT, Math.round(m.preferred)))
+      : null;
+    setHeight((h) => (h.content === content && h.preferred === preferred ? h : { content, preferred }));
+  }, []);
   useWatchEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      const m = e.data as { type?: unknown; height?: unknown } | null;
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
-      if (m?.type !== PAGE_HEIGHT_MESSAGE || typeof m.height !== "number" || !Number.isFinite(m.height)) return;
-      if (m.height < EMBED_MIN_HEIGHT) return;
-      setHeight(Math.round(m.height));
+      take(e.data);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [frameRef]);
-  return height;
+  // A frame moved back from the pool reports nothing new: replay the last height it reported.
+  const replay = useCallback((h: PageHeight) => take({ type: PAGE_HEIGHT_MESSAGE, ...h }), [take]);
+  return { ...height, replay };
+}
+
+/** The page's iframe. A frame for the same page parked a moment ago (lib/pageFramePool) is moved in still loaded;
+ *  otherwise the embed renders its own, which the pool adopts, and either way the frame is parked on unmount for the
+ *  next embed of that page. Keyed by `src` by its parent: a new address is a new frame. */
+function PooledFrame({ src, poolKey, title, frameRef, onLoad, onHeight }: {
+  src: string;
+  /** The page version this address shows (frameKey), null while unconfirmed: what the pool keeps the frame under. */
+  poolKey: string | null;
+  title: string;
+  frameRef: RefObject<HTMLIFrameElement | null>;
+  onLoad: () => void;
+  onHeight: (h: PageHeight) => void;
+}) {
+  const slotRef = useRef<HTMLSpanElement>(null);
+  const ownRef = useRef<HTMLIFrameElement>(null);
+  const keyRef = useRef(poolKey);
+  keyRef.current = poolKey;
+  const loadRef = useRef(onLoad);
+  loadRef.current = onLoad;
+  // Decided once, at mount: render a frame of our own unless one waits parked.
+  const [parkedAtMount] = useState(() => hasParkedFrame(poolKey));
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const claimed = claimFrame(keyRef.current);
+    const frame = claimed?.frame ?? ownRef.current;
+    if (!frame) return;
+    if (claimed) placeFrame(frame, slot);
+    else adoptFrame(frame);
+    frame.title = title;
+    (frameRef as { current: HTMLIFrameElement | null }).current = frame;
+    const onFrameLoad = () => { frameLoaded(frame); loadRef.current(); };
+    frame.addEventListener("load", onFrameLoad);
+    if (claimed?.height) onHeight(claimed.height);
+    if (claimed?.loaded) loadRef.current();
+    return () => {
+      frame.removeEventListener("load", onFrameLoad);
+      if (frameRef.current === frame) (frameRef as { current: HTMLIFrameElement | null }).current = null;
+      releaseFrame(frame, keyRef.current);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <span ref={slotRef} className="block h-full w-full">
+      {!parkedAtMount && (
+        <iframe
+          ref={ownRef}
+          src={src}
+          className="page-embed__frame block h-full w-full"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          title={title}
+        />
+      )}
+    </span>
+  );
 }
 
 /**
@@ -423,6 +511,15 @@ type PublishedPageEmbedProps = {
   /** A shorter frame where the page is a slice of something else (a decision
    *  card in a list), not the page's own surface. */
   height?: number;
+  /** The decision this page was filed on (its report or an option's page): whoever may read that decision opens a gated
+   *  page here as its owner does. */
+  decision?: string | null;
+  /** The page is the surface's subject: the frame grows to the page's whole height once it reports it, so it reads in
+   *  the host's own scroll instead of a box that scrolls inside it, and carries no chrome of its own (the surface has
+   *  its own ways to open and share it). `height` holds its place until then. */
+  whole?: boolean;
+  /** Called once the page is in view (its frame loaded), or once it is known it will not frame (deleted, locked). */
+  onReady?: () => void;
 };
 
 export function PublishedPageEmbed(props: PublishedPageEmbedProps) {
@@ -430,63 +527,90 @@ export function PublishedPageEmbed(props: PublishedPageEmbedProps) {
   return asLink ? <PublishedPagePill slug={props.slug} href={pageShareUrl(props.slug)} /> : <PublishedPageFrame {...props} />;
 }
 
-function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) {
-  const shared = usePageMeta(slug);
-  // A gated page hides itself from getShared. Its owner, signed in here, gets their own unlock tokens and the real
-  // metadata (artifacts.ownerUnlock), so their page frames open; anyone else gets a link, never a password form.
-  const gated = !!shared?.gated;
-  const unlockQ = useQueryNoThrow(api.artifacts.ownerUnlock, gated ? { slug } : "skip");
-  const unlock = unlockQ.data as { k: string | null; e: string | null; title: string; version: number } | null | undefined;
-  const locked = gated && (unlock === null || (unlock === undefined && !!unlockQ.error));
-  const meta = gated && unlock ? { ...shared!, title: unlock.title, version: unlock.version, gated: false } : shared;
-  const keys = gated && unlock ? `${unlock.k ? `&k=${unlock.k}` : ""}${unlock.e ? `&e=${unlock.e}` : ""}` : "";
+function PublishedPageFrame({ slug, caption, height, decision, whole = false, onReady }: PublishedPageEmbedProps) {
+  // The page's info (title, version, its gates) paints from the store, so a page seen before frames at once. A page
+  // never seen starts loading anyway, with no gate tokens, hidden until its info arrives: an open page is then
+  // already there, and a gated one reloads with the tokens a signed-in reader may hold. A guest frames at once: a
+  // gated page's password form is what a guest should see.
+  const { info, keys } = usePageInfo(slug, decision);
+  const guest = useMemo(() => !hasStoredAuthToken(), []);
+  const confirmed = !!info || guest;
+  const locked = !!info?.locked;
+  const meta = info && !info.missing && !info.locked ? info : undefined;
   const [expanded, setExpanded] = useState(false);
   // Folded, the frame unmounts: a page out of sight should not keep running.
   const [collapsed, setCollapsed] = useState(false);
-  // The height this frame was dragged to becomes its short height.
+  // A drag sizes this frame alone: every other embed still opens short. A
+  // drag past the short height reads as expanded, so Shrink undoes it.
   const [dragged, setDragged] = useState<number | null>(null);
-  const onResized = useCallback((h: number) => {
-    setDragged(h);
-    setExpanded(false);
-  }, []);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLSpanElement>(null);
   // Short by default: the given height (a slice inside a decision card), else
-  // the reader's saved one. Expanding doubles it. Neither runs past the page's
-  // own content, so a short page sits snug and has nothing to expand.
-  const reported = useReportedHeight(frameRef);
-  const [fallback] = useState(() => height ?? savedGripHeight(EMBED_HEIGHT_KEY, EMBED_MIN_HEIGHT) ?? EMBED_HEIGHT);
-  const base = dragged ?? fallback;
+  // the height the page asks for, else EMBED_HEIGHT. Expanding doubles it.
+  // Neither runs past the page's own content, so a short page sits snug and
+  // has nothing to expand.
+  const { content: reported, preferred, replay: replayHeight } = useReportedHeight(frameRef);
+  const short = height ?? preferred ?? EMBED_HEIGHT;
   const content = reported ?? Infinity;
-  const canExpand = content > base;
-  const frameHeight = Math.min(content, expanded && canExpand ? base * EMBED_EXPAND_FACTOR : base);
+  const tall = dragged != null ? dragged > short : expanded;
+  const canToggle = tall || content > short;
+  const toggleExpand = () => {
+    setExpanded(!tall);
+    setDragged(null);
+  };
+  const frameHeight = whole && reported && dragged == null ? reported : Math.min(content, dragged ?? (expanded ? short * EMBED_EXPAND_FACTOR : short));
   const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef, { blend: true });
   const notes = usePageNotes(frameRef, slug, meta?.title || "Published page");
-  // The page paints the server's default palette until the theme message
-  // lands, so it fades in a beat after load rather than flashing.
-  const [loaded, setLoaded] = useState(false);
+  // The page is shown the moment it is there: the frame's own load event, or
+  // the page reporting its painted height, whichever comes first. Neither waits
+  // on a timer, which a background tab holds back for a minute; the theme rides
+  // the address, so the first paint already matches. What loaded is the address
+  // it loaded, so a frame started before the page's info was known shows only
+  // once that info says it was the right address.
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const srcRef = useRef("");
   const onLoad = useCallback(() => {
     onThemeLoad();
     notes?.onLoad();
-    setTimeout(() => setLoaded(true), 90);
+    setLoadedSrc(srcRef.current);
   }, [onThemeLoad, notes?.onLoad]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => { if (reported) setLoadedSrc(srcRef.current); }, [reported]);
+  const readyRef = useRef(onReady);
+  readyRef.current = onReady;
   // The theme at mount rides the address so the first paint already matches;
   // later changes arrive as messages, because a new src would reload the page.
   // embed=1 tells the page this window carries its chrome.
   const [mountTheme] = useState(theme);
-  // A newer version reloads the frame by itself: the version the frame first
-  // showed stays the base, and each version above it is a new address (which
-  // also busts the 60s cache in front of the page).
+  // The address is pinned to the page's version (r=vN) whenever the version
+  // was known at mount, so the browser keeps it for the whole bound and a
+  // newer version is a new address that reloads the frame by itself. A page
+  // never seen starts at the bare address, before its version is known, and
+  // keeps it until a newer version arrives.
   const version = meta?.version ?? 0;
-  const [baseVersion, setBaseVersion] = useState(0);
+  const [mountVersion] = useState(version);
+  const [baseVersion, setBaseVersion] = useState(version);
   if (!baseVersion && version) setBaseVersion(version);
-  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}&embed=1${keys}${baseVersion && version > baseVersion ? `&r=v${version}` : ""}`;
+  const src = pageEmbedSrc(slug, mountTheme, keys, mountVersion || version > baseVersion ? version : undefined);
+  srcRef.current = src;
+  // A frame started before the page's info arrived shows the moment it loads, unless what loaded was a gate (it says
+  // so: PAGE_GATE_MESSAGE): then it waits for the info, which brings the tokens past it or says the reader has none.
+  const [gateSrc, setGateSrc] = useState<string | null>(null);
+  useEventListener("message", useCallback((e: MessageEvent) => {
+    if (frameRef.current && e.source === frameRef.current.contentWindow && (e.data as { type?: unknown } | null)?.type === PAGE_GATE_MESSAGE) setGateSrc(srcRef.current);
+  }, []));
+  const loaded = loadedSrc === src && (confirmed || gateSrc !== src);
   const agent = usePageAgent(slug, !collapsed && !!meta && !meta.gated);
+  // Idle says nothing the reader can use, and inside the publishing session's
+  // own thread the thread already shows its state.
+  const thread = useContext(MessageIdentity)?.conversationId;
+  const showAgent = !!agent && agent.chip !== "idle" && !(thread && thread === agent.session?.conversation_id);
+  useWatchEffect(() => { if (loaded) readyRef.current?.(); }, [loaded]);
 
   // Deleted or never existed: a full-height frame of a 404 reads as breakage. A gated page the viewer cannot
   // open here would frame a password form. Both degrade to a compact note carrying the link.
-  if (meta === null || locked) {
+  if (info?.missing || locked) {
     return (
+      <ReadyNow onReady={onReady}>
       <span className="not-prose my-3 flex max-w-md flex-col gap-1 rounded-md border border-dashed border-sol-border bg-sol-bg-alt px-3 py-2 text-xs" data-page-embed-note={locked ? "locked" : "missing"}>
         <span className="text-sol-text-dim">{locked ? "Protected page: open it to enter its password" : "Published page unavailable"}</span>
         <a
@@ -498,11 +622,11 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
           {pageShareUrl(slug)}
         </a>
       </span>
+      </ReadyNow>
     );
   }
 
   const title = meta?.title || "Published page";
-  const waitingUnlock = gated && unlock === undefined;
   return (
     <FramelessPage
       title={title}
@@ -512,30 +636,45 @@ function PublishedPageFrame({ slug, caption, height }: PublishedPageEmbedProps) 
       stageRef={stageRef}
       loaded={loaded}
       pinning={notes?.pinMode}
-      status={agent ? <PageAgentStatus agent={agent} /> : undefined}
-      statusPinned={!!agent && agent.chip !== "idle"}
+      status={showAgent ? <PageAgentStatus agent={agent} /> : undefined}
+      statusPinned={showAgent}
+      bare={whole}
       collapsed={collapsed}
       onToggleCollapsed={() => {
-        setLoaded(false);
+        setLoadedSrc(null);
         setCollapsed((v) => !v);
       }}
-      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={canExpand ? () => setExpanded((v) => !v) : undefined} notes={notes} />}
+      actions={<PublishedPageActions slug={slug} expanded={tall} onToggleExpand={canToggle && !(whole && reported) ? toggleExpand : undefined} notes={notes} />}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
-          <HeightGrip target={stageRef} storageKey={EMBED_HEIGHT_KEY} min={EMBED_MIN_HEIGHT} onResized={onResized} />
+          <HeightGrip target={stageRef} min={EMBED_MIN_HEIGHT} onResized={setDragged} />
         </span>
       }
     >
-      {!waitingUnlock && <iframe
-        ref={frameRef}
-        src={src}
-        onLoad={onLoad}
-        className="page-embed__frame block h-full w-full"
-        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        title={title}
-      />}
+      <PooledFrame key={src} src={src} poolKey={confirmed ? frameKey(src, meta?.version) : null} title={title} frameRef={frameRef} onLoad={onLoad} onHeight={replayHeight} />
     </FramelessPage>
   );
+}
+
+/** Loads a page the reader is likely to open next into a parked frame (lib/pageFramePool), so its embed shows it
+ *  loaded the moment it mounts. Renders nothing. */
+export function PreloadPublishedPage({ slug, decision }: { slug: string; decision?: string | null }) {
+  const { info, keys } = usePageInfo(slug, decision);
+  const { theme } = useTheme();
+  const version = info && !info.missing && !info.locked ? info.version : undefined;
+  useWatchEffect(() => {
+    if (!version) return;
+    const src = pageEmbedSrc(slug, theme, keys, version);
+    // Roughly the width a thread or a decision shows a page at; a different one only re-lays it out on arrival.
+    preloadFrame(src, frameKey(src, version), Math.min(900, window.innerWidth * 0.6));
+  }, [slug, theme, keys, version]);
+  return null;
+}
+
+/** Says a page that will not frame is as ready as it gets, once, on mount. */
+function ReadyNow({ onReady, children }: { onReady?: () => void; children: ReactNode }) {
+  useWatchEffect(() => { onReady?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return <>{children}</>;
 }
 
 /** Tiny "favicon" disc: the published page's identity mark. Every flat accent
@@ -558,7 +697,7 @@ export function PageFavicon({ className = "h-3.5 w-3.5" }: { className?: string 
  * wrote one).
  */
 export function PublishedPagePill({ slug, href, label }: { slug: string; href: string; label?: string }) {
-  const meta = usePageMeta(slug);
+  const { info: meta } = usePageInfo(slug);
   return (
     <PagePill
       icon={<PageFavicon />}
@@ -719,43 +858,50 @@ export function LinkPreviewCard({ url, caption }: { url: string; caption?: strin
   const site = ok?.site_name && ok.site_name.toLowerCase() !== host ? `${host} · ${ok.site_name}` : host;
   const image = ok?.image && !imageFailed ? ok.image : null;
   return (
-    <span className="not-prose my-2 block max-w-xl">
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={url}
-        className="group flex gap-3 rounded-md border border-sol-border border-l-[3px] border-l-sol-border bg-sol-bg-alt py-2 pl-3 pr-2 no-underline transition-colors hover:border-l-sol-blue hover:bg-sol-card"
-      >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim">
-            {ok?.favicon && !iconFailed ? (
-              <img src={ok.favicon} alt="" className="h-3.5 w-3.5 flex-shrink-0 rounded-sm" onError={() => setIconFailed(true)} />
+    <span className="not-prose my-2 block">
+      <span className="group/link flex items-start gap-1">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={url}
+          className="group flex min-w-0 max-w-xl flex-1 gap-3 rounded-md border border-sol-border border-l-[3px] border-l-sol-border bg-sol-bg-alt py-2 pl-3 pr-2 no-underline transition-colors hover:border-l-sol-blue hover:bg-sol-card"
+        >
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim">
+              {ok?.favicon && !iconFailed ? (
+                <img src={ok.favicon} alt="" className="h-3.5 w-3.5 flex-shrink-0 rounded-sm" onError={() => setIconFailed(true)} />
+              ) : (
+                <LinkIcon className="h-3 w-3 flex-shrink-0" />
+              )}
+              <span className="truncate">{site}</span>
+              <ArrowUpRight className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+            </span>
+            {ok?.title ? (
+              <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-sol-blue group-hover:underline">{ok.title}</span>
             ) : (
-              <LinkIcon className="h-3 w-3 flex-shrink-0" />
+              <span className="truncate font-mono text-[11px] text-sol-text-muted">{url.replace(/^https?:\/\//, "")}</span>
             )}
-            <span className="truncate">{site}</span>
-            <ArrowUpRight className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+            {ok?.description && (
+              <span className="line-clamp-2 text-xs leading-snug text-sol-text-muted">{ok.description}</span>
+            )}
           </span>
-          {ok?.title ? (
-            <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-sol-blue group-hover:underline">{ok.title}</span>
-          ) : (
-            <span className="truncate font-mono text-[11px] text-sol-text-muted">{url.replace(/^https?:\/\//, "")}</span>
+          {image && (
+            <img
+              src={image}
+              alt=""
+              loading="lazy"
+              className="h-[72px] w-[128px] flex-shrink-0 self-center rounded border border-sol-border object-cover"
+              onError={() => setImageFailed(true)}
+            />
           )}
-          {ok?.description && (
-            <span className="line-clamp-2 text-xs leading-snug text-sol-text-muted">{ok.description}</span>
-          )}
-        </span>
-        {image && (
-          <img
-            src={image}
-            alt=""
-            loading="lazy"
-            className="h-[72px] w-[128px] flex-shrink-0 self-center rounded border border-sol-border object-cover"
-            onError={() => setImageFailed(true)}
-          />
-        )}
-      </a>
+        </a>
+        <CopyLinkButton
+          url={url}
+          title="Copy link"
+          className="mt-1 flex-shrink-0 rounded p-1 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-blue focus-visible:opacity-100 group-hover/link:opacity-100 [@media(hover:none)]:opacity-100"
+        />
+      </span>
       {caption && <span className="mt-1 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
   );

@@ -145,6 +145,54 @@
     t.insertBefore(more, items[0]);
   }
 
+  // ── Screens ───────────────────────────────────────────────────────────────
+  // A screenshot of the product, fit to the column and a tap from full size.
+  function drawShot(s) {
+    if (s.hasAttribute("data-dk")) return;
+    var src = s.getAttribute("src"), note = s.textContent.trim();
+    s.textContent = "";
+    if (s.getAttribute("label")) s.appendChild(el("div", "dk-shot-label", s.getAttribute("label")));
+    if (src) {
+      var a = el("a", "dk-shot-frame"), img = el("img");
+      a.href = src; a.target = "_blank"; a.rel = "noreferrer";
+      img.src = src; img.alt = s.getAttribute("alt") || note || s.getAttribute("label") || "";
+      a.appendChild(img);
+      s.appendChild(a);
+    }
+    if (note) s.appendChild(el("p", "dk-shot-note", note));
+    s.setAttribute("data-dk", "");
+  }
+
+  // Shots of one screen (before and after) share one frame, flipped by their
+  // labels, so a change reads in place at any width. The frame holds the
+  // tallest, so a flip never moves the page.
+  function drawShots(g) {
+    if (g.hasAttribute("data-dk")) return;
+    var shots = [].slice.call(g.querySelectorAll(":scope > dk-shot"));
+    if (shots.length < 2) { g.setAttribute("data-dk", ""); return; }
+    var tabs = el("div", "dk-shot-tabs"), stack = el("div", "dk-shot-stack");
+    tabs.setAttribute("role", "group");
+    var buttons = shots.map(function (s, i) {
+      var b = el("button", null, s.getAttribute("label") || "Shot " + (i + 1));
+      b.type = "button";
+      b.addEventListener("click", function () { show(i); });
+      tabs.appendChild(b);
+      stack.appendChild(s);
+      return b;
+    });
+    function show(n) {
+      shots.forEach(function (s, i) { s.toggleAttribute("data-off", i !== n); });
+      buttons.forEach(function (b, i) { b.setAttribute("aria-pressed", String(i === n)); });
+    }
+    var cap = g.querySelector(":scope > figcaption");
+    g.textContent = "";
+    if (cap) g.appendChild(cap);
+    g.appendChild(tabs);
+    g.appendChild(stack);
+    show(0);
+    g.setAttribute("data-dk", "");
+  }
+
   // ── Cases ─────────────────────────────────────────────────────────────────
   // A case is what we say about it and what it shows; the two halves sit side
   // by side or stacked, as the room allows.
@@ -156,7 +204,7 @@
     [].forEach.call(cases.querySelectorAll(":scope > dk-example"), function (ex) {
       var says = el("div", "dk-says"), shows = el("div", "dk-shows");
       [].slice.call(ex.children).forEach(function (c) {
-        (/^DK-(MSG|PAIR|GAP|VIEW|THREAD|DIFF)$/.test(c.tagName) ? shows : says).appendChild(c);
+        (/^DK-(MSG|PAIR|GAP|VIEW|THREAD|DIFF|SHOTS?)$/.test(c.tagName) ? shows : says).appendChild(c);
       });
       ex.textContent = "";
       ex.appendChild(says);
@@ -615,11 +663,43 @@
     [].forEach.call(document.querySelectorAll("dk-event"), drawEvent);
     [].forEach.call(document.querySelectorAll("dk-msg"), drawMessage);
     [].forEach.call(document.querySelectorAll("dk-thread"), drawThread);
+    [].forEach.call(document.querySelectorAll("dk-shot"), drawShot);
+    [].forEach.call(document.querySelectorAll("dk-shots"), drawShots);
     [].forEach.call(document.querySelectorAll("dk-examples"), drawExamples);
     [].forEach.call(document.querySelectorAll("dk-diff"), drawDiff);
     [].forEach.call(document.querySelectorAll("dk-view"), drawView);
     [].forEach.call(document.querySelectorAll("dk-tally"), drawTally);
+    [].forEach.call(document.querySelectorAll("dk-cells"), drawCells);
     [].forEach.call(document.querySelectorAll("table"), drawTable);
+  }
+
+  // A grid of results as a screen draws it: each row's letters become cells
+  // (P pass, F fail, anything else not run), its name whole beside them, and
+  // its note (a count) at the end of the line, never wrapped under the cells.
+  var CELL = { P: "pass", F: "fail" };
+  function drawCells(g) {
+    if (g.hasAttribute("data-dk")) return;
+    [].forEach.call(g.querySelectorAll(":scope > dk-row"), function (r) {
+      var letters = r.textContent.replace(/\s+/g, "");
+      r.textContent = "";
+      r.appendChild(el("span", "dk-cells-name", r.getAttribute("name") || ""));
+      var cells = el("span", "dk-cells-run");
+      for (var i = 0; i < letters.length; i++) {
+        var c = el("i");
+        c.setAttribute("data-v", CELL[letters[i].toUpperCase()] || "none");
+        cells.appendChild(c);
+      }
+      r.appendChild(cells);
+      r.appendChild(el("span", "dk-cells-note", r.getAttribute("note") || ""));
+    });
+    var legend = el("p", "dk-cells-legend");
+    [["pass", "pass"], ["fail", "fail"], ["none", "not run"]].forEach(function (k) {
+      var i = el("i"); i.setAttribute("data-v", k[0]);
+      var s = el("span"); s.appendChild(i); s.appendChild(document.createTextNode(k[1]));
+      legend.appendChild(s);
+    });
+    g.appendChild(legend);
+    g.setAttribute("data-dk", "");
   }
 
   // A tally's numbers are counted from the people it lists, so a count can
