@@ -154,6 +154,12 @@ stty kill '^K' 2>/dev/null || true
 # drains, re-pastes twice and gives up AGENT_STDIN_NOT_READY. Without echoctl
 # the raw ESC[200~ reaches tmux, which drops the unknown sequence.
 stty -echoctl 2>/dev/null || true
+# ENTER SUBMITS, C-j IS A NEWLINE, the way Claude's composer reads them. An
+# idle composer receives typed input with C-j between lines and one Enter at
+# the end (typedComposerInput), so the two keys must stay distinct: -icrnl
+# keeps Enter a CR instead of folding it into LF, eol makes CR end a canonical
+# line so the read sees it at once, and the reads below end on CR only.
+stty -icrnl eol '^M' 2>/dev/null || true
 
 has_paste_start() { case "$1" in *$'\\033'"[200~"*) return 0 ;; *) return 1 ;; esac; }
 has_paste_end() { case "$1" in *$'\\033'"[201~"*) return 0 ;; *) return 1 ;; esac; }
@@ -178,13 +184,13 @@ submit() {
 trap 'exit 0' INT TERM
 while true; do
   printf '\\n❯ '
-  if ! IFS= read -r line; then
+  if ! IFS= read -r -d $'\\r' line; then
     exit 0
   fi
   if has_paste_start "$line"; then
     pasted="$(strip_paste_markers "$line")"
     if ! has_paste_end "$line"; then
-      while IFS= read -r -t 5 more; do
+      while IFS= read -r -d $'\\r' -t 5 more; do
         pasted="$pasted
 $(strip_paste_markers "$more")"
         has_paste_end "$more" && break
