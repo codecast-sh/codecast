@@ -22,8 +22,10 @@ import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
+import { ComposeRolePicker } from "../ComposeRolePicker";
+import type { RoleRecipient } from "../../lib/roleRecipients";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { AgentDefinitionPill, LaunchModelPill } from "../ModelEffortPicker";
+import { AgentDefinitionPill, FOOT_PICK, LaunchEffortPill, LaunchModelPill, ModelEffortRows, useLaunchModel } from "../ModelEffortPicker";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, type ProjectPathOption } from "../../lib/utils";
@@ -35,10 +37,15 @@ import { withoutUndo } from "../../store/undoStack";
 import { getLabelColor } from "../../lib/labelColors";
 import { browseProjectOrder, frequentProjectChips } from "../../lib/recentProjectPaths";
 import { ChevronDown, Search } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { sessionWorkState } from "../../store/inboxStore";
+import { ORG_STATE_META } from "../org/orgMeta";
+import { formatTimeAgo } from "../../lib/messageNavigator";
 import { deviceDisplayName } from "../DeviceBadge";
+import { useHostLoads } from "../../hooks/useHostLoads";
 import { MachineChips } from "../MachineChips";
 import { SharedWithMark } from "../ProjectPathPicker";
-import { SessionModeToggles } from "../SessionModeToggles";
+import { SessionModeToggles, SessionPlacementMenu, type SessionModeTogglesProps, type SessionPlacement } from "../SessionModeToggles";
 import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
@@ -97,9 +104,19 @@ function restorePickerFocus(prev: HTMLElement | null) {
   document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
 }
 
-export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
+export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline = false, modeSlot, recentsSlot }: {
   conversation: ConversationData;
   handleRef?: React.MutableRefObject<PickerHandle | null>;
+  // The new-session page's question over the chips ("What should we build in
+  // <project>?"); the project name opens the folder search.
+  headline?: boolean;
+  // Where the worktree/cloud switches render. Omitted → the meta row under the
+  // chips. Provided → portaled into the host's slot (the composer foot on the
+  // new-session page), and the meta row goes.
+  modeSlot?: HTMLElement | null;
+  // Where this project's recent sessions list renders (the new-session page,
+  // under the composer). Omitted → no list.
+  recentsSlot?: HTMLElement | null;
   // Where the machine picker renders. Omitted → inline above the folder chips
   // (the standalone non-owner surface). Provided → portaled into the host's
   // slot (NewSessionView puts it on the Context line); null while the slot
@@ -605,11 +622,14 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     }
   }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
+  const hostLoads = useHostLoads();
+
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Rests collapsed as one pill (the machine the
   // session will run on); a click unfolds the full chip row.
   const machineUi = machineChipsShown && (
     <MachineChips
+      loads={hostLoads}
       machines={machineChips}
       selectedDeviceId={selectedDeviceId}
       open={machinesOpen}
@@ -619,15 +639,84 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     />
   );
 
+  const modeProps: SessionModeTogglesProps = {
+    cloudAgent,
+    cloudHost,
+    cloudMode,
+    cloudToggleEnabled: cloudToggleAvailable(machineChips, cloudMode),
+    onToggleCloud: toggleCloudMode,
+    isolated,
+    onToggleIsolated: () => {
+      const turningOn = !isolated;
+      useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
+      if (turningOn && currentPath) {
+        handleSwitch(currentPath, true);
+      }
+    },
+    shared: cloudMode && cloudShared,
+    onToggleShared: () => {
+      useInboxStore.getState().setCloudSharedCheckout(isolated);
+      // A row the machine pick already parked on the host re-parks with
+      // the new mode (the child in flight is superseded). A deferred
+      // stub reads the flag at send time, and a row the host already
+      // placed keeps its checkout: neither is touched here.
+      if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
+        handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
+      }
+    },
+    startFrom: cloudStartFrom,
+    onSetStartFrom: (v) => {
+      useInboxStore.getState().setCloudStartFrom(v);
+      // Same rule as the shared toggle: a parked row re-parks with the
+      // new seed choice, a deferred stub reads it at send time.
+      if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
+        handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
+      }
+    },
+  };
+  // The placement menu's pick, as the switches' transitions: leave the cloud
+  // first, then set the local worktree flag. A deferred stub reads the flag
+  // at send time; a created row is re-pointed by the cloud toggle's own
+  // reconfigure when it leaves the host, else by an isolated re-switch here.
+  const pickPlacement = (placement: SessionPlacement) => {
+    const cloudOn = cloudAgent ? cloudAgent.on : cloudMode;
+    if (placement === "cloud") {
+      if (!cloudOn) (cloudAgent ? cloudAgent.onToggle : toggleCloudMode)();
+      return;
+    }
+    const wantIsolated = placement === "worktree";
+    if (isolatedToggle !== wantIsolated) useInboxStore.getState().setIsolatedWorktreeMode(wantIsolated);
+    if (cloudOn) (cloudAgent ? cloudAgent.onToggle : toggleCloudMode)();
+    else if (wantIsolated && currentPath) handleSwitch(currentPath, true);
+  };
+
   return (
     <div className="flex flex-col items-center gap-3">
+      {modeSlot && createPortal(<SessionPlacementMenu {...modeProps} onPick={pickPlacement} />, modeSlot)}
+      {recentsSlot && createPortal(
+        <ProjectRecentSessions projectPath={currentPath} excludeId={storeSession?._id || conversation._id} />,
+        recentsSlot,
+      )}
+      {headline && (
+        <h1 className="mb-1 text-center text-xl sm:text-2xl font-medium tracking-tight text-sol-text">
+          {currentPath ? <>
+            What should we build in{" "}
+            <button
+              type="button"
+              onClick={focusPicker}
+              title={`${currentPath}: search folders or paste any path`}
+              className="underline decoration-sol-cyan/60 decoration-2 underline-offset-[6px] hover:text-sol-cyan transition-colors"
+            >{currentName}</button>?
+          </> : "What should we build?"}
+        </h1>
+      )}
       {machineSlot === undefined
         ? machineUi
         : machineUi && machineSlot
           ? createPortal(machineUi, machineSlot)
           : null}
 
-      {!currentPath && recentProjects.length > 0 && (
+      {!headline && !currentPath && recentProjects.length > 0 && (
         <div className="text-sol-text-dim text-xs">select a project</div>
       )}
 
@@ -774,44 +863,10 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
           of the picker box and these hints hide. Kept to the picker's width,
           so a cloud agent's options wrap inside the column instead of
           spanning the pane. */}
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 max-w-3xl">
+      {modeSlot === undefined && <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 max-w-3xl">
         <NewSessionBucketPill conversation={conversation} />
 
-        <SessionModeToggles
-          cloudAgent={cloudAgent}
-          cloudHost={cloudHost}
-          cloudMode={cloudMode}
-          cloudToggleEnabled={cloudToggleAvailable(machineChips, cloudMode)}
-          onToggleCloud={toggleCloudMode}
-          isolated={isolated}
-          onToggleIsolated={() => {
-            const turningOn = !isolated;
-            useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
-            if (turningOn && currentPath) {
-              handleSwitch(currentPath, true);
-            }
-          }}
-          shared={cloudMode && cloudShared}
-          onToggleShared={() => {
-            useInboxStore.getState().setCloudSharedCheckout(isolated);
-            // A row the machine pick already parked on the host re-parks with
-            // the new mode (the child in flight is superseded). A deferred
-            // stub reads the flag at send time, and a row the host already
-            // placed keeps its checkout: neither is touched here.
-            if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
-              handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
-            }
-          }}
-          startFrom={cloudStartFrom}
-          onSetStartFrom={(v) => {
-            useInboxStore.getState().setCloudStartFrom(v);
-            // Same rule as the shared toggle: a parked row re-parks with the
-            // new seed choice, a deferred stub reads it at send time.
-            if (currentPath && storeSession?.cloud_placement === "pending" && routedMachine && isCloudHost(routedMachine)) {
-              handleSwitch(currentPath, undefined, routedMachine.device_id, { onlyCloudPark: true });
-            }
-          }}
-        />
+        <SessionModeToggles {...modeProps} />
 
         {!picking && recentProjects.length > 0 && (
           <button
@@ -822,7 +877,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
             <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
           </button>
         )}
-      </div>
+      </div>}
 
     </div>
   );
@@ -847,8 +902,11 @@ function useNewSessionAgent(conversation: ConversationData) {
   return { storeSession, currentAgent };
 }
 
-function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef }: {
+function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef, compact = false }: {
   conversation: ConversationData;
+  // One dropdown (agent) beside the model pill, for the composer foot,
+  // instead of the row of agent chips.
+  compact?: boolean;
   showWorkflow: boolean;
   onToggleWorkflow: () => void;
   selectedWorkflowId: string;
@@ -963,16 +1021,73 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     }
   }, [hi, handleAgentSwitch, exitAgentPicker, showWorkflow, onToggleWorkflow, AGENT_OPTIONS]);
 
+  // The compact dropdown's open state; ⌥↓ opens it, ⌥←/→ step the agent.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const launch = useLaunchModel(storeSession?._id || conversation._id);
+  const stepAgent = useCallback((delta: -1 | 1) => {
+    if (AGENT_OPTIONS.length === 0) return false;
+    const i = Math.max(0, AGENT_OPTIONS.findIndex((a) => a.type === currentAgent));
+    handleAgentSwitch(AGENT_OPTIONS[(i + delta + AGENT_OPTIONS.length) % AGENT_OPTIONS.length].type);
+    return true;
+  }, [AGENT_OPTIONS, currentAgent, handleAgentSwitch]);
+
   // Hand the imperative surface up to NewSessionView's ⌥-chord router.
   useWatchEffect(() => {
     if (!handleRef) return;
-    handleRef.current = {
-      focus: focusAgentPicker,
-      isOpen: () => picking,
-      move: moveAgentPicker,
-    };
+    handleRef.current = compact
+      ? { focus: () => { setMenuOpen(true); return true; }, isOpen: () => menuOpen, move: stepAgent }
+      : { focus: focusAgentPicker, isOpen: () => picking, move: moveAgentPicker };
   });
   useWatchEffect(() => () => { if (handleRef) handleRef.current = null; }, [handleRef]);
+
+  if (compact) {
+    const current = AGENT_OPTIONS.find((a) => a.type === currentAgent)
+      ?? AGENT_PICKER_OPTIONS.find((a) => a.convexType === currentAgent);
+    const sessionId = storeSession?._id || conversation._id;
+    return (
+      <>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className={FOOT_PICK} title="Agent and model for this session">
+              <AgentTypeIcon agentType={currentAgent} />
+              <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
+              {!hosted && modelPickerShown && launch.cfg && <span>{launch.label}</span>}
+              <ChevronDown className="w-3 h-3 opacity-50" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="p-0 max-w-[calc(100vw-1rem)]" onCloseAutoFocus={(e) => { e.preventDefault(); restorePickerFocus(null); }}>
+            <div className="flex">
+              <div className="w-40 shrink-0 p-1">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Agent</DropdownMenuLabel>
+                {AGENT_OPTIONS.map((a) => (
+                  <DropdownMenuItem
+                    key={a.type}
+                    // Picking an agent keeps the menu open on its models.
+                    onSelect={(e) => { e.preventDefault(); handleAgentSwitch(a.type); if (showWorkflow) onToggleWorkflow(); }}
+                    className={`gap-2 text-xs ${a.type === currentAgent ? "bg-sol-bg-alt text-sol-text" : ""}`}
+                  >
+                    <AgentTypeIcon agentType={a.type} />
+                    {a.label}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+              {!hosted && modelPickerShown && launch.cfg && (
+                <div className="w-64 p-1 border-l border-sol-border/40 max-h-[60vh] overflow-y-auto">
+                  <ModelEffortRows {...launch.rowProps} part="model" />
+                </div>
+              )}
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {!hosted && modelPickerShown && (
+          <>
+            <LaunchEffortPill conversationId={sessionId} />
+            <AgentDefinitionPill conversationId={sessionId} variant="ghost" />
+          </>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center gap-2 px-4 pb-7">
@@ -1118,6 +1233,47 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
   );
 }
 
+/** This project's latest sessions under the new-session composer, each with
+ *  who acts next, so a person continues one instead of starting a duplicate.
+ *  The store holds the rows; the signature string keeps a heartbeat elsewhere
+ *  from re-rendering the list. */
+function ProjectRecentSessions({ projectPath, excludeId }: { projectPath: string | undefined; excludeId: string }) {
+  const name = projectPath ? repoName(projectPath) : null;
+  const sig = useInboxStore((s) => {
+    if (!name) return "";
+    const rows: string[] = [];
+    const picked = Object.values(s.sessions)
+      .filter((r) => r._id !== excludeId && !r.is_subagent && (r.message_count ?? 0) > 0 && (r.short_title || r.title)
+        && [r.git_root, r.project_path].some((p) => p && repoName(p) === name))
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .slice(0, 5);
+    for (const r of picked) rows.push([r._id, sessionWorkState(r), r.updated_at, r.short_title || r.title].join("\u0001"));
+    return rows.join("\u0002");
+  });
+  const rows = useMemo(() => (sig ? sig.split("\u0002").map((line) => {
+    const [id, state, at, title] = line.split("\u0001");
+    return { id, state: state as keyof typeof ORG_STATE_META, at: Number(at), title };
+  }) : []), [sig]);
+  if (!name || rows.length === 0) return null;
+  return (
+    <div className="mx-auto conv-col px-2 sm:px-4">
+      <div className="px-3 pb-1.5 text-[11px] text-sol-text-dim">Recent in {name}</div>
+      {rows.map((r) => (
+        <button
+          key={r.id}
+          type="button"
+          onClick={() => useInboxStore.getState().navigateToSession(r.id, "gesture")}
+          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-left text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors"
+        >
+          <span className="flex-1 min-w-0 truncate">{r.title}</span>
+          <span className={`shrink-0 px-1.5 py-px rounded-full border text-[10px] ${ORG_STATE_META[r.state]?.chip ?? ""}`}>{ORG_STATE_META[r.state]?.label ?? r.state}</span>
+          <span className="shrink-0 w-8 text-right tabular-nums text-[10px] text-sol-text-dim">{formatTimeAgo(r.at)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** The hosted assistant's intro (AssistantIntro), in place of the developer
  *  pickers. The composer this sits over (ConversationView and ComposeView
  *  both bridge it) takes a starter's request. */
@@ -1126,7 +1282,20 @@ function HostedComposeIntro() {
   return <AssistantIntro title={LANE_COPY.intro.sheetTitle} onStarter={populate && ((text) => populate(text, { append: true }))} />;
 }
 
-export function NewSessionView({ conversation, agentControls }: { conversation: ConversationData; agentControls?: NewSessionAgentControls }) {
+export function NewSessionView({ conversation, agentControls, slots, role }: {
+  conversation: ConversationData;
+  agentControls?: NewSessionAgentControls;
+  // The new-session page (ConversationView): the host's composer foot and the
+  // space under the composer. Given, the launch pickers render in the foot
+  // and the context line and this project's sessions below; null while a slot
+  // element hasn't mounted yet. Omitted (the compose popup), everything
+  // renders here above the host's input.
+  slots?: { foot: HTMLElement | null; below: HTMLElement | null };
+  // The new-session page's recipient (ComposeRolePicker): picked, the request
+  // goes to that role's standing session, which chooses project and agent, so
+  // the launch pickers step aside.
+  role?: { picked: RoleRecipient | null; onPick: (r: RoleRecipient | null) => void; onDone: () => void };
+}) {
   const [localShowWorkflow, setLocalShowWorkflow] = useState(false);
   const [localWorkflowId, setLocalWorkflowId] = useState("");
   const ac: NewSessionAgentControls = agentControls ?? {
@@ -1151,6 +1320,9 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   // the folder list), but it renders down on the Context line — this slot is
   // the portal target StableContextPicker mounts at the end of that line.
   const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
+  // Sub-slots inside the host's slots, so the pieces land in a fixed order.
+  const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
+  const [recentsSlot, setRecentsSlot] = useState<HTMLElement | null>(null);
   useMountEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       // altChordDirection also releases ⌥←/⌥→ from a text caret (word jump).
@@ -1189,6 +1361,75 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
   const onlyHosted = useOnlyHostedAgent();
   const agentRow = !(hosted && onlyHosted);
 
+  const agentSwitcher = (compact: boolean) => (
+    <AgentSwitcher
+      conversation={conversation}
+      showWorkflow={ac.showWorkflow}
+      onToggleWorkflow={ac.onToggleWorkflow}
+      selectedWorkflowId={ac.selectedWorkflowId}
+      onSelectWorkflow={ac.onSelectWorkflow}
+      workflows={ac.workflows}
+      handleRef={agentsRef}
+      compact={compact}
+    />
+  );
+  const contextLine = (className: string) => (
+    <ErrorBoundary name="StableContextPicker" level="inline">
+      <div className={className}>
+        <StableContextPicker
+          conversationId={conversation._id}
+          trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
+        />
+      </div>
+    </ErrorBoundary>
+  );
+
+  if (slots) {
+    // The new-session page: the question and the project chips here, right
+    // above the composer; the launch pickers in its foot; the context line,
+    // the label and this project's sessions under it.
+    return (
+      <div ref={rootRef} className="flex flex-col items-center w-full">
+        {role && !onlyHosted && (
+          <div className={`w-full max-w-3xl px-4 ${role.picked ? "mb-1" : "mb-6"}`}>
+            <ComposeRolePicker page picked={role.picked} onPick={role.onPick} onDone={role.onDone} />
+          </div>
+        )}
+        {role?.picked ? null : <>
+        {hosted ? <HostedComposeIntro /> : (
+          <ErrorBoundary name="ProjectSwitcher" level="inline">
+            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} headline modeSlot={modeSlot} recentsSlot={recentsSlot} />
+          </ErrorBoundary>
+        )}
+        {slots.foot && createPortal(
+          <>
+            {agentRow && agentSwitcher(true)}
+            {!hosted && <div ref={setModeSlot} className="contents" />}
+          </>,
+          slots.foot,
+        )}
+        {slots.below && !hosted && createPortal(
+          <>
+            {/* The strip tucked under the composer: which machine, what
+                context rides along, and the label. */}
+            <div className="mx-auto conv-col px-2 sm:px-4">
+              <div className="mx-4 flex items-start gap-3 rounded-b-xl border border-t-0 border-sol-border/50 bg-sol-bg-alt/40 px-3 pt-1.5 pb-1.5">
+                <div ref={setMachineSlot} className="shrink-0 min-w-0" />
+                <ErrorBoundary name="StableContextPicker" level="inline">
+                  <StableContextPicker conversationId={conversation._id} className="flex-1 min-w-0 pt-1" />
+                </ErrorBoundary>
+                <NewSessionBucketPill conversation={conversation} />
+              </div>
+            </div>
+            <div ref={setRecentsSlot} className="mt-6" />
+          </>,
+          slots.below,
+        )}
+        </>}
+      </div>
+    );
+  }
+
   // Project picker sits up top; a flex spacer pushes the agent picker down so it
   // pins to the bottom, directly above the message input (the host renders the
   // input right after this view). Needs a full-height parent.
@@ -1202,27 +1443,10 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
             <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
           </ErrorBoundary>
           <div className="flex-1" />
-          <ErrorBoundary name="StableContextPicker" level="inline">
-            <div className="w-full px-4 mb-4">
-              <StableContextPicker
-                conversationId={conversation._id}
-                trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
-              />
-            </div>
-          </ErrorBoundary>
+          {contextLine("w-full px-4 mb-4")}
         </>
       )}
-      {agentRow && (
-        <AgentSwitcher
-          conversation={conversation}
-          showWorkflow={ac.showWorkflow}
-          onToggleWorkflow={ac.onToggleWorkflow}
-          selectedWorkflowId={ac.selectedWorkflowId}
-          onSelectWorkflow={ac.onSelectWorkflow}
-          workflows={ac.workflows}
-          handleRef={agentsRef}
-        />
-      )}
+      {agentRow && agentSwitcher(false)}
     </div>
   );
 }

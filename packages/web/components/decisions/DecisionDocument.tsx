@@ -1,12 +1,13 @@
 "use client";
 
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
-import { useState } from "react";
+import { useRef, useState, type WheelEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, MessageSquare } from "lucide-react";
+import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionDetailItem } from "../../store/inboxStore";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useDecisionDiscussion } from "../../hooks/useDecisionDiscussion";
+import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { DoubtChip } from "../line/DoubtChip";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { AppLoader } from "../AppLoader";
@@ -54,6 +55,22 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const discussion = useDecisionDiscussion(decision._id);
   const [discussOpen, setDiscussOpen] = useState(false);
 
+  // The page stands on the thread that asked: scrolling up off its top opens
+  // that thread at the ask, the way the sheet in a session hands its pane
+  // back. Only a scroll that STARTS at the top counts, so coasting back up a
+  // long decision never leaves the page.
+  const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
+  const pull = useRef({ last: 0, armed: false, sum: 0 });
+  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
+    const p = pull.current;
+    if (e.timeStamp - p.last > 200) { p.armed = e.currentTarget.scrollTop <= 0; p.sum = 0; }
+    p.last = e.timeStamp;
+    if (e.deltaY > 0) p.armed = false;
+    if (!p.armed) return;
+    p.sum -= e.deltaY;
+    if (p.sum > 80) { p.armed = false; void jumpToAsk(); }
+  };
+
   // Who asked, who may answer, who holds it. A change card leads with the
   // change and its proof, so for one these facts follow the card.
   const meta = <DecisionFacts decision={decision} detail={detail} ladder={detail.ladder.length ? <DecisionLadder decision={decision} detail={detail} now={now} /> : undefined} />;
@@ -64,7 +81,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const body = hasDecisionBody(decision, detail) && !restated ? <DecisionBody decision={decision} detail={detail} /> : null;
 
   return (
-    <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
+    <div className="h-full overflow-y-auto decision-doc" data-main-scroll onWheel={onWheel}>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
         <Link href="/questions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
@@ -106,8 +123,16 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
 
         {/* Discuss sits by the status as a real button, saying where it goes. */}
-        {(discussion.owner || discussion.thread.length > 0) && (
-          <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
+        <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
+          <button
+            type="button"
+            onClick={() => void jumpToAsk()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-blue/60 hover:text-sol-blue transition-colors"
+            data-decision-open-thread
+          >
+            <MessagesSquare className="w-3.5 h-3.5" />Thread
+          </button>
+          {(discussion.owner || discussion.thread.length > 0) && (<>
             <button
               type="button"
               onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
@@ -117,8 +142,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               <MessageSquare className="w-3.5 h-3.5" />{discussion.thread.length ? "Reply in the discussion" : "Discuss"}
             </button>
             {discussion.owner && <span className="text-[12px] text-sol-text-dim">Opens a thread with {discussion.owner.name ?? "the session that asked"} about this {decision.card ? "card" : "decision"}.</span>}
-          </div>
-        )}
+          </>)}
+        </div>
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
         {verdictBar && decision.card && heldNote && <div className="mt-4">{heldNote}</div>}
