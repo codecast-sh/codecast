@@ -37,8 +37,9 @@ export async function drainSyncOutbox(ctx: any, id: string) {
       delivered_revision: deliveredRevision, position, pending,
       cargo: undefined, access: undefined, events: pending ? remaining : undefined,
     });
-    if (pending) await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: row._id });
   }
+  // One follow-up for the scope, which also covers a lifecycle slot whose
+  // events ran past this pass's cap: it is still pending.
   const next = await ctx.db.query("sync_outbox")
     .withIndex("by_scope_pending", (q: any) => q.eq("scope_key", first.scope_key).eq("pending", true))
     .first();

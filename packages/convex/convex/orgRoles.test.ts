@@ -282,7 +282,7 @@ describe("orgRoles.reparentSession + retire", () => {
     expect(filed.told).toEqual({ sessions: 1, roles: 0 });
 
     // `cast own`: Mate is added, keeps Me as an owner, and the chart follows Mate.
-    const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" }, note: "Take it from here." });
+    const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" }, handoff: "Take it from here." });
     expect(res.org_role_id).toBeNull();
     expect(db._tables.conversations[0].org_role_id).toBeUndefined();
     expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([ME, MATE].sort());
@@ -293,8 +293,8 @@ describe("orgRoles.reparentSession + retire", () => {
     // The line rides the session message rail, from the acting person, with the note.
     const pending = db._tables.pending_messages;
     expect(pending).toHaveLength(2);
-    expect(pending[0].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Growth.\n</session-message>`);
-    expect(pending[1].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Mate. Take it from here.\n</session-message>`);
+    expect(pending[0].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Growth (@growth): what you need from a person goes to it first, and \`cast send @growth\` reaches it.\n</session-message>`);
+    expect(pending[1].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Mate: your questions and decisions go to them. Note handed to Mate with this session: "Take it from here."\n</session-message>`);
     expect(pending[1].from_user_id).toBe(ME);
     expect(pending[1].conversation_id).toBe("c".repeat(32));
 
@@ -342,7 +342,7 @@ describe("orgRoles.reparentSession + retire", () => {
     expect(res.told).toEqual({ sessions: 0, roles: 0, deferred: 1 });
     const row = db._tables.pending_messages[0];
     expect(row.status).toBe("held");
-    expect(row.content).toContain("You now report to Mate. Yours now.");
+    expect(row.content).toContain("You now report to Mate: your questions and decisions go to them. Yours now.");
     // Not resurrected, not bumped. The stash comes off: the new owner has
     // never seen the session and it must appear in their inbox. A kill stays
     // (cast restore is the gesture for that).
@@ -355,7 +355,7 @@ describe("orgRoles.reparentSession + retire", () => {
     const { enqueuePendingMessage } = await import("./pendingMessages");
     await enqueuePendingMessage(ctx, c, ME as any, { content: "pick this up", human: true });
     expect(db._tables.pending_messages.map((p: any) => p.status)).toEqual(["pending", "pending"]);
-    expect(db._tables.pending_messages[0].content).toContain("You now report to Mate.");
+    expect(db._tables.pending_messages[0].content).toContain("You now report to Mate:");
   });
 
   test("a reparent to a role keeps the stash: the role triages and the row nests under it without anyone's eyes", async () => {
@@ -380,7 +380,7 @@ describe("orgRoles.reparentSession + retire", () => {
     const ctx = ctxOf(db);
     const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", user_id: MATE as any }, from_session: "jxactor" });
     expect(res.told.sessions).toBe(1);
-    expect(db._tables.pending_messages[0].content).toBe(`<session-message from="jxactor" name="Me">\nYou now report to Mate.\n</session-message>`);
+    expect(db._tables.pending_messages[0].content).toBe(`<session-message from="jxactor" name="Me">\nYou now report to Mate: your questions and decisions go to them.\n</session-message>`);
     await expect(performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["Anchor"], mode: "add" } }))
       .rejects.toThrow(/agent account/);
   });

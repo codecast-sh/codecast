@@ -118,7 +118,7 @@ const HOST_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.+:@_-]*$/;
 function validateHost(raw: unknown, file?: string): HostSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'host' must be a table", file, "host");
-  const known = new Set(["packages", "services", "run", "simulators"]);
+  const known = new Set(["packages", "services", "run", "simulators", "memory_gb"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) throw new ManifestError(`unknown key in [host]: '${key}'`, file, `host.${key}`);
   }
@@ -133,7 +133,11 @@ function validateHost(raw: unknown, file?: string): HostSpec | undefined {
   simulators.forEach((name, i) => {
     if (!SIM_PLATFORMS.has(name)) throw new ManifestError(`'host.simulators[${i}]' must be one of ${[...SIM_PLATFORMS].join(", ")}`, file, `host.simulators[${i}]`);
   });
-  return { packages, services, run: validateStringArray(raw["run"], "host.run", file), ...(simulators.length ? { simulators } : {}) };
+  const memory = raw["memory_gb"];
+  if (memory !== undefined && (typeof memory !== "number" || !Number.isFinite(memory) || memory <= 0 || memory > 1024)) {
+    throw new ManifestError("'host.memory_gb' must be a number of gigabytes", file, "host.memory_gb");
+  }
+  return { packages, services, run: validateStringArray(raw["run"], "host.run", file), ...(simulators.length ? { simulators } : {}), ...(memory !== undefined ? { memory_gb: memory as number } : {}) };
 }
 
 /** Simulator platforms a cloud Mac can be provisioned for (sim/provision.ts). */

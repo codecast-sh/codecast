@@ -34,6 +34,12 @@ range = 20
 # axe, so sessions that drive the mobile app in a simulator can move there.
 [host]
 simulators = ["iOS"]
+# What a session here needs to typecheck, run the web dev server and drive a
+# browser beside a few agents. Measured on a laptop 2026-10-15: web tsc peaks
+# at 4.3 GB, cli tsc 1.8, the Vite dev server 1.2; plus a browser (~0.6), the
+# daemon (0.3), four agents (~1.2) and the OS (~0.5): about 10 GB. New hosts
+# are sized to it (a 16 GB t3.xlarge), and placements prefer hosts that have it.
+memory_gb = 12
 
 # How `cast ship checkout` lands everything uncommitted in this shared
 # checkout: commits by session, replayed onto origin/main in memory, checked
