@@ -141,6 +141,7 @@ const ModPane = lazy(() => import("@/app/m/page"));
 const ModObjects = lazy(() => import("@/app/objects/page"));
 const ModObject = lazy(() => import("@/app/o/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const SessionMap = lazy(() => import("@/app/map/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
@@ -340,6 +341,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "objects/:prefix", component: cast(ModObjects), layout: "dashboardShell", tab: "/objects/:prefix", fullWidth: true },
   { path: "o/:id", component: cast(ModObject), layout: "dashboardShell", tab: "/o/:id", fullWidth: true },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
+  { path: "map", component: cast(SessionMap), layout: "dashboardShell", tab: "/map", fullWidth: true },
   // A web page as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS (like
   // /chat), so no fullWidth flag here.
   { path: "browser", component: cast(Browser), layout: "dashboardShell", tab: "/browser" },
