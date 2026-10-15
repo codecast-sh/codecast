@@ -11,7 +11,7 @@ const options: CreateHostOptions = { name: "dev", key: "~/.ssh/dev.pem", keyName
 describe("remote machine launch", () => {
   test("Linux launches one machine with IMDSv2, stop on shutdown, and a repeatable request token", () => {
     const plan = createHostPlan("linux", options);
-    expect(plan.type).toBe("t3.medium");
+    expect(plan.type).toBe("t3.large");
     expect(plan.args).toContain("HttpTokens=required,HttpEndpoint=enabled");
     expect(plan.args).toContain("--associate-public-ip-address");
     expect(JSON.parse(plan.args[plan.args.indexOf("--tag-specifications") + 1]!)[0].Tags).toContainEqual({ Key: "codecast-launch-token", Value: plan.clientToken });
