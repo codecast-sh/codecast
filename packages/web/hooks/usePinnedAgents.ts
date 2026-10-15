@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { pinnedAgentIds, pinnedPickerOptions, type AgentClientId, type AgentPickerOption, type ConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, pinnedAgentIds, pinnedPickerOptions, type AgentClientId, type AgentPickerOption, type ConvexAgentType } from "@codecast/shared/contracts";
 // Relative, not "@/": mobile reaches this file and its "@/" is a different tree.
 import { useInboxStore } from "../store/inboxStore";
 import { defaultAgentType, onlyHostedAgent } from "../lib/defaultAgent";
@@ -39,4 +39,33 @@ export function useDefaultAgentType(): ConvexAgentType {
  *  hosted mode, or an account with no machine. */
 export function useOnlyHostedAgent(): boolean {
   return useInboxStore(onlyHostedAgent);
+}
+
+/** How many of the inbox's sessions each agent ran, as "agent:count,…" so
+ *  the subscription stays quiet across heartbeats. Counting walks every
+ *  session on each store change, so it runs only while `active`. */
+function useAgentUseKey(active: boolean): string {
+  return useInboxStore((s) => {
+    if (!active) return "";
+    const counts = new Map<AgentClientId, number>();
+    for (const row of Object.values(s.sessions)) {
+      if (!row.agent_type) continue;
+      const id = fromConvexAgentType(row.agent_type);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return [...counts].map(([id, n]) => `${id}:${n}`).join(",");
+  });
+}
+
+/** A picker's agent options, the ones the viewer runs most first. Ties keep
+ *  the given (registry) order. */
+export function useAgentsByUse<T extends { id: AgentClientId }>(options: T[], active = true): T[] {
+  const key = useAgentUseKey(active);
+  return useMemo(() => {
+    const uses = new Map(key.split(",").filter(Boolean).map((pair) => {
+      const [id, n] = pair.split(":");
+      return [id, Number(n)] as const;
+    }));
+    return [...options].sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0));
+  }, [options, key]);
 }

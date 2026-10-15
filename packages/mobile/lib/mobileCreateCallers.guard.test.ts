@@ -35,7 +35,7 @@ describe("mobile result-dependent create callers", () => {
     expect(submit).toContain("deferCreate: true");
     expect(submit).not.toMatch(/\bawait\b/);
     const watch = submit.indexOf("watchSessionCreate(stubId, started.materialize(), create)");
-    const finish = submit.indexOf("finishSessionCreate(stubId, !text)");
+    const finish = submit.indexOf("finishSessionCreate(stubId, empty)");
     expect(watch).toBeGreaterThanOrEqual(0);
     expect(finish).toBeGreaterThan(watch);
     const finishBody = sourceBetween("const finishSessionCreate", "const handleSubmit");
@@ -49,12 +49,16 @@ describe("mobile result-dependent create callers", () => {
     expect(sessionSource).toMatch(/if \(!reveal\) return;\s*sessionLanded\(\);/);
   });
 
-  // The sheet is prompt first: typed words become the first message, queued on
-  // the stub and sent once the create has a real id, never awaited here.
+  // The sheet is prompt first: typed words and picked images become the first
+  // message, queued on the stub through the session composer's own send and
+  // sent once the create has a real id, never awaited here.
   test("the sheet's words ride the stub as its first message", () => {
     const submit = sourceBetween("const handleSubmit", "\n  return (");
-    expect(submit).toContain("store.addOptimisticMessage(stubId, text)");
-    expect(submit).toContain("store.sendMessageWhenReady(stubId, text, undefined, clientId)");
+    expect(submit).toContain("dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages)");
+    const composer = readFileSync(`${import.meta.dir}/../components/session/MessageComposer.tsx`, "utf8");
+    const send = sourceBetween("export function dispatchComposerSend", "\n}\n", composer);
+    expect(send).toContain("store.addOptimisticMessage(conversationId, content");
+    expect(send).toContain("sendMessageWhenReady(conversationId, content");
   });
 
   // A refused create must not vanish silently once the sheet is gone: it is
