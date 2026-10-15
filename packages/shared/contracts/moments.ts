@@ -84,6 +84,9 @@ export interface ExtractorOutput {
   blocks: MomentBlock[];
   refs: MomentRef[];
   at?: number;
+  /** Who the moment is about, as a person names it in a list ("Marilyn Priest, called by Logan"). Absent: codecast
+   *  reads it off the first facts block's Name or Contact (momentWho). */
+  who?: string;
 }
 
 /** A moment as codecast keeps it: the extractor's output plus where and when it came from. */
@@ -224,7 +227,22 @@ export function parseExtractorOutput(raw: unknown): ExtractorOutput | { error: s
     refs.push({ label, id, ...(table ? { table } : {}), ...(url && /^https?:\/\//.test(url) ? { url } : {}) });
   }
   const at = time(value.at);
-  return { blocks, refs, ...(at ? { at } : {}) };
+  const who = text(value.who, MOMENT_LIMITS.label_chars);
+  return { blocks, refs, ...(at ? { at } : {}), ...(who ? { who } : {}) };
+}
+
+/** Labels of a facts block that name the person a moment is about. */
+const PERSON_LABEL = /^(name|contact|who)$/i;
+
+/**
+ * Who a moment is about, for a list a person scans: the extractor's own `who`, else the person its first facts block
+ * names (a Name or Contact fact), else null. Never an id: a list names a moment by the people in it.
+ */
+export function momentWho(m: Pick<ExtractorOutput, "who" | "blocks">): string | null {
+  if (m.who?.trim()) return m.who.trim();
+  const facts = m.blocks.find((b): b is MomentFacts => b.type === "facts");
+  const named = facts?.facts.filter((f) => PERSON_LABEL.test(f.label.trim()) && String(f.value ?? "").trim()).map((f) => String(f.value).trim()) ?? [];
+  return named.length ? [...new Set(named)].join(", ").slice(0, MOMENT_LIMITS.label_chars) : null;
 }
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");

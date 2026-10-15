@@ -28,6 +28,7 @@ import {
   remoteClaudeLoginLive,
   gitEnv,
   gitSshUrl,
+  gitRootOf,
   isWorktree,
   pullSession,
   pushSession,
@@ -111,6 +112,8 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
   let api: any;
   const hosts = new Map<string, { cloud: CloudHost; host: RemoteHost }>();
   const credentialRefreshed = new Set<string>();
+  // The host-home steps (host setup, tools, logins, mirror, the host's cast) once per host and repo a batch moves into.
+  const homeReady = new Set<string>();
   const myDeviceId = localDeviceId();
 
   const ready = async () => {
@@ -207,8 +210,18 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       return remoteClaudeLoginLive(host) ? null : `this machine has none to give it: ${local.reason}`;
     },
 
+    hostRoom: async (deviceId, facts) => {
+      const { cloud } = await prepareHost(deviceId);
+      const { probeHeadroom, readRepoNeed, tooSmallFor } = await import("../cloud/hostHeadroom.js");
+      const room = probeHeadroom(cloud);
+      if (!room.fit) return { refuse: room.why ?? "no room" };
+      const localRoot = facts.git_root ?? facts.project_path ?? undefined;
+      const small = tooSmallFor(room, readRepoNeed(localRoot && fs.existsSync(localRoot) ? localRoot : undefined));
+      return small ? { small } : {};
+    },
+
     transferToCloud: async (facts: Facts, o) => {
-      const { host } = await prepareHost(facts.to_device_id);
+      const { cloud, host } = await prepareHost(facts.to_device_id);
       // The move merges into the host's checkout of the repository, beside
       // whatever sessions already work there (gitPushWorktree).
       const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree, pushedHead: o.pushedHead });
@@ -218,6 +231,26 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         throw new Error(`the host checkout ${move.remoteCwd} is at ${move.verification.remoteHead?.slice(0, 8) ?? "an unknown commit"}, not this session's ${move.verification.localHead.slice(0, 8)}; nothing was handed over`);
       }
       ensureRemoteClaudeReady(host, move.remoteCwd);
+      // A moved checkout must run its tools where it lands, not just hold the
+      // files: the host's declared setup, then the checkout's own (install).
+      let readiness: string | undefined;
+      if (move.remoteRoot && !o.skipTree) {
+        const localRoot = gitRootOf(move.localCwd);
+        const key = `${facts.to_device_id}:${move.remoteRoot}`;
+        if (!homeReady.has(key)) {
+          homeReady.add(key);
+          try {
+            const { readyHostHome } = await import("../cloud/prepare.js");
+            // The git step already ran in pushSession, with the moved repo in hand.
+            await readyHostHome(host, { localGitRoot: localRoot, repoPath: move.remoteRoot, cloudId: cloud.id, skipGit: true, onProgress: (m) => log(`  ${m}`) });
+          } catch (err) {
+            log(`  host home steps failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        const { readyMovedCheckout } = await import("../cloud/prepare.js");
+        readiness = readyMovedCheckout(host, move.remoteRoot);
+        log(`  ${readiness}`);
+      }
       if (!credentialRefreshed.has(facts.to_device_id)) {
         refreshRemoteCredential(host);
         credentialRefreshed.add(facts.to_device_id);
@@ -230,7 +263,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         destinationPath: move.remoteCwd,
         gitRoot: move.remoteRoot,
         sourcePath: `${move.localCwd}`,
-        verification: describeVerification(move.verification),
+        verification: [describeVerification(move.verification), readiness].filter(Boolean).join("; "),
         localCwd: move.localCwd,
       };
     },

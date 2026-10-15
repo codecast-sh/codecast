@@ -131,6 +131,16 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .action(async (ref: string, options: any) => (await run()).revise(deps, ref, options));
 
   org
+    .command("hire")
+    .description("Decide a hire (op-N: a role proposing a new role under itself) from your standing session: a lead above the hiring role, or the hiring role itself when a person turned on its leeway to hire. Approving brings the new role online.")
+    .argument("<op-N>", "The hire proposal")
+    .option("--approve", "Bring the new role online")
+    .option("--reject", "Turn the hire down")
+    .option("--note <text>", "One line why, sent to the hiring role")
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string, options: any) => (await run()).decideHire(deps, ref, options));
+
+  org
     .command("proposals")
     .description("Staffing proposals for the workspace, open first")
     .option("--all", "Include resolved and withdrawn proposals")

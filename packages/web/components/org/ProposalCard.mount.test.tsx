@@ -11,7 +11,7 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLTextAreaElement", "Element", "Node", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "localStorage"]) {
+for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLTextAreaElement", "Element", "Node", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "localStorage", "MutationObserver", "CustomEvent", "HTMLInputElement"]) {
   const v = (dom.window as any)[key];
   if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
 }
@@ -129,6 +129,8 @@ const type = (el: HTMLTextAreaElement, text: string) => React.act(() => {
 const sentences = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>("[data-subject-sentence]")).map((s) => s.textContent);
 const subjects = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>("[data-subject]"));
 const foot = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-ledger-close]")!;
+/** Approving a new role opens the shared confirm; this presses its confirm. */
+const confirmOnline = () => click(q("[data-switch-confirm]"));
 
 test("a proposed proposal: meta, lead, totals, one entry per subject; Approve stages a band in the batch and decides nothing; Undo takes it back", () => {
   const root = mount(inThread(card("op-1")));
@@ -234,7 +236,11 @@ test("Approve all 2 with nothing answered, Approve the rest after one answer, pr
   // One card answered by hand first.
   click(c.querySelector("[data-subject='role:growth'] [data-subject-reject]")!);
   expect(rest().textContent).toBe("Approve the rest");
+  // The rest holds a new role: the press opens the online review, and nothing is staged until it is confirmed.
   click(rest());
+  expect(q("[data-switch-review]").getAttribute("data-switch-review")).toBe("Bring @platform online");
+  expect(batch().map((b) => [b[0], b[1]])).toEqual([["role:growth", "reject"]]);
+  confirmOnline();
   expect(batch().map((b) => [b[0], b[1]])).toEqual([["role:growth", "reject"], ["role:platform", "approve"]]);
   expect(rest().getAttribute("aria-pressed")).toBe("true");
   expect(rest().querySelector("svg")).not.toBeNull();
@@ -249,6 +255,7 @@ test("Approve all 2 with nothing answered, Approve the rest after one answer, pr
   expect(batch()).toEqual([]);
   expect(rest().textContent).toBe("Approve all 2");
   click(rest());
+  confirmOnline();
   expect(batch().map((b) => [b[0], b[1]])).toEqual([["role:platform", "approve"], ["role:growth", "approve"]]);
   expect(qa("[data-staged='approve']").length).toBe(2);
   expect(calls).toEqual([]);
@@ -329,7 +336,13 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   const beside = q("[data-card='op-5']");
   expect(subjects(beside).map((s) => [s.getAttribute("data-subject"), s.getAttribute("data-change-ids")])).toEqual([["role:platform", "c5-role c5-limit"]]);
   expect(beside.textContent).not.toMatch(/wakes|tokens|caps|limit|safety net/i);
+  // A new role: its Approve opens the online review; Not yet stages nothing, the confirm stages it.
   click(beside.querySelector("[data-subject-approve]")!);
+  expect(q("[data-switch-review]").textContent).toContain("Approve and bring online");
+  click(q("[data-switch-cancel]"));
+  expect(batch().length).toBe(1);
+  click(beside.querySelector("[data-subject-approve]")!);
+  confirmOnline();
   expect(batch()[1]).toEqual(["role:platform", "approve", "", [1], ["c5-role", "c5-limit"], 1, "Head of Platform"]);
   expect(calls).toEqual([]);
   React.act(() => root.unmount());

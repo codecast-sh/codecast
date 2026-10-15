@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { HEAD_OF_PEOPLE_HANDLE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
-import { apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
+import { apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, decideHire, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { describeOrgChange, orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
@@ -370,5 +370,33 @@ describe("cast org revise", () => {
     const cap3 = capture(); const exit3 = trapExit();
     try { await revise(d, "ds-4", { remove: ["3"] }); } catch (e: any) { expect(e.message).toBe("exit"); } finally { exit3.restore(); cap3.restore(); }
     expect(cap3.said()).toContain("Usage: cast org revise op-N");
+  });
+});
+
+// ── cast org hire ────────────────────────────────────────────────────────────
+// A lead decides a hire from its standing session: the verdict and the
+// calling session go to the hire route; one of --approve or --reject.
+
+describe("cast org hire", () => {
+  test("posts the verdict with the calling session; refuses at a plain shell or without a verdict", async () => {
+    const posts: any[] = [];
+    const d = deps({
+      callingSession: () => "jxgrowt",
+      cliPost: async (route: string, body: any) => { posts.push([route, body]); return { proposal: "op-7", results: [{ status: "applied", line: "role @docs-api under @docs" }], applied: 1, remaining: 0 }; },
+    } as any) as any;
+    const cap = capture();
+    try {
+      await decideHire(d, "op-7", { approve: true });
+      await decideHire(d, "op-7", { reject: true, note: "not yet" });
+    } finally { cap.restore(); }
+    expect(posts).toEqual([
+      ["/cli/org/proposal/hire", { proposal: "op-7", verdict: "accept", from_session: "jxgrowt" }],
+      ["/cli/org/proposal/hire", { proposal: "op-7", verdict: "skip", from_session: "jxgrowt", text: "not yet" }],
+    ]);
+    expect(cap.said()).toContain("op-7 approved");
+    const said = (fn: () => Promise<void>) => async () => { const c = capture(); const exit = trapExit(); try { await fn(); } catch (e: any) { expect(e.message).toBe("exit"); } finally { exit.restore(); c.restore(); } return c.said(); };
+    expect(await said(() => decideHire(deps({ callingSession: () => undefined } as any) as any, "op-7", { approve: true }))()).toContain("runs inside a role's standing session");
+    expect(await said(() => decideHire(d, "op-7", {}))()).toContain("Usage: cast org hire op-N --approve|--reject");
+    expect(await said(() => decideHire(d, "op-7", { approve: true, reject: true }))()).toContain("Usage: cast org hire");
   });
 });

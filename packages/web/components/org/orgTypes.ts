@@ -128,6 +128,8 @@ export type OrgRole = {
   /** The line's merge step (the-line.md L12): on, an approved branch merges
    *  into the default branch under the role's merge authority. */
   line_merge?: boolean;
+  /** Leeway to hire: its proposals of roles under itself come online with nobody approving. A person's switch. */
+  hires_freely?: boolean;
   /** Knowledge handoff (org-staffing.md S32): which role this one succeeded
    *  for which area, and when the outgoing role handed over the rest. */
   succeeded?: OrgSuccession[];

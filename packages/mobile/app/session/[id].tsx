@@ -3,35 +3,26 @@ import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from '@codecast/web/li
 import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast/web/lib/sessionAgentActions';
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
-import { optionalNative } from '@/lib/optionalNative';
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
-import { useQuery, useMutation, useConvex } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
-const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
-  'ExponentImagePicker',
-  () => require('expo-image-picker'),
-);
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
-import { useInboxStore, isConvexId, retryPendingSend, type OptimisticImage } from '@codecast/web/store/inboxStore';
-import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
-import { startUpload, forgetUpload } from '@/components/chat/chatUpload';
+import { useInboxStore, isConvexId, retryPendingSend } from '@codecast/web/store/inboxStore';
 import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
-import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
-import { NativePressable } from '@/lib/gestureHandler';
 import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { foldToolRuns, type ToolRun } from '@/lib/toolRuns';
@@ -62,12 +53,12 @@ import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { SlashCommandPills } from '@/components/session/SlashCommandPills';
-import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ComposeButton } from '@/components/session/ComposeButton';
+import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
 import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/components/session/SessionActionsSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
@@ -79,7 +70,7 @@ import { searchedSources } from '@codecast/web/lib/hostedReceipt';
 import { HostedNoticeRow } from '@/components/hosted/Notice';
 import { foldHostedRetries, hostedNoticeKind, lastAskOf } from '@codecast/web/lib/hostedNotice';
 import { Serif } from '@/constants/fonts';
-import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
+import { useHostedTheme } from '@/components/hosted/hostedTheme';
 import { hostedComposerWords, hostedLastExchange } from '@codecast/web/lib/hostedComposer';
 import { useAllowanceOut } from '@codecast/web/components/simple/usePlanFigures';
 import { hostedConnectionWords } from '@codecast/web/components/conversation/HostedConnection';
@@ -163,9 +154,6 @@ type ImageData = {
   // The local file an optimistic attachment paints while it uploads.
   preview_url?: string;
 };
-
-// A send with attachments and no text carries this as its content.
-const IMAGE_ONLY_CONTENT = '[image]';
 
 type Message = {
   _id: string;
@@ -2771,9 +2759,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 }) {
   const Theme = useTheme();
   const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
-  // The family look's send is the hosted composers' ring and ink disc.
+  // The family look's wait reads in quiet ink.
   const familyLook = useActiveLook() === 'family';
-  const { c: hostedColors } = useHostedTheme();
   const answeredBefore = useInboxStore((s) => hosted && (s.messages[conversationId as string] ?? []).some((m: { role?: string }) => m.role === 'assistant'));
   const hostedLast = useInboxStore((s) => (hosted ? hostedLastExchange(s.messages[conversationId as string] as any, s.sessionDecisions, conversationId as string, Date.now()) : null));
   // A used-up month holds the send and says why in the box, as the web's
@@ -2785,22 +2772,16 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   const unsent = useInboxStore((s) => hosted && (s.pendingMessages[conversationId as string] ?? []).length > 0);
   const words = useModeWords();
   const insets = useSafeAreaInsets();
-  const { height: winHeight } = useWindowDimensions();
-  const [expanded, setExpanded] = useState(false);
-  // Content height of the inline input; the fullscreen affordance only appears
-  // once the text actually wraps, so a one-liner keeps the card minimal.
-  const [inputHeight, setInputHeight] = useState(0);
 
   const [seed] = useState(() => seedComposerDraft(conversationId as string, draft));
+  const field = useComposerField(seed);
   const {
     value: message,
     setValue: setMessage,
-    onChangeText,
-    epoch,
     inputRef,
     sendingRef,
     clearAfterSend,
-  } = useComposerField(seed);
+  } = field;
 
   // Focus after the push animation settles — focusing mid-transition on iOS
   // either drops the keyboard or stutters the navigation.
@@ -2810,12 +2791,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     return () => task.cancel();
   }, [autoFocus]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedImages, setSelectedImages] = useState<{ uri: string; mime: string; storageId?: string; uploading: boolean }[]>([]);
-  // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
-  // need each image's current position, and a state read inside an async
-  // callback or a state updater would be stale (or double-fire in StrictMode).
-  const selectedImagesRef = useRef(selectedImages);
-  selectedImagesRef.current = selectedImages;
+  const images = useComposerImages(setMessage);
+  const { selectedImages } = images;
   // The session row's live fields (synced with the inbox): is_connected is
   // the heartbeat verdict, agent_status what the daemon reports.
   const sessionFields = useManagedSessionFields(conversationId as string);
@@ -2827,8 +2804,6 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   const managedSession = (conversationId as string) === '__designmock__'
     ? { managed: true as const, agent_status: 'working' }
     : managedSessionQ;
-
-  const convex = useConvex();
 
   const draftRef = useRef(seed);
   // Same store path as web MessageInput: debounce setDraft / clearDraftFinal.
@@ -2869,91 +2844,6 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     return () => clearTimeout(timer);
   }, [conversationId, clearAfterSend, sendingRef]);
 
-  // Drops the image and its `[Image N]` token, renumbering the tokens above it
-  // so what's left still points at the attachments the agent will receive.
-  const removeImage = (uri: string) => {
-    const index = selectedImagesRef.current.findIndex(img => img.uri === uri);
-    if (index < 0) return;
-    selectedImagesRef.current = selectedImagesRef.current.filter(img => img.uri !== uri);
-    setSelectedImages(selectedImagesRef.current);
-    forgetUpload(uri);
-    setMessage(m => dropImagePlaceholder(m, index + 1));
-  };
-
-  const pickImage = async () => {
-    if (!ImagePicker) {
-      Alert.alert('Not available', 'Image uploads require a development build with expo-image-picker.');
-      return;
-    }
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant photo library access to attach images');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets) {
-        for (const asset of result.assets) {
-          const uri = asset.uri;
-          const mime = asset.mimeType ?? 'image/jpeg';
-          // Ref-first so a multi-pick batch numbers sequentially: the state
-          // updates are async, so `selectedImages` is still the old array here.
-          selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, uploading: true }];
-          setSelectedImages(selectedImagesRef.current);
-          // Token numbers follow attach order, which is the order the agent
-          // receives the images in — so `[Image 2]` is a real reference.
-          setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
-          // Registered in pendingImageUploads under the uri, so a send pressed
-          // before the bytes land still finds the upload (dispatchSend).
-          startUpload(convex, { uri, mime }).then(storageId => {
-            if (storageId) {
-              setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
-              return;
-            }
-            removeImage(uri);
-            Alert.alert('Upload failed', 'Could not upload image');
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Image picker error:', err);
-    }
-  };
-
-  // The optimistic-send core, shared by the composer's send button and the
-  // suggestion pills (which send fixed text with no attachments): pending row
-  // in the store instantly, fire-and-forget delivery via the outbox (after the
-  // create lands, when this is a session started a moment ago). An image still
-  // uploading rides the bubble as its local preview; the send goes out once
-  // the uploads settle, the same detached path as web MessageInput.
-  const dispatchSend = (content: string, images?: OptimisticImage[]) => {
-    const store = useInboxStore.getState();
-    const clientId = store.addOptimisticMessage(conversationId, content, images?.length ? images : undefined);
-    if (!images?.some(img => img.uploading)) {
-      const ids = images?.map(img => img.storage_id!) ?? [];
-      store.sendMessageWhenReady(conversationId, content, ids.length ? ids : undefined, clientId);
-      return;
-    }
-    void (async () => {
-      const settled = await Promise.all(images.map(async (img): Promise<OptimisticImage> =>
-        img.uploading ? { media_type: img.media_type, storage_id: (await awaitUpload(img.preview_url)) ?? undefined } : img));
-      images.forEach(img => releaseUpload(img.preview_url));
-      const resolved = settled.filter(img => img.storage_id);
-      const s = useInboxStore.getState();
-      // Every upload failed and there was no text: nothing real to send.
-      if (resolved.length === 0 && content === IMAGE_ONLY_CONTENT) {
-        s.markOptimisticAsFailed(conversationId, clientId);
-        return;
-      }
-      s.resolvePendingUploads(conversationId, clientId, resolved);
-      s.sendMessageWhenReady(conversationId, content, resolved.length ? resolved.map(img => img.storage_id!) : undefined, clientId);
-    })();
-  };
-
   // Optimistic, non-blocking send (mirrors web ContextChatInput). The message
   // is added to the store as pending and rendered instantly; sendMessage is
   // fire-and-forget (rides the store outbox, dedups on client_id). The input
@@ -2967,9 +2857,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     if (allowanceOut) return;
     setError(null);
 
-    const images: OptimisticImage[] = selectedImages.map(img => img.storageId
-      ? { media_type: img.mime, storage_id: img.storageId }
-      : { media_type: img.mime, preview_url: img.uri, uploading: true });
+    const sendImages = images.optimisticImages();
     const content = trimmedMessage || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written
@@ -2977,7 +2865,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     // lays out without animating, and the bubble would snap in instead of rising.
     requestAnimationFrame(() => {
       try {
-        dispatchSend(content, images);
+        dispatchComposerSend(conversationId, content, sendImages);
       } catch (error) {
         captureError(error instanceof Error ? error : new Error(String(error)));
         setError(error instanceof Error ? error.message : 'Could not save your message. Please try again.');
@@ -2995,11 +2883,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     draftRef.current = '';
     clearAfterSend(content, { keepFocus: false });
     Keyboard.dismiss();
-    setSelectedImages([]);
-    setInputHeight(0);
+    images.clearImages();
     useInboxStore.getState().clearDraftFinal(conversationId);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setExpanded(false);
   };
 
   const canSend = (!!message.trim() || selectedImages.length > 0) && !allowanceOut;
@@ -3009,7 +2895,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   // turn stops through the store's stopHostedTurn, the web's visible Stop,
   // so stopping never rests on a gesture a person who does not code would
   // not know.
-  const showStop = !canSend && (hosted ? hostedWorking : agentWorking && isOwner);
+  const canStop = hosted ? hostedWorking : agentWorking && isOwner;
 
   // The interrupt is the shared store action (web's Escape); the daemon judges
   // whether the agent is mid-turn and paints the interruption line.
@@ -3024,94 +2910,17 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     });
   };
 
-  // Shared between the inline card and the fullscreen editor so both modes show
-  // the same attachments/errors and drive the same send.
-  const errorBannerEl = error ? (
-    <RNView style={styles.errorBanner}>
-      <RNText style={styles.errorBannerText}>{error}</RNText>
-      <TouchableOpacity onPress={() => setError(null)}>
-        <RNText style={styles.errorBannerDismiss}>x</RNText>
-      </TouchableOpacity>
-    </RNView>
-  ) : null;
-
-  const imageStripEl = selectedImages.length > 0 ? (
-    <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false}>
-      {selectedImages.map((img, index) => (
-        <RNView key={index} style={styles.imagePreview}>
-          <Image source={{ uri: img.uri }} style={styles.previewImage} />
-          {img.uploading && (
-            <RNView style={styles.imageUploadingOverlay}>
-              <ActivityIndicator size="small" color="#fff" />
-            </RNView>
-          )}
-          <TouchableOpacity
-            style={styles.removeImageButton}
-            onPress={() => removeImage(img.uri)}
-            activeOpacity={0.7}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Remove image"
-          >
-            <Feather name="x" size={12} color="#fff" />
-          </TouchableOpacity>
-        </RNView>
-      ))}
-    </ScrollView>
-  ) : null;
-
   // Status lives in the otherwise-empty middle of the button row: zero extra
   // height, and it can never overlap the conversation.
   // A hosted wait reads as the web's one wait: "Getting started…" before
   // the first reply, "Thinking…" after, in quiet ink in the family look.
-  const statusMeta = hosted && linkDown
+  const statusMeta: ComposerStatus | undefined = hosted && linkDown
     ? { color: Theme.textMuted, dot: Theme.textMuted0, label: hostedConnectionWords(linkDown, unsent) }
     : hostedWorking
     ? { color: familyLook ? Theme.textMuted : AGENT_STATUS_META.working.color, dot: familyLook ? Theme.text : AGENT_STATUS_META.working.color, label: answeredBefore ? 'Thinking…' : 'Getting started…' }
     : managedSession?.managed && !hosted
       ? AGENT_STATUS_META[managedSession.agent_status ?? '']
       : undefined;
-
-  const actionsRowEl = (
-    <RNView style={styles.composerActions}>
-      {hosted ? null : (
-        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Attach image">
-          <Feather name="plus" size={18} color={Theme.textMuted} />
-        </TouchableOpacity>
-      )}
-      <RNView style={styles.composerSpacer}>
-        {statusMeta && (
-          <RNView style={styles.composerStatus}>
-            <PulsingDot color={(statusMeta as { dot?: string }).dot ?? statusMeta.color} />
-            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} numberOfLines={2} style={[styles.composerStatusText, { color: statusMeta.color, flexShrink: 1 }]}>
-              {statusMeta.label}
-            </RNText>
-          </RNView>
-        )}
-      </RNView>
-      {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
-          new session the JS thread is often still catching up (create, cache
-          write, keyboard) while the native field already shows text. Keep the
-          grey look; handleSend no-ops if the box is still empty. */}
-      {/* While the agent works and the box is empty, the send slot becomes
-          stop: the same interrupt web's Escape sends. Typing turns it back
-          into send, so a follow-up can always be queued. */}
-      <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, familyLook && sendDisc(hostedColors, 'family', canSend || showStop).style]}
-        onPress={showStop ? handleStop : handleSend}
-        activeOpacity={0.7}
-        delayPressIn={0}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
-        accessibilityRole="button"
-        accessibilityLabel={showStop ? words.stopWorking : 'Send'}
-      >
-        {showStop
-          ? <FontAwesome name="stop" size={11} color={familyLook ? sendDisc(hostedColors, 'family', true).icon : '#fff'} />
-          : <FontAwesome name="arrow-up" size={14} color={familyLook ? sendDisc(hostedColors, 'family', canSend).icon : '#fff'} />}
-      </NativePressable>
-    </RNView>
-  );
 
   // The web composer's resting words for the same exchange (lib/hostedComposer).
   const placeholder = hosted
@@ -3128,90 +2937,31 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
       {conversationId ? <AccountRecoveryBanner conversationId={conversationId} /> : null}
-      {errorBannerEl}
-      {imageStripEl}
-      {suggestionsEnabled && (
-        <SuggestionPills
-          conversationId={conversationId}
-          idle={!agentWorking}
-          hidden={!!message.trim() || selectedImages.length > 0}
-          onSend={(t) => dispatchSend(t)}
-          onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
-        />
-      )}
-      {hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
-      <RNView style={styles.composerCard}>
-        <TextInput
-          key={epoch}
-          ref={inputRef}
-          style={[
-            styles.textInput,
-            // Grow with the text up to a third of the screen; beyond that it scrolls.
-            { maxHeight: Math.round(winHeight * 0.33) },
-            inputHeight > 44 && !!message && styles.textInputWithExpand,
-          ]}
-          value={message}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor={Theme.textMuted0}
-          multiline
-          maxLength={10000}
-          blurOnSubmit={false}
-          maxFontSizeMultiplier={CHROME_FONT_CAP}
-          onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
-        />
-        {/* Only typed text earns it: a long placeholder (a held month's
-            sentence) wraps too, and has nothing to expand. */}
-        {inputHeight > 44 && !!message && (
-          <TouchableOpacity
-            style={styles.expandButton}
-            onPress={() => setExpanded(true)}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Expand composer to full screen"
-          >
-            <FontAwesome name="expand" size={12} color={Theme.textMuted} />
-          </TouchableOpacity>
-        )}
-        {actionsRowEl}
-      </RNView>
-
-      <Modal visible={expanded} animationType="slide" onRequestClose={() => setExpanded(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.expandedContainer}
-        >
-          <RNView style={[styles.expandedInner, { paddingTop: insets.top + 6, paddingBottom: insets.bottom || 12 }]}>
-            <RNView style={styles.expandedHeader}>
-              <TouchableOpacity
-                style={styles.expandButtonStatic}
-                onPress={() => setExpanded(false)}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel="Collapse composer"
-              >
-                <FontAwesome name="compress" size={13} color={Theme.textMuted} />
-              </TouchableOpacity>
-            </RNView>
-            {errorBannerEl}
-            {imageStripEl}
-            <TextInput
-              key={epoch}
-              style={styles.expandedInput}
-              value={message}
-              onChangeText={onChangeText}
-              placeholder={placeholder}
-              placeholderTextColor={Theme.textMuted0}
-              multiline
-              autoFocus
-              maxLength={10000}
-              blurOnSubmit={false}
-              maxFontSizeMultiplier={CHROME_FONT_CAP}
+      <MessageComposer
+        field={field}
+        images={images}
+        placeholder={placeholder}
+        canSend={canSend}
+        onSend={handleSend}
+        stop={canStop ? { label: words.stopWorking, onPress: handleStop } : null}
+        status={statusMeta}
+        // The hosted assistant's turns take words only.
+        attach={!hosted}
+        error={error}
+        onDismissError={() => setError(null)}
+        above={<>
+          {suggestionsEnabled && (
+            <SuggestionPills
+              conversationId={conversationId}
+              idle={!agentWorking}
+              hidden={!!message.trim() || selectedImages.length > 0}
+              onSend={(t) => dispatchComposerSend(conversationId, t)}
+              onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
             />
-            {actionsRowEl}
-          </RNView>
-        </KeyboardAvoidingView>
-      </Modal>
+          )}
+          {hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
+        </>}
+      />
     </RNView>
   );
 }
@@ -5920,145 +5670,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderTopColor: Theme.borderLight,
     // paddingBottom is set inline from safe-area insets (home indicator clearance
     // varies by device/orientation); see MessageInput.
-  },
-  errorBanner: {
-    backgroundColor: Theme.red,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  errorBannerText: {
-    color: '#fff',
-    fontSize: 13,
-    flex: 1,
-  },
-  errorBannerDismiss: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-    paddingLeft: 12,
-  },
-  imagePreviewContainer: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    maxHeight: 120,
-  },
-  imagePreview: {
-    position: 'relative',
-    marginRight: 8,
-  },
-  previewImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  imageUploadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 10,
-    justifyContent: 'center' as const,
-    alignItems: 'center' as const,
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: 5,
-    right: 5,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-  },
-  imageButton: {
-    ...S.imageButton,
-    borderRadius: 16,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  // One rounded card: full-width input on top, action row underneath. Buttons
-  // living below the text (not beside it) is what gives the input the whole
-  // screen width, matching the web/reference composer.
-  composerCard: {
-    ...S.composerCard,
-    backgroundColor: Theme.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  composerActions: S.composerActions,
-  composerSpacer: S.composerSpacer,
-  composerStatus: S.composerStatus,
-  composerStatusText: chipText,
-  textInput: {
-    ...S.textInput,
-    color: Theme.text,
-    // maxHeight is set inline from the window height (grows to ~1/3 screen).
-  },
-  // Keeps wrapped text clear of the floating expand button in the top-right.
-  textInputWithExpand: {
-    paddingRight: 44,
-  },
-  expandButton: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.bgHighlight,
-  },
-  expandButtonStatic: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.bgHighlight,
-  },
-  expandedContainer: {
-    flex: 1,
-    backgroundColor: Theme.bgAlt,
-  },
-  expandedInner: {
-    flex: 1,
-    paddingHorizontal: 6,
-  },
-  expandedHeader: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 6,
-    paddingBottom: 2,
-  },
-  expandedInput: {
-    flex: 1,
-    paddingHorizontal: 10,
-    paddingTop: 6,
-    color: Theme.text,
-    fontSize: 16,
-    lineHeight: 24,
-    textAlignVertical: 'top',
-  },
-  sendButton: {
-    ...S.sendButton,
-    minWidth: 32,
-    height: 32,
-    borderRadius: 16,
-    paddingLeft: 9,
-    paddingRight: 9,
-    backgroundColor: mixColor(Theme.blue, 80, Theme.text),
-  },
-  sendButtonDisabled: {
-    backgroundColor: Theme.bgHighlight,
-  },
-  stopButton: {
-    backgroundColor: mixColor(Theme.red, 80, Theme.text),
   },
   // Workflow event anchors
   wfStartedRow: {
