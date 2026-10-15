@@ -51,7 +51,7 @@ test("the phone's alert gets the same facts as lines", () => {
 test("a role with no daily cap says so, never a default", () => {
   const l = L.roleAutonomyLedger({ name: "Lead", handle: "x", caps: {}, projects: [], merges: false });
   assert.equal(l.figures[0].value, "∞");
-  assert.equal(l.rows.find((r) => r.k === "Tokens")!.v, "No cap");
+  assert.equal(l.rows.find((r) => r.k === "Tokens")!.v, "No limit");
 });
 
 test("start these again at the line's pace: what starts now, what waits, and the line off said first", () => {

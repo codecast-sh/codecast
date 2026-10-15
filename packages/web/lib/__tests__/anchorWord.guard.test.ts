@@ -23,7 +23,7 @@ const ROOTS = [
 // (anchor_id), a key (anchor.toggle, anchors:), a class (anchor-panel), a
 // verb (anchored, anchoring), and not the command name (cast anchor …).
 const WORD = /(?<![\w@#/._:$-])anchors?(?![\w./_:-])/i;
-const COMMAND = /cast anchor\b/i;
+const COMMAND = /cast anchor\b/gi;
 
 // What a person reads on a code line: every quoted string with its `${…}`
 // code cut out, and JSX text. A bare lowercase token ("anchor", "anchors")

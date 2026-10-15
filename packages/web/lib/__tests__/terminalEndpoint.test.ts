@@ -80,7 +80,8 @@ describe("getTerminalEndpoint", () => {
     const relay = { mutation: async () => { asked++; throw new Error("Not authenticated"); }, query: async () => null } as any;
     useInboxStore.setState({ currentUser: null } as any);
     expect(await getTerminalEndpoint(relay)).toBeNull();
-    useInboxStore.setState({ currentUser: { _id: "u_me" }, clientState: { ...useInboxStore.getState().clientState, ui: { lane: "simple" } } } as any);
+    // Hosted mode is open to staff only (simpleModeAllowed); everyone else stays in developer mode.
+    useInboxStore.setState({ currentUser: { _id: "u_me", staff: true }, clientState: { ...useInboxStore.getState().clientState, ui: { lane: "simple" } } } as any);
     expect(await getTerminalEndpoint(relay)).toBeNull();
     expect(asked).toBe(0);
     useInboxStore.setState({ clientState: { ...useInboxStore.getState().clientState, ui: {} } } as any);

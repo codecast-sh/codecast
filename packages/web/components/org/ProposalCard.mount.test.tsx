@@ -1,7 +1,7 @@
 // Mounts the proposal card (docs/architecture/org-staffing.md S24, S39) in
 // jsdom against stubbed store rows: a proposed proposal (a new role under the
 // founder and a move onto it, drawn as two entries with their own Approve,
-// Reject and Reply and a foot with Map and Approve the rest), an applied one
+// Reject and Reply and a foot with Approve the rest), an applied one
 // (what happened, in words), and a failed one (Retry, the note). An answer
 // joins the pending batch of the conversation whose composer is in reach and
 // decides nothing; the controls give way to a band until the composer sends.
@@ -168,8 +168,7 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(c.querySelector("[data-tree-row], [data-ghost-tag], [data-proposal-rationale], [data-subject-edit], [data-send-answers], [data-proposal-reply], [data-subject-pending]")).toBeNull();
   expect(c.textContent).not.toMatch(/accept|skip|\bask\b|on your next message|\bEdit\b|Send \d/i);
 
-  // Before any answer the foot has Map and Approve all, nothing filled.
-  expect(foot(c).querySelector("[data-open-map='op-1']")!.textContent).toBe("Map");
+  // Before any answer the foot has Approve all, nothing filled.
   expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Approve all 2");
   expect(foot(c).querySelector<HTMLElement>("[data-approve-rest]")!.style.background).toBe("");
 
@@ -263,7 +262,7 @@ test("Approve all 2 with nothing answered, Approve the rest after one answer, pr
   clearBatch();
 });
 
-test("after the send: no bands; accepted reads Approved, applying, then applied reads Applied; the meta and the outcome say what happened; Map stays", () => {
+test("after the send: no bands; accepted reads Approved, applying, then applied reads Applied; the meta and the outcome say what happened", () => {
   const landing = mount(inThread(card("op-7")));
   const l = q("[data-card='op-7']");
   expect(l.querySelector("[data-staged], [data-subject-approve], [data-approve-rest]")).toBeNull();
@@ -280,7 +279,6 @@ test("after the send: no bands; accepted reads Approved, applying, then applied 
   expect(c.querySelector("[data-subject-approve], [data-subject-reject], [data-subject-reply]")).toBeNull();
   expect(c.querySelector("[data-proposal-outcome]")!.textContent).toBe("2 approved");
   expect(subjects(c).map((s) => s.getAttribute("data-subject-status"))).toEqual(["applied", "applied"]);
-  expect(c.querySelector("[data-open-map='op-2']")!.textContent).toBe("Map");
   // Nothing to answer, so no line asks the reader to open a thread.
   expect(c.querySelector("[data-proposal-readonly-line]")).toBeNull();
   React.act(() => root.unmount());
@@ -298,6 +296,7 @@ test("a failed change keeps the card answerable: Retry, Reject and the note; sta
   expect(failed().querySelector("[data-subject-approve]")!.textContent).toBe("Retry");
   expect(failed().querySelector("[data-subject-reject]")).not.toBeNull();
   click(failed().querySelector("[data-subject-approve]")!);
+  confirmOnline();
   expect(batch()).toEqual([["role:platform", "approve", "", [1], ["c3-role"], 1, "Head of Platform"]]);
   expect(failed().querySelector("[data-staged]")!.textContent).toBe("Retry. Runs again when you send.Undo");
   React.act(() => root.unmount());
@@ -312,7 +311,6 @@ test("a failed change keeps the card answerable: Retry, Reject and the note; sta
     expect(ro.querySelector("[data-proposal-readonly-line]")!.textContent, name).toBe("Open this in Head of People's thread to answer.");
     expect(ro.querySelectorAll("[data-proposal-readonly-line]").length, name).toBe(1);
     expect(ro.querySelector("[data-failed-note]")!.textContent, name).toBe("Failed: A role already answers to @platform");
-    expect(ro.querySelector("[data-open-map='op-3']")!.textContent, name).toBe("Map");
     expect(Object.keys(useInboxStore.getState().reviewComments), name).toEqual([]);
     React.act(() => r.unmount());
   }
@@ -393,6 +391,7 @@ test("a revision landing on a staged card withdraws the answer: the batch emptie
   const c = q("[data-card='op-1']");
   const platform = () => c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
   click(platform().querySelector("[data-subject-approve]")!);
+  confirmOnline();
   expect(batch().map((b) => b[0])).toEqual(["role:platform"]);
   expect(platform().querySelector("[data-staged]")).not.toBeNull();
   const was = useInboxStore.getState().orgProposalChanges["c1-role"];

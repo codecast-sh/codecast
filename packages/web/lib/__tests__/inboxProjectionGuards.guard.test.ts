@@ -82,6 +82,9 @@ describe("projection stamp fields never appear in render code", () => {
       // Reads the store's own placement ({ bucket, work_state } from
       // placeInboxRows / sessionPlacement), the chokepoint's output, never a row.
       ["lib/instantSessionSearch.ts", "sessionStanding reads the store's placement"],
+      // Matches the words of a failure station's comment ("work_state:
+      // needs_input"), text a station wrote, never a field of a row.
+      ["components/trial/TrialReviewPage.tsx", "parses a station comment's text"],
     ]);
     const offenders = offendersFor(
       ["app", "components", "hooks", "lib", "src", "shortcuts", "tips"],

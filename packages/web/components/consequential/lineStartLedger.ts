@@ -44,7 +44,7 @@ export type LineStartFacts = {
 };
 
 /** The daily caps the Turn on review offers a role that has none. */
-export const DAY_CAP_OPTIONS = ["5", "10", "20", "No cap"] as const;
+export const DAY_CAP_OPTIONS = ["5", "10", "20", "No limit"] as const;
 export const DEFAULT_DAY_CAP = 10;
 export const dayCapOf = (option: string): number | null => (Number.isFinite(Number(option)) ? Number(option) : null);
 
@@ -69,7 +69,7 @@ export function lineStartLedger({ project, admission: given, roleOwnSwitchOff = 
     // The one total: what the sweep would start. The blocked ones are a row of their own, so the numbers add up.
     ...(queued != null && queued !== now ? [{ value: String(queued), label: "ready" }] : []),
     // No daily cap is the loudest fact a cost can have: said as one, never left blank.
-    perDay != null ? dayLimitFigure(perDay) : { value: "∞", label: "a day, no cap", tone: "warn" },
+    perDay != null ? dayLimitFigure(perDay) : { value: "∞", label: "a day, no limit", tone: "warn" },
     // Without a daily cap the bound is the queue: what working through all of it costs.
     perDay != null ? dayCostFigure(cost, perDay) : cost && queued ? costFigure(cost, queued, "all") : { value: "$?", label: "not priced", tone: "warn" },
   ];
@@ -99,7 +99,7 @@ export function lineStartLedger({ project, admission: given, roleOwnSwitchOff = 
     // The button names everything the press commits to: the whole queue when more waits than starts now.
     // The button says what the title says (Auto-start, off to on) and everything the press commits to.
     confirm: !now ? "Turn on" : rest > 0 ? `Turn on: run all ${queued}` : `Turn on: start ${now}`,
-    ...(offer ? { pick: { k: "A day", options: DAY_CAP_OPTIONS, value: dayCap == null ? "No cap" : String(dayCap) } } : {}),
+    ...(offer ? { pick: { k: "A day", options: DAY_CAP_OPTIONS, value: dayCap == null ? "No limit" : String(dayCap) } } : {}),
   };
 }
 

@@ -8,6 +8,7 @@
 // absolute times in titles are the same on every run and every machine.
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { MemoryRouter } from "react-router";
@@ -73,8 +74,14 @@ type Props = Record<string, unknown>;
 const ROLE = { _id: "r1", short_id: "rl-7", name: "Infra lead", handle: "infra", avatar: "otter", status: "active", tenure_kind: "standing" as const };
 const noop = () => {};
 
+// The markup must read the same on every machine. Bun resolves an imported
+// image to its absolute path in the checkout, and ICU builds disagree on the
+// date and time joiner ("Jan 2 at 3:00 PM" on macOS, "Jan 2, 3:00 PM" on Linux).
+const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
+const portable = (html: string) => html.replaceAll(REPO_ROOT, "<repo>").replace(/(\d) at (\d)/g, "$1, $2");
+
 function render(overrides: Partial<InboxSession>, props: Props = {}) {
-  return renderToStaticMarkup(
+  return portable(renderToStaticMarkup(
     <MemoryRouter>
     <ConvexProvider client={convex}>
       <SessionCard
@@ -91,7 +98,7 @@ function render(overrides: Partial<InboxSession>, props: Props = {}) {
       />
     </ConvexProvider>
     </MemoryRouter>,
-  );
+  ));
 }
 
 const CASES: Array<[string, Partial<InboxSession>, Props?]> = [

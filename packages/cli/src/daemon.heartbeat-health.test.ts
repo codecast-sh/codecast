@@ -28,7 +28,7 @@ function harness(probeError?: unknown, realTarget?: string, probe?: (args: strin
   const resumeSessionCache = new Map([[sessionId, target]]);
   const deps = {
     isTmuxSessionMissingError,
-    isSupersededAppServerSession: () => false,
+    isSupersededInPass: () => false,
     resumeSessionCache,
     resumeInFlight: new Set<string>(),
     expectedHibernationExits: new Set<string>(),
