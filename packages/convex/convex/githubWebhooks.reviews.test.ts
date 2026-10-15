@@ -417,7 +417,7 @@ describe("push", () => {
       conversations: [],
     });
     await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
-    const refresh = ctx._scheduled.filter((s: any) => s.args?.pr_id === PR && s.args?.attempt === 0);
+    const refresh = ctx._scheduled.filter((s: any) => s.args?.pr_ids?.includes(PR) && s.args?.attempt === 0);
     expect(refresh).toHaveLength(1);
     expect(refresh[0].delay).toBe(15000);
   });
