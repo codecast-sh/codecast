@@ -155,3 +155,27 @@ describe("snippets", () => {
     expect(highlights).toEqual([]);
   });
 });
+
+describe("vacuuming", () => {
+  test("edits that land while a vacuum is underway don't crash it", async () => {
+    const errors: unknown[] = [];
+    const onRejection = (e: unknown) => errors.push(e);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const search = new VaultSearchIndex();
+      // Enough distinct terms that a batched vacuum would yield mid-walk.
+      const words = (n: number, salt: string) =>
+        Array.from({ length: 60 }, (_, j) => `w${salt}${n}x${j}longword`).join(" ");
+      for (let i = 0; i < 100; i++) search.upsertNote(`N${i}.md`, parseNote(words(i, "a")));
+      // Rewriting notes discards their blocks, which schedules an auto-vacuum.
+      for (let i = 0; i < 40; i++) search.upsertNote(`N${i}.md`, parseNote(words(i, "b")));
+      // Shorter prefixes of existing terms split radix-tree edges.
+      for (let i = 40; i < 100; i++) search.upsertNote(`M${i}.md`, parseNote(`wa${i}x wa${i}x1 wb${i}`));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(errors).toEqual([]);
+      expect(search.search("wb50").map((f) => f.path)).toContain("M50.md");
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+});
