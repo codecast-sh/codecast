@@ -35,6 +35,13 @@ describe("sessionMatchesQuery", () => {
 });
 
 describe("instantSessionRows", () => {
+  test("a quoted phrase, curly or straight, finds the session by its words", () => {
+    const state = stateWith([session({ _id: "a", title: "Toddler kitchen table build", idle_summary: "picked up lumber at Home Depot", user_id: "u1" })]);
+    for (const q of ['"home depot"', "“home depot”"]) {
+      expect(instantSessionRows(state as any, q).map((r) => r.conversationId)).toEqual(["a"]);
+    }
+  });
+
   test("a title hit outranks a summary hit, recency breaks ties", () => {
     const rows = instantSessionRows(
       stateWith([
@@ -44,6 +51,16 @@ describe("instantSessionRows", () => {
       "sidebar",
     );
     expect(rows.map((r) => r.conversationId)).toEqual(["title", "summary"]);
+  });
+
+  test("the oldest of thousands of cached sessions is still found by name", () => {
+    const filler = Array.from({ length: 2000 }, (_, i) => session({ _id: `f${i}`, title: `Filler ${i}`, user_id: "u1", updated_at: 10_000 + i }));
+    const old = session({ _id: "old", title: "Agent org hierarchy", character_avatar: "hedgehog", character_name: "Nettle", user_id: "u1", updated_at: 1 });
+    const state = stateWith([...filler, old]);
+    expect(instantSessionRows(state as any, "nettle").map((r) => r.conversationId)).toEqual(["old"]);
+    const standing = () => ({ state: null, shelf: null, sub: false, mine: true }) as SessionStanding;
+    const pool = [...filler, old].sort((a, b) => b.updated_at - a.updated_at);
+    expect(rankSessions(pool, "nettle", standing, 25).map((r) => r._id)).toEqual(["old"]);
   });
 
   test("a short query matches nothing, so no tier is drawn", () => {

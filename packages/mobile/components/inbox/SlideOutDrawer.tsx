@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, { Extrapolation, interpolate, runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { gestureHandler } from '@/lib/gestureHandler';
-import { isInboxDrawerOpen, setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useTheme } from '@/constants/Theme';
 
 // Critically damped enough to land without a wobble, quick enough to follow a flick.
@@ -11,36 +10,50 @@ const SPRING = { damping: 28, stiffness: 300, mass: 0.9 };
 // A flick faster than this (pt/s) decides the direction regardless of distance.
 const FLICK = 500;
 
-/** The panel behind the inbox, ChatGPT style: the whole screen (tab bar
- *  included) slides right to uncover it. A rightward drag anywhere on the
- *  content opens it, a leftward drag or a tap on the uncovered edge of the
- *  content closes it, and the inbox header's menu button opens it too. The
- *  drawer's contents mount on first open, so a closed panel costs nothing. */
-export function SlideOutDrawer({ enabled, drawer, children }: { enabled: boolean; drawer: ReactNode; children: ReactNode }) {
+/** A panel behind a screen, ChatGPT style: the whole screen slides right to
+ *  uncover it. A rightward drag anywhere on the content opens it, a leftward
+ *  drag or a tap on the uncovered edge of the content closes it. The owner
+ *  holds the open state, so its own controls can open it too: the inbox's
+ *  menu button opens its filters, and a conversation uncovers the inbox.
+ *  The drawer's contents mount on first open, so a closed panel costs nothing.
+ *  `startOpen` mounts it uncovered and slides it shut, for a screen that
+ *  replaces one whose panel was open (picking a conversation in the panel). */
+export function SlideOutDrawer({ enabled, open, setOpen, startOpen = false, drawer, children }: {
+  enabled: boolean;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  startOpen?: boolean;
+  drawer: ReactNode;
+  children: ReactNode;
+}) {
   const Theme = useTheme();
   const { width } = useWindowDimensions();
   const panelWidth = Math.min(Math.round(width * 0.84), 360);
-  const open = useInboxDrawerOpen();
-  const [mounted, setMounted] = useState(false);
-  const progress = useSharedValue(0);
+  const [mounted, setMounted] = useState(startOpen);
+  const progress = useSharedValue(startOpen ? 1 : 0);
   const start = useSharedValue(0);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const setOpenRef = useRef(setOpen);
+  setOpenRef.current = setOpen;
 
   useEffect(() => {
     if (open) setMounted(true);
     progress.value = withSpring(open ? 1 : 0, SPRING);
   }, [open, progress]);
 
-  // Leaving the inbox tab (or a pushed screen taking over) closes the panel.
+  // Losing the screen (leaving the inbox tab, a pushed screen taking over)
+  // closes the panel.
   useEffect(() => {
-    if (!enabled) setInboxDrawerOpen(false);
+    if (!enabled) setOpenRef.current(false);
   }, [enabled]);
 
   const gesture = useMemo(() => {
     const G = gestureHandler?.Gesture;
     if (!G) return null;
     const settle = (next: boolean) => {
-      if (next && !isInboxDrawerOpen()) Haptics.selectionAsync();
-      setInboxDrawerOpen(next);
+      if (next && !openRef.current) Haptics.selectionAsync();
+      setOpenRef.current(next);
     };
     return G.Pan()
       .enabled(enabled)
@@ -88,7 +101,7 @@ export function SlideOutDrawer({ enabled, drawer, children }: { enabled: boolean
         <Animated.View style={[styles.clip, { backgroundColor: Theme.bg }, clipStyle]}>
           {children}
           <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]} pointerEvents={open ? 'auto' : 'none'}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setInboxDrawerOpen(false)} accessibilityLabel="Close menu" />
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} accessibilityLabel="Close menu" />
           </Animated.View>
         </Animated.View>
       </Animated.View>
