@@ -408,6 +408,24 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["budget", "outside"] },
     feeds: ["lineTrial.spend"],
   },
+  // A project's leading stages (convex lineStages.flow): its moment kinds with
+  // their extractors, its judges with their prompts and runs, withdrawn
+  // findings and the grouping rule. One row per project, so delta. The Map's
+  // flow band and each stage's drawer read it.
+  lineStages: {
+    persistence: { kind: "collection", key: "lineStages" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["sources", "window", "kinds", "judges", "retired", "grouping"] },
+    feeds: ["lineStages.flow"],
+  },
+  // A trial's dispatcher as a dry pass sees it (lineStages.dispatch): its queue
+  // in order, its room and what holds it. Fed only while its drawer is open.
+  lineDispatch: {
+    persistence: { kind: "collection", key: "lineDispatch" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["pass", "room", "last"] },
+    feeds: ["lineStages.dispatch"],
+  },
   // Saved views: the sidebar rail and its pinned rows. A pin lives in client
   // UI state and renders offline, but its click resolves the view row from
   // this collection — unpersisted, that lookup found nothing after an offline
@@ -976,6 +994,14 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: {},
     feeds: ["artifacts.listForWeb"],
+  },
+  // What an embed needs to frame a published page (artifacts.embedInfo), any
+  // page, owned or not, keyed by slug. Persisted so a page seen before frames
+  // on the first paint after a reload. Delta: each embed feeds its own row.
+  pageEmbeds: {
+    persistence: { kind: "collection", key: "pageEmbeds" },
+    sync: { isDelta: true },
+    feeds: ["artifacts.embedInfo"],
   },
   // The anchor space, one row per scope key ("user" | "team:<id>"), keyed by
   // it. Delta so the scopes coexist; each push replaces its own row.
@@ -1819,6 +1845,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   trialProjects: "shared",
   trialRuns: "shared",
   trialSpend: "shared",
+  lineStages: "shared",
+  lineDispatch: "shared",
   shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
@@ -1873,6 +1901,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   opsApps: "shared",
   opsAppCalls: "shared",
   artifacts: "shared",
+  pageEmbeds: "shared",
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",

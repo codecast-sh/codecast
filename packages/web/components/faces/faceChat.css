@@ -164,7 +164,7 @@
 /* ── in the card ────────────────────────────────────────────────────────── */
 
 /* Between who they are and the ways to reach them: a hairline above, the
- * recent lines, the reply box. It runs to the card's edges like the rows
+ * conversation, the reply box. It runs to the card's edges like the rows
  * around it, so the card reads as one column. */
 .fc-card-msgs {
   display: flex;
@@ -198,71 +198,95 @@
 }
 
 .fc-list {
-  max-height: 232px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 46vh);
   overflow-y: auto;
-  padding: 2px 13px 8px;
+  overscroll-behavior: contain;
+  padding: 6px 13px 10px;
   scrollbar-width: thin;
-  -webkit-mask-image: linear-gradient(transparent, #000 16px);
-  mask-image: linear-gradient(transparent, #000 16px);
 }
 .fc-sep {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 3px;
+  align-self: center;
+  margin: 10px 0 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
   color: var(--sol-text-dim);
   font-size: 10px;
 }
-.fc-sep::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--sol-border);
-  opacity: 0.6;
+/* Their lines hang left, yours right, like any chat; a run from one side
+ * sits tight and a change of speaker opens a gap. */
+.fc-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: 8px;
+}
+.fc-row[data-run] {
+  margin-top: 3px;
+}
+.fc-row[data-me] {
+  align-items: flex-end;
 }
 .fc-msg {
-  display: grid;
-  grid-template-columns: 9px 1fr auto;
-  align-items: baseline;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
   gap: 6px;
-  padding: 3px 0;
+  max-width: 88%;
   font-size: 12px;
   line-height: 1.5;
 }
-/* Every line from them here is one you had not read: a dot and a soft wash
- * in their colour. */
-.fc-msg:not([data-me]) {
-  margin: 2px -6px;
-  padding: 4px 6px;
-  border-radius: 7px;
-  background: var(--fc-tint);
+.fc-row[data-me] .fc-msg {
+  flex-direction: row-reverse;
 }
 .fc-text {
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 12px 12px 12px 4px;
+  background: color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg-alt));
+  color: var(--sol-text);
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  white-space: pre-wrap;
 }
-.fc-dot {
-  width: 6px;
-  height: 6px;
+.fc-row[data-me] .fc-text {
+  border-radius: 12px 12px 4px 12px;
+  background: color-mix(in srgb, var(--sol-blue) 16%, var(--sol-bg-alt));
+}
+.fc-row[data-run]:not([data-me]) .fc-text {
+  border-top-left-radius: 4px;
+}
+.fc-row[data-run][data-me] .fc-text {
+  border-top-right-radius: 4px;
+}
+/* New since you last looked: their colour on the edge and a dot. */
+.fc-msg[data-new] .fc-text {
+  box-shadow: inset 2px 0 0 var(--fc-hue);
+  background: color-mix(in srgb, var(--fc-hue) 10%, var(--sol-bg-alt));
+}
+.fc-msg[data-new]::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 11px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--fc-hue);
-  transform: translateY(-1px);
 }
-.fc-msg[data-me] .fc-dot {
-  opacity: 0;
+.fc-msg[data-failed] .fc-text {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-red) 55%, transparent);
 }
-.fc-msg[data-me] .fc-text {
-  justify-self: end;
-  padding: 3px 9px;
-  border-radius: 10px 10px 3px 10px;
-  background: color-mix(in srgb, var(--sol-text) 7%, transparent);
+.fc-msg[data-failed] .fc-at-time {
+  color: var(--sol-red);
 }
 .fc-at-time {
+  flex-shrink: 0;
+  padding-bottom: 3px;
   color: var(--sol-text-dim);
   font-size: 9.5px;
+  white-space: nowrap;
 }
 .fc-reply {
   display: flex;
@@ -309,8 +333,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fc-bubble,
-  .fc-dot {
+  .fc-bubble {
     transition-duration: 1ms;
     animation-duration: 1ms;
     filter: none;

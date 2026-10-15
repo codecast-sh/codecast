@@ -203,7 +203,7 @@ export function TrialCardBody({ card: c, now, answer }: { card: TrialCardRow; no
         {!c.context_md && leftOut}
         {d.report_slug ? (
           <section className="mt-5" data-trial-decision-page>
-            <PublishedPageEmbed slug={d.report_slug} height={1100} />
+            <PublishedPageEmbed slug={d.report_slug} decision={d._id} height={1100} />
           </section>
         ) : c.doc_md ? (
           <section className="mt-5 border-t border-sol-border/30 pt-5"><MarkdownRenderer content={cardProse(c.doc_md, c)} /></section>
