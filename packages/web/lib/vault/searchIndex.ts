@@ -77,6 +77,10 @@ function newEngine(): MiniSearch<BlockDoc> {
       prefix: true,
       combineWith: "AND",
     },
+    // Vacuum in one unbroken pass. MiniSearch's default walks the term tree in
+    // batches with a setTimeout between them, and an upsert landing in that gap
+    // splits a radix edge out from under its iterator ("reading 'keys'").
+    autoVacuum: { batchSize: Infinity },
   });
 }
 
