@@ -10,11 +10,11 @@ import { projectColor } from '@/components/SessionItem';
 import { labelHexColor } from '@/lib/labelColors';
 import { showActionSheet } from '@/lib/actionSheet';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { useInboxPlacement } from '@/hooks/useInboxPlacement';
+import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { useSurface } from '@codecast/web/lib/surfaces';
 import {
-  useInboxStore, computeChipCounts, convBucketMap, sortLabels, resolveInboxViewMode, type InboxViewMode,
+  useInboxStore, sortLabels, resolveInboxViewMode, type InboxViewMode,
 } from '@codecast/web/store/inboxStore';
 
 /** The inbox lenses, the same names and availability rules as web's
@@ -41,22 +41,14 @@ export function InboxDrawer() {
   const router = useRouter();
   const gitChips = useSurface('gitChips');
   const orgOn = useWorkspaceFeatureState('org');
-  const { placed } = useInboxPlacement();
+  const { placed, labels, bucketCounts, projectCounts } = useInboxFilterCounts();
   const buckets = useInboxStore((s) => s.buckets);
-  const bucketAssignments = useInboxStore((s) => s.bucketAssignments);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
   const [find, setFind] = useState('');
 
-  const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
   const active = useMemo(() => placed.sorted.filter((s) => !s.is_deferred), [placed.sorted]);
-  const { bucketCounts, projectCounts } = useMemo(() => computeChipCounts(placed.sorted, bucketByConv), [placed.sorted, bucketByConv]);
-  // Empty labels stay out unless one is the active filter (web's chip rule).
-  const labels = useMemo(
-    () => sortLabels(buckets).filter((b) => (bucketCounts[b._id] || 0) > 0 || activeBucketFilter === b._id),
-    [buckets, bucketCounts, activeBucketFilter],
-  );
   const projects = gitChips ? projectCounts : [];
   const q = find.trim().toLowerCase();
   const shownLabels = q ? labels.filter((b) => b.name.toLowerCase().includes(q)) : labels;

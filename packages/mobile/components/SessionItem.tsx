@@ -212,7 +212,7 @@ function HostedRowDot({ working, unread }: { working: boolean; unread: boolean }
   return <RNView style={[styles.statusDot, { backgroundColor: unread ? Theme.text : 'transparent' }]} />;
 }
 
-export function SessionItem({ session, isUnread, onPress, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: { session: SessionData; isUnread?: boolean; onPress: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; titleSuffix?: string }) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; titleSuffix?: string }) {
   const Theme = useTheme();
   // Hosted mode hides project chips (lib/surfaces gitChips).
   const gitChips = useSurface('gitChips');
@@ -279,7 +279,7 @@ export function SessionItem({ session, isUnread, onPress, onLongPress, roleSessi
       onPress={onPress}
       onLongPress={onLongPress ? () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onLongPress(); } : undefined}
       delayLongPress={400}
-      style={[styles.conversationContent, thumbUrl ? styles.contentWithThumb : null]}
+      style={[styles.conversationContent, thumbUrl ? styles.contentWithThumb : null, selected ? { backgroundColor: Theme.bgHighlight } : null]}
       activeOpacity={0.6}
     >
       <RNView style={thumbUrl ? styles.contentColumn : null}>
@@ -413,9 +413,11 @@ export function SessionItem({ session, isUnread, onPress, onLongPress, roleSessi
   );
 }
 
-export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: {
+export function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: {
   session: SessionData;
   isUnread?: boolean;
+  /** The row is the conversation on screen (a conversation's inbox panel). */
+  selected?: boolean;
   onPress: () => void;
   onDismiss: () => void;
   onLongPress?: () => void;
@@ -531,7 +533,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onLongPress={onLongPress} />
+      <SessionItem session={session} selected={selected} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onLongPress={onLongPress} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );
@@ -589,18 +591,19 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
   contentWithThumb: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
   },
   contentColumn: {
     flex: 1,
     minWidth: 0,
   },
   imageThumb: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
+    width: 54,
+    height: 54,
+    borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.bgHighlight,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
   },
   conversationHeader: {
     flexDirection: 'row',
