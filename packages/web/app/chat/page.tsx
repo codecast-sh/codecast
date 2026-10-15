@@ -59,7 +59,7 @@ import { useShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { channelDisplayName } from "../../lib/chatViews";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
-import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
+import { useInboxStore, selectChannelReadMarker, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
 import Link from "next/link";
 import { useAuthGate } from "@platform/auth/web";
 import { useLocalAuth } from "../../lib/localAuth";
@@ -93,7 +93,6 @@ import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
-import { useDesktopAppWindow } from "../../hooks/useDesktopWindowRole";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -206,29 +205,10 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
 
   const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const chatOn = useTeamFeature("chat");
-  const navCollapsed = useInboxStore((s) => selectNavCollapsed(s as any));
-  const zenMode = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
   const headTitlebarRef = useTitlebarHead<HTMLElement>();
-  const inAppWindow = useDesktopAppWindow();
-  const narrowViewport = useSyncExternalStore(
-    (cb) => {
-      if (typeof window === "undefined") return () => {};
-      const mq = window.matchMedia("(max-width: 768px)");
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
-    },
-    () => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 768px)").matches),
-    () => false,
-  );
-  // One channel list on screen at a time: the app sidebar lists the channels,
-  // so the page's own rail appears only when that sidebar is out of the way —
-  // collapsed, zen mode, or a phone-width viewport. Collapsing the sidebar IS
-  // the "just Slack" switch; no separate preference to remember.
-  // The app sidebar lists the WORKSPACE's rooms, never the public ones, so
-  // the community page always carries its own rail (and a visitor has no
-  // sidebar at all).
-  // The Chat window draws no sidebar either, so the rail is the page's there.
-  const showInlineRail = community || navCollapsed || zenMode || narrowViewport || !!inAppWindow;
+  // The page owns the room list, always: the app sidebar carries only the
+  // rooms that need you (unread, mentioned, the one you are in), so the full
+  // directory has exactly one home whether that sidebar is open or not.
   // Switching workspace writes BOTH the local mirror and the canonical
   // users.active_team_id (hooks/useSwitchWorkspace) — one path for every caller.
   const switchWorkspace = useSwitchWorkspace();
@@ -597,7 +577,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
     <div className={standalone ? "ch-community-page" : "h-full min-h-0"}>
     {standalone && <CommunityBar isGuest={isGuest} />}
     <div className="ch-shell">
-      {showInlineRail && <ChatChannelRail
+      <ChatChannelRail
         channels={rail}
         activeChannelId={activeChannelId}
         onChannelContextMenu={isGuest ? undefined : (e, c) =>
@@ -612,7 +592,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
         onNewMessage={community ? undefined : openNewMessage}
         onOpenDm={community ? undefined : openDmWith}
         showDms={!community}
-      />}
+      />
 
       <div
         className="ch-main"

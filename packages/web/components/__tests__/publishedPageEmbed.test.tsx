@@ -10,12 +10,14 @@ import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const client = new ConvexReactClient("https://example.convex.cloud");
-const watchQuery = spyOn(client, "watchQuery").mockImplementation(() => ({
+// The page's embed info answers (an open page, so the frame mounts); every other query is still loading.
+const INFO = [{ slug: "my-page", title: "A page", kind: "html", version: 1, gated: false, user: null }];
+const watchQuery = spyOn(client, "watchQuery").mockImplementation(((query: unknown) => ({
   onUpdate: () => () => {},
-  localQueryResult: () => undefined,
+  localQueryResult: () => (String((query as { [k: symbol]: unknown })[Symbol.for("functionName")] ?? "") === "artifacts:embedInfo" ? INFO : undefined),
   localQueryLogs: () => undefined,
   journal: () => undefined,
-}));
+})) as never);
 
 function markup(slug = "abc") {
   return renderToStaticMarkup(
@@ -87,6 +89,42 @@ describe("PublishedPageEmbed copy", () => {
     await act(() => btn.click());
     expect(written).toEqual(["https://codecast.sh/a/my-page"]);
     await act(() => root.unmount());
+  });
+});
+
+// The frame opens short; a page that declares <meta name="codecast:height">
+// opens at the height it asked for, never past its own content.
+describe("PublishedPageEmbed height", () => {
+  test("opens at 420, or at the page's declared height, and Expand doubles it", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <ConvexProvider client={client}>
+          <PublishedPageEmbed slug="tall-page" />
+        </ConvexProvider>,
+      ),
+    );
+    try {
+      const frame = container.querySelector("iframe") as HTMLIFrameElement;
+      const stage = () => (container.querySelector(".page-embed__stage") as HTMLElement).style.height;
+      const report = (height: number, preferred: number | null) =>
+        act(() => { dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data: { type: "codecast:height", height, preferred }, source: frame.contentWindow as any })); });
+      await report(3000, null);
+      expect(stage()).toBe("420px");
+      await report(3000, 700);
+      expect(stage()).toBe("700px");
+      await act(() => (container.querySelector('[aria-label="Expand"]') as HTMLButtonElement).click());
+      expect(stage()).toBe("1400px");
+      await act(() => (container.querySelector('[aria-label="Shrink"]') as HTMLButtonElement).click());
+      expect(stage()).toBe("700px");
+      await report(500, 700);
+      expect(stage()).toBe("500px");
+    } finally {
+      await act(() => root.unmount());
+      container.remove();
+    }
   });
 });
 
