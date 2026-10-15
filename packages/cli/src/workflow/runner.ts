@@ -179,7 +179,7 @@ async function executeCallNode(node: WorkflowNode, graph: WorkflowGraph, context
     const resp = await fetch(`${options.convexSiteUrl}/cli/model/call`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: options.apiToken, ...body }),
+      body: JSON.stringify({ api_token: options.apiToken, ...body, ...(options.runId ? { run_id: options.runId } : {}) }),
     });
     result = await resp.json();
     if (!resp.ok && !result?.reason) result = { ok: false, error: result?.error ?? `the server answered ${resp.status}`, cost_usd: 0 };
@@ -500,6 +500,37 @@ async function executeSessionNode(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
+    // A hand whose start failed (its machine refused it, or a cloud host's
+    // preparation failed) reads idle, never live and never killed: nothing
+    // would settle it before the node's timeout, three hours at prove. Once
+    // the error has stood past the first-sync grace, the station fails with it.
+    if (!wasLive && row.message_count === 0 && row.session_error) {
+      emptySince ||= Date.now();
+      if (Date.now() - emptySince >= EMPTY_HAND_GRACE_MS) {
+        console.log(`  ${c.red}✗ ${shortId} could not start${c.reset}: ${String(row.session_error).split("\n")[0]}`);
+        await cliCall(options, "/cli/sessions/kill", { session: conversationId });
+        context["last_error"] = `hand ${shortId} at ${node.id} could not start: ${String(row.session_error).slice(0, 1500)}`;
+        context["station_dead"] = node.id;
+        return "failure";
+      }
+      continue;
+    }
+    // A hand seen live that now reads not live, neither killed nor
+    // hibernated, has a daemon that went quiet: its heartbeat lapsed, and the
+    // row reads stopped and needs_input on that alone. That is the daemon's
+    // silence, not the hand's answer: a hand that exits is reported by its
+    // daemon while the row is still live, and the settle below catches it
+    // there. A daemon frozen for 199s under load settled a hand mid tool
+    // call and routed the run to failure (agentwatch Build, 2026-10-14).
+    // Wait for the daemon to come back, or for the node's timeout; a hand
+    // that declared done before the silence keeps that answer.
+    const dark = wasLive && !row.is_live && !row.is_killed && row.agent_status !== "hibernated";
+    if (dark && state !== "done") {
+      if (lastState !== "dark") console.log(`${c.dim}  ${shortId}: its daemon has gone quiet, waiting for it to report again${c.reset}`);
+      lastState = "dark";
+      askedOnce = false;
+      continue;
+    }
     if (state !== lastState) {
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
@@ -544,6 +575,17 @@ async function executeSessionNode(
       console.log(`  ${c.red}✗ ${shortId} never ran a turn${c.reset}`);
       await cliCall(options, "/cli/sessions/kill", { session: conversationId });
       context["last_error"] = `hand ${shortId} at ${node.id} never ran a turn: its session holds no messages and no result`;
+      context["station_dead"] = node.id;
+      return "failure";
+    }
+    // A hand that stopped on an API error it does not come back from by itself
+    // (a logged-out machine answers every prompt "Not logged in") and pinned
+    // nothing did no work. Read as a settle, it passed, and the run routed on
+    // the task's old fields: a whole box's runs parked their causes unread
+    // (Union, 2026-10-14). The station fails with the error instead.
+    if (!pinnedStatus && row.blocked_on && !CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
+      console.log(`  ${c.red}✗ ${shortId} stopped on an ${row.blocked_on} error${c.reset}`);
+      context["last_error"] = `hand ${shortId} at ${node.id} stopped on an ${row.blocked_on} error before doing the work${row.session_error ? `: ${String(row.session_error).slice(0, 1500)}` : ""}`;
       context["station_dead"] = node.id;
       return "failure";
     }
@@ -601,7 +643,7 @@ async function spawnHand(
     prompt,
     project_path: cwd,
     git_root: gitRoot,
-    title: stationTitle(node, context),
+    title: stationTitle(node, context, presentsDecision(node, graph)),
     // A station is the run's worker: nested under the run's own session, so
     // it reads, answers cast send and shows on the run, and stays out of the
     // inbox's top level. The task's blocker comment is what reaches a person.
@@ -1275,8 +1317,13 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
 
 // A station's name, fixed at spawn: the node and what it works on, so the row
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
-// unattended preamble every station's prompt opens with.
-export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>): string {
+// unattended preamble every station's prompt opens with. A station that
+// presents a decision is the session a person talks the fix over with, and its
+// title shows wherever they meet it (the decision's chat, its page's bar): it
+// is named by the problem, in the problem's own words.
+export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>, presents = false): string {
+  const problem = context["task_title"]?.replace(/\s+/g, " ").trim();
+  if (presents && problem) return problem.length > 100 ? `${problem.slice(0, 99).trimEnd()}…` : problem;
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
   const label = node.label || node.id;
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;
@@ -1453,15 +1500,27 @@ async function continueFreshIfStale(graph: WorkflowGraph, options: RunOptions, n
   await options.continueFresh();
 }
 
+// An answer that comes while the person is still at the card is picked up at
+// once; a gate that has waited longer is waiting on someone who walked away,
+// and a few seconds more cost nothing. Polling every 3s for days made paused
+// runs 7.9 backend calls a second (ct-56547).
+export const GATE_POLL_FAST_MS = 3000;
+export const GATE_POLL_SLOW_MS = 15_000;
+export const GATE_POLL_FAST_WINDOW_MS = 2 * 60_000;
+export function gatePollIntervalMs(waitedMs: number, override?: number): number {
+  if (override !== undefined) return override;
+  return waitedMs < GATE_POLL_FAST_WINDOW_MS ? GATE_POLL_FAST_MS : GATE_POLL_SLOW_MS;
+}
+
 /** Wait on the run's open gate: its answer, or null when the run stops waiting. */
 // A gate waits on a person for as long as they take: hours, or days. It ends
 // only with an answer or when the run leaves "paused" (withdrawn, cancelled);
 // a clock ending the wait would read as an answer nobody gave.
 async function pollGate(options: RunOptions): Promise<string | null> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
-  const interval = options.pollIntervalMs ?? 3000;
+  const startedAt = Date.now();
   for (;;) {
-    await new Promise(r => setTimeout(r, interval));
+    await new Promise(r => setTimeout(r, gatePollIntervalMs(Date.now() - startedAt, options.pollIntervalMs)));
     try {
       const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/poll-gate`, {
         method: "POST",
@@ -1595,6 +1654,7 @@ async function driveRun(
     // task, the profile, the run's ids) is read again.
     state.context = { ...resumeAt.context, ...initialContext };
     state.visitCounts = resumeAt.visit_counts;
+    for (const [id, n] of Object.entries(state.visitCounts)) state.context[`${id}.visits`] = String(n);
     state.completed = resumeAt.completed;
     state.currentNodeId = resumeAt.node_id;
     Object.assign(nodeOutcomes, resumeAt.node_outcomes);
@@ -1761,6 +1821,8 @@ async function runNodeLoop(
     state.currentNodeId = current.id;
     const visits = (state.visitCounts[current.id] || 0) + 1;
     state.visitCounts[current.id] = visits;
+    // Edges may route on how often a station has run (`build.visits >= 3`).
+    state.context[`${current.id}.visits`] = String(visits);
 
     if (current.max_visits !== undefined && visits > current.max_visits) {
       console.log(`\n${c.red}${c.bold}  ✗ max_visits=${current.max_visits} exceeded on '${current.label}' — aborting${c.reset}`);

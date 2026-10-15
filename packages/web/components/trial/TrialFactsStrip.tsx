@@ -10,7 +10,7 @@ import { useRunVerify } from "../../hooks/useRunVerify";
 import { TrialFactOpen } from "../line/widgets/TrialFactOpen";
 import type { TrialCardRow } from "../../hooks/useSyncTrial";
 import { cn } from "../../lib/utils";
-import { checkNotRun, honestChecks } from "@codecast/shared/contracts/changeCard";
+import { checkNotRun, costParts, costUsd, honestChecks } from "@codecast/shared/contracts/changeCard";
 import { overlapNote, reachSince, ruleId, trialReach, workTime } from "../../lib/trialEvidence";
 
 /** Longer than any build's working time: a card saying more counted a night at its gate. */
@@ -106,7 +106,9 @@ export function trialFacts(c: TrialCardRow, verify?: VerifyFigure | null): Fact[
     if (card.stops) out.push({ label: "Stops", value: `~${card.stops.per_week} ${card.stops.what}/wk`, title: card.stops.basis });
     // Minutes its stations worked; a card built before those were counted carries its run's wall clock, which says nothing.
     const worked = card.cost.minutes <= WORK_DAY_MIN ? `${workTime(card.cost.minutes)} · ` : "";
-    out.push({ label: worked ? "Built in" : "Cost", value: `${worked}$${card.cost.usd.toFixed(2)}`, title: "Working time of the run's stations and what their sessions cost" });
+    const cost = costParts(card.cost);
+    out.push({ label: worked ? "Built in" : "Cost", value: `${worked}${costUsd(cost.billed_usd)} billed`, title: "Working time of the run's stations, and the money it billed (calls, sessions on API keys)" });
+    if (cost.list_usd > 0) out.push({ label: "List price, unbilled", value: costUsd(cost.list_usd), title: "Its subscription sessions at API list price: an equivalent of the account quota they spent, never billed" });
   }
   const p = c.proposal;
   if (p) {

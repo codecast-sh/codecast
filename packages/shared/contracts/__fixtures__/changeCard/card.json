@@ -117,6 +117,7 @@
   "cost": {
     "tokens": 412000,
     "usd": 1.96,
-    "minutes": 38
+    "minutes": 38,
+    "list_usd": 0
   }
 }

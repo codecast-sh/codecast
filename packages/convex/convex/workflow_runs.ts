@@ -8,7 +8,7 @@ import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conve
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
-import { CARD_GATE_NODE_ID, isLineRun, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -18,6 +18,8 @@ import { createDataContext } from "./data";
 import { askTrialGate, trialProjectOf } from "./lineTrial";
 import { alignGateChoices } from "./lib/gateChoices";
 import { runSuperseded } from "./lib/superseded";
+import { resolveOwnerDevice } from "./devices";
+import { openRunPrice } from "./lib/trialRunPrices";
 
 type Ctx = { db: any };
 
@@ -497,21 +499,38 @@ export const create = mutation({
 // Hand a run to a daemon of its owner, which executes it in tmux with
 // `cast workflow run-daemon` (daemon.ts run_workflow). `device` pins it to
 // one machine (the one that asked, for `cast workflow run --detach`); without
-// it any of the owner's daemons may take it. `slug` names a shipped template
-// for a run with no workflows row (orgLine.startLineRun).
+// it the run goes to the machine that holds its checkout, picked the way a
+// session start is (deviceRouting.pickOwnerDevice, the spawner's machine as
+// the sticky owner). Left to whichever daemon polled first, a cloud host took
+// a role's run on a laptop folder it does not have, and every isolated
+// station it spawned was parked on itself and prepared from the laptop's
+// shared tree (Union's Prove failures, 2026-10-14). `slug` names a shipped
+// template for a run with no workflows row (orgLine.startLineRun).
 export async function queueRunOnDaemon(
   ctx: Ctx,
   userId: Id<"users">,
   runId: Id<"workflow_runs">,
   opts: { slug?: string; device?: string; now?: number } = {},
 ): Promise<void> {
+  const device = opts.device ?? (await runCheckoutDevice(ctx, userId, runId));
   await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "run_workflow",
     args: JSON.stringify({ workflow_run_id: runId, ...(opts.slug ? { workflow_slug: opts.slug } : {}) }),
-    ...(opts.device ? { target_device_id: opts.device } : {}),
+    ...(device ? { target_device_id: device } : {}),
     created_at: opts.now ?? Date.now(),
   });
+}
+
+async function runCheckoutDevice(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">): Promise<string | undefined> {
+  const run = await ctx.db.get(runId);
+  if (!run?.project_path) return undefined;
+  const spawner = run.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
+  return (await resolveOwnerDevice(ctx, userId, {
+    projectPath: run.project_path,
+    gitRoot: spawner?.project_path === run.project_path ? spawner?.git_root : undefined,
+    ownerDeviceId: spawner?.owner_device_id ?? null,
+  })) ?? undefined;
 }
 
 // The one insert shape for a run: the run row, the bound task or plan patched
@@ -584,6 +603,10 @@ export async function createRunCore(
     updated_at: now,
   });
 
+  if (opts.task?.project_id) {
+    const project = await ctx.db.get(opts.task.project_id);
+    if (project?.line_trial) await openRunPrice(ctx, runId, project._id, now);
+  }
   if (opts.task) {
     await moveTaskStatus(ctx, opts.task, "in_progress", { actorUserId: userId, now, extra: { workflow_run_id: runId } });
   }
@@ -1403,6 +1426,55 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
   await ctx.db.patch(run._id, { resume_requested_at: now, updated_at: now });
   return { ok: true };
 }
+/**
+ * A run goes back to `node` and its machine's daemon drives it from there, keeping what it made. Nothing it asked
+ * stays on the row, a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
+ * graph as it is now. A decision the run waited on is the caller's to settle after, once the run no longer waits on it.
+ */
+export async function resumeRunAt(ctx: Ctx, userId: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
+  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
+  await queueRunOnDaemon(ctx, userId, run._id, { device: run.runner_device!, now });
+}
+
+/**
+ * `cast workflow reask`: the decision a run put to a person is asked again by the stations as they are now. The run
+ * waits at a gate, or it failed while standing at one (its question went with it). It picks up at `at`, else at the
+ * station that asks the gate (`asker`, read from the graph by the CLI, which also stops the old runner), else at the
+ * gate itself; the old decision is withdrawn once the run no longer waits on it, so it reads as replaced and the
+ * withdrawal cannot fail the run. A trial run is asked again under its budget (lineTrial.rerunCore). The owner asks.
+ */
+export async function reaskRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, opts: { at?: string; asker?: string; check?: boolean } = {}, now = Date.now()) {
+  const run = await ctx.db.get(runId);
+  if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
+  if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner asks its decision again");
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not asked again`);
+  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast line trial rerun ${task.short_id} --reask asks it again under the trial's budget`);
+  const wf = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const isGate = (id?: string) => !!id && ((wf as any)?.nodes ?? []).some((n: { id?: string; type?: string }) => n.id === id && n.type === "human");
+  const gate = run.status === "paused" ? run.gate_node_id : run.status === "failed" && isGate(run.current_node_id) ? run.current_node_id : undefined;
+  if (!gate) throw new ConvexError(`The run is ${run.status}${run.current_node_id ? ` at ${run.current_node_id}` : ""}: it is not waiting on a decision, and did not end at one`);
+  if (!run.runner_device) throw new ConvexError("The run names no machine to pick it up");
+  const asked = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  const node = opts.at?.trim() || opts.asker?.trim() || gate;
+  // `check`: every refusal above, and nothing written, so the CLI stops the old runner only for a run that will move.
+  if (opts.check) return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, replaced: null as string | null };
+  await resumeRunAt(ctx, userId, run, node, now);
+  if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);
+  return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, replaced: asked?.status === "pending" ? asked.short_id ?? null : null };
+}
+
+export const reaskFromCli = mutation({
+  args: { api_token: v.string(), run_id: v.id("workflow_runs"), at: v.optional(v.string()), asker: v.optional(v.string()), check: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    return reaskRunCore(ctx, auth.userId, args.run_id, { at: args.at, asker: args.asker, check: args.check });
+  },
+});
+
 /** A landing step's own words for refusing a branch the default branch has moved past ("line: codecast/line-ct-58259
  *  is behind origin/main; rebase it first"): the one refusal a rebase answers. */
 export const BEHIND_MAIN = /\S+ is behind (?:origin\/)?\S+?[;,.\s]/;
@@ -1558,7 +1630,8 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     // How a line run ended (LE16): shipped, dropped, dissolved or parked,
     // so a project reading its runs never re-derives it from station ids.
     line_outcome: lineRunOutcome(run.node_statuses)?.kind,
-    card_cost_usd: typeof decision?.card?.cost?.usd === "number" ? decision.card.cost.usd : undefined,
+    // Billed money and the subscription sessions' list price, two kinds never added (changeCard costParts).
+    ...(typeof decision?.card?.cost?.usd === "number" ? (({ billed_usd, list_usd }) => ({ card_billed_usd: billed_usd, card_list_usd: list_usd }))(costParts(decision.card.cost)) : {}),
     // line-versions.md LV1: a live run a later run, a dropped station or its problem replaced; null while current.
     superseded: await runSuperseded(ctx, run, task),
   };

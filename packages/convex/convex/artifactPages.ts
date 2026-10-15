@@ -25,6 +25,7 @@ const PIN_PATH = `<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><cir
 import { escAttr, escHtml } from "./htmlEscape";
 import { MD_THEME_CSS } from "./artifactMarkdown";
 import { PAGE_AGENT_LABELS, PAGE_AGENT_PICKUP_MS } from "@codecast/shared/contracts";
+import { PAGE_GATE_SIGNAL } from "@codecast/shared/render";
 export { escAttr, escHtml };
 
 // Every icon we inject is built here, and its size rides in an INLINE STYLE,
@@ -1887,6 +1888,7 @@ const CLOCK_SVG = iconSvg(22, `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3
 
 export function passwordGatePage(o: { slug: string; title: string; apiBase: string; shareUrl: string }): string {
   const body = `
+${PAGE_GATE_SIGNAL}
 <div class="top"><a class="brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer">${logoSvg(22)}</a><span class="t">${escHtml(o.title)}</span></div>
 <div class="card" style="max-width:420px;margin:12vh auto 0">
   <div class="glyph">${LOCK_SVG}</div>
@@ -1919,6 +1921,7 @@ export function passwordGatePage(o: { slug: string; title: string; apiBase: stri
 
 export function emailGatePage(o: { slug: string; title: string; apiBase: string; shareUrl: string }): string {
   const body = `
+${PAGE_GATE_SIGNAL}
 <div class="top"><a class="brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer">${logoSvg(22)}</a><span class="t">${escHtml(o.title)}</span></div>
 <div class="card" style="max-width:420px;margin:12vh auto 0">
   <div class="glyph">${MAIL_SVG}</div>
@@ -1954,6 +1957,7 @@ export function emailGatePage(o: { slug: string; title: string; apiBase: string;
 
 export function expiredPage(o: { title: string }): string {
   const body = `
+${PAGE_GATE_SIGNAL}
 <div class="top"><a class="brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer">${logoSvg(22)}</a></div>
 <div class="card" style="max-width:420px;margin:16vh auto 0;text-align:center">
   <div class="glyph" style="margin:0 auto 14px">${CLOCK_SVG}</div>

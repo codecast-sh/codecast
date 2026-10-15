@@ -196,3 +196,43 @@ describe("resolveComposeProjectPath with a room's team", () => {
     ).toBe("/home/ubuntu/work/codecast");
   });
 });
+
+describe("resolveComposeProjectPath with a teammate's project chip", () => {
+  // Cam's laptop, filtering the team inbox to union-mobile: the chip's path is
+  // the checkout of whichever visible session carried the project, here Ashot's.
+  const teammatePath = "/Users/ashot/src/union-mobile";
+
+  it("never seeds a path none of my machines have", () => {
+    expect(
+      resolveComposeProjectPath({
+        conversation: {},
+        activeProjectFilter: "union-mobile",
+        activeProjectPath: teammatePath,
+        machineRoster: [{ local_project_roots: ["/Users/cam/.claude"] }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("swaps in my own checkout of the filtered project", () => {
+    expect(
+      resolveComposeProjectPath({
+        conversation: {},
+        activeProjectFilter: "union-mobile",
+        activeProjectPath: teammatePath,
+        recentProjects: [{ path: "/Users/cam/code/union-mobile" }],
+        machineRoster: [{ local_project_roots: ["/Users/cam/code"] }],
+      }),
+    ).toBe("/Users/cam/code/union-mobile");
+  });
+
+  it("keeps the chip path when one of my machines has it", () => {
+    expect(
+      resolveComposeProjectPath({
+        conversation: {},
+        activeProjectFilter: "union-mobile",
+        activeProjectPath: teammatePath,
+        machineRoster: [{ local_project_roots: ["/Users/ashot/src"] }],
+      }),
+    ).toBe(teammatePath);
+  });
+});

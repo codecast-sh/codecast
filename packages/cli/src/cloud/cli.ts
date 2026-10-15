@@ -245,10 +245,12 @@ export function registerCloudCommand(program: Command): void {
         process.exit(1);
       }
       const { seedCwd, repoRoot } = resolveSeedRoots(localPath);
-      const deviceId: string | undefined = opts.device ?? target.owner_device_id ?? undefined;
-      const hostArg = opts.host ?? (deviceId ? hostForDevice(deviceId)?.id : undefined);
+      const parkedDevice: string | undefined = opts.device ?? target.owner_device_id ?? undefined;
 
-      const say = (m: string) => console.log(`  ${m}`);
+      const { placementReporter } = await import("./placementProgress.js");
+      const progress = placementReporter(target.cloud_placement_token ?? undefined, (record) =>
+        client.mutation(api.cloud.reportPlacementProgress, { api_token: token, conversation_id: conversationId, progress: record }));
+      const say = (m: string) => { console.log(`  ${m}`); progress.line(m); };
       const mode: CloudWorkspaceMode = normalizeCloudWorkspace(opts.workspace ?? target.cloud_workspace);
       // A shared checkout never seeds from a laptop tree: the host's main
       // checkout is moved to origin/main, whatever the row asked for.
@@ -272,119 +274,188 @@ export function registerCloudCommand(program: Command): void {
         console.error(`the conversation's repo is ${target.git_remote_url} but ${repoRoot} points at ${laptopOrigin} — not seeding a different repository`);
         process.exit(1);
       }
-      const expectToken = target.cloud_placement_token ?? undefined;
-      const launch = {
-        model: launchModelKey(target.model, target.agent_type),
-        effort: target.effort ?? undefined,
-        cc_account: target.cc_account ?? undefined,
-      };
-      // `path` is the whole answer to "can this host push", because the key
-      // is only one of the credentials that can: a host whose App token
-      // answers pushes with read/write both false on the key.
-      const gitAccess = (prepared: Awaited<ReturnType<typeof wakeCloudHost>>) => {
-        const git = prepared.git;
-        if (!git) return null;
-        const { path } = hostAccessPath(git.access, git.app, prepared.cloud.forwardAgent === true);
-        return {
-          read: git.access.read,
-          write: git.access.write,
-          readonly: git.access.readonly === true,
-          path,
-          ...(git.app ? { app: { origin: git.app.origin, read: git.app.read, write: git.app.write } } : {}),
+      // A host out of memory would stall every step below until a timeout
+      // fires minutes in: choose a host with room first. Only an isolated
+      // worktree may go elsewhere; a shared placement is about that host's
+      // checkout.
+      const { chooseCloudHost, readRepoNeed } = await import("./hostHeadroom.js");
+      const need = readRepoNeed(repoRoot);
+      progress.step("host");
+      const askedHost = opts.host ?? (parkedDevice ? hostForDevice(parkedDevice)?.id : undefined);
+      progress.host(askedHost ?? "cloud host", parkedDevice);
+      // Autoscale (Settings > Machines) lets a full fleet wake or launch a
+      // host; a shared checkout is about one host and never scales.
+      const autoscale = mode === "shared" ? undefined : await autoscalePlanFor(client, api, token, askedHost);
+      const pick = () => chooseCloudHost(askedHost, say, { fallback: mode !== "shared", autoscale, need });
+      let chosen: ReturnType<typeof chooseCloudHost>;
+      try {
+        chosen = pick();
+        if (chosen.launch) {
+          const { withAutoscaleLock, launchAutoscaledHost } = await import("./autoscale.js");
+          chosen = await withAutoscaleLock(async () => {
+            // Another placement may have launched while this one waited: choose again.
+            const again = pick();
+            if (!again.launch) return again;
+            progress.step("launch");
+            progress.host(`new ${again.launch.size}`, undefined, { host_id: again.from!.id, ...(again.from!.deviceId ? { host_device_id: again.from!.deviceId } : {}), why: again.why ?? "no room" });
+            const host = await launchAutoscaledHost(again.launch.like, again.launch.size, say);
+            return { host, moved: true, from: again.from, why: again.why };
+          });
+        }
+      } catch (err) {
+        say(err instanceof Error ? err.message : String(err));
+        await progress.flush();
+        throw err;
+      }
+      if (chosen.small) say(`${chosen.host.id} is smaller than this repo needs (${chosen.small}): its typecheck and dev server will not run there`);
+      const hostArg = chosen.host.id;
+      const deviceId = chosen.moved ? chosen.host.deviceId : parkedDevice;
+      progress.host(hostArg, chosen.host.deviceId, chosen.moved && chosen.from ? { host_id: chosen.from.id, ...(chosen.from.deviceId ? { host_device_id: chosen.from.deviceId } : {}), why: chosen.why ?? "no room" } : undefined);
+      // Every step below reports as it begins; a throw lands its message as
+      // the last log line before the daemon records the failure.
+      const onStep = (step: Parameters<typeof progress.step>[0]) => progress.step(step);
+      try {
+        const expectToken = target.cloud_placement_token ?? undefined;
+        const launch = {
+          model: launchModelKey(target.model, target.agent_type),
+          effort: target.effort ?? undefined,
+          cc_account: target.cc_account ?? undefined,
         };
-      };
+        // `path` is the whole answer to "can this host push", because the key
+        // is only one of the credentials that can: a host whose App token
+        // answers pushes with read/write both false on the key.
+        const gitAccess = (prepared: Awaited<ReturnType<typeof wakeCloudHost>>) => {
+          const git = prepared.git;
+          if (!git) return null;
+          const { path } = hostAccessPath(git.access, git.app, prepared.cloud.forwardAgent === true);
+          return {
+            read: git.access.read,
+            write: git.access.write,
+            readonly: git.access.readonly === true,
+            path,
+            ...(git.app ? { app: { origin: git.app.origin, read: git.app.read, write: git.app.write } } : {}),
+          };
+        };
 
-      if (mode === "shared") {
-        // Claim BEFORE touching the checkout: the wake and the home steps
-        // mutate nothing in the repo, so a refused claim (another session
-        // holds the checkout; the row was re-parked) leaves the host as it
-        // was. A throw here prints the server's message and exits 1 — the
-        // daemon stamps it on the row as session_error, which by the
-        // occupancy rule frees the checkout for the next claimant.
-        const prepared = await wakeCloudHost({ hostArg, seedCwd, repoRoot, startFrom, onProgress: say });
+        if (mode === "shared") {
+          // Claim BEFORE touching the checkout: the wake and the home steps
+          // mutate nothing in the repo, so a refused claim (another session
+          // holds the checkout; the row was re-parked) leaves the host as it
+          // was. A throw here prints the server's message and exits 1 — the
+          // daemon stamps it on the row as session_error, which by the
+          // occupancy rule frees the checkout for the next claimant.
+          const prepared = await wakeCloudHost({ hostArg, seedCwd, repoRoot, startFrom, onProgress: say, onStep });
+          if (deviceId && deviceId !== prepared.deviceId) {
+            console.error(`the row is parked on device ${deviceId.slice(0, 8)} but host ${prepared.cloud.id} is device ${prepared.deviceId.slice(0, 8)}`);
+            process.exit(1);
+          }
+          const claim = await client.mutation(api.cloud.claimSharedCheckout, {
+            api_token: token, conversation_id: conversationId, device_id: prepared.deviceId,
+            project_path: prepared.repoPath, expect_token: expectToken,
+          });
+          if (claim.claimed === false) {
+            console.log(JSON.stringify({ placed: false, reason: claim.reason, workspace: mode }));
+            process.exit(0);
+          }
+          say(`claimed the host checkout ${prepared.repoPath} for this session`);
+          onStep("checkout");
+          refreshCloudCheckout(prepared, { moveHead: true }, say);
+          await waitForDeviceOnline(client, api, token, prepared.deviceId, say);
+          const branch = `codecast/${freshWorktreeName()}`;
+          onStep("worktree");
+          say(`preparing the host checkout on ${branch} (cast ws root: ports, secret files, install)`);
+          const ws = await acquireRemoteRootCheckout(prepared.host, prepared.repoPath, prepared.seedCwd, branch, { onProgress: say });
+          const seed = await seedForHost(prepared, { startFrom: "origin_main" });
+          onStep("start");
+          const r = await client.mutation(api.cloud.placeConversation, {
+            api_token: token, conversation_id: conversationId, device_id: prepared.deviceId,
+            project_path: ws.path, git_root: ws.path, worktree_branch: ws.branch,
+            cloud_workspace: "shared", start: true, ...launch, expect_token: expectToken, seed: seedPlacementArg(seed),
+          });
+          if (r.placed === false) {
+            // The root stays as prepared: nothing of this session's is in it yet.
+            say(`the row was ${r.reason === "superseded" ? "re-parked" : "re-pointed"} while the host was being prepared — the checkout is left on ${ws.branch}`);
+            console.log(JSON.stringify({ placed: false, reason: r.reason, workspace: mode, checkout: ws }));
+            process.exit(0);
+          }
+          console.log(JSON.stringify({
+            placed: true, device_id: prepared.deviceId, host: prepared.cloud.id, workspace: mode, checkout: ws, command_id: r.command_id ?? null,
+            seed: seedPlacementArg(seed),
+            git_access: gitAccess(prepared),
+          }));
+          return;
+        }
+
+        const prepared = await prepareCloudHost({ hostArg, seedCwd, repoRoot, startFrom, onProgress: say, onStep });
         if (deviceId && deviceId !== prepared.deviceId) {
           console.error(`the row is parked on device ${deviceId.slice(0, 8)} but host ${prepared.cloud.id} is device ${prepared.deviceId.slice(0, 8)}`);
           process.exit(1);
         }
-        const claim = await client.mutation(api.cloud.claimSharedCheckout, {
-          api_token: token, conversation_id: conversationId, device_id: prepared.deviceId,
-          project_path: prepared.repoPath, expect_token: expectToken,
-        });
-        if (claim.claimed === false) {
-          console.log(JSON.stringify({ placed: false, reason: claim.reason, workspace: mode }));
-          process.exit(0);
-        }
-        say(`claimed the host checkout ${prepared.repoPath} for this session`);
-        refreshCloudCheckout(prepared, { moveHead: true }, say);
         await waitForDeviceOnline(client, api, token, prepared.deviceId, say);
-        const branch = `codecast/${freshWorktreeName()}`;
-        say(`preparing the host checkout on ${branch} (cast ws root: ports, secret files, install)`);
-        const ws = await acquireRemoteRootCheckout(prepared.host, prepared.repoPath, prepared.seedCwd, branch, { onProgress: say });
-        const seed = await seedForHost(prepared, { startFrom: "origin_main" });
+        onStep("seed");
+        const seed = await seedForHost(prepared, { startFrom });
+        if (seed.reason) say(`starting from origin/main: ${seed.reason}`);
+        else say(seed.source === "checkout" ? `seeding from ${seed.branch ?? "detached HEAD"} @ ${seed.base.slice(0, 8)}${seed.dirty ? " with uncommitted changes" : ""}` : `starting from origin/main @ ${seed.base.slice(0, 8)}`);
+        const name = target.worktree_name || freshWorktreeName();
+        onStep("worktree");
+        say(`acquiring worktree ${name} on the host (install runs there)`);
+        const ws = await acquireRemoteWorkspace(prepared.host, prepared.repoPath, name, prepared.seedCwd, seed, { onProgress: say });
+        onStep("start");
         const r = await client.mutation(api.cloud.placeConversation, {
-          api_token: token, conversation_id: conversationId, device_id: prepared.deviceId,
-          project_path: ws.path, git_root: ws.path, worktree_branch: ws.branch,
-          cloud_workspace: "shared", start: true, ...launch, expect_token: expectToken, seed: seedPlacementArg(seed),
+          api_token: token,
+          conversation_id: conversationId,
+          device_id: prepared.deviceId,
+          project_path: ws.path,
+          git_root: ws.path,
+          worktree_name: ws.name,
+          worktree_branch: ws.branch,
+          worktree_path: ws.path,
+          cloud_workspace: "isolated",
+          seed: seedPlacementArg(ws.seed),
+          start: true,
+          ...launch,
+          // Fenced placement: the token the park stamped. A row re-pointed or
+          // re-parked while the ssh ran is refused, and the worktree we just
+          // acquired is dropped rather than left holding the manifest's secrets.
+          expect_token: expectToken,
         });
         if (r.placed === false) {
-          // The root stays as prepared: nothing of this session's is in it yet.
-          say(`the row was ${r.reason === "superseded" ? "re-parked" : "re-pointed"} while the host was being prepared — the checkout is left on ${ws.branch}`);
-          console.log(JSON.stringify({ placed: false, reason: r.reason, workspace: mode, checkout: ws }));
+          say(`the row was ${r.reason === "superseded" ? "re-parked" : "re-pointed"} while the host was being prepared — removing worktree ${ws.name}`);
+          const drop = releaseRemoteWorkspace(prepared.host, prepared.repoPath, ws.name);
+          if (drop.error) say(drop.error);
+          console.log(JSON.stringify({ placed: false, reason: r.reason, workspace: mode, worktree: ws.name, removed: drop.removed }));
           process.exit(0);
         }
         console.log(JSON.stringify({
-          placed: true, device_id: prepared.deviceId, host: prepared.cloud.id, workspace: mode, checkout: ws, command_id: r.command_id ?? null,
-          seed: seedPlacementArg(seed),
+          placed: true, device_id: prepared.deviceId, host: prepared.cloud.id, workspace: mode, worktree: ws, command_id: r.command_id ?? null,
+          seed: seedPlacementArg(ws.seed),
+          // What the host's own key can do against the origin, so the daemon's
+          // [CLOUD] placed line says whether pushes from there will work.
           git_access: gitAccess(prepared),
         }));
-        return;
+      } catch (err) {
+        say(`failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      } finally {
+        await progress.flush();
       }
-
-      const prepared = await prepareCloudHost({ hostArg, seedCwd, repoRoot, startFrom, onProgress: say });
-      if (deviceId && deviceId !== prepared.deviceId) {
-        console.error(`the row is parked on device ${deviceId.slice(0, 8)} but host ${prepared.cloud.id} is device ${prepared.deviceId.slice(0, 8)}`);
-        process.exit(1);
-      }
-      await waitForDeviceOnline(client, api, token, prepared.deviceId, say);
-      const seed = await seedForHost(prepared, { startFrom });
-      if (seed.reason) say(`starting from origin/main: ${seed.reason}`);
-      else say(seed.source === "checkout" ? `seeding from ${seed.branch ?? "detached HEAD"} @ ${seed.base.slice(0, 8)}${seed.dirty ? " with uncommitted changes" : ""}` : `starting from origin/main @ ${seed.base.slice(0, 8)}`);
-      const name = target.worktree_name || freshWorktreeName();
-      say(`acquiring worktree ${name} on the host (install runs there)`);
-      const ws = await acquireRemoteWorkspace(prepared.host, prepared.repoPath, name, prepared.seedCwd, seed, { onProgress: say });
-      const r = await client.mutation(api.cloud.placeConversation, {
-        api_token: token,
-        conversation_id: conversationId,
-        device_id: prepared.deviceId,
-        project_path: ws.path,
-        git_root: ws.path,
-        worktree_name: ws.name,
-        worktree_branch: ws.branch,
-        worktree_path: ws.path,
-        cloud_workspace: "isolated",
-        seed: seedPlacementArg(ws.seed),
-        start: true,
-        ...launch,
-        // Fenced placement: the token the park stamped. A row re-pointed or
-        // re-parked while the ssh ran is refused, and the worktree we just
-        // acquired is dropped rather than left holding the manifest's secrets.
-        expect_token: expectToken,
-      });
-      if (r.placed === false) {
-        say(`the row was ${r.reason === "superseded" ? "re-parked" : "re-pointed"} while the host was being prepared — removing worktree ${ws.name}`);
-        const drop = releaseRemoteWorkspace(prepared.host, prepared.repoPath, ws.name);
-        if (drop.error) say(drop.error);
-        console.log(JSON.stringify({ placed: false, reason: r.reason, workspace: mode, worktree: ws.name, removed: drop.removed }));
-        process.exit(0);
-      }
-      console.log(JSON.stringify({
-        placed: true, device_id: prepared.deviceId, host: prepared.cloud.id, workspace: mode, worktree: ws, command_id: r.command_id ?? null,
-        seed: seedPlacementArg(ws.seed),
-        // What the host's own key can do against the origin, so the daemon's
-        // [CLOUD] placed line says whether pushes from there will work.
-        git_access: gitAccess(prepared),
-      }));
     }));
+}
+
+/**
+ * The autoscale plan a placement runs under: the user's policy whose template
+ * is the asked host, else any policy that is on. Its template must be a host
+ * this laptop manages (its registry holds the key that launches a copy). An
+ * older backend without the query means no autoscale.
+ */
+async function autoscalePlanFor(client: any, api: any, token: string, askedHost: string | undefined): Promise<import("./hostHeadroom.js").AutoscalePlan | undefined> {
+  let policies: Array<{ device_id: string; max_extra: number; size: string }> = [];
+  try { policies = await client.query(api.cloud.autoscalePolicies, { api_token: token }); } catch { return undefined; }
+  const plans = policies.flatMap((p) => {
+    const template = hostForDevice(p.device_id);
+    return template ? [{ template, maxExtra: p.max_extra, size: p.size }] : [];
+  });
+  return plans.find((p) => p.template.id === askedHost) ?? plans[0];
 }
 
 /**

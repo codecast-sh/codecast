@@ -58,7 +58,7 @@ export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardMode
           <MarkdownRenderer content={d.context_md} />
         </div>
       )}
-      {d.report_slug && <PublishedPageEmbed slug={d.report_slug} />}
+      {d.report_slug && <PublishedPageEmbed slug={d.report_slug} decision={d._id} />}
       <div className="th-question-options" role="group" aria-label="Answer options">
         {d.options.map((o, i) => (
           <button key={i} type="button" className="th-question-option" onClick={() => answer(i)}>

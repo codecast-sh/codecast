@@ -19,6 +19,10 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { Button } from "../ui/button";
 import { ConfirmButton } from "../integrations/parts";
 import { deviceDisplayName, relativeSeen, useDevices, type Device } from "../DeviceBadge";
+import { useHostLoads } from "../../hooks/useHostLoads";
+import { formatHostLoad } from "../../lib/hostLoad";
+import { AddCloudHost } from "./AddCloudHost";
+import { CloudAutoscale } from "./CloudAutoscale";
 
 /** An action nobody answered: the laptop went away mid-run, or never picked it up. */
 const ACTION_STALE_MS = 35 * 60_000;
@@ -39,6 +43,7 @@ const DOING: Record<CloudHostAction, [running: string, done: string]> = {
   setup: ["Applying setup", "Applied setup"],
   image: ["Saving an image", "Saved an image"],
   delete_image: ["Deleting an image", "Deleted an image"],
+  clone: ["Launching a host like this", "Launched a host like this"],
 };
 
 type Tone = "ok" | "warn" | "bad" | "idle";
@@ -76,6 +81,18 @@ function stateLine(r: CloudHostReport): string {
   ].filter(Boolean).join(", ");
   const sleep = r.state === "stopped" ? "wakes when a session moves here" : r.idle_stop_minutes ? `sleeps after ${r.idle_stop_minutes} idle min` : null;
   return [parts, cost, sleep].filter(Boolean).join(" · ");
+}
+
+/** Free memory and agents from the host's own resource report: what decides whether new sessions land here. */
+function LoadRow({ deviceId, asleep }: { deviceId: string; asleep: boolean }) {
+  const load = useHostLoads().get(deviceId);
+  if (asleep) return <Row tone="idle" label="Load">asleep · empty when it wakes</Row>;
+  if (!load) return <Row tone="idle" label="Load">no recent report</Row>;
+  return (
+    <Row tone={load.tight ? "warn" : "ok"} label="Load" fix={load.tight ? "Tight: new sessions go to a roomier host when one is awake" : undefined}>
+      {formatHostLoad(load)}
+    </Row>
+  );
 }
 
 function SetupRow({ h, laptop }: { h?: HostReadiness; laptop: string }) {
@@ -175,6 +192,7 @@ export function CloudHostPanel({ d }: { d: Device }) {
       )}
 
       <ul className="mt-2 space-y-1.5">
+        <LoadRow deviceId={d.device_id} asleep={asleep} />
         <SetupRow h={h} laptop={laptop} />
         <LoginsRow h={h} r={r} laptop={laptop} />
         <ToolsRow h={h} />
@@ -194,6 +212,8 @@ export function CloudHostPanel({ d }: { d: Device }) {
           <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px]" disabled={!canAct || r.state === "missing"} title="Snapshot this machine so the next one starts ready" onClick={() => run("image")}>
             Save image
           </Button>
+          {canAct && r.state !== "missing" && <AddCloudHost like={d} className="h-7 rounded-md px-3 text-[11px] text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text" />}
+          {r.state !== "missing" && !r.autoscaled && <CloudAutoscale d={d} />}
           <ActionStatus last={last} running={running} laptop={laptop} managerOnline={managerOnline} now={now} />
         </div>
       )}
