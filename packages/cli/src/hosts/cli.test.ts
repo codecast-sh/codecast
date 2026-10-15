@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  AGENT_BRIDGE_SECURITY_NOTE, briefError, EC2_HOURLY_USD, estimateHostCost, forwardAgentRefusal, gitStatusLine,
+  AGENT_BRIDGE_SECURITY_NOTE, briefError, EC2_HOURLY_USD, estimateHostCost, idleStopLine, forwardAgentRefusal, gitStatusLine,
   GP3_USD_PER_GIB_MONTH, GH_NOT_LOGGED_IN_MESSAGE, grantAccountKey, grantDeployKey, hostGitReport, KEY_ALREADY_IN_USE_MESSAGE, keyReportLines, markOrphanWorktrees,
   parseDanglingSeeds, parseRemoteWorkspaceList, readRemoteWorktrees, REMOTE_DANGLING_SEEDS_SCRIPT, worktreeGitLabel, REMOTE_WORKSPACE_LIST_SCRIPT, sessionLine, sessionSeed, sessionWhere, worktreeNote, type HostSession, type RemoteWorktree,
 } from "./cli.js";
@@ -22,6 +22,18 @@ function session(worktree: string | null, over: Partial<HostSession> = {}): Host
 function worktree(name: string): RemoteWorktree {
   return { repo: "codecast", name, state: "ready", branch: `ws/${name}`, path: `/p/${name}` };
 }
+
+describe("hosts cost and idle lines", () => {
+  test("memory-optimized types we launch have a rate (us-west-2 on-demand)", () => {
+    expect(estimateHostCost({ instanceType: "r6a.4xlarge", volumeGiB: 100, state: "running" }).line).toBe("awake: about $0.9072/hour running, about $8.00/month disk");
+    for (const t of ["r7a.4xlarge", "r7i.4xlarge", "r8g.4xlarge"]) expect(EC2_HOURLY_USD[t]).toBeGreaterThan(0);
+  });
+  test("the idle line never says a host that never stops powers itself off", () => {
+    expect(idleStopLine(20)).toBe("idle auto-stop: 20m — after that it powers itself off and costs only its disk");
+    expect(idleStopLine(0)).not.toContain("powers itself off");
+    expect(idleStopLine(0)).toContain("disabled");
+  });
+});
 
 describe("estimateHostCost", () => {
   test("a sleeping host is billed for its disk and nothing else", () => {

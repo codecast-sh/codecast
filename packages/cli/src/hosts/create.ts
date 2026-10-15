@@ -23,6 +23,21 @@ export interface CreateHostOptions {
   disk?: string;
   dryRun?: boolean;
   provision?: boolean;
+  idle?: string;
+}
+
+/** Idle minutes as `cast hosts provision --idle` takes them: a nonnegative whole number. */
+export function checkIdleMinutes(idle: string): void {
+  if (!/^\d+$/.test(idle) || !Number.isSafeInteger(Number(idle))) throw new Error("Idle minutes must be a nonnegative whole number");
+}
+
+/**
+ * The `cast hosts provision` run that `add --provision` and `create` end in.
+ * --idle rides along, so a new host never starts on the 20-minute default
+ * and stops itself before it can be provisioned again with the limit wanted.
+ */
+export function provisionArgv(id: string, o: { idle?: string; serviceUser?: string }): string[] {
+  return ["provision", id, ...(o.idle !== undefined ? ["--idle", o.idle] : []), ...(o.serviceUser ? ["--service-user", o.serviceUser] : [])];
 }
 
 export function createHostPlan(platform: string, options: CreateHostOptions) {
@@ -73,7 +88,9 @@ export function registerHostCreateCommand(hosts: Command): void {
     .option("--disk <gib>", "Encrypted root disk size (Linux: 80 GiB; Mac: 200 GiB)")
     .option("--dry-run", "Print the launch plan without creating or changing anything")
     .option("--no-provision", "Register the instance without installing Codecast")
+    .option("--idle <minutes>", "Provision with this idle auto-stop, in minutes (0 disables; default 20)")
     .action(async (platform: string, options: CreateHostOptions) => {
+      if (options.idle !== undefined) checkIdleMinutes(options.idle);
       let fromBase = false;
       if (!options.image) {
         const imagePlatform = platform === "mac" ? "darwin" : "linux";
@@ -119,6 +136,6 @@ export function registerHostCreateCommand(hosts: Command): void {
       upsertHost(host);
       console.log(`Registered ${host.id}. Resume setup with: cast hosts provision ${host.id}`);
       // The base image's desktop, grants and autologin belong to its managed login.
-      if (options.provision !== false) await hosts.parseAsync(["provision", host.id, ...(fromBase && platform === "mac" ? ["--service-user", BASE_IMAGE_LOGIN] : [])], { from: "user" });
+      if (options.provision !== false) await hosts.parseAsync(provisionArgv(host.id, { idle: options.idle, serviceUser: fromBase && platform === "mac" ? BASE_IMAGE_LOGIN : undefined }), { from: "user" });
     });
 }

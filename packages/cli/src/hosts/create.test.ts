@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createHostPlan, type CreateHostOptions } from "./create";
+import { checkIdleMinutes, createHostPlan, provisionArgv, type CreateHostOptions } from "./create";
 import { macBaseScript, macDaemonScript } from "./provisionMac";
 import { kcpassword, macDesktopScript, macLoginScript, parseMacDesktop } from "./macLogin";
 import { hostReleaseScript } from "./installRelease";
@@ -64,4 +64,13 @@ describe("remote machine launch", () => {
     expect(parseMacDesktop("MAC-DESKTOP-PASSWORD-UNKNOWN").desktop).toBe("password-unknown");
     expect(() => parseMacDesktop("boom")).toThrow("did not finish");
   });
+});
+
+test("add --provision and create pass --idle through to provision", () => {
+  expect(provisionArgv("i-1", { idle: "0" })).toEqual(["provision", "i-1", "--idle", "0"]);
+  expect(provisionArgv("i-1", { idle: "45", serviceUser: "codecast" })).toEqual(["provision", "i-1", "--idle", "45", "--service-user", "codecast"]);
+  expect(provisionArgv("i-1", {})).toEqual(["provision", "i-1"]);
+  expect(() => checkIdleMinutes("0")).not.toThrow();
+  expect(() => checkIdleMinutes("-5")).toThrow("nonnegative whole number");
+  expect(() => checkIdleMinutes("1.5")).toThrow();
 });

@@ -41,7 +41,7 @@ import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
-import { registerHostCreateCommand } from "./create.js";
+import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
 import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
 
@@ -73,7 +73,34 @@ export const EC2_HOURLY_USD: Record<string, number> = {
   "m5.xlarge": 0.192,
   "c5.large": 0.085,
   "c5.xlarge": 0.17,
+  "r6a.large": 0.1134,
+  "r6a.xlarge": 0.2268,
+  "r6a.2xlarge": 0.4536,
+  "r6a.4xlarge": 0.9072,
+  "r6a.8xlarge": 1.8144,
+  "r7a.large": 0.15215,
+  "r7a.xlarge": 0.3043,
+  "r7a.2xlarge": 0.6086,
+  "r7a.4xlarge": 1.2172,
+  "r7a.8xlarge": 2.4344,
+  "r7i.large": 0.1323,
+  "r7i.xlarge": 0.2646,
+  "r7i.2xlarge": 0.5292,
+  "r7i.4xlarge": 1.0584,
+  "r7i.8xlarge": 2.1168,
+  "r8g.large": 0.11782,
+  "r8g.xlarge": 0.23564,
+  "r8g.2xlarge": 0.47128,
+  "r8g.4xlarge": 0.94256,
+  "r8g.8xlarge": 1.88512,
 };
+
+/** The provision summary's auto-stop line: what the host costs while it sits idle. */
+export function idleStopLine(idleMinutes: number): string {
+  return idleMinutes > 0
+    ? `idle auto-stop: ${idleMinutes}m — after that it powers itself off and costs only its disk`
+    : "idle auto-stop: disabled — it stays up, billing its hourly rate, until you stop it (cast hosts sleep)";
+}
 
 /** gp3 storage, USD per GiB-month. This is the whole bill of a sleeping host. */
 export const GP3_USD_PER_GIB_MONTH = 0.08;
@@ -931,8 +958,11 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--user <name>", "SSH user (ubuntu for Linux, ec2-user for Mac)")
     .option("--provision", "Install tools, sync configuration, and start the remote service")
     .option("--service-user <name>", "With --provision, create a separate Mac login with SSH and passwordless sudo")
-    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string }) => {
+    .option("--idle <minutes>", "With --provision, auto-stop after this many idle minutes (0 disables; default 20)")
+    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string; idle?: string }) => {
       if (o.serviceUser && !o.provision) die("--service-user requires --provision");
+      if (o.idle !== undefined && !o.provision) die("--idle requires --provision");
+      if (o.idle !== undefined) { try { checkIdleMinutes(o.idle); } catch (err) { die((err as Error).message); } }
       const previous = readHosts().find((entry) => entry.id === instanceId);
       const host: CloudHost = {
         id: instanceId, provider: "aws", region: o.region, user: o.user ?? "ubuntu",
@@ -943,7 +973,7 @@ export function buildHostsCommand(parent: Command): Command {
       if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
       upsertHost({ ...previous, ...host, platform: s.platform, user: o.user ?? previous?.user ?? (s.platform === "darwin" ? "ec2-user" : "ubuntu"), address: s.address });
       console.log(`${OK} registered ${instanceId} (${s.platform === "darwin" ? "Mac" : "Linux"}, ${s.state})`);
-      if (o.provision) await hosts.parseAsync(["provision", instanceId, ...(o.serviceUser ? ["--service-user", o.serviceUser] : [])], { from: "user" });
+      if (o.provision) await hosts.parseAsync(provisionArgv(instanceId, o), { from: "user" });
     });
 
   hosts
@@ -1005,7 +1035,7 @@ export function buildHostsCommand(parent: Command): Command {
         console.log(`  git key:  ${report.git.trim()}`);
         console.log(`  agents:   ${report.agents.trim()}`);
         console.log(`  tools:    ${report.tools.trim()}`);
-        console.log(fmt.muted(`  idle auto-stop: ${idle ? `${idle}m` : "disabled"} — it powers itself off and costs only its disk`));
+        console.log(fmt.muted(`  ${idleStopLine(idle)}`));
         console.log(fmt.muted(`  watch it: cast hosts view`));
       } catch (err) {
         die((err as Error).message);
