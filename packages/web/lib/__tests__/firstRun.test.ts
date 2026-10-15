@@ -53,7 +53,8 @@ describe("a first hosted conversation joins hosted mode", () => {
   const lane = () => (useInboxStore.getState().clientState as any).ui?.lane;
   const seed = (over: Record<string, unknown> = {}) => {
     const cs = useInboxStore.getState().clientState as any;
-    useInboxStore.setState({ ...base, clientState: { ...cs, ui: { ...cs.ui, lane: undefined } }, ...over } as any);
+    // Hosted mode is open to staff only for now (lanePaths simpleModeAllowed).
+    useInboxStore.setState({ ...base, currentUser: { _id: "u_me", staff: true }, clientState: { ...cs, ui: { ...cs.ui, lane: undefined } }, ...over } as any);
   };
 
   test("from a surface that holds only the text (the palette, the context composer)", () => {
@@ -75,8 +76,14 @@ describe("a first hosted conversation joins hosted mode", () => {
   });
 
   test("someone with a machine stays where they are", () => {
-    seed({ currentUser: { _id: "u_me", cli_version: "1.2.0" } });
+    seed({ currentUser: { _id: "u_me", staff: true, cli_version: "1.2.0" } });
     startHostedConversation("Anything urgent?");
+    expect(lane()).toBeUndefined();
+  });
+
+  test("someone hosted mode is not open to stays in developer mode", () => {
+    seed({ currentUser: { _id: "u_me" } });
+    startHostedConversation("What's on tomorrow?");
     expect(lane()).toBeUndefined();
   });
 });

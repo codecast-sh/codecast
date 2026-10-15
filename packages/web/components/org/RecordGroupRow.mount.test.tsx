@@ -120,9 +120,8 @@ test("op-901 draws six group rows in order, each titled and totalled, all closed
   expect(c.querySelector("[data-group-rows]")).toBeNull();
   expect(groups(c).every((g) => g.querySelector("[data-group-toggle]")!.getAttribute("aria-expanded") === "false")).toBe(true);
   expect(groups(c).every((g) => g.querySelector("[data-subject-approve]") && g.querySelector("[data-subject-reject]") && g.querySelector("[data-subject-reply]"))).toBe(true);
-  // One entry's Approve is a quiet outline; the foot offers the rest and the map.
+  // One entry's Approve is a quiet outline; the foot offers the rest.
   expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Approve all 6");
-  expect(c.querySelector("[data-open-map='op-901']")!.textContent).toBe("Map");
   expect(c.querySelector("[data-send-answers], [data-proposal-reply], [data-subject-pending]")).toBeNull();
   expect(c.textContent).not.toMatch(/on your next message|Filed under no project/);
   React.act(() => root.unmount());
