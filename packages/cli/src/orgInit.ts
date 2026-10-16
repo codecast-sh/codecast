@@ -86,6 +86,14 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .action(async (options: any) => (await run()).showInputs(deps, options));
 
   org
+    .command("loose")
+    .description("Your sessions nothing places yet (no role, task or seat), newest first, the ones new since the Head of People last looked marked; --new is its daily gate")
+    .option("--new", "Exit 0 only when a loose session started since the Head of People's last look, else 1 (a trigger precheck)")
+    .option(...TEAM_OPT)
+    .option("--json", "Machine-readable output")
+    .action(async (options: any) => (await import("./orgLooseRun.js")).showLoose(deps, options));
+
+  org
     .command("init")
     .description("Propose the first organization for the company: spawns an analyzer session that reads how work flows and posts a proposal (op-N) for the person to decide on the org page or with cast org apply")
     .option("--here", "Print the analyzer prompt for the current agent to act on instead of spawning a session")

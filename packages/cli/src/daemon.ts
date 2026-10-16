@@ -29873,13 +29873,13 @@ async function main(): Promise<void> {
   setInterval(() => { maintainReach().catch(() => {}); }, REACH_TICK_MS);
   // The local halves of codecast mods (mods/localRunner.ts): each in its own
   // Worker, and only at a version a person approved on this machine.
-  void import("./mods/localRunner.js").then(({ startLocalMods }) => startLocalMods({
+  void import("./mods/localRunner.js").then(({ startLocalMods }) => { localMods = startLocalMods({
     endpoint: () => {
       const c = readConfig();
       return c?.auth_token && c?.convex_url ? { siteUrl: c.convex_url.replace(".cloud", ".site"), apiToken: c.auth_token } : null;
     },
     log: (m) => log(m),
-  })).catch((err) => log(`[MODS] local runner did not start: ${err instanceof Error ? err.message : String(err)}`));
+  }); }).catch((err) => log(`[MODS] local runner did not start: ${err instanceof Error ? err.message : String(err)}`));
   // Agent logins (remote/agentAuth.ts) on the same cadence: a start backfill,
   // the 30-minute unconditional push, a per-host hash-gated fast tick, and a
   // watch on each source directory filtered to the exact filenames (the
@@ -32478,6 +32478,27 @@ async function main(): Promise<void> {
     }
   };
   setupLocalReadSubscription();
+
+  // A mod's UI waits on its local half ($.local.call): claim each call as it
+  // lands rather than on the runner's fallback poll.
+  let modCallsUnsubscribe: (() => void) | null = null;
+  const setupModCallSubscription = () => {
+    try {
+      modCallsUnsubscribe = subscriptionClient.onUpdate(
+        "modLocal:cliPendingCall" as any,
+        { api_token: config.auth_token },
+        (pending: unknown) => { if (pending) localMods?.wakeCalls(); },
+        makeSubscriptionErrorHandler(
+          "Mod calls",
+          () => { if (modCallsUnsubscribe) { modCallsUnsubscribe(); modCallsUnsubscribe = null; } },
+          () => setupModCallSubscription(),
+        ),
+      );
+    } catch {
+      setTimeout(() => setupModCallSubscription(), getReconnectDelay());
+    }
+  };
+  setupModCallSubscription();
 
   const setupCommandSubscription = () => {
     try {
