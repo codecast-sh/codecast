@@ -1,10 +1,10 @@
 // The session map (/map): every live session as a card on one zoomable
-// canvas, sitting in a pile. Piles come from three places, in this order of
-// precedence for any one session: a pile the person made (they dragged it
-// there), the role the session works for, and otherwise the repository it
-// runs in. Roles keep their reporting lines to the person or role above them,
-// so the org reads straight off the canvas. A card dragged onto bare canvas is
-// loose and stays where it was dropped.
+// canvas, sitting in a pile. A pile the person made (they dragged or piled
+// sessions there) always holds its sessions; a card dragged onto bare canvas
+// is loose and stays where it was dropped. Every other session falls into the
+// pile the chosen grouping gives it: by org (the role it works for, else its
+// repository, with each role under whoever it reports to), or by repository,
+// state, agent, model, last activity, task or branch.
 //
 // Pure: the page hands in rows and the saved arrangement, and gets back what
 // to draw. Edits return a new arrangement for clientState.ui.session_map.
@@ -24,6 +24,31 @@ export type SessionMapLayout = {
   settledOpen?: string[];
 };
 
+export type GroupBy = "org" | "repo" | "state" | "agent" | "model" | "day" | "task" | "branch";
+export type SortBy = "urgency" | "recent" | "oldest" | "title" | "messages";
+/** How piles line up on the shelves; "natural" follows the grouping's own order (states, days). */
+export type PileOrder = "natural" | "urgency" | "size" | "name" | "recent";
+export type Since = "1d" | "7d" | "30d" | "all";
+/** How the map is sliced, sorted and filtered (clientState.ui.session_map_view). */
+export type SessionMapView = { group?: GroupBy; sort?: SortBy; order?: PileOrder; since?: Since; hiddenStates?: WorkState[]; hiddenAgents?: string[] };
+
+export const GROUPS: { id: GroupBy; label: string }[] = [
+  { id: "org", label: "Org" }, { id: "repo", label: "Repository" }, { id: "state", label: "State" }, { id: "agent", label: "Agent" },
+  { id: "model", label: "Model" }, { id: "day", label: "Last active" }, { id: "task", label: "Task" }, { id: "branch", label: "Branch" },
+];
+export const SORTS: { id: SortBy; label: string }[] = [
+  { id: "urgency", label: "Needs you first" }, { id: "recent", label: "Recently active" }, { id: "oldest", label: "Least recently active" },
+  { id: "title", label: "Title" }, { id: "messages", label: "Most messages" },
+];
+export const ORDERS: { id: PileOrder; label: string }[] = [
+  { id: "natural", label: "Grouping's order" }, { id: "urgency", label: "Needs you first" }, { id: "size", label: "Largest first" },
+  { id: "name", label: "Name" }, { id: "recent", label: "Recently active" },
+];
+export const SINCES: { id: Since; label: string; ms: number }[] = [
+  { id: "1d", label: "Last day", ms: 86_400_000 }, { id: "7d", label: "Last week", ms: 7 * 86_400_000 },
+  { id: "30d", label: "Last month", ms: 30 * 86_400_000 }, { id: "all", label: "Any time", ms: Infinity },
+];
+
 export type MapSession = {
   id: string;
   title: string;
@@ -36,6 +61,10 @@ export type MapSession = {
   /** Where it runs: the repository's name. */
   repo: string;
   workers: number;
+  model?: string | null;
+  messages?: number;
+  branch?: string | null;
+  task?: { shortId: string; title: string } | null;
 };
 
 export type MapRole = {
@@ -53,7 +82,7 @@ export type MapRole = {
 
 export type MapPerson = { id: string; name: string; image?: string; presence?: "online" | "away" | "offline" };
 
-export type PileKind = "role" | "repo" | "custom";
+export type PileKind = "role" | "repo" | "custom" | "group";
 export type Pile = {
   id: string;
   kind: PileKind;
@@ -65,6 +94,8 @@ export type Pile = {
   settled: MapSession[];
   folded: boolean;
   settledOpen: boolean;
+  /** Its place in the grouping's own order (states in urgency order, newest day first). */
+  rank: number;
 };
 
 export const CARD = { w: 440, h: 340, gap: 16 } as const;
@@ -78,10 +109,38 @@ export const STATE_ORDER: WorkState[] = ["needs_input", "working", "dormant", "d
 const SETTLED = new Set<WorkState>(["done", "idle"]);
 const rank = new Map(STATE_ORDER.map((s, i) => [s, i]));
 const byUrgency = (a: MapSession, b: MapSession) => (rank.get(a.state)! - rank.get(b.state)!) || b.updated_at - a.updated_at;
+const SORT_FNS: Record<SortBy, (a: MapSession, b: MapSession) => number> = {
+  urgency: byUrgency,
+  recent: (a, b) => b.updated_at - a.updated_at,
+  oldest: (a, b) => a.updated_at - b.updated_at,
+  title: (a, b) => a.title.localeCompare(b.title),
+  messages: (a, b) => (b.messages ?? 0) - (a.messages ?? 0) || b.updated_at - a.updated_at,
+};
+export const STATE_TITLE: Record<WorkState, string> = { needs_input: "Needs input", working: "Working", dormant: "Dormant", done: "Done", idle: "Idle" };
+const DAY_BUCKETS = [
+  { key: "today", title: "Today", ms: 86_400_000 }, { key: "week", title: "This week", ms: 7 * 86_400_000 },
+  { key: "month", title: "This month", ms: 30 * 86_400_000 }, { key: "older", title: "Older", ms: Infinity },
+];
+
+/** The pile a session falls into under a grouping that is not the org: its key, title and place in order. */
+function groupOf(s: MapSession, group: Exclude<GroupBy, "org" | "repo">, now: number): { key: string; title: string; rank: number } {
+  switch (group) {
+    case "state": return { key: s.state, title: STATE_TITLE[s.state], rank: rank.get(s.state)! };
+    case "agent": return { key: s.agent_type, title: s.agent_type, rank: 0 };
+    case "model": return s.model ? { key: s.model, title: s.model, rank: 0 } : { key: "", title: "No model", rank: 1 };
+    case "task": return s.task ? { key: s.task.shortId, title: `${s.task.shortId} ${s.task.title}`, rank: 0 } : { key: "", title: "No task", rank: 1 };
+    case "branch": return s.branch ? { key: s.branch, title: s.branch, rank: 0 } : { key: "", title: "No branch", rank: 1 };
+    case "day": {
+      const i = DAY_BUCKETS.findIndex((b) => now - s.updated_at < b.ms);
+      return { key: DAY_BUCKETS[i].key, title: DAY_BUCKETS[i].title, rank: i };
+    }
+  }
+}
 
 export const rolePileId = (roleId: string) => `pile:role:${roleId}`;
 export const repoPileId = (repo: string) => `pile:repo:${repo}`;
 export const customPileId = (key: string) => `pile:c:${key}`;
+export const groupPileId = (group: GroupBy, key: string) => `pile:g:${group}:${key}`;
 export const personNodeId = (userId: string) => `person:${userId}`;
 export const cardNodeId = (sessionId: string) => `s:${sessionId}`;
 export const SETTLED_TILE = "settled";
@@ -95,7 +154,11 @@ export function repoOf(s: { git_remote_url?: string | null; git_root?: string | 
 }
 
 /** Every pile, with each session in exactly one place (a pile or loose). */
-export function buildPiles(sessions: MapSession[], roles: MapRole[], layout: SessionMapLayout): { piles: Pile[]; loose: MapSession[] } {
+export function buildPiles(sessions: MapSession[], roles: MapRole[], layout: SessionMapLayout, view: SessionMapView = {}, now = Date.now()): { piles: Pile[]; loose: MapSession[] } {
+  const group = view.group ?? "org";
+  const sort = SORT_FNS[view.sort ?? "urgency"];
+  // Grouped by state, a pile of done sessions is the point, not something to fold away.
+  const split = group !== "state";
   const folded = new Set(layout.folded ?? []);
   const settledOpen = new Set(layout.settledOpen ?? []);
   const looseIds = new Set(layout.loose ?? []);
@@ -103,6 +166,7 @@ export function buildPiles(sessions: MapSession[], roles: MapRole[], layout: Ses
   for (const [key, p] of Object.entries(layout.piles ?? {})) for (const id of p.ids) if (!custom.has(id)) custom.set(id, customPileId(key));
 
   const members = new Map<string, MapSession[]>();
+  const meta = new Map<string, { title: string; rank: number }>();
   const add = (pileId: string, s: MapSession) => { const l = members.get(pileId); if (l) l.push(s); else members.set(pileId, [s]); };
   const roleById = new Map(roles.map((r) => [r.id, r]));
   const loose: MapSession[] = [];
@@ -110,20 +174,29 @@ export function buildPiles(sessions: MapSession[], roles: MapRole[], layout: Ses
     const c = custom.get(s.id);
     if (c) add(c, s);
     else if (looseIds.has(s.id)) loose.push(s);
-    else if (s.roleId && roleById.has(s.roleId)) add(rolePileId(s.roleId), s);
-    else add(repoPileId(s.repo), s);
+    else if (group === "org" && s.roleId && roleById.has(s.roleId)) add(rolePileId(s.roleId), s);
+    else if (group === "org" || group === "repo") add(repoPileId(s.repo), s);
+    else {
+      const g = groupOf(s, group, now);
+      const id = groupPileId(group, g.key);
+      if (!meta.has(id)) meta.set(id, g);
+      add(id, s);
+    }
   }
 
-  const make = (id: string, kind: PileKind, title: string, role?: MapRole): Pile => {
-    const all = (members.get(id) ?? []).sort(byUrgency);
-    return { id, kind, title, role, active: all.filter((s) => !SETTLED.has(s.state)), settled: all.filter((s) => SETTLED.has(s.state)), folded: folded.has(id), settledOpen: settledOpen.has(id) };
+  const make = (id: string, kind: PileKind, title: string, rankInOrder: number, role?: MapRole): Pile => {
+    const all = (members.get(id) ?? []).sort(sort);
+    const settled = split ? all.filter((s) => SETTLED.has(s.state)) : [];
+    return { id, kind, title, role, active: split ? all.filter((s) => !SETTLED.has(s.state)) : all, settled, folded: folded.has(id), settledOpen: settledOpen.has(id), rank: rankInOrder };
   };
   const piles: Pile[] = [];
-  // Every role keeps its pile even when empty: the org's shape is the point.
-  for (const r of roles) piles.push(make(rolePileId(r.id), "role", r.name, r));
-  for (const [key, p] of Object.entries(layout.piles ?? {})) piles.push(make(customPileId(key), "custom", p.title));
-  const repos = [...members.keys()].filter((id) => id.startsWith("pile:repo:"));
-  for (const id of repos) piles.push(make(id, "repo", id.slice("pile:repo:".length)));
+  // Under the org, every role keeps its pile even when empty: the org's shape is the point.
+  if (group === "org") for (const r of roles) piles.push(make(rolePileId(r.id), "role", r.name, 0, r));
+  for (const [key, p] of Object.entries(layout.piles ?? {})) piles.push(make(customPileId(key), "custom", p.title, -1));
+  for (const id of members.keys()) {
+    if (id.startsWith("pile:repo:")) piles.push(make(id, "repo", id.slice("pile:repo:".length), 0));
+    else if (id.startsWith("pile:g:")) { const m = meta.get(id)!; piles.push(make(id, "group", m.title, m.rank)); }
+  }
   return { piles, loose };
 }
 
@@ -161,7 +234,7 @@ type Box = { id: string; w: number; h: number };
  * then the roles under whoever they report to), and every other pile on shelves
  * below it, busiest first. A saved spot always wins over this.
  */
-export function defaultPositions(piles: Pile[], people: MapPerson[], roles: MapRole[], loose: MapSession[]): Record<string, { x: number; y: number }> {
+export function defaultPositions(piles: Pile[], people: MapPerson[], roles: MapRole[], loose: MapSession[], order: PileOrder = "urgency"): Record<string, { x: number; y: number }> {
   const out: Record<string, { x: number; y: number }> = {};
   const size = new Map<string, { w: number; h: number }>();
   for (const p of piles) size.set(p.id, pileSize(p));
@@ -216,10 +289,10 @@ export function defaultPositions(piles: Pile[], people: MapPerson[], roles: MapR
   for (const id of placed) orgBottom = Math.max(orgBottom, out[id].y + size.get(id)!.h);
   const orgWidth = Math.max(x - SIBLING_GAP * 2, 0);
 
-  // Shelves: everything not on the tree, busiest first, packed left to right.
+  // Shelves: everything not on the tree, in the chosen order, packed left to right.
   const rest: Box[] = piles
     .filter((p) => !out[p.id])
-    .sort((a, b) => weight(b) - weight(a))
+    .sort(PILE_ORDER[order])
     .map((p) => ({ id: p.id, ...size.get(p.id)! }));
   const shelfW = Math.max(orgWidth, 9000);
   let sx = 0;
@@ -248,6 +321,17 @@ function weight(p: Pile): number {
   for (const s of p.active) w += s.state === "needs_input" ? 1000 : s.state === "working" ? 100 : 10;
   return w + p.settled.length;
 }
+const sizeOf = (p: Pile) => p.active.length + p.settled.length;
+const newest = (p: Pile) => Math.max(0, ...p.active.map((s) => s.updated_at), ...p.settled.map((s) => s.updated_at));
+const PILE_ORDER: Record<PileOrder, (a: Pile, b: Pile) => number> = {
+  natural: (a, b) => a.rank - b.rank || weight(b) - weight(a),
+  urgency: (a, b) => weight(b) - weight(a),
+  size: (a, b) => sizeOf(b) - sizeOf(a),
+  name: (a, b) => a.title.localeCompare(b.title),
+  recent: (a, b) => newest(b) - newest(a),
+};
+/** The shelf order a grouping reads best in when the person has not chosen one. */
+export const defaultOrder = (group: GroupBy): PileOrder => (group === "state" || group === "day" ? "natural" : "urgency");
 
 // ---------------------------------------------------------------- edits
 
@@ -288,11 +372,19 @@ export function makeLoose(layout: SessionMapLayout, drops: { id: string; x: numb
   return next;
 }
 
-export function createPile(layout: SessionMapLayout, title: string, ids: readonly string[], at: { x: number; y: number }, key: string): SessionMapLayout {
+/** A new pile of these sessions at `at`; `stack` draws it closed, as a deck. */
+export function createPile(layout: SessionMapLayout, title: string, ids: readonly string[], at: { x: number; y: number }, key: string, stack = false): SessionMapLayout {
   const next = detach(layout, ids);
   next.piles![key] = { title, ids: [...ids] };
   next.pos![customPileId(key)] = [Math.round(at.x), Math.round(at.y)];
+  if (stack) next.folded = [...(next.folded ?? []), customPileId(key)];
   return next;
+}
+
+/** Fold every given pile into a stack, or spread them all. */
+export function setFolded(layout: SessionMapLayout, pileIds: readonly string[], fold: boolean): SessionMapLayout {
+  const rest = (layout.folded ?? []).filter((id) => !pileIds.includes(id));
+  return { ...layout, folded: fold ? [...rest, ...pileIds] : rest };
 }
 
 export function renamePile(layout: SessionMapLayout, pileId: string, title: string): SessionMapLayout {
