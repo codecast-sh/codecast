@@ -6,7 +6,7 @@
 // text never reaches a request, an unusable reply keeps the deterministic text,
 // the daily cap stops every call, an unsettled story brings its day back, a
 // live edition waits out its hour, and a reply whose inputs moved is dropped.
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test, setSystemTime } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -590,20 +590,27 @@ describe("runProse through rebuildDay", () => {
   });
 
   test("a story that has not settled waits, and its day comes back when it will have", async () => {
-    const s = await setup();
-    const last = Date.now() - 60_000;
-    const date = localDate(last, "UTC");
-    await s.commit("live1", "feat(web): line pages", last - 30 * 60_000, ["packages/web/line.tsx"], { conversation_id: s.ids.vis });
-    await s.commit("live2", "fix(web): line page scroll", last, ["packages/web/line.tsx"], { conversation_id: s.ids.vis });
+    // Midday, so the story and its settle time sit inside one UTC day: near
+    // midnight the day's end would settle it before the test looks.
+    setSystemTime(Math.floor(Date.now() / 86_400_000) * 86_400_000 + 12 * 3_600_000);
+    try {
+      const s = await setup();
+      const last = Date.now() - 60_000;
+      const date = localDate(last, "UTC");
+      await s.commit("live1", "feat(web): line pages", last - 30 * 60_000, ["packages/web/line.tsx"], { conversation_id: s.ids.vis });
+      await s.commit("live2", "fix(web): line page scroll", last, ["packages/web/line.tsx"], { conversation_id: s.ids.vis });
 
-    await s.rebuild(date);
-    expect(storyCalls()).toEqual([]);
-    const story = (await s.stories(date)).find((x) => x.commit_shas.includes("live2"))!;
-    expect(story.prose_status).toBe("pending");
+      await s.rebuild(date);
+      expect(storyCalls()).toEqual([]);
+      const story = (await s.stories(date)).find((x) => x.commit_shas.includes("live2"))!;
+      expect(story.prose_status).toBe("pending");
 
-    const due = settlesAt(story, dayBounds(date, "UTC").end);
-    const jobs = await s.rebuildJobs();
-    expect(jobs.some((j) => j.args[0].date === date && Math.abs(j.scheduledTime - Math.max(due, Date.now() + 60_000)) < 5_000)).toBe(true);
+      const due = settlesAt(story, dayBounds(date, "UTC").end);
+      const jobs = await s.rebuildJobs();
+      expect(jobs.some((j) => j.args[0].date === date && Math.abs(j.scheduledTime - Math.max(due, Date.now() + 60_000)) < 5_000)).toBe(true);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("a live day's edition is rewritten at most once an hour", async () => {

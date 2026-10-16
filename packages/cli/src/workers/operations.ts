@@ -7,7 +7,7 @@ export type ProbePayload = { operation: ProbeOperation; args: string[]; options:
 export type ProbeResult = { status: number | null; signal: string | null; code?: string; killed: boolean; stdout: string; stderr: string };
 const safeText = (s: unknown, max = 4096): s is string => typeof s === "string" && s.length <= max && !/[\0\r\n]/.test(s);
 const target = (s: string) => /^=?[A-Za-z0-9_.$%:@/+-]+$/.test(s);
-const fields = new Set(["pid", "session_name", "session_id", "session_created", "session_attached", "session_activity", "session_path", "session_windows", "window_index", "window_id", "window_name", "window_active", "window_panes", "pane_id", "pane_index", "pane_pid", "pane_tty", "pane_current_command", "pane_current_path", "pane_dead", "pane_active", "pane_width", "pane_height", "cursor_x", "cursor_y", "@codecast_session_id", "@codecast_conversation_id"]);
+const fields = new Set(["pid", "session_name", "session_id", "session_created", "session_attached", "session_activity", "session_path", "session_windows", "window_index", "window_id", "window_name", "window_active", "window_panes", "pane_id", "pane_index", "pane_pid", "pane_tty", "pane_current_command", "pane_current_path", "pane_dead", "pane_active", "pane_width", "pane_height", "cursor_x", "cursor_y", "@codecast_session_id", "@codecast_conversation_id", "@codecast_agent_type", "@codecast_project_path"]);
 export function safeTmuxFormat(format: string): boolean {
   if (!safeText(format, 2048)) return false;
   const remainder = format.replace(/#\{([^{}]+)\}/g, (whole, field) => fields.has(field) ? "" : whole);
