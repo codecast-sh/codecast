@@ -853,6 +853,29 @@ describe("inboxForCLI path — the same placement, tallied from the stamps", () 
     expect(rows.find((r) => r.id === "conversations_q")).toMatchObject({ bucket: "questions", below_fold: false });
     expect(rows.find((r) => r.id === "conversations_old")).toMatchObject({ below_fold: true });
   });
+
+  // A workflow runner names each station's hand alone, and the hand nests
+  // under the run's session, so its row is a child row. Mid tool call (a five
+  // minute foreground Bash) the transcript is silent while the daemon keeps
+  // beating: the hand is working. The child row has to carry the heartbeat the
+  // placement reads, or the placement saw a silent session with no heartbeat,
+  // read it stopped, and the runner settled a working Build (ct-59591).
+  test("a named hand mid tool call, quiet past the heartbeat window with a live heartbeat, reads live and working", async () => {
+    const tables = {
+      conversations: [
+        conv("run", { updated_at: EPOCH - MIN }),
+        conv("hand", { parent_conversation_id: "conversations_run", updated_at: EPOCH - 5 * MIN, message_count: 120 }),
+      ],
+      managed_sessions: [
+        { _id: "ms_hand", user_id: ME, conversation_id: "conversations_hand", last_heartbeat: EPOCH - 20_000, agent_status: "working", agent_status_updated_at: EPOCH - 9 * MIN },
+      ],
+    };
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {
+      show_all: true, projection: true, namedOnly: true, extraConvIds: ["conversations_hand"],
+    });
+    const { rows } = tallyInboxRows(sessions, { showAll: true, stateFilter: null, labelByConv: new Map(), requestedIds: new Set(["conversations_hand"]) });
+    expect(rows.find((r) => r.id === "conversations_hand")).toMatchObject({ is_live: true, work_state: "working", agent_status: "working" });
+  });
 });
 
 
