@@ -244,7 +244,7 @@ function fixture(transport = "tmux", cached = true) {
     const constants = [
       "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
-      "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
+      "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
       if (!line) throw new Error(`Missing constant ${name}`);
@@ -704,7 +704,9 @@ describe("machine prompt delivery safety", () => {
     const f = fixture();
     f.state.menu = null;
     if (stage === "before Escape") f.hooks.capture = () => { if (f.state.captures === 1) f.state.menu = menu; };
-    if (stage === "before paste") f.hooks.loaded = () => { f.state.menu = menu; };
+    // An idle claude composer is typed into, not pasted: a busy one takes the
+    // paste whose buffer load is the moment this stage opens the menu.
+    if (stage === "before paste") { f.state.busy = true; f.hooks.loaded = () => { f.state.menu = menu; }; }
     if (stage === "before Enter") f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
     await expect(f.deliver(session("preserve this"))).rejects.toThrow("human answer");
     expect(f.events).not.toContain("Enter");
