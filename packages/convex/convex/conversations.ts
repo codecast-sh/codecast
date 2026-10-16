@@ -117,6 +117,7 @@ import { narrowByOperators, type OperatorCandidate, type OperatorScope } from ".
 import { requireUser } from "./lib/auth";
 import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
 import { isDeletedSession } from "./lib/deletedSessions";
+import { touchDaemonLastSeen } from "./lib/daemonLiveness";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { claimShareToken } from "./publicShare";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
@@ -1484,11 +1485,7 @@ export const createConversation = mutation({
       }
     }
 
-    if (args.api_token) {
-      await ctx.db.patch(args.user_id, {
-        daemon_last_seen: now,
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, args.user_id, creator);
 
     if (resolvedTeamId && !existing) {
       const bornSubagent =
@@ -3960,11 +3957,7 @@ export const setPrivacyBySessionId = mutation({
     await patchConversationVisibility(ctx, conversation, updates);
     await advanceCommentsAccessRevision(ctx, conversation);
 
-    if (args.api_token) {
-      await ctx.db.patch(authUserId, {
-        daemon_last_seen: Date.now(),
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, authUserId);
   },
 });
 
@@ -5329,9 +5322,7 @@ export const updateTitle = mutation({
     // once: a no-op among them must not write the account row, or they
     // contend on it and fail (OCC on users, 2026-09-30).
     if (args.api_token && (changed || args.replaces === undefined)) {
-      await ctx.db.patch(conversation.user_id, {
-        daemon_last_seen: Date.now(),
-      });
+      await touchDaemonLastSeen(ctx, conversation.user_id);
     }
   },
 });
@@ -5482,11 +5473,7 @@ export const setSkipTitleGeneration = mutation({
       skip_title_generation: args.skip,
     });
 
-    if (args.api_token) {
-      await ctx.db.patch(conversation.user_id, {
-        daemon_last_seen: Date.now(),
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, conversation.user_id);
   },
 });
 
@@ -12178,6 +12165,10 @@ export const setThreadState = mutation({
 export const getThreadState = query({
   args: {
     session: v.string(),
+    // Background probes (the stale-state reminder, the scheduler's filing
+    // read) ask about a session that may not have synced yet: answer null
+    // instead of throwing, so an expected miss is not logged as an error.
+    if_exists: v.optional(v.boolean()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12192,6 +12183,7 @@ export const getThreadState = query({
     // else this way (org-staffing.md S29); the write above stays run-or-own.
     const conv = await resolveConversationRefRanked(ctx, args.session, userId, (c) => canAccessConversation(ctx, userId, c as any));
     if (!conv || !(await canAccessConversation(ctx, userId, conv as any))) {
+      if (args.if_exists) return null;
       throw new Error(
         `No session found for "${args.session}" (you can only read state on sessions you run, own or can see in your team)`
       );

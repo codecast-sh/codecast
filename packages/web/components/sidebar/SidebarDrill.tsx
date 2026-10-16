@@ -49,7 +49,7 @@ export function SidebarDrillStack({
   pane: ReactNode;
   children: ReactNode;
 }) {
-  const motion = "transition-[transform,opacity] duration-300 ease-[cubic-bezier(.3,.7,.2,1)] motion-reduce:transition-none";
+  const motion = "transition-[transform,opacity] duration-300 [transition-timing-function:cubic-bezier(.3,.7,.2,1)] motion-reduce:transition-none";
   return (
     <div className="flex-1 min-h-0 relative overflow-hidden">
       <div
