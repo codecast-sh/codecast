@@ -59,6 +59,7 @@
    "answer": 4
   },
   "outside_line_followed_pct": 64.4,
-  "worker_to_parent_readable_pct": 52.5
+  "worker_to_parent_readable_pct": 52.5,
+  "readable_idle_unasked_pct": 14.8
  }
 }

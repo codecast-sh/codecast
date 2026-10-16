@@ -188,9 +188,21 @@ declare module "codecast-mod" {
       meta(key: string): Promise<{ value: unknown; device: string | null; at: number } | null>;
       call<T = unknown>(method: string, args?: unknown): Promise<T>;
     };
-    /** Fetch from an origin listed under permissions.fetch. Runs in the sandbox, so the server must allow CORS. */
+    /**
+     * Fetch from an origin listed under permissions.fetch. Runs in the sandbox, so the server must allow CORS.
+     * Naming one of the manifest's `secrets` sends the request from codecast's server instead, with that key
+     * attached; it goes only to the secret's origins, and no browser or code of yours ever sees the key.
+     */
     http: {
-      fetch(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; headers: Record<string, string>; text: string; json: any }>;
+      fetch(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; secret?: string }): Promise<{ ok: boolean; status: number; headers: Record<string, string>; text: string; json: any }>;
+    };
+    /**
+     * A connected product's readers (`cast connector readers <source>` lists them), called as the
+     * person viewing the mod, for the sources permissions.connectors names. Codecast signs the request,
+     * so there is no key to hold. Resolves with the reader's answer and throws when it fails.
+     */
+    connector: {
+      read<T = any>(source: string, reader: string, args?: Record<string, unknown>): Promise<T>;
     };
     me(): Promise<{ id: string; name?: string; email?: string } | null>;
     readonly manifest: Manifest;
@@ -208,7 +220,19 @@ declare module "codecast-mod" {
 
   export type Manifest = {
     name: string; title?: string; description?: string; version?: string; icon?: string; main?: string;
-    permissions?: { read?: Collection[] | "*"; write?: ("tasks" | "sessions" | "docs" | "clipboard" | "objects")[] | "*"; fetch?: string[] | "*" };
+    permissions?: {
+      read?: Collection[] | "*";
+      write?: ("tasks" | "sessions" | "docs" | "clipboard" | "objects")[] | "*";
+      fetch?: string[] | "*";
+      /** Connected products (by source name, like "union") whose readers $.connector.read may call. */
+      connectors?: string[];
+    };
+    /**
+     * Keys the mod's requests need. You set each value on the Mods page (or `cast mod secret set`); codecast
+     * stores it encrypted and attaches it to a $.http.fetch naming it, only toward `origins` (which
+     * permissions.fetch must list). Sent as `Authorization: Bearer <value>`, or raw in `header` when named.
+     */
+    secrets?: { name: string; description?: string; origins: string[]; header?: string }[];
     panes?: { id: string; title: string; icon?: string; description?: string }[];
     commands?: { id: string; title: string; keywords?: string; icon?: string }[];
     fences?: { lang: string; description?: string }[];

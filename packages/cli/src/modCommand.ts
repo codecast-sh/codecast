@@ -43,6 +43,36 @@ function reportBuild(build: ModBuild, quiet = false): build is Extract<ModBuild,
   return true;
 }
 
+/** Names each declared key still unset, with where to set it: until then every request that needs it is refused. */
+async function reportUnsetSecrets(deps: PublishDeps, name: string, manifest: { secrets?: unknown[] }) {
+  if (!manifest.secrets?.length) return;
+  const res = await apiPost(deps, "/cli/mods/secrets", { name }, { read: true, exitOnError: false }).catch(() => null);
+  const unset = (res?.secrets ?? []).filter((s: any) => !s.set_at).map((s: any) => s.name);
+  if (!unset.length) return;
+  console.log(`\nNot set yet: ${unset.join(", ")}. Requests that need ${unset.length === 1 ? "it" : "them"} are refused until the author sets ${unset.length === 1 ? "it" : "them"} on ${webBaseUrl().replace(/\/$/, "")}/mods (or: cast mod secret set ${name} <NAME>, value on stdin). Ask the person for the value; never write a key into the mod's code.`);
+}
+
+/** The value from stdin when piped, else typed at a hidden prompt. */
+async function readSecretValue(secret: string): Promise<string> {
+  if (!process.stdin.isTTY) return (await new Response(Bun.stdin.stream()).text()).trim();
+  process.stdout.write(`${secret}: `);
+  const { stdin } = process;
+  stdin.setRawMode(true);
+  stdin.resume();
+  let value = "";
+  return await new Promise((resolve) => {
+    const onData = (buf: Buffer) => {
+      for (const ch of buf.toString("utf8")) {
+        if (ch === "\r" || ch === "\n") { stdin.setRawMode(false); stdin.pause(); stdin.off("data", onData); process.stdout.write("\n"); return resolve(value.trim()); }
+        if (ch === "\u0003") { process.stdout.write("\n"); process.exit(130); }
+        if (ch === "\u007f") value = value.slice(0, -1);
+        else value += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
 function fmtTime(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -178,6 +208,7 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
       if (build.manifest.fences?.length) console.log(`Show a fence by writing an example \`\`\`${build.manifest.fences[0].lang} block in your reply.`);
       console.log(`cast mod logs ${res.name} shows what it printed and threw.`);
       if (build.local) console.log(`Its local half runs on each of your machines within 30s (cast mod local; cast mod revoke ${res.name} stops it on one)`);
+      await reportUnsetSecrets(deps, res.name, build.manifest);
     });
 
   mod
@@ -236,6 +267,7 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
       const scope = await teamScope(deps, options.team);
       const res = await push(deps, build, { publish: true, note: options.note, scope, shared: options.share ? true : options.private ? false : undefined });
       console.log(`ok ${res.name} v${res.version} (rev ${res.rev})${options.share ? ", shared with the team" : ""}: ${modUrl(res.name)}`);
+      await reportUnsetSecrets(deps, res.name, build.manifest);
     });
 
   mod
@@ -398,6 +430,32 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
         console.log(`${m.name.padEnd(24)} ${hash}  ${state}`);
         for (const d of m.local_devices ?? []) if (d.device !== here) console.log(`  ${d.device.padEnd(22)} ${d.state}${d.error ? `: ${d.error}` : ""}`);
       }
+    });
+
+  const secret = mod.command("secret").description("The keys a mod's requests carry: set by you, stored encrypted, attached on codecast's server, never sent to a browser");
+  secret
+    .command("set <name> <secret>")
+    .description("Set one of the mod's declared secrets (value on stdin, or typed at a hidden prompt)")
+    .action(async (name: string, key: string) => {
+      const value = await readSecretValue(key);
+      if (!value) fail("no value given (pipe it on stdin, or type it at the prompt); cast mod secret rm clears one");
+      await apiPost(deps, "/cli/mods/secret-set", { name, secret: key, value });
+      console.log(`ok ${key} set for ${name}`);
+    });
+  secret
+    .command("rm <name> <secret>")
+    .description("Clear one of the mod's secrets")
+    .action(async (name: string, key: string) => {
+      await apiPost(deps, "/cli/mods/secret-set", { name, secret: key, value: "" });
+      console.log(`ok ${key} cleared for ${name}`);
+    });
+  secret
+    .command("ls <name>")
+    .description("The mod's declared secrets: where each may be sent and whether it is set (never a value)")
+    .action(async (name: string) => {
+      const res = await apiPost(deps, "/cli/mods/secrets", { name }, { read: true });
+      if (!res.secrets?.length) return console.log(`${name} declares no secrets (codecast-mod.json "secrets").`);
+      for (const s of res.secrets) console.log(`${s.name.padEnd(24)} ${s.set_at ? `set ${new Date(s.set_at).toLocaleString()}` : "NOT SET"}  -> ${s.origins.join(", ")}`);
     });
 
   mod

@@ -47,6 +47,17 @@ export function ModRuntimes() {
           });
         });
       },
+      callServer: async (modId, method, args) => {
+        const team = useInboxStore.getState().clientState.ui?.active_team_id;
+        const res = await convex.action(api.modServer.call, { mod_id: modId, method, args_json: JSON.stringify(args), ...(team ? { team_id: team } : {}) });
+        // A reader answers its data and throws when it fails; a fetch answers like fetch does, throwing only when nothing came back.
+        if (method === "connector.read") {
+          if (!res.ok) throw new Error(res.error ?? `the reader answered ${res.status}`);
+          return res.json ?? res.text ?? null;
+        }
+        if (res.status === undefined) throw new Error(res.error ?? "the request failed");
+        return { ok: res.ok, status: res.status, headers: res.headers ?? {}, text: res.text ?? "", json: res.json };
+      },
     });
     return () => setModBridge(null);
   }, [convex]);

@@ -227,7 +227,8 @@ export const cliRemove = mutation({
     const logs = await ctx.db.query("mod_logs").withIndex("by_mod_created", (q) => q.eq("mod_id", modId)).collect();
     const state = await ctx.db.query("mod_state").withIndex("by_mod_key", (q) => q.eq("mod_id", modId)).collect();
     const calls = await ctx.db.query("mod_calls").withIndex("by_mod_created", (q) => q.eq("mod_id", modId)).collect();
-    for (const r of [...logs, ...state, ...calls]) await ctx.db.delete(r._id);
+    const secrets = await ctx.db.query("mod_secrets").withIndex("by_mod_name", (q) => q.eq("mod_id", modId)).collect();
+    for (const r of [...logs, ...state, ...calls, ...secrets]) await ctx.db.delete(r._id);
     await ctx.db.delete(modId);
     return { ok: true };
   },

@@ -143,6 +143,7 @@ export function NavSection({
   expanded,
   onToggle,
   alwaysOpen,
+  onDrill,
 }: {
   label: string;
   href: string;
@@ -173,6 +174,10 @@ export function NavSection({
   /** The rows under it are views of this section, not a list it holds: they
    *  always show, with no chevron to fold them and nothing to open on click. */
   alwaysOpen?: boolean;
+  /** The section is a level of the sidebar of its own (SidebarDrill): opening
+   *  the row goes into it. Already on the section's page, it goes in without
+   *  navigating, so you stay where you were. */
+  onDrill?: () => void;
 }) {
   const inOtherWindow = usePoppedOut(popped);
   // Only the wide rail nests children; the narrow rail stays icon-only, and
@@ -186,6 +191,10 @@ export function NavSection({
         <Link
           href={href}
           onClick={(e) => {
+            if (onDrill && !inOtherWindow) {
+              onDrill();
+              if (isActive) { e.preventDefault(); return; }
+            }
             onMobileClose?.();
             // Going into a section opens its list: landing on a channel while
             // the channels stay folded reads as broken. Only opens, never folds;
@@ -240,7 +249,11 @@ export function NavSection({
             {badge}
           </Link>
         )}
-        {!isNarrow && <span className="w-4 flex-shrink-0" aria-hidden="true" />}
+        {!isNarrow && (onDrill && !inOtherWindow ? (
+          <svg className="w-3 h-3 mx-0.5 flex-shrink-0 text-sol-text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5} aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        ) : <span className="w-4 flex-shrink-0" aria-hidden="true" />)}
       </div>
       {/* Views of the section: plain rows on a guide line from this row's
           icon, text aligned with the label above. */}
