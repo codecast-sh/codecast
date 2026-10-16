@@ -59,7 +59,7 @@ import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHarnessFile, unsentHarnessChanges, withHarnessCause, writeHarnessFile, type HarnessChange } from "./harness.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
-import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
+import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { liveRunnerPid, paneReplaceable, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
@@ -32655,6 +32655,7 @@ let daemonStarted = false;
 export async function runDaemon(): Promise<void> {
   if (daemonStarted) return;
   daemonStarted = true;
+  recordRemoteLaunch();
   return main();
 }
 
