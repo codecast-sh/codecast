@@ -75,7 +75,7 @@ test("account switching and recovery changes use the same local target", async (
   await act(() => button("switch →")!.click());
   expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:requestAccountSwitch", args: { device_id: "local-mac", profile: "backup", continue_blocked: false } });
   await act(() => seedAccounts([otherDevice, { ...localDevice, active_email: "backup@example.com" }]));
-  await act(() => button("Switch automatically")!.click());
+  await act(() => button("Continue, and switch accounts automatically")!.click());
   expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:setRecoveryMode", args: { device_id: "local-mac", mode: "auto" } });
 });
 
