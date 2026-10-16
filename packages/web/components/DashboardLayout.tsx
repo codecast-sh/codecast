@@ -28,7 +28,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Bot } from "lucide-react";
+import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Bot } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { TriageBar } from "./triage/TriageBar";
@@ -1358,11 +1358,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </Surface>
           </TopbarTray>}
           actions={<>
-            <ShortcutTooltip label={words.newConversation} action="session.create">
+            <ShortcutTooltip label={words.newConversation} action="session.compose">
               <TopbarButton
                 onClick={(e) => {
-                  handleNewFullSession();
-                  tipActions.whisper('session.create', e);
+                  openCompose();
+                  tipActions.whisper('session.compose', e);
                 }}
                 aria-label={words.newConversation}
                 // In hosted mode starting a conversation is the main thing,
@@ -1371,7 +1371,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 desktopOnly={!hostedMode}
                 data-cc-compose=""
               >
-                <Plus />
+                <SquarePen />
               </TopbarButton>
             </ShortcutTooltip>
             <ErrorBoundary name="HeaderPins" level="inline">
