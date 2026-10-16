@@ -602,7 +602,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         // The same click on a dock the user had left brings the caret back.
         if (docked && !collapsed && !rootRef.current?.contains(document.activeElement)) refocusComposer();
       }}
-      className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
+      // The page layout's composer is its own card, so the popup draws no
+      // frame around it: the heading, chips and composer sit on the backdrop.
+      className={`relative ${pageLayout ? "" : "border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40"} overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
         // The assistant needs no project, agent or model pickers, so its
         // sheet is sized to one ask rather than to the developer's form.
         // The assistant's sheet is sized to its content (mark, heading,
@@ -630,7 +632,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         )}
         {conversation && !recipient && (
           <ReviewComposerContext.Provider value={composerBridge}>
-            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot, recents: false } : undefined} />
+            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot } : undefined} />
           </ReviewComposerContext.Provider>
         )}
         {conversation && recipient && (
