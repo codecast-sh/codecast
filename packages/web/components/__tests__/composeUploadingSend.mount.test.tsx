@@ -10,11 +10,12 @@ mock.module("sonner", () => ({
 process.on("unhandledRejection", (err) => { console.log("UNHANDLED", err); });
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { pendingImageUploads } from "../../lib/draftImages";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 // The compose popup (Ctrl+N) contract: Enter sends the first message and the
 // popup unmounts on the same tick. An image still uploading at that moment
 // must ride along — the send waits for the upload in the background and then
@@ -53,7 +54,7 @@ const flushUntil = async (ready: () => boolean, budgetMs = 3_000) => {
 // settles when the test says so.
 function fakeConvex(uploadGate: Deferred<void>, failFirst = 0) {
   let failuresLeft = failFirst;
-  const client = new ConvexReactClient("https://example.convex.cloud");
+  const client = offlineConvexClient("https://example.convex.cloud");
   (client as any).mutation = async () => "https://upload.test/storage";
   (client as any).query = async () => null;
   (client as any).watchQuery = () => ({

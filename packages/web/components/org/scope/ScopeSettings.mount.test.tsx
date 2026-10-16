@@ -99,18 +99,20 @@ async function verify() {
   const before = calls.length;
   await act(async () => { q<HTMLButtonElement>("[data-autonomy-switch]")!.click(); });
   assert.equal(calls.length, before, "the switch alone turns nothing on");
-  assert.ok(document.querySelector('[data-switch-figure="a day, max"]'), "the review leads with the role's daily sessions");
+  // A role with no daily limit of its own has none, and the review says so.
+  assert.ok(document.querySelector('[data-switch-figure="a day, no limit"]'), "the review leads with the role's daily sessions");
   await act(async () => { document.querySelector<HTMLButtonElement>("[data-switch-confirm]")!.click(); });
   assert.equal(calls.pop(), 'update:{"trust":"direct"}');
 
-  // ── the limits: a closed disclosure holding the three defaults and today's use ──
+  // ── the limits: a closed disclosure holding the three limits (none unless set) and today's use ──
   const limits = q<HTMLDetailsElement>("[data-role-limits]")!;
   assert.ok(limits, "the Limits disclosure exists");
   assert.equal(limits.open, false, "closed by default: the role page shows no numbers");
   const inputs = [...limits.querySelectorAll<HTMLInputElement>("input[type=number]")].map((i) => i.value);
-  assert.deepEqual(inputs, ["6", "40", "400000"], "the defaults are filled in when the role has none of its own");
+  assert.deepEqual(inputs, ["", "", ""], "a role with none of its own has no limit");
+  assert.ok([...limits.querySelectorAll<HTMLInputElement>("input[type=number]")].every((i) => i.placeholder === "no limit"));
   assert.match(limits.textContent!, /today 1/);
-  assert.match(text(), /A safety net with the defaults filled in/);
+  assert.match(text(), /none unless you set one/);
 
   // ── the words: no stage, cap or budget reaches the person ──
   assert.doesNotMatch(text(), /trust|stage|\bcaps?\b|budget|allowance|understand|decide|direct/i);

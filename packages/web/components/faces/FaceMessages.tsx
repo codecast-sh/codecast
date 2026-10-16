@@ -161,11 +161,14 @@ export function FaceMessages({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dmId, newestDm?.id, focus]);
 
-  // Newest at the bottom, in view, on open and whenever a line arrives.
+  // Newest at the bottom, in view, on open and whenever a line arrives. Keyed
+  // on the newest line, not the count: past CARD_LINES a new line pushes the
+  // oldest out and the count stays put.
+  const newestId = rows[rows.length - 1]?.id;
   useLayoutEffect(() => {
     const list = listRef.current;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [rows.length]);
+  }, [newestId]);
   useLayoutEffect(() => {
     if (!focus) return;
     const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 120);

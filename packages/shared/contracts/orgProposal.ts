@@ -9,6 +9,10 @@ import { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange } from
 export { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange, type OrgSessionDestination } from "./orgSessionFiling";
 import { autonomyOn, trustForSwitch } from "./roleAutonomy";
 import { INITIATIVE_RECORD_MAX } from "./initiative";
+import { everyWords } from "./rolePlaybook";
+export { everyWords } from "./rolePlaybook";
+import { DEFAULT_LINE_SLUG, LINE_SLUG_RE } from "./lineSlug";
+export { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf } from "./lineSlug";
 import { proposalChangeRefId } from "../entities";
 
 export const ORG_PROPOSAL_FENCE = "org-proposal";
@@ -16,13 +20,6 @@ export const ORG_PROPOSAL_FENCE = "org-proposal";
 /** `cards` is the line's admission cap (line-profile.md LP6): open change cards per person. */
 /** A daily limit set to null is removed: the role has no limit on it. */
 export type OrgProposalCaps = { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null; cards?: number };
-
-// The line a role's tasks run on (the-line.md L2): a workflow slug, absent
-// meaning the shipped "line" template.
-export const DEFAULT_LINE_SLUG = "line";
-/** The line a role runs: its own pick, else the shipped line. */
-export const lineSlugOf = (role: { line_workflow_slug?: string | null }): string => role.line_workflow_slug || DEFAULT_LINE_SLUG;
-export const LINE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export type OrgProposalScope = {
   /** Project refs: a short id, an id, or a title substring unique in the workspace. */
@@ -872,18 +869,6 @@ export function capsWords(caps: { hands_per_day?: number | null; wakes_per_day?:
   one(caps.wakes_per_day, "wake", "wakes");
   one(caps.tokens_per_day, "token", "tokens");
   return andList(parts);
-}
-/** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
-export function everyWords(every: string): string {
-  const m = every.trim().match(/^(\d+)\s*([dhwm])$/i);
-  if (!m) return `every ${every}`;
-  const n = Number(m[1]);
-  const unit = m[2].toLowerCase();
-  if (unit === "d" && n === 1) return "every day";
-  if (unit === "d" && n === 7) return "every week";
-  if (unit === "w" && n === 1) return "every week";
-  const word = { d: "day", h: "hour", w: "week", m: "minute" }[unit as "d" | "h" | "w" | "m"];
-  return n === 1 ? `every ${word}` : `every ${n} ${word}s`;
 }
 
 /** The names a derived ask speaks in (S19): an agent by its handle, a

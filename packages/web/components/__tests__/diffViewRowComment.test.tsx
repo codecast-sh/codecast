@@ -1,12 +1,13 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { fileDiffRenders } from "../../test-helpers/pierreFileDiff";
 import { useInboxStore } from "../../store/inboxStore";
 import { DiffView } from "../DiffView";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // The comment affordance is Pierre's gutter button. What it produces is ours:
 // the side and line (or run) a comment anchors to, the code it quotes, and,
@@ -25,7 +26,7 @@ const restoreGlobals = replaceGlobals({
 const { createRoot } = await import("react-dom/client");
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 const OLD = "one\ntwo\nthree";
 const NEW = "one\n2\nthree";
 

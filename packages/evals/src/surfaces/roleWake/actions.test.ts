@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { AgentResult } from '../../surface';
-import { budgetGate, callsByTurn, intendedWrites, ownWorkCalls, playbookGate, standingGates } from './actions';
+import { budgetGate, callsByTurn, filingsNamed, intendedWrites, ownWorkCalls, playbookGate, standingGates } from './actions';
 
 const agent = (turns: string[][], calls: string[] = []): AgentResult => ({ runSubdir: '/tmp/a', said: turns.flat(), turns, calls, costUsd: 0, modelUsage: {}, isError: false, exitCode: 0, model: 'pin', realMs: 0 });
 const verdict = (agents: AgentResult[], label: Parameters<typeof standingGates>[1], from = 1) => standingGates(agents, label, from).map((g) => [g.id, g.pass, g.evidence.summary]);
@@ -188,5 +188,13 @@ describe('the playbook a turn saves', () => {
   test('the brief fits its budget', () => {
     expect(budgetGate(brief).pass).toBe(true);
     expect(budgetGate(`${brief}\n${'x'.repeat(12_000)}`)).toMatchObject({ id: 'brief-budget', pass: false });
+  });
+});
+
+describe('filingsNamed (org-staffing.md S43)', () => {
+  test('reads each file_session change from a spec the turn names, and nothing else', () => {
+    const said = 'I would run:\n```\ncast org propose --spec - <<\'EOF\'\n{"title":"Tidy","changes":[{"change":{"kind":"file_session","session":"jx7g001","title":"Launch thread","to":"@growth"},"rationale":"growth work"},{"change":{"kind":"retire","handle":"x"},"rationale":"r"}]}\nEOF\n```';
+    expect(filingsNamed([said]).map((c) => [c.change.session, c.change.to])).toEqual([['jx7g001', '@growth']]);
+    expect(filingsNamed(['no proposal here', '{"kind":"file_session", broken'])).toEqual([]);
   });
 });

@@ -28,7 +28,6 @@
 // learning pass, so every reader sees the same entries.
 
 import { TRAILING_DATE, dayAt, listItem, sectionRows } from "./briefStanding";
-import { everyWords } from "./orgProposal";
 
 const DAY = "\\d{4}-\\d{2}-\\d{2}";
 
@@ -207,6 +206,19 @@ export const roleWakeOf = (t: { interval_ms?: number | null; precheck?: string |
 
 /** What a role is told it may change, beside its wake, in `cast brief`. */
 export const WAKE_TUNE_HINT = `yours to change when the pace of the work changes: cast role tune --every <${msToEvery(WAKE_TUNE.min_ms)} to ${msToEvery(WAKE_TUNE.max_ms)}> --precheck "<command>" --focus "<text>" --why "<reason>"`;
+
+/** "1d" reads as every day, "7d" as every week, "12h" as every 12 hours. */
+export function everyWords(every: string): string {
+  const m = every.trim().match(/^(\d+)\s*([dhwm])$/i);
+  if (!m) return `every ${every}`;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit === "d" && n === 1) return "every day";
+  if (unit === "d" && n === 7) return "every week";
+  if (unit === "w" && n === 1) return "every week";
+  const word = { d: "day", h: "hour", w: "week", m: "minute" }[unit as "d" | "h" | "w" | "m"];
+  return n === 1 ? `every ${word}` : `every ${n} ${word}s`;
+}
 
 /** An interval as a cadence word ("12h", "1d", "90m"): the inverse of orgEveryToMs. */
 export function msToEvery(ms: number): string {

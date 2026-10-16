@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { mockInboxStore } from "./mockInboxStore";
 import type { InboxSession } from "../../store/inboxStore";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // The card reads the machine roster (useRosterDevice) for the worktree chip's
 // host name, and under renderToStaticMarkup zustand answers from its initial
@@ -26,7 +27,7 @@ const { SessionCard } = await import("../inbox/SessionCard");
 
 // Never connects: SessionCard only registers mutation callbacks, and static
 // rendering fires no effects and opens no sockets.
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 
 const worktreePath = "/home/ubuntu/work/codecast/.codecast/worktrees/cloud-d03aaa";
 const base: InboxSession = {

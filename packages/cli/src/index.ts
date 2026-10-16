@@ -21128,7 +21128,7 @@ workflow
   .command("validate <file>")
   .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
-    const { parseWorkflowSource, validateWorkflow } = await import("./workflow/parser.js");
+    const { graphDiff, graphExtends, parseWorkflowFile, parseWorkflowSource, validateWorkflow } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
 
     const resolved = resolveWorkflowSource(file);
@@ -21137,12 +21137,25 @@ workflow
       process.exit(1);
     }
 
-    const graph = parseWorkflowSource(resolved.source, resolved.dir);
+    let graph: ReturnType<typeof parseWorkflowSource>;
+    try {
+      graph = parseWorkflowSource(resolved.source, resolved.dir);
+    } catch (err) {
+      console.error(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
     const errors = validateWorkflow(graph);
 
     console.log(`Workflow: ${graph.name}`);
     if (graph.goal) console.log(`Goal: ${graph.goal}`);
     console.log(`Nodes: ${graph.nodes.size}, Edges: ${graph.edges.length}`);
+    // A variant: the base it is read on top of, and what it does differently.
+    const ext = resolved.dir ? graphExtends(resolved.source) : undefined;
+    if (ext) {
+      const d = graphDiff(parseWorkflowFile(path.resolve(resolved.dir!, ext)), graph);
+      console.log(`Extends: ${ext}`);
+      for (const [k, ids] of Object.entries(d)) if (ids.length) console.log(`  ${k.padEnd(8)} ${ids.join(", ")}`);
+    }
     console.log();
 
     for (const [id, node] of graph.nodes) {
