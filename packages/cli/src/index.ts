@@ -3411,9 +3411,21 @@ program
           session_id: sessionId,
           owner: member?.trim() || "me",
         });
+    // Symmetric with `own` (which notes "already an owner"): a plain green ✓ hid
+    // a silent no-op. `disown` with no member removes YOU, so running it as a
+    // non-owner — e.g. a bot that parked the session on someone else — changed
+    // nothing yet still looked like success. Owners are a set, so we can't just
+    // "remove the one owner"; instead, surface the no-op and name the fix.
+    const removedNothing = !opts.all && !(result.removed?.length > 0);
+    const note = removedNothing
+      ? ` ${c.dim}(${member?.trim() ? "not an owner" : "you're not an owner"}${
+          result.owners?.length ? " — name one or --all to clear" : ""
+        })${c.reset}`
+      : "";
     console.log(
-      `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
+      `${removedNothing ? `${c.yellow}•` : `${c.green}✓`}${c.reset} ` +
+      `${c.cyan}${result.short_id || sessionId}${c.reset} ` +
+      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}`
     );
   });
 
