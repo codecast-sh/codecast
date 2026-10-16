@@ -359,6 +359,7 @@ import type * as orgChannels from "../orgChannels.js";
 import type * as orgGoals from "../orgGoals.js";
 import type * as orgHandoff from "../orgHandoff.js";
 import type * as orgHealth from "../orgHealth.js";
+import type * as orgInbox from "../orgInbox.js";
 import type * as orgInit from "../orgInit.js";
 import type * as orgLine from "../orgLine.js";
 import type * as orgLineMerge from "../orgLineMerge.js";
@@ -848,6 +849,7 @@ declare const fullApi: ApiFromModules<{
   orgGoals: typeof orgGoals;
   orgHandoff: typeof orgHandoff;
   orgHealth: typeof orgHealth;
+  orgInbox: typeof orgInbox;
   orgInit: typeof orgInit;
   orgLine: typeof orgLine;
   orgLineMerge: typeof orgLineMerge;

@@ -35,7 +35,7 @@ import { callModel, momentForTry, repoRoot } from "./judgingCommand.js";
 import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, rulingsShown, type ExpectationsBrief, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
 import { parseExtractorHeader, type MomentRecord } from "@codecast/shared/contracts/moments";
 import { isJudgeCaseKey, type CaseTarget } from "@codecast/shared/contracts/judgeReview";
-import { caseMoved, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard, type JudgeFixCard, type JudgeFixCase, type JudgeFixKept, type JudgeFixRest } from "@codecast/shared/contracts/judgeFix";
+import { caseMoved, restEmptied, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard, type JudgeFixCard, type JudgeFixCase, type JudgeFixKept, type JudgeFixRest } from "@codecast/shared/contracts/judgeFix";
 
 function fail(message: string, code = 2): never {
   console.error(fmt.error(message));
@@ -800,7 +800,7 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
         console.log(`  controls  ${controlsG.moments} moments: found ${controlsG.base}/${controlsG.runs} (${pct(controlsG.base, controlsG.runs)}) -> ${controlsG.arm}/${controlsG.runs} (${pct(controlsG.arm, controlsG.runs)})`);
         for (const c of cases) console.log(`    ${c.moment}${c.twins?.length ? ` (+${c.twins.map((t) => t.moment).join(", ")})` : ""} ${c.expectation}: ${c.base}/${c.reps} -> ${c.arm}/${c.reps}${caseMoved(c) ? "" : "  not moved"}`);
         if (restRows.length) console.log(`  waiting proposals rest on`);
-        for (const r of restRows) console.log(`    ${r.card} (${r.problem}) ${r.finding} on ${r.moment}: ${r.base}/${r.reps} -> ${r.arm}/${r.reps}${caseMoved(r) ? "  EMPTIED" : ""}`);
+        for (const r of restRows) console.log(`    ${r.card} (${r.problem}) ${r.finding} on ${r.moment}: ${r.base}/${r.reps} -> ${r.arm}/${r.reps}${restEmptied(r) ? "  EMPTIED" : ""}`);
         if (stopped) console.log(fmt.warning(`  ${stopped}`));
         console.log(`  card: ${path.join(dir, "judge-fix.json")}`);
       }

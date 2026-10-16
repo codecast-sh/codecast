@@ -523,6 +523,19 @@ export function graphHash(graph: WorkflowGraph): string {
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 
+/** How a variant differs from its base, by node id: what it changes, adds, removes and routes anew. */
+export function graphDiff(base: WorkflowGraph, variant: WorkflowGraph): { changes: string[]; adds: string[]; removes: string[]; routes: string[] } {
+  const same = (a: object[], b: object[]) => JSON.stringify(a.map(sortedAttrs)) === JSON.stringify(b.map(sortedAttrs));
+  const out = (g: WorkflowGraph, id: string) => g.edges.filter((e) => e.from === id);
+  const ids = [...variant.nodes.keys()];
+  return {
+    changes: ids.filter((id) => base.nodes.has(id) && !same([base.nodes.get(id)!], [variant.nodes.get(id)!])),
+    adds: ids.filter((id) => !base.nodes.has(id)),
+    removes: [...base.nodes.keys()].filter((id) => !variant.nodes.has(id)),
+    routes: ids.filter((id) => base.nodes.has(id) && !same(out(base, id), out(variant, id))),
+  };
+}
+
 // Each station's own hash (LE14): the node as parsed with the edges leaving
 // it, so two versions of a graph say which stations changed (a prompt edit,
 // a new route) rather than only that something did.

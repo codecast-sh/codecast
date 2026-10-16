@@ -3,8 +3,9 @@ import "fake-indexeddb/auto";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { replaceGlobals } from "../../../test-helpers/globals";
+import { offlineConvexClient } from "../../../test-helpers/offlineConvex";
 
 const { JSDOM } = require("jsdom");
 const { spyOn } = require("bun:test");
@@ -34,7 +35,7 @@ await hydrated;
 hydrationSpy.mockRestore();
 useInboxStore.getState()._setDispatch(async () => null);
 const { IssueSyncSources } = await import("../IssueSyncSources");
-const client = new ConvexReactClient("https://unused.convex.cloud");
+const client = offlineConvexClient("https://unused.convex.cloud");
 const root = createRoot(document.getElementById("root")!);
 
 function Screen() {

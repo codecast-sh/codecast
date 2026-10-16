@@ -5,7 +5,7 @@
 // this order: what changes, whether it worked (the ruled cases stop being
 // found, the kept findings stay), the edited lines, and each case.
 import type { ReactNode } from "react";
-import { caseMoved, type JudgeFixCard, type JudgeFixCase, type JudgeFixGroup } from "@codecast/shared/contracts/judgeFix";
+import { caseMoved, restEmptied, type JudgeFixCard, type JudgeFixCase, type JudgeFixGroup } from "@codecast/shared/contracts/judgeFix";
 import { cn } from "../../lib/utils";
 import { CardFacts, type CardFactsProps } from "../decisions/CardFacts";
 
@@ -83,13 +83,13 @@ function CaseList({ title, cases, moved }: { title: string; cases: JudgeFixCase[
 /** The findings waiting proposals rest on, each measured by name: one the edit stops finding is struck through in red. */
 function Rests({ rests }: { rests: NonNullable<JudgeFixCard["ab"]["rests"]> }) {
   if (!rests.length) return null;
-  const emptied = rests.filter(caseMoved).length;
+  const emptied = rests.filter(restEmptied).length;
   return (
     <section className="mt-6" data-judge-fix-rests>
       <h2 className={cn("text-[11px] font-medium uppercase tracking-wide", emptied ? "text-sol-red" : "text-sol-text-dim")}>Waiting proposals · {emptied ? `${emptied} emptied` : `${rests.length} kept`}</h2>
       <ul className="mt-1.5 divide-y divide-sol-border/30 border-y border-sol-border/30">
         {rests.map((r) => {
-          const gone = caseMoved(r);
+          const gone = restEmptied(r);
           return (
             <li key={r.card} className="grid grid-cols-[4rem_1fr_auto] items-baseline gap-x-3 py-2 text-[12px]" data-judge-fix-rest={gone ? "emptied" : "kept"}>
               <span className="font-mono text-[11px] text-sol-text-muted">{r.card}</span>

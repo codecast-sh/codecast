@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { GateResult } from '@platform/evals';
@@ -7,6 +7,7 @@ import { orgEveryToMs } from '@codecast/shared/contracts/orgProposal';
 import { briefBudget, briefBudgetWords, parsePlaybook, wakeTuneRefusal } from '@codecast/shared/contracts/rolePlaybook';
 
 import { gate, type AgentResult } from '../../surface';
+import { gradeFilings } from '../orgReview/grade';
 
 const DAY_MS = 86_400_000;
 
@@ -38,6 +39,28 @@ export interface StandingLabel {
   playbook?: PlaybookLabel;
   /** Hands-on work in its area: `handoff`, it gives the work to a session (one it starts, or one already on it by `cast send`); `none`, it starts nothing (a role that does not start work on its own, or a question at its own level). Either way it does not do the work itself. */
   delegates?: 'handoff' | 'none';
+  /** The person's loose sessions (org-staffing.md S43): where each that belongs elsewhere may go, and the ones that stay. Read from the specs the turn names. */
+  files?: Record<string, string[]>;
+  keep?: string[];
+}
+
+/** Every file_session change a turn names, from the proposal specs in its messages and the files it wrote. */
+export function filingsNamed(texts: string[]): Array<{ change: { kind: 'file_session'; session: string; to: string } }> {
+  const out: Array<{ change: { kind: 'file_session'; session: string; to: string } }> = [];
+  for (const text of texts) for (const m of text.matchAll(/\{[^{}]*"kind"\s*:\s*"file_session"[^{}]*\}/g)) {
+    try { const c = JSON.parse(m[0]); if (c.session && c.to) out.push({ change: c }); } catch { /* a fragment that is no JSON is no filing */ }
+  }
+  return out;
+}
+
+/** The JSON files a turn wrote in its own directory: a spec it named with `cast org propose --spec <file>`. */
+const specFilesOf = (a: AgentResult): string[] => (existsSync(a.runSubdir) ? readdirSync(a.runSubdir).filter((f) => f.endsWith('.json')).map((f) => readFileSync(join(a.runSubdir, f), 'utf8')) : []);
+
+function filingGate(texts: string[], label: Pick<StandingLabel, 'files' | 'keep'>): GateResult {
+  const f = gradeFilings(filingsNamed(texts), { must_not_close: [], should_close: [], name_it: [], never_name: [], files: label.files, keep: label.keep });
+  const want = Object.keys(label.files ?? {}).length;
+  const pass = !f.wrong.length && f.right.length === want;
+  return gate('files-sessions', pass, f.wrong.length ? `filed ${f.wrong.join('; ')}` : want ? `${f.right.length} of ${want} filed where they belong${f.missed.length ? `; missed ${f.missed.join(', ')}` : ''}` : 'filed nothing, as it should');
 }
 
 /** A playbook a check must leave behind, each key held only when named. */
@@ -283,6 +306,7 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
     const attempted = agents.flatMap((a) => callsByTurn(a.calls).slice(from - 1).flat()).filter((l) => l.startsWith('REFUSED ')).map((l) => l.slice('REFUSED '.length).trim());
     gates.push(delegatesGate(writes, attempted, ownWorkCalls(agents, from), label.delegates));
   }
+  if (label.files || label.keep) gates.push(filingGate([...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...agents.flatMap(specFilesOf), ...extra], label));
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
 }

@@ -3318,20 +3318,14 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 .ch-head-slack-glyph { width: 9px; height: 9px; color: var(--sol-text-dim); }
 .ch-head-slack-glyph-warn { color: var(--sol-orange); }
 
-/* Per-line mark, beside the time. */
+/* Per-line glyph, beside the time; its title names it. */
 .ch-slack-mark {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  /* 10.5px in text-muted: this is the one label whose job is provenance, so
-   * it keeps AA contrast where the dim hover time does not need to. */
-  font-size: 10.5px;
-  line-height: 14px;
+  align-self: center;
   color: var(--sol-text-muted);
-  text-decoration: none;
-  white-space: nowrap;
 }
-a.ch-slack-mark:hover { color: var(--sol-text); text-decoration: underline; }
+a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-mark-local { color: var(--sol-text-dim); opacity: 0.8; }
 .ch-slack-chip {
   border-color: color-mix(in srgb, var(--sol-text-muted) 45%, transparent);

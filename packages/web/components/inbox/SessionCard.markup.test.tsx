@@ -10,10 +10,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { MemoryRouter } from "react-router";
 import { mockInboxStore } from "../__tests__/mockInboxStore";
 import type { InboxSession } from "../../store/inboxStore";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 process.env.TZ = "UTC";
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
@@ -51,7 +52,7 @@ const readState = mockInboxStore(() => ({
 
 const { SessionCard } = await import("./SessionCard");
 
-const convex = new ConvexReactClient("https://example.convex.cloud");
+const convex = offlineConvexClient("https://example.convex.cloud");
 
 const base: InboxSession = {
   _id: "c1",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { caseMoved, fisherOneSided, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard } from "./judgeFix";
+import { caseMoved, fisherOneSided, restEmptied, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard } from "./judgeFix";
 import { isJudgeCaseKey, isJudgeProblem } from "./judgeReview";
 
 describe("a problem of cases against a judge takes the judge route", () => {
@@ -68,5 +68,24 @@ describe("a fix that empties a waiting proposal (tc-44)", () => {
     expect(judgeFixVerdict(ruled, controls)).toBe("better");
     expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3 }])).toBe("better");
     expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3 }, { base: 4, arm: 0 }])).toBe("empties_proposal");
+  });
+});
+
+describe("restEmptied: a waiting proposal loses its evidence only when the edit separates from it", () => {
+  test("draws on either side move nothing", () => {
+    expect(restEmptied({ base: 1, arm: 0, reps: 5 })).toBe(false);
+    expect(restEmptied({ base: 4, arm: 2, reps: 5 })).toBe(false);
+    expect(restEmptied({ base: 3, arm: 0, reps: 5 })).toBe(false);
+  });
+  test("a finding the edit stops filing empties it", () => {
+    expect(restEmptied({ base: 5, arm: 0, reps: 5 })).toBe(true);
+    expect(restEmptied({ base: 4, arm: 0, reps: 5 })).toBe(true);
+    expect(restEmptied({ base: 5, arm: 1, reps: 5 })).toBe(true);
+  });
+  test("the verdict follows it: ct-60174's rests (4 to 2, 1 to 0) leave a separated fix better", () => {
+    const ruled = judgeFixGroup(2, 10, 7, 0, "fewer");
+    const controls = judgeFixGroup(10, 50, 42, 43, "more");
+    expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 2, reps: 5 }, { base: 1, arm: 0, reps: 5 }, { base: 5, arm: 5, reps: 5 }])).toBe("better");
+    expect(judgeFixVerdict(ruled, controls, [{ base: 5, arm: 0, reps: 5 }])).toBe("empties_proposal");
   });
 });
