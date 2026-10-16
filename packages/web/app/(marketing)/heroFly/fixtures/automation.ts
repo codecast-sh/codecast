@@ -180,9 +180,9 @@ export function workflowRun(now: number, phase: RunPhase) {
 /** The lead's pinned state: handing the change to the trigger's run, then waiting at its gate. */
 export function pinnedState(phase: RunPhase): { text: string; status: string; messages: number } {
   if (phase === "gate" || phase === "rearmed") {
-    return { text: `Waiting on review of ${OBJECTS.task.shortId}\nStatus: implement and verify passed\nNext: merge once someone approves the gate`, status: "blocked", messages: 71 };
+    return { text: `Waiting on review of ${OBJECTS.task.shortId}\nYou: approve the review gate to merge\nDone: implement · verify passed`, status: "blocked", messages: 71 };
   }
-  return { text: `${OBJECTS.task.title}\nStatus: the CI trigger runs it through implement, verify and review\nNext: answer the review gate`, status: "working", messages: 68 };
+  return { text: `${OBJECTS.task.title}\nNext: the CI trigger runs it through implement, verify and review · then the review gate`, status: "working", messages: 68 };
 }
 
 export const entities: Record<string, EntityFixture> = {};
