@@ -5648,6 +5648,8 @@ export default defineSchema({
       error: v.optional(v.string()),
       at: v.number(),
     }))),
+    // Which of the manifest's secrets the author has set, and when (modSecrets.ts); the values live in mod_secrets.
+    secrets_set: v.optional(v.array(v.object({ name: v.string(), at: v.number() }))),
     rev: v.number(),
     version: v.number(),
     enabled: v.boolean(),
@@ -5696,6 +5698,17 @@ export default defineSchema({
     .index("by_workspace_updated", ["workspace", "updated_at"])
     .index("by_short_id", ["short_id"])
     .index("by_client_key", ["client_key"]),
+
+  // A mod's secrets (manifest `secrets`): encrypted values its author set,
+  // attached on the server to requests bound for their declared origins
+  // (modServer.ts), never sent to a browser.
+  mod_secrets: defineTable({
+    mod_id: v.id("mods"),
+    name: v.string(),
+    value_enc: v.string(),
+    set_by: v.id("users"),
+    updated_at: v.number(),
+  }).index("by_mod_name", ["mod_id", "name"]),
 
   // What a mod's local half published ($.publish): one value per mod and key,
   // the latest write wins. The web syncs these into the store, so the
