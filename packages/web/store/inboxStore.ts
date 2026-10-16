@@ -33,7 +33,7 @@ import {
 import { rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
-import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
+import { declareViewNav, freshHomeLaunchPending, hasViewNavigated, recordNavEvent, settleFreshHomeLaunch, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks, type PendingEntry } from "./syncProtocol";
 import { syncTransaction } from "./syncTransaction";
 import { installStoreListenerCensus } from "./storeListenerCensus";
@@ -241,6 +241,7 @@ import { defaultAgentType } from "../lib/defaultAgent";
 import { retryHostedStart } from "../lib/startHostedConversation";
 import { isHostedUi, laneOf, simpleModeAllowed } from "../components/simple/lanePaths";
 import { readLaneHint, writeLaneHint, type LaneHint } from "../components/simple/laneBoot";
+import type { SessionMapLayout, SessionMapView } from "../components/sessionMap/sessionMapModel";
 import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
@@ -492,6 +493,8 @@ export type PlanItem = {
   priority?: "p0" | "p1" | "p2" | "p3";
   owner_role_id?: string;
   non_goals?: string[];
+  /** The Project the plan is filed under (server row field). */
+  project_id?: string;
   status: string;
   source: string;
   // Workspace: set = that team's plan, unset = personal (lib/workspaceScope).
@@ -1287,6 +1290,8 @@ export type TaskItem = {
   workflow_run_id?: string;
   workflow_node_id?: string;
   project_path?: string;
+  /** The Project the task is filed under (server row field). */
+  project_id?: string;
   external?: TaskExternal;
 };
 
@@ -1405,6 +1410,8 @@ export type SessionDecisionItem = {
   trial?: boolean;
   holder?: { kind: "user" | "role"; id: string };
   holder_key?: string;
+  /** A person handed it to a teammate or a role (convex passCore). */
+  passed_to?: { kind: "user" | "role"; id: string; by: string; at: number };
   asked_user_ids?: string[];
   hops?: DecisionHop[];
   answered_by?: DecisionParty;
@@ -1919,6 +1926,14 @@ export type ClientUI = {
   // The /org chart's "Expand all": every role and session card opened in
   // place. Stamped LWW like org_view.
   org_expand_all?: boolean;
+  // The session map's arrangement (components/sessionMap): the piles the
+  // person made, where each pile and loose card sits, and which piles are
+  // folded. Stamped LWW: the desk is the same on every device.
+  session_map?: SessionMapLayout;
+  // How the session map is sliced: grouping, sort, pile order and filters.
+  // Kept apart from the arrangement so a view change never enters its undo
+  // history. Stamped LWW like the arrangement.
+  session_map_view?: SessionMapView;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -4520,6 +4535,192 @@ export function groupSessionsByPlan(
   return { planGroups: primaryGroups, projectGroups };
 }
 
+// The org lenses: "By project", "By goal" and "By reports" regroup the same
+// active set the label and plan lenses do, on the same skeleton
+// (groupSessionsBy), keyed on what the session's work is filed under. Unbound
+// sessions fall to the repo-folder tier exactly as in the other lenses.
+export type OrgLensMode = "project" | "goal" | "reports";
+export const ORG_LENS_MODES: readonly OrgLensMode[] = ["project", "goal", "reports"];
+export function isOrgLensMode(mode: InboxViewMode): mode is OrgLensMode {
+  return (ORG_LENS_MODES as readonly string[]).includes(mode);
+}
+
+type LensRole = {
+  _id: string;
+  name: string;
+  status: string;
+  reports_to: { kind: "user"; user_id: string } | { kind: "role"; role_id: string };
+  standing?: { conversation_id?: string } | null;
+};
+export type OrgLensSources = {
+  tasks: Record<string, Pick<TaskItem, "project_id">>;
+  plans: Record<string, Pick<PlanItem, "project_id">>;
+  projects: Record<string, Pick<ProjectItem, "_id" | "title">>;
+  initiatives: Record<string, { _id: string; title: string; status: string; priority?: string; project_ids: string[]; parent_initiative_id?: string }>;
+  roles: readonly LensRole[];
+  meId: string | null;
+  // Every cached row, for a report's standing session: an anchor lives in its
+  // own space and is rarely in the active set, but its report always leads
+  // with it.
+  sessions: Record<string, InboxSession>;
+};
+export type OrgLensGroup = { key: string; label: string; items: InboxSession[]; roleId?: string };
+
+type OrgLensState = {
+  tasks: OrgLensSources["tasks"];
+  plans: OrgLensSources["plans"];
+  projects: OrgLensSources["projects"];
+  initiatives: OrgLensSources["initiatives"];
+  orgTree: { roles: readonly LensRole[] } | null;
+  currentUser?: any;
+  sessions: Record<string, InboxSession>;
+};
+export function orgLensSourcesOf(state: Partial<OrgLensState> & { sessions: Record<string, InboxSession> }): OrgLensSources {
+  return {
+    tasks: state.tasks ?? {}, plans: state.plans ?? {}, projects: state.projects ?? {}, initiatives: state.initiatives ?? {},
+    roles: state.orgTree?.roles ?? [],
+    meId: state.currentUser?._id?.toString?.() ?? null,
+    sessions: state.sessions,
+  };
+}
+
+// The real Project a session's work is filed under: its task's, else its
+// plan's. Only a project the store holds counts, so every group has a name.
+export function sessionProjectId(s: InboxSession, src: Pick<OrgLensSources, "tasks" | "plans" | "projects">): string | null {
+  const id = (s.active_task && src.tasks[s.active_task._id]?.project_id) || (s.active_plan && src.plans[s.active_plan._id]?.project_id) || null;
+  return id && src.projects[id] ? id : null;
+}
+
+const OPEN_GOAL = new Set(["proposed", "planned", "active"]);
+const GOAL_PRIORITY_RANK: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 };
+
+// project id → the top-level goal it serves. A project under a sub-goal rolls
+// up to that sub-goal's parent: the lens shows the few goals a person steers.
+// A project in several goals files under the highest-priority one.
+function goalOfProjectMap(initiatives: OrgLensSources["initiatives"]): Map<string, string> {
+  const topOf = (g: OrgLensSources["initiatives"][string]) => {
+    const parent = g.parent_initiative_id ? initiatives[g.parent_initiative_id] : undefined;
+    return parent && OPEN_GOAL.has(parent.status) ? parent : g;
+  };
+  const rank = (g: { priority?: string }) => GOAL_PRIORITY_RANK[g.priority ?? ""] ?? 9;
+  const out = new Map<string, string>();
+  for (const g of Object.values(initiatives)) {
+    if (!OPEN_GOAL.has(g.status)) continue;
+    const top = topOf(g);
+    for (const pid of g.project_ids) {
+      const cur = out.get(pid);
+      if (!cur || rank(top) < rank(initiatives[cur])) out.set(pid, top._id);
+    }
+  }
+  return out;
+}
+
+// role id → the viewer's direct report it sits under (itself, when it reports
+// to the viewer), or null for a role outside the viewer's line.
+function reportRootResolver(roles: readonly LensRole[], meId: string | null): (roleId: string | null | undefined) => string | null {
+  const byId = new Map(roles.map((r) => [String(r._id), r]));
+  const memo = new Map<string, string | null>();
+  return (roleId) => {
+    if (!roleId || !meId) return null;
+    const start = String(roleId);
+    if (memo.has(start)) return memo.get(start)!;
+    let cur = byId.get(start);
+    let root: string | null = null;
+    for (let depth = 0; cur && depth < 32; depth++) {
+      if (cur.reports_to.kind === "user") {
+        root = cur.reports_to.user_id === meId && cur.status !== "retired" ? String(cur._id) : null;
+        break;
+      }
+      cur = byId.get(cur.reports_to.role_id);
+    }
+    memo.set(start, root);
+    return root;
+  };
+}
+
+const bySizeThenLabel = (a: OrgLensGroup, b: OrgLensGroup) => b.items.length - a.items.length || a.label.localeCompare(b.label);
+
+export function groupSessionsForOrgLens(
+  mode: OrgLensMode,
+  items: InboxSession[],
+  src: OrgLensSources,
+): { groups: OrgLensGroup[]; projectGroups: Array<{ name: string; items: InboxSession[] }> } {
+  if (mode === "reports") {
+    const rootOf = reportRootResolver(src.roles, src.meId);
+    const { primaryGroups, projectGroups } = groupSessionsBy(
+      items,
+      (sess) => rootOf(sess.standing_role_id ?? sess.org_role_id),
+      // Reports in the org's own order; each leads with its standing session,
+      // fetched from the cache when the inbox has it set aside.
+      (byRole) => src.roles.flatMap((role) => {
+        const roleId = String(role._id);
+        if (rootOf(roleId) !== roleId) return [];
+        const leadId = role.standing?.conversation_id;
+        const rest = (byRole.get(roleId) ?? []).filter((x) => x._id !== leadId).sort(byActivity);
+        const lead = (leadId && byRole.get(roleId)?.find((x) => x._id === leadId)) || (leadId ? src.sessions[leadId] : undefined);
+        const leadRow = lead && !lead.is_pinned && !lead.inbox_killed_at ? [lead] : [];
+        const list = [...leadRow, ...rest];
+        return list.length ? [{ key: roleId, label: role.name, items: list, roleId }] : [];
+      }),
+    );
+    return { groups: primaryGroups, projectGroups };
+  }
+  const goalOf = mode === "goal" ? goalOfProjectMap(src.initiatives) : null;
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    (sess) => {
+      const pid = sessionProjectId(sess, src);
+      if (!pid) return null;
+      const gid = goalOf?.get(pid);
+      return gid ? `goal:${gid}` : `project:${pid}`;
+    },
+    (byKey) => {
+      const groups = Array.from(byKey.entries()).map(([key, list]): OrgLensGroup => {
+        const [kind, id] = key.split(":");
+        const label = kind === "goal" ? src.initiatives[id].title : src.projects[id].title;
+        return { key, label, items: list.sort(byActivity) };
+      });
+      // Goals lead (highest priority first), then projects that serve none.
+      const rankOf = (g: OrgLensGroup) => g.key.startsWith("goal:") ? GOAL_PRIORITY_RANK[src.initiatives[g.key.slice(5)].priority ?? ""] ?? 9 : 10;
+      return groups.sort((a, b) => rankOf(a) - rankOf(b) || bySizeThenLabel(a, b));
+    },
+  );
+  return { groups: primaryGroups, projectGroups };
+}
+
+// What the org lenses read, as a wake signature: the panel re-renders when a
+// fact a lens groups by changes, never on the rest of a task's churn. The
+// task and goal collections only count while a lens is up; the roles always
+// do (the menu offers "By reports" off them).
+const lensTaskSig = makeCollectionSig((t: { project_id?: string }) => t.project_id ?? "");
+const lensProjectSig = makeCollectionSig((p: { title?: string }) => p.title ?? "");
+const lensGoalSig = makeCollectionSig((g: OrgLensSources["initiatives"][string]) =>
+  `${g.title}|${g.status}|${g.priority ?? ""}|${g.parent_initiative_id ?? ""}|${g.project_ids.join(",")}`);
+const lensRoleSigs = new WeakMap<object, string>();
+function lensRoleSig(roles: readonly LensRole[]): string {
+  let sig = lensRoleSigs.get(roles);
+  if (sig === undefined) {
+    sig = roles.map((r) => `${r._id}|${r.name}|${r.status}|${r.reports_to.kind === "user" ? r.reports_to.user_id : r.reports_to.role_id}|${r.standing?.conversation_id ?? ""}`).join("\n");
+    lensRoleSigs.set(roles, sig);
+  }
+  return sig;
+}
+export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } } }): string {
+  const roles = lensRoleSig(state.orgTree?.roles ?? []);
+  if (!isOrgLensMode(resolveInboxViewMode(state.clientState.ui))) return roles;
+  return [roles, lensTaskSig(state.tasks), lensTaskSig(state.plans), lensProjectSig(state.projects), lensGoalSig(state.initiatives)].join("\u0001");
+}
+
+// Whether a lens has anything to group by, so the menu and the cycle offer
+// only lenses that would change the list.
+export function orgLensAvailable(mode: OrgLensMode, items: InboxSession[], src: OrgLensSources): boolean {
+  if (mode === "reports") {
+    return !!src.meId && src.roles.some((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === src.meId);
+  }
+  if (mode === "goal" && !Object.values(src.initiatives).some((g) => OPEN_GOAL.has(g.status) && g.project_ids.length > 0)) return false;
+  return items.some((x) => !!sessionProjectId(x, src));
+}
+
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
 // a kept session that isn't in the cache — an old favorite the inbox window never
 // loaded. Enough for the shelf row + navigation; clicking hydrates the rest.
@@ -5069,6 +5270,9 @@ export function computeVisualOrder(state: {
   currentUser?: { _id?: string } | null;
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
+  // What the org lenses group by (orgLensSourcesOf); optional for callers
+  // (tests) that model no org.
+} & Partial<Omit<OrgLensState, "sessions" | "currentUser">> & {
   // Ephemeral schedule projection published by GlobalSessionPanel (see
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
   // TRIGGERS rows, and so trigger-mode nav walks the panel's trigger-group
@@ -5164,6 +5368,16 @@ export function computeVisualOrder(state: {
       ...pinned,
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (isOrgLensMode(mode)) {
+    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
+    const rest = base.filter((s) => !s.is_pinned);
+    const { groups, projectGroups } = groupSessionsForOrgLens(mode, rest, orgLensSourcesOf(state));
+    return [
+      ...pinned,
+      ...groups.flatMap((g) => (collapsed[`${mode}_${g.key}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`${mode}proj_${g.name}`] ? [] : g.items)),
     ];
   }
   if (mode === "trigger") {
@@ -6178,6 +6392,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // viewer, leaves "Handled without you", and the reopenDecision side effect
   // does the server write.
   reopenDecision: (decisionId: string) => void;
+  // Hands an open question to a teammate (it leaves this viewer's queue) or a
+  // role (it stays here, held by the role); the passDecision side effect.
+  passDecision: (decisionId: string, to: { kind: "user" | "role"; id: string }) => void;
   // Stack verbs (D5): the draft moves first, named side effects follow.
   reorderStack: (stackId: string, decisionIds: string[]) => void;
   removeFromStack: (stackId: string, decisionId: string) => void;
@@ -7162,7 +7379,7 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized &&
-          !hasViewNavigated()) {
+          !hasViewNavigated() && !freshHomeLaunchPending()) {
         // A URL that names a conversation owns the view (bootLinkTarget).
         const linked = bootLinkTarget(table);
         if (linked !== undefined) {
@@ -9449,6 +9666,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
+    // Answered from a surface that read the decision's document (a session opened on it, its page): adopt that copy first.
+    adoptDecisionDraft(this, decisionId);
     answerDecisionDraft(this, decisionId, answer);
   }),
   // The words paint at once as a local echo; the discussDecision side effect
@@ -9474,9 +9693,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // not inside answerDecision, because the answer reaches the server only as
   // field patches on a row that already exists.
   adoptDecision: sync(function (this: Draft, decisionId: string) {
-    const detail = this.decisionDetails[decisionId];
-    if (this.sessionDecisions[decisionId] || !detail || !mayAnswerFromDocument(detail, String(this.currentUser?._id ?? ""))) return;
-    this.sessionDecisions[decisionId] = { ...detail.decision };
+    adoptDecisionDraft(this, decisionId);
   }),
 
   // One Ship control (docs/architecture/ship.md): every Ship press, the
@@ -9520,6 +9737,29 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete this.handledDecisions[decisionId];
     const detail = this.decisionDetails[decisionId];
     if (detail && row) detail.decision = { ...row };
+  }),
+  passDecision: action(function (this: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }) {
+    const row = this.sessionDecisions[decisionId] ?? this.decisionDetails[decisionId]?.decision;
+    if (!row || row.status !== "pending") return;
+    const now = Date.now();
+    row.passed_to = { ...to, by: String(this.currentUser?._id ?? ""), at: now };
+    row.holder = { kind: to.kind, id: to.id };
+    row.holder_key = `${to.kind}:${to.id}`;
+    if (to.kind === "user") row.asked_user_ids = [to.id];
+    else if (!(row.hops ?? []).some((h) => h.role_id === to.id)) row.hops = [...(row.hops ?? []), { role_id: to.id, at: now }];
+    row.updated_at = now;
+    const detail = this.decisionDetails[decisionId];
+    if (!detail) return;
+    if (detail.decision !== row) detail.decision = { ...row };
+    if (to.kind === "user") {
+      const m = (this.teamMembers ?? []).find((u: any) => String(u._id) === to.id);
+      detail.asked_users = [{ _id: to.id, name: m?.name ?? m?.email ?? "a teammate" }];
+      return;
+    }
+    const r = this.orgTree?.roles.find((x) => String(x._id) === to.id);
+    const role = r ? { _id: String(r._id), short_id: r.short_id, name: r.name, handle: r.handle, status: r.status } : null;
+    detail.holder_role = role;
+    if (!detail.ladder.some((h) => h.role_id === to.id)) detail.ladder = [...detail.ladder, { role_id: to.id, at: now, role }];
   }),
   reorderStack: action(function (this: Draft, stackId: string, decisionIds: string[]) {
     const stack = this.decisionStacks[stackId];
@@ -9627,10 +9867,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // Trigger data lives in the panel's Convex subscription; its published nav
     // bridge is the store's only sight of whether any triggers exist.
     const hasTriggers = (state.scheduleNavSets?.triggerOrder?.length ?? 0) > 0;
+    const lensSrc = orgLensSourcesOf(state);
+    const lensRows = Object.values(state.sessions) as InboxSession[];
     const cycle: Array<InboxViewMode> = [
       "grouped", "recent", "time",
       ...(hasBuckets ? ["bucket" as const] : []),
       ...(hasPlans ? ["plan" as const] : []),
+      ...ORG_LENS_MODES.filter((m) => orgLensAvailable(m, lensRows, lensSrc)),
       ...(hasTriggers ? ["trigger" as const] : []),
     ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
@@ -14569,6 +14812,13 @@ export function answersForOthers(detail: DecisionDetailItem, meId: string): bool
  * bound to a run, the answer goes into the session as a message. The
  * answerDecision action and a Ship press on a change card both answer here.
  */
+/** A decision's document copy becomes its row when the viewer may answer it and holds no queue row (adoptDecision). */
+function adoptDecisionDraft(draft: Draft, decisionId: string): void {
+  const detail = draft.decisionDetails[decisionId];
+  if (draft.sessionDecisions[decisionId] || !detail || !mayAnswerFromDocument(detail, String(draft.currentUser?._id ?? ""))) return;
+  draft.sessionDecisions[decisionId] = { ...detail.decision };
+}
+
 function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
   const row = draft.sessionDecisions[decisionId];
   // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
@@ -15174,13 +15424,20 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       useInboxStore.setState({ lastFocusedConversationId: ownId });
     }
     if (!st.currentSessionId) {
-      const linked = bootLinkTarget(st.sessions);
+      // A fresh open onto the feed home goes to the new-session page
+      // (DashboardLayout opens it) rather than back to the last conversation.
+      // Decided from the address the window opened on: by now the tab shell
+      // may have put the restored tab's conversation in the address bar,
+      // which is not a link the person followed.
+      const freshHome = freshHomeLaunchPending() && !hostedHomeAsked(st.clientState?.ui) && resolveInboxHome(st.clientState?.ui) !== "board";
+      if (!freshHome) settleFreshHomeLaunch();
+      const linked = freshHome ? undefined : bootLinkTarget(st.sessions);
       const remembered = ownId ?? st.clientState?.current_conversation_id;
       // A link opens what it names; a remembered position comes back only
       // when the Assistant scope would list it (restorableIn).
       const homeAsked = linked === undefined && hostedHomeAsked(st.clientState?.ui);
       const restoreId = linked !== undefined ? linked
-        : !homeAsked && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
+        : !homeAsked && !freshHome && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
       if (homeAsked) {
         useInboxStore.setState({ showMySessions: true });
       } else if (restoreId && st.sessions[restoreId]) {
