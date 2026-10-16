@@ -37,8 +37,8 @@ export function FreshnessFigure() {
     </g>
   );
   const zones: { x: number; ink: Ink; title: string; sub: string; at: number }[] = [
-    { x: mx(0) + 6, ink: "cyan", title: "fresh", sub: "cyan pin", at: 0.4 },
-    { x: mx(MSG.aging) + 6, ink: "yellow", title: "aging", sub: "yellow pin and counter", at: 0.2 + SWEEP * (mx(MSG.aging) - X0) / W },
+    { x: mx(0) + 6, ink: "cyan", title: "fresh", sub: "just the age", at: 0.4 },
+    { x: mx(MSG.aging) + 6, ink: "yellow", title: "aging", sub: "age turns yellow", at: 0.2 + SWEEP * (mx(MSG.aging) - X0) / W },
     { x: mx(MSG.stale) + 6, ink: "red", title: "stale", sub: "hidden everywhere", at: 0.2 + SWEEP * (mx(MSG.stale) - X0) / W },
   ];
   return (
