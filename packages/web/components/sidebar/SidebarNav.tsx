@@ -295,7 +295,7 @@ export function SidebarNavView({
       </>)}
       {/* What you are working on. Org leads: the company the rest of this
           group files into, then its tasks and the docs and files around them. */}
-      <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
+      <RailHeading label="Work" isNarrow={isNarrow} />
       <div className="text-sm">
         {/* Goals and projects are work in their own right: they need no org.
             Org is the people and agent roles who carry them. */}
@@ -341,6 +341,9 @@ export function SidebarNavView({
           expanded={tasks.expanded}
           onToggle={tasks.onToggle}
           onDrill={tasks.onDrill}
+          // The Work window holds all of Work, and Tasks is where you reach
+          // for it, as Chat's row pops out the Chat window.
+          headerAction={workAction}
           icon={<TasksNavIcon />}
         />
         <NavSection
