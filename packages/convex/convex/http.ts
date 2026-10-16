@@ -4411,6 +4411,11 @@ cliRoute("/cli/moments/claim", async (ctx, body) => {
 cliRoute("/cli/moments/complete", async (ctx, body) => {
   return await ctx.runAction(api.moments.complete, body);
 }, { forwardDeviceId: true });
+// A source that judges on subscription hands its judging to the machine that
+// handed the moment in; the replies come back here (moments.judgedForCli).
+cliRoute("/cli/moments/judged", async (ctx, body) => {
+  return await ctx.runAction(api.moments.judgedForCli, body);
+}, { forwardDeviceId: true });
 cliRoute("/cli/moments/ls", async (ctx, body) => {
   return await ctx.runQuery(api.moments.listForCli, body);
 });
@@ -4455,6 +4460,14 @@ cliRoute("/cli/model/call", async (ctx, body) => {
 cliRoute("/cli/model/budget", async (ctx, body) => {
   return await ctx.runMutation(api.modelCalls.budgetForCli, body);
 });
+// `cast keys`: the person's keyboard bindings (convex/keyBindings.ts).
+cliRoute("/cli/keys/get", async (ctx, body) => {
+  return await ctx.runQuery(api.keyBindings.get, body);
+});
+cliRoute("/cli/keys/set", async (ctx, body) => {
+  return await ctx.runMutation(api.keyBindings.set, body);
+});
+
 // The goals brief the ground node reads (the-line-end-to-end.md LE5).
 cliRoute("/cli/goals/brief", async (ctx, body) => {
   return await ctx.runQuery(api.goals.brief, body);

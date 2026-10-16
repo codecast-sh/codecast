@@ -1,7 +1,7 @@
 // Mounts the ledger entry (docs/architecture/org-staffing.md S39) in jsdom on
 // cards built by the real model from synthetic rows: the sentence with its one
 // bold name, each field with what was there before, the reasons, the answers
-// (Approve, Reject, Reply and the field), the band a staged answer leaves in
+// (Adjust and Accept, the field with Reject inside it), the band a staged answer leaves in
 // their place, and every state an entry can be in before and after the send.
 // The card takes callbacks and reads no store, so nothing but the link is
 // mocked. Nothing in jsdom lays out, so a line's height is faked from its
@@ -106,7 +106,7 @@ const field = (key: string) => q(`[data-field='${key}']`);
 const struckIn = (el: HTMLElement) => Array.from(el.querySelectorAll<HTMLElement>(".line-through")).map((x) => x.textContent);
 const band = () => q("[data-staged]") as HTMLElement | null;
 
-test("a change to a project: the sentence with one bold name, the field from what it was, the reason; Approve stages a band and Undo takes it back", () => {
+test("a change to a project: the sentence with one bold name, the field from what it was, the reason; Accept stages a band and Undo takes it back", () => {
   const card = cardOf([FIRST, RAISE], "Private Network");
   const m = mount({ card, ordinal: 2, onAnswer });
   const root = q("[data-subject]");
@@ -127,16 +127,21 @@ test("a change to a project: the sentence with one bold name, the field from wha
   expect(struckIn(priority)).toEqual(["P2"]);
   expect(priority.querySelectorAll("i").length).toBe(1);
   expect(priority.previousElementSibling!.textContent).toBe("Priority");
-  // The author's reason stays in its conversation: the card holds only what is decided.
-  expect(document.body.textContent).not.toContain("Because r4.");
+  // The author's reason reads as the Why row in the field grid.
+  expect(q("[data-subject-why]").textContent).toBe("Because r4.");
+  expect(q("[data-subject-why]").previousElementSibling!.textContent).toBe("Why");
 
-  // The entry's Approve is an outline: the composer's send is the one filled button.
+  // Two answers: Adjust, an outline that opens the field, then Accept, the filled green face.
+  expect(qa("[data-subject-verdicts] button").map((b) => b.textContent)).toEqual(["Adjust", "Accept"]);
   const approve = q("[data-subject-approve]");
-  expect(approve.textContent).toBe("Approve");
-  expect(approve.style.background).toBe("");
+  expect(approve.textContent).toBe("Accept");
+  expect(approve.className).toContain("cc-btn-green");
   expect(approve.getAttribute("aria-pressed")).toBe("false");
-  expect(q("[data-subject-reject]").textContent).toBe("Reject");
-  expect(q("[data-subject-reply]").textContent).toBe("Reply");
+  expect(q("[data-subject-reply]").textContent).toBe("Adjust");
+  expect(q("[data-subject-reply]").className).toContain("cc-btn-outline");
+  expect(q("[data-subject-reply]").getAttribute("aria-expanded")).toBe("false");
+  // Reject lives only inside the open field.
+  expect(q("[data-subject-reject]")).toBeNull();
   // Nothing is decided on a press: the answer goes to the batch, and nothing else changes on the card.
   click(approve);
   expect(sent.splice(0)).toEqual([APPROVE]);
@@ -148,7 +153,7 @@ test("a change to a project: the sentence with one bold name, the field from wha
   expect(q("[data-subject-approve]")).toBeNull();
   expect(q("[data-subject-reject]")).toBeNull();
   expect(band()!.getAttribute("data-staged")).toBe("approve");
-  expect(band()!.textContent).toBe("Approved. Applies when you send.Undo");
+  expect(band()!.textContent).toBe("Accepted. Applies when you send.Undo");
   expect(band()!.getAttribute("role")).toBe("status");
   expect(band()!.className).toContain("org-pop-in");
   expect(document.body.textContent).not.toContain("on your next message");
@@ -167,15 +172,21 @@ test("a change to a project: the sentence with one bold name, the field from wha
   fire(q("[data-subject-approve]"), "keydown");
   fire(q("[data-subject-approve]"), "pointerdown");
   expect(reached).toEqual([]);
-  // No word a person could read says Accept or Skip.
-  expect(document.body.textContent).not.toMatch(/accept|skip/i);
+  // No word a person could read says Skip.
+  expect(document.body.textContent).not.toMatch(/skip/i);
   m.done();
 });
 
-test("Reject stages the band with the field inside it, asking why; the words write through as typed and show as the person's own", () => {
+test("Reject inside the Adjust field stages the band with the field inside it, asking why; the words write through as typed and show as the person's own", () => {
   const card = cardOf([FIRST, RAISE], "Private Network");
   const m = mount({ card, ordinal: 2, onAnswer });
   expect(fieldOf()).toBeNull();
+  expect(q("[data-subject-reject]")).toBeNull();
+  click(q("[data-subject-reply]"));
+  expect(sent).toEqual([]);
+  // Reject sits on the field's key line.
+  expect(q("[data-subject-reply-field] [data-subject-reject]").textContent).toBe("Reject");
+  expect(q("[data-subject-reject]").getAttribute("aria-pressed")).toBe("false");
   click(q("[data-subject-reject]"));
   expect(sent.splice(0)).toEqual([{ verdict: "reject" }]);
   m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "reject" } });
@@ -189,9 +200,17 @@ test("Reject stages the band with the field inside it, asking why; the words wri
   // The field sits in the band's area, joined under its line.
   expect(q("[data-answer-area] [data-staged]")).not.toBeNull();
   expect(q("[data-answer-area] [data-subject-reply-field]")).not.toBeNull();
+  expect(q("[data-subject-reject]").getAttribute("aria-pressed")).toBe("true");
   // Every keystroke is the batch's: the draft never lives in the card alone.
   type(ta, "P1 is too high");
   expect(sent.splice(0)).toEqual([{ verdict: "reject", text: "P1 is too high" }]);
+  // Pressed again, Reject turns the words back into a note and keeps them.
+  m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "reject", text: "P1 is too high" } });
+  click(q("[data-subject-reject]"));
+  expect(sent.splice(0)).toEqual([{ verdict: "note", text: "P1 is too high" }]);
+  m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "note", text: "P1 is too high" } });
+  expect(fieldOf()!.placeholder).toBe("What should change?");
+  m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "reject", text: "P1 is too high" } });
   // Keys in the field never reach the frame: a space does not fold the card.
   key(ta, " ");
   key(ta, "Enter", { shiftKey: true });
@@ -218,21 +237,22 @@ test("Reject stages the band with the field inside it, asking why; the words wri
   m.done();
 });
 
-test("Reply opens the field with no verdict; the first keystroke mounts the band around the same textarea; Approve then carries the words", () => {
+test("Adjust opens the field with no verdict; the first keystroke mounts the band around the same textarea; Accept then carries the words", () => {
   const card = cardOf([FIRST, RAISE], "Private Network");
   const m = mount({ card, ordinal: 2, onAnswer });
   click(q("[data-subject-reply]"));
   expect(sent).toEqual([]);
   const ta = fieldOf()!;
-  expect(ta.placeholder).toBe("Say something about this change");
+  expect(ta.placeholder).toBe("What should change?");
   expect(q("[data-subject-reply]").getAttribute("aria-expanded")).toBe("true");
+  expect(q("[data-subject-reply]").getAttribute("aria-pressed")).toBe("true");
   expect(band()).toBeNull();
   type(ta, "Cameron owns this");
   expect(sent.splice(0)).toEqual([{ verdict: "note", text: "Cameron owns this" }]);
   // The note is an answer now: the band appears, and the textarea under the caret is the same node.
   m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "note", text: "Cameron owns this" } });
   expect(band()!.getAttribute("data-staged")).toBe("note");
-  expect(band()!.textContent).toBe("Replied. Sent when you send.Undo");
+  expect(band()!.textContent).toBe("Adjust. Your words go back when you send.Undo");
   expect(fieldOf()).toBe(ta);
   expect(document.activeElement).toBe(ta);
   // An empty note is withdrawn by the batch; the field stays open all the same.
@@ -256,13 +276,13 @@ test("Reply opens the field with no verdict; the first keystroke mounts the band
   expect(sent.splice(0)).toEqual([null]);
   expect(fieldOf()).toBeNull();
   m.update({ card, ordinal: 2, onAnswer, answer: null });
-  // With a note in hand, Approve keeps the words under the approval.
+  // With a note in hand, Accept keeps the words under the approval.
   m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "note", text: "Cameron owns this, not Samvit." } });
   click(q("[data-subject-you]"));
   expect(fieldOf()!.value).toBe("Cameron owns this, not Samvit.");
   key(fieldOf()!, "Escape");
   m.update({ card, ordinal: 2, onAnswer, answer: { verdict: "approve", text: "Cameron owns this, not Samvit." } });
-  expect(band()!.textContent).toBe("Approved. Applies when you send.UndoYou: Cameron owns this, not Samvit.");
+  expect(band()!.textContent).toBe("Accepted. Applies when you send.UndoYou: Cameron owns this, not Samvit.");
   expect(q("[data-subject-you]").getAttribute("data-subject-you")).toBe("approve");
   expect(reached).toEqual([]);
   m.done();
@@ -279,14 +299,14 @@ test("the band's words per verdict, a retry, and an approval that leaves the ses
   ];
   React.act(() => root.render(h("div", null, bands)));
   expect(qa("[data-staged]").map((b) => [b.getAttribute("data-staged"), b.textContent])).toEqual([
-    ["approve", "Approved. Applies when you send.Undo"],
+    ["approve", "Accepted. Applies when you send.Undo"],
     ["approve", "Retry. Runs again when you send.Undo"],
-    ["approve", "Approved, and the sessions stay where they are. Applies when you send.Undo"],
+    ["approve", "Accepted, and the sessions stay where they are. Applies when you send.Undo"],
     ["reject", "Rejected. Sent when you send.Undo"],
-    ["note", "Replied. Sent when you send.Undo"],
+    ["note", "Adjust. Your words go back when you send.Undo"],
   ]);
   // The first word carries the verdict's ink; the rest is quiet.
-  expect(qa("[data-staged] b").map((b) => b.textContent)).toEqual(["Approved.", "Retry.", "Approved,", "Rejected.", "Replied."]);
+  expect(qa("[data-staged] b").map((b) => b.textContent)).toEqual(["Accepted.", "Retry.", "Accepted,", "Rejected.", "Adjust."]);
   expect(qa("[data-staged]")[3].querySelector("b")!.className).toContain("--ink-red");
   expect(qa("[data-staged] svg").length).toBe(4);
   React.act(() => root.unmount());
@@ -342,8 +362,8 @@ test("a charter edit draws each edit as a passage diff under one Charter label; 
   expect(blocks.length).toBe(3);
   expect(blocks.map((b) => Array.from(b.querySelectorAll("[data-diff]")).map((p) => p.getAttribute("data-diff")))).toEqual([["removed", "added"], ["added"], ["removed"]]);
   expect(blocks.map((b) => b.getAttribute("data-passage-diff"))).toEqual(["2", "1", "1"]);
-  // One label for the run of edits; the author's reason follows as their note, outside the grid.
-  expect(Array.from(q("[data-subject-group]").querySelectorAll("dt")).map((d) => d.textContent)).toEqual(["Charter", "", ""]);
+  // One label for the run of edits; the author's reason closes the grid as its Why row.
+  expect(Array.from(q("[data-subject-group]").querySelectorAll("dt")).map((d) => d.textContent)).toEqual(["Charter", "", "", "Why"]);
   expect(blocks[0].querySelector("del")!.textContent).toBe(ESCALATIONS_CHARTER_SENTENCES[1]);
   expect(blocks[0].querySelector("ins")).not.toBeNull();
   expect(document.body.textContent).not.toContain(ESCALATIONS_CHARTER_SENTENCES[3]);
@@ -396,7 +416,7 @@ test("a field that held nothing reads its placeholder, quiet and never struck; a
   meta.done();
 });
 
-test("a new role with what rides along is one entry whose members are the card's; a limit never shows; alone, Approve is still an outline", () => {
+test("a new role with what rides along is one entry whose members are the card's; a limit never shows; alone, Accept is the filled green face", () => {
   const card = cardOf(ROLE, "Head of Platform");
   const m = mount({ card, onAnswer });
   expect(q("[data-subject]").getAttribute("data-change-ids")).toBe("role limit trust routine");
@@ -412,19 +432,19 @@ test("a new role with what rides along is one entry whose members are the card's
   expect(qa("[data-field-before]")).toEqual([]);
   expect(document.body.textContent).not.toContain("→");
   expect(field("routine").querySelector(".text-\\[color\\:var\\(--ink-quiet\\)\\]")!.textContent).toBe(", every week");
-  // What creates the subject is one group; the reasons stay in the author's conversation.
+  // What creates the subject is one group; its members' reasons read as one Why row.
   expect(qa("[data-subject-group]").length).toBe(1);
-  expect(document.body.textContent).not.toContain("Because role.");
+  expect(qa("[data-subject-why]").map((w) => w.textContent)).toEqual(["Because role.\nBecause routine.\nBecause trust."]);
   expect(document.body.textContent).not.toMatch(/800|tokens|wakes|caps|limit/i);
-  // No number column on a card that stands alone, and its Approve stays an outline: only the composer's send acts.
+  // No number column on a card that stands alone; its Accept is the filled green face all the same.
   expect(q("[data-subject-ordinal]")).toBeNull();
-  expect(q("[data-subject-approve]").style.background).toBe("");
+  expect(q("[data-subject-approve]").className).toContain("cc-btn-green");
   click(q("[data-subject-approve]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
   m.done();
 });
 
-test("a failed entry: the note under the sentence, a red number, Retry in Approve's place; staged, the band says it runs again", () => {
+test("a failed entry: the note under the sentence, a red number, Retry in Accept's place; staged, the band says it runs again", () => {
   const failed = { ...RAISE, status: "failed" as const, applied_note: "The project was renamed while this waited." };
   const card = cardOf([FIRST, failed], "Private Network");
   const m = mount({ card, ordinal: 4, onAnswer });
@@ -433,13 +453,16 @@ test("a failed entry: the note under the sentence, a red number, Retry in Approv
   expect(q("[data-subject-ordinal]").className).toContain("--ink-red");
   // A failed apply wrote nothing, so the field still reads the live record.
   expect(field("priority").getAttribute("data-field-before")).toBe("P2");
-  // Retry is an approve answer like any other: an outline.
+  // Retry is an approve answer like any other: the filled green face.
   expect(q("[data-subject-approve]").textContent).toBe("Retry");
-  expect(q("[data-subject-approve]").style.background).toBe("");
+  expect(q("[data-subject-approve]").className).toContain("cc-btn-green");
   click(q("[data-subject-approve]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
-  expect(q("[data-subject-reject]")).not.toBeNull();
-  expect(q("[data-subject-reply]")).not.toBeNull();
+  // A failed entry can still be adjusted or rejected: Reject waits in the Adjust field.
+  expect(q("[data-subject-reject]")).toBeNull();
+  click(q("[data-subject-reply]"));
+  expect(q("[data-subject-reply-field] [data-subject-reject]")).not.toBeNull();
+  key(fieldOf()!, "Escape");
   m.update({ card, ordinal: 4, onAnswer, answer: APPROVE });
   expect(band()!.textContent).toBe("Retry. Runs again when you send.Undo");
   m.done();
@@ -452,7 +475,7 @@ test("after the send an entry keeps its fields and reason; the word says where i
   // The beat between the send and its apply: the word in cyan, and the band is gone with the answer.
   m.update({ card: at("accepted"), ordinal: 4, onAnswer });
   expect(q("[data-subject-state]").getAttribute("data-subject-state")).toBe("accepted");
-  expect(q("[data-subject-state]").textContent).toBe("Approved, applying");
+  expect(q("[data-subject-state]").textContent).toBe("Accepted, applying");
   expect(q("[data-subject-state]").className).toContain("--ink-cyan");
   expect(q("[data-subject-approve]")).toBeNull();
   expect(q("[data-subject-reject]")).toBeNull();
@@ -500,7 +523,7 @@ test("rejected and noted after the send: the stored words under the entry, and a
   expect(q("[data-subject]").getAttribute("data-subject-status")).toBe("proposed");
   expect(q("[data-subject-you]").textContent).toBe("You: Cameron owns this, not Samvit.");
   expect(q("[data-subject-noted]").textContent).toBe("Noted, waiting for a revision");
-  expect(q("[data-subject-approve]").textContent).toBe("Approve");
+  expect(q("[data-subject-approve]").textContent).toBe("Accept");
   click(q("[data-subject-you]"));
   expect(fieldOf()).not.toBeNull();
   // Read only, the gutter says Noted.
@@ -529,16 +552,16 @@ test("mounted already decided an entry is settled: an approved one keeps its fie
   // The state word on its own, per status.
   const root = createRoot(document.getElementById("root")!);
   React.act(() => root.render(h("div", null, h(StateWord, { key: 1, status: "accepted" }), h(StateWord, { key: 2, status: "applied" }), h(StateWord, { key: 3, status: "skipped" }), h(StateWord, { key: 4, status: "mixed", words: "12 applied, 2 failed" }), h(StateWord, { key: 5, status: "proposed" }))));
-  expect(qa("[data-subject-state]").map((s) => [s.getAttribute("data-subject-state"), s.textContent])).toEqual([["accepted", "Approved, applying"], ["applied", "Applied"], ["skipped", "Rejected"], ["mixed", "12 applied, 2 failed"]]);
+  expect(qa("[data-subject-state]").map((s) => [s.getAttribute("data-subject-state"), s.textContent])).toEqual([["accepted", "Accepted, applying"], ["applied", "Applied"], ["skipped", "Rejected"], ["mixed", "12 applied, 2 failed"]]);
   React.act(() => root.unmount());
 });
 
-test("changes that ended differently: each group carries its own word or its own Retry, Reject and Reply, and its own words", () => {
+test("changes that ended differently: each group carries its own word or its own Adjust and Retry, and its own words", () => {
   const card = cardOf([G1, { ...G9, status: "applied", reply: { verdict: "approve", text: "Good.", at: 3 } }, { ...G10, status: "failed", applied_note: "Agent Quality was archived while this waited." }], "Proud relationships");
   const m = mount({ card, ordinal: 9, onAnswer });
-  expect(q("[data-subject-verdicts]").textContent).toBe("1 of 2 approved, 1 failed");
+  expect(q("[data-subject-verdicts]").textContent).toBe("1 of 2 accepted, 1 failed");
   expect(qa("[data-subject-group]").map((g) => g.getAttribute("data-subject-group"))).toEqual(["9", "10"]);
-  expect(qa("[data-subject-group-state]").map((g) => [g.getAttribute("data-subject-group-state"), g.textContent])).toEqual([["applied", "Applied"], ["failed", "RetryRejectReply"]]);
+  expect(qa("[data-subject-group-state]").map((g) => [g.getAttribute("data-subject-group-state"), g.textContent])).toEqual([["applied", "Applied"], ["failed", "AdjustRetry"]]);
   expect(qa("[data-subject-you]").map((y) => y.textContent)).toEqual(["You: Good."]);
   const [first, second] = qa("[data-subject-group]");
   expect(first.querySelector("[data-failed-note]")).toBeNull();
@@ -559,8 +582,9 @@ test("several changes to a goal that exists read change by change under one sent
   expect(field("parent").getAttribute("data-field-before")).toBe("at the top level");
   expect(field("parent").getAttribute("data-field-after")).toBe("the mission");
   expect(field("projects").getAttribute("data-field-before")).toBe("no project");
-  // A list that gains an entry: the kept names, then the new one behind a quiet plus.
-  expect(field("projects").textContent).toBe("+ Agent Quality");
+  // A list that gains an entry: the new name as a green chip behind its plus.
+  expect(field("projects").textContent).toBe("+Agent Quality");
+  expect(Array.from(field("projects").querySelectorAll("ins[data-diff='added']")).map((x) => x.textContent)).toEqual(["+Agent Quality"]);
   expect(qa("[data-subject-approve]").length).toBe(1);
   expect(q("[data-subject]").getAttribute("data-change-ids")).toBe("g10 g9");
   click(q("[data-subject-approve]"));
@@ -608,13 +632,13 @@ test("what approving would take over: the card shows the phrase and the leave bo
   expect(sent.splice(0)).toEqual([{ verdict: "approve", leave_sessions: true }]);
   const ticked = { verdict: "approve" as const, leave_sessions: true };
   m.update({ card, onAnswer, answer: ticked, takeover });
-  expect(band()!.textContent).toContain("Approved, and the sessions stay where they are.");
+  expect(band()!.textContent).toContain("Accepted, and the sessions stay where they are.");
   expect((q("[data-staged] [data-takeover-leave-input]") as HTMLInputElement).checked).toBe(true);
   // Unticking rewrites the pending approval without it; ticking again puts it back.
   click(q("[data-takeover-leave-input]"));
   expect(sent.splice(0)).toEqual([APPROVE]);
   m.update({ card, onAnswer, answer: APPROVE, takeover });
-  expect(band()!.textContent).toContain("Approved. Applies when you send.Undo");
+  expect(band()!.textContent).toContain("Accepted. Applies when you send.Undo");
   expect((q("[data-staged] [data-takeover-leave-input]") as HTMLInputElement).checked).toBe(false);
   click(q("[data-takeover-leave-input]"));
   expect(sent.splice(0)).toEqual([ticked]);
@@ -672,17 +696,17 @@ test("a limit alone is one plain sentence with its answers and nothing else", ()
 test("the closing row shell: words at the left, the controls at the right, a line above, or what happened; nothing reaches the frame", () => {
   const root = createRoot(document.getElementById("root")!);
   const pressed: string[] = [];
-  React.act(() => root.render(frame(h(LedgerClosingRow, { left: h("button", { "data-map": true, onClick: () => pressed.push("map") }, "Map"), right: h("button", { "data-rest": true, onClick: () => pressed.push("rest") }, "Approve the rest"), above: h("p", { "data-above": true }, "Leave them") }))));
+  React.act(() => root.render(frame(h(LedgerClosingRow, { left: h("button", { "data-map": true, onClick: () => pressed.push("map") }, "Map"), right: h("button", { "data-rest": true, onClick: () => pressed.push("rest") }, "Accept the rest"), above: h("p", { "data-above": true }, "Leave them") }))));
   expect(q("[data-ledger-close]")).not.toBeNull();
   expect(q("[data-above]").textContent).toBe("Leave them");
   click(q("[data-rest]"));
   click(q("[data-map]"));
   expect(pressed).toEqual(["rest", "map"]);
   expect(reached).toEqual([]);
-  React.act(() => root.render(frame(h(LedgerClosingRow, { outcome: "7 approved, 2 rejected" }))));
+  React.act(() => root.render(frame(h(LedgerClosingRow, { outcome: "7 accepted, 2 rejected" }))));
   expect(q("[data-rest]")).toBeNull();
   expect(q("[data-above]")).toBeNull();
-  expect(q("[data-proposal-outcome]").textContent).toBe("7 approved, 2 rejected");
+  expect(q("[data-proposal-outcome]").textContent).toBe("7 accepted, 2 rejected");
   React.act(() => root.unmount());
 });
 
@@ -693,6 +717,6 @@ test("no entry draws a dashed line, a hatch, an upper case label, a long dash, o
   const html = document.getElementById("root")!.innerHTML;
   expect(html).not.toMatch(/dashed|dotted|repeating-linear-gradient|uppercase|tracking-\[/);
   expect(html).not.toContain(String.fromCharCode(8212));
-  expect(document.body.textContent).not.toMatch(/accept|skip|on your next message|no change|Accept with edits/i);
+  expect(document.body.textContent).not.toMatch(/skip|on your next message|no change|Accept with edits/i);
   React.act(() => root.unmount());
 });

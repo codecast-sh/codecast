@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { EyeOff, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
+import { EyeOff, Keyboard, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { hasCollectionRows } from "../../lib/hasCollectionRows";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -219,7 +219,7 @@ export function TriageBar() {
               aria-label="Keyboard shortcuts"
               className="ml-auto flex items-center justify-center w-6 h-6 rounded-[5px] outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan/40 hover:bg-sol-bg-alt transition-colors duration-150"
             >
-              <KeyCap size="xs">?</KeyCap>
+              <Keyboard className="w-3.5 h-3.5 text-sol-text-dim" />
             </button>
           </ShortcutTooltip>
         </div>

@@ -19,8 +19,8 @@ function fakeContents({ editable = false, shell = true, probeThrows = false } = 
   return wc;
 }
 
-function setup(wc) {
-  const edit = createEditUndo({ focusedContents: () => wc, isShell: (c) => c.shell });
+function setup(wc, keyRunsApp) {
+  const edit = createEditUndo({ focusedContents: () => wc, isShell: (c) => c.shell, keyRunsApp });
   edit.observe(wc);
   return edit;
 }
@@ -107,4 +107,14 @@ test("the menu items carry the accelerators and route through run", async () => 
 test("nothing focused does nothing", async () => {
   const edit = createEditUndo({ focusedContents: () => null, isShell: () => true });
   assert.equal(await edit.run("undo", true), "none");
+});
+
+test("once the person moves app undo off the chord, the key stays text undo only", async () => {
+  const wc = fakeContents();
+  const edit = setup(wc, (command) => command === "redo");
+  assert.equal(await edit.run("undo", true), "none");
+  assert.equal(await edit.run("undo", false), "app");
+  assert.equal(await edit.run("redo", true), "app");
+  const field = fakeContents({ editable: true });
+  assert.equal(await setup(field, () => false).run("undo", true), "native");
 });

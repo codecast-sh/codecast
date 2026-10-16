@@ -4,7 +4,7 @@
 // mounted hidden, and its `j` must not answer for the page in front. They
 // decline as well while a menu is open over the page.
 import { useCallback } from "react";
-import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShortcutContext } from "../../shortcuts";
+import { useShortcutAction, useShortcutContext, useShortcutParts } from "../../shortcuts";
 import type { ShortcutAction } from "../../shortcuts";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 
@@ -75,7 +75,7 @@ export function useChangesKeys(active: boolean, h: ChangesKeyHandlers): void {
 
 /** The first binding of a Changes action, as keycaps. */
 export function KeyHint({ action, size = "xs" }: { action: ShortcutAction; size?: "sm" | "xs" }) {
-  const def = getShortcutsForAction(action)[0];
-  if (!def) return null;
-  return <>{formatShortcutParts(def).map((k) => <KeyCap key={k} size={size}>{k}</KeyCap>)}</>;
+  const parts = useShortcutParts(action);
+  if (!parts) return null;
+  return <>{parts.map((k) => <KeyCap key={k} size={size}>{k}</KeyCap>)}</>;
 }
