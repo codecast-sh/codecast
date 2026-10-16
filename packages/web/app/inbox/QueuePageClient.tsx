@@ -34,7 +34,10 @@ import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
-import { InboxShortcuts, OrgTreeFeeder } from "../../components/inbox/InboxEffects";
+import { InboxShortcuts } from "../../components/inbox/InboxEffects";
+import { useOrgScope, useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
+import { WorkspaceScopeProvider } from "../../hooks/useWorkspaceScope";
+import { activeWorkspaceKey, activeWorkspaceKeyOf } from "../../lib/workspaceScope";
 import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
@@ -312,9 +315,27 @@ export function SessionPage(props: InboxConversationProps) {
     const row = s.sessions[sessionId];
     return row ? standingRoleIdOf(row) : null;
   });
-  // The role page paints from the org tree. A seat whose role the tree does
-  // not hold (another workspace's, or a cold cache still filling) stays a
-  // plain session rather than a page that says it cannot find the role.
+  // The role page paints from the org tree, and the window's tree is the
+  // active workspace's. A seat of another workspace holds the tree to its own
+  // while it is on screen, the way /line holds its workspace, so a Union role
+  // opens as its page from the Codecast inbox. Only the active tab holds it:
+  // a background tab never moves the org the rest of the window reads.
+  const isActiveTab = useTabActive();
+  const seatKey = useInboxStore((s) => {
+    const row = s.sessions[sessionId];
+    return roleId && row ? activeWorkspaceKey(row.team_id, s.currentUser?._id ? String(s.currentUser._id) : null) : null;
+  });
+  const activeKey = useInboxStore(activeWorkspaceKeyOf);
+  const foreignKey = isActiveTab && seatKey && seatKey !== activeKey ? seatKey : null;
+  useOrgScope(foreignKey);
+  const feed = useSyncOrgTreeFeeder(undefined, !!roleId);
+  // While the seat's own tree is on its way the held one is another
+  // workspace's: wait for it rather than flash the plain session. A feed that
+  // fails or is refused ends the wait, and the seat stays a plain session.
+  const awaitingTree = useInboxStore((s) => !!foreignKey && `${s.orgTree?.workspace?.kind}:${s.orgTree?.workspace?.id}` !== foreignKey) && !feed.error && !feed.refused;
+  // A seat whose role the tree does not hold (one the viewer cannot read, or a
+  // cold cache still filling) stays a plain session rather than a page that
+  // says it cannot find the role.
   const roleKnown = useInboxStore((s) => !!roleId && !!s.orgTree?.roles.some((r) => r._id === roleId));
   const ask = useSessionViewAsk(sessionId);
   const [visit, setVisit] = useState(() => ({ sessionId, plain: ask != null, ask }));
@@ -329,19 +350,17 @@ export function SessionPage(props: InboxConversationProps) {
     [roleId, roleKnown, setPlain, headerEnd],
   );
 
+  if (roleId && !plain && awaitingTree) return <ConversationPlaceholder id={sessionId} />;
   if (roleId && roleKnown && !plain) {
     return (
-      <Suspense fallback={<ConversationPlaceholder id={sessionId} />}>
-        <ScopePageInner id={roleId} session={{ ...props, onSessionView }} />
-      </Suspense>
+      <WorkspaceScopeProvider value={foreignKey}>
+        <Suspense fallback={<ConversationPlaceholder id={sessionId} />}>
+          <ScopePageInner id={roleId} session={{ ...props, onSessionView }} />
+        </Suspense>
+      </WorkspaceScopeProvider>
     );
   }
-  return (
-    <>
-      {roleId && <OrgTreeFeeder />}
-      <InboxConversation {...props} headerEnd={plainHeaderEnd} />
-    </>
-  );
+  return <InboxConversation {...props} headerEnd={plainHeaderEnd} />;
 }
 
 // SessionCard moved to GlobalSessionPanel.tsx as part of the shared SessionListPanel

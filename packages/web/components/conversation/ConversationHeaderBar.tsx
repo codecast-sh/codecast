@@ -15,10 +15,12 @@ export function AgentStatusPill({
   const spec = agentStatusPillSpec(agentStatus, { disconnected, live });
   if (!spec) return null;
   return (
-    <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${spec.tone}`}>
+    <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${spec.tone}`} title={spec.quiet ? spec.label : undefined}>
       <span className={`w-1.5 h-1.5 rounded-full ${spec.dot}`} />
-      <span className="hidden sm:inline cq-sq3">{spec.label}</span>
-      <span className="sm:hidden cq-sq3">{spec.short}</span>
+      {!spec.quiet && <>
+        <span className="hidden sm:inline cq-sq3">{spec.label}</span>
+        <span className="sm:hidden cq-sq3">{spec.short}</span>
+      </>}
     </span>
   );
 }

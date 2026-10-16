@@ -3,7 +3,8 @@ import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { matchesAction } from "../shortcuts";
 import { ReviewView } from "./ReviewView";
 import { useBatchReview } from "./BatchReviewContext";
 import { BatchProgressBar } from "./BatchProgressBar";
@@ -53,7 +54,7 @@ export function BatchReviewView() {
       } else if (e.key === "Escape") {
         e.preventDefault();
         router.push("/changes");
-      } else if (e.key === "?") {
+      } else if (matchesAction(e, "ui.toggleShortcutsHelp")) {
         e.preventDefault();
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "a" && e.ctrlKey) {
@@ -88,10 +89,10 @@ export function BatchReviewView() {
         <div className="sol-header px-4 py-1.5 text-[10px] text-sol-text-dim border-t border-sol-border/40">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">]</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">[</KeyCap></span> PRs</span>
-            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> files</span>
+            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><MenuKeyCaps action="review.nextFile" className="contents" /><span className="text-sol-text-dim/40">/</span><MenuKeyCaps action="review.prevFile" className="contents" /></span> files</span>
             <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
             <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
-              <KeyCap size="xs">?</KeyCap> all shortcuts
+              <MenuKeyCaps action="ui.toggleShortcutsHelp" className="contents" /> all shortcuts
             </button>
           </div>
         </div>
