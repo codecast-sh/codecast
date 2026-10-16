@@ -21,7 +21,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal } from "../shortcuts";
+import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
@@ -159,7 +159,7 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
@@ -3966,7 +3966,7 @@ const ConversationViewInner = (
             ) : (
               <ConversationHeaderTitle
                 text={identityRow
-                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" titleClassName="!text-sol-text-muted" />
+                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
                   : truncatedTitle}
                 tooltip={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
@@ -4034,7 +4034,6 @@ const ConversationViewInner = (
               </span>
             )}
                 </>}
-                <ConversationAgeFacts startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} conversationId={conversation._id} />
         </>)}
         actions={conversation && (<>
 
@@ -4086,7 +4085,7 @@ const ConversationViewInner = (
                           ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
                           : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
                       }`}
-                      title={`Branch map: ${heading} (${isMac ? "⌘B" : "Ctrl+B"})`}
+                      title={withShortcut(`Branch map: ${heading}`, "conv.toggleTree")}
                     >
                       <Split className="w-3 h-3" />
                       {familyCount > 1 && (
@@ -4481,10 +4480,11 @@ const ConversationViewInner = (
                     )}
                       </>
                     )}
-                    {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
-                      <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
+                    <ConversationAgeMenuItems startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} />
+                    {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
+                      <>
                     {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
                       <DropdownMenuItem disabled>
                         <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />

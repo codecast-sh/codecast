@@ -192,6 +192,20 @@ describe("Updater", () => {
     expect(await dev.performUpdate()).toEqual({ success: false, error: "dev_mode" });
   });
 
+  it("judges dev mode by the executable's name, not the directories above it", async () => {
+    const { updater } = await setup();
+    const at = (execPath: string) => new Updater({
+      productName: "Acme", binaryName: "acme", aliasName: "ac", currentVersion: "1.0.0", releaseBaseUrl: BASE, stateDir: "/x",
+      execPath, fs: (updater as any).cfg.fs, fetch: (updater as any).cfg.fetch, log: () => {},
+    }).isDevMode();
+    expect(at("/home/ubuntu/.local/bin/acme")).toBe(false);
+    expect(at("/home/ubuntu/.local/bin/ac")).toBe(false);
+    expect(at("C:\\Users\\bunny\\acme.exe")).toBe(false);
+    expect(at("/home/ubuntu/.bun/bin/bun")).toBe(true);
+    expect(at("/opt/homebrew/bin/bun-debug")).toBe(true);
+    expect(at("/usr/bin/node")).toBe(true);
+  });
+
   it("reports a missing platform binary", async () => {
     const { updater } = await setup();
     (updater as any).cfg.arch = "x64";

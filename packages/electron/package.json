@@ -48,6 +48,7 @@
       "shareCursors.js",
       "spellMenu.js",
       "editUndo.js",
+      "menuKeys.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
