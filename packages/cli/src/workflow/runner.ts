@@ -1593,6 +1593,18 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   } catch (err) {
     if (!(err instanceof LineProfileError)) throw err;
     console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    // A run the daemon handed this runner fails with the profile's words. Left
+    // unreported it stayed taken until the server's sweep called it unclaimed
+    // (a profile key newer than the machine's cast, Union 2026-10-15).
+    if (options.runId && !options.dryRun) {
+      await reportProgress(options, {
+        current_node_id: startNode.id,
+        node_id: startNode.id,
+        node_status: "failed",
+        run_status: "failed",
+        fail_reason: `the line profile could not be read on this machine: ${err.message}`,
+      });
+    }
     return "invalid";
   }
   // A run with no cause keeps its files under its own id, so a resume finds them.
@@ -1999,7 +2011,11 @@ async function runNodeLoop(
       // A dead end short of exit is not a completion: nothing routed, so the
       // run (and any bound task) must not read as delivered.
       state.failed = true;
-      state.failReason = `no outgoing edge from ${current.id} (outcome ${outcome}${state.context["review_verdict"] ? `, review_verdict ${state.context["review_verdict"]}` : ""})`;
+      // Name the task fields this node's edges route on, as they read: an
+      // implement that ended without a handoff says so, not a review_verdict
+      // no edge of its own asks about.
+      const routedOn = ["handoff", "review_verdict"].filter((k) => k in state.context && graph.edges.some((e) => e.from === current.id && new RegExp(`\\b${k}\\b`).test(e.condition ?? "")));
+      state.failReason = `no outgoing edge from ${current.id} (outcome ${outcome}${routedOn.map((k) => `, ${k} ${state.context[k]}`).join("")})`;
       break;
     }
 

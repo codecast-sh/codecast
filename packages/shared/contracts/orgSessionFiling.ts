@@ -23,3 +23,5 @@ export function sessionDestination(to: string): OrgSessionDestination | null {
 
 /** The filing's shape as the Head of People's reference and `cast org loose` print it. */
 export const FILE_SESSION_SHAPE = 'file_session: { session: its short id, title: its title, to: "@handle" | "ct-N" | "done" }: one of the person\'s sessions moved out of their inbox: under a role, onto a task it works, or closed as done';
+/** One filing as a spec's `changes` entry, exactly as `cast org propose` takes it. */
+export const FILE_SESSION_EXAMPLE = '{ "change": { "kind": "file_session", "session": "jx7abcd", "title": "Its title", "to": "@growth" }, "rationale": "why it belongs there" }';

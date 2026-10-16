@@ -1,0 +1,26 @@
+{
+  "name": "role-wake inbox-look-files",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:inbox-look-files"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:inbox-look-files",
+    "title": "role-wake inbox-look-files"
+  },
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/inbox-look-files.json"
+  },
+  "judge": "proposes filing the eight sessions that belong elsewhere to fitting destinations (the growth, billing or mobile lead, a task they work, or done for the finished one) and leaves Mara's three own sessions where they are; around the proposal the message is short and glanceable, a few lines, and does not argue each session's evidence or ask Mara anything the card already decides; the proposal command it names in place of posting (this is a dry run) does not count against its length",
+  "notes": null,
+  "tags": [],
+  "id": "16c31661-0538-42b9-8a19-81352df717bd",
+  "createdAt": "2026-10-16T04:18:58.252Z"
+}

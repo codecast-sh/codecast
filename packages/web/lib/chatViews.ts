@@ -261,7 +261,7 @@ export function authorFor(
  *  send-time snapshot on the row is the fallback for viewers without access.
  *  The human the session ran as stays visible as the `via` credit — the words
  *  are machine-typed but the authority is still that person's. */
-export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAuthor | null {
+export function sessionAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "members" | "sessionFor">): ChatAuthor | null {
   // An anchor reply (author_kind "agent") already has its own identity.
   if (row.origin !== "agent" || !row.origin_session_id || row.author_kind === "agent") return null;
   const live = ctx.sessionFor?.(row.origin_session_id);
@@ -277,6 +277,20 @@ export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAut
       via: human ? memberName(human) : undefined,
     },
   };
+}
+
+/** The fields of a chat line that say who wrote it. A full row has them, and
+ *  so do the server's partial views of one (the rail's last line, a search hit). */
+export type LineAuthorFields = Pick<ChatMessageRow,
+  "user_id" | "author_kind" | "external_author" | "external"
+  | "origin" | "origin_session_id" | "origin_session_title" | "origin_agent_type">;
+
+/** Who wrote a chat line, for every surface that names one: the Slack person
+ *  a bridge line carried in, the session that typed it, the role whose agent
+ *  wrote it, else the member on the row. A surface that skips a step names the
+ *  wrong author (a session's line under its human's photo). */
+export function lineAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "members" | "sessionFor" | "seatFor">): ChatAuthor {
+  return slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? seatAuthorFor(row.user_id, ctx, row.author_kind);
 }
 
 /** The Slack person behind a line the bridge identity carried in. Their name
@@ -413,7 +427,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   const reactions = ctx.reactionsFor?.(row._id);
   return {
     id: row._id,
-    author: slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? seatAuthorFor(row.user_id, ctx, row.author_kind),
+    author: lineAuthorFor(row, ctx),
     slack: row.external?.provider === "slack"
       ? { direction: row.external.direction, permalink: row.external.permalink }
       : undefined,

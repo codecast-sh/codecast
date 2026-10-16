@@ -84,7 +84,7 @@ export const HEAD_INBOX_EVERY_MS = 24 * 60 * 60 * 1000;
 export const headInboxPrecheck = (role: { team_id?: unknown }): string => `cast org loose --new --team ${role.team_id ? String(role.team_id) : "personal"}`;
 export const HEAD_INBOX_PROMPT = [
   `New sessions are loose in the inbox of the person you report to since you last looked. \`cast org loose\` lists the sessions nothing places yet, and how a filing is written.`,
-  `Keep that inbox the way your job asks. When something should move, open it with the person here in your thread as a proposal, its short id alone on its line. When nothing should, say so in one line and end the turn.`,
+  `Keep that inbox the way your job asks. The person reads your reply at a glance, and a proposal's card already shows each filing and its reason, so the reply is the proposal, its short id alone on its line, or one line when nothing should move. The why is theirs to ask for.`,
 ].join("\n");
 
 /** The event triggers a role is armed with: every role hears for its waiting
