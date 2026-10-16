@@ -17,12 +17,18 @@ process.stdin.on("data", (chunk: string) => {
       render();
     } else if ("\x1b[200~".startsWith(input)) {
       return;
-    } else if (input[0] === "\r" || input[0] === "\n") {
+    } else if (input[0] === "\r") {
       process.stdout.write("\x1b[2J\x1b[HResume this session with:\r\nclaude --resume fixture\r\n$ ", () => process.exit(1));
       process.stdin.pause();
       return;
     } else {
+      // Typed input, as an idle composer receives it: C-j is a newline, C-k or
+      // C-u clears, other control bytes do nothing.
+      const key = input[0];
       input = input.slice(1);
+      if (key === "\x0b" || key === "\x15") composer = "";
+      else if (key === "\n" || key >= " ") composer += key;
+      render();
     }
   }
 });
