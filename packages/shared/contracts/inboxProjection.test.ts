@@ -706,7 +706,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
-      "agent_status_updated_at", "agent_status_raw", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
+      "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
       "child_asking", "child_asking_until", "activity", "context_tokens", "last_model_call_at",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
@@ -878,14 +878,12 @@ describe("deriveLiveAt: one idle rule at any instant", () => {
   });
 
   // A replica derives at its own clock from a payload the overlay shipped
-  // earlier: the shipped status is already coerced, so it rides beside the
-  // daemon's raw status. A working row whose trust decayed to idle while its
-  // heartbeat lived is stopped once the heartbeat lapses (ct-56054).
+  // earlier: the payload carries the daemon's raw status, never a verdict
+  // coerced at the overlay's instant. A working row whose trust decayed to
+  // idle while its heartbeat lived is stopped once the heartbeat lapses
+  // (ct-56054).
   test("a payload shipped at one instant derives every later instant exactly as the raw facts do", () => {
-    const shipped = (r: LiveFactsRow, t: number): LiveFactsRow => {
-      const d = live(r, t);
-      return { ...r, agent_status: d.agent_status, awaiting_input: d.awaiting_input, agent_status_raw: r.agent_status ?? null };
-    };
+    const shipped = (r: LiveFactsRow, t: number): LiveFactsRow => ({ ...r, awaiting_input: live(r, t).awaiting_input });
     for (let i = 0; i < 150; i++) {
       const r = facts();
       for (const t1 of [T0 - 2 * MIN, T0, T0 + 50 * S]) {

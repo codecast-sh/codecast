@@ -1206,8 +1206,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   last_message_preview?: string | null;
   last_user_message?: string | null;
   // Overlay-owned facts (INBOX_FACT_FIELDS).
+  /** The daemon's own status (managed_sessions.agent_status), before any trust rule: a reader derives the verdict at its own clock (deriveLiveAt). */
   agent_status?: string | null;
-  agent_status_raw?: string | null;
   is_idle?: boolean | null;
   is_unresponsive?: boolean | null;
   awaiting_input?: boolean | null;
@@ -1239,8 +1239,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
 // at each deadline on both sides. Every term is monotone in `t` for fixed
 // facts (a grace passes, a heartbeat lapses, a status decays, production
 // ends), so it only ever moves a row toward settled, never back. The status
-// it trusts is the daemon's raw one (agent_status_raw on a shipped row): a
-// verdict coerced at one instant does not replay at a later one.
+// it trusts is the daemon's raw one, which is what a row ships: a verdict
+// coerced at one instant does not replay at a later one.
 
 export interface SessionIdleInput {
   /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
@@ -1333,9 +1333,8 @@ export interface LiveFactsRow {
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
   inbox_snoozed_until?: number | null;
+  /** The daemon's own status before any trust rule (managed_sessions.agent_status). */
   agent_status?: string | null;
-  /** The daemon's own status before any trust rule (managed_sessions.agent_status), on a row a replica holds. Absent on the server's raw facts, whose agent_status is already raw. */
-  agent_status_raw?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
@@ -1362,18 +1361,27 @@ export function rowHeartbeatAliveAt(row: { last_heartbeat?: number | null }, t: 
   return row.last_heartbeat != null && t - row.last_heartbeat < HEARTBEAT_ALIVE_MS;
 }
 
-export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
-  const msgs = row.message_count ?? 0;
-  const hasPending = !!row.has_pending_messages;
+// The status a row's facts are trusted to say at `t`: the trust rules over the
+// daemon's raw status, the only status a row carries. A verdict does not
+// replay, since working decays to idle past the trust TTL while the heartbeat
+// lives and to stopped once it lapses, but idle stays idle (ct-56054). Every
+// reader that shows or branches on what the agent is doing reads this, never
+// the raw field.
+export function trustedStatusAt(
+  row: Pick<LiveFactsRow, "agent_status" | "updated_at" | "last_heartbeat" | "open_tasks" | "open_tasks_at">,
+  t: number,
+): string | undefined {
   // isLiveAt: the row's own heartbeat inside the window (the liveness set and
   // the heartbeat map are populated together, so this IS membership).
   const heartbeatAlive = rowHeartbeatAliveAt(row, t);
   const verifiedWaiting = openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, heartbeatAlive);
-  // The trust rules run over the daemon's raw status. A shipped row's
-  // agent_status is the overlay's verdict at its own epoch, and a verdict does
-  // not replay: working decays to idle past the trust TTL while the heartbeat
-  // lives, and to stopped once it lapses, but idle stays idle (ct-56054).
-  const agentStatus = trustedAgentStatus((row.agent_status_raw ?? row.agent_status) ?? undefined, row.updated_at, t, heartbeatAlive, verifiedWaiting);
+  return trustedAgentStatus(row.agent_status ?? undefined, row.updated_at, t, heartbeatAlive, verifiedWaiting);
+}
+
+export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
+  const msgs = row.message_count ?? 0;
+  const hasPending = !!row.has_pending_messages;
+  const agentStatus = trustedStatusAt(row, t);
   // A stopped agent is never connected, whatever the user's other daemons say.
   const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
   const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
@@ -1577,10 +1585,6 @@ export const INBOX_FACT_FIELDS = [
   // the +45s settle, the heartbeat lapse and the trust decay flip on the
   // replica's own clock instead of waiting for a server re-execution.
   "agent_status_updated_at",
-  // The daemon's raw status beside the shipped verdict (agent_status): the
-  // trust rules re-run over it, since a verdict does not replay at a later
-  // instant (ct-56054).
-  "agent_status_raw",
   // The settle's own facts (ct-49533): whether it came from a lifecycle event
   // rather than a turn ending — which the replica must place exactly as the
   // server does — and which turn it belongs to, the identity a completion
