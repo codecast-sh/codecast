@@ -22,6 +22,7 @@ import {
 } from "../store/inboxStore";
 import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
+import { agentStatusAt } from "../lib/liveness";
 import { threadStateView, compactAge } from "../lib/threadState";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { formatModel } from "../lib/conversationProcessor";
@@ -40,13 +41,13 @@ export interface FleetBandOpts {
 const inFlight = (s: InboxSession, opts: FleetBandOpts) =>
   opts.queued.has(s._id) || opts.pendingSendIds.has(s._id);
 
-// Is the daemon producing right now, per the RAW facts: an active status, or
-// the server's composite is_idle false. The board asks this, not "who acts
+// Is the daemon producing right now: an active status at `now`, or the
+// server's composite is_idle false. The board asks this, not "who acts
 // next" (the shared verdict): a run that died mid-task (stopped while not
 // idle) is the user's to revive, while a cleanly finished one (stopped and
 // idle) is FINISHED here even though the inbox verdict files it needs_input.
 // A killed row is retired whatever its frozen status says.
-const isProducing = (s: InboxSession) => !s.inbox_killed_at && (isAgentActive(s) || !s.is_idle);
+const isProducing = (s: InboxSession, now: number) => !s.inbox_killed_at && (isAgentActive(s, now) || !s.is_idle);
 
 export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
@@ -63,7 +64,7 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   if (s.awaiting_input) return "needsYou";
   if (s.pending_api_error && hasOutput) return "needsYou";
   if (s.agent_status === "permission_blocked" && hasOutput) return "needsYou";
-  if (isProducing(s)) {
+  if (isProducing(s, opts.now)) {
     // "Active" per status, but the liveness TTL says the agent went silent
     // (or the daemon marked it unresponsive): a quietly dead worker is the
     // user's to revive, not a running one.
@@ -108,7 +109,7 @@ export function fleetCountedSessions(
       rows.set(s._id, s);
     }
     for (const s of placed.newSessions) {
-      if (isAgentActive(s) || inFlight(s, opts)) rows.set(s._id, s);
+      if (isAgentActive(s, opts.now) || inFlight(s, opts)) rows.set(s._id, s);
     }
   };
   collect(placeInboxRows(state, { scope: "mine", focusedId, now: opts.now }));
@@ -212,7 +213,7 @@ export function splitFleetBands(
   // Blanks: a just-spawned worker (agent starting, or a first send in flight)
   // belongs on the board as RUNNING; a never-engaged pre-warm stub does not.
   for (const s of cat.newSessions) {
-    if (isAgentActive(s) || inFlight(s, opts)) out.running.push(s);
+    if (isAgentActive(s, opts.now) || inFlight(s, opts)) out.running.push(s);
   }
   // Longest-waiting first: the tile you've kept blocked the longest leads.
   out.needsYou.sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
@@ -287,14 +288,15 @@ export function fleetTileMeta(
     }
     const ts = threadStateView(s, s.message_count ?? 0, now);
     const blocker = (ts?.status === "blocked" ? ts.cardLine : "") || sessionCardSummary(s);
-    if (s.agent_status === "permission_blocked") {
+    const status = agentStatusAt(s, now);
+    if (status === "permission_blocked") {
       return { text: blocker ? `permission: ${blocker}` : "permission needed", tone: "amber" };
     }
     if (s.awaiting_input) {
       return { text: blocker ? `asks: ${blocker}` : "waiting for your answer", tone: "amber" };
     }
-    if (s.agent_status === "stopped") return { text: "agent stopped", tone: "amber" };
-    if (isLivenessStale(s, now) && isProducing(s)) {
+    if (status === "stopped") return { text: "agent stopped", tone: "amber" };
+    if (isLivenessStale(s, now) && isProducing(s, now)) {
       return { text: `went quiet ${compactAge(now - (s.updated_at ?? now))} ago`, tone: "amber" };
     }
     return { text: blocker || "needs your attention", tone: "amber" };
@@ -302,7 +304,7 @@ export function fleetTileMeta(
   if (band === "running") {
     if ((s.message_count ?? 0) === 0) return { text: "starting", tone: "green" };
     const age = compactAge(now - (s.updated_at ?? now));
-    const status = RUNNING_STATUS_LABEL[s.agent_status ?? ""] ?? "working";
+    const status = RUNNING_STATUS_LABEL[agentStatusAt(s, now) ?? ""] ?? "working";
     return { text: `${status} · ${age === "just now" ? "<1m" : age}`, tone: "green" };
   }
   const age = compactAge(now - (s.updated_at ?? now));

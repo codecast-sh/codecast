@@ -1,4 +1,4 @@
-import { deriveLiveAt, isHibernated, rowHeartbeatAliveAt, type LiveFactsRow } from "@codecast/shared/contracts";
+import { deriveLiveAt, isHibernated, rowHeartbeatAliveAt, trustedStatusAt, type LiveFactsRow } from "@codecast/shared/contracts";
 
 // A session row as the shared live derivation reads it (deriveLiveAt): the
 // replicated facts plus the base fields the rules branch on. ONE adapter for
@@ -14,7 +14,6 @@ export function liveFactsOf(s: {
   inbox_stashed_at?: number | null;
   inbox_snoozed_until?: number | null;
   agent_status?: string | null;
-  agent_status_raw?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
@@ -37,7 +36,6 @@ export function liveFactsOf(s: {
     inbox_stashed_at: s.inbox_stashed_at ?? null,
     inbox_snoozed_until: s.inbox_snoozed_until ?? null,
     agent_status: s.agent_status ?? null,
-    agent_status_raw: s.agent_status_raw ?? null,
     agent_status_updated_at: s.agent_status_updated_at ?? null,
     last_heartbeat: s.last_heartbeat ?? null,
     daemon_alive_until: s.daemon_alive_until ?? null,
@@ -50,6 +48,24 @@ export function liveFactsOf(s: {
     open_tasks_at: s.open_tasks_at ?? null,
     loop_state: s.loop_state ?? null,
   };
+}
+
+// What the agent is doing at instant `now`: the row carries the daemon's raw
+// status, and this is the verdict every reader shows or branches on (the
+// shared trust rule, the same one the placement chokepoint runs). A reader that
+// stays mounted re-derives it on a clock (useNowWhen / useCoarseNow), since the
+// verdict moves with time while the row does not.
+export function agentStatusAt(
+  s: { agent_status?: string | null; updated_at?: number; last_heartbeat?: number | null; open_tasks?: unknown[] | null; open_tasks_at?: number | null },
+  now: number,
+): string | undefined {
+  return trustedStatusAt({
+    agent_status: s.agent_status ?? null,
+    updated_at: s.updated_at ?? 0,
+    last_heartbeat: s.last_heartbeat ?? null,
+    open_tasks: s.open_tasks ?? null,
+    open_tasks_at: s.open_tasks_at ?? null,
+  }, now);
 }
 
 // Settled at instant `now` by the shared rule — or retired: a killed row's

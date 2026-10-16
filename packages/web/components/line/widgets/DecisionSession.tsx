@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { DecisionStepperContext, type DecisionStepper } from "../../../hooks/useDecisionQueue";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
 import { useInboxStore } from "../../../store/inboxStore";
+import { agentStatusAt } from "../../../lib/liveness";
 import { SessionPane } from "../../stage/SessionPane";
 import { decisionQueueItems } from "../../../lib/decisionQueue";
 
@@ -20,7 +21,7 @@ export function DecisionSession({ id, position = 1, total = 1, onSkip }: { id: s
   // Only what the card reads of the asking session (its title, project, whether it runs), never the whole row.
   const sessionSig = useInboxStore((s) => {
     const r = conversationId ? s.sessions[conversationId] : undefined;
-    return r ? `${r.title}|${r.project_path}|${r.is_idle}|${r.agent_status}|${r.is_unresponsive}` : "";
+    return r ? `${r.title}|${r.project_path}|${r.is_idle}|${agentStatusAt(r, Date.now())}|${r.is_unresponsive}` : "";
   });
   const item = useMemo(() => {
     if (!decision || decision.status !== "pending") return undefined;

@@ -5,6 +5,7 @@ import type { MentionItem } from "../lib/mentionItem";
 import { matchHandle, memberHandle } from "@codecast/shared/chat";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
+import { agentStatusAt } from "../lib/liveness";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
 import { useDebounce } from "./useDebounce";
@@ -280,7 +281,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       id: sess._id, type: "session", label: sess.title || "Untitled Session",
       sublabel: sess.idle_summary || undefined, shortId: sess._id.slice(0, 7).toLowerCase(),
       messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
-      status: sess.agent_status ?? undefined, agentType: sess.agent_type,
+      status: agentStatusAt(sess, Date.now()), agentType: sess.agent_type,
       model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
       identity: identityRowOf(sess as never), worker: !!sess.is_subagent || undefined,
     })),
