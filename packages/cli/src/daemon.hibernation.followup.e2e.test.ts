@@ -279,6 +279,9 @@ test.skipIf(!hasTmux())("two resume callers waiting for cancelled parking share 
   const park = hibernateSessionNow(f.id, undefined, f.io);
   await arrived.promise;
   const parking = internals.hibernationInFlight.get(f.id)!;
+  // The parking's evidence job outlives its cancelled attempt; it is drained
+  // below so it cannot sit in the shared abandoned set during the next test.
+  const evidenceJob = internals.hibernationEvidenceJobs.get(f.id);
   const first = internals.autoResumeSession(f.id, "", {}, undefined, undefined, "claude", { userInitiated: true });
   const second = internals.autoResumeSession(f.id, "", {}, undefined, undefined, "claude", { userInitiated: true });
   try {
@@ -293,6 +296,7 @@ test.skipIf(!hasTmux())("two resume callers waiting for cancelled parking share 
   } finally {
     parkGate.resolve(); resumeGate.resolve();
     expect(await Promise.all([first, second])).toEqual([true, true]);
+    await evidenceJob;
   }
 }, 15000);
 
