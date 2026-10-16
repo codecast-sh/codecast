@@ -35,7 +35,7 @@ export function looseLines(a: LooseAnswer, now: number): string[] {
   return [
     `${a.count} loose session${a.count === 1 ? "" : "s"}${a.count > a.rows.length ? ` (newest ${a.rows.length} shown)` : ""}${a.last_look_at ? fmt.muted(` · last look ${formatRelative(a.last_look_at, now)}`) : ""}`,
     ...a.rows.map((r) => `  ${fresh.has(r.short_id) ? fmt.highlight("new") : "   "} ${r.short_id} ${r.title} ${fmt.muted(`· ${r.state} · ${formatRelative(r.last_active_at, now)}${r.project_path ? ` · ${r.project_path}` : ""}`)}`),
-    fmt.muted(`\nFiling one is a proposal change (cast org propose): ${FILE_SESSION_SHAPE}. One change in a spec reads:`),
+    fmt.muted(`\nFiling one is a proposal change (cast org propose, or cast org revise op-N --add on an open proposal of yours; cast org proposals lists them): ${FILE_SESSION_SHAPE}. One change in a spec reads:`),
     fmt.muted(`  ${FILE_SESSION_EXAMPLE}`),
   ];
 }

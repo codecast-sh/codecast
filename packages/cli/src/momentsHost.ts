@@ -15,6 +15,9 @@ import path from "node:path";
 import { spawn, findOnPath, TOOL_PATH, execFileAsync } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { MOMENT_LIMITS, type ExtractorInput } from "@codecast/shared/contracts/moments";
+import type { JudgeHandoff } from "@codecast/shared/contracts/judges";
+import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/modelCall";
+import { subscriptionModelCall } from "./subscriptionCall.js";
 
 export const MOMENTS_DIR = ".codecast/moments";
 export const JUDGES_DIR = ".codecast/judges";
@@ -131,12 +134,42 @@ export function pruneHostMoments(now: number): number {
   return removed;
 }
 
+/**
+ * Judging handed to this machine (a source that judges on subscription): each
+ * request run on this machine's Claude Code login, one at a time since the
+ * login's window is shared with every other session on it, and the replies
+ * handed back to `/cli/moments/judged`, where they are recorded as an API
+ * reply is. `scope` is what names the moment's owner there: the daemon's
+ * device_id, or a person's workspace scope.
+ */
+export async function judgeHere(
+  handoff: JudgeHandoff,
+  post: (route: string, body: Record<string, unknown>) => Promise<any>,
+  scope: Record<string, unknown>,
+  call: (spec: ModelCallSpec) => Promise<ModelCallResult> = (spec) => subscriptionModelCall(spec),
+): Promise<Array<{ judge: string; status: string; findings: number; filed: number; reason?: string; cost_usd: number }>> {
+  const results = [];
+  for (const { judge, request } of handoff.requests) {
+    const r = await call(request);
+    results.push({
+      judge,
+      result: r.ok
+        ? { ok: true, text: r.text, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens, ...(r.stop_reason !== undefined ? { stop_reason: r.stop_reason } : {}) }
+        : { ok: false, error: r.error },
+    });
+  }
+  const reply = await post("/cli/moments/judged", { ...scope, moment: handoff.moment, clock: handoff.clock, ...(handoff.lines?.length ? { lines: handoff.lines } : {}), record: JSON.stringify(handoff.record), results });
+  return reply?.judged ?? [];
+}
+
 export type MomentsTickDeps = {
   post: (route: string, body: Record<string, unknown>) => Promise<any>;
   deviceId: string;
   now?: () => number;
   log?: (line: string) => void;
   run?: (claim: MomentClaim) => Promise<ExtractResult>;
+  /** Runs one judge request handed to this machine; the subscription call by default. */
+  judgeCall?: (spec: ModelCallSpec) => Promise<ModelCallResult>;
 };
 
 /**
@@ -166,6 +199,11 @@ export async function tickMoments(deps: MomentsTickDeps): Promise<Array<{ moment
     }).catch((err: unknown) => ({ status: "unreported", error: err instanceof Error ? err.message : String(err) }));
     out.push({ moment: claim.moment, status: reply?.status ?? "unreported", ...(reply?.error ? { error: reply.error } : {}) });
     deps.log?.(`[MOMENTS] ${claim.moment} ${claim.input.kind}/${claim.input.subject}: ${reply?.status ?? "unreported"}${reply?.error ? ` (${reply.error})` : ""}`);
+    if (reply?.judge_here) {
+      const judged = await judgeHere(reply.judge_here, deps.post, { device_id: deps.deviceId }, deps.judgeCall)
+        .catch((err: unknown) => [{ judge: "*", status: "unreported", findings: 0, filed: 0, reason: err instanceof Error ? err.message : String(err), cost_usd: 0 }]);
+      deps.log?.(`[MOMENTS] ${claim.moment} judged on this machine: ${judged.map((j) => `${j.judge} ${j.status}${j.status === "ok" ? ` ${j.findings} found` : j.reason ? ` (${j.reason})` : ""}`).join("; ") || "no judges"}`);
+    }
   }
   return out;
 }

@@ -83,6 +83,7 @@ const { createComputerPermissions } = require("./computerPermissions");
 const { createDaemonSetup } = require("./daemonSetup");
 const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
 const { createEditUndo } = require("./editUndo");
+const { createMenuKeys } = require("./menuKeys");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 const { createShareCursors } = require("./shareCursors");
 const { attachSpellMenu } = require("./spellMenu");
@@ -144,7 +145,10 @@ const shellAuthority = createShellAuthority({
 const shellIpc = shellAuthority.ipc;
 // Edit > Undo/Redo: text undo in a focused field, the web app's undo
 // everywhere else (editUndo.js says why the stock roles cannot do this).
+const menuKeys = createMenuKeys();
+shellIpc.on("set-menu-keys", (_e, keys) => { if (menuKeys.set(keys)) buildAppMenu(); });
 const editUndo = createEditUndo({
+  keyRunsApp: (command) => menuKeys.chordRuns(command === "undo" ? "ui.undo" : "ui.redo", command === "undo" ? "CmdOrCtrl+Z" : "Shift+CmdOrCtrl+Z"),
   focusedContents: () => webContents.getFocusedWebContents() ?? BrowserWindow.getFocusedWindow()?.webContents,
   isShell: (contents) => trustedShellUrl(contents.getURL(), [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean)),
 });
@@ -2922,7 +2926,7 @@ function buildAppMenu() {
         { type: "separator" },
         { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
         { type: "separator" },
-        { label: "Settings…", accelerator: "CommandOrControl+,", click: () => navigateMain("/settings") },
+        { label: "Settings…", accelerator: menuKeys.accelerator("ui.openSettings", "CommandOrControl+,"), click: () => navigateMain("/settings") },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -2949,7 +2953,7 @@ function buildAppMenu() {
         },
         {
           label: "New Session",
-          accelerator: "CommandOrControl+Shift+N",
+          accelerator: menuKeys.accelerator("session.create", "CommandOrControl+Shift+N"),
           click: () => openFullSessionInMain(),
         },
         // No accelerators here: these mirror native windows the global
@@ -2994,11 +2998,12 @@ function buildAppMenu() {
         { label: "Docs", click: () => routeToWindow("/docs") },
         { label: "Plans", click: () => routeToWindow("/plans") },
         { type: "separator" },
-        // Same chords as the renderer's nav.back/nav.forward (web shortcuts
-        // registry): the page handles the key first and swallows it, so the
-        // menu fires only for a window without that handler, or from a click.
-        { label: "Back", accelerator: process.platform === "darwin" ? "Command+[" : "Alt+Left", click: () => focusedWindowHistory(-1) },
-        { label: "Forward", accelerator: process.platform === "darwin" ? "Command+]" : "Alt+Right", click: () => focusedWindowHistory(1) },
+        // Same chords as the renderer's nav.back/nav.forward, following the
+        // person's rebinding (menuKeys.js): the page handles the key first and
+        // swallows it, so the menu fires only for a window without that
+        // handler, or from a click.
+        { label: "Back", accelerator: menuKeys.accelerator("nav.back", process.platform === "darwin" ? "Command+[" : "Alt+Left"), click: () => focusedWindowHistory(-1) },
+        { label: "Forward", accelerator: menuKeys.accelerator("nav.forward", process.platform === "darwin" ? "Command+]" : "Alt+Right"), click: () => focusedWindowHistory(1) },
       ],
     },
     {

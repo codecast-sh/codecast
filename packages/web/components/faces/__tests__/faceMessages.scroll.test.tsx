@@ -12,9 +12,10 @@ import { closeDomWindow } from "../../../test-helpers/domGlobals";
 // conversation the test seeds into the store.
 const realChatSync = await import("../../../hooks/useChatSync");
 mock.module("../../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}) }));
+const openChat = mock(() => {});
 mock.module("../../../hooks/useOpenDm", () => ({
   useOpenDm: () => () => {},
-  useOpenChatPath: () => () => {},
+  useOpenChatPath: () => openChat,
 }));
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
@@ -61,7 +62,8 @@ test("a new line scrolls the card's messages to the bottom, even once the card h
   } as any);
   const host = dom.window.document.body.appendChild(dom.window.document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root!.render(<FaceMessages memberId={ANN} name="Ann" focus={false} onLeave={() => {}} />));
+  const leave = mock(() => {});
+  await act(async () => root!.render(<FaceMessages memberId={ANN} name="Ann" focus={false} onLeave={leave} />));
   const list = host.querySelector(".fc-list")!;
   let top = 0;
   Object.defineProperty(list, "scrollHeight", { configurable: true, get: () => 900 });
@@ -72,5 +74,12 @@ test("a new line scrolls the card's messages to the bottom, even once the card h
   expect(host.querySelectorAll(".fc-row")).toHaveLength(30);
   expect(Array.from(host.querySelectorAll(".fc-text")).at(-1)?.textContent).toBe("line 30");
   expect(top).toBe(900);
+  const bubbles = host.querySelectorAll<HTMLButtonElement>("button.fc-msg");
+  expect(bubbles).toHaveLength(30);
+  for (const index of [0, 1, 29]) {
+    await act(async () => bubbles[index].click());
+    expect(openChat).toHaveBeenLastCalledWith(`/chat/${DM}?m=m${index + 1}`);
+  }
+  expect(leave).toHaveBeenCalledTimes(3);
   host.remove();
 });

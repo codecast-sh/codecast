@@ -38,7 +38,7 @@ export function groupStateWords(card: RecordGroupCard): { words: string; status:
   const total = card.rows.length;
   if (card.status === "proposed") return null;
   if (card.status === "applied") return { words: "Applied", status: "applied" };
-  if (card.status === "accepted") return { words: n("applied") ? `Applying ${n("applied")} of ${total}` : "Approved, applying", status: "accepted" };
+  if (card.status === "accepted") return { words: n("applied") ? `Applying ${n("applied")} of ${total}` : "Accepted, applying", status: "accepted" };
   if (card.status === "skipped") return { words: "Rejected", status: "skipped" };
   const parts = [n("applied") && `${n("applied")} applied`, n("accepted") && `${n("accepted")} approved`, n("skipped") && `${n("skipped")} rejected`, n("failed") && `${n("failed")} failed`].filter(Boolean);
   return { words: parts.join(", "), status: "mixed" };
