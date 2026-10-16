@@ -21,6 +21,8 @@ export type ChatToastData = {
   authorName: string;
   authorAvatarUrl?: string;
   authorIsAgent?: boolean;
+  /** A session typed the line: its agent's mark is the face. */
+  authorAgentType?: string;
   preview: string;
   /** Loud carries the accent edge and a sound; quiet is a plain card. Silent
    *  never reaches this component. */
@@ -78,6 +80,7 @@ export function ChatToast({
           name={data.authorName}
           image={data.authorAvatarUrl}
           isAgent={data.authorIsAgent}
+          agentType={data.authorAgentType}
           size={26}
           letters={2}
         />

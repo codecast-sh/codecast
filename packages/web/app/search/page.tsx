@@ -27,8 +27,8 @@ import { MatchSnippet } from "../../components/search/MatchSnippet";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { FilterDropdown } from "../../components/FilterDropdown";
 import { AuthorAvatar } from "../../components/entityDisplay";
-import { slackAuthorFor, memberName } from "../../lib/chatViews";
-import { memberAvatarUrl } from "../../lib/liveEntities";
+import { lineAuthorFor } from "../../lib/chatViews";
+import { CommentAvatar } from "../../components/comments/CommentAvatar";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -392,9 +392,8 @@ export default function SearchPage() {
               <div className="space-y-0.5">
                 {chatHits.slice(0, chatCap).map((h) => {
                   const key = `chat:${h._id}`;
-                  const slack = slackAuthorFor(h);
-                  const member = memberById.get(String(h.user_id));
-                  const name = slack?.name ?? memberName(member);
+                  const author = lineAuthorFor(h, { members: memberById });
+                  const name = author.name;
                   return (
                     <div
                       key={key}
@@ -410,7 +409,9 @@ export default function SearchPage() {
                         href={h.permalink}
                         who={(
                           <>
-                            <AuthorAvatar name={name} avatar={slack?.avatarUrl ?? memberAvatarUrl(member)} size={16} />
+                            {author.isAgent
+                              ? <CommentAvatar name={name} isAgent agentType={author.session?.agentType} size={16} />
+                              : <AuthorAvatar name={name} avatar={author.avatarUrl} size={16} />}
                             <span className="truncate font-medium text-sol-text">{name}</span>
                             <span className="flex flex-shrink-0 items-center gap-0.5 text-sol-text-dim">
                               {h.channel_kind === "dm" ? "direct message" : <><Hash className="h-3 w-3" />{h.channel_name}</>}
