@@ -283,8 +283,8 @@ describe("line.cast template", () => {
   test("ship: a landed ship watches the cause, with or without a ship command; a refused ship ends the run", () => {
     expect(fired("ship", { outcome: "success", ...EMPTY_VARS })).toEqual(["watch"]);
     expect(fired("ship", { outcome: "success", ...UNION_VARS })).toEqual(["watch"]);
-    expect(fired("ship", { outcome: "failure", ...UNION_VARS })).toEqual(["exit"]);
-    expect(fired("ship", { outcome: "failure", ...EMPTY_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...UNION_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...EMPTY_VARS })).toEqual(["exit"]);
   });
 
   test("the template names no path or tool of one project: everything per project comes from the profile", () => {

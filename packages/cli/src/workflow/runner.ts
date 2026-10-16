@@ -15,6 +15,7 @@ import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
+import { deadEndReason, profileFailure } from "./runFailure.js";
 import { claimRun, readCheckpoint, resumePoint, runnerStamp, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import presenterBase from "./presenter.md" with { type: "text" };
 import * as fs from "fs";
@@ -1593,6 +1594,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   } catch (err) {
     if (!(err instanceof LineProfileError)) throw err;
     console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    if (options.runId && !options.dryRun) await reportProgress(options, profileFailure(startNode.id, err.message));
     return "invalid";
   }
   // A run with no cause keeps its files under its own id, so a resume finds them.
@@ -1999,7 +2001,7 @@ async function runNodeLoop(
       // A dead end short of exit is not a completion: nothing routed, so the
       // run (and any bound task) must not read as delivered.
       state.failed = true;
-      state.failReason = `no outgoing edge from ${current.id} (outcome ${outcome}${state.context["review_verdict"] ? `, review_verdict ${state.context["review_verdict"]}` : ""})`;
+      state.failReason = deadEndReason(graph, current.id, outcome, state.context);
       break;
     }
 
