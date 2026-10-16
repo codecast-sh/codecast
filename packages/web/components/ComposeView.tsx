@@ -620,19 +620,17 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           </div>
         </div>
       )}
-      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} keys={!hosted} canDock={canDock} onOpenPage={pageLayout && onClose ? openAsPage : undefined} />}
+      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} canDock={canDock} onOpenPage={pageLayout && onClose ? openAsPage : undefined} />}
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
       <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : pageLayout ? "flex-1 min-h-0 justify-end pt-6 pb-5" : "flex-1 min-h-0 pt-6"}`}>
         {conversation && !onlyHosted && (
-          <div className={`w-full shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`}>
-            <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} />
-          </div>
+          <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} className={`shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`} />
         )}
         {conversation && !recipient && (
           <ReviewComposerContext.Provider value={composerBridge}>
-            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot } : undefined} />
+            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot, recents: false } : undefined} />
           </ReviewComposerContext.Provider>
         )}
         {conversation && recipient && (
@@ -673,18 +671,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onCancel={() => { setConfirmClose(false); refocusComposer(); }}
         />
       )}
-      {/* Hosted mode's sheet carries no key legend: Enter sends and opens,
-          Esc closes, as anyone expects. */}
-      {!(hosted && !recipient && onClose) && <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
-        <span className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> {recipient ? `send to ${recipient.name}` : "send"}</span>
-          <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
-        </span>
-        <span className="flex items-center gap-3">
-          {standalone && <ClearDraftButton stubId={sessionId} restored={restored} onClear={clearDraft} />}
-          <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
-        </span>
-      </div>}
+      {/* No key legend: Enter sends, Esc closes, as anyone expects. The
+          palette window keeps one control, dropping its kept draft. */}
+      {standalone && <ClearDraftButton stubId={sessionId} restored={restored} onClear={clearDraft} />}
       </div>
     </div>
   );
@@ -698,7 +687,7 @@ const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover
 // title bar naming the target project and, once collapsed, the draft it holds;
 // clicking the bar collapses or restores it. Subscribes to the two strings it
 // shows, so typing re-renders this bar and not the composer around it.
-function ComposeChrome({ instance, stubId, recipientName, onRequestClose, keys = true, canDock = true, onOpenPage }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The minimize button's keycaps; the footer already lists the keys. */ keys?: boolean; /** The docked composer is fleet machinery (actions.fleet); without it the modal offers a plain close. */ canDock?: boolean; /** The modal's move into the full new-session page. */ onOpenPage?: () => void }) {
+function ComposeChrome({ instance, stubId, recipientName, onRequestClose, canDock = true, onOpenPage }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The docked composer is fleet machinery (actions.fleet); without it the modal offers a plain close. */ canDock?: boolean; /** The modal's move into the full new-session page. */ onOpenPage?: () => void }) {
   const projectName = useInboxStore((s) => {
     const row = stubId ? s.sessions[stubId] : undefined;
     return (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop();
@@ -710,14 +699,12 @@ function ComposeChrome({ instance, stubId, recipientName, onRequestClose, keys =
     return (
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
         {onOpenPage && (
-          <button onClick={onOpenPage} className={`flex items-center gap-1.5 ${chromeButton}`} aria-label="Open as a page" title="Open as a page">
-            {keys && <span className="opacity-70"><FooterKeys combo={PAGE_COMBO} /></span>}
+          <button onClick={onOpenPage} className={chromeButton} aria-label="Open as a page" title="Open as a page">
             <Maximize2 className="w-3 h-3" />
           </button>
         )}
         {canDock ? (
-          <button onClick={() => dockCompose(instance.id)} className={`flex items-center gap-1.5 ${chromeButton}`} aria-label="Minimize to a docked composer">
-            {keys && <span className="opacity-70"><FooterKeys combo={DOCK_COMBO} /></span>}
+          <button onClick={() => dockCompose(instance.id)} className={chromeButton} aria-label="Minimize to a docked composer" title="Minimize">
             <Minus className="w-3.5 h-3.5" />
           </button>
         ) : (
@@ -847,7 +834,7 @@ function ClearDraftButton({ stubId, restored, onClear }: { stubId: string | null
   const hasDraft = useInboxStore((s) => !!composeDraftContent(s, stubId));
   if (!hasDraft) return null;
   return (
-    <span className="flex items-center gap-1.5">
+    <div className="px-3 py-1.5 border-t border-sol-border/60 flex items-center justify-end gap-1.5 text-[10px] text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
       {restored && <span className="text-sol-yellow">draft restored</span>}
       <button
         type="button"
@@ -857,7 +844,7 @@ function ClearDraftButton({ stubId, restored, onClear }: { stubId: string | null
       >
         clear
       </button>
-    </span>
+    </div>
   );
 }
 
