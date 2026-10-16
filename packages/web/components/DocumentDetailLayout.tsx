@@ -20,7 +20,7 @@ import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { isMac } from "../shortcuts";
+import { isMac, matchesAction } from "../shortcuts";
 import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
 import { useDrafting } from "./docs/drafting/useDrafting";
 import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftingMenu } from "./docs/drafting/DraftingUI";
@@ -136,7 +136,7 @@ export function DocumentDetailLayout({
   useWatchEffect(() => {
     if (!initialEditable || !paneActive) return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {
+      if (matchesAction(e, "doc.toggleEdit")) {
         e.preventDefault();
         setIsEditing((v) => !v);
       }

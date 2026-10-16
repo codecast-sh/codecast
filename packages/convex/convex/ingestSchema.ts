@@ -79,6 +79,8 @@ export const sourceConfigValidator = v.object({
   moment_storage: v.optional(v.union(v.literal("host"), v.literal("codecast"))),
   /** How long codecast-stored bodies are kept: 30d by default, keep for as long as the moment exists (decision sd-555). */
   moment_retention: v.optional(v.union(v.literal("30d"), v.literal("keep"))),
+  /** Where its judges make model calls (shared JUDGE_BACKENDS): api by default, or subscription on the extracting machine's Claude Code login. */
+  judge_on: v.optional(v.union(v.literal("api"), v.literal("subscription"))),
 });
 
 /** An app connector action a person allowed (X8). Readers need no grant. */
