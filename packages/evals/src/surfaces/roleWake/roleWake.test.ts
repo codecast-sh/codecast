@@ -156,6 +156,16 @@ function guard(serveDir: string, run: string, ...argv: string[]) {
 }
 
 describe('served reads', () => {
+  test('a captured dir whose org inputs came back empty is refused, so it never stands for its moment', () => {
+    const dir = join(home, 'snapshots', 'role-wake', 'empty-inputs');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'org-inputs.json'), '');
+    writeFileSync(join(dir, 'org-ls.json'), '{}');
+    expect(() => servedDirFor({ captured_at: '2026-10-01T00:00:00.000Z', served: 'role-wake/empty-inputs' }, { runDir: join(home, 'run') }, meta)).toThrow('empty org-inputs.json');
+    writeFileSync(join(dir, 'org-inputs.json'), '{}');
+    expect(servedDirFor({ captured_at: '2026-10-01T00:00:00.000Z', served: 'role-wake/empty-inputs' }, { runDir: join(home, 'run') }, meta)).toBe(dir);
+  });
+
   test("a fixture's reads are served, and deleting one fails frozen-reads with the argv named", () => {
     const runDir = join(home, 'run');
     mkdirSync(runDir, { recursive: true });

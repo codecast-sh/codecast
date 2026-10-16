@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { classifyWorkState, type WorkState } from "@codecast/shared/contracts";
+import { agentStatusAt } from "../../lib/liveness";
 import {
   classifySession,
   isSessionEffectivelyIdle,
@@ -20,11 +21,11 @@ const sess = (extra: Partial<InboxSession> = {}): InboxSession => ({
   ...extra,
 });
 
-// The SHARED work state a row's raw facts produce (no staleness sweep, no
-// trust decay — those are the chokepoint's time-driven inputs).
+// The SHARED work state a row's facts produce: its shipped live fields and
+// the status the row's raw one is trusted to say now (agentStatusAt).
 const sharedWorkState = (s: InboxSession): WorkState =>
   classifyWorkState({
-    agentStatus: s.agent_status ?? undefined,
+    agentStatus: agentStatusAt(s, Date.now()),
     isIdle: !!s.is_idle,
     awaitingInput: !!s.awaiting_input,
     hasPending: !!s.has_pending,

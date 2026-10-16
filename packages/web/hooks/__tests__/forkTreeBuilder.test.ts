@@ -196,7 +196,7 @@ describe("buildForkFamily — killed branches never glow needs_input", () => {
 
   test("a killed branch that still claims to be working reads idle", () => {
     expect(liveFor({ is_idle: false, agent_status: "working", inbox_killed_at: 1_000 })).toBe("idle");
-    expect(liveFor({ is_idle: false, agent_status: "working" })).toBe("working");
+    expect(liveFor({ is_idle: false, agent_status: "working", updated_at: Date.now(), last_heartbeat: Date.now() })).toBe("working");
   });
 });
 

@@ -345,14 +345,18 @@ describe("isWatchHostDead — the session can still host the watch", () => {
   test("a waiting session quiet past the trust TTL still hosts its poll (2026-08-17: a live 5h build poll)", () => {
     // Turn ended on an open background task, then nothing for 5 hours — the
     // exact card that lost its bar at the hour and drew "are you polling?".
-    expect(isWatchHostDead({ agent_status: "waiting", message_count: 940, updated_at: quietFor(5 * HOUR) }, NOW)).toBe(false);
-    // The server's own decay has already coerced that status to plain idle by
-    // then; the process is still alive, so the watch is too.
-    expect(isWatchHostDead({ agent_status: "idle", message_count: 940, updated_at: quietFor(5 * HOUR) }, NOW)).toBe(false);
+    // The row carries the daemon's raw status; its heartbeat says the process
+    // lives, so the trust decay reads it as plain idle, and the watch lives too.
+    expect(isWatchHostDead({ agent_status: "waiting", message_count: 940, updated_at: quietFor(5 * HOUR), last_heartbeat: quietFor(5_000) }, NOW)).toBe(false);
+    expect(isWatchHostDead({ agent_status: "idle", message_count: 940, updated_at: quietFor(5 * HOUR), last_heartbeat: quietFor(5_000) }, NOW)).toBe(false);
   });
 
   test("an active session quiet past the TTL still hosts (a lost idle transition, not a dead process)", () => {
-    expect(isWatchHostDead({ agent_status: "working", message_count: 10, updated_at: quietFor(3 * HOUR) }, NOW)).toBe(false);
+    expect(isWatchHostDead({ agent_status: "working", message_count: 10, updated_at: quietFor(3 * HOUR), last_heartbeat: quietFor(5_000) }, NOW)).toBe(false);
+  });
+
+  test("a working status whose heartbeat lapsed is a dead host: the trusted status says stopped", () => {
+    expect(isWatchHostDead({ agent_status: "working", message_count: 10, updated_at: quietFor(3 * HOUR), last_heartbeat: quietFor(HOUR) }, NOW)).toBe(true);
   });
 
   test("a stopped agent hosts nothing — the watch died with the process", () => {

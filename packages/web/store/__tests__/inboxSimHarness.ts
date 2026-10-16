@@ -20,7 +20,7 @@
 // the suite delivers it (deliver, drain), so it can interleave with feeds.
 // CLOCK: the realm's virtual clock behind Date.now and performance.now.
 import { expect } from "bun:test";
-import { inboxEpoch, projectInbox, shouldShowInInbox, type ProjectableInboxRow } from "@codecast/shared/contracts";
+import { INBOX_FACT_FIELDS, inboxEpoch, projectInbox, shouldShowInInbox, trustedStatusAt, type ProjectableInboxRow } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, GEN_MIN, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
 import { makeChangeTrackedDb } from "@codecast/convex/convex/changeLog";
 import { EMPTY_CONVERSATION_GRACE_MS } from "@codecast/convex/convex/cleanup";
@@ -651,8 +651,8 @@ export class Device {
 // ── The canonical projection ────────────────────────────────────────────────
 
 // Computed directly: the shared module over the server's conversations with
-// the overlay's facts merged on (the same adapter every replica applies), at
-// the payload's epoch.
+// the overlay's facts merged on (the same adapter every replica applies, the
+// status read as the verdict its raw value derives to), at the payload's epoch.
 export async function canonicalProjection(server: SimServer) {
   const { liveness, projection } = await server.overlay();
   const rows: ProjectableInboxRow[] = [];
@@ -661,9 +661,10 @@ export async function canonicalProjection(server: SimServer) {
     const lv: any = liveness[c._id];
     const row: any = { ...c };
     if (lv) {
-      for (const f of ["agent_status", "is_idle", "is_unresponsive", "awaiting_input", "message_count", "updated_at", "last_turn_allows_park"]) {
+      for (const f of INBOX_FACT_FIELDS) {
         if (lv[f] !== undefined) row[f] = lv[f];
       }
+      row.agent_status = trustedStatusAt(row, projection.epoch) ?? null;
       if (lv.asking) asking.add(c._id);
     }
     rows.push(row);

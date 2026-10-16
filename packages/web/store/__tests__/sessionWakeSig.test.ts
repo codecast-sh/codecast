@@ -7,12 +7,13 @@ import {
 } from "../inboxStore";
 
 // A plausible "live working" session: has messages, not idle, recent heartbeat.
+const T = Date.now();
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `session-${id}`,
-  updated_at: 1_000,
-  last_heartbeat: 1_000,
-  last_message_at: 1_000,
+  updated_at: T,
+  last_heartbeat: T,
+  last_message_at: T,
   agent_type: "claude_code",
   agent_status: "working",
   message_count: 5,
@@ -27,9 +28,9 @@ describe("sessionStructuralSig — heartbeat churn is inert", () => {
   it("ignores updated_at / last_heartbeat / last_message_at bumps", () => {
     const base = session("a");
     const ticked = session("a", {
-      updated_at: 99_999,
-      last_heartbeat: 99_999,
-      last_message_at: 99_999,
+      updated_at: T + 60_000,
+      last_heartbeat: T + 60_000,
+      last_message_at: T + 60_000,
     });
     expect(sessionStructuralSig(ticked)).toBe(sessionStructuralSig(base));
   });
@@ -168,8 +169,8 @@ describe("sessionsWakeSig — collection-level wake gate", () => {
     const sig1 = sessionsWakeSig(before);
     // A new map object (as syncTable hands back) with only churn fields bumped.
     const after: Record<string, InboxSession> = {
-      a: session("a", { updated_at: 50_000, last_heartbeat: 50_000, message_count: 9 }),
-      b: session("b", { updated_at: 50_000, last_heartbeat: 50_000 }),
+      a: session("a", { updated_at: T + 50_000, last_heartbeat: T + 50_000, message_count: 9 }),
+      b: session("b", { updated_at: T + 50_000, last_heartbeat: T + 50_000 }),
     };
     expect(sessionsWakeSig(after)).toBe(sig1);
   });
