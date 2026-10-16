@@ -92,6 +92,7 @@ export type ShortcutAction =
   | 'compose.focus'
   | 'compose.richToggle'
   | 'sidebar.toggleLeft'
+  | 'sidebar.back'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
   | 'terminal.toggle'
@@ -394,6 +395,12 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
+  // Out of the Chat or Tasks level of the sidebar (sidebar/SidebarDrill),
+  // back to the menu: the toggle's chord with Shift. Off mac Ctrl+Shift+[ is
+  // the previous tab, so Alt takes it there. Both spellings of shift+bracket,
+  // as tab.prev registers them.
+  { key: 'alt+shift+[', mac: 'ctrl+shift+[', action: 'sidebar.back', skipInputCheck: true, description: 'Back to the sidebar menu' },
+  { key: 'alt+shift+{', mac: 'ctrl+shift+{', action: 'sidebar.back', skipInputCheck: true, description: 'Back to the sidebar menu' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
   // The anchor is reachable from anywhere: one chord opens its slide-over

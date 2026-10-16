@@ -3688,6 +3688,7 @@ function questionPredicate(ids: ReadonlySet<string>): (session: InboxSession) =>
 // previous call's; clearing the slot memo keeps assertions on fresh refs.
 export function __resetInboxPlacementCacheForTests(): void {
   _placedMemo.clear();
+  _lastParityCheckAt = 0;
   _placementDeadlineMemo = null;
   _membershipKey = null;
   _membershipVal = null;
@@ -4105,7 +4106,16 @@ function assertPlacementParity(
 ): void {
   try {
     const { proj } = projectReplicaInbox(state, { scope: ctx.scope, focusedId: ctx.focusedId, epoch: ctx.epoch, now: ctx.now, scoped: ctx.scoped, askingOf: ctx.askingOf });
+    // An in-flight row deviates on purpose, and its riders follow it there:
+    // give each in-flight row its overlay bucket and ride again, so a teammate
+    // of an in-flight lead is compared against the same ride, not skipped.
+    const pure = new Map<string, { bucket: InboxBucket; below_fold: boolean }>();
     for (const [id, p] of proj.placements) {
+      const overlay = ctx.inFlight(id) ? ctx.placements.get(id) : undefined;
+      pure.set(id, { bucket: overlay?.bucket ?? p.bucket, below_fold: p.below_fold });
+    }
+    rideLeadPlacements(pure, (id) => ctx.scoped[id]);
+    for (const [id, p] of pure) {
       if (ctx.inFlight(id)) continue; // declared overlay carve-out
       const mine = ctx.placements.get(id);
       if (!mine) {

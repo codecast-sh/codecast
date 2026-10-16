@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../Sidebar.tsx", import.meta.url), "utf8");
 // The rail's row primitives (SectionRow, NavSection) live beside it.
 const primitives = readFileSync(new URL("../sidebar/navPrimitives.tsx", import.meta.url), "utf8");
+const chatNav = readFileSync(new URL("../sidebar/ChatNav.tsx", import.meta.url), "utf8");
+const rowSignals = readFileSync(new URL("../../lib/chatRowSignals.tsx", import.meta.url), "utf8");
 
 function block(startMarker: string, endMarker: string, text = source) {
   const start = text.indexOf(startMarker);
@@ -19,7 +21,7 @@ function block(startMarker: string, endMarker: string, text = source) {
 // vanished the moment the row was hovered and no mouse could ever reach it.
 // The chip is a control now, and a control does not yield to hover.
 test("the huddle chip is a control, not a trailing marker", () => {
-  const signals = block("function channelSignals(", "const ChatNavRow = memo(");
+  const signals = block("function channelSignals(", "\n}\n", rowSignals);
   // Past the signature, which names both slots as types.
   const body = signals.slice(signals.indexOf("return {"));
   const control = body.slice(body.indexOf("control:"), body.indexOf("trailing:"));
@@ -38,7 +40,7 @@ test("a row's control survives hover while its trailing marker steps aside", () 
 });
 
 test("both chat rows in the rail wear the same signals", () => {
-  const spreads = source.match(/\.\.\.\(?(?:live \? )?channelSignals\(/g) ?? [];
+  const spreads = (source + chatNav).match(/\.\.\.\(?(?:live \? )?channelSignals\(/g) ?? [];
   expect(spreads.length).toBe(2);
 });
 
@@ -53,7 +55,7 @@ test("the section count sits after the chevron, not inside the link", () => {
 });
 
 test("chat mention counts are red", () => {
-  const badge = source.match(/<NavCount n=\{channel\.mentionCount[^>]*\/>/)?.[0] ?? "";
+  const badge = rowSignals.match(/<NavCount n=\{channel\.mentionCount[^>]*\/>/)?.[0] ?? "";
   expect(badge).toContain('tone="bg-sol-red text-white"');
   expect(badge).toContain('kind="mention"');
   expect(source).not.toContain("bg-sol-orange text-sol-bg");
