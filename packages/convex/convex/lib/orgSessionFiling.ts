@@ -69,14 +69,29 @@ export async function applyFileSession(ctx: Ctx, userId: Id<"users">, boundary: 
   return { status: "applied", note: bound ? `${named} now works ${task.short_id} "${task.title}"` : `${named} is linked to ${task.short_id} "${task.title}", which another live session owns` };
 }
 
+/** A proposal that only files sessions, every one the caller's own: theirs
+ *  to decide on the card without being an admin, since each filing moves
+ *  nothing but where their own session sits. */
+export async function filesOnlyOwnSessions(ctx: Ctx, userId: Id<"users">, rows: ReadonlyArray<{ status: string; change: { kind: string; session?: string } }>): Promise<boolean> {
+  const live = rows.filter((r) => r.status !== "removed");
+  if (!live.length || live.some((r) => r.change.kind !== "file_session")) return false;
+  for (const r of live) {
+    const own = await findConversationByAnyRefWhere(ctx as any, String(r.change.session), async (c: any) => (await checkConversationAccess(ctx as any, userId, c)) === "owner");
+    if (!own) return false;
+  }
+  return true;
+}
+
 // ── The person's loose sessions (org-staffing.md S43) ─────────────────────
 // The sessions in the caller's own inbox that nothing places: no role holds
-// them, no task binds them, and they are no seat. Newest first, with the facts
-// a filing needs; `cast read` says the rest.
+// them, no task binds them, and they are no seat. A workflow's station and a
+// trigger's run already belong to what started them, and a stashed session is
+// out of the inbox. Newest first, with the facts a filing needs; `cast read`
+// says the rest.
 export async function looseSessionsOf(_ctx: Ctx, scan: OrgScan, userId: Id<"users">) {
   const rows = (scan.byParent.get(`user:${String(userId)}`) ?? [])
     .map((s: any) => ({ s, raw: scan.sessions.get(String(s._id))?.raw }))
-    .filter(({ s, raw }) => raw && !s.is_anchor && !raw.standing_role_id && !raw.org_role_id && !raw.active_task_id)
+    .filter(({ s, raw }) => raw && !s.is_anchor && !raw.standing_role_id && !raw.org_role_id && !raw.active_task_id && !raw.workflow_run_id && !raw.agent_task_id && !raw.inbox_stashed_at)
     .sort((a, b) => b.s.updated_at - a.s.updated_at);
   return {
     count: rows.length,

@@ -412,6 +412,20 @@ digraph my_flow {
   review -> implement [label="[R] Revise"]
 }
 \`\`\`
+
+A prompt or script can live in its own file: \`prompt="@flow/implement.md"\`, relative to the graph. Lines that share most of a flow share it rather than copy it: a variant names its base with \`extends\` and writes only how it differs. A node it writes overrides the attributes it names, \`[removed]\` takes one out, and a node it gives edges keeps exactly those, so each node's routing is read in one file. A station's prompt takes in a shared part at a line that is only \`@include <file>\`. An edit to the base or a part reaches every line on it; \`cast workflow validate <file>\` prints what a variant changes, adds, removes and routes.
+
+\`\`\`dot
+digraph trial {
+  graph [extends="live.cast"]
+  review [prompt="@trial/review.md"]      // its own prompt; every other station is live's
+  push [removed]
+  review -> card [condition="outcome = success"]
+  review -> build
+  card [shape=hexagon]
+  card -> exit
+}
+\`\`\`
 `;
 
 export const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";

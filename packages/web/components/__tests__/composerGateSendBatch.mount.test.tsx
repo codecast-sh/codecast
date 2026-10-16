@@ -7,7 +7,7 @@ mock.module("sonner", () => {
 });
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { formatPendingComments } from "../../lib/quoteFormat";
@@ -17,6 +17,7 @@ import { formatPendingComments } from "../../lib/quoteFormat";
 // evaluating (a TDZ ReferenceError; markdownMapCycles.guard.test.ts names
 // the cycle). Entering from ChatMessage closes the cycle on a lazy read.
 import "../chat/ChatMessage";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // A gated composer (onGateSend: a comment on a commit, the org page's thread
 // column beside a proposal) sends through its host, not the session rail.
@@ -35,7 +36,7 @@ afterAll(() => {
 const CONV_ID = "jx70000000000000000000000gatebat"; // 32 chars => isConvexId
 
 function fakeConvex() {
-  const client = new ConvexReactClient("https://example.convex.cloud");
+  const client = offlineConvexClient("https://example.convex.cloud");
   (client as any).mutation = async () => null;
   (client as any).query = async () => null;
   (client as any).watchQuery = () => ({ onUpdate: () => () => {}, localQueryResult: () => undefined, localQueryLogs: () => undefined, journal: () => undefined });

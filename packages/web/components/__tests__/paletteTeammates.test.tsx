@@ -1,7 +1,8 @@
 import { describe, expect, test, mock } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { Command as CommandPrimitive } from "cmdk";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // TeammateItem reads the router only through the palette's own navigation
 // callback, never at render time — a stub is enough for a static render.
@@ -13,7 +14,7 @@ mock.module("next/navigation", () => ({
 const { TeammateItem } = await import("../CommandPalette");
 
 // Never connects: static rendering fires no effects and opens no sockets.
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 
 const NOW = Date.now();
 

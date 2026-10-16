@@ -74,6 +74,19 @@ export const HEAD_AREA_CHANGE_PROMPT = [
 ].join("\n");
 export const HEAD_AREA_CHANGE_SPEC: RoleEventSpec = { event: ORG_AREA_CHANGE_EVENT, title: HEAD_AREA_CHANGE_TITLE, prompt: HEAD_AREA_CHANGE_PROMPT };
 
+// The inbox look (org-staffing.md S43): sessions gather in the person's inbox
+// every day, so the Head of People looks daily rather than at its weekly
+// review. The precheck spends nothing on a day with no new loose session: it
+// passes only when one started since this trigger last ran. The prompt names
+// where to look and leaves the judgment to the job its opening states.
+export const HEAD_INBOX_TITLE = "Look at the inbox";
+export const HEAD_INBOX_EVERY_MS = 24 * 60 * 60 * 1000;
+export const headInboxPrecheck = (role: { team_id?: unknown }): string => `cast org loose --new --team ${role.team_id ? String(role.team_id) : "personal"}`;
+export const HEAD_INBOX_PROMPT = [
+  `New sessions are loose in the inbox of the person you report to since you last looked. \`cast org loose\` lists the sessions nothing places yet, and how a filing is written.`,
+  `Keep that inbox the way your job asks. When something should move, open it with the person here in your thread as a proposal, its short id alone on its line. When nothing should, say so in one line and end the turn.`,
+].join("\n");
+
 /** The event triggers a role is armed with: every role hears for its waiting
  *  sessions; the Head of People also hears the area watch. */
 export function roleEventSpecsFor(role: { handle: string }): RoleEventSpec[] {

@@ -14,9 +14,10 @@ mock.module("next/navigation", () => ({
 }));
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // Every character typed into a new-session composer belongs to the draft the
 // instant it is typed. The composer's store write is debounced, so a dismissal
@@ -34,7 +35,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 const flush = async (ms = 20) => { await act(async () => { await tick(ms); }); };
 
 function fakeConvex() {
-  const client = new ConvexReactClient("https://happy-otter-123.convex.cloud", { skipConvexDeploymentUrlCheck: true } as any);
+  const client = offlineConvexClient("https://happy-otter-123.convex.cloud");
   (client as any).sync?.webSocketManager?.terminate?.();
   (client as any).mutation = async () => null;
   (client as any).query = async () => null;

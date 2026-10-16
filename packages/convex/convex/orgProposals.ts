@@ -15,6 +15,7 @@ import { refuseUnlessHuman } from "./orgRoles";
 import { requireWorkspaceCaller } from "./org";
 import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
+import { filesOnlyOwnSessions } from "./lib/orgSessionFiling";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
 import { setInboxStatus } from "./sessionDecisions";
@@ -110,7 +111,8 @@ export async function findChange(ctx: Ctx, ref: string): Promise<{ change: Chang
 }
 
 async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow): Promise<void> {
-  if (!(await userCanAdminRole(ctx, userId, hostShape(proposal)))) throw new Error(`Only ${proposal.short_id}'s author, the workspace owner or a team admin can decide it`);
+  if (await userCanAdminRole(ctx, userId, hostShape(proposal))) return;
+  if (!(await filesOnlyOwnSessions(ctx, userId, await changesOf(ctx, proposal._id)))) throw new Error(`Only ${proposal.short_id}'s author, the workspace owner or a team admin can decide it`);
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
