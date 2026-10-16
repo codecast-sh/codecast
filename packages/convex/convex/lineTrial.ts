@@ -1607,15 +1607,18 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     return { task: task.short_id, run_id: run._id, resumed_at: node, ...(route.to === "investigate" ? { rebuild: "investigate" as const, why: route.why } : {}) };
   }
   if (!run || !(run.status === "failed" || stopOf(run, task.status))) throw new Error(`${task.short_id}'s run ${run ? `is ${run.status}` : "does not exist"}; only a failed or stopped run is rerun here`);
-  if (!run.runner_device) throw new Error(`${task.short_id}'s run names no machine: start it with cast line trial run ${task.short_id}`);
+  // A run no machine ever claimed (the daemon took it and its runner died first) is started the way the dispatcher
+  // starts one: from its route's newest run that names a machine.
+  const from = run.runner_device ? run : (await dueProblems(ctx, project)).like[routeOf(task)];
+  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast line trial run ${task.short_id}`);
   const lost = await gateLossOf(ctx, run);
-  const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [run.runner_device]), !lost);
+  const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [from.runner_device]), !lost);
   if (refused) throw new Error(refused);
   if (lost) {
     await resumeRunAt(ctx as any, userId, run, lost.node, now);
     return { task: task.short_id, run_id: run._id, resumed_at: lost.node };
   }
-  const run_id = await queueTrialRun(ctx, userId, task, run, run.runner_device, now);
+  const run_id = await queueTrialRun(ctx, userId, task, from, from.runner_device, now);
   const stop = newApproach ? stopOf(run, task.status) : null;
   if (stop) {
     const report = task.verification_evidence?.trim() ?? "";

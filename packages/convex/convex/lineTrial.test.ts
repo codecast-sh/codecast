@@ -631,6 +631,17 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     await expect(rerunCore(broke.ctx, HOST, "ct-lost", NOW)).rejects.toThrow("billed $1000 of $1000: the cap is reached");
   });
 
+  test("a run no machine ever claimed reruns on its route's newest machine, as the dispatcher would start it (ct-59568)", async () => {
+    const w = world(1000);
+    lostAt(w, "lost", "decide", "card");
+    const r = await rerunCore(w.ctx, HOST, "ct-stale", NOW);
+    expect(r.run_id).not.toBe("workflow_runs_stale");
+    expect(w.tables.daemon_commands.map((c: any) => [JSON.parse(c.args).workflow_run_id, c.target_device_id])).toEqual([[r.run_id, "dev-mac"]]);
+    const bare = world(1000);
+    for (const x of bare.tables.workflow_runs) delete x.runner_device;
+    await expect(rerunCore(bare.ctx, HOST, "ct-stale", NOW)).rejects.toThrow("names no machine, nor does any earlier run on its route");
+  });
+
   /** A problem paused at its change card: the card's author read `read` and its fix reaches `covers`. */
   function carded(w: ReturnType<typeof world>, id: string, n: number, reach: { read: string[]; covers: string[] }, extra: Record<string, any> = {}) {
     w.tables.tasks.push(task(id, "in_review", { workflow_run_id: `workflow_runs_${id}`, user_id: HOST, team_id: TEAM, task_type: "task", priority: "medium", ...extra }));

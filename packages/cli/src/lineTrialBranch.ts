@@ -91,7 +91,10 @@ export async function freshRunBranch(cwd: string, graph: Pick<WorkflowGraph, "na
   if (fs.existsSync(path.join(repo, ".codecast", "workspace.toml"))) {
     // Built here, ready, so the run's hand attaches to it (daemon createWorktree)
     // rather than to a warm pool slot cut from the checkout's own HEAD.
-    const { acquireWorkspace } = await import("./workspace/lifecycle.js");
+    const { acquireWorkspace, releaseWorkspace } = await import("./workspace/lifecycle.js");
+    // A workspace of this name that holds no branch any more (one that broke while it was built) would
+    // refuse the start, and every later one, with no runner to say so (ct-59568): it goes first.
+    if (fs.existsSync(path.join(repo, ".codecast", "workspaces", slug))) await releaseWorkspace(repo, slug);
     await acquireWorkspace(repo, slug, { branch, startPoint: base });
   } else if (!git(repo, ["branch", branch, base]).ok) {
     throw new Error(`Could not start ${branch} from ${base}`);
