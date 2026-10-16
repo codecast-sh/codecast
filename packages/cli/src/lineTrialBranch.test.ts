@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { freshRunBranch } from "./lineTrialBranch";
+import { spawn, spawnSync } from "node:child_process";
+import { freshRunBranch, processesIn, sessionIdsOf, type RunHands } from "./lineTrialBranch";
 import { lineRunDir } from "./workflow/runner";
 
 const sh = (cwd: string, ...args: string[]) => {
@@ -45,5 +45,66 @@ describe("freshRunBranch", () => {
     // A first run on a problem has nothing to set aside.
     expect((await freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-2")).set_aside).toBeNull();
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // ct-60298: a build hand the runner settled while it worked was still in the
+  // worktree when the next run cut its fresh branch; it found its branch reset
+  // and put its fix back on it, so the next run proved against the old fix.
+  const SESSION = "9ac3b13f-6e06-4308-8b06-c3bd00000000";
+  async function earlierRunWithHand() {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "trial-hand-")));
+    const origin = path.join(root, "origin.git");
+    const repo = path.join(root, "repo");
+    spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    spawnSync("git", ["clone", "-q", origin, repo]);
+    for (const [k, val] of [["user.email", "t@t"], ["user.name", "t"], ["commit.gpgsign", "false"]]) sh(repo, "config", k, val);
+    fs.writeFileSync(path.join(repo, "a.txt"), "unfixed\n");
+    sh(repo, "add", "."); sh(repo, "commit", "-qm", "base"); sh(repo, "push", "-q", "origin", "main");
+    const tree = path.join(root, "wt");
+    sh(repo, "worktree", "add", "-q", "-b", "codecast/agentwatch-trial-ct-7", tree);
+    fs.writeFileSync(path.join(tree, "a.txt"), "fixed\n");
+    sh(tree, "commit", "-qam", "fix");
+    // The hand: a process working in the tree, started with its session id.
+    const hand = spawn("sh", ["-c", "sleep 60; :", "sh", "--session-id", SESSION], { cwd: tree, detached: true, stdio: "ignore" });
+    for (let i = 0; i < 50 && !processesIn(tree).length; i++) await new Promise((r) => setTimeout(r, 100));
+    const stopHand = () => { try { process.kill(-hand.pid!, "SIGKILL"); } catch {} };
+    return { root, repo, tree, fixed: sh(repo, "rev-parse", "codecast/agentwatch-trial-ct-7"), stopHand };
+  }
+
+  test("a session still working in the earlier run's worktree refuses the fresh run and leaves its branch as it was", async () => {
+    const { root, repo, fixed, stopHand } = await earlierRunWithHand();
+    const stopped: string[] = [];
+    const hands: RunHands = { live: async (ids) => ids.map((id) => ({ id, working: true })), stop: async (id) => { stopped.push(id); } };
+    try {
+      await expect(freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date(), hands)).rejects.toThrow(/still working/);
+      expect(stopped).toEqual([]);
+      expect(sh(repo, "rev-parse", "codecast/agentwatch-trial-ct-7")).toBe(fixed);
+    } finally {
+      stopHand();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a settled session left in the worktree is stopped, and the fresh branch starts from origin/main", async () => {
+    const { root, repo, fixed, stopHand } = await earlierRunWithHand();
+    const stopped: string[] = [];
+    const hands: RunHands = { live: async (ids) => ids.map((id) => ({ id, working: false })), stop: async (id) => { stopped.push(id); stopHand(); } };
+    try {
+      const fresh = await freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date("2026-10-16T14:23:00Z"), hands);
+      expect(stopped).toEqual([SESSION]);
+      expect(sh(repo, "rev-parse", "codecast/agentwatch-trial-ct-7")).toBe(sh(repo, "rev-parse", "origin/main"));
+      expect(sh(repo, "rev-parse", `codecast/${fresh.set_aside}`)).toBe(fixed);
+    } finally {
+      stopHand();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("sessionIdsOf reads the session id an agent was started or resumed with", () => {
+    expect(sessionIdsOf([1, 2, 3], [
+      `/Users/x/.codecast/bin/claude --permission-mode bypassPermissions --session-id ${SESSION} --model opus -- You are running unattended`,
+      "codex resume 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b",
+      "bash",
+    ].join("\n"))).toEqual([SESSION, "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b"]);
   });
 });
