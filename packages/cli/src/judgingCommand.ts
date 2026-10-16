@@ -14,7 +14,7 @@ import path from "node:path";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { lineProjectFor, scopeFor } from "./signalCommand.js";
+import { lineProjectFor, scopeFor } from "./lineScope.js";
 import { JUDGES_DIR, fileVersion } from "./momentsHost.js";
 import { execFileAsync } from "./proc.js";
 import { judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, type ExpectationsBrief, type JudgeFinding, type JudgeSpec } from "@codecast/shared/contracts/judges";

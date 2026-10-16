@@ -19,7 +19,7 @@ import SHARED_PRINCIPLES from "../../../docs/principles.md" with { type: "text" 
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { taskWorkspaceScope } from "./cardCommand.js";
 import { commandGroup } from "./commandGroups.js";
-import { lineProjectFor, scopeFor } from "./signalCommand.js";
+import { lineProjectFor, scopeFor } from "./lineScope.js";
 import { CODECAST_PRINCIPLES, loadLineProfile } from "./lineProfile.js";
 
 /**

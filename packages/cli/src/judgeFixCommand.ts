@@ -29,7 +29,7 @@ import { spawnSync } from "./proc.js";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { scopeFor } from "./signalCommand.js";
+import { scopeFor } from "./lineScope.js";
 import { JUDGES_DIR, MOMENTS_DIR, fileVersion, runExtractor, shadowDir } from "./momentsHost.js";
 import { callModel, momentForTry, repoRoot } from "./judgingCommand.js";
 import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, rulingsShown, type ExpectationsBrief, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
