@@ -10,7 +10,7 @@
 
 import { toast } from "sonner";
 import {
-  MOD_COLLECTIONS, MOD_PROTOCOL, canRead, canWrite,
+  MOD_COLLECTIONS, MOD_PROTOCOL, canRead, canReadConnector, canWrite,
   type FrameToHost, type HostToFrame, type ModContext, type ModEventName, type ModManifest, type ModNode, type ModSurface,
 } from "@codecast/shared/contracts/mods";
 import { withoutUndo } from "@platform/engine";
@@ -38,6 +38,8 @@ export type ModRow = {
   has_local?: boolean;
   local_off?: string[];
   local_devices?: { device: string; state: "running" | "off" | "failed"; error?: string; at: number }[];
+  /** Which declared secrets the author has set, and when; never a value. */
+  secrets_set?: { name: string; at: number }[];
   updated_at: number;
 };
 
@@ -51,6 +53,8 @@ export type HostBridge = {
   log: (modId: string, entries: { level: string; text: string }[]) => void;
   /** Queue a call to the mod's local half and resolve with its answer. */
   callLocal: (modId: string, method: string, args: unknown) => Promise<unknown>;
+  /** Run one of the mod's server-side requests: a connector reader, or a fetch that carries a declared secret. */
+  callServer: (modId: string, method: "connector.read" | "http.fetch", args: unknown[]) => Promise<unknown>;
 };
 
 let bridge: HostBridge | null = null;
@@ -589,6 +593,16 @@ export class ModRuntime {
         if (!this.row.is_mine && !this.row.shared) throw new Error("a local call reaches only your own mods and your team's shared ones");
         if (!bridge) throw new Error("not connected");
         return await bridge.callLocal(this.id, String(a0), a1 ?? null);
+      }
+      case "connector.read": {
+        if (!canReadConnector(this.row.manifest, String(a0))) throw new Error(`permissions.connectors does not list "${String(a0)}"`);
+        if (!bridge) throw new Error("not connected");
+        return await bridge.callServer(this.id, method, args);
+      }
+      case "http.fetch": {
+        // Only a fetch naming a secret reaches the host; the server checks the secret's origins.
+        if (!bridge) throw new Error("not connected");
+        return await bridge.callServer(this.id, method, args);
       }
       case "me": {
         const u = store.currentUser;
