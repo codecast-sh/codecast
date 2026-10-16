@@ -138,10 +138,9 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
 
 // One launch choice in the sheet's settings card: label left, the current
 // value right, tapping opens its picker.
-function SettingRow({ label, value, dot, onPress }: {
+function SettingRow({ label, value, onPress }: {
   label: string;
   value: string;
-  dot?: string;
   onPress: () => void;
 }) {
   const Theme = useTheme();
@@ -149,7 +148,6 @@ function SettingRow({ label, value, dot, onPress }: {
     <TouchableOpacity style={modalStyles.settingRow} onPress={onPress} activeOpacity={0.6}>
       <RNText style={modalStyles.settingLabel}>{label}</RNText>
       <RNView style={modalStyles.settingValueWrap}>
-        {dot ? <RNView style={[modalStyles.machineDot, { backgroundColor: dot }]} /> : null}
         <RNText style={modalStyles.settingValue} numberOfLines={1}>{value}</RNText>
       </RNView>
       <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
@@ -574,6 +572,22 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               contentContainerStyle={modalStyles.chipRow}
               keyboardShouldPersistTaps="handled"
             >
+              {/* Where the session runs leads the row: the folders after it
+                  are that machine's. Tapping it opens the machine list. */}
+              {devices.length > 0 && (
+                <TouchableOpacity
+                  style={modalStyles.folderChip}
+                  onPress={() => setOpenSheet("machine")}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`Machine: ${selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}`}
+                >
+                  <RNView style={[modalStyles.machineDot, { backgroundColor: selectedDevice?.online ? Theme.green : Theme.textMuted0 }]} />
+                  <RNText style={modalStyles.folderChipText} numberOfLines={1}>
+                    {selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
+                  </RNText>
+                  <FontAwesome name="angle-down" size={12} color={Theme.textMuted0} />
+                </TouchableOpacity>
+              )}
               {folderSearching ? null : (
                 <TouchableOpacity
                   style={modalStyles.folderChip}
@@ -613,17 +627,8 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           )}
 
           {/* The rest folds into one card: a row per choice, each opening its
-              own picker. The machine row appears only with two or more
-              machines: one machine is no choice at all. */}
+              own picker. */}
           <RNView style={modalStyles.card}>
-            {devices.length > 1 && (
-              <SettingRow
-                label="Machine"
-                value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
-                dot={selectedDevice ? (selectedDevice.online ? Theme.green : Theme.textMuted0) : undefined}
-                onPress={() => setOpenSheet("machine")}
-              />
-            )}
             {rail && (
               <SettingRow
                 label="Model"
