@@ -96,7 +96,7 @@
   "state": {
     "config": {
       "state_enabled": true,
-      "state_version": "6"
+      "state_version": "7"
     },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

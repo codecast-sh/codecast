@@ -30,7 +30,7 @@ const SIM_VERSION = "1"; // first release: cast sim, the shared simulator pool o
 const SKILLS_VERSION = "3"; // bumped: cast-ship ships a whole shared checkout with cast ship checkout
 const PR_VERSION = "2"; // bumped: cast pr create, the change guide as the walkthrough
 const MODS_VERSION = "1"; // first release: cast mod, panes, commands and fences in the app
-const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
+const STATE_VERSION = "7"; // 7: the note's shape, a headline then You / Done / Next; 6: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
   return MEMORY_VERSION;

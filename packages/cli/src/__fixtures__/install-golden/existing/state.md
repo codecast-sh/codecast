@@ -49,14 +49,25 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 `done` and `dormant` cover only the turn that declares them, and a message from the human takes the pin down, so declare again at the end of each turn. Never park an ask in prose and go dormant: queue it with `cast decide`, then declare dormant.
 
-The first line, plain and unlabeled, names the work **now** for a reader with no context: plain words, no task IDs or shorthand. Later lines carry detail (`Status:`, `Next:`, `Blocked:` render as labels); keep only lines that carry information.
+The first line says where the work stands **now**, for a reader with no context: one thought, about 60 characters, plain words; if it waits on someone, name them. Then up to three lines, one line each, only when they carry something:
+
+- `You:` what the human must do or decide, with the exact command (in backticks), link or choice
+- `Done:` what is finished, short items joined by ` · `; proof counts ("tests green")
+- `Next:` what happens next and when, in local time: the running job, your next step, or what wakes you
+
+Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless one is what the human must type, and never repeat the first line or write a line that says "nothing".
 
 ```bash
-cast state --status dormant "Waiting on CI run 8841; tr-42 re-checks at 3pm"
 cast state --status done "Shipped: all four fixes verified in the browser"
-cast state --status blocked - <<'EOF'   # multi-line, exact newlines preserved
-Migrating the sync layer to wake signatures
-Blocked: needs a prod key before the last check
+cast state --status dormant - <<'EOF'   # multi-line, exact newlines preserved
+Waiting on CI for the sync fix
+Done: fix pushed · unit tests green
+Next: 3 PM re-check, then merge if green
+EOF
+cast state --status blocked - <<'EOF'
+Release is waiting on a signing key
+You: add it to the repo secrets: `gh secret set SIGN_KEY < key.p12`
+Next: re-run the release, then verify the download
 EOF
 ```
 
