@@ -1307,8 +1307,9 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   // space under the composer. Given, the launch pickers render in the foot
   // and the context line and this project's sessions below; null while a slot
   // element hasn't mounted yet. Omitted (the compose popup), everything
-  // renders here above the host's input.
-  slots?: { foot: HTMLElement | null; below: HTMLElement | null };
+  // renders here above the host's input. `recents: false` (the compose popup)
+  // leaves out this project's sessions.
+  slots?: { foot: HTMLElement | null; below: HTMLElement | null; recents?: boolean };
   // The new-session page's recipient (ComposeRolePicker): picked, the request
   // goes to that role's standing session, which chooses project and agent, so
   // the launch pickers step aside.
@@ -1409,9 +1410,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
     return (
       <div ref={rootRef} className="flex flex-col items-center w-full">
         {role && !onlyHosted && (
-          <div className={`w-full max-w-3xl px-4 ${role.picked ? "mb-1" : "mb-6"}`}>
-            <ComposeRolePicker page picked={role.picked} onPick={role.onPick} onDone={role.onDone} />
-          </div>
+          <ComposeRolePicker page picked={role.picked} onPick={role.onPick} onDone={role.onDone} className="w-full max-w-3xl px-4 mb-1" />
         )}
         {role?.picked ? null : <>
         {hosted ? <HostedComposeIntro /> : (
@@ -1439,7 +1438,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
                 <NewSessionBucketPill conversation={conversation} />
               </div>
             </div>
-            <div ref={setRecentsSlot} className="mt-6" />
+            {slots.recents !== false && <div ref={setRecentsSlot} className="mt-6" />}
           </>,
           slots.below,
         )}

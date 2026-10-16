@@ -8,12 +8,11 @@
 //
 // The list is the workspace's roles as the org tree already holds them
 // (hooks/useOrgRoles): the viewer's direct reports first, read as their own,
-// everyone else's below and quieter. Closed, the viewer's own reports sit in
-// the composer as one-click picks, each with its standing session's state, so
-// handing work to a report is as direct as starting a session. Typing filters by name, handle, title or
-// area (lib/roleRecipients). Keyboard first: ⌥R opens it from anywhere in the
-// composer, ↑↓ move, ↵ picks and hands the caret back to the message, Esc
-// backs out; the pill and every row take a click too.
+// everyone else's below and quieter. Closed and unpicked, it shows nothing:
+// the composer stays a plain new session. Typing filters by name, handle,
+// title or area (lib/roleRecipients). Keyboard first: ⌥R opens it from
+// anywhere in the composer, ↑↓ move, ↵ picks and hands the caret back to the
+// message, Esc backs out; the picked pill and every row take a click too.
 import { useCallback, useMemo, useRef, useState } from "react";
 import { AtSign, X } from "lucide-react";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -55,8 +54,10 @@ export function useRoleRecipient() {
   return { recipient, setRecipient, recipientRef, wakeRole };
 }
 
-export function ComposeRolePicker({ picked, onPick, onDone, page }: {
+export function ComposeRolePicker({ picked, onPick, onDone, page, className = "" }: {
   picked: RoleRecipient | null;
+  /** The host's placement (width, margin), applied only while something shows. */
+  className?: string;
   /** The new-session page: a quiet centered line of faces over the headline,
    *  and a picked role becomes the headline itself. */
   page?: boolean;
@@ -158,103 +159,40 @@ export function ComposeRolePicker({ picked, onPick, onDone, page }: {
   // No roles in this workspace: the composer stays as it was.
   if (all.length === 0) return null;
 
-  if (!open && page) {
-    if (picked) {
-      return (
-        <div ref={rootRef} className="flex flex-col items-center gap-2 text-center">
-          <button type="button" onClick={openPicker} className="group flex items-center gap-3" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
-            <RoleFace role={picked.role} size={36} />
-            <h1 className="text-xl sm:text-2xl font-medium tracking-tight text-sol-text">
-              Ask <span className="underline decoration-sol-violet/60 decoration-2 underline-offset-[6px] group-hover:text-sol-violet transition-colors">{picked.name}</span>
-            </h1>
-          </button>
-          <div className="flex items-center gap-2 text-xs text-sol-text-dim">
-            <span className="text-sol-text-muted">{picked.title}</span>
-            <span className="font-mono opacity-70">@{picked.handle}</span>
-            <StandingDot r={picked} withLabel />
-            <button type="button" onClick={() => { onPick(null); onDone(); }} className="ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-sol-text hover:bg-sol-bg-alt transition-colors" aria-label="Start a fresh session instead">
-              <X className="w-3 h-3" />new session
-            </button>
-          </div>
-        </div>
-      );
-    }
-    const reports = all.filter((r) => r.mine && r.standingId);
-    return (
-      <div ref={rootRef} className="flex items-center justify-center gap-x-4 gap-y-1.5 flex-wrap text-xs">
-        {reports.map((r) => (
-          <button
-            key={r.role._id}
-            type="button"
-            data-handle={r.handle}
-            onClick={() => { onPick(r); onDone(); }}
-            className="group inline-flex items-center gap-1.5 text-sol-text-dim hover:text-sol-text transition-colors"
-            title={`Ask ${r.name}, ${r.title}`}
-          >
-            <RoleFace role={r.role} size={20} className="opacity-80 group-hover:opacity-100 transition-opacity" />
-            <span>{r.title}</span>
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={openPicker}
-          className="inline-flex items-center gap-1 text-sol-text-dim/70 hover:text-sol-violet transition-colors"
-          title="Send this request to a role instead of a fresh session"
-        >
-          <AtSign className="w-3 h-3" />
-          {reports.length > 0 ? "other" : "ask a role"}
-          <span className="inline-flex items-center gap-[3px] ml-0.5 opacity-60"><KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap></span>
+  if (!open) {
+    // Unpicked: nothing on screen, only the ⌥R listener's anchor.
+    if (!picked) return <div ref={rootRef} hidden />;
+    if (page) return (
+      <div ref={rootRef} className={`flex flex-col items-center gap-2 text-center ${className}`}>
+        <button type="button" onClick={openPicker} className="group flex items-center gap-3" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
+          <RoleFace role={picked.role} size={36} />
+          <h1 className="text-xl sm:text-2xl font-medium tracking-tight text-sol-text">
+            Ask <span className="underline decoration-sol-violet/60 decoration-2 underline-offset-[6px] group-hover:text-sol-violet transition-colors">{picked.name}</span>
+          </h1>
         </button>
+        <div className="flex items-center gap-2 text-xs text-sol-text-dim">
+          <span className="text-sol-text-muted">{picked.title}</span>
+          <span className="font-mono opacity-70">@{picked.handle}</span>
+          <StandingDot r={picked} withLabel />
+          <button type="button" onClick={() => { onPick(null); onDone(); }} className="ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-sol-text hover:bg-sol-bg-alt transition-colors" aria-label="Start a fresh session instead">
+            <X className="w-3 h-3" />new session
+          </button>
+        </div>
       </div>
     );
-  }
-
-  if (!open) {
-    if (picked) {
-      return (
-        <div ref={rootRef} className="flex items-center gap-2 w-full min-w-0 rounded-lg border border-sol-violet/40 bg-sol-violet/[0.07] pl-2.5 pr-1.5 py-1.5 text-xs">
-          <RoleFace role={picked.role} size={20} />
-          <button type="button" onClick={openPicker} className="flex items-center gap-1.5 min-w-0 flex-1 text-left hover:opacity-90" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
-            <span className="text-sol-text-dim shrink-0">To</span>
-            <RoleLine r={picked} handle />
-            <StandingDot r={picked} withLabel />
-          </button>
-          <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim/70 shrink-0">
-            <KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap> change
-          </span>
-          <button type="button" onClick={() => { onPick(null); onDone(); }} className="p-1 rounded text-sol-text-dim/70 hover:text-sol-red hover:bg-sol-red/10 transition-colors shrink-0" aria-label="Start a fresh session instead">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      );
-    }
-    const reports = all.filter((r) => r.mine && r.standingId);
     return (
-      <div ref={rootRef} className="flex items-center gap-1.5 w-full min-w-0 flex-wrap">
-        {reports.length > 0 && <span className="text-xs text-sol-text-dim shrink-0 pr-0.5">To</span>}
-        {reports.map((r) => (
-          <button
-            key={r.role._id}
-            type="button"
-            data-handle={r.handle}
-            onClick={() => { onPick(r); onDone(); }}
-            className="inline-flex items-center gap-1.5 pl-1 pr-2 py-0.5 text-xs rounded-full border border-sol-border/50 text-sol-text-muted hover:text-sol-text hover:border-sol-violet/50 hover:bg-sol-violet/5 transition-colors min-w-0"
-            title={`${r.name}, ${r.title}`}
-          >
-            <RoleFace role={r.role} size={16} />
-            <span className="truncate">{r.title}</span>
-            <StandingDot r={r} />
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={openPicker}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-violet hover:border-sol-violet/50 hover:bg-sol-violet/5 transition-colors"
-          title="Send this request to one of your roles instead of a fresh session"
-        >
-          <AtSign className="w-3 h-3" />
-          {reports.length > 0 ? "Other role" : "To a role"}
-          <span className="inline-flex items-center gap-[3px] ml-1 opacity-70"><KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap></span>
+      <div ref={rootRef} className={`flex items-center gap-2 w-full min-w-0 rounded-lg border border-sol-violet/40 bg-sol-violet/[0.07] pl-2.5 pr-1.5 py-1.5 text-xs ${className}`}>
+        <RoleFace role={picked.role} size={20} />
+        <button type="button" onClick={openPicker} className="flex items-center gap-1.5 min-w-0 flex-1 text-left hover:opacity-90" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
+          <span className="text-sol-text-dim shrink-0">To</span>
+          <RoleLine r={picked} handle />
+          <StandingDot r={picked} withLabel />
+        </button>
+        <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim/70 shrink-0">
+          <KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap> change
+        </span>
+        <button type="button" onClick={() => { onPick(null); onDone(); }} className="p-1 rounded text-sol-text-dim/70 hover:text-sol-red hover:bg-sol-red/10 transition-colors shrink-0" aria-label="Start a fresh session instead">
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     );
@@ -263,7 +201,7 @@ export function ComposeRolePicker({ picked, onPick, onDone, page }: {
   const firstOther = shown.findIndex((r) => !r.mine);
   const byHandle = query.trimStart().startsWith("@");
   return (
-    <div ref={rootRef} className="w-full rounded-lg border border-sol-violet/40 bg-sol-bg-alt/40 ring-1 ring-sol-violet/20 text-xs" role="combobox" aria-expanded="true" aria-haspopup="listbox" aria-controls="compose-role-list">
+    <div ref={rootRef} className={`w-full rounded-lg border border-sol-violet/40 bg-sol-bg-alt/40 ring-1 ring-sol-violet/20 text-xs ${className}`} role="combobox" aria-expanded="true" aria-haspopup="listbox" aria-controls="compose-role-list">
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-sol-border/40">
         <AtSign className="w-3.5 h-3.5 text-sol-violet shrink-0" />
         <input
