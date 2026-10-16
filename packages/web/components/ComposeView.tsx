@@ -607,7 +607,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         // sheet is sized to one ask rather than to the developer's form.
         // The assistant's sheet is sized to its content (mark, heading,
         // starters, composer) up to the frame, so no empty paper sits above.
-        !docked ? `w-[94vw] ${hosted ? "max-w-[640px] [--frame-h:min(80vh,460px)] max-h-[var(--frame-h)]" : "max-w-[960px] [--frame-h:min(88vh,680px)] h-[var(--frame-h)]"} [--composer-max-h:calc(var(--frame-h)*0.45)] rounded-xl zoom-in-95 slide-in-from-top-2`
+        !docked ? `w-[94vw] ${hosted ? "max-w-[640px] [--frame-h:min(80vh,460px)] max-h-[var(--frame-h)]" : `max-w-[960px] [--frame-h:min(88vh,680px)] ${pageLayout ? "max-h-[var(--frame-h)]" : "h-[var(--frame-h)]"}`} [--composer-max-h:calc(var(--frame-h)*0.45)] rounded-xl zoom-in-95 slide-in-from-top-2`
           : collapsed ? "w-[280px] max-w-full rounded-t-lg border-b-0 slide-in-from-bottom-4"
           : "w-[460px] max-w-full [--frame-h:calc(100vh-5rem)] max-h-[var(--frame-h)] rounded-t-xl border-b-0 slide-in-from-bottom-4"
       }`}
@@ -624,7 +624,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
-      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : pageLayout ? "flex-1 min-h-0 justify-end pt-6 pb-5" : "flex-1 min-h-0 pt-6"}`}>
+      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : pageLayout ? "min-h-0 justify-end pt-12 pb-5" : "flex-1 min-h-0 pt-6"}`}>
         {conversation && !onlyHosted && (
           <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} className={`shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`} />
         )}
@@ -662,7 +662,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           escapeCloses
         />
       )}
-      {conversation && pageLayout && <div ref={setBelowSlot} className="flex-1 min-h-0 overflow-y-auto pb-4" />}
+      {conversation && pageLayout && <div ref={setBelowSlot} className="shrink-0 pb-6" />}
       {confirmClose && (
         <DiscardDraftConfirm
           stubId={stubIdRef.current}
