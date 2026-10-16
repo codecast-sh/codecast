@@ -322,6 +322,9 @@ describe('org-review rescore', () => {
       expect(fixed.evidence.summary).toBe('closes ct-1, which the labels say must stay open');
       expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8')).gates.find((g: { id: string }) => g.id === 'no-wrong-close').pass).toBe(false);
       expect(JSON.parse(readFileSync(join(dir, 'grade-auto.json'), 'utf8')).records.wrong_close).toEqual(['ct-1']);
+      // A label of the freeze's own (./evals freeze label) grades it in place of the workspace's, as check grades it.
+      writeFileSync(join(home, 'labels', 'org-review', `${f.id}.json`), JSON.stringify(SETS));
+      expect((await wrongClose()).pass).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.CODECAST_EVALS_HOME;
       else process.env.CODECAST_EVALS_HOME = prev;

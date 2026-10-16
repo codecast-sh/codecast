@@ -11,7 +11,7 @@ import { readAgentRun, readCallRun } from '../adapters/dryRun';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { criteriaCheck, judgeMomentOf, rejudgeStored, storedReply } from '../adapters/judge';
 import { routeGates, scoreOf, stampGuard } from '../adapters/replay';
-import { hasSnapshot, loadSnapshot } from '../adapters/resolver';
+import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
 import { harnessExit, scoreVersionName, thenFiles, unitDirs, type RunJson } from '../layout';
 import { homePaths } from '../paths';
@@ -45,7 +45,7 @@ export function registerGrade(program: Command): void {
       const ref = flags.freeze ?? (existsSync(join(dir, 'run.json')) ? (JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')) as { freezeId?: string }).freezeId : undefined);
       const freeze = ref ? await codecastFreezeStore().get(ref) : null;
       if (ref && !freeze) throw new Error(`no freeze ${ref}`);
-      const score = impl.grade(dir, label, freeze ?? undefined);
+      const score = impl.grade(dir, label ?? (freeze ? loadLabel(freeze) : undefined), freeze ?? undefined);
       if (flags.json) return console.log(JSON.stringify(score, null, 2));
       console.log(renderScore(score, renderOpts({ full: true })).join('\n'));
       if (!score.pass) process.exitCode = 1;
@@ -110,8 +110,8 @@ export async function rescoreRun(runDir: string, opts: { rejudge?: boolean } = {
   const freeze = impl.allowedRefusals || impl.grade ? await codecastFreezeStore().get(run.freezeId) : null;
   const allowedHere = freeze && impl.allowedRefusals ? impl.allowedRefusals(loadSnapshot(freeze).snap) : [];
   const fresh = routeGates(meta, harnessRuns, allowedHere);
-  // A surface that grades a finished dir (org-review) grades it again against today's labels, so a label fixed after the run reaches the score.
-  const regraded = freeze && impl.grade ? impl.grade(runDir, undefined, freeze) : null;
+  // A surface that grades a finished dir (org-review) grades it again against today's labels (the freeze's own, as check grades it), so a label fixed after the run reaches the score.
+  const regraded = freeze && impl.grade ? impl.grade(runDir, loadLabel(freeze), freeze) : null;
   const own = regraded ?? stored;
   const gates = [...fresh, ...own.gates.filter((g) => !ROUTE_GATES.has(g.id))];
   const judged = opts.rejudge ? await rejudgeRun(runDir, impl, run.freezeId, stored) : null;

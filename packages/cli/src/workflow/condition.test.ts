@@ -124,6 +124,11 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     // A planner that pinned blocked stops the run; a blocked handoff left on the task by an earlier run does not.
     ["handoff = blocked and station_blocked = plan", { handoff: "blocked", station_blocked: "plan" }, true],
     ["handoff = blocked and station_blocked = plan", { handoff: "blocked" }, false],
+    ["outcome = failure and ship.exit_code = 3", { outcome: "failure", "ship.exit_code": "3" }, true],
+    ["outcome = failure and ship.exit_code = 3", { outcome: "failure", "ship.exit_code": "1" }, false],
+    ["outcome = failure and ship.exit_code = 3", { outcome: "success", "ship.exit_code": "3" }, false],
+    ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "1" }, true],
+    ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "3" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {
