@@ -24,10 +24,12 @@ import { useNeedsInputCount, useNewResultsCount } from "../hooks/useNeedsInputCo
 import { useScopedDecisionQueue } from "../hooks/useDecisionQueue";
 import { waitingOnPerson } from "../lib/decisionQueue";
 import { chatUnreadTotals, useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
+import { useOpenDm } from "../hooks/useOpenDm";
 import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
 import { useChannelMenu } from "../hooks/useChannelMenu";
-import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName } from "../lib/chatViews";
+import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName, suggestedDmMembers } from "../lib/chatViews";
+import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { CommentAvatar } from "./comments/CommentAvatar";
 import { readPins, isPinned, isThreadsPin, pinApp, togglePin, type SidebarPin } from "../lib/sidebarPins";
@@ -39,7 +41,7 @@ import { activeViewId, currentViewId, fitsHostedMode, VIEW_ID_KEY } from "../lib
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
-import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, Phone, PhoneCall, Monitor, Smartphone, PanelRight } from "lucide-react";
+import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone, PanelRight } from "lucide-react";
 import { useBarlessShell } from "../hooks/useBarlessShell";
 import { GlobalSearch } from "./GlobalSearch";
 import { TeamSwitcher } from "./TeamSwitcher";
@@ -249,6 +251,7 @@ const ChatNavRow = memo(function ChatNavRow({
   // always mounted and memo-isolated, and teamMembers re-pushes on presence
   // heartbeats that change nothing a rail row shows.
   const { members: teamMembers, viewerId: viewer } = useChatMembers();
+  const openDm = useOpenDm();
   // The app's one context-menu system: one instance for the whole list, rows
   // open it from the ⋯ button and from right-click alike.
   const channelMenu = useChannelMenu();
@@ -278,13 +281,7 @@ const ChatNavRow = memo(function ChatNavRow({
   // Count what the pins don't already show: a pinned DM's mentions badge its
   // pinned row, and repeating them on Chat points at a list that hides them.
   const { channels, mentions } = chatUnreadTotals(pinsShown ? ordered : rail);
-  // The rail lists only the rooms that need you: unread, mentioned, or the one
-  // on screen (so opening a room never makes its row vanish under you). Every
-  // other room lives in the chat page's own list, one row away.
-  const needsYou = ordered.filter(
-    (c) => (c.unreadCount ?? 0) > 0 || (c.mentionCount ?? 0) > 0 || pathname === `/chat/${c.id}`,
-  );
-  const items = needsYou.map((c) => {
+  const items = ordered.map((c) => {
     const counterpart = dmCounterpart(c, teamMembers);
     const dmIcon = counterpart ? (
       <CommentAvatar
@@ -331,19 +328,33 @@ const ChatNavRow = memo(function ChatNavRow({
     };
   });
 
-  const allRooms: SectionRowSpec = {
-    id: "all-rooms",
-    name: "All rooms",
-    path: "/chat",
-    icon: <Hash className="w-3 h-3 flex-shrink-0 opacity-60" />,
-    active: pathname === "/chat",
+  // The DM half of the rail never runs dry: teammates without an open room sit
+  // below the real conversations, dimmer, one click from becoming one. Same
+  // helper as the chat page's rail, so the two lists cannot disagree.
+  const suggestedItems = suggestedDmMembers(
+    rail.filter((c) => c.kind === "dm"),
+    teamMembers,
+    viewer,
+    5,
+  ).map((m) => ({
+    id: `suggest-${m._id}`,
+    name: memberName(m),
+    title: `Message ${memberName(m)}`,
+    icon: (
+      <span className="opacity-70">
+        <CommentAvatar name={memberName(m)} image={memberAvatarUrl(m)} size={14} letters={1} />
+      </span>
+    ),
+    active: false,
     dim: true,
-    trailing: <span className="text-[10px] tabular-nums text-sol-text-dim">{rail.length}</span>,
+    // The affordance appears where a real row's actions do: a pencil on hover
+    // says "click starts a conversation" without shouting on every row.
+    trailing: <SquarePen className="w-3 h-3 text-sol-text-dim opacity-0 group-hover/v:opacity-100 flex-shrink-0" aria-hidden="true" />,
     onSelect: () => {
-      router.push("/chat");
+      openDm([String(m._id)]);
       onMobileClose?.();
     },
-  };
+  }));
 
   return (
     <>
@@ -353,7 +364,7 @@ const ChatNavRow = memo(function ChatNavRow({
         onMobileClose={onMobileClose}
         channels={channels}
         mentions={mentions}
-        items={[...items, allRooms]}
+        items={[...items, ...suggestedItems]}
         headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}

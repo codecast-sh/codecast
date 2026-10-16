@@ -17,13 +17,11 @@ const api = _api as any;
 /** Feeds the store's `mods` and `modObjects` collections. Mounted once, in HostFeeders. */
 export function useSyncMods(): void {
   useSyncCollection("modObjects", api.modObjects.webList, {});
-  useSyncCollection("modState", api.modLocal.webState, {});
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  useSyncCollection(
-    "mods",
-    api.mods.webList,
-    activeTeamId && !isConvexId(String(activeTeamId)) ? "skip" : activeTeamId ? { team_id: activeTeamId } : {},
-  );
+  // The team's shared mods, and what their local halves publish, come with the active team.
+  const teamArgs = activeTeamId && !isConvexId(String(activeTeamId)) ? "skip" : activeTeamId ? { team_id: activeTeamId } : {};
+  useSyncCollection("modState", api.modLocal.webState, teamArgs);
+  useSyncCollection("mods", api.mods.webList, teamArgs);
 }
 
 const EMPTY: Record<string, ModRow> = {};

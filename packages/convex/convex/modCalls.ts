@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
-import { ownMod, tokenUser } from "./modLocal";
+import { ownMod, reachesMod, tokenUser } from "./modLocal";
 
 /**
  * Calls from a mod's UI into its local half ($.local.call), as a queue: the
@@ -13,12 +13,16 @@ import { ownMod, tokenUser } from "./modLocal";
 
 const CALLS_KEPT = 100;
 
-/** Queue a call into a mod's local half. The author's own mods only: the call runs on their machine. */
+/**
+ * Queue a call into a mod's local half. It runs on the author's machines, so
+ * it lands in the author's queue (`user_id`) whoever made it; `caller_id` is
+ * who reads the answer. A shared mod takes calls from every member of its team.
+ */
 export async function enqueueCall(ctx: any, userId: Id<"users">, mod: any, method: string, callArgs: unknown) {
-  if (!mod || String(mod.user_id) !== String(userId)) throw new Error("a local call reaches only your own mods");
+  if (!(await reachesMod(ctx, userId, mod))) throw new Error("a local call reaches only your own mods and your team's shared ones");
   if (!mod.local_code) throw new Error(`${mod.name} has no local half`);
   const now = Date.now();
-  const id = await ctx.db.insert("mod_calls", { mod_id: mod._id, user_id: userId, method: method.slice(0, 80), args: callArgs ?? null, status: "pending", created_at: now, updated_at: now });
+  const id = await ctx.db.insert("mod_calls", { mod_id: mod._id, user_id: mod.user_id, caller_id: userId, method: method.slice(0, 80), args: callArgs ?? null, status: "pending", created_at: now, updated_at: now });
   const old = await ctx.db.query("mod_calls").withIndex("by_mod_created", (q: any) => q.eq("mod_id", mod._id)).order("desc").take(CALLS_KEPT + 20);
   for (const c of old.slice(CALLS_KEPT)) await ctx.db.delete(c._id);
   return id;
@@ -26,7 +30,7 @@ export async function enqueueCall(ctx: any, userId: Id<"users">, mod: any, metho
 
 export async function readCall(ctx: any, userId: Id<"users">, id: Id<"mod_calls">) {
   const call = await ctx.db.get(id);
-  if (!call || String(call.user_id) !== String(userId)) return null;
+  if (!call || String(call.caller_id ?? call.user_id) !== String(userId)) return null;
   return { status: call.status, result: call.result, error: call.error, device_name: call.device_name };
 }
 
