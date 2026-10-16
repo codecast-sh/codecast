@@ -43,3 +43,10 @@ export function isTemplateInstance(unit: string): boolean {
 export function autostartDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CODECAST_NO_AUTOSTART === "1" || env.CODECAST_NO_AUTOSTART === "true";
 }
+
+/** This process runs under a systemd service (INVOCATION_ID is set for every
+ *  service process) and this user has a daemon unit: the unit restarts the
+ *  daemon itself, so a restart is an exit, never a spawned replacement. */
+export function supervisedBySystemdUnit(env: NodeJS.ProcessEnv = process.env, unit: () => string | null = findSystemDaemonUnit): boolean {
+  return !!env.INVOCATION_ID && unit() !== null;
+}
