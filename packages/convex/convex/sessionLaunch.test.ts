@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { dispatch } from "./dispatch";
 import { createSessionFromCli } from "./spawn";
-import { getDeviceLocalRoots, listAgentBoxes, listDevices, performRemoveDevices, performSetDeviceShares, resolveReachableRunnerDevice } from "./devices";
+import { getDeviceLocalRoots, listAgentBoxes, listDevices, performReassignToDevice, performRemoveDevices, performSetDeviceShares, resolveReachableRunnerDevice } from "./devices";
 import { reconfigureSession } from "./conversations";
 import { canAccessConversation } from "./lib/access";
 import { listTeamMachines, sessionLaunchRunner } from "./sessionLaunch";
@@ -345,5 +345,31 @@ describe("reconfigureSession — park, un-park and placed-row rules (ct-49427)",
     // A model pick from the co-owner still rides the placement.
     await reconfigure(db, { model: "opus" }, CO_OWNER);
     expect((await db.get("conv_1")).model).toBe("claude-opus");
+  });
+});
+
+describe("moving a session onto a team machine", () => {
+  const withLaptopSession = () => {
+    const db = fixture();
+    db._tables.conversations.push({ _id: "conv_move", session_id: "sess_move", user_id: ME, owner_device_id: "laptop", project_path: "/Users/me/src/app", status: "active" });
+    return db;
+  };
+
+  test("the session runs under the box's account and the mover stays its owner", async () => {
+    const db = withLaptopSession();
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv_move" as any, device_id: DEVICE });
+    expect(await db.get("conv_move" as any)).toMatchObject({ user_id: BOT, author_user_id: ME, owner_user_id: ME, owner_device_id: DEVICE });
+    expect(db._tables.session_owners).toMatchObject([{ conversation_id: "conv_move", user_id: ME }]);
+    const resume = db._tables.daemon_commands.find((c: any) => c.command === "resume_session");
+    expect(resume).toMatchObject({ user_id: BOT, target_device_id: DEVICE });
+    expect(JSON.parse(resume.args)).toMatchObject({ reparented: true, cross_user: true });
+  });
+
+  test("a machine the viewer's teams were never given stays out of reach", async () => {
+    for (const device_id of ["person", "other-bot"]) {
+      const db = withLaptopSession();
+      await expect(performReassignToDevice({ db }, ME as any, { conversation_id: "conv_move" as any, device_id })).rejects.toThrow("Unknown device");
+      expect(await db.get("conv_move" as any)).toMatchObject({ user_id: ME, owner_device_id: "laptop" });
+    }
   });
 });
