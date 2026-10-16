@@ -312,6 +312,18 @@ recorded as skipped, grouping falls back to the finding's key, and a call
 node fails with the reason. The team settings show the month's spend against
 the cap, where it went, how many calls were skipped, and earlier months.
 
+A source can move its judges off the budget: `cast sources set <source>
+--judge-on subscription`. Its judge calls then run on the Claude Code login
+of the machine that hands the moment in (`cli/src/subscriptionCall.ts`: the
+same system prompt, user message and model, no tools, one turn, under a
+private config dir so no transcript reaches the inbox). The server builds
+each request as before and hands them back with the moment
+(`JudgeHandoff`); the daemon runs them and posts the replies to
+`/cli/moments/judged`, which records them through the same path an API reply
+takes (`moments.settleJudge`), with `backend: "subscription"` on the run.
+`cast line moments rejudge`, `cast line judges try` and the judge-fix A/B
+(`base`, `ab`) follow the source's setting, or `--on api|subscription`.
+
 ## LL11. Improving a judge
 
 LL4's "improve a judge", as built (`convex/judgeReview.ts`,

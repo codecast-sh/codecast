@@ -62,7 +62,7 @@ export function OrgIntroAnywhere() {
       risen.current = true;
       showOrgIntroCard({
         onAnswer: () => markOrgUpsellSeen(useInboxStore.getState()),
-        onSee: () => router.push("/org"),
+        onSee: () => router.push("/org?panel=open"),
       });
     }, ORG_MEET_SETTLE_MS);
     return () => window.clearTimeout(t);
@@ -74,4 +74,4 @@ export function OrgIntroAnywhere() {
 // Dev console hook, the meeting offer's convention: __showOrgIntroCard() raises
 // the card without the gate, so the look can be checked in any state.
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined")
-  (window as any).__showOrgIntroCard = () => showOrgIntroCard({ onAnswer: () => {}, onSee: () => { window.location.assign("/org"); } });
+  (window as any).__showOrgIntroCard = () => showOrgIntroCard({ onAnswer: () => {}, onSee: () => { window.location.assign("/org?panel=open"); } });

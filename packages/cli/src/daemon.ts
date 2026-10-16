@@ -397,6 +397,7 @@ import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConf
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
+import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -25108,6 +25109,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const data = await fetchExport(siteUrl, config.auth_token, conversationId);
       if (!hasResumableMessages(data)) {
         logDelivery(`Reconstitution skipped for ${sessionId.slice(0, 8)}: conversation has no resumable messages`);
+        unresumableConversations.add(conversationId);
         return false;
       }
       const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
@@ -26670,77 +26672,85 @@ async function deliverMessageIntoSession(
     }
   }
 
+  // Try delivering via a recently started tmux session (from start_session command)
+  const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
+    try {
+      await tmuxExec(["has-session", "-t", entry.tmuxSession]);
+      let ready = false;
+      const startTime = Date.now();
+      for (let i = 0; i < 60; i++) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
+        const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
+        if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
+        if (probe.state === "fatal") {
+          log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
+          deleteStartedSession(conversationId);
+          return false;
+        }
+        if (probe.state === "ready") {
+          log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
+          ready = true;
+          break;
+        }
+      }
+      if (!ready) {
+        log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+      }
+      // Brief settle after the prompt paints. This is NOT the readiness
+      // guarantee — injectViaTmux gates Enter on the pasted payload actually
+      // rendering in the composer (awaitTmuxComposerPayload, ct-40212), so a
+      // slow input handler stalls the gate, not the submit. The 500ms just
+      // lets the freshly painted frame stop redrawing, and a client with no
+      // readiness entry of its own keeps exactly that.
+      const readiness = localAgentClient(entry.agentType).paneReadiness;
+      await new Promise(resolve => setTimeout(resolve, readiness?.settleMs ?? 500));
+      const startedTmuxTarget = entry.tmuxSession + ":0.0";
+      // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
+      // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
+      // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
+      // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
+      // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
+      // "delivered". If we marked after and the ack won the race it would find no row and the
+      // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
+      // → duplicate reply. Marking first guarantees the ack always has a row to promote.
+      await deliveryStep(messageId, "admit_started", admit);
+      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+      await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
+      syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+      log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+      watchForPrompt(startedTmuxTarget, conversationId);
+      return true;
+    } catch (err) {
+      if (err instanceof PendingDeliveryHeldError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // A deaf-but-painted composer (payload never rendered) or a paste that
+      // provably never reached the agent are conditions of THIS healthy,
+      // still-booting pane. Falling through would start a SECOND instance
+      // beside it (the incident's duplicated-backend shape) — rethrow so the
+      // delivery layer retries into the same pane after backoff instead.
+      if (isDeliveryVerdict(err)) throw err;
+      log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
+      // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
+      if (Date.now() - entry.startedAt > 60_000) {
+        deleteStartedSession(conversationId);
+      }
+      return false;
+    }
+  };
+
+  // A blank agent for this conversation, with the message typed into it: the
+  // fallback for a conversation that has no session to reach or resume.
+  const deliverViaFreshStart = async (): Promise<boolean> => {
+    const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
+    if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
+    return !!freshEntry && await tryStartedTmux(freshEntry);
+  };
+
   if (!sessionId) {
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
-    // Try delivering via a recently started tmux session (from start_session command)
-    const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
-      try {
-        await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        let ready = false;
-        const startTime = Date.now();
-        for (let i = 0; i < 60; i++) {
-          await new Promise(resolve => setTimeout(resolve, 250));
-          // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
-          const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
-          if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
-          if (probe.state === "fatal") {
-            log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
-            deleteStartedSession(conversationId);
-            return false;
-          }
-          if (probe.state === "ready") {
-            log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
-            ready = true;
-            break;
-          }
-        }
-        if (!ready) {
-          log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
-        }
-        // Brief settle after the prompt paints. This is NOT the readiness
-        // guarantee — injectViaTmux gates Enter on the pasted payload actually
-        // rendering in the composer (awaitTmuxComposerPayload, ct-40212), so a
-        // slow input handler stalls the gate, not the submit. The 500ms just
-        // lets the freshly painted frame stop redrawing, and a client with no
-        // readiness entry of its own keeps exactly that.
-        const readiness = localAgentClient(entry.agentType).paneReadiness;
-        await new Promise(resolve => setTimeout(resolve, readiness?.settleMs ?? 500));
-        const startedTmuxTarget = entry.tmuxSession + ":0.0";
-        // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
-        // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
-        // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
-        // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
-        // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
-        // "delivered". If we marked after and the ack won the race it would find no row and the
-        // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
-        // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        await deliveryStep(messageId, "admit_started", admit);
-        markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
-        syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-        log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        watchForPrompt(startedTmuxTarget, conversationId);
-        return true;
-      } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        // A deaf-but-painted composer (payload never rendered) or a paste that
-        // provably never reached the agent are conditions of THIS healthy,
-        // still-booting pane. Falling through would start a SECOND instance
-        // beside it (the incident's duplicated-backend shape) — rethrow so the
-        // delivery layer retries into the same pane after backoff instead.
-        if (isDeliveryVerdict(err)) throw err;
-        log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
-        // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
-        if (Date.now() - entry.startedAt > 60_000) {
-          deleteStartedSession(conversationId);
-        }
-        return false;
-      }
-    };
-
     const started = startedSessionTmux.get(conversationId);
     if (started && await tryStartedTmux(started)) return true;
 
@@ -26786,9 +26796,7 @@ async function deliverMessageIntoSession(
         sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
         if (!sessionId) {
           logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-          const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
-          if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
-          if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+          if (await deliverViaFreshStart()) return true;
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
@@ -26799,9 +26807,7 @@ async function deliverMessageIntoSession(
       sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
       if (!sessionId) {
         logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-        const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
-        if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
-        if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+        if (await deliverViaFreshStart()) return true;
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
@@ -27005,6 +27011,15 @@ async function deliverMessageIntoSession(
   // days, ~780 rows across the fleet on 2026-10-14, ct-56547).
   if (fatal && unresumableConversations.has(conversationId)) {
     throw new UndeliverableMessageError(`session ${sessionId.slice(0, 8)} cannot resume (${resumeFatalReasons.get(sessionId)}) and its conversation has nothing to rebuild it from`);
+  }
+  // A session that died before its first message reached it (a reboot while
+  // its first delivery was still typing) left no transcript and its
+  // conversation holds nothing to rebuild one from, so no resume can ever
+  // succeed. Nothing is lost by starting it over: a blank agent with this
+  // message is exactly the session that was meant to exist.
+  if (unresumableConversations.has(conversationId) && !findSessionFile(sessionId)) {
+    logDelivery(`Session ${sessionId.slice(0, 8)} never started and has nothing to resume, starting fresh for conv=${conversationId.slice(0, 12)}`);
+    if (await deliverViaFreshStart()) return true;
   }
   logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${fatal ? "fatal" : "transient"})`);
   return false;
@@ -27665,6 +27680,16 @@ function restartDaemonProcess(reason: string): void {
     // free the pid file by exiting and kick the job so launchd's instance wins it.
     skipRespawn = true;
     if (!requestLaunchdRestart()) spawnReplacement();
+    persistLogQueue();
+    process.exit(0);
+  }
+  // A systemd unit (provisionLinux.ts: Restart=always, KillMode=process)
+  // brings its daemon back on exit. A replacement spawned here would outlive
+  // the exit inside the unit's cgroup and hold the pid file, so every restart
+  // of the unit exits "already running" and the unit loops every RestartSec
+  // forever (28k restarts on the Linux host, 2026-10-16).
+  if (supervisedBySystemdUnit()) {
+    skipRespawn = true;
     persistLogQueue();
     process.exit(0);
   }

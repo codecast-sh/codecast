@@ -5,7 +5,7 @@ import { useCallback } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Layers, LayoutTemplate, ShieldCheck, Workflow } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
-import { DecisionAnswerControls } from "./DecisionAnswerControls";
+import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { askingSessionName, decisionHref, gateRunLabel, ladderRecommendation, runHref } from "../../lib/decisionLinks";
 import { optionPageSlugs } from "../../lib/decisionQueue";
@@ -100,6 +100,14 @@ export function DecisionCompactCard({
     />
   );
 }
+
+// A settled row says how it settled beside when it was asked; an answered
+// one also shows the answer under the question.
+const SETTLED_STATE: Record<string, { label: string; className: string }> = {
+  answered: { label: "answered", className: "text-sol-green" },
+  dismissed: { label: "dismissed", className: "text-sol-text-dim" },
+  withdrawn: { label: "withdrawn", className: "text-sol-text-dim" },
+};
 
 /** The compact card drawn from props: the decision, the asking session's row,
  *  the task and stack it is bound to, the clock, and the answer and jump
@@ -226,6 +234,7 @@ export function DecisionCompactCardView({
               ),
             },
             { key: "asked", className: "cc-nowrap", node: asked },
+            ...(!pending ? [{ key: "state", className: `cc-nowrap ${SETTLED_STATE[decision.status]?.className ?? "text-sol-text-dim"}`, node: SETTLED_STATE[decision.status]?.label ?? decision.status }] : []),
             { key: "chips", plain: true, className: "flex-wrap items-center gap-2 min-w-0", node: (
               <>
                 {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
@@ -327,6 +336,9 @@ export function DecisionCompactCardView({
         )}
         {pageCount > 0 && (
           <div className="mt-2"><OptionPages decision={decision} answerable={pending && kind === "single"} onAnswer={(i) => onAnswer({ index: i })} /></div>
+        )}
+        {decision.status === "answered" && !decision.card && (
+          <div className="mt-2.5 border-t border-sol-border/50 pt-2" data-decision-answer><DecisionRecordedAnswer decision={decision} /></div>
         )}
         {rec !== undefined && (
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
