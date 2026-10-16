@@ -4189,6 +4189,7 @@ cliRoute("/cli/org/apply-decision", async (ctx, body) => ctx.runMutation((api as
 // The fanned action (org-staffing.md S3): the decision ladder in its own
 // execution budget, so `cast org health` answers on a large workspace.
 cliRoute("/cli/org/health", async (ctx, body) => ctx.runAction((api as any).orgHealth.healthReport, body));
+cliRoute("/cli/org/loose", async (ctx, body) => ctx.runQuery((api as any).orgInbox.loose, body));
 cliRoute("/cli/org/propose", async (ctx, body) => ctx.runMutation((api as any).orgProposals.create, body));
 cliRoute("/cli/org/proposals", async (ctx, body) => ctx.runQuery((api as any).orgProposals.list, body));
 cliRoute("/cli/org/proposal", async (ctx, body) => ctx.runQuery((api as any).orgProposals.get, body));
