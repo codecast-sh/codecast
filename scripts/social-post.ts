@@ -75,11 +75,14 @@ async function publora(platformKind: "twitter" | "linkedin"): Promise<string> {
   if (!id) return `skipped: no ${platformKind} id in growth.toml publora_platform_ids`;
   if (platformKind === "twitter" && [...body].length > 280) return `refused: ${[...body].length} chars, X allows 280`;
   if (dry) return `dry: would post via Publora to ${id}`;
-  const res = await (await fetch("https://api.publora.com/api/v1/posts", {
+  const r = await fetch("https://api.publora.com/api/v1/create-post", {
     method: "POST", headers: { "Content-Type": "application/json", "x-publora-key": readFileSync(keyFile, "utf8").trim(), "Idempotency-Key": `${key}-${platformKind}` },
     body: JSON.stringify({ content: body, platforms: [id], scheduledTime: new Date(Date.now() + 2 * 60e3).toISOString() }),
-  })).json();
-  return res.id || res.postId ? `scheduled ${res.id ?? res.postId}` : `failed: ${JSON.stringify(res).slice(0, 160)}`;
+  });
+  const raw = await r.text();
+  let res: Record<string, unknown> = {}; try { res = JSON.parse(raw); } catch { return `failed: http ${r.status} ${raw.slice(0, 120)}`; }
+  const postId = (res.postGroupId ?? res.id ?? res.postId) as string | undefined;
+  return r.ok && postId ? `scheduled ${postId}` : `failed: http ${r.status} ${raw.slice(0, 160)}`;
 }
 
 const senders: Record<string, () => Promise<string>> = { bluesky, x: () => publora("twitter"), linkedin: () => publora("linkedin") };

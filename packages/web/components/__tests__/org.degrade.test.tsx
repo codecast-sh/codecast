@@ -28,6 +28,11 @@ test("the org chart paints its cached people and roles with every query missing"
   try {
     expect(describeFailures(page)).toBe("");
     const text = page.text();
+    if (!text.includes("Head of Growth")) {
+      const st: any = useInboxStore.getState();
+      console.error("DUMP tabs", JSON.stringify(st.tabs), "active", st.activeTabId, "cur", st.currentSessionId, "path", window.location.pathname, "orgTree", !!st.orgTree, "user", st.currentUser?._id);
+      console.error("DUMPHTML", page.container.innerHTML.slice(-2500));
+    }
     expect(text).toContain("Head of Growth");
     expect(text).toContain("Samvit Jain");
     for (const fn of ["org:tree", "orgProposals:list"]) expect(backend.refused).toContain(fn);
