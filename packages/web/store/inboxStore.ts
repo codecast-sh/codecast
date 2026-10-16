@@ -2998,13 +2998,19 @@ export function isSessionHardBlocked(
 type RowVerdict = { bucket: InboxBucket; work_state: WorkState };
 const _placementCache = new WeakMap<object, { live: string; p: RowVerdict }>();
 const _classifyCache = new WeakMap<RowVerdict, SessionVerdict>();
-/** One row's bucket and work state from its live fields at `now`, outside the
+/** One row's bucket and work state from its shipped live fields, outside the
  *  working set: the per-row placement the inbox sections use, without the
  *  membership fold. For a surface listing rows the inbox may not hold. The
- *  live fields derive from the row's facts at the caller's clock, the rule
- *  the chokepoint runs, and the placement is reused while they stand. */
+ *  status is the verdict at `now` (the row holds the daemon's raw one); the
+ *  placement is reused while the live fields stand. */
 export function sessionPlacement(s: InboxSession, now = Date.now()): RowVerdict {
-  const live = deriveLiveAt(liveFactsOf(s), now);
+  const live: LiveFacts = {
+    agent_status: agentStatusAt(s, now) ?? null,
+    is_idle: !!s.is_idle,
+    is_unresponsive: !!s.is_unresponsive,
+    awaiting_input: !!s.awaiting_input,
+    daemon_alive: !!s.is_connected,
+  };
   const key = liveKeyOf(live);
   const hit = _placementCache.get(s);
   if (hit && hit.live === key) return hit.p;

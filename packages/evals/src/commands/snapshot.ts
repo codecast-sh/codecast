@@ -29,6 +29,10 @@ export const LEGACY: Array<[string, string]> = [
 /** The legacy file a read is also kept under, if it is one of LEGACY's. */
 export const legacyFile = (argv: string[]): string | undefined => LEGACY.find(([w]) => argv.slice(0, 2).join(' ') === w)?.[1];
 
+/** The legacy org files a snapshot holds empty: captured while the read failed, before capture refused that. */
+export const emptyOrgReads = (dir: string): string[] =>
+  LEGACY.map(([, file]) => file).filter((file) => existsSync(join(dir, file)) && !readFileSync(join(dir, file), 'utf8').trim());
+
 /** Makes every file of a snapshot read-only, so a run cannot rewrite the record it is graded on. */
 export function lockSnapshot(dir: string): void {
   for (const entry of new Bun.Glob('**/*').scanSync({ cwd: dir, onlyFiles: true })) chmodSync(join(dir, entry), 0o444);

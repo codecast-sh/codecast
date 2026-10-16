@@ -7,6 +7,7 @@ import { UsageError } from '@platform/evals/cli';
 
 import { briefTextLines } from '../../../../cli/src/briefLines';
 
+import { emptyOrgReads } from '../../commands/snapshot';
 import { fixturesDir, homePaths } from '../../paths';
 import { EVERY_READ, fillAliases, readFrozenVerbs, recordSentence, servedReadKey, writeFrozenVerbs, writeServedRead } from '../../served';
 import type { ReplayCtx, SurfaceMeta } from '../../surface';
@@ -83,6 +84,8 @@ export function servedDirFor(world: StandingWorld, ctx: Pick<ReplayCtx, 'runDir'
   if (world.served) {
     const dir = join(homePaths().snapshots, world.served);
     if (!existsSync(dir)) throw new Error(`served dir missing here: ${world.served}; it lives in EVALS_HOME on the machine that captured it`);
+    const empty = emptyOrgReads(dir);
+    if (empty.length) throw new Error(`served dir ${world.served} holds an empty ${empty.join(', ')} (the read failed at capture), so it cannot stand for its moment; snapshot a new moment and freeze that`);
     return dir;
   }
   const reads = new Map<string, FixtureRead>();

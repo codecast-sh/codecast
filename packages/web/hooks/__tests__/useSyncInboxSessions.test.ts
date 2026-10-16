@@ -5,7 +5,9 @@ import type { InboxSession } from "../../store/inboxStore";
 const baseSession: InboxSession = {
   _id: "conv1",
   session_id: "session-1",
-  updated_at: 1,
+  // A live working session: recent activity, its daemon heartbeating.
+  updated_at: Date.now(),
+  last_heartbeat: Date.now(),
   agent_type: "claude_code",
   message_count: 5,
   is_idle: false,

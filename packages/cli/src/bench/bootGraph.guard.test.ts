@@ -236,7 +236,9 @@ describe("command groups stay off the boot graph", () => {
     // only everyWords from it and orgTemplateManifest.ts only LINE_SLUG_RE
     // (now in the lineSlug.ts leaf), so the whole proposal module and, since
     // bc5b8ded2, orgSessionFiling.ts under it rode along on every command.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4339);
+    // 4340 on 2026-10-16: the snippets workflow split (see the file count)
+    // adds its header, import and re-export.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4340);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
