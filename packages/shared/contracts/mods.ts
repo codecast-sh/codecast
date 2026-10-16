@@ -131,7 +131,11 @@ export type ModManifest = {
     write?: ModWrite[] | "*";
     /** Origins the mod may fetch from, e.g. "https://api.github.com". "*" for any. */
     fetch?: string[] | "*";
+    /** App connectors (by source name, e.g. "union") whose readers the mod may call with $.connector.read, as the person viewing it. */
+    connectors?: string[];
   };
+  /** Keys the mod's requests need, set by its author and never sent to a browser: codecast attaches one to a $.http.fetch that names it, and only toward its origins. */
+  secrets?: ModSecret[];
   panes?: ModPane[];
   commands?: ModCommand[];
   fences?: ModFence[];
@@ -150,6 +154,17 @@ export type ModManifest = {
   agents?: string;
 };
 
+/**
+ * A key a mod's requests carry. The author sets the value (the Mods page, or
+ * `cast mod secret set`); codecast stores it encrypted and attaches it on the
+ * server to a `$.http.fetch(url, { secret })` bound for one of `origins`, so no
+ * browser, teammate or mod code ever holds it. Sent as `Authorization: Bearer
+ * <value>`, or as the raw value of `header` when one is named.
+ */
+export type ModSecret = { name: string; description?: string; origins: string[]; header?: string };
+export const MOD_SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{1,39}$/;
+const ORIGIN_RE = /^https?:\/\/[^/\s]+$/;
+
 /** A local half's published value, as the sandboxed half reads it ($.local.get). */
 export type ModLocalState = { mod_id: string; key: string; value: unknown; device_name?: string; updated_at: number };
 
@@ -164,7 +179,7 @@ export function validateManifest(raw: unknown): ManifestCheck {
   const errors: string[] = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, errors: ["the manifest must be a JSON object"] };
   const m = raw as Record<string, unknown>;
-  const known = new Set(["name", "title", "description", "version", "icon", "main", "permissions", "panes", "commands", "fences", "sidebar", "objects", "themes", "local", "agents", "$schema"]);
+  const known = new Set(["name", "title", "description", "version", "icon", "main", "permissions", "panes", "commands", "fences", "sidebar", "objects", "themes", "local", "agents", "secrets", "$schema"]);
   for (const key of Object.keys(m)) if (!known.has(key)) errors.push(`unknown key "${key}"`);
   if (typeof m.name !== "string" || !MOD_NAME_RE.test(m.name)) errors.push(`name must be 2 to 40 characters of a-z, 0-9 and -, starting with a letter`);
   if (typeof m.agents === "string" && m.agents.length > 2000) errors.push("agents holds at most 2000 characters");
@@ -175,7 +190,7 @@ export function validateManifest(raw: unknown): ManifestCheck {
   if (perms !== undefined) {
     if (!perms || typeof perms !== "object" || Array.isArray(perms)) errors.push("permissions must be an object");
     else {
-      for (const key of Object.keys(perms)) if (!["read", "write", "fetch"].includes(key)) errors.push(`unknown permission "${key}"`);
+      for (const key of Object.keys(perms)) if (!["read", "write", "fetch", "connectors"].includes(key)) errors.push(`unknown permission "${key}"`);
       const check = (key: string, allowed: readonly string[] | null) => {
         const v = perms[key];
         if (v === undefined || v === "*") return;
@@ -183,12 +198,28 @@ export function validateManifest(raw: unknown): ManifestCheck {
         for (const item of v) {
           if (typeof item !== "string") errors.push(`permissions.${key} holds a non-string`);
           else if (allowed && !allowed.includes(item)) errors.push(`permissions.${key}: "${item}" is not one of ${allowed.join(", ")}`);
-          else if (!allowed && !/^https?:\/\/[^/\s]+$/.test(item)) errors.push(`permissions.fetch: "${item}" must be an origin like https://api.example.com`);
+          else if (!allowed && !ORIGIN_RE.test(item)) errors.push(`permissions.fetch: "${item}" must be an origin like https://api.example.com`);
         }
       };
       check("read", MOD_COLLECTION_NAMES);
       check("write", MOD_WRITES);
       check("fetch", null);
+      const c = perms.connectors;
+      if (c !== undefined && (!isList(c) || !c.every((x) => typeof x === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(x)))) errors.push(`permissions.connectors must be a list of connector source names, e.g. ["union"]`);
+    }
+  }
+  if (m.secrets !== undefined) {
+    if (!isList(m.secrets)) errors.push("secrets must be a list");
+    else for (const raw of m.secrets) {
+      const o = (raw ?? {}) as Record<string, unknown>;
+      const name = String(o.name ?? "");
+      if (!MOD_SECRET_NAME_RE.test(name)) { errors.push(`secrets: name "${name}" must be 2 to 40 characters of A-Z, 0-9 and _, like UNION_KEY`); continue; }
+      if (seen.has(`secrets:${name}`)) errors.push(`secrets: "${name}" is declared twice`);
+      seen.add(`secrets:${name}`);
+      for (const key of Object.keys(o)) if (!["name", "description", "origins", "header"].includes(key)) errors.push(`secrets: "${name}" has an unknown key "${key}"`);
+      if (!isList(o.origins) || !o.origins.length || !o.origins.every((x) => typeof x === "string" && ORIGIN_RE.test(x))) errors.push(`secrets: "${name}".origins must list the origins it may be sent to, like ["https://api.example.com"]`);
+      else if (!o.origins.every((x) => fetchAllows(perms?.fetch, x as string))) errors.push(`secrets: "${name}" goes to an origin permissions.fetch does not list`);
+      if (o.header !== undefined && (typeof o.header !== "string" || !/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(o.header))) errors.push(`secrets: "${name}".header must be a header name, like X-Api-Key`);
     }
   }
   const seen = new Set<string>();
@@ -251,7 +282,26 @@ export function validateManifest(raw: unknown): ManifestCheck {
 export function permissionsSig(manifest: Pick<ModManifest, "permissions"> | undefined): string {
   const p = manifest?.permissions ?? {};
   const norm = (v: unknown) => (v === "*" ? "*" : Array.isArray(v) ? [...v].map(String).sort().join(",") : "");
-  return `r=${norm(p.read)};w=${norm(p.write)};f=${norm(p.fetch)}`;
+  // Connectors join the signature only when granted, so a mod without them keeps the signature its installs recorded.
+  return `r=${norm(p.read)};w=${norm(p.write)};f=${norm(p.fetch)}${p.connectors?.length ? `;c=${norm(p.connectors)}` : ""}`;
+}
+
+function fetchAllows(fetch: unknown, origin: string): boolean {
+  return fetch === "*" || (isList(fetch) && fetch.includes(origin));
+}
+
+/** The declared secret a fetch to `url` may carry, or why it may not. */
+export function secretFor(manifest: ModManifest, name: string, url: string): { ok: true; secret: ModSecret } | { ok: false; error: string } {
+  const secret = manifest.secrets?.find((s) => s.name === name);
+  if (!secret) return { ok: false, error: `the manifest declares no secret "${name}" (secrets: ${(manifest.secrets ?? []).map((s) => s.name).join(", ") || "none"})` };
+  let origin: string;
+  try { origin = new URL(url).origin; } catch { return { ok: false, error: `"${url}" is not a URL` }; }
+  if (!secret.origins.includes(origin)) return { ok: false, error: `${name} is sent only to ${secret.origins.join(", ")}, not ${origin}` };
+  return { ok: true, secret };
+}
+
+export function canReadConnector(manifest: ModManifest, source: string): boolean {
+  return !!manifest.permissions?.connectors?.includes(source);
 }
 
 export function canRead(manifest: ModManifest, collection: string): boolean {
@@ -345,6 +395,7 @@ export const MOD_METHODS = [
   "objects.create", "objects.update", "objects.archive",
   "local.get", "local.meta", "local.call",
   "http.fetch",
+  "connector.read",
   "me",
 ] as const;
 export type ModMethod = (typeof MOD_METHODS)[number];
