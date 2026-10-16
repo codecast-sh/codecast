@@ -61,6 +61,43 @@ describe("threadStateView", () => {
     expect(v).toBeNull();
   });
 
+  test("the header stamp is just the age while fresh, the gap only once aging", () => {
+    const fresh = threadStateView(
+      { thread_state: "Waiting on CI", thread_state_at: NOW - 60 * 60_000, thread_state_msg_count: 40 },
+      45,
+      NOW,
+    )!;
+    expect(fresh.stamp).toBe("1h");
+    const aging = threadStateView(
+      { thread_state: "Waiting on CI", thread_state_at: NOW - 4 * 3_600_000, thread_state_msg_count: 0 },
+      64,
+      NOW,
+    )!;
+    expect(aging.freshness).toBe("aging");
+    expect(aging.stamp).toBe("4h · 64 new messages");
+    const quiet = threadStateView(
+      { thread_state: "Waiting on CI", thread_state_at: NOW - 15 * 3_600_000, thread_state_msg_count: 10 },
+      12,
+      NOW,
+    )!;
+    expect(quiet.freshness).toBe("aging");
+    expect(quiet.stamp).toBe("15h");
+  });
+
+  test("rows and the card line come from the shared parser", () => {
+    const v = threadStateView(
+      {
+        thread_state: "Release is waiting on a signing key\nYou: add it to the repo secrets\nDone: build green",
+        thread_state_at: NOW - 60_000,
+        thread_state_msg_count: 3,
+      },
+      3,
+      NOW,
+    )!;
+    expect(v.rows.map((r) => r.label)).toEqual(["You", "Done"]);
+    expect(v.cardLine).toBe("add it to the repo secrets");
+  });
+
   test("a row with no write-time count claims no gap", () => {
     const v = threadStateView(
       { thread_state: "Waiting on CI", thread_state_at: NOW - 60_000 },

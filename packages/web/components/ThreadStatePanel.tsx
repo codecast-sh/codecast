@@ -1,25 +1,31 @@
 "use client";
 
 import React, { memo, useLayoutEffect, useRef, useState } from "react";
-import { Pin, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, Copy, X } from "lucide-react";
 import { toast } from "sonner";
+import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { PrStatusChip } from "./PrStatusChip";
+import { TextWithMentions } from "./EntityIdPill";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
-import { FormattedSummary } from "./FormattedSummary";
+import { copyText } from "../lib/copyText";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The pinned thread state, rendered directly above the composer: the agent's own
 // standing answer to "where does this thread stand?", so a human opening a long
 // or multi-party session sees the situation before reading any of it.
 //
-// The panel is deliberately loud about age. A pinned line that has quietly gone
-// wrong is worse than no line at all, so the header always carries how long ago
-// the agent wrote it and how many messages have landed since, and the accent
-// walks from cyan to yellow as that gap grows. Past that the view is null and
-// the panel disappears (lib/threadState decides the cutoff).
+// The header is the answer: the status chip and the headline, on one line
+// whether the panel is open or folded. Below it each later line is a row in an
+// aligned grid, styled by its label: `You` is the ask, `Done` a quiet
+// checklist, `Next` what happens next.
+//
+// Age stays honest without crying wolf. The header always says how old the
+// state is; once the thread has run well past it, it also counts the messages
+// since and turns yellow. Past that the view is null and the panel disappears
+// (lib/threadState decides the cutoff).
 
 const TONE: Record<ThreadStateView["freshness"], { bar: string; label: string; meta: string }> = {
   fresh: { bar: "border-l-sol-cyan/70", label: "text-sol-cyan/80", meta: "text-sol-text-dim" },
@@ -167,20 +173,10 @@ export function ThreadStatePanelView({
 
   const tone = TONE[view.freshness];
   // The declared status owns the bar when present — it is the semantic signal;
-  // freshness keeps the provenance text and takes the bar over only on rows
-  // written before the status existed.
+  // freshness keeps the age and takes the bar over only on rows written before
+  // the status existed.
   const statusMeta = view.status ? THREAD_STATE_STATUS_META[view.status] : null;
   const barClass = statusMeta ? statusMeta.bar : tone.bar;
-  // Everything after the headline line — rendered under it in the body.
-  const lines = view.text.split("\n");
-  const headlineIdx = lines.findIndex((l) => l.trim().length > 0);
-  const body = lines.slice(headlineIdx + 1).join("\n").trim();
-  // The "Working on" label fits a first line that names the work. A state whose
-  // first line is itself a Status:/Blocked: line (the older single-line habit)
-  // describes the situation, not the subject — labeling it would lie.
-  const headlineIsSubject = !/^[-*•]?\s*(Status|State|Blocked):/i.test(lines[headlineIdx] ?? "");
-
-  const toggle = onToggle;
   const canClear = !!onClear;
   const clear = () => onClear?.(view.headline);
 
@@ -194,36 +190,35 @@ export function ThreadStatePanelView({
         <div
           className={`group rounded-xl border border-sol-border/40 border-l-2 ${barClass} bg-sol-bg-alt/60 overflow-hidden animate-in fade-in slide-in-from-bottom-1 duration-200`}
         >
-          <div className="flex items-center gap-2 pl-2.5 pr-1.5 py-1.5">
+          <div className="flex items-start gap-2 pl-3 pr-1.5 pt-[7px] pb-1.5">
             <button
               type="button"
-              onClick={toggle}
+              onClick={onToggle}
               title={collapsed ? "Show the full pinned state" : "Collapse the pinned state"}
-              className="flex items-center gap-2 min-w-0 flex-1 text-left"
+              aria-expanded={!collapsed}
+              className="flex flex-wrap items-start gap-x-2.5 gap-y-1 min-w-0 flex-1 text-left"
             >
-              {/* The pin is the whole label: it says "pinned state" on hover,
-                  the status chip says which state, and the headline says what.
-                  A "STATE" word next to them was a third voice for one idea. */}
-              <Pin className={`w-3 h-3 shrink-0 ${tone.label}`} strokeWidth={2.2} aria-label="Pinned state" />
               {statusMeta ? (
                 <span
-                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}
+                  className={`mt-[3px] shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   {statusMeta.label}
                 </span>
               ) : (
-                <span className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${tone.label}`}>
+                <span className={`mt-[3px] shrink-0 text-[10px] uppercase tracking-wider font-semibold ${tone.label}`}>
                   Pinned
                 </span>
               )}
-              {collapsed && (
-                <span className="text-[12px] text-sol-text-secondary truncate min-w-0">
-                  {view.headline}
-                </span>
-              )}
-              {view.provenance && (
-                <span data-cc-tech className={`text-[10px] shrink-0 ml-auto ${tone.meta}`}>{view.provenance}</span>
+              {/* Open on a narrow screen, the headline takes its own full line
+                  under the chip and the age instead of a sliver beside them. */}
+              <span
+                className={`min-w-0 text-[13.5px] leading-[1.45] font-semibold text-sol-text ${collapsed ? "flex-1 truncate" : "order-last basis-full break-words sm:order-none sm:basis-0 sm:flex-1"}`}
+              >
+                {view.headline}
+              </span>
+              {view.stamp && (
+                <span data-cc-tech className={`ml-auto mt-[3px] shrink-0 text-[10px] ${tone.meta}`}>{view.stamp}</span>
               )}
             </button>
             <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
@@ -241,7 +236,7 @@ export function ThreadStatePanelView({
               )}
               <button
                 type="button"
-                onClick={toggle}
+                onClick={onToggle}
                 aria-label={collapsed ? "Expand" : "Collapse"}
                 className="p-1 rounded text-sol-text-dim hover:text-sol-text-muted hover:bg-sol-bg-highlight transition-colors"
               >
@@ -252,28 +247,13 @@ export function ThreadStatePanelView({
               </button>
             </div>
           </div>
-          {!collapsed && (
-            <div className="px-3 pb-2.5 -mt-0.5">
+          {!collapsed && view.rows.length > 0 && (
+            <div className="px-3 pb-2.5">
               <div
                 ref={bodyRef}
-                className={`relative text-[13px] leading-relaxed whitespace-pre-line break-words overflow-hidden transition-[max-height] duration-300 ${expanded ? "max-h-[1200px]" : "max-h-64"}`}
+                className={`relative overflow-hidden transition-[max-height] duration-300 ${expanded ? "max-h-[1200px]" : "max-h-64"}`}
               >
-                {/* The WHAT: first line = what this session is working on,
-                    named as such so the reader never has to infer which line
-                    is the subject and which is the situation. */}
-                <div>
-                  {headlineIsSubject && (
-                    <span className="text-[9px] uppercase tracking-wider font-semibold text-sol-text-dim mr-1.5">
-                      Working on
-                    </span>
-                  )}
-                  <span className="text-sol-text font-medium">{view.headline}</span>
-                </div>
-                {body && (
-                  <div className="text-sol-text-secondary">
-                    <FormattedSummary text={body} />
-                  </div>
-                )}
+                <StateRows rows={view.rows} />
                 {overflows && !expanded && (
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-bg-alt to-transparent" />
                 )}
@@ -296,5 +276,104 @@ export function ThreadStatePanelView({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Labels that mark the ask: `You`, and `Blocked` on notes written before it. */
+const ASK_LABELS = new Set(["You", "Blocked"]);
+
+/** A leading day and time on a `Next` item ("5:45 AM", "Fri 6:20 AM PT"). */
+const LEADING_TIME = /^((?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?\d{1,2}(?::\d{2})?\s?(?:AM|PM|am|pm)(?:\s+[A-Z]{1,3}T)?)[\s:,]+(?=\S)/;
+
+const items = (text: string) => text.split(/\s+·\s+/).map((s) => s.trim()).filter(Boolean);
+
+/** The lines under the headline: a narrow label column and the line beside it. */
+function StateRows({ rows }: { rows: ThreadStateRow[] }) {
+  return (
+    <div className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12.5px] leading-normal break-words">
+      {rows.map((row, i) => {
+        const ask = !!row.label && ASK_LABELS.has(row.label);
+        return (
+          <React.Fragment key={i}>
+            <span className={`text-[11px] ${ask ? "pt-[5px] font-semibold text-sol-yellow" : "pt-px text-sol-text-dim"}`}>
+              {row.label}
+            </span>
+            {ask ? (
+              <AskLine text={row.text} />
+            ) : row.label === "Done" ? (
+              <span className="min-w-0 text-sol-text-muted">
+                {items(row.text).map((item, j) => (
+                  <span key={j} className="mr-3.5 inline-block">
+                    <Check className="mr-1 inline h-3 w-3 -translate-y-px text-sol-green" strokeWidth={2.5} />
+                    <RowText text={item} />
+                  </span>
+                ))}
+              </span>
+            ) : row.label === "Next" ? (
+              <span className="min-w-0 text-sol-text-muted">
+                {items(row.text).map((item, j) => {
+                  const at = item.match(LEADING_TIME);
+                  return (
+                    <span key={j} className="block">
+                      {at && <span className="mr-1.5 font-semibold text-sol-text-secondary">{at[1]}</span>}
+                      <RowText text={at ? item.slice(at[0].length) : item} />
+                    </span>
+                  );
+                })}
+              </span>
+            ) : (
+              <span className="min-w-0 text-sol-text-muted">
+                <RowText text={row.text} />
+              </span>
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The ask, at full contrast on an amber wash. A command that ends it gets a
+ *  line of its own and a copy button. */
+function AskLine({ text }: { text: string }) {
+  const { prose, command } = threadStateAskParts(text);
+  return (
+    <div className="min-w-0 -ml-2 rounded-md border border-sol-yellow/20 bg-sol-yellow/[0.08] px-2 py-1 text-sol-text">
+      {prose && <RowText text={prose} />}
+      {command && (
+        <div className={`flex min-w-0 overflow-hidden rounded border border-sol-border/40 bg-sol-bg/70 ${prose ? "mt-1" : ""}`}>
+          <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-2 py-0.5 text-[11px] leading-relaxed text-sol-text-secondary">
+            {command}
+          </code>
+          <button
+            type="button"
+            onClick={() => void copyText(command, "Command copied")}
+            className="flex shrink-0 items-center gap-1 border-l border-sol-border/40 px-2 text-[10.5px] font-semibold text-sol-yellow hover:bg-sol-yellow/10 transition-colors"
+          >
+            <Copy className="h-3 w-3" strokeWidth={2.2} />
+            Copy
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A row's text with its `code` spans set as code and its object ids drawn as
+ *  live pills. */
+function RowText({ text }: { text: string }) {
+  const parts = text.split(/`([^`]+)`/);
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <code key={i} className="rounded border border-sol-border/40 bg-sol-bg/60 px-1 text-[11.5px] text-sol-text-secondary">
+            {part}
+          </code>
+        ) : (
+          part && <TextWithMentions key={i} text={part} bareIds />
+        ),
+      )}
+    </>
   );
 }
