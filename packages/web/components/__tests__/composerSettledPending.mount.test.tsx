@@ -7,9 +7,10 @@ mock.module("sonner", () => {
 });
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // getConversationPendingMessage reports the newest SETTLED row when nothing is
 // in flight, so a lagging transcript keeps its bubble. The composer's stuck
@@ -25,7 +26,7 @@ afterAll(() => {
 const CONV_ID = "jx70000000000000000000000settled"; // 32 chars => isConvexId
 
 function fakeConvex() {
-  const client = new ConvexReactClient("https://example.convex.cloud");
+  const client = offlineConvexClient("https://example.convex.cloud");
   (client as any).mutation = async () => null;
   (client as any).query = async () => null;
   (client as any).watchQuery = () => ({

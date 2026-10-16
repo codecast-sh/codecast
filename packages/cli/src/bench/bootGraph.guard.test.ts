@@ -228,7 +228,11 @@ describe("command groups stay off the boot graph", () => {
     // 3474 after hook admission: the two leaves above, plus the token read and
     // the legacy grace in statusHook.ts and the copy step in session-move.ts.
     // 4462 on 2026-10-15, re-measured with the file count above.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4462);
+    // 4339 on 2026-10-16: orgProposal.ts left the graph. rolePlaybook.ts took
+    // only everyWords from it and orgTemplateManifest.ts only LINE_SLUG_RE
+    // (now in the lineSlug.ts leaf), so the whole proposal module and, since
+    // bc5b8ded2, orgSessionFiling.ts under it rode along on every command.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4339);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -315,7 +319,10 @@ describe("command groups stay off the boot graph", () => {
     // modules, the session move cluster and the snippets package. Daemon boot
     // is not on any command's latency path, and no single import here is an
     // accident to cut.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(488);
+    // 483 on 2026-10-16: orgProposal.ts and the five files only it brought
+    // (orgSessionFiling, orgLead, initiative, roleAutonomy, chat/handles) left
+    // when rolePlaybook.ts, reached through the barrel, stopped importing it.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(483);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

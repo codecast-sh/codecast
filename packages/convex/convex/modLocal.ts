@@ -124,6 +124,21 @@ async function writeModState(ctx: any, mod: any, userId: Id<"users">, key: strin
 }
 
 /** Hand the pending UI calls for these mods to the daemon that runs them. */
+/**
+ * The daemon's wake for its call queue: the id of a call still waiting, or
+ * null. It changes only when a call arrives or is claimed, so the daemon's
+ * subscription fires once per call and the claim follows within a round trip.
+ */
+export const cliPendingCall = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await tokenUser(ctx, args.api_token);
+    if (!userId) return null;
+    const call = await ctx.db.query("mod_calls").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).first();
+    return call ? String(call._id) : null;
+  },
+});
+
 export const cliClaimCalls = mutation({
   args: { api_token: v.string(), names: v.array(v.string()), device_name: v.optional(v.string()) },
   handler: async (ctx, args) => {

@@ -1,14 +1,15 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // A page embed keeps its frame across unmounts (lib/pageFramePool): returning to a page moves the same, still loaded
 // iframe back instead of loading the page again. These mount the real embed against store rows and watch the element.
 
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 const watchQuery = spyOn(client, "watchQuery").mockImplementation((() => ({
   onUpdate: () => () => {},
   localQueryResult: () => undefined,

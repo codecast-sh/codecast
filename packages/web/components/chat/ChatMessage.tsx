@@ -829,33 +829,27 @@ export const ChatMessage = memo(function ChatMessage({
   );
 });
 
-/** Where this line stands with Slack. "From Slack" for a mirrored-in line,
- *  "Also in Slack" for ours that crossed over (both open the Slack copy), and a
- *  muted "not in Slack" for a line its author kept local in a channel that
- *  otherwise mirrors. Nothing at all in a channel with no mirror. */
+/** Where this line stands with Slack, as a bare glyph whose title names it:
+ *  "From Slack" for a mirrored-in line, "Also in Slack" for ours that crossed
+ *  over (both open the Slack copy), and a muted eye for a line its author kept
+ *  local in a channel that otherwise mirrors. Nothing in a channel with no mirror. */
 function SlackMark({ message, slackOutbound }: { message: ChatMessageView; slackOutbound?: boolean }) {
   const s = message.slack;
   if (s) {
     const label = s.direction === "inbound" ? "From Slack" : "Also in Slack";
-    const inner = (
-      <>
-        <SlackLogo className="w-2.5 h-2.5" muted={s.direction === "outbound"} />
-        <span>{label}</span>
-      </>
-    );
+    const inner = <SlackLogo className="w-3 h-3" muted={s.direction === "outbound"} />;
     return s.permalink ? (
-      <a className="ch-slack-mark" href={s.permalink} target="_blank" rel="noreferrer" title={`${label} · open there`}>
+      <a className="ch-slack-mark" href={s.permalink} target="_blank" rel="noreferrer" title={`${label} · open there`} aria-label={`${label}, open there`}>
         {inner}
       </a>
     ) : (
-      <span className="ch-slack-mark" title={label}>{inner}</span>
+      <span className="ch-slack-mark" title={label} aria-label={label} role="img">{inner}</span>
     );
   }
   if (slackOutbound && message.localOnly) {
     return (
-      <span className="ch-slack-mark ch-slack-mark-local" title="Kept out of Slack by its author">
-        <EyeOff className="w-2.5 h-2.5" />
-        <span>not in Slack</span>
+      <span className="ch-slack-mark ch-slack-mark-local" title="Not in Slack: kept out by its author" aria-label="Not in Slack" role="img">
+        <EyeOff className="w-3 h-3" />
       </span>
     );
   }

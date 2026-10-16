@@ -177,28 +177,24 @@ function clock(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-/** "From Slack" / "Also in Slack" beside the time. Tapping opens the line in
- *  Slack when the bridge minted a permalink. */
+/** The Slack mark beside the time, labelled "From Slack" / "Also in Slack"
+ *  for screen readers. Tapping opens the line in Slack when the bridge minted
+ *  a permalink. */
 function SlackMark({ slack }: { slack: NonNullable<MobileChatMessage['slack']> }) {
   const label = slack.direction === 'inbound' ? 'From Slack' : 'Also in Slack';
-  const inner = (
-    <>
-      <SlackLogo size={9} muted={slack.direction === 'outbound'} />
-      <RNText style={styles.slackMarkText}>{label}</RNText>
-    </>
-  );
+  const logo = <SlackLogo size={11} muted={slack.direction === 'outbound'} />;
   return slack.permalink ? (
     <TouchableOpacity
       style={styles.slackMark}
-      hitSlop={6}
+      hitSlop={10}
       accessibilityRole="link"
       accessibilityLabel={`${label}. Open in Slack`}
       onPress={() => Linking.openURL(slack.permalink!)}
     >
-      {inner}
+      {logo}
     </TouchableOpacity>
   ) : (
-    <RNView style={styles.slackMark} accessibilityRole="text" accessibilityLabel={label}>{inner}</RNView>
+    <RNView style={styles.slackMark} accessibilityRole="image" accessibilityLabel={label}>{logo}</RNView>
   );
 }
 
@@ -463,8 +459,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   agentChipText: { fontSize: 7.5, fontWeight: '700', color: Theme.violet, letterSpacing: 0.8 },
   time: { fontSize: 10, color: Theme.textMuted0 },
-  slackMark: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  slackMarkText: { fontSize: 10, color: Theme.textMuted0 },
+  // The head aligns on text baselines; a bare glyph has none, so it centers.
+  slackMark: { alignSelf: 'center' },
   deleted: { fontSize: 12.5, fontStyle: 'italic', color: Theme.textMuted0 },
   edited: { fontSize: 10, color: Theme.textMuted0, marginTop: -4, marginBottom: 2 },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

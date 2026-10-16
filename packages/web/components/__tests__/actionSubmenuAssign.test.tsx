@@ -1,6 +1,7 @@
 import { describe, expect, test, mock } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // ActionSubmenu only reads router/pathname for navigation actions, never at
 // render time — a stub is enough for a static render.
@@ -12,7 +13,7 @@ mock.module("next/navigation", () => ({
 const { ActionSubmenu } = await import("../CommandPalette");
 
 // Never connects: static rendering fires no effects and opens no sockets.
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 
 function render(teamMembers: any[], currentUser: any) {
   return renderToStaticMarkup(

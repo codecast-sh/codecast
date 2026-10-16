@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { act, createContext } from "react";
 import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { replaceGlobals } from "../../test-helpers/globals";
 
 mock.module("../AuthGuard", () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => children }));
@@ -15,6 +15,7 @@ import { tabNavigate } from "../../src/compat/tabRouting";
 import StageSplitView from "../stage/StageSplitView";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/inbox" });
 const restoreGlobals = replaceGlobals({
   window: Object.assign(dom.window, { innerWidth: 1400 }),
@@ -30,7 +31,7 @@ const {createRoot} = await import("react-dom/client");
 
 // The search page offers a feature through FeatureUpsell, which binds its
 // turn-on mutation from the app's provider. Nothing here calls it.
-const convex = new ConvexReactClient("https://example.convex.cloud");
+const convex = offlineConvexClient("https://example.convex.cloud");
 
 afterAll(() => { void convex.close(); closeDomWindow(dom); restoreGlobals(); });
 

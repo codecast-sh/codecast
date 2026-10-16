@@ -1,4 +1,5 @@
 import { test, expect, describe, mock } from "bun:test";
+import { offlineConvexClient } from "../../../test-helpers/offlineConvex";
 
 // Every element a mod can return, drawn in jsdom through the real renderer
 // and the real store: the regression net for the element table (contract:
@@ -34,8 +35,7 @@ const fn = (id: string) => ({ $fn: id });
 
 // A Ref is the real entity pill, which subscribes to queries: a client whose
 // socket never opens lets it render its fallback, as it does offline.
-class NoSocket { readyState = 0; onopen = null; onclose = null; onmessage = null; onerror = null; send() {} close() {} }
-const client = new ConvexReactClient("https://example.convex.cloud", { webSocketConstructor: NoSocket as any, unsavedChangesWarning: false });
+const client = offlineConvexClient("https://example.convex.cloud");
 
 const EVERY: any = {
   t: "Column", p: { gap: 3 }, c: [

@@ -166,13 +166,14 @@ export function _resetViewNavForTests(): void {
 
 /** Sim seam: the intent token and lifetime counter belong to one window. */
 export function __viewNavSimSlots() {
-  type Slots = { pendingSource: ViewNavSource | null; appliedNavCount: number };
+  type Slots = { pendingSource: ViewNavSource | null; appliedNavCount: number; freshHomeLaunch: boolean | null };
   return {
-    fresh: (): Slots => ({ pendingSource: null, appliedNavCount: 0 }),
-    get: (): Slots => ({ pendingSource, appliedNavCount }),
+    fresh: (): Slots => ({ pendingSource: null, appliedNavCount: 0, freshHomeLaunch: null }),
+    get: (): Slots => ({ pendingSource, appliedNavCount, freshHomeLaunch }),
     set: (s: Slots): void => {
       pendingSource = s.pendingSource;
       appliedNavCount = s.appliedNavCount;
+      freshHomeLaunch = s.freshHomeLaunch;
     },
   };
 }

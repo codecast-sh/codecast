@@ -20,3 +20,6 @@ export function sessionDestination(to: string): OrgSessionDestination | null {
   if (/^ct-\d+$/i.test(t)) return { kind: "task", task: t.toLowerCase() };
   return null;
 }
+
+/** The filing's shape as the Head of People's reference and `cast org loose` print it. */
+export const FILE_SESSION_SHAPE = 'file_session: { session: its short id, title: its title, to: "@handle" | "ct-N" | "done" }: one of the person\'s sessions moved out of their inbox: under a role, onto a task it works, or closed as done';
