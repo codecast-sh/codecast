@@ -1,3 +1,4 @@
+import { HEAD_INBOX_TITLE } from "./lib/orgRoutine";
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { headOfPeopleOpening } from "@codecast/shared/contracts/headOfPeoplePrompt";
@@ -58,6 +59,9 @@ function world(extra: Record<string, any[]> = {}) {
   return { ctx, tables, scheduled };
 }
 
+/** The Company review routine among the seat's triggers. */
+const review = (tables: any) => tables.agent_tasks.find((t: any) => t.title === COMPANY_REVIEW_TITLE)!;
+
 describe("orgRoles.staff", () => {
   test("creates the head of people once, adopting the caller's session as its standing session", async () => {
     const { ctx, tables } = world();
@@ -92,12 +96,12 @@ describe("orgRoles.staff", () => {
     expect(again.already_existed).toBe(true);
     expect(String(again.role._id)).toBe(String(role._id));
     expect(tables.org_roles).toHaveLength(1);
-    // The seat's three triggers: the routine, the route up (S28), and the
-    // area watch's, which only the Head of People has (S29).
-    expect(tables.agent_tasks.map((t) => t.schedule_type)).toEqual(["recurring", "event", "event"]);
-    expect(tables.agent_tasks[1].event_filter).toEqual({ event_type: "session_needs_input" });
-    expect(tables.agent_tasks[2]).toMatchObject({ event_filter: { event_type: "org_area_change" }, title: "An area needs your review", role_id: role._id });
-    expect(String(tables.agent_tasks[1].role_id)).toBe(String(role._id));
+    // The seat's four triggers: the routine, the route up (S28), and the
+    // area watch and the inbox look, which only the Head of People has (S29, S43).
+    expect(tables.agent_tasks.map((t) => t.title)).toEqual([HEAD_INBOX_TITLE, COMPANY_REVIEW_TITLE, "A session under you needs input", "An area needs your review"]);
+    const needsInput = tables.agent_tasks.find((t) => t.event_filter?.event_type === "session_needs_input")!;
+    expect(tables.agent_tasks.find((t) => t.event_filter?.event_type === "org_area_change")).toMatchObject({ title: "An area needs your review", role_id: role._id });
+    expect(String(needsInput.role_id)).toBe(String(role._id));
   });
 
   // org-staffing.md S12: the head of people IS the workspace's standing agent.
@@ -136,7 +140,7 @@ describe("orgRoles.staff", () => {
     expect({ anchors: tables.anchors.length, users: tables.users.length, conversations: tables.conversations.length }).toEqual(before);
     expect(tables.users.find((u) => u._id === BOT)?.bot_kind).toBe("role");
     // The review routine lives on that session.
-    expect(tables.agent_tasks[0].originating_conversation_id).toBe("anchor-conv");
+    expect(review(tables).originating_conversation_id).toBe("anchor-conv");
     // The thread looks like the role, and remembers what it was called.
     expect(conv.title).toBe("Head of People");
     expect(conv.title_is_custom).toBe(true);
@@ -281,7 +285,7 @@ describe("orgRoles.staff", () => {
     expect(tables.users.find((u) => u._id === BOT)?.bot_kind).toBe("anchor");
     expect((await workspaceAnchorFor(ctx, { team_id: TEAM }))?._id).toBe("anchor-t");
     // The seat's routine went with the seat.
-    expect(tables.agent_tasks[0].status).not.toBe("scheduled");
+    expect(review(tables).status).not.toBe("scheduled");
     // Retiring the standing session with the seat is the other choice.
     const again = await performStaff(ctx, ME as any, { team_id: TEAM });
     const gone = await performRetireRole(ctx, ME as any, { role_id: String(again.role._id), standing_session: "retire" });
@@ -379,8 +383,8 @@ describe("orgRoles.staff", () => {
     tables.pending_messages.push({ _id: "waiting", conversation_id: "anchor-conv", from_user_id: ME, owner_user_id: ME, content: "what changed?", status: "held", created_at: NOW });
     const retired = await performRetireRole(ctx, ME as any, { role_id: String(out.role._id) });
     expect(retired.standing_session).toBe("kept");
-    // The seat's own three go: the routine, the route up and the area watch's.
-    expect(retired.cancelled_triggers).toBe(3);
+    // The seat's own four go: the routine, the route up, the area watch's and the inbox look.
+    expect(retired.cancelled_triggers).toBe(4);
     expect(tables.agent_tasks.find((t) => t.event_filter?.event_type === "session_needs_input")!.status).toBe("cancelled");
     expect(tables.agent_tasks.find((t) => t._id === "digest")!.status).toBe("scheduled");
     expect(tables.agent_tasks.find((t) => t.title === COMPANY_REVIEW_TITLE)!.status).toBe("cancelled");
@@ -425,7 +429,7 @@ describe("orgRoles.staff", () => {
   test("arms one Company review routine on the standing session and queues the first review at once", async () => {
     const { ctx, tables } = world();
     const out = await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine", every_ms: 3 * 86_400_000 });
-    const routine = tables.agent_tasks[0];
+    const routine = review(tables);
     expect(out.routine?.id).toBe(routine._id);
     expect(routine.title).toBe(COMPANY_REVIEW_TITLE);
     expect(routine.originating_conversation_id).toBe("mine");
@@ -441,7 +445,7 @@ describe("orgRoles.staff", () => {
   test("the default cadence is seven days", async () => {
     const { ctx, tables } = world();
     await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });
-    expect(tables.agent_tasks[0].interval_ms).toBe(7 * 86_400_000);
+    expect(review(tables).interval_ms).toBe(7 * 86_400_000);
   });
 
   test("adopt refuses a hand and another role's standing session", async () => {
@@ -560,7 +564,7 @@ describe("orgRoles.staff", () => {
     expect(COMPANY_REVIEW_PROMPT).toContain("in your own thread");
     const { ctx, tables } = world({ agent_task_revisions: [] });
     await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });
-    const routine = tables.agent_tasks[0];
+    const routine = review(tables);
     expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
     routine.prompt = "Company review. The old text.";
     delete routine.role_id;
@@ -568,10 +572,10 @@ describe("orgRoles.staff", () => {
     await performBackfillSeatedHeads(ctx, false);
     expect(routine.prompt).toBe(COMPANY_REVIEW_PROMPT);
     expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
-    expect(tables.agent_tasks).toHaveLength(3);
+    expect(tables.agent_tasks).toHaveLength(4);
     routine.status = "cancelled";
     await performBackfillSeatedHeads(ctx, false);
-    expect(tables.agent_tasks).toHaveLength(3);
+    expect(tables.agent_tasks).toHaveLength(4);
   });
 
   test("the charter is the structure job its opening states, for the person it reports to", () => {

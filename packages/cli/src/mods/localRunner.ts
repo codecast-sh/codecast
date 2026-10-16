@@ -41,9 +41,11 @@ export type LocalRunnerDeps = {
 };
 
 const SYNC_MS = 30_000;
-const CALL_POLL_MS = 2_000;
+// The daemon wakes the queue the moment a call arrives (wakeCalls, on its
+// subscription to modLocal.cliPendingCall); the poll only covers a dropped socket.
+const CALL_POLL_MS = 10_000;
 
-export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void } {
+export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void; wakeCalls: () => void } {
   const running = new Map<string, Running>();
   const logBuffer = new Map<string, { level: string; text: string }[]>();
   const device = localDeviceName();
@@ -220,6 +222,7 @@ export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void } {
   const callTimer = setInterval(() => void pump(), CALL_POLL_MS);
   const logTimer = setInterval(flushLogs, 3_000);
   return {
+    wakeCalls: () => void pump(),
     stop: () => {
       stopped = true;
       fleet?.kill();
