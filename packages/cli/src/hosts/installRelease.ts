@@ -2,6 +2,26 @@ import { execFileSync } from "../proc.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { sshBase, type RemoteHost } from "../remote/session-move.js";
 
+/**
+ * What a host runs: the published release (the default), which updates itself
+ * like every other client, or a build of this checkout for trying a fix that
+ * is not released yet. A checkout build is a dev build to the updater, so it
+ * stands down for every update, forced ones included, until the host is put
+ * back on a release.
+ */
+export type HostCastSource = "release" | "checkout";
+
+/** The version dl.codecast.sh publishes as latest, or null when it cannot be read. */
+export function latestReleaseVersion(): string | null {
+  try {
+    const out = execFileSync("curl", ["-fsSL", "--max-time", "30", "https://dl.codecast.sh/latest.json"], { encoding: "utf8", timeout: 40_000, stdio: ["ignore", "pipe", "ignore"] });
+    const version = JSON.parse(String(out))?.version;
+    return typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 export function hostReleaseScript(platform: "linux" | "darwin", systemLinks = true): string {
   return `set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
