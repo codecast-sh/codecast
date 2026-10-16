@@ -28,7 +28,7 @@ export interface GradeSets {
   never_name: string[];
   must_not_reopen?: string[];
   either?: string[];
-  /** A world of loose sessions (org-staffing.md S43): each session that belongs elsewhere, with the destinations it may go to ("@handle", "ct-N", "done"). */
+  /** A world of loose sessions (org-staffing.md S43): each session that belongs elsewhere, with the destinations it may go to ("@handle", "ct-N", "done", or "stay" when leaving it is right too). */
   files?: Record<string, string[]>;
   /** Loose sessions that are the person's own and must stay where they are. */
   keep?: string[];
@@ -41,7 +41,8 @@ export function gradeFilings(changes: any[], sets: GradeSets): { right: string[]
   const right: string[] = [], wrong: string[] = [], missed: string[] = [];
   for (const [id, ok] of Object.entries(sets.files ?? {})) {
     const to = filed.get(id.toLowerCase());
-    if (!to) missed.push(id);
+    // "stay" in the list: leaving the session where it is is right too (one still asking the person something).
+    if (!to) (ok.includes('stay') ? right : missed).push(id);
     else if (ok.map((x) => x.toLowerCase()).includes(to)) right.push(`${id} to ${to}`);
     else wrong.push(`${id} to ${to}`);
   }
