@@ -15,6 +15,7 @@
 //   cast line trial spend rm <at>                          take back one outside entry
 //   cast line trial runs [--failed]                        each problem's latest run
 //   cast line trial rerun <ct-N>                           rerun a failed run (at its lost card when it died there)
+//   cast line trial rerun <ct-N> --fresh                   start it again from main on today's line, wherever its run stands
 //   cast line trial rerun <ct-N> --reask                   ask a waiting card again, or send its run back to work when its fix no longer answers the findings
 //   cast line trial drop <ct-N> [-m note]                  the drop station: findings left keep the problem open and due; none closes it
 //   cast line trial sweep [ct-N...] [--dry]                end runs waiting on closed problems; release closed problems' worktrees here (only the named ones')
@@ -146,8 +147,8 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
       if (options.graph && target.route === "judge") console.error(fmt.warning(`${target.task} holds cases against a judge; --graph overrides its judge route`));
       const cwd = options.graph ? (path.basename(path.dirname(graph)) === "line" ? path.dirname(path.dirname(graph)) : path.dirname(graph)) : target.cwd ?? path.dirname(graph);
       // Every run proves against unfixed code: an earlier run's branch is set aside (lineTrialBranch.ts).
-      const [{ parseWorkflowFile }, { freshRunBranch }] = await Promise.all([import("./workflow/parser.js"), import("./lineTrialBranch.js")]);
-      const fresh = await freshRunBranch(cwd, parseWorkflowFile(graph), target.task);
+      const [{ parseWorkflowFile }, { freshRunBranch, runHandsVia }] = await Promise.all([import("./workflow/parser.js"), import("./lineTrialBranch.js")]);
+      const fresh = await freshRunBranch(cwd, parseWorkflowFile(graph), target.task, new Date(), runHandsVia(post)).catch((e) => fail(e.message));
       const { stdout } = await execFileAsync("cast", ["workflow", "run", graph, "--task", target.task, "--detach", "--json"], { cwd, encoding: "utf8", env: { ...process.env, CODECAST_CWD: cwd } } as any);
       const started = JSON.parse(String(stdout).slice(Math.max(0, String(stdout).search(/[[{]/))));
       if (options.json) return console.log(JSON.stringify({ ...started, graph, cwd, ...fresh }, null, 2));
@@ -248,21 +249,24 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     .description("Run a failed or stopped trial problem again (the review page's Rerun): one that died waiting at its own card picks up at that card; any other starts fresh from main. Under the dispatcher's billed-money cap, its accounts' quota and its run limit")
     .option("--reask", "A run waiting at a card: stop its runner here and ask that card again on the stations as they are now. A change card whose fix no longer answers its problem's findings is not worded again: with the findings changed and under half reached the run reads the problem again and works on; with none reached it ends and the problem is due a run from main")
     .option("--at <node>", "With --reask, pick the run up at this station whatever its findings (a gate the graph no longer has resumes at the station after it)")
+    .option("--fresh", "Start the problem again from main on the line as it is now, wherever its run stands: the run ends and its fix is set aside on its branch")
     .option("--json", "Machine-readable output")
-    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string }) => {
+    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string; fresh?: boolean }) => {
       if (opts.at && !opts.reask) fail("--at goes with --reask");
+      if (opts.fresh && opts.reask) fail("--fresh starts from main; --reask picks the run up where it stands");
       let asker: string | undefined;
       let entry: string | undefined;
-      if (opts.reask) {
+      if (opts.reask || opts.fresh) {
         const projects: Array<{ title: string }> = trial.opts().project ? [{ title: trial.opts().project }] : await post("/cli/line/trial/projects", {}, true);
         let row: { task: string; run_id: string } | undefined;
         for (const p of projects) row ??= ((await post("/cli/line/trial/runs", { project: p.title }, true)) as Array<{ task: string; run_id: string }>).find((r) => r.task === task);
         if (!row) fail(`${task} has no trial run`);
+        const { prepareReask, stopRunner } = await import("./workflow/reask.js");
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
-        const { prepareReask } = await import("./workflow/reask.js");
-        ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
+        if (opts.reask) ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
+        else await stopRunner(row.run_id, task).catch((e) => fail(e.message));
       }
-      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
+      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.fresh ? { fresh: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
       if (r.rebuild === "main") return console.log(`${r.task}: not asked again: ${r.why}. Its run ended, its branch is set aside, and the problem is due a new run from main (cast line trial dispatch --dry).`);
       if (r.rebuild === "investigate") return console.log(`${r.task}: not asked again: ${r.why}. Its run reads the problem again at ${r.resumed_at} and works on from there (run ${r.run_id}).`);
@@ -335,7 +339,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     .action(async (only: string[], opts: { project?: string; dry?: boolean; json?: boolean }) => {
       const r: { project: string; ended: string[]; closed: Array<{ task: string; status: string; run_id: string; run_status: string; workflow_name: string; project_path: string | null; runner_device: string | null }> } =
         await post("/cli/line/trial/sweep", { project: projectOf(opts), ...(opts.dry ? { dry: true } : {}) });
-      const [{ liveRunnerPid }, { releaseRunWorktree }, { deviceId }] = await Promise.all([import("./workflow/runResume.js"), import("./lineTrialBranch.js"), import("./remote/device.js")]);
+      const [{ liveRunnerPid }, { releaseRunWorktree, runHandsVia }, { deviceId }] = await Promise.all([import("./workflow/runResume.js"), import("./lineTrialBranch.js"), import("./remote/device.js")]);
       const released: Array<{ task: string; slug: string; committed: boolean }> = [];
       for (const c of r.closed) {
         const here = c.runner_device === deviceId() && !!c.project_path && fs.existsSync(c.project_path);
@@ -347,7 +351,8 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
           process.kill(pid, "SIGTERM");
           for (let i = 0; i < 50 && liveRunnerPid(c.run_id); i++) await new Promise((res) => setTimeout(res, 100));
         }
-        const done = await releaseRunWorktree(c.project_path!, { name: c.workflow_name }, c.task, !!opts.dry);
+        const done = await releaseRunWorktree(c.project_path!, { name: c.workflow_name }, c.task, !!opts.dry, runHandsVia(post))
+          .catch((e) => { console.error(`${c.task}: ${e.message}`); return null; });
         if (done) released.push({ task: c.task, ...done });
       }
       if (jsonOf(opts)) return console.log(JSON.stringify({ project: r.project, ended: r.ended, released }, null, 2));

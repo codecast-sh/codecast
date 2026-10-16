@@ -599,6 +599,43 @@ describe("moments", () => {
     expect(bad).toMatchObject({ status: "failed", error: expect.stringContaining("unknown type") });
   }, 120_000);
 
+  test("a source that judges on subscription hands its requests to the machine and settles the replies it brings back, on no budget", async () => {
+    const { t, ids, scope, post, due, claim, complete } = await setup();
+    await t.mutation(api.moments.publish, { ...scope, source: "app", device_id: "host-1", root: "/repo", extractors: [{ kind: "conversation", path: ".codecast/moments/conversation.ts", version: "b".repeat(40), quiet_ms: 0, timeout_ms: 30_000 }], judges: [JUDGE] });
+    await t.mutation(api.ingest.updateSource, { ...scope, source: "app", config: { judge_on: "subscription" } });
+    await post([{ type: "moment", kind: "conversation", subject: "t_1", at: T0 }]);
+    await due();
+    const [c] = await claim();
+    // No budget is set: an API judge would be skipped. Nothing is sent from the server.
+    const sent = s.state.model.length;
+    const done = await complete(c.moment, "t_1");
+    expect(done.judged).toEqual([]);
+    expect(s.state.model).toHaveLength(sent);
+    const handoff = done.judge_here!;
+    expect(handoff.requests).toHaveLength(1);
+    expect(handoff.requests[0]).toMatchObject({ judge: "comms", request: { model: JUDGE.model, max_tokens: JUDGE.max_tokens, output: "json" } });
+    expect(handoff.requests[0].request.system).toContain(JUDGE.prompt);
+    expect(handoff.requests[0].request.prompt).toContain("Can we talk Tuesday?");
+
+    const reply = '{"deviations": [{"expectation": "ex-aq-1", "severity": 6, "what_happened": "The agent never replied. Dana asked on Monday.", "quote": "Can we talk Tuesday?", "markers": []}]}';
+    const back = { moment: handoff.moment, clock: handoff.clock, record: JSON.stringify(handoff.record), results: [{ judge: "comms", result: { ok: true, text: reply, input_tokens: 900, output_tokens: 120 } }] };
+    // Only the machine its extractor runs on hands it back by device.
+    await expect(t.action(api.moments.judgedForCli, { api_token: TOKEN, device_id: "host-2", ...back })).rejects.toThrow("Unauthorized");
+    const judged = await t.action(api.moments.judgedForCli, { api_token: TOKEN, device_id: "host-1", ...back });
+    expect(judged.judged).toMatchObject([{ judge: "comms", status: "ok", findings: 1, filed: 1, cost_usd: 0 }]);
+    const runs = await t.run((ctx) => ctx.db.query("judge_runs").collect());
+    expect(runs).toMatchObject([{ status: "ok", findings: 1, backend: "subscription", cost_usd: 0 }]);
+    expect(await t.run((ctx) => ctx.db.query("signals").collect())).toMatchObject([{ subject: "ex-aq-1", source: "judge:comms" }]);
+    // A failed call is a failed run, as an API failure is.
+    const failed = await t.action(api.moments.judgedForCli, { ...scope, ...back, results: [{ judge: "comms", result: { ok: false, error: "the answer held no JSON" } }] });
+    expect(failed.judged).toMatchObject([{ status: "failed", reason: "the answer held no JSON" }]);
+
+    // Back on the API, a judgment made elsewhere is not taken.
+    await t.mutation(api.ingest.updateSource, { ...scope, source: "app", config: { judge_on: "api" } });
+    await expect(t.action(api.moments.judgedForCli, { ...scope, ...back })).rejects.toThrow("judges on the API");
+    expect(ids.source).toBeTruthy();
+  }, 120_000);
+
   test("codecast storage is the source's setting when the moment is read, and never falls back to the host", async () => {
     const { t, ids, scope, post, due, claim, complete } = await setup();
     const prev = { a: process.env.REPLAYS_R2_ACCESS_KEY_ID, e: process.env.R2_ENDPOINT };

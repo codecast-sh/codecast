@@ -20,6 +20,7 @@ const settle = (ms = 0) => act(async () => { await new Promise(resolve => setTim
 const mount = (identityOnly = false) => act(() => root.render(<AccountHarness client={account.client} identityOnly={identityOnly} />));
 const docButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === text);
 const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === text);
+const chipAccount = () => host.querySelector("[aria-label^='Claude']")?.getAttribute("aria-label")?.match(/"(.*?)"/)?.[1];
 const hover = () => act(() => host.firstElementChild!.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })));
 const cache = (deviceId = localDevice.device_id) => sessionStorage.setItem("cast_term_endpoint", JSON.stringify({ port: 45123, token: "local-fixture", deviceId, tmux: true }));
 const reply = (_input: any, init: any) => {
@@ -106,7 +107,7 @@ test("failed discovery leaves settings available and focus retries without overl
   await act(() => { window.dispatchEvent(new dom.window.Event("focus")); window.dispatchEvent(new dom.window.Event("online")); });
   expect(probes).toBe(1);
   await act(async () => { release(); await held; }); await settle();
-  expect(host.textContent).toBe("local");
+  expect(chipAccount()).toBe("local");
 });
 
 test("signed-out and changed viewers cannot receive a stale discovery result", async () => {
@@ -146,7 +147,7 @@ test("inventory arriving after mount is resolved locally and disappearing invent
   expect(host.textContent).toBe("accounts");
   expect(requests).toHaveLength(0);
   await act(() => seedAccounts()); await settle();
-  expect(host.textContent).toBe("local");
+  expect(chipAccount()).toBe("local");
   await act(() => seedAccounts([otherDevice]));
   expect(host.textContent).toBe("accounts");
 });
