@@ -18,7 +18,7 @@ import { dmRoomKey } from "@codecast/shared/contracts";
 
 const hadGlobals = new Map<string, { had: boolean; was: unknown }>();
 
-beforeAll(() => {
+beforeAll(async () => {
   // A real URL, not the default opaque origin: `localStorage` throws a
   // SecurityError on one, and the store reaches for it at import time.
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -58,7 +58,14 @@ beforeAll(() => {
     createBiquadFilter = () => ({ type: "lowpass", frequency: { value: 1, setValueAtTime() {} }, Q: { value: 1 }, connect() {}, disconnect() {} });
     close = () => Promise.resolve();
   };
-});
+  // Load the engine and the store graph here, once, with the page in place:
+  // the first import of that graph is most of a cold file's time, and inside a
+  // test it spent the 5s budget of whichever test imported first (on a busy
+  // runner deep in the suite) without measuring anything the test is about.
+  await import("../../lib/calls/walkie");
+  await import("../../hooks/useWalkie");
+  await import("react-dom/client");
+}, 60_000);
 
 afterAll(() => {
   const g = globalThis as any;

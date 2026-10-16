@@ -36,6 +36,7 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page"));
+const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
 const BlogCloud = lazy(() => import("@/app/(marketing)/blog/codecast-in-the-cloud/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
@@ -232,6 +233,7 @@ export function App() {
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
               <Route path="blog/the-tree-at-the-end-of-every-turn" element={<E name="BlogTurns"><BlogTurns /></E>} />
+              <Route path="blog/the-questions-your-agents-save-for-you" element={<E name="BlogQuestions"><BlogQuestions /></E>} />
               <Route path="blog/the-task-your-agent-reports-to" element={<E name="BlogTaskPage"><BlogTaskPage /></E>} />
               <Route path="blog/codecast-in-the-cloud" element={<E name="BlogCloud"><BlogCloud /></E>} />
               <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
