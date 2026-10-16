@@ -131,7 +131,7 @@ interface NodeStmt { open: number; close: number; attrs: Attr[] }
 /** The attribute list of the node statement `<id> [ ... ]`, or null when the source declares no such node. */
 export function findNodeStmt(src: string, id: string): NodeStmt | null {
   const mask = codeMask(src);
-  const re = new RegExp(String.raw`(^|[\n;{])([ \t]*)(${id.replace(/[^\w]/g, "\\$&")})\s*\[`, "g");
+  const re = new RegExp(String.raw`(^|[\n;{\]])([ \t]*)(${id.replace(/[^\w]/g, "\\$&")})\s*\[`, "g");
   for (let m = re.exec(src); m; m = re.exec(src)) {
     const at = m.index + m[1].length + m[2].length;
     if (!mask[at]) continue;
