@@ -198,3 +198,49 @@ describe('filingsNamed (org-staffing.md S43)', () => {
     expect(filingsNamed(['no proposal here', '{"kind":"file_session", broken'])).toEqual([]);
   });
 });
+
+describe('proposal-currency (org-staffing.md S43)', () => {
+  const currency = {
+    open: { 'op-41': { '1': 'jx7g001', '2': 'jx7g003', '3': 'jx7b002', '4': 'jx7m001' }, 'op-44': { '1': 'jx7b002', '2': 'jx7d001' } },
+    stale: ['jx7g003'],
+    fresh: ['jx7g002', 'jx7b003'],
+  };
+  const fresh = '[{"change":{"kind":"file_session","session":"jx7g002","title":"Fix pricing page copy and FAQ","to":"ct-111"},"rationale":"r"},{"change":{"kind":"file_session","session":"jx7b003","title":"Partial refunds","to":"ct-212"},"rationale":"r"}]';
+  const gateOf = (said: string, calls: string[] = []) => verdict([agent([[said]], calls)], { currency })[0];
+
+  test('a revise that drops the stale filing and the duplicate and adds the new ones passes, a heredoc and a continued line included', () => {
+    const said = `op-41\n\n\`\`\`\ncast org revise op-41 \\\n  --remove 2 --add - <<'EOF'\n${fresh}\nEOF\ncast org revise op-44 --remove 1\n\`\`\``;
+    expect(gateOf(said)?.slice(0, 2)).toEqual(['proposal-currency', true]);
+    // Folding op-44 into op-41 and withdrawing it is current too.
+    const folded = `\`\`\`\ncast org revise op-41 --remove 2 --add new.json\ncast org proposals --withdraw op-44\n\`\`\`\n${fresh.replace(']', ',{"change":{"kind":"file_session","session":"jx7d001","title":"Bump Node","to":"done"}}]')}`;
+    expect(gateOf(folded)?.[1]).toBe(true);
+  });
+
+  test('--ops removes land on the revise that named them', () => {
+    const said = `\`\`\`\ncast org revise op-41 --ops - <<'EOF'\n[{"op":"remove","seq":2},{"op":"remove","seq":3},{"op":"add","change":${fresh.slice(1, fresh.indexOf('},{') + 1)}},{"op":"add","change":${fresh.slice(fresh.indexOf('},{') + 2, -1)}}]\nEOF\n\`\`\``;
+    expect(gateOf(said)?.slice(0, 2)).toEqual(['proposal-currency', true]);
+  });
+
+  test('a new proposal beside the open ones fails, a stale or duplicate filing left fails, and naming nothing fails', () => {
+    const beside = gateOf(`\`\`\`\ncast org propose --spec - <<'EOF'\n{"changes":${fresh}}\nEOF\n\`\`\``);
+    expect(beside?.[1]).toBe(false);
+    expect(beside?.[2]).toContain('left the stale filing of jx7g003');
+    expect(beside?.[2]).toContain('asks jx7b002 2 times');
+    expect(beside?.[2]).toContain('left 3 filings proposals where 2 stood');
+    expect(gateOf(`\`cast org propose\` would add a third, so instead:\n\n\`\`\`\ncast org revise op-41 --remove 2 --add new.json\ncast org revise op-44 --remove 1\n\`\`\`\n${fresh}`)?.[1]).toBe(true);
+    expect(gateOf('Nothing new to file.')?.[2]).toContain('jx7g002 joined no open proposal');
+    // A refused revise counts as the turn's intent; one that removes the wrong seq drops a filing still right.
+    expect(gateOf(`\`cast org revise op-44 --remove 2\`\n\n${fresh}`, ['REFUSED org revise op-41 --remove 2 --add new.json'])?.[2]).toContain('dropped jx7d001, still right');
+  });
+
+  test('a superseding proposal that carries every filing still right passes', () => {
+    const all = fresh.replace(']', ',{"change":{"kind":"file_session","session":"jx7g001","title":"a","to":"@growth"}},{"change":{"kind":"file_session","session":"jx7b002","title":"b","to":"@billing"}},{"change":{"kind":"file_session","session":"jx7m001","title":"c","to":"@mobile"}},{"change":{"kind":"file_session","session":"jx7d001","title":"d","to":"done"}}]');
+    expect(gateOf(`\`\`\`\ncast org propose --supersedes op-41 --spec spec.json\ncast org proposals --withdraw op-44\n\`\`\`\n${all}`)?.[1]).toBe(true);
+  });
+
+  test('unchanged: no proposal write passes; any revise fails', () => {
+    const label = { currency: { open: { 'op-41': { '1': 'jx7g001' } }, stale: [], fresh: [], unchanged: true } };
+    expect(verdict([agent([['Nothing new to file; op-41 still stands.']])], label)[0]).toEqual(['proposal-currency', true, 'left op-41 as it stands']);
+    expect(verdict([agent([['`cast org revise op-41 --rationale "still right"`']])], label)[0]?.[1]).toBe(false);
+  });
+});

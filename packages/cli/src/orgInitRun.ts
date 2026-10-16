@@ -29,8 +29,8 @@ export type PromptFacts = {
   workspace: string;
   teamFlag?: string;
   summary: OrgInitSummary;
-  /** A proposal of this kind still open: the reference states it as a fact. */
-  open?: { short_id: string; title: string; decided: number; total: number; url: string };
+  /** The analyzer's proposals still open, oldest first: the reference states them as facts. */
+  open?: ReadonlyArray<{ short_id: string; title: string; decided: number; total: number; created_at?: number }>;
 };
 
 export function buildOrgAnalyzerPrompt(opts: PromptFacts): string {
@@ -55,11 +55,19 @@ export function coverageLine(c: OrgInitSummary["coverage"]): string {
  *  duplicate ghosts, and accepting both is safe only by accident of the
  *  handle clash. A person's own request does not block. */
 export function findOpenOrgProposal(
-  proposals: Array<{ short_id: string; title: string; mode?: OrgProposalMode; status?: string; decided?: number; total?: number; changes?: any[]; counts?: { decided?: number; total?: number } }> | null | undefined,
-): { short_id: string; title: string; decided: number; total: number } | null {
-  const hit = (proposals ?? []).find((p) => (p.status ?? "open") === "open" && (p.mode === "init" || p.mode === "review"));
-  if (!hit) return null;
-  return { short_id: hit.short_id, title: hit.title, ...decidedCount(hit) };
+  proposals: Parameters<typeof findOpenOrgProposals>[0],
+): { short_id: string; title: string; decided: number; total: number; created_at?: number } | null {
+  return findOpenOrgProposals(proposals)[0] ?? null;
+}
+
+/** Every open analyzer proposal, oldest first: what a review keeps current. */
+export function findOpenOrgProposals(
+  proposals: Array<{ short_id: string; title: string; mode?: OrgProposalMode; status?: string; created_at?: number; decided?: number; total?: number; changes?: any[]; counts?: { decided?: number; total?: number } }> | null | undefined,
+): Array<{ short_id: string; title: string; decided: number; total: number; created_at?: number }> {
+  return (proposals ?? [])
+    .filter((p) => (p.status ?? "open") === "open" && (p.mode === "init" || p.mode === "review"))
+    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))
+    .map((p) => ({ short_id: p.short_id, title: p.title, ...decidedCount(p), ...(p.created_at ? { created_at: p.created_at } : {}) }));
 }
 
 /** Stacks (ds-N) keep the older apply order; one sort for both. */
@@ -179,18 +187,19 @@ export async function runAnalyzer(deps: OrgInitDeps, mode: OrgInitMode, options:
   // would post a second set of ghosts. Printing the prompt is guarded the
   // same way, because the agent that reads it posts too.
   const listed = await deps.cliPost("/cli/org/proposals", { ...args, status: "open" });
-  const open = findOpenOrgProposal(listed?.proposals);
+  const opens = findOpenOrgProposals(listed?.proposals);
+  const open = opens[0] ?? null;
   // Init refuses: two first charts would post duplicate ghosts. A review
-  // with last week's proposal still open is the routine's ordinary Monday: the
-  // prompt tells the reviewer to read what changed and add nothing until the
-  // person has decided. Withdrawing is the person's act, never a hint here.
+  // with proposals still open is the routine's ordinary Monday: the reference
+  // lists them, and the review keeps them current by revising them.
+  // Withdrawing is the person's act, never a hint here.
   if (open && mode === "init") {
     fail(
       `${open.short_id} "${open.title}" is still open (${open.decided} of ${open.total} decided), so a second proposal is not started.\n` +
       `Decide it on the org page (${proposalUrl(deps, open.short_id)}) before running this again.`,
     );
   }
-  const prompt = buildOrgAnalyzerPrompt({ mode, workspace, teamFlag: options.team, summary: summarizeInputs(inputs), open: open ? { ...open, url: proposalUrl(deps, open.short_id) } : undefined });
+  const prompt = buildOrgAnalyzerPrompt({ mode, workspace, teamFlag: options.team, summary: summarizeInputs(inputs), open: opens });
   if (!options.spawn) { process.stdout.write(prompt); return; }
   const code = await spawnAnalyzer(prompt, ORG_INIT_LABEL);
   if (code !== 0) process.exit(code);

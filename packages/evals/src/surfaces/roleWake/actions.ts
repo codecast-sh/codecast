@@ -42,6 +42,19 @@ export interface StandingLabel {
   /** The person's loose sessions (org-staffing.md S43): where each that belongs elsewhere may go, and the ones that stay. Read from the specs the turn names. */
   files?: Record<string, string[]>;
   keep?: string[];
+  /** Its own open filings proposals, kept current (S43): what each holds by seq, the filings gone stale since, the new ones that must join, or `unchanged` when every filing is still right and nothing new belongs elsewhere. */
+  currency?: CurrencyLabel;
+}
+
+export interface CurrencyLabel {
+  /** The open proposals at the wake: op-N to { seq: session }. */
+  open: Record<string, Record<string, string>>;
+  /** Sessions whose filing went stale (filed or finished since): no open proposal may still hold one. */
+  stale: string[];
+  /** Newly loose sessions that must join an open proposal. */
+  fresh: string[];
+  /** Nothing should move: the turn names no revise, propose or withdraw. */
+  unchanged?: boolean;
 }
 
 /** Every file_session change a turn names, from the proposal specs in its messages and the files it wrote. */
@@ -61,6 +74,85 @@ function filingGate(texts: string[], label: Pick<StandingLabel, 'files' | 'keep'
   const want = Object.keys(label.files ?? {}).length;
   const pass = !f.wrong.length && f.right.length === want;
   return gate('files-sessions', pass, f.wrong.length ? `filed ${f.wrong.join('; ')}` : want ? `${f.right.length} of ${want} filed where they belong${f.missed.length ? `; missed ${f.missed.join(', ')}` : ''}` : 'filed nothing, as it should');
+}
+
+/** The proposal writes a turn made or named, as the argv after `cast`: revise, propose, and a withdraw. A command continued over lines with `\` reads as one. */
+const ORG_WRITE = /\bcast\s+(org\s+(?:revise|propose)\b[^\n`]*|org\s+proposals\b[^\n`]*--withdraw\b[^\n`]*)/g;
+
+export function orgWritesNamed(agents: AgentResult[], from = 1, extra: string[] = []): string[] {
+  const out: string[] = [];
+  for (const a of agents) {
+    for (const line of callsByTurn(a.calls).slice(from - 1).flat()) {
+      const w = line.startsWith('REFUSED ') ? line.slice('REFUSED '.length).trim() : '';
+      if (/^org\s+(?:revise|propose)\b|^org\s+proposals\b.*--withdraw\b/.test(w)) out.push(w);
+    }
+    for (const text of [...a.turns.slice(from - 1).flat(), ...extra]) for (const code of codeIn(text)) for (const m of code.replace(/\\\n\s*/g, ' ').matchAll(ORG_WRITE)) out.push(m[1]!.trim());
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * The open proposals as the turn leaves them (S43): its removes, withdraws and
+ * supersedes applied by seq to what the label says each held, and the filings
+ * it names joined when a revise adds to a proposal still open or a propose
+ * carries them. Then: no stale filing is left, no session is asked twice, the
+ * fresh ones joined, the still-right ones stayed, and no proposal stands
+ * beside the ones it had. `unchanged` asks for no proposal write at all.
+ */
+export function currencyGate(writes: string[], texts: string[], label: CurrencyLabel): GateResult {
+  const named = (ws: string[]) => ws.map((w) => `cast ${w}`).join('; ');
+  if (label.unchanged) return gate('proposal-currency', writes.length === 0, writes.length ? `changed proposals whose every filing was still right: ${named(writes)}` : `left ${Object.keys(label.open).join(', ')} as it stands`);
+  const state = new Map(Object.entries(label.open).map(([op, rows]) => [op, new Map(Object.entries(rows))]));
+  const notOpen: string[] = [];
+  const targets: string[] = [];
+  const opsOn: string[] = [];
+  let posted = 0;
+  for (const w of writes) {
+    const rev = /^org\s+revise\s+["']?(op-\d+)/.exec(w);
+    if (rev) {
+      const op = rev[1]!;
+      if (!state.has(op)) notOpen.push(op);
+      for (const m of w.matchAll(/--remove[\s=]+["']?#?(\d+)/g)) state.get(op)?.delete(m[1]!);
+      if (/--add\b/.test(w)) targets.push(op);
+      if (/--ops\b/.test(w)) opsOn.push(op);
+      continue;
+    }
+    // A bare verb is the command named in passing (as in decisionGate), never a proposal posted.
+    if (/^org\s+propose\s+\S/.test(w)) {
+      posted++;
+      targets.push('new');
+      const sup = /--supersedes[\s=]+["']?(op-\d+)/.exec(w)?.[1];
+      if (sup) state.delete(sup);
+      continue;
+    }
+    const wd = /--withdraw[\s=]+["']?(op-\d+)/.exec(w)?.[1];
+    if (wd) state.delete(wd);
+  }
+  // --ops hands the ops over as JSON: its removes land on the revise that named it.
+  if (opsOn.length) {
+    for (const text of texts) {
+      for (const m of text.matchAll(/\{[^{}]*"op"\s*:\s*"remove"[^{}]*\}/g)) {
+        try { const seq = JSON.parse(m[0]).seq; if (seq !== undefined) state.get(opsOn[0]!)?.delete(String(seq)); } catch { /* a fragment that is no JSON removes nothing */ }
+      }
+      if (/"op"\s*:\s*"add"/.test(text)) targets.push(opsOn[0]!);
+    }
+  }
+  const carried = targets.some((t) => t === 'new' || state.has(t));
+  const added = carried ? [...new Set(filingsNamed(texts).map((f) => f.change.session.trim().toLowerCase()))] : [];
+  const held = [...state.values()].flatMap((rows) => [...rows.values()]);
+  const final = [...held, ...added];
+  const count = (s: string) => final.filter((x) => x === s).length;
+  const stale = new Set(label.stale);
+  const right = [...new Set(Object.values(label.open).flatMap((rows) => Object.values(rows)))].filter((s) => !stale.has(s));
+  const faults = [
+    ...label.stale.filter((s) => count(s) > 0).map((s) => `left the stale filing of ${s}`),
+    ...[...new Set(final)].filter((s) => count(s) > 1).map((s) => `asks ${s} ${count(s)} times`),
+    ...label.fresh.filter((s) => !added.includes(s)).map((s) => `${s} joined no open proposal`),
+    ...right.filter((s) => count(s) === 0).map((s) => `dropped ${s}, still right`),
+    ...(state.size + posted > Object.keys(label.open).length ? [`left ${state.size + posted} filings proposals where ${Object.keys(label.open).length} stood`] : []),
+    ...notOpen.map((op) => `revised ${op}, which is not open`),
+  ];
+  return gate('proposal-currency', faults.length === 0, `${faults.length ? faults.join('; ') : 'kept its open filings current'}${writes.length ? ` (${named(writes)})` : ' (named no proposal write)'}`);
 }
 
 /** A playbook a check must leave behind, each key held only when named. */
@@ -306,7 +398,9 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
     const attempted = agents.flatMap((a) => callsByTurn(a.calls).slice(from - 1).flat()).filter((l) => l.startsWith('REFUSED ')).map((l) => l.slice('REFUSED '.length).trim());
     gates.push(delegatesGate(writes, attempted, ownWorkCalls(agents, from), label.delegates));
   }
-  if (label.files || label.keep) gates.push(filingGate([...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...agents.flatMap(specFilesOf), ...extra], label));
+  const filingTexts = () => [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...agents.flatMap(specFilesOf), ...extra];
+  if (label.files || label.keep) gates.push(filingGate(filingTexts(), label));
+  if (label.currency) gates.push(currencyGate(orgWritesNamed(agents, from, extra), filingTexts(), label.currency));
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
 }
