@@ -4,7 +4,7 @@
 // targets inline, the rest in the picker); people and roles fold and unfold.
 // Opening a card goes where a click goes: a role to its session, a person to
 // their profile, a session to its conversation.
-import { ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Search, User } from "lucide-react";
+import { ArrowRightLeft, ArrowUpToLine, ChevronDown, ChevronRight, ExternalLink, Search, User } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "../ui/context-menu";
 import { SessionMenuItems } from "../menus/ObjectContextMenus";
@@ -12,8 +12,8 @@ import { Avatar } from "../tasks/TaskCommentStream";
 import type { OrgGraphObject } from "./OrgGraph";
 import type { OrgLayoutNode } from "./orgLayout";
 import type { MoveSubject } from "./useOrgPeopleView";
-import type { OrgMoves } from "./useOrgMoves";
-import { sameParent, type OrgParentRef } from "./orgTypes";
+import { sameTarget, type OrgMoves } from "./useOrgMoves";
+import type { OrgParentRef } from "./orgTypes";
 
 const INLINE_TARGETS = 12;
 
@@ -34,13 +34,13 @@ export function OrgNodeMenu({ node, moves, currentParentOf, onToggleCollapse, on
         <CtxSubTrigger icon={ArrowRightLeft}>Move to…</CtxSubTrigger>
         <CtxSubContent>
           {list.slice(0, INLINE_TARGETS).map((t) => {
-            const isCur = !!cur && sameParent(cur, t.ref);
+            const isCur = sameTarget(cur, t.ref);
             return (
               <CtxItem
                 key={t.id}
                 disabled={isCur}
                 onSelect={() => moves.move(subject, t.ref, t.title)}
-                leading={t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : <span className="w-4 h-4 rounded inline-flex items-center justify-center text-[8px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>@</span>}
+                leading={t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" /> : <span className="w-4 h-4 rounded inline-flex items-center justify-center text-[8px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>@</span>}
                 trailing={isCur ? <span className="text-[10px]" style={{ color: "var(--sol-text-dim)" }}>current</span> : undefined}
                 data-move-target={t.id}
               >
@@ -97,11 +97,21 @@ export function OrgNodeMenu({ node, moves, currentParentOf, onToggleCollapse, on
     );
   }
   if (node.kind === "person") {
+    const subject: MoveSubject = { kind: "person", id: node.person.user_id, title: node.person.name };
+    // Only targets this viewer may pick are listed; the current one alone means nothing to pick.
+    const cur = currentParentOf(subject);
+    const canMove = moves.targetsFor(subject).some((t) => !sameTarget(cur, t.ref));
     return (
       <>
         <CtxHeader title={node.person.name} />
         <CtxItem icon={User} onSelect={() => onOpenObject({ kind: "person", id: node.person.user_id })}>Open profile</CtxItem>
         {fold(node)}
+        {canMove && (
+          <>
+            <CtxSeparator />
+            {moveTo(subject)}
+          </>
+        )}
       </>
     );
   }

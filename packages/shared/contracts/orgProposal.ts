@@ -133,6 +133,20 @@ export type OrgProjectMetaChange = {
 export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: string } & OrgLeaveSessions;
 /** File a plan under a project (plans.project_id), so a role's scope can see it. Both are refs. */
 export type OrgFileChange = { kind: "file"; plan: string; project: string };
+/** Where a loose session of the person's goes (org-staffing.md S40): under a
+ *  role ("@handle"), onto a task ("ct-N", the session joins its work), or out
+ *  of the inbox as finished ("done"). `session` is its short id and `title` its
+ *  title as the author read it, so the row reads cold. */
+export type OrgFileSessionChange = { kind: "file_session"; session: string; to: string; title?: string };
+export type OrgSessionDestination = { kind: "role"; handle: string } | { kind: "task"; task: string } | { kind: "done" };
+/** What a filing's `to` names, or null when it names nothing a session can go to. */
+export function sessionDestination(to: string): OrgSessionDestination | null {
+  const t = (to ?? "").trim();
+  if (t.toLowerCase() === "done") return { kind: "done" };
+  if (/^@[a-z0-9-]{2,32}$/i.test(t)) return { kind: "role", handle: t.slice(1).toLowerCase() };
+  if (/^ct-\d+$/i.test(t)) return { kind: "task", task: t.toLowerCase() };
+  return null;
+}
 
 // A role's charter edited in place (org-staffing.md S7): the change carries
 // only what moves, never the whole text, so the card draws each passage
@@ -219,9 +233,9 @@ export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: s
 export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
 export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange | OrgCharterEditChange
-  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange;
+  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange | OrgFileSessionChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape"] as const;
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape", "file_session"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
@@ -237,6 +251,8 @@ export function quietChangeSentence(c: OrgChange, name?: string): string {
   const who = name ?? ("handle" in c && typeof (c as { handle?: unknown }).handle === "string" ? `@${(c as { handle: string }).handle.replace(/^@/, "")}` : "the role");
   return `${who} keeps a safety net on its daily work.`;
 }
+/** The kinds that tidy the person's inbox: one ask holds them, and a role with its switch on files them itself (S40). */
+export const ORG_SESSION_KINDS: readonly OrgChangeKind[] = ["file_session"];
 export const isOrgGoalChange = (c: { kind: string }): c is OrgGoalChange => (ORG_GOAL_KINDS as readonly string[]).includes(c.kind);
 export type OrgChangeKind = OrgChange["kind"];
 
@@ -249,11 +265,13 @@ export type OrgChangeKind = OrgChange["kind"];
 // The cap is read off Union's real proposals: the largest structure proposal
 // held 9 changes and the first goal tree 11 (op-55, op-54, 2026-10-06); 12
 // holds both and refuses the 64-row record shape that has no place here.
-export type OrgProposalWork = "records" | "structure" | "goals";
-export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals"];
-export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12 };
+// The person's sessions filed where they belong are a fourth kind, uncapped
+// like the records: a tidy files every loose session it can place.
+export type OrgProposalWork = "records" | "structure" | "goals" | "sessions";
+export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals", "sessions"];
+export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12, sessions: null };
 export function orgWorkOfChange(c: { kind: string }): OrgProposalWork {
-  return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : "structure";
+  return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : (ORG_SESSION_KINDS as readonly string[]).includes(c.kind) ? "sessions" : "structure";
 }
 /** The work the changes hold, or null when they mix kinds. */
 export function orgProposalWork(changes: ReadonlyArray<{ change: { kind: string } }>): OrgProposalWork | null {
@@ -266,9 +284,9 @@ export function orgProposalWorkErrors(changes: ReadonlyArray<{ change: { kind: s
   const byWork = new Map<OrgProposalWork, string[]>();
   for (const c of changes) { const w = orgWorkOfChange(c.change); byWork.set(w, [...(byWork.get(w) ?? []), c.change.kind]); }
   if (byWork.size > 1) {
-    const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal" };
+    const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal", sessions: "session filing" };
     const parts = ORG_PROPOSAL_WORKS.filter((w) => byWork.has(w)).map((w) => { const kinds = byWork.get(w)!; return `${kinds.length} ${noun[w]} ${kinds.length === 1 ? "change" : "changes"} (${[...new Set(kinds)].join(", ")})`; });
-    return [`a proposal holds one kind of work, and this one mixes ${andList(parts)}: post the records as one proposal, the structure as another and the goals as a third, each with its own title and summary`];
+    return [`a proposal holds one kind of work, and this one mixes ${andList(parts)}: post the records as one proposal, the structure as another, the goals as a third and the session filings as a fourth, each with its own title and summary`];
   }
   const [work, kinds] = [...byWork][0];
   const max = ORG_PROPOSAL_MAX[work];
@@ -297,6 +315,7 @@ export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
   projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9, initiative_shape: 10,
   move: 11, scope: 12, charter_edit: 13, budget: 14, trust: 15, authority: 16, adopt: 17, routine: 18, hire: 19, upgrade: 20, retire: 21,
+  file_session: 22,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -468,6 +487,10 @@ export function orgChangeError(raw: any): string | null {
     }
     case "file":
       return nonEmpty(raw.plan) && nonEmpty(raw.project) ? null : "file needs a plan ref and a project ref";
+    case "file_session":
+      if (!nonEmpty(raw.session)) return "file_session needs the session's short id";
+      if (!optString(raw.title)) return "file_session title is the session's title, a string";
+      return nonEmpty(raw.to) && sessionDestination(raw.to) ? null : `file_session to is "@handle" (under a role), "ct-N" (onto a task) or "done" (finished, out of the inbox), not ${JSON.stringify(raw.to)}`;
     case "charter_edit": {
       const h = handle(); if (h) return h;
       if (!Array.isArray(raw.edits) || !raw.edits.length || raw.edits.length > ORG_CHARTER_EDITS_MAX) return `charter_edit edits is a list of one to ${ORG_CHARTER_EDITS_MAX} edits: { op: "replace", before, after }, { op: "add", line } or { op: "remove", before }`;
@@ -887,8 +910,10 @@ export type OrgAskNames = {
   project?: (ref: string) => string | undefined;
   plan?: (ref: string) => string | undefined;
   initiative?: (ref: string) => string | undefined;
-  /** A session's title, for a change that seats one (a role's seat, an adopt). */
+  /** A session's title, for a change that seats or files one (a role's seat, an adopt, a filing). */
   session?: (ref: string) => string | undefined;
+  /** A task's title, for a filing that puts a session on it. */
+  task?: (ref: string) => string | undefined;
 };
 
 /** The one line a goal change reads as (I1, revised), for a person who has
@@ -1078,6 +1103,7 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
   const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
   const goals = live.filter((c) => isOrgGoalChange(c.change));
+  const filings = live.filter((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind));
   const created = new Map<string, AskRow>(live.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
   // A move of a role this proposal creates rides in that role's ask (a named
   // session put under an existing role, R2), so the person can accept the
@@ -1086,7 +1112,7 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const riders = new Map<AskRow, AskRow[]>();
   const rest: AskRow[] = [];
   for (const c of live) {
-    if (records.includes(c) || goals.includes(c) || own.includes(c)) continue;
+    if (records.includes(c) || goals.includes(c) || filings.includes(c) || own.includes(c)) continue;
     const role = created.get(askHandle(c.change) ?? "");
     if (role) riders.set(role, [...(riders.get(role) ?? []), c]);
     else rest.push(c);
@@ -1120,6 +1146,23 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
       why: one?.rationale?.trim() || "The projects' own goals, and what the company said in its calls and threads, point at these goals; the goals page does not hold them yet.",
       effect: one?.expected_effect?.trim() || (one ? words.effect(one.change) : `${n(goals.length, "change", "changes")} on the goals page: a goal set, a project added to one, or an owner named. No work starts or stops.`),
       seqs: seqs(goals),
+    });
+  }
+  // The filings ask (S40): the person clears their inbox in one pass. One
+  // filing reads as its own sentence; several read as where they go.
+  if (filings.length) {
+    const one = filings.length === 1 ? filings[0] : null;
+    const to = new Map<string, number>();
+    for (const c of filings) {
+      const d = sessionDestination((c.change as OrgFileSessionChange).to);
+      const where = !d ? "elsewhere" : d.kind === "done" ? "closed as done" : d.kind === "task" ? "onto tasks" : `under ${names?.role?.(d.handle) ?? `@${d.handle}`}`;
+      to.set(where, (to.get(where) ?? 0) + 1);
+    }
+    out.push({
+      title: one ? changeLine(one.change, { names, brief: true }) : `File ${n(filings.length, "session", "sessions")} where they belong`,
+      why: one?.rationale?.trim() || "Each of these sits loose in your inbox, but its work belongs to an area someone already owns, or is finished.",
+      effect: `${andList([...to].map(([where, k]) => `${k} ${where}`))}. ${filings.length === 1 ? "It leaves" : "They leave"} your inbox; nothing stops running.`,
+      seqs: seqs(filings),
     });
   }
   for (const c of own) {
@@ -1197,6 +1240,7 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "plan_status": return `plan_status:${c.plan.trim()}`;
     case "project_status": return `project_status:${c.project.trim().toLowerCase()}`;
     case "file": return `file:${c.plan.trim()}`;
+    case "file_session": return `file_session:${c.session.trim().toLowerCase()}`;
     case "project_meta": return `project_meta:${c.project.trim().toLowerCase()}`;
     case "charter_edit": return `charter_edit:${h(c.handle)}`;
     case "role": return `role:${h(c.handle)}`;
@@ -1456,6 +1500,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "hire": return `hire ${at(c.handle)} from template ${c.template}@${c.version} on ${c.project} as ${c.instance}`;
     case "upgrade": return `upgrade instance ${c.instance} to ${c.template}@${c.to}`;
     case "file": return `file plan ${c.plan} under project ${c.project}`;
+    case "file_session": return `file session ${c.session} ${sessionDestination(c.to)?.kind === "done" ? "as done" : `under ${c.to.trim()}`}`;
     case "charter_edit": return `charter ${at(c.handle)}: ${c.edits.map(charterEditTerse).join("; ")}`;
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
@@ -1619,6 +1664,11 @@ export function changeClauses(c: OrgChange, words: ChangeWords = {}): string[] {
     case "hire": return [`hire ${subject(who(c.handle))} from the template ${c.template} (${c.version}) to lead ${project(c.project)}`];
     case "upgrade": return [`move ${subject(c.instance, "the instance")} to ${c.template} ${c.to}`];
     case "file": return [`put ${subject(plan(c.plan), brief ? "the plan" : "plan")} under the project ${project(c.project)}`];
+    case "file_session": {
+      const s = subject(c.title?.trim() || names?.session?.(c.session) || c.session, "the session");
+      const to = sessionDestination(c.to);
+      return [to?.kind === "done" ? `close ${s} as done` : to?.kind === "task" ? `put ${s} on the task ${names?.task?.(to.task) ?? to.task}` : `put ${s} under ${who(c.to)}`];
+    }
     case "charter_edit": {
       // What the edit does, never the words: the card shows each passage before and after.
       const s = subject(who(c.handle));

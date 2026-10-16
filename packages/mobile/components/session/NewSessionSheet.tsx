@@ -74,15 +74,15 @@ export function ComposeHost() {
   );
 }
 
-// Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
+// Per-client accents, matching web's agentAccent chip colors (lib/agentColors) where it
 // has one. Tints the selected pill's border/background/label; the logo
 // itself is the shared AgentGlyph (web AgentTypeIcon marks and colors).
 const agentAccents: Record<AgentClientId, string> = {
-  claude: Theme.orange,
+  claude: Theme.yellow,
   codex: Theme.green,
   cursor: Theme.violet,
   gemini: Theme.blue,
-  opencode: Theme.accentAmber,
+  opencode: Theme.orange,
   pi: Theme.cyan,
   grok: Theme.text,
   muse: Theme.greenBright,
@@ -163,7 +163,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // in hosted mode or with no machine) until they pick one here. Where only
   // the hosted assistant can answer, the agent row is not offered at all.
   const defaultAgent = fromConvexAgentType(useDefaultAgentType());
-  const onlyHosted = useOnlyHostedAgent() && false; // TEMP-VERIFY
+  const onlyHosted = useOnlyHostedAgent();
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
@@ -480,9 +480,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
             }}
             activeOpacity={0.7}
           >
-            <RNView style={{ opacity: active ? 1 : 0.55 }}>
-              <AgentGlyph agentType={a.id} size={16} />
-            </RNView>
+            <AgentGlyph agentType={a.id} size={16} />
             <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
               {a.label}
             </RNText>

@@ -14,6 +14,7 @@ import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { refuseUnlessHuman } from "./orgRoles";
 import { requireWorkspaceCaller } from "./org";
 import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
+import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
 import { setInboxStatus } from "./sessionDecisions";
@@ -47,6 +48,7 @@ import {
   type OrgRevision,
   type OrgVerdictSeen,
   orgRecordRedundancyErrors,
+  ORG_SESSION_KINDS,
 } from "@codecast/shared/contracts/orgProposal";
 import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 
@@ -242,7 +244,7 @@ export async function performCreateProposal(
   // No queue card: the proposal lives as a card in the author's conversation
   // (org-staffing.md S24), where the person reads and decides it. A role's
   // hire also reaches the lead above it, or applies at once (routeHire).
-  const hire = await routeHire(ctx, userId, (await ctx.db.get(proposalId))!, conversation);
+  const hire = { ...(await routeHire(ctx, userId, (await ctx.db.get(proposalId))!, conversation)), ...(await routeFilings(ctx, userId, (await ctx.db.get(proposalId))!)) };
   return { id: proposalId, short_id, status: hire.applied ? (await ctx.db.get(proposalId))!.status : "open", author, changes, link: PROPOSAL_LINK(short_id), ...hire, ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
 }
 
@@ -736,6 +738,24 @@ async function routeHire(ctx: Ctx & { runMutation?: (ref: any, args: any) => Pro
     ...(conversation ? { from_conversation_id: conversation._id } : {}),
   });
   return sent ? { routed_to: lead.handle } : {};
+}
+
+/**
+ * Session filings (S40) from a role a person let start work on its own apply
+ * at once: the switch is the person's leave to act in its area, and the
+ * filings are its area's tidying. Each lands in the org log, so the person
+ * reads and undoes them there. Any other author's filings wait on the card.
+ */
+async function routeFilings(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, proposal: ProposalRow): Promise<{ applied?: boolean }> {
+  if (proposal.author.kind !== "role") return {};
+  const author: any = await ctx.db.get(proposal.author.id as Id<"org_roles">);
+  if (!author || author.status === "retired" || !roleStartsOnItsOwn(author)) return {};
+  const rows = (await changesOf(ctx, proposal._id)).filter(decidable);
+  if (!rows.length || !rows.every((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind))) return {};
+  const now = Date.now();
+  for (const row of rows) await ctx.db.patch(row._id, { reply: { verdict: "approve", text: `Filed by @${author.handle}, which starts work on its own`, at: now, by: userId } });
+  await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: rows.map((c) => c.seq), continuation: true, lead: true, log_head: { door: "proposal", gesture: "accept_all", key: `proposal:${proposal._id}:filed:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } } });
+  return { applied: true };
 }
 
 /** Changes one accept all call applies before it hands the rest on. */

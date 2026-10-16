@@ -908,6 +908,15 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // ── Org record (display-only history items) ────────────────────────────────
   reparentOrgSession: org(reparentSessionLabel),
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),
+  reparentOrgPerson: {
+    spec: {
+      label: (ctx) => `Moved ${personName(ctx.before, ctx.args[1] as string)} in the org`,
+      inverse: (ctx) => {
+        const was = (ctx.before as any)?.orgTree?.people?.find((p: any) => p.user_id === ctx.args[1]);
+        return was ? [call("reparentOrgPerson", ctx.args[0], ctx.args[1], was.reports_to_user_id ?? null)] : null;
+      },
+    },
+  },
   createOrgRole: org((ctx) => `Created the role ${quoted((ctx.args[0] as { name?: string })?.name, "role")}`),
   updateOrgRole: org((ctx) => `Edited ${roleName(ctx.before, ctx.args[0] as string)}`),
   setRoleLine: org((ctx) => `Changed the line of ${roleName(ctx.before, ctx.args[0] as string)}`),

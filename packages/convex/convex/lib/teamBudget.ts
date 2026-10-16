@@ -67,18 +67,28 @@ export function worstCaseCost(model: string, promptChars: number, maxTokens: num
   return modelCost(model, { input_tokens: Math.ceil(promptChars / 3), output_tokens: maxTokens });
 }
 
+/** Longer than any call holds its reservation: Convex stops an action at 10 minutes. */
+export const HOLD_OUTLIVES_ANY_CALL_MS = 15 * 60_000;
+
 /**
  * Reserves `amount` for one call. False when the cap has no room for it, and
  * the refusal is counted. The caller settles what it reserved, called or not.
+ * A settle that never landed leaves its hold behind; when the cap is full and
+ * no hold has been granted for longer than any call runs, every hold left is
+ * such a leftover, and they are released so the cap means what was spent.
  */
 export async function takeBudget(ctx: { db: any }, workspace: string, teamId: Id<"teams"> | undefined, amount: number, now: number): Promise<boolean> {
   const row = await current(ctx, workspace, teamId, now);
   amount = hold(amount);
-  if (row.cap_usd <= 0 || row.spent_usd + row.held_usd + amount > row.cap_usd) {
-    await ctx.db.patch(row._id, { refused: row.refused + 1, last_refused_at: now, updated_at: now });
+  let held = row.held_usd;
+  const full = () => row.cap_usd <= 0 || row.spent_usd + held + amount > row.cap_usd;
+  if (full() && held > 0 && row.last_granted_at !== undefined && now - row.last_granted_at > HOLD_OUTLIVES_ANY_CALL_MS) held = 0;
+  if (full()) {
+    // A row from before grants were stamped starts the clock at its first refusal.
+    await ctx.db.patch(row._id, { held_usd: held, refused: row.refused + 1, last_refused_at: now, last_granted_at: row.last_granted_at ?? now, updated_at: now });
     return false;
   }
-  await ctx.db.patch(row._id, { held_usd: cents(row.held_usd + amount), updated_at: now });
+  await ctx.db.patch(row._id, { held_usd: cents(held + amount), last_granted_at: now, updated_at: now });
   return true;
 }
 

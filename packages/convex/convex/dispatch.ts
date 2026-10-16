@@ -744,6 +744,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   reparentOrgRole: async (ctx, _userId, [roleId, reportsTo, note]: [string, any, string | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo, ...(note ? { note } : {}) });
   },
+  // A person reports to a person (orgPeople.ts); null lets them report to nobody.
+  reparentOrgPerson: async (ctx, _userId, [teamId, userId, reportsTo]: [string, string, string | null]) => {
+    return await ctx.runMutation!((api as any).orgPeople.reparentPerson, { team_id: teamId, user_id: userId, reports_to_user_id: reportsTo });
+  },
   createOrgRole: async (ctx, _userId, [input]: [any]) => {
     // The hire form (org-init.md O3) creates and provisions in one gesture and
     // may set caps; the plain add-a-role path passes neither. Caps have their
