@@ -1100,10 +1100,11 @@ export function buildHostsCommand(parent: Command): Command {
 
   hosts
     .command("update [id]")
-    .description("Put the CLI built from this checkout on a host, check it runs there, then restart its daemon onto it")
-    .option("--no-restart", "Install and check the new bundle, but leave the running daemon alone")
+    .description("Put the latest cast release on a host, check it runs there, then restart its daemon onto it")
+    .option("--from-checkout", "Install a build of this checkout instead, to try an unreleased fix (the host stops taking updates until it is back on a release)")
+    .option("--no-restart", "Install and check the new cast, but leave the running daemon alone")
     .option("--force", "Restart even when that would end the sessions in the daemon's own tmux server")
-    .action(async (id: string | undefined, o: { restart: boolean; force?: boolean }) => {
+    .action(async (id: string | undefined, o: { restart: boolean; force?: boolean; fromCheckout?: boolean }) => {
       const h = pick(id, "no linux host registered");
       const { hostIdleWatchdogCurrent } = await import("../browser/provisionLinux.js");
       const { hostCastPlatform, updateHostCast } = await import("./updateHost.js");
@@ -1112,7 +1113,7 @@ export function buildHostsCommand(parent: Command): Command {
       const remote = toRemoteHost(up);
       const platform = hostCastPlatform(up);
       try {
-        const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force }, (m) => console.log(fmt.muted(`  ${m}`)));
+        const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force, source: o.fromCheckout ? "checkout" : "release" }, (m) => console.log(fmt.muted(`  ${m}`)));
         console.log(`${OK} cast ${version} is installed on ${up.id}${platform === "linux" ? " and runs there" : ""}`);
         if (!restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
         else if ("refused" in restart) die(restart.refused);

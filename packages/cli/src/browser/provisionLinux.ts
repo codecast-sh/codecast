@@ -28,7 +28,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { installHostRelease } from "../hosts/installRelease.js";
+import { installHostRelease, type HostCastSource } from "../hosts/installRelease.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
@@ -491,8 +491,8 @@ const REMOTE_BUNDLE_PREVIOUS = `${REMOTE_BUNDLE_DIR}.previous`;
  * The idle watchdog and probe are not part of the bundle: provisioning writes
  * them, so this leaves them as they are.
  */
-export function installLinuxCast(host: RemoteHost, onProgress: (m: string) => void = () => {}): { version: string } {
-  if (!hasHostBuildSource()) return { version: installHostRelease(host, "linux", onProgress) };
+export function installLinuxCast(host: RemoteHost, onProgress: (m: string) => void = () => {}, source: HostCastSource = "release"): { version: string } {
+  if (source === "release" || !hasHostBuildSource()) return { version: installHostRelease(host, "linux", onProgress) };
   const want = cliSourceVersion();
   const bundles = buildLinuxCast(onProgress);
   const restore = () =>

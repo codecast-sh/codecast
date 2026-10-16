@@ -513,5 +513,8 @@ if (__DEV__) {
     declineInvite,
     snapshot: getCallSnapshot,
     room: getRoom,
+    // Paint a call with no room behind it: the store shots mode
+    // (lib/storeShots) stages the huddle screen this way.
+    stage: (patch: Partial<CallSnapshot>) => emit(patch),
   };
 }
