@@ -14,7 +14,7 @@ in git. The study this continues: docs/architecture/agent-comms.md.
     python3 packages/evals/org-comms/monitor.py [--days 7] [--sample 120]
         [--user <users id>] [--account <profile>] [--model <id>] [--skip-export]
 """
-import argparse, collections, datetime, json, os, random, re, statistics, subprocess, sys
+import argparse, collections, datetime, glob, json, os, random, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -79,6 +79,40 @@ def place(rc, sc, convs):
     return "peer"
 
 
+def fill_long_lived(convs, short, msgs):
+    """The export holds the newest sessions, so a long-lived one (a role's
+    standing session above all) falls out of it while still sending every
+    day. Look those up by id; such a session runs at the top of its line, so
+    only its role is needed to place it."""
+    want = {m["conversation_id"] for m in msgs if m["conversation_id"] not in convs}
+    want |= {m["sender"] for m in msgs if m["sender"] not in ("unknown", "codecast") and not short.get(m["sender"])}
+    want = sorted(want)
+    for i in range(0, len(want), 25):
+        out = subprocess.run(["cast", "sessions", *want[i:i + 25], "--json"], capture_output=True, text=True, timeout=300).stdout
+        try: rows = json.loads(out).get("sessions", [])
+        except Exception: continue
+        for r in rows:
+            row = {"_id": r["id"], "short_id": r["id"][:7], "title": r.get("title"), "parent_conversation_id": None,
+                   "standing_role_id": (r.get("role") or {}).get("handle"), "session_id": r.get("session_id")}
+            convs.setdefault(r["id"], row)
+            if row not in short[row["short_id"]]: short[row["short_id"]].append(convs[r["id"]])
+    return len(want)
+
+
+def saw_guidance(session_id, transcripts):
+    """Whether a session's start actually showed it the org guidance: Claude
+    Code cuts start-hook output over about 9.8KB to a preview, and a session
+    whose transcript is not on this machine cannot be told."""
+    f = transcripts.get(session_id or "")
+    if not f: return "unknown"
+    head = ""
+    with open(f, errors="ignore") as fh:
+        for i, line in enumerate(fh):
+            if i > 40: break
+            head += line
+    return "saw" if "org-context" in head and "Output too large" not in head else "did not see"
+
+
 def call_model(run_dir, prompt, system, model, account):
     os.makedirs(run_dir, exist_ok=True)
     reply_path = os.path.join(run_dir, "h", "reply.txt")
@@ -116,7 +150,7 @@ def main():
         convex_data("pending_messages", 60000, os.path.join(exp, "pending.jsonl"))
         convex_data("conversations", 70000, os.path.join(exp, "convs.jsonl"))
 
-    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "standing_role_id", "org_role_id"]
+    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "standing_role_id", "org_role_id", "session_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
     short = collections.defaultdict(list)
     for c in convs.values():
@@ -127,11 +161,12 @@ def main():
         if r["_creationTime"] < since or r.get("from_user_id") != a.user or not r["content"].startswith("<session-message"): continue
         m = re.match(r'<session-message from="([^"]+)"', r["content"])
         r["sender"] = m.group(1) if m else "unknown"
-        r["rel"] = relation(r, convs, short)
         msgs.append(r)
+    looked_up = fill_long_lived(convs, short, msgs)
+    for r in msgs: r["rel"] = relation(r, convs, short)
     notices = sum(1 for m in msgs if m["rel"] == "system")
     msgs = [m for m in msgs if m["rel"] != "system"]
-    print(f"{len(msgs)} messages in the last {a.days} days ({notices} system notices left out)", flush=True)
+    print(f"{len(msgs)} messages in the last {a.days} days ({notices} system notices left out, {looked_up} sessions outside the export looked up)", flush=True)
 
     # Shape: counts that need no model.
     rel = collections.Counter(m["rel"] for m in msgs)
@@ -179,7 +214,12 @@ def main():
     with ThreadPoolExecutor(4) as ex:
         outs = list(ex.map(lambda i: call_model(os.path.join(run, "label", f"b{i:02d}"), "\n\n".join(c for _, c in batches[i]), system, a.model, a.account), range(len(batches))))
     rel_of = {m["_id"]: m["rel"] for m in sample}
-    labels = [dict(x, rel=rel_of.get(x.get("id"))) for o in outs if o for x in o]
+    transcripts = {os.path.basename(f)[:-6]: f for f in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))}
+    def sender_saw(m):
+        cands = [c for c in short.get(m["sender"], []) if c.get("session_id")]
+        return saw_guidance(cands[0]["session_id"], transcripts) if cands else "unknown"
+    seen_of = {m["_id"]: sender_saw(m) for m in sample}
+    labels = [dict(x, rel=rel_of.get(x.get("id")), guidance=seen_of.get(x.get("id"))) for o in outs if o for x in o]
     json.dump(labels, open(os.path.join(run, "labels.json"), "w"), indent=1)
 
     ag = [x for x in labels if x["rel"] != "huddle-feed"]
@@ -202,11 +242,20 @@ def main():
             "changed_pct": pct(ag, lambda x: x.get("effect") == "changed"),
             "readable_pct": pct(ag, lambda x: x.get("readable")),
             "readable_idle_pct": pct(ag, lambda x: x.get("readable") and not x.get("urgent") and x.get("effect") != "changed"),
+            # The same, leaving out a result the recipient asked for: a worker's
+            # one finished report is the handoff the messaging guidance asks for.
+            "readable_idle_unasked_pct": pct(ag, lambda x: x.get("readable") and not x.get("urgent") and x.get("effect") != "changed" and not (x.get("kind") == "result" and x.get("solicited"))),
             "urgent_pct": pct(ag, lambda x: x.get("urgent")),
             "kinds": dict(collections.Counter(x.get("kind") for x in ag).most_common()),
             "directing": len(directing), "directing_from_outside_line": len(outside),
             "outside_line_kinds": dict(collections.Counter(x.get("kind") for x in outside).most_common()),
             "outside_line_followed_pct": pct(outside, lambda x: x.get("effect") == "changed"),
+            # The wording's own effect: the same reading for senders whose start
+            # showed them the org guidance and for those it did not.
+            "by_guidance": {g: {"n": len(xs), "changed_pct": pct(xs, lambda x: x.get("effect") == "changed"), "noise_pct": pct(xs, lambda x: x.get("noise")),
+                                "readable_idle_unasked_pct": pct(xs, lambda x: x.get("readable") and not x.get("urgent") and x.get("effect") != "changed" and not (x.get("kind") == "result" and x.get("solicited"))),
+                                "peer_pct": pct(xs, lambda x: x["rel"] == "peer"), "directs_outside_line_pct": pct(xs, lambda x: x.get("directs") and x["rel"] not in ("parent->worker", "ancestor"))}
+                            for g, xs in ((g, [x for x in ag if x.get("guidance") == g]) for g in ("saw", "did not see", "unknown"))},
             "worker_to_parent_readable_pct": pct([x for x in ag if x["rel"] == "worker->parent"], lambda x: x.get("readable")),
         },
     }
@@ -227,6 +276,7 @@ def main():
             ("changed recipient %", lambda r: r["agent_to_agent"]["changed_pct"]),
             ("could have been read %", lambda r: r["agent_to_agent"]["readable_pct"]),
             ("read, idle, unchanged %", lambda r: r["agent_to_agent"]["readable_idle_pct"]),
+            ("same, asked-for results left out %", lambda r: r["agent_to_agent"]["readable_idle_unasked_pct"]),
             ("peer share %", lambda r: round(100 * r["by_relation"].get("peer", 0) / max(1, r["messages"] - r["huddle"]["chunks"]), 1)),
             ("outside-line direction followed %", lambda r: r["agent_to_agent"]["outside_line_followed_pct"]),
             ("hub share %", lambda r: r["hubs"]["their_share_pct"])]

@@ -103,7 +103,8 @@ async function modFetch(url: string, init?: RequestInit) {
 /** A `$` bound to one dispatch, so the host knows which surface a read belongs to and re-renders it when that data changes. */
 function makeApi(key: string | undefined, origin: Origin): any {
   const local: Record<string, Record<string, unknown>> = {
-    http: { fetch: modFetch },
+    // A fetch naming a secret runs on codecast's server, which attaches the key; any other runs here, in the sandbox.
+    http: { fetch: (url: string, init?: RequestInit & { secret?: string }) => (init?.secret ? call(key, "http.fetch", [url, init], origin) : modFetch(url, init)) },
     ui: { invalidate: (k?: string) => post({ type: "invalidate", key: k ?? key }) },
   };
   const nouns = new Map<string, unknown>();

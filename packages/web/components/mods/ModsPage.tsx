@@ -3,6 +3,8 @@
 // loop: one sentence to an agent, or `cast mod new`.
 
 import { useState } from "react";
+import { useAction } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { Switch } from "../ui/switch";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -91,6 +93,79 @@ function LocalHalf({ row }: { row: ModRow }) {
   );
 }
 
+const api = _api as any;
+
+/**
+ * The keys the author's mod declares, each with where it may be sent and
+ * whether it is set. A value goes straight to the server, which encrypts it,
+ * and is never shown again; it skips the store on purpose, so no outbox or
+ * cache on this device ever holds it.
+ */
+function Secrets({ row }: { row: ModRow }) {
+  const secrets = row.manifest?.secrets ?? [];
+  const setAt = new Map((row.secrets_set ?? []).map((s) => [s.name, s.at]));
+  return (
+    <div className="mx-4 mt-3 rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-sol-text-dim">
+        <DynamicIcon name="key-round" size={12} />
+        Keys
+      </div>
+      <ul className="mt-1.5 space-y-1.5">
+        {secrets.map((s) => <SecretRow key={s.name} modId={row._id} name={s.name} description={s.description} origins={s.origins} at={setAt.get(s.name)} />)}
+      </ul>
+    </div>
+  );
+}
+
+function SecretRow({ modId, name, description, origins, at }: { modId: string; name: string; description?: string; origins: string[]; at?: number }) {
+  const set = useAction(api.modSecrets.webSet);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (next: string) => {
+    setBusy(true);
+    setError(null);
+    const res = await set({ mod_id: modId, secret: name, value: next }).catch((err: Error) => ({ error: err.message }));
+    setBusy(false);
+    if (res?.error) return setError(res.error);
+    setValue("");
+    setEditing(false);
+  };
+  const tone = at ? "var(--sol-green)" : "var(--sol-yellow)";
+  return (
+    <li className="text-[12.5px]">
+      <div className="flex items-center gap-2">
+        <span className="size-1.5 shrink-0 rounded-full" style={{ background: tone }} />
+        <span className="font-mono text-sol-text" title={description}>{name}</span>
+        <span className="min-w-0 truncate text-[11px] text-sol-text-dim">{origins.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</span>
+        <span className="ml-auto shrink-0 text-[11px]" style={{ color: tone }}>{at ? `set ${formatRelativeTime(at)}` : "not set"}</span>
+        {at && !editing ? (
+          <>
+            <button onClick={() => setEditing(true)} className="shrink-0 text-[11px] text-sol-text-muted hover:text-sol-text">Replace</button>
+            <button onClick={() => save("")} disabled={busy} className="shrink-0 text-[11px] text-sol-text-muted hover:text-sol-red">Clear</button>
+          </>
+        ) : null}
+      </div>
+      {!at || editing ? (
+        <form className="mt-1 flex items-center gap-1.5 pl-3.5" onSubmit={(e) => { e.preventDefault(); if (value.trim()) void save(value); }}>
+          <input
+            type="password"
+            autoComplete="off"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={`Paste ${name}`}
+            className="min-w-0 flex-1 rounded-md border border-sol-border bg-sol-bg px-2 py-1 font-mono text-[12px] text-sol-text outline-none focus:border-sol-violet"
+          />
+          <button type="submit" disabled={busy || !value.trim()} className="rounded-md border border-sol-violet px-2 py-1 text-[12px] text-sol-violet disabled:opacity-40">{busy ? "Saving" : "Save"}</button>
+          {editing ? <button type="button" onClick={() => { setEditing(false); setValue(""); }} className="text-[12px] text-sol-text-muted hover:text-sol-text">Cancel</button> : null}
+        </form>
+      ) : null}
+      {error ? <div className="mt-0.5 pl-3.5 text-[11px] text-sol-red">{error}</div> : null}
+    </li>
+  );
+}
+
 function ModCard({ row }: { row: ModRow }) {
   useModHostVersion();
   const runtime = modHost.get(row._id);
@@ -146,9 +221,11 @@ function ModCard({ row }: { row: ModRow }) {
         {(m.fences ?? []).map((f) => <Chip key={`f${f.lang}`} icon="code">```{f.lang}</Chip>)}
         {m.permissions?.read ? <Chip icon="eye">reads {m.permissions.read === "*" ? "everything" : m.permissions.read.join(", ")}</Chip> : null}
         {m.permissions?.write ? <Chip icon="pen-line">writes {m.permissions.write === "*" ? "everything" : m.permissions.write.join(", ")}</Chip> : null}
+        {m.permissions?.connectors?.length ? <Chip icon="plug">reads {m.permissions.connectors.join(", ")}</Chip> : null}
         {m.permissions?.fetch ? <Chip icon="globe">fetches {m.permissions.fetch === "*" ? "anywhere" : m.permissions.fetch.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</Chip> : null}
       </div>
       {agentsOpen && m.agents ? <div className="mx-4 mt-3 max-h-72 overflow-auto rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2 text-[12.5px]"><MarkdownRenderer content={m.agents} /></div> : null}
+      {row.is_mine !== false && m.secrets?.length ? <Secrets row={row} /> : null}
       {row.is_mine !== false && row.has_local ? <LocalHalf row={row} /> : null}
       <div className="mt-3 flex items-center gap-3 border-t border-sol-border px-4 py-2">
         <button onClick={() => setOpen((v) => !v)} className="text-[12px] text-sol-text-muted hover:text-sol-text">

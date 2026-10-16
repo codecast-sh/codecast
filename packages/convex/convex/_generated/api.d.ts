@@ -341,6 +341,8 @@ import type * as modCalls from "../modCalls.js";
 import type * as modLocal from "../modLocal.js";
 import type * as modLogs from "../modLogs.js";
 import type * as modObjects from "../modObjects.js";
+import type * as modSecrets from "../modSecrets.js";
+import type * as modServer from "../modServer.js";
 import type * as modelCalls from "../modelCalls.js";
 import type * as mods from "../mods.js";
 import type * as momentWhoBackfill from "../momentWhoBackfill.js";
@@ -831,6 +833,8 @@ declare const fullApi: ApiFromModules<{
   modLocal: typeof modLocal;
   modLogs: typeof modLogs;
   modObjects: typeof modObjects;
+  modSecrets: typeof modSecrets;
+  modServer: typeof modServer;
   modelCalls: typeof modelCalls;
   mods: typeof mods;
   momentWhoBackfill: typeof momentWhoBackfill;
