@@ -119,20 +119,59 @@ export function threadStateHeadline(text: string): string {
     .trim();
 }
 
+/** One line of a state after its headline. `label` is the word before the
+ * colon: `You`, `Done` or `Next` in the shape agents are asked to write, or
+ * whatever an older note used (`Status`, `Blocked`, `Note`). Null when the
+ * line carries none. */
+export interface ThreadStateRow {
+  label: string | null;
+  text: string;
+}
+
+/** A label is one capitalized word, or one and a lowercase second ("Likely
+ * cause"): short enough that a sentence with a colon in it stays a sentence. */
+const ROW_LABEL = /^([A-Z][A-Za-z]{0,11}(?: [a-z]{1,11})?):\s+(\S.*)$/;
+
 /**
- * The line the inbox card shows: what is HAPPENING, not what the thread is
- * about. Prefers the content of a `Status:` (or `Blocked:`) labeled line —
- * that is the part that changes as the work moves — and falls back to the
- * headline when the state has no such line. The full text stays in the
- * tooltip/panel, so this only decides which line earns the card's one slot.
+ * The state as the panel lays it out: every line after the headline, one row
+ * each. A workflow station's fenced json report is left out: it is for the
+ * station's edges to route on, and it stays whole in `thread_state_result`.
  */
-export function threadStateCardLine(text: string): string {
-  for (const raw of text.split("\n")) {
-    const line = raw.trim().replace(/^[-*•]\s*/, "");
-    const m = line.match(/^(Status|Blocked):\s*(.+)$/i);
-    if (m) return m[2].trim();
+export function threadStateRows(text: string): ThreadStateRow[] {
+  const lines = withoutJsonBlocks(text)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  return lines.slice(1).map((line) => {
+    const m = line.replace(/^[-*•]\s*/, "").match(ROW_LABEL);
+    return m ? { label: m[1], text: m[2].trim() } : { label: null, text: line };
+  });
+}
+
+/**
+ * The one line a card shows for the whole state: the ask when the state holds
+ * one (`You:`, or an older note's `Blocked:`), else the headline. A `Status:`
+ * line takes the slot only under a `Goal:` headline: elsewhere it is mostly
+ * what already happened, and on a blocked card it used to push the ask out.
+ */
+export function threadStateCardLine(text: string, rows: ThreadStateRow[] = threadStateRows(text)): string {
+  const ask = rows.find((r) => r.label === "You" || r.label === "Blocked");
+  if (ask) {
+    const { prose, command } = threadStateAskParts(ask.text);
+    return (prose || command || "").replace(/`/g, "");
   }
+  // A first line labeled `Goal:` names the work rather than where it stands;
+  // on such a note the `Status:` line is the one that says that.
+  const status = rows.find((r) => r.label === "Status");
+  if (status && /^[-*•]?\s*Goal:/i.test(text.trimStart())) return status.text;
   return threadStateHeadline(text);
+}
+
+/** An ask split from the command that ends it ("paste it: `cmd`"): a card
+ * shows the words, and the panel gives the command a line and a copy button. */
+export function threadStateAskParts(text: string): { prose: string; command: string | null } {
+  const m = text.match(/^(.*?)[\s:]*`([^`]+)`\s*$/);
+  return m ? { prose: m[1], command: m[2] } : { prose: text, command: null };
 }
 
 /**
@@ -185,13 +224,22 @@ export function threadStateResult(text: string): string | null {
 }
 
 /**
- * The body of the last fenced json block in `text` that parses, or null. A
- * block closes at the first fence after which its body parses: the json's own
- * strings may hold fences (a markdown proposal), and a report piped from a file
- * without a final newline closes on the json's last line. A block that no fence
- * closes runs to the end of the text, as an unclosed fence does in markdown.
+ * The body of the last fenced json block in `text` that parses, or null.
  */
 export function lastJsonBlock(text: string): string | null {
+  const blocks = jsonBlocks(text);
+  return blocks[blocks.length - 1]?.body ?? null;
+}
+
+/**
+ * Each fenced json block whose body parses, from its opening fence to the end
+ * of its closing one. A block closes at the first fence after which its body
+ * parses: the json's own strings may hold fences (a markdown proposal), and a
+ * report piped from a file without a final newline closes on the json's last
+ * line. A block that no fence closes runs to the end of the text, as an
+ * unclosed fence does in markdown.
+ */
+function jsonBlocks(text: string): { from: number; to: number; body: string }[] {
   const parses = (body: string) => {
     try {
       JSON.parse(body);
@@ -200,19 +248,32 @@ export function lastJsonBlock(text: string): string | null {
       return false;
     }
   };
-  let last: string | null = null;
+  const blocks: { from: number; to: number; body: string }[] = [];
   for (const open of text.matchAll(/```json[ \t]*\n/g)) {
     const from = open.index! + open[0].length;
     for (let at = text.indexOf("```", from); ; at = text.indexOf("```", at + 3)) {
       const body = text.slice(from, at === -1 ? undefined : at).trim();
       if (parses(body)) {
-        last = body;
+        blocks.push({ from: open.index!, to: at === -1 ? text.length : at + 3, body });
         break;
       }
       if (at === -1) break;
     }
   }
-  return last;
+  return blocks;
+}
+
+/** The text with its json reports cut out, including one the display cap
+ * truncated mid-block (it no longer parses, so it runs to the end). */
+function withoutJsonBlocks(text: string): string {
+  let out = "";
+  let at = 0;
+  for (const block of jsonBlocks(text)) {
+    if (block.from < at) continue;
+    out += text.slice(at, block.from);
+    at = block.to;
+  }
+  return (out + text.slice(at)).replace(/```json[\s\S]*$/, "");
 }
 
 export function clearedThreadStateFields(): {
