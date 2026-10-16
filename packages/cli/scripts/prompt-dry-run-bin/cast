@@ -160,6 +160,9 @@ is_read() {
         *) return 1 ;;
       esac ;;
     sources) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
+    # Production evidence; events resolve and ignore, metrics add, rm and backfill write.
+    events) case "${2:-}" in ls|list|groups|show) return 0 ;; *) return 1 ;; esac ;;
+    metrics) case "${2:-}" in ls|list|show|query) return 0 ;; *) return 1 ;; esac ;;
     # What a connected product lets codecast read; every other connector verb runs an action.
     connector) case "${2:-}" in ls|readers) return 0 ;; *) return 1 ;; esac ;;
     # A finder's observations; add, move, merge and split write.

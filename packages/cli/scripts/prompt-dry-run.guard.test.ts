@@ -264,12 +264,12 @@ describe("guard cast: served reads", () => {
     // Every check here is a guard spawn, about two seconds each at a load of 500.
   }, 120_000);
 
-  test("pr, chat and trigger history reads go live; their writes are refused", () => {
+  test("pr, chat, trigger history, events and metrics reads go live; their writes are refused", () => {
     const w = world();
-    for (const argv of [["pr", "ls"], ["pr", "show", "12"], ["pr", "events", "12"], ["pr", "threads", "12"], ["chat", "read", "--channel", "c1"], ["chat", "thread", "m1"], ["chat", "channels"], ["trigger", "log", "tr-1"], ["trigger", "history", "tr-1"]]) {
+    for (const argv of [["pr", "ls"], ["pr", "show", "12"], ["pr", "events", "12"], ["pr", "threads", "12"], ["chat", "read", "--channel", "c1"], ["chat", "thread", "m1"], ["chat", "channels"], ["trigger", "log", "tr-1"], ["trigger", "history", "tr-1"], ["events", "groups", "--status", "open"], ["events", "ls", "--since", "7d"], ["events", "show", "g1"], ["metrics", "ls"], ["metrics", "show", "w1"]]) {
       expect(w.cast(...argv).out).toBe(`LIVE ${argv.join(" ")} dir=/real/state\n`);
     }
-    for (const argv of [["pr", "comment", "12", "hi"], ["pr", "merge", "12"], ["pr", "review", "12", "--approve"], ["chat", "send", "hi"], ["chat", "mark-read"]]) {
+    for (const argv of [["pr", "comment", "12", "hi"], ["pr", "merge", "12"], ["pr", "review", "12", "--approve"], ["chat", "send", "hi"], ["chat", "mark-read"], ["events", "resolve", "g1"], ["events", "ignore", "g1"], ["metrics", "add", "m"], ["metrics", "rm", "w1"]]) {
       expect(w.cast(...argv).code).toBe(1);
       expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
