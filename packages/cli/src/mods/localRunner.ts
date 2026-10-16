@@ -26,7 +26,7 @@ export function localDeviceName(): string {
 }
 
 function modsDir(): string {
-  return path.join(process.env.CODECAST_DIR || defaultConfigDir(), "mods");
+  return path.join(defaultConfigDir(), "mods");
 }
 
 type LocalMod = { id: string; name: string; title?: string; rev: number; enabled: boolean; local_code: string; manifest: unknown; local_off?: string[] };

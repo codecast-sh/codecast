@@ -284,12 +284,14 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
     set.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
   }
   set
+    .option("--promote <transitions>", "Transitions that become findings on the line")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
-    .action(async (ref: string, o: Record<string, unknown> & { team?: string; json?: boolean }) => {
+    .action(async (ref: string, o: Record<string, unknown> & { promote?: string; team?: string; json?: boolean }) => {
       const config = sourceConfigFromFlags(o);
-      if (!Object.keys(config).length) fail(`Name a setting to change: ${SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`).join(", ")}`);
-      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, config }, o.team);
+      const promote = csv(o.promote);
+      if (!Object.keys(config).length && !promote) fail(`Name a setting to change: ${[...SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`), "--promote"].join(", ")}`);
+      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, ...(Object.keys(config).length ? { config } : {}), ...(promote ? { promote } : {}) }, o.team);
       emit(o.json, result, () => formatSourceLine(result.source));
     });
 
