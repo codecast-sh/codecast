@@ -155,7 +155,7 @@ test("See it opens the org page and sells it; the gates hold it back", async () 
   const toastRoot = createRoot(document.getElementById("toast")!);
   await paintToast(toastRoot);
   await act(async () => q<HTMLButtonElement>("[data-org-meet] [data-rise-primary]")!.click());
-  expect(fake.pushes).toEqual(["/org"]);
+  expect(fake.pushes).toEqual(["/org?panel=open"]);
   expect(fake.writes).toEqual([{ org_upsell_seen: true }]);
   await act(async () => { toastRoot.unmount(); root.unmount(); });
 
