@@ -462,6 +462,7 @@ export const recordRun = internalMutation({
     inputs: v.optional(judgeInputs),
     lines: v.optional(v.array(v.string())),
     model: v.string(),
+    backend: v.optional(v.literal("subscription")),
     cost_usd: v.number(),
   },
   handler: async (ctx, args) => {

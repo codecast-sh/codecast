@@ -200,9 +200,9 @@ export function layOutArm(root: string, arm: string): void {
   }
 }
 
-type MomentShown = { moment: any; body: any };
+export type MomentShown = { moment: any; body: any };
 
-async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref: string): Promise<MomentShown> {
+export async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref: string): Promise<MomentShown> {
   const shown = await apiPost(deps, "/cli/moments/show", { ...scope, moment: ref }, { read: true });
   let body: any = shown.moment.kept ? await apiPost(deps, "/cli/moments/body", { ...scope, moment: ref }, { read: true }) : null;
   const local = path.join(shadowDir(), String(shown.moment.source ?? "").replace(/[^A-Za-z0-9_-]/g, "_"), `${shown.moment.short_id}.json`);
@@ -211,7 +211,7 @@ async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref
 }
 
 /** The moment as one side's extractor sees it now: the kept body, or a fresh extraction from that side's root. */
-async function momentOn(side: { root: string; fresh: boolean }, m: MomentShown, spec: JudgeSpec): Promise<MomentRecord | { error: string }> {
+export async function momentOn(side: { root: string; fresh: boolean }, m: MomentShown, spec: JudgeSpec): Promise<MomentRecord | { error: string }> {
   let raw: unknown = m.body;
   if (side.fresh) {
     const rel = `${MOMENTS_DIR}/${m.moment.kind}.ts`;
