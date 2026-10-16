@@ -9,7 +9,7 @@ import { useRepoLocation } from "../../../../../components/repo/useRepoFamily";
 import { GitPullRequest } from "lucide-react";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
-import { KeyCap } from "../../../../../components/KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "../../../../../components/KeyboardShortcutsHelp";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { Button } from "../../../../../components/ui/button";
 import { PRChecks } from "../../../../../components/pr/PRChecks";
@@ -62,6 +62,7 @@ import { accentVar } from "../../../../../lib/externalEvents";
 import { TitlebarStrip } from "../../../../../lib/pageLayout";
 import "../../../../../components/pr/pr.css";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
+import { matchesAction } from "../../../../../shortcuts";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; the call then fails and useQueryNoThrow reports it as
@@ -369,24 +370,24 @@ export function PRContent({
   // answer the same keypress. offsetParent is null exactly then.
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (!rootRef.current?.offsetParent) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
     if (keyBelongsElsewhere(el)) return;
-    const hit = PR_TABS.find((t) => t.digit === e.key);
+    // The actions below match their own modifiers; the tab digits are plain keys.
+    const hit = !e.metaKey && !e.ctrlKey && !e.altKey && PR_TABS.find((t) => t.digit === e.key);
     if (hit) { setTab(hit.key); return; }
-    if (e.key === "r" && isAuthenticated) {
+    if (matchesAction(e, "pr.review") && isAuthenticated) {
       e.preventDefault();
       setReviewOpen((v) => (v ? false : notes.length > 0 ? "bar" : "header"));
       return;
     }
-    if (e.key === "n" || e.key === "p") {
+    const forward = matchesAction(e, "pr.nextThread");
+    if (forward || matchesAction(e, "pr.prevThread")) {
       if (openThreadStops.length === 0) return;
       e.preventDefault();
       // Where the reader stands is any thread they landed on, open or not; the
       // walk continues from there to the next open one.
       const all = threadStops(pr?.files ?? [], comments);
       const at = landing ? all.findIndex((s) => s.file === landing.file && s.key === landing.key) : -1;
-      const forward = e.key === "n";
       for (let step = 1; step <= all.length; step++) {
         const index = forward ? (at + step) % all.length : (at - step + all.length * 2) % all.length;
         const stop = all[index];
@@ -577,7 +578,7 @@ export function PRContent({
                         onClick={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
                       >
                         {openThreadStops.length} open
-                        <KeyCap size="xs">n</KeyCap>
+                        <MenuKeyCaps action="pr.nextThread" className="contents" />
                       </button>
                     )}
                   </div>
