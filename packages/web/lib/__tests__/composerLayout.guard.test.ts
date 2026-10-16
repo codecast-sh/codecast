@@ -35,10 +35,11 @@ test("the expanded editor box is bound by the same cap and is the field in that 
 });
 
 test("the modal is a fixed frame that hands the field a share of its height", () => {
-  // The developer's modal holds a fixed height; hosted mode's smaller sheet
-  // sizes to its content up to its frame. Both hand the field the same share.
+  // The developer's modal holds a fixed height, except the new-session page
+  // layout, which sizes to its content up to the frame like hosted mode's
+  // smaller sheet. All of them hand the field the same share.
   expect(composeView).toContain('"max-w-[640px] [--frame-h:min(80vh,460px)] max-h-[var(--frame-h)]"');
-  expect(composeView).toContain('"max-w-[960px] [--frame-h:min(88vh,680px)] h-[var(--frame-h)]"');
+  expect(composeView).toContain('max-w-[960px] [--frame-h:min(88vh,680px)] ${pageLayout ? "max-h-[var(--frame-h)]" : "h-[var(--frame-h)]"}');
   expect(composeView).toContain("} [--composer-max-h:calc(var(--frame-h)*0.45)]");
 });
 
