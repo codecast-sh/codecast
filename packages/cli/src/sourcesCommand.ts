@@ -21,7 +21,7 @@ import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, csv, emit, fail, optionKey, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { codecastJsonPath, committedIngestKey, writeCodecastJson } from "./codecastJson.js";
-import { lineProjectFor } from "./signalCommand.js";
+import { lineProjectFor } from "./lineScope.js";
 import { ADDABLE_SOURCE_PROVIDERS, GITHUB_CI_SOURCE_NAME, KEYED_SOURCE_PROVIDERS, SOURCE_CONFIG_FIELDS, SOURCE_PROVIDERS, SYSTEM_SOURCE_PROVIDERS, eventNameRows, type EventNameCounts, type SourceProvider } from "@codecast/shared/contracts/ingest";
 import { replayBackfillLine, type ReplayBackfill } from "@codecast/shared/contracts/replay";
 
@@ -284,12 +284,14 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
     set.option(`--${field.flag} <${field.list ? "a,b" : "value"}>`, `${field.help}${only}`);
   }
   set
+    .option("--promote <transitions>", "Transitions that become findings on the line")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
-    .action(async (ref: string, o: Record<string, unknown> & { team?: string; json?: boolean }) => {
+    .action(async (ref: string, o: Record<string, unknown> & { promote?: string; team?: string; json?: boolean }) => {
       const config = sourceConfigFromFlags(o);
-      if (!Object.keys(config).length) fail(`Name a setting to change: ${SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`).join(", ")}`);
-      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, config }, o.team);
+      const promote = csv(o.promote);
+      if (!Object.keys(config).length && !promote) fail(`Name a setting to change: ${[...SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`), "--promote"].join(", ")}`);
+      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, ...(Object.keys(config).length ? { config } : {}), ...(promote ? { promote } : {}) }, o.team);
       emit(o.json, result, () => formatSourceLine(result.source));
     });
 

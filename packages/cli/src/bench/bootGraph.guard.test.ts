@@ -211,18 +211,37 @@ describe("command groups stay off the boot graph", () => {
     // Plus the `cast doc` drafting verbs: docDraftingCommand.ts, a registrar
     // whose bodies load inside each action, and shared/docs/drafting.ts, a
     // pure leaf with the constants its help text names.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(266);
+    // Re-measured at 324 files and 4462 KB on 2026-10-15, after two weeks no
+    // run reached this case and the graph had grown to 420 and 5668 KB. Two
+    // cuts brought it down: `cast line` became a command group (lineCommand.ts,
+    // 80 files of line profile, moments, trials, dissolves and judges), and
+    // taskGraphCommands.ts stopped importing shq from remote/session-move.ts,
+    // which had put the session move cluster back on every command (17 files).
+    // The rest is real growth: 22 contracts through the barrel, 6 shared/tasks
+    // modules and about 25 small leaves index.ts uses. Owed next: the shared
+    // contracts barrel, 77 files that reach this graph only through it, moved
+    // to subpath imports.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(324);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
     // 3474 after hook admission: the two leaves above, plus the token read and
     // the legacy grace in statusHook.ts and the copy step in session-move.ts.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3570);
+    // 4462 on 2026-10-15, re-measured with the file count above.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4462);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
     const graph = buildBootGraph(path.join(SRC, "main.ts"));
-    expect([...graph.nodes.keys()].map(rel).sort()).toEqual(["packages/cli/src/fastPath.ts", "packages/cli/src/main.ts"]);
+    // Plus syncStdio.ts, installed before anything can write so a large write
+    // into a pipe arrives whole (fe4d8f0da), and proc.ts, which main.ts's
+    // dry-run hand-off spawns through like every caller (the child_process
+    // ratchet), with its two leaves: slowSync.ts and workers/bridge.ts, whose
+    // worker modules stay behind import type and a dynamic import (2026-10-15).
+    expect([...graph.nodes.keys()].map(rel).sort()).toEqual([
+      "packages/cli/src/fastPath.ts", "packages/cli/src/main.ts", "packages/cli/src/proc.ts",
+      "packages/cli/src/slowSync.ts", "packages/cli/src/syncStdio.ts", "packages/cli/src/workers/bridge.ts",
+    ]);
   });
 
   test("the daemon carries no CLI command group either", () => {
@@ -288,7 +307,15 @@ describe("command groups stay off the boot graph", () => {
     // loads, since both run at boot. Plus cliVersion.ts, the same leaf as above.
     // Plus cloudAgents/shape.ts, the payload shape check http.ts runs on each
     // cloud agent answer (the Codex Cloud kill switch).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(393);
+    // Re-measured at 488 on 2026-10-15, after two weeks no run reached this
+    // case (the cli job bailed earlier). The growth is the daemon's own work
+    // landing: the shared contracts barrel (85 files only the daemon reaches
+    // through it), the evals server with its api contract, the execution
+    // layer, the browser watch source, capability reconcile, more cloud agent
+    // modules, the session move cluster and the snippets package. Daemon boot
+    // is not on any command's latency path, and no single import here is an
+    // accident to cut.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(488);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

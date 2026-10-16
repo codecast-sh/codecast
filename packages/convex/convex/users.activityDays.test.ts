@@ -9,7 +9,7 @@
 //     day is never counted twice across the two halves;
 //   - a teammate reads the shared counters, the owner the totals;
 //   - re-rolling a day is idempotent and corrects it.
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { rollupActivityDay } from "./lib/activityDaily";
@@ -85,6 +85,11 @@ const heatmap = (uid: string | null, t: Record<string, any[]>, args: any = {}) =
   (getUserActivityHeatmap as any)._handler(ctx(uid, t), { user_id: OWNER, team_id: TEAM, days: 371, ...args });
 
 describe("rolled-up activity days", () => {
+  // The queries read the real clock; hold it at NOW so a run just after UTC
+  // midnight doesn't find today's fixture sessions still in the future.
+  beforeAll(() => setSystemTime(NOW));
+  afterAll(() => setSystemTime());
+
   test("an old day is read from its row, and the sessions behind it are never touched", async () => {
     const t = tables([session("c_old", OLD + 9 * HOUR, OLD + 11 * HOUR)]);
     await rollupActivityDay({ db: db(t) }, OWNER, OLD);

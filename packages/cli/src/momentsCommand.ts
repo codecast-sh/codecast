@@ -65,7 +65,7 @@ const age = (ms: number) => `${durationWords(Math.max(0, Date.now() - ms))} ago`
 
 export function registerMomentsCommands(line: Command, deps: PublishDeps): void {
   const scope = async () => {
-    const { scopeFor } = await import("./signalCommand.js");
+    const { scopeFor } = await import("./lineScope.js");
     const s: Record<string, unknown> = { ...(await scopeFor(deps, undefined, true)) };
     delete s.project;
     return s;
