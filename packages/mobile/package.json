@@ -50,6 +50,7 @@
     "expo-linear-gradient": "^15.0.8",
     "expo-linking": "~8.0.10",
     "expo-local-authentication": "^17.0.8",
+    "expo-media-library": "~18.2.1",
     "expo-notifications": "^0.32.15",
     "expo-router": "~6.0.20",
     "expo-secure-store": "^15.0.8",
