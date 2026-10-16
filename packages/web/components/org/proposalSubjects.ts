@@ -191,8 +191,8 @@ const latestReply = (members: readonly OrgProposalChange[]): OrgChangeReply | nu
   members.map(changeReply).filter((r): r is OrgChangeReply => !!r).sort((a, b) => b.at - a.at)[0] ?? null;
 
 /** The card's status in words: "To decide", "2 to decide", "Noted" (a card
- *  the person wrote back on, still waiting on a revision), "Approved",
- *  "Rejected", "Failed", "1 of 2 approved, 1 failed". */
+ *  the person wrote back on, still waiting on a revision), "Accepted",
+ *  "Rejected", "Failed", "1 of 2 accepted, 1 failed". */
 export function subjectStatusWords(card: SubjectCard): string {
   const members = membersOf(card);
   const n = (...statuses: OrgChangeStatus[]) => members.filter((m) => statuses.includes(m.status)).length;
@@ -202,16 +202,16 @@ export function subjectStatusWords(card: SubjectCard): string {
       const shown = card.changes.length + card.carried.length || 1;
       return shown === 1 ? "To decide" : `${shown} to decide`;
     }
-    case "accepted": case "applied": return "Approved";
+    case "accepted": case "applied": return "Accepted";
     case "skipped": return "Rejected";
     case "failed": {
-      const failed = n("failed"), approved = n("accepted", "applied");
+      const failed = n("failed"), accepted = n("accepted", "applied");
       if (failed === members.length) return "Failed";
-      return approved > 0 ? `${approved} of ${members.length} approved, ${failed} failed` : `${failed} of ${members.length} failed`;
+      return accepted > 0 ? `${accepted} of ${members.length} accepted, ${failed} failed` : `${failed} of ${members.length} failed`;
     }
     case "mixed": {
-      const approved = n("accepted", "applied");
-      return approved > 0 ? `${approved} of ${members.length} approved` : `${n("skipped")} of ${members.length} rejected`;
+      const accepted = n("accepted", "applied");
+      return accepted > 0 ? `${accepted} of ${members.length} accepted` : `${n("skipped")} of ${members.length} rejected`;
     }
   }
 }
@@ -230,10 +230,10 @@ export function subjectCounts(cards: readonly SubjectCard[]): { total: number; w
 
 /**
  * The proposal's meta line. Cards: "9 to decide", "5 of 9 to decide · 2
- * approved, 1 rejected, 1 failed", "7 approved, 2 rejected". A records
+ * accepted, 1 rejected, 1 failed", "7 accepted, 2 rejected". A records
  * proposal (`records`: its two or more record changes) counts the records
  * themselves: "64 records to decide", "40 of 64 records to decide · 24
- * approved", "62 applied, 2 rejected".
+ * accepted", "62 applied, 2 rejected".
  */
 export function proposalProgressWords(cards: readonly SubjectCard[], records?: readonly OrgProposalChange[]): string {
   if (records && records.length > 1) {
@@ -242,13 +242,13 @@ export function proposalProgressWords(cards: readonly SubjectCard[], records?: r
     const total = live.length, waiting = n("proposed");
     if (total === 0) return "";
     if (waiting === total) return `${total} records to decide`;
-    const decided = [n("applied") && `${n("applied")} applied`, n("accepted") && `${n("accepted")} approved`, n("skipped") && `${n("skipped")} rejected`, n("failed") && `${n("failed")} failed`].filter(Boolean).join(", ");
+    const decided = [n("applied") && `${n("applied")} applied`, n("accepted") && `${n("accepted")} accepted`, n("skipped") && `${n("skipped")} rejected`, n("failed") && `${n("failed")} failed`].filter(Boolean).join(", ");
     return waiting === 0 ? decided : `${waiting} of ${total} records to decide · ${decided}`;
   }
   const c = subjectCounts(cards);
   if (c.total === 0) return "";
   if (c.waiting === c.total) return `${c.total} to decide`;
-  const decided = [c.approved && `${c.approved} approved`, c.rejected && `${c.rejected} rejected`, c.failed && `${c.failed} failed`].filter(Boolean).join(", ");
+  const decided = [c.approved && `${c.approved} accepted`, c.rejected && `${c.rejected} rejected`, c.failed && `${c.failed} failed`].filter(Boolean).join(", ");
   return c.waiting === 0 ? decided : `${c.waiting} of ${c.total} to decide · ${decided}`;
 }
 

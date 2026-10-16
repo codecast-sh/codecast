@@ -647,9 +647,9 @@ export type OrgChangeReply = { verdict: OrgReplyVerdict; text?: string; at: numb
 /** The word a surface shows for a verdict: `act` on the control before the
  *  send, `done` on the card after it. */
 export const ORG_REPLY_WORDS: Record<OrgReplyVerdict, { act: string; done: string }> = {
-  approve: { act: "Approve", done: "Approved" },
+  approve: { act: "Accept", done: "Accepted" },
   reject: { act: "Reject", done: "Rejected" },
-  note: { act: "Reply", done: "Noted" },
+  note: { act: "Adjust", done: "Noted" },
 };
 
 /**

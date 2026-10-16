@@ -2133,7 +2133,7 @@ export const auditStrandedMessages = internalQuery({
     for (const status of NON_TERMINAL_STATUSES) {
       const rows = await ctx.db
         .query("pending_messages")
-        .filter((q) => q.eq(q.field("status"), status))
+        .withIndex("by_status", (q) => q.eq("status", status))
         .collect();
       byStatus[status] = rows.length;
       for (const r of rows) {
