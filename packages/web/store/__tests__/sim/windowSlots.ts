@@ -80,8 +80,14 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/gestureBridge.ts:channelFactory": { shared: "set once per realm by the sim's device bridge" },
   "store/viewNav.ts:pendingSource": "window",
   "store/viewNav.ts:appliedNavCount": "window",
+  // Whether this window opened fresh onto the feed home: read from its own address once.
+  "store/viewNav.ts:freshHomeLaunch": "window",
   "store/viewNav.ts:navLog": { shared: "audit ring, persisted to the one origin-wide localStorage in production too" },
   "store/viewNav.ts:navListeners": NO_REACT,
+  "store/writeLog.ts:writeLog": { shared: "audit ring of sent writes, persisted to the one origin-wide localStorage in production too, like navLog" },
+  "store/writeLog.ts:persistTimer": { shared: "the write audit ring's persist debounce; one ring, so one timer" },
+  "store/writeLog.ts:lastInput": { shared: "the person's last key or pointer press, from a capture listener on the page; the sim presses nothing" },
+  "store/orgLens.ts:OPEN_GOAL": CONSTANT,
   "store/syncActivity.ts:_lastApplyMono": "window",
   "store/syncActivity.ts:_applySeq": "window",
   "store/syncTransaction.ts:depth": "transient",
@@ -89,7 +95,6 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/syncTransaction.ts:deferredFanOut": "transient",
   "store/syncTransaction.ts:timer": "transient",
   "store/syncReplication.ts:running": { shared: "the sim never calls startSyncReplication; devices wire the runtime directly" },
-  "store/syncReplication.ts:followerTees": { shared: "keyed by each window's own store (its tee setter), so one map serves every window" },
   "store/chatSlice.ts:railCacheKey": "memo",
   "store/chatSlice.ts:railCacheValue": "memo",
   "store/chatSlice.ts:dmOpensInFlight": { shared: "keyed by stub ids minted from the window's own seeded stream, so windows never collide" },
@@ -169,6 +174,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/workspace.ts:PERSISTABLE_KINDS": CONSTANT,
 
   // hooks/
+  "hooks/useSplitQuery.ts:caches": { shared: "split-query transport cache, filled only by React feeders and recovery polls; the sim mounts neither" },
+  "hooks/useSplitQuery.ts:unsupported": { shared: "split-query transport memory of a server that rejects the split form; set only by React feeders, which the sim does not mount" },
   "hooks/reconcileCrawl.ts:states": "window",
   "hooks/useBootstrapCollection.ts:done": "window",
   "hooks/useSyncChangeFeed.ts:cargoSupported": "window",
@@ -190,6 +197,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "hooks/useConversationMessages.ts:LIVENESS_ONLY_CONV_FIELDS": CONSTANT,
 
   // lib/
+  "lib/settingsData.ts:TEAM_SCOPED_SETTINGS": CONSTANT,
+  "lib/surfaceRules.ts:STAFF_ONLY_SURFACES": CONSTANT,
   "lib/analytics.ts:runtime": ANALYTICS,
   "lib/analytics.ts:initPromise": ANALYTICS,
   "lib/appWindowRegistry.ts:present": DESKTOP,

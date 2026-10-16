@@ -116,8 +116,9 @@ describe("the role's routine", () => {
     await performRetireRole(ctx, ME as any, { role_id: String(first.role._id), standing_session: "keep" });
     const second = await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" });
     const live = tables.agent_tasks.filter((t) => t.schedule_type === "recurring" && t.status === "scheduled");
-    expect(live).toHaveLength(1);
-    expect(String(live[0].role_id)).toBe(String(second.role._id));
+    // Its review and its inbox look (S43), both its own; the earlier role's went with it.
+    expect(live).toHaveLength(2);
+    expect(live.map((t) => String(t.role_id))).toEqual([String(second.role._id), String(second.role._id)]);
   });
 
   test("the routine prompt names no switch and no grants", () => {
