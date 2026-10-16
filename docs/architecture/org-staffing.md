@@ -1712,3 +1712,15 @@ Written 2026-10-07. This section supersedes the split of S41 (a conversation bes
 - `/org?view=health` redirects to `/org?lens=people&week=1` (`healthRedirect`, `orgScreenModel.ts`). The header's menu reaches the same address as This week.
 
 **What was deleted.** The goal list and the goal page (`InitiativesList`, `InitiativePage`, `/initiatives`), the projects list with its inline create, the `/company` page (its document is the Read lens), the Team Directory, the roadmap page, the role page's glance header (`ScopeGlance`), the sidebar's Goals and Projects rows and Org under Agents, the palette's Goals, Company document and Team Directory rows, the six parallel href builders, the health page (`HealthPage`) and its board (`HealthBoard`): its waiting row is the needs-you strip, its role drawer is the role sheet, and its levers are `RoleLevers`.
+
+## S43. The person's inbox is part of the org the Head of People keeps
+
+A person ends up managing dozens of raw top-level sessions when nothing places them. The Head of People's job already says it keeps "where each of the person's sessions belongs" true; S43 gives it the means.
+
+**What it sees.** `cast org inputs` carries `sessions.loose`: the caller's own top-level sessions that nothing places (no role holds them, no task binds them, no seat), newest first, up to 40, each with its title, state, folder and size (`looseSessionsOf`, `convex/lib/orgSessionFiling.ts`).
+
+**What it proposes.** One change kind, `file_session: { session, title, to }`, where `to` is `@handle` (under that role, through the reparent core), `ct-N` (the session joins the task's work and binds to it when no live session owns it) or `done` (out of the inbox, as the inbox's own done). Filings are their own kind of proposal work, uncapped like the records, so a tidy arrives as one card the person clears in one pass: one ask, "File N sessions where they belong", Approve all, and a per-row reject. Each apply lands in the org log, so History reads and undoes it.
+
+**Who may file without asking.** A role whose "Starts work on its own" switch a person turned on: its filings apply as they are posted, each row marked as filed by it (`routeFilings`, `orgProposals.ts`). The Head of People's switch is off by default, so its filings wait on the card until the person turns it on. A role the Head of People hires for this work starts with the switch on, like every hire.
+
+**The prompt.** No routine and no steps: the review prompt's job line names where the person's sessions belong, and the reference lists the shape. The org-review eval's Fernhill worlds (`packages/evals/fixtures/org-review/fernhill.ts`) hold a messy inbox, a busy one and a control where every loose session is the person's own.
