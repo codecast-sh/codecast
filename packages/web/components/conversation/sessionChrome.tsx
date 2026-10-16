@@ -27,7 +27,7 @@ import { Spinner } from "../ui/spinner";
 import { authRemedy, detectProviderFromError } from "./classify";
 import { cloudAgentCardHeading, CloudAgentSetupHint, CloudAgentSetupText } from "../cloudAgents";
 import { useCloudAgentSetupCard } from "../cloudAgents/sessionAgent";
-import { formatDuration, formatFullTimestamp, formatRelativeTime, useRelativeTime } from "../../lib/conversationFormat";
+import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
@@ -80,10 +80,10 @@ export function SessionGalleryButton({ images }: { images: GalleryImage[] }) {
     <ShortcutTooltip label={`View ${images.length === 1 ? "image" : `${images.length} images`}`} side="bottom">
       <button
         onClick={() => gallery?.openList(images, images.length - 1)}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/20 transition-colors"
+        className="inline-flex items-center gap-1 p-1 rounded text-[10.5px] flex-shrink-0 text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-alt transition-colors"
         aria-label={`View ${images.length} images`}
       >
-        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <span className="tabular-nums">{images.length}</span>
@@ -671,39 +671,28 @@ export function ConversationMetadata({
   );
 }
 
-/** How old and how big: the facts strip's last item, so the strip's tail
- *  clip takes these before anything that says what the session is. The
- *  message count copies the conversation id, as it always has. `endedAt`
- *  ends the duration where a session's span ends (a cloud agent's mirror:
- *  its last message), else it runs to now. */
-export function ConversationAgeFacts({ startedAt, endedAt, messageCount, conversationId }: { startedAt?: number; endedAt?: number; messageCount?: number; conversationId?: string }) {
-  const relativeTime = useRelativeTime();
+/** How old and how big, as rows in the header menu's Stats: these are for
+ *  looking up, not for reading at a glance, so the facts strip leaves them
+ *  out. `endedAt` ends the duration where a session's span ends (a cloud
+ *  agent's mirror: its last message), else it runs to now. */
+export function ConversationAgeMenuItems({ startedAt, endedAt, messageCount }: { startedAt?: number; endedAt?: number; messageCount?: number }) {
   // The count and the running duration are a session's working parts; in
   // hosted mode a conversation says only when it began, whatever the style.
   const internals = useSurface("conversation.internals");
-  if (!startedAt && !messageCount) return null;
   return (
-    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
+    <>
       {startedAt && (
-        <span className="flex-shrink-0" title={formatFullTimestamp(startedAt)}>{relativeTime(startedAt)}</span>
+        <DropdownMenuItem disabled className="tabular-nums">
+          <span className="truncate">{formatFullTimestamp(startedAt)}</span>
+          {internals && <span className="ml-auto pl-3 text-sol-text-dim">{formatDuration(startedAt, endedAt)}</span>}
+        </DropdownMenuItem>
       )}
-      {internals && messageCount !== undefined && messageCount > 0 && (
-        <button
-          className="hidden sm:flex items-center gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
-          title="Copy conversation ID"
-          onClick={() => { if (conversationId) setTimeout(() => { copyToClipboard(conversationId).then(() => toast.success("ID copied")); }); }}
-        >
-          {startedAt && <span className="text-sol-text-dim">&middot;</span>}
-          <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
-        </button>
+      {internals && !!messageCount && (
+        <DropdownMenuItem disabled className="tabular-nums">
+          {messageCount.toLocaleString()} {messageCount === 1 ? "message" : "messages"}
+        </DropdownMenuItem>
       )}
-      {internals && startedAt && (
-        <span className="hidden sm:flex items-center gap-1 flex-shrink-0 cq-sq1">
-          <span className="text-sol-text-dim">&middot;</span>
-          <span>{formatDuration(startedAt, endedAt)}</span>
-        </span>
-      )}
-    </div>
+    </>
   );
 }
 

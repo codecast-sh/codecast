@@ -3,7 +3,7 @@ import { recoveringWebSocket } from "@codecast/shared/network";
 import { ReactNode, useRef } from "react";
 import { toast } from "sonner";
 import { captureException } from "@sentry/react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { subscribeGestures } from "../store/gestureBridge";
 import { applyBridgedGesture } from "../store/syncReplication";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -11,7 +11,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
 import { OpenInDesktopHandoff } from "@/components/OpenInDesktopHandoff";
-import { ShortcutProvider } from "@/shortcuts";
+import { ShortcutProvider, setKeyBindings } from "@/shortcuts";
 import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useMountEffect } from "@/hooks/useMountEffect";
@@ -21,6 +21,16 @@ import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+// The person's own key bindings (client_state.ui.key_bindings) into the live
+// shortcut catalog. Rebinding in settings, on another device, or by an agent
+// through `cast shortcuts` all land in the store, and from there here.
+function KeyBindingsSync() {
+  const s = useTrackedStore([(s) => s.clientState.ui?.key_bindings]);
+  const bindings = s.clientState.ui?.key_bindings;
+  useWatchEffect(() => { setKeyBindings(bindings); }, [bindings]);
+  return null;
+}
+
 function PrefsMigration() {
   useLocalStorageMigration();
   return null;
@@ -145,6 +155,7 @@ export function Providers({ children }: { children: ReactNode }) {
           <OpenInDesktopHandoff />
         </ErrorBoundary>
         <PrefsMigration />
+        <KeyBindingsSync />
         <GestureBridge />
         <AnalyticsIdentify />
         <DispatchFailureToast />
