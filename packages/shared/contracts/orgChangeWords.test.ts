@@ -24,6 +24,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
   adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "pr-1" },
+  file_session: { kind: "file_session", session: "jx7abcd", to: "@growth", title: "Launch thread" },
   charter_edit: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "Owns the funnel on budget.", after: "Owns the funnel under budget." }, { op: "add", line: "Reports spend every Monday." }, { op: "remove", before: "Writes the weekly post." }] },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open", title: "Remove the pilot" },

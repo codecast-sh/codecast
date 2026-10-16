@@ -28,6 +28,25 @@ export interface GradeSets {
   never_name: string[];
   must_not_reopen?: string[];
   either?: string[];
+  /** A world of loose sessions (org-staffing.md S43): each session that belongs elsewhere, with the destinations it may go to ("@handle", "ct-N", "done"). */
+  files?: Record<string, string[]>;
+  /** Loose sessions that are the person's own and must stay where they are. */
+  keep?: string[];
+}
+
+/** Where a run filed the person's sessions, against the label's `files` and `keep`. */
+export function gradeFilings(changes: any[], sets: GradeSets): { right: string[]; wrong: string[]; missed: string[] } {
+  const filed = new Map<string, string>();
+  for (const c of changes) if (c?.change?.kind === 'file_session') filed.set(String(c.change.session).trim().toLowerCase(), String(c.change.to).trim().toLowerCase());
+  const right: string[] = [], wrong: string[] = [], missed: string[] = [];
+  for (const [id, ok] of Object.entries(sets.files ?? {})) {
+    const to = filed.get(id.toLowerCase());
+    if (!to) missed.push(id);
+    else if (ok.map((x) => x.toLowerCase()).includes(to)) right.push(`${id} to ${to}`);
+    else wrong.push(`${id} to ${to}`);
+  }
+  for (const id of sets.keep ?? []) { const to = filed.get(id.toLowerCase()); if (to) wrong.push(`${id} to ${to}, which is the person's own`); }
+  return { right, wrong, missed };
 }
 
 /** Python's sorted() over strings: by code point. */
@@ -329,7 +348,8 @@ export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
   const r = auto.records;
   const foreign = foreignRecords(spec.changes, ctx.workspace, ctx.owners ?? workspaceRecordOwners());
   const gates: GateResult[] = [
-    gate('spec-parses', files.length > 0 && !broken.length, !files.length ? 'no proposals/op-*.json was written' : broken.length ? broken.map((b) => `${b.file}: ${JSON.stringify(b.errors).slice(0, 300)}`).join('; ') : `${files.length} proposal file(s) parse`),
+    // In a filing world a review that finds nothing to propose is a good one, so writing none passes.
+    gate('spec-parses', (files.length > 0 || ctx.sets.keep !== undefined) && !broken.length, !files.length ? 'no proposals/op-*.json was written' : broken.length ? broken.map((b) => `${b.file}: ${JSON.stringify(b.errors).slice(0, 300)}`).join('; ') : `${files.length} proposal file(s) parse`),
     gate('no-wrong-close', !r.wrong_close.length, r.wrong_close.length ? `closes ${r.wrong_close.join(', ')}${WRONG_CLOSE_TAIL}` : `closes ${r.closed_total}, none the labels say must stay open`),
     gate('no-never-name', !auto.sessions.named_bad.length, auto.sessions.named_bad.length ? `names ${auto.sessions.named_bad.join(', ')}, which the labels say is a finished job` : 'names no session the labels rule out'),
     gate('no-phantom-handle', !auto.roles_named.phantom.length, auto.roles_named.phantom.length ? `the letter names ${auto.roles_named.phantom.map((h) => `@${h}`).join(', ')}, a role neither the inputs nor this proposal has` : 'every role the letter names exists'),
@@ -348,6 +368,12 @@ export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
     // grade.py records the count with no band; it is shown, and moves no score.
     { id: 'summary_words', ask: 'words in the letter', weight: 0, score: 1, evidence: String(auto.summary_words) },
   ];
+  if (ctx.sets.files || ctx.sets.keep) {
+    const f = gradeFilings(spec.changes, ctx.sets);
+    const want = Object.keys(ctx.sets.files ?? {}).length;
+    gates.push(gate('no-wrong-filing', !f.wrong.length, f.wrong.length ? `filed ${f.wrong.join('; ')}` : `${f.right.length} filed where they belong, none wrong`));
+    checks.push({ id: 'filings', ask: 'loose sessions that belong to an area are filed where they belong', weight: 1, score: want ? f.right.length / want : f.wrong.length ? 0 : 1, evidence: want ? `${f.right.length} of ${want} filed${f.missed.length ? `; missed ${f.missed.join(', ')}` : ''}` : 'nothing to file' });
+  }
   return { auto, spec, gates, checks };
 }
 

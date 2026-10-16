@@ -476,6 +476,7 @@ const CASES: Case[] = [
   { kind: "projects", change: { kind: "projects", changes: [{ op: "create", title: "New project" }] } },
   { kind: "move", setup: (f) => f.role(), change: { kind: "move", handle: "growth", reports_to: MATE } },
   { kind: "retire", setup: (f) => f.role(), change: { kind: "retire", handle: "growth" } },
+  { kind: "file_session", setup: (f) => f.role(), change: { kind: "file_session", session: "jx70001", to: "@growth" } },
   { kind: "scope", setup: (f) => f.role(), change: { kind: "scope", handle: "growth", add: ["pr-1"], leave_sessions: true } },
   { kind: "budget", setup: (f) => f.role(), change: { kind: "budget", handle: "growth", caps: { hands_per_day: 8 } } },
   { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "understand" } },
