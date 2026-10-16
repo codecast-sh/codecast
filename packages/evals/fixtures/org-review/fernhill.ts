@@ -14,6 +14,7 @@
 //
 //   bun packages/evals/fixtures/org-review/fernhill.ts
 
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -200,6 +201,13 @@ function writeLook(name: string, loose: Loose[], notes: string): void {
         { argv: ['org', 'inputs'], out: JSON.stringify(inputs(loose)), prefix: true },
         { argv: ['org', 'health'], out: JSON.stringify(health), prefix: true },
         { argv: ['org', 'ls'], out: JSON.stringify(orgLs), prefix: true },
+        { argv: ['role', 'ls'], out: roles.map((r) => `@${r.handle} · ${r.name} · reports to Mara Okafor · looks after ${r.scope.map((x) => projects.find((p) => p.short_id === x)!.title).join(', ') || 'no project'}\n  ${r.charter}`).join('\n'), prefix: true },
+        ...roles.map((r) => ({ argv: ['role', 'show', `@${r.handle}`], out: `@${r.handle} · ${r.name}\n${r.charter}`, prefix: true })),
+        // A bare `cast org` prints the group's usage, as the CLI in this tree has it.
+        { argv: ['org'], out: spawnSync('cast', ['org', '--help'], { encoding: 'utf8' }).stdout },
+        { argv: ['org', 'show'], out: JSON.stringify(orgLs), prefix: true },
+        { argv: ['task', 'ls'], out: 'No matching tasks.', prefix: true },
+        { argv: ['org', 'where'], out: 'Workspace: Fernhill\nThis session: jx7hop1, the Head of People\nReports to: Mara Okafor\nRoles: @growth (Marketing site), @billing (Billing), @mobile (Mobile app), each reporting to Mara Okafor', prefix: true },
       ],
     },
   };

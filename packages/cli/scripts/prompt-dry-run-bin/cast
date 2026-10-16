@@ -114,7 +114,7 @@ has_flag() { local f="$1" a; shift; for a in "$@"; do [[ "$a" == "$f"* ]] && ret
 is_read() {
   case "${1:-}" in
     task|project|plan|doc|initiative|trigger|anchor|role|org)
-      case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|log|history|"") return 0 ;; esac
+      case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|log|history|where|feed|loose|"") return 0 ;; esac
       # `plan replay` prints a plan's history; no other group has the verb.
       [ "${1:-}" = plan ] && [ "${2:-}" = replay ] && return 0
       [ "${1:-}" = org ] && [ "${2:-}" = review ] && ! has_arg --spawn "$@" ;;
