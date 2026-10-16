@@ -27,7 +27,7 @@ import {
 } from "../../lib/threadKinds";
 import type { ThreadInboxRow } from "../../store/threadTypes";
 import { useShortcutAction, useShortcutContext } from "../../shortcuts/ShortcutProvider";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Switch } from "../ui/switch";
 import { NewMessageModal } from "../chat/NewMessageModal";
@@ -268,10 +268,10 @@ export function ThreadsView({ present, reading }: { present: boolean; reading: b
             </label>
             {cards.length > 0 && (
               <span className="th-keys" aria-hidden="true">
-                <span className="th-key"><KeyCap size="xs">j</KeyCap><KeyCap size="xs">k</KeyCap> move</span>
-                <span className="th-key"><KeyCap size="xs">e</KeyCap> done</span>
-                <span className="th-key"><KeyCap size="xs">r</KeyCap> reply</span>
-                <span className="th-key"><KeyCap size="xs">o</KeyCap> open</span>
+                <span className="th-key"><MenuKeyCaps action="list.down" className="contents" /><MenuKeyCaps action="list.up" className="contents" /> move</span>
+                <span className="th-key"><MenuKeyCaps action="threads.done" className="contents" /> done</span>
+                <span className="th-key"><MenuKeyCaps action="threads.reply" className="contents" /> reply</span>
+                <span className="th-key"><MenuKeyCaps action="threads.openIn" className="contents" /> open</span>
               </span>
             )}
           </div>

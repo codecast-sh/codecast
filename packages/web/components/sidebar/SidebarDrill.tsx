@@ -3,15 +3,10 @@
 import { useCallback, type ReactNode } from "react";
 import type { DrillLevel } from "../../hooks/useSidebarDrill";
 import { KeyCap } from "../KeyCap";
-import { formatShortcutParts, getShortcutsForAction, useShortcutAction } from "../../shortcuts";
+import { useShortcutAction, useShortcutParts } from "../../shortcuts";
 
 // The sidebar's Chat or Tasks level slid over the app nav (useSidebarDrill
 // decides which is open).
-
-const BACK_KEYS = (() => {
-  const def = getShortcutsForAction("sidebar.back")[0];
-  return def ? formatShortcutParts(def) : [];
-})();
 
 /** The app nav (`children`) with one level slid over it. */
 export function SidebarDrillStack({
@@ -33,6 +28,7 @@ export function SidebarDrillStack({
   pane: ReactNode;
   children: ReactNode;
 }) {
+  const backKeys = useShortcutParts("sidebar.back");
   useShortcutAction("sidebar.back", useCallback(() => {
     if (!level) return false;
     onBack();
@@ -66,7 +62,7 @@ export function SidebarDrillStack({
             </svg>
             <span className="flex-1 text-left">{label}</span>
             <span className="hidden group-hover/back:flex gap-0.5">
-              {BACK_KEYS.map((k) => <KeyCap key={k} size="xs">{k}</KeyCap>)}
+              {backKeys?.map((k) => <KeyCap key={k} size="xs">{k}</KeyCap>)}
             </span>
             {peek}
           </button>

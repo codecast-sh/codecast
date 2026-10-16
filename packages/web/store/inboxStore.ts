@@ -242,7 +242,7 @@ import { defaultAgentType } from "../lib/defaultAgent";
 import { retryHostedStart } from "../lib/startHostedConversation";
 import { isHostedUi, laneOf, simpleModeAllowed } from "../components/simple/lanePaths";
 import { readLaneHint, writeLaneHint, type LaneHint } from "../components/simple/laneBoot";
-import type { SessionMapLayout } from "../components/sessionMap/sessionMapModel";
+import type { SessionMapLayout, SessionMapView } from "../components/sessionMap/sessionMapModel";
 import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
@@ -1719,6 +1719,7 @@ export type DocDetail = DocItem & {
   _cachedAt?: number;
 };
 
+import type { KeyBindingOverride } from "@codecast/shared/contracts/keyBindings";
 export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 
@@ -1727,6 +1728,10 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // The person's own keyboard bindings over the defaults
+  // (@codecast/shared/contracts/keyBindings). Stamped: follows them to every
+  // device, and `cast shortcuts` writes the same key from any session.
+  key_bindings?: KeyBindingOverride[];
   // Which app this person lives in: "simple" is the hosted assistant's calm
   // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
   // the whole app. Stamped LWW, so a switch on one device follows the person.
@@ -1928,10 +1933,18 @@ export type ClientUI = {
   // The /org chart's "Expand all": every role and session card opened in
   // place. Stamped LWW like org_view.
   org_expand_all?: boolean;
+  // The /org chart's companion drawer (components/org/OrgPanel), closed by the
+  // person. Absent: open. A proposal or a session named in the address opens
+  // it whatever this says.
+  org_panel?: "closed";
   // The session map's arrangement (components/sessionMap): the piles the
   // person made, where each pile and loose card sits, and which piles are
   // folded. Stamped LWW: the desk is the same on every device.
   session_map?: SessionMapLayout;
+  // How the session map is sliced: grouping, sort, pile order and filters.
+  // Kept apart from the arrangement so a view change never enters its undo
+  // history. Stamped LWW like the arrangement.
+  session_map_view?: SessionMapView;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
