@@ -4,6 +4,7 @@ import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
+import { agentStatusAt } from "../lib/liveness";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { warmVisibleSessions } from "./inboxWarm";
 import { toast } from "sonner";
@@ -50,13 +51,15 @@ export function waitingSoundKey(session: InboxSession, queued: Set<string>): str
   // Only a genuine claim on the human chimes: the SHARED verdict's
   // needs_input (a delivered or parked settle is quiet) — the server's
   // needs-input push stands down on the same verdict.
-  const c = classifySession(session);
+  const now = Date.now();
+  const c = classifySession(session, now);
   if (!c.waiting || c.rest !== "needs_input") return null;
+  const status = agentStatusAt(session, now);
   const kind = session.awaiting_input
     ? "awaiting_input"
-    : session.agent_status === "permission_blocked"
+    : status === "permission_blocked"
     ? "permission_blocked"
-    : session.agent_status || (session.is_unresponsive ? "unresponsive" : "idle");
+    : status || (session.is_unresponsive ? "unresponsive" : "idle");
   return `${session._id}:${session.message_count}:${kind}`;
 }
 

@@ -9,7 +9,7 @@ describe("session controls use the default optimistic store path", () => {
   beforeEach(() => {
     useInboxStore.setState({
       sessions: { [ID]: {
-        _id: ID, session_id: "session-a", agent_type: "claude_code", agent_status: "working", agent_status_raw: "working",
+        _id: ID, session_id: "session-a", agent_type: "claude_code", agent_status: "working",
         last_heartbeat: Date.now(), permission_mode: "default", is_idle: false, has_pending: false, message_count: 2,
         updated_at: Date.now(),
       } },
@@ -57,22 +57,20 @@ describe("session controls use the default optimistic store path", () => {
 
   it("protects local state from both overlay paths until the daemon echoes it", async () => {
     await store().sendEscape(ID);
-    // The overlay ships the daemon's raw status beside its verdict, and the
-    // live derivation trusts the raw one: the press must hold both, or the
-    // stopped row derives working again a minute later.
+    // The overlay ships the daemon's raw status, the one fact the live
+    // derivation reads: the press must hold it, or the stopped row derives
+    // working again a minute later.
     // A liveness payload carries every fact field (an absent one clears).
-    const working = { agent_status: "working", agent_status_raw: "working", is_idle: false, last_heartbeat: Date.now(), message_count: 2, updated_at: Date.now() };
+    const working = { agent_status: "working", is_idle: false, last_heartbeat: Date.now(), message_count: 2, updated_at: Date.now() };
     store().applyInboxLivenessPayload("mine", { [ID]: working });
     expect(store().sessions[ID].agent_status).toBe("idle");
-    expect(store().sessions[ID].agent_status_raw).toBe("idle");
     expect(store().sessions[ID].is_idle).toBe(true);
     expect(sessionIdleAt(store().sessions[ID], Date.now() + 60_000)).toBe(true);
-    store().syncOverlay("sessions", { [ID]: { ...working, agent_status: "thinking", agent_status_raw: "thinking" } });
+    store().syncOverlay("sessions", { [ID]: { ...working, agent_status: "thinking" } });
     expect(store().sessions[ID].agent_status).toBe("idle");
     expect(sessionIdleAt(store().sessions[ID], Date.now() + 60_000)).toBe(true);
-    store().applyInboxLivenessPayload("mine", { [ID]: { ...working, agent_status: "idle", agent_status_raw: "idle", is_idle: true } });
+    store().applyInboxLivenessPayload("mine", { [ID]: { ...working, agent_status: "idle", is_idle: true } });
     expect(store().pending[`sessions:${ID}:agent_status`]).toBeUndefined();
-    expect(store().pending[`sessions:${ID}:agent_status_raw`]).toBeUndefined();
     store().applyInboxLivenessPayload("mine", { [ID]: working });
     expect(store().sessions[ID].agent_status).toBe("working");
     expect(sessionIdleAt(store().sessions[ID], Date.now() + 60_000)).toBe(false);

@@ -41,6 +41,7 @@ import {
   BLOCKED_BANNER_KINDS,
   placeProjectableRow,
   deriveLiveAt,
+  trustedStatusAt,
   rowLiveDeadlines,
   childAskingAt,
   rowLastTurnAllowsPark,
@@ -117,6 +118,7 @@ import { narrowByOperators, type OperatorCandidate, type OperatorScope } from ".
 import { requireUser } from "./lib/auth";
 import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
 import { isDeletedSession } from "./lib/deletedSessions";
+import { touchDaemonLastSeen } from "./lib/daemonLiveness";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { claimShareToken } from "./publicShare";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
@@ -1484,11 +1486,7 @@ export const createConversation = mutation({
       }
     }
 
-    if (args.api_token) {
-      await ctx.db.patch(args.user_id, {
-        daemon_last_seen: now,
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, args.user_id, creator);
 
     if (resolvedTeamId && !existing) {
       const bornSubagent =
@@ -3960,11 +3958,7 @@ export const setPrivacyBySessionId = mutation({
     await patchConversationVisibility(ctx, conversation, updates);
     await advanceCommentsAccessRevision(ctx, conversation);
 
-    if (args.api_token) {
-      await ctx.db.patch(authUserId, {
-        daemon_last_seen: Date.now(),
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, authUserId);
   },
 });
 
@@ -5329,9 +5323,7 @@ export const updateTitle = mutation({
     // once: a no-op among them must not write the account row, or they
     // contend on it and fail (OCC on users, 2026-09-30).
     if (args.api_token && (changed || args.replaces === undefined)) {
-      await ctx.db.patch(conversation.user_id, {
-        daemon_last_seen: Date.now(),
-      });
+      await touchDaemonLastSeen(ctx, conversation.user_id);
     }
   },
 });
@@ -5482,11 +5474,7 @@ export const setSkipTitleGeneration = mutation({
       skip_title_generation: args.skip,
     });
 
-    if (args.api_token) {
-      await ctx.db.patch(conversation.user_id, {
-        daemon_last_seen: Date.now(),
-      });
-    }
+    if (args.api_token) await touchDaemonLastSeen(ctx, conversation.user_id);
   },
 });
 
@@ -8976,8 +8964,9 @@ async function enrichInboxSessionRow(
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
-    agent_status: agentStatus,
-    agent_status_raw: maps.agentStatusMap.get(conv._id.toString()) ?? null,
+    // The daemon's own status: every reader derives what it means at its own
+    // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
+    agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
@@ -9172,8 +9161,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     user_rest: userRestOf(child),
     inbox_rest: userRestStampOf(child)?.rest ?? null,
     inbox_rest_at: userRestStampOf(child)?.at ?? null,
-    agent_status: childAgentStatus,
-    agent_status_raw: maps.agentStatusMap.get(child._id.toString()) ?? null,
+    agent_status: maps.agentStatusMap.get(child._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
@@ -10020,11 +10008,11 @@ export const listTeamInboxSessions = query({
 // The heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
 // full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
 type LivenessFields = {
-  agent_status: any;
-  // The daemon's raw status the verdict above came from: a replica re-runs the
-  // trust rules over it at its own clock, since a verdict does not replay at a
-  // later instant (ct-56054).
-  agent_status_raw: string | null;
+  // The daemon's own status, before any trust rule: every reader (this file's
+  // placement included) derives the verdict at its own clock through
+  // trustedStatusAt, since a verdict does not replay at a later instant
+  // (ct-56054).
+  agent_status: string | null;
   is_idle: boolean;
   is_unresponsive: boolean;
   awaiting_input: boolean;
@@ -10396,7 +10384,7 @@ export function ownAsk(
 // same names, same meaning). Both the overlay and inboxForCLI go through here.
 export function placeConversationRow(
   conv: any,
-  lv: Partial<Pick<LivenessFields, "agent_status" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at" | "producing_until" | "last_heartbeat">>,
+  lv: Partial<Pick<LivenessFields, "agent_status" | "updated_at" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at" | "producing_until" | "last_heartbeat">>,
   asking: boolean,
   lastUserMessage: string | null | undefined,
   now: number,
@@ -10411,7 +10399,14 @@ export function placeConversationRow(
   return placeProjectableRow(
     {
       ...conv,
-      agent_status: lv.agent_status ?? null,
+      // The row ships the daemon's raw status; placement reads the verdict.
+      agent_status: trustedStatusAt({
+        agent_status: lv.agent_status ?? null,
+        updated_at: lv.updated_at ?? conv.updated_at,
+        last_heartbeat: lv.last_heartbeat ?? null,
+        open_tasks: lv.open_tasks ?? null,
+        open_tasks_at: lv.open_tasks_at ?? null,
+      }, now) ?? null,
       agent_status_boundary: lv.agent_status_boundary ?? null,
       is_idle: lv.is_idle ?? null,
       awaiting_input: lv.awaiting_input ?? null,
@@ -10527,8 +10522,7 @@ function deriveLivenessAt(
     // execution's value forever — a "stopped" from the day the daemon died
     // outlived the managed row and filed a declared-done session under Needs
     // Input on every replica while this stamp said done (prod, 2026-09-01).
-    agent_status: live.agent_status,
-    agent_status_raw: facts.agent_status,
+    agent_status: facts.agent_status,
     is_idle: live.is_idle,
     is_unresponsive: live.is_unresponsive,
     awaiting_input: live.awaiting_input,
@@ -11020,7 +11014,7 @@ export function tallyInboxRows(
       ts: s.updated_at,
       message_count: s.message_count || 0,
       agent_type: s.agent_type,
-      agent_status: s.agent_status,
+      agent_status: trustedStatusAt(s, now),
       hibernated_at: s.hibernated_at ?? null,
       work_state,
       bucket,
@@ -12178,6 +12172,10 @@ export const setThreadState = mutation({
 export const getThreadState = query({
   args: {
     session: v.string(),
+    // Background probes (the stale-state reminder, the scheduler's filing
+    // read) ask about a session that may not have synced yet: answer null
+    // instead of throwing, so an expected miss is not logged as an error.
+    if_exists: v.optional(v.boolean()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12192,6 +12190,7 @@ export const getThreadState = query({
     // else this way (org-staffing.md S29); the write above stays run-or-own.
     const conv = await resolveConversationRefRanked(ctx, args.session, userId, (c) => canAccessConversation(ctx, userId, c as any));
     if (!conv || !(await canAccessConversation(ctx, userId, conv as any))) {
+      if (args.if_exists) return null;
       throw new Error(
         `No session found for "${args.session}" (you can only read state on sessions you run, own or can see in your team)`
       );

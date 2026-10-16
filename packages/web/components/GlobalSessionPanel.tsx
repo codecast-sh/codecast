@@ -37,7 +37,7 @@ import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, res
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { fallbackProfiles, rankByHeadroom, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
-import { sessionLiveAt } from "../lib/liveness";
+import { agentStatusAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -1266,7 +1266,7 @@ function useLiveWatchRows(session: InboxSession, now: number) {
   return useMemo(
     () => (isWatchHostDead(session, now) ? [] : liveWatchRowsFor(session, messages, now)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
-    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.inbox_killed_at, session.updated_at],
+    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.last_heartbeat, session.inbox_killed_at, session.updated_at],
   );
 }
 
@@ -1492,15 +1492,16 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
   let family: string;
   let title: string;
   let detail: string;
-  if (session.agent_status === "hibernated") {
+  const status = agentStatusAt(session, now);
+  if (status === "hibernated") {
     family = "Hibernated";
     title = HIBERNATED_COPY;
     detail = "";
-  } else if (session.agent_status === "waiting") {
+  } else if (status === "waiting") {
     family = "Background";
     title = "waiting on background work";
     detail = "the turn ended on an open task — the agent resumes when it finishes";
-  } else if (session.agent_status === "dormant") {
+  } else if (status === "dormant") {
     family = "Dormant";
     title = ts?.headline || "parked on a machine wake";
     detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";

@@ -16,7 +16,7 @@ import {
   STATUS_TRUST_TTL_MS,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
-import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, deriveLiveAt, rowLiveDeadlines, computeBucketStale, placeProjectableRow, rollupParentIdOf, type InboxBucket } from "@codecast/shared/contracts";
+import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, deriveLiveAt, trustedStatusAt, rowLiveDeadlines, computeBucketStale, placeProjectableRow, rollupParentIdOf, type InboxBucket } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 
 // The server half of sync-convergence (docs/architecture/sync-convergence.md):
@@ -924,8 +924,10 @@ describe("the replica's live derivation is the server's", () => {
       const conv = tables.conversations.find((c: any) => c._id === cid)!;
       const facts = { ...conv, ...row };
       const live = deriveLiveAt(facts, EPOCH);
-      expect({ agent_status: live.agent_status, is_idle: live.is_idle, is_unresponsive: live.is_unresponsive, awaiting_input: live.awaiting_input, is_connected: live.daemon_alive })
-        .toEqual({ agent_status: row.agent_status, is_idle: row.is_idle, is_unresponsive: row.is_unresponsive, awaiting_input: row.awaiting_input, is_connected: row.is_connected });
+      expect({ is_idle: live.is_idle, is_unresponsive: live.is_unresponsive, awaiting_input: live.awaiting_input, is_connected: live.daemon_alive })
+        .toEqual({ is_idle: row.is_idle, is_unresponsive: row.is_unresponsive, awaiting_input: row.awaiting_input, is_connected: row.is_connected });
+      // The status ships raw, the daemon's own word; the verdict is derived.
+      expect(row.agent_status).toBe(tables.managed_sessions.find((m) => m.conversation_id === cid)?.agent_status ?? null);
       checkedLive++;
       // The flip: members whose asking cannot change with time (false, and an
       // ask only ever drops) and that ride no lead.
@@ -948,7 +950,12 @@ describe("the replica's live derivation is the server's", () => {
     expect(liveness.conversations_parent).toMatchObject({ is_idle: true, bucket: "dormant" });
     expect(liveness.conversations_parent.producing_until).toBeGreaterThan(EPOCH);
     expect(liveness.conversations_unanswered).toMatchObject({ last_role_is_user: true, agent_status: null });
-    expect(liveness.conversations_decay).toMatchObject({ agent_status: "idle", is_idle: true });
-    expect(liveness.conversations_dead).toMatchObject({ agent_status: "stopped", is_connected: false });
+    // Both ship the daemon's stale "working"; what they say is the verdict a
+    // reader derives from it: decayed to idle, and stopped once the heartbeat
+    // lapsed.
+    expect(liveness.conversations_decay).toMatchObject({ agent_status: "working", is_idle: true });
+    expect(trustedStatusAt(liveness.conversations_decay, EPOCH)).toBe("idle");
+    expect(liveness.conversations_dead).toMatchObject({ agent_status: "working", is_connected: false });
+    expect(trustedStatusAt(liveness.conversations_dead, EPOCH)).toBe("stopped");
   });
 });

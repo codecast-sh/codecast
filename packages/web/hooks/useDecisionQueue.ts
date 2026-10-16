@@ -1,5 +1,6 @@
 import { createContext, useMemo } from "react";
 import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inboxStore";
+import { agentStatusAt } from "../lib/liveness";
 import { useAssistantConversationIds, useAssistantScope } from "../lib/surfaces";
 import { makeCollectionSig } from "../store/wakeSig";
 import {
@@ -208,7 +209,7 @@ export function usePendingDecisionItems(conversationId: string | null | undefine
     },
     (st: any) => {
       const row = conversationId ? st.sessions[conversationId] : undefined;
-      return row ? `${row.title}|${row.project_path}|${row.is_idle}|${row.agent_status}|${row.is_unresponsive}|${row.inbox_killed_at}` : "";
+      return row ? `${row.title}|${row.project_path}|${row.is_idle}|${agentStatusAt(row, Date.now())}|${row.is_unresponsive}|${row.inbox_killed_at}` : "";
     },
   ]);
   return useMemo(() => {
