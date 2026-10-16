@@ -133,7 +133,9 @@ async function linkedin(): Promise<string> {
 
 async function x(): Promise<string> {
   const brand = "codecastsh";
-  if ([...body].length > 280) return `refused: ${[...body].length} chars, X allows 280`;
+  // X counts every URL as 23 characters (t.co), whatever its real length.
+  const xLen = [...body.replace(/https?:\/\/\S+/g, "x".repeat(23))].length;
+  if (xLen > 280) return `refused: ${xLen} chars, X allows 280`;
   if (dry) return `dry: would post as @${brand} through cast browser`;
   const switcher = '[data-testid=SideNav_AccountSwitcher_Button]';
   const activeJs = `JSON.stringify({active:(document.querySelector(${JSON.stringify(switcher)})?.innerText.match(/@(\\w+)/)||[])[1]||""})`;
