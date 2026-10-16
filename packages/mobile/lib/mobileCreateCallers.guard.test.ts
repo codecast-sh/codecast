@@ -102,7 +102,8 @@ describe("mobile new-session launch options", () => {
     // app-wide (StoreSyncBridge), never queried when the sheet appears.
     expect(sheetSource).not.toContain("api.devices.listDevices");
     expect(sheetSource).not.toContain("api.users.getRecentProjectPaths");
-    expect(sheetSource).toContain("devices.length > 1 &&");
+    // The machine row shows with any machine, so where a session runs is always in view.
+    expect(sheetSource).toContain("devices.length > 0 &&");
 
     const builder = sourceBetween("const launchStampsForCreate", "const finishSessionCreate");
     expect(builder).toContain("deviceId && deviceId !== defaultDeviceId ? deviceId : undefined");
