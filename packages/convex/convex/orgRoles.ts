@@ -42,6 +42,7 @@ import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isScopeless, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { areaMoves, areasOf, beginAreaHandoff, handOverAreaMoves, ownerSnapshot } from "./orgHandoff";
 import { syncRoleAgenda } from "./orgAgenda";
+import { syncInboxLook } from "./orgInbox";
 import { mergeAllowance } from "./lib/lineMerge";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
 import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
@@ -1322,7 +1323,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
   const spec = roleRoutineFor(role);
   // The morning agenda (S33) is armed with the routine, for a role with
   // people reporting to it, so every door that arms one arms it.
-  await syncRoleAgenda(ctx, role, standing);
+  await syncRoleAgenda(ctx, role, standing); await syncInboxLook(ctx, role, standing);
   const interval = Math.max(60_000, Math.round(everyMs || spec.every_ms));
   // Found in any status (S25): a routine the person cancelled stays
   // cancelled, whatever door arms the role again.
