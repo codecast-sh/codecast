@@ -1668,6 +1668,7 @@ export class SyncService {
     try {
       const res: any = await this.client.query("conversations:getThreadState" as any, {
         session: conversationId,
+        if_exists: true,
         api_token: this.apiToken,
       });
       return res?.visibility ?? null;

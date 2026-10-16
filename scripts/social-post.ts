@@ -81,7 +81,7 @@ function cast(args: string[], timeoutMs = 90e3): { ok: boolean; out: string } {
 }
 function evalJs<T>(js: string): T | undefined {
   const r = cast(["eval", js]);
-  if (!r.ok) return undefined;
+  // The result line is a JSON string; page console errors may add a failure report around it.
   try { return JSON.parse(JSON.parse(r.out.split("\n").find((l) => l.startsWith('"')) ?? "null")) as T; } catch { return undefined; }
 }
 /** Insert the text into a focused contenteditable the way a paste would, so the editor's model sees it. */
@@ -115,7 +115,10 @@ async function linkedin(): Promise<string> {
       if (!opened.ok) return `failed: composer did not open: ${opened.out.slice(0, 160)}`;
       const who = evalJs<{ as: string }>('JSON.stringify({as: [...document.querySelectorAll("button")].map(b=>b.innerText.trim().replace(/\\s+/g," ")).find(t=>/Post to/.test(t))||""})');
       if (!/Codecast/.test(who?.as ?? "")) return `refused: composer would post as "${who?.as ?? "?"}", not the Codecast Page`;
-      const ins = typeInto("Text editor for creating content in the post composer", '[...document.querySelectorAll(".ql-editor")].find(e=>!e.closest(".comments-comment-texteditor"))?.innerText');
+      // Quill mirrors DOM mutations into its model, so a direct write is instant; keystrokes take minutes on a loaded machine.
+      const ins = evalJs<{ len?: number; err?: string }>(`(()=>{const ed=[...document.querySelectorAll(".ql-editor")].find(e=>!e.closest(".comments-comment-texteditor")); if(!ed) return JSON.stringify({err:"no editor"});
+        const p=document.createElement("p"); p.textContent=${JSON.stringify(body)}; ed.replaceChildren(p); ed.classList.remove("ql-blank");
+        ed.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText"})); return JSON.stringify({len:(ed.innerText||"").trim().length});})()`);
       if (ins?.err) return `failed: ${ins.err}`;
       if (ins?.len !== wantLen) return `failed: editor holds ${ins?.len} chars, wanted ${wantLen}`;
       const armed = evalJs<{ enabled: boolean }>('JSON.stringify({enabled: [...document.querySelectorAll("button")].some(b=>b.innerText.trim()==="Post" && !b.disabled)})');

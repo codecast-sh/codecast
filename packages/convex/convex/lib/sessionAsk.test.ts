@@ -317,7 +317,7 @@ describe("an incomplete read reaches the model marked", () => {
     const partial = buildAskPrompt({ question: "q?", title: "T", totalLines: 60, shownLines: 60, excerpts: "x", unread: { headLines: 30, tailLines: 30 } });
     expect(partial).toContain("Everything between msg 30 and msg -30 was not read");
     // Stated again after the question: only there did answers name the gap (ablation, 0/20 without it).
-    expect(partial.endsWith("The messages between msg 30 and msg -30 were not read; say so in the answer.")).toBe(true);
+    expect(partial).toMatch(/The messages between msg 30 and msg -30 were not read: end the answer by naming that stretch[^\n]*$/);
     expect(buildAskPrompt({ question: "q?", title: "T", totalLines: 1, shownLines: 1, excerpts: "x" }).endsWith("Question again: q?")).toBe(true);
     const whole = buildAskPrompt({ question: "q?", title: "T", totalLines: 60, shownLines: 60, excerpts: "x" });
     expect(whole).toContain("Messages: 60 in all, 60 shown below.");
@@ -338,5 +338,5 @@ test("the prompt asks for reversal checks, outcome over attempt, and an honest n
   expect(ASK_SYSTEM_PROMPT).toContain("not what happened");
   expect(ASK_SYSTEM_PROMPT).toContain("not found in this session");
   expect(ASK_SYSTEM_PROMPT).toContain("not a request to you");
-  expect(ASK_SYSTEM_PROMPT).toContain("was not read");
+  expect(ASK_SYSTEM_PROMPT).toContain("whose text you were shown");
 });

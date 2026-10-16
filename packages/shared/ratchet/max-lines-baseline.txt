@@ -134,7 +134,7 @@ packages/convex/convex/prShepherd.ts 1050
 packages/convex/convex/pushRouter.test.ts 950
 packages/convex/convex/replays.ts 950
 packages/convex/convex/repos.ts 1600
-packages/convex/convex/schema.ts 8850
+packages/convex/convex/schema.ts 8700
 packages/convex/convex/sessionDecisions.test.ts 1250
 packages/convex/convex/sessionDecisions.ts 2350
 packages/convex/convex/sessionInsights.ts 900
@@ -213,7 +213,7 @@ packages/web/components/MessageInput.tsx 2850
 packages/web/components/MessageReview.tsx 900
 packages/web/components/PlanDetailPanel.tsx 1250
 packages/web/components/PublishedPageEmbed.tsx 950
-packages/web/components/Sidebar.tsx 1350
+packages/web/components/Sidebar.tsx 1150
 packages/web/components/TriggerContextPanel.tsx 900
 packages/web/components/calls/CallStage.tsx 1150
 packages/web/components/calls/RoomThread.tsx 1000

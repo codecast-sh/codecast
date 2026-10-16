@@ -16,6 +16,8 @@ import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore, useTra
 import { withoutUndo } from "../../store/undoStack";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { agentStatusAt } from "../../lib/liveness";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
@@ -411,12 +413,13 @@ export type AgentInRoom = {
 export function useAgentsInRoom(routes: Array<{ kind: string; target: string; added_by: string }>): AgentInRoom[] {
   const targets = routes.filter((r) => r.kind === "session");
   const sig = targets.map((r) => r.target).join("|");
+  const now = useCoarseNow(30_000);
   const s = useTrackedStore([
     (st: any) =>
       targets
         .map((r) => {
           const row = findSessionRow(st, r.target);
-          return row ? `${identitySig(row)}:${row.title ?? ""}:${row.agent_type ?? ""}:${row.agent_status ?? ""}` : r.target;
+          return row ? `${identitySig(row)}:${row.title ?? ""}:${row.agent_type ?? ""}:${agentStatusAt(row, now) ?? ""}` : r.target;
         })
         .join("|"),
   ]);
@@ -430,12 +433,12 @@ export function useAgentsInRoom(routes: Array<{ kind: string; target: string; ad
           addedBy: r.added_by,
           name: (row ? agentRoomName(row) : "new agent").slice(0, 40),
           agentType: row?.agent_type ?? "claude_code",
-          working: ACTIVE_AGENT_STATUSES.has(row?.agent_status ?? ""),
+          working: !!row && ACTIVE_AGENT_STATUSES.has(agentStatusAt(row, now) ?? ""),
           row,
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the routes list
-    [sig, s],
+    [sig, s, now],
   );
 }
 
