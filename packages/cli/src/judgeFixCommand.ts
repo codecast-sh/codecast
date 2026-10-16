@@ -35,7 +35,7 @@ import { callModel, momentForTry, repoRoot } from "./judgingCommand.js";
 import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, rulingsShown, type ExpectationsBrief, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
 import { parseExtractorHeader, type MomentRecord } from "@codecast/shared/contracts/moments";
 import { isJudgeCaseKey, type CaseTarget } from "@codecast/shared/contracts/judgeReview";
-import { caseMoved, restEmptied, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard, type JudgeFixCard, type JudgeFixCase, type JudgeFixKept, type JudgeFixRest } from "@codecast/shared/contracts/judgeFix";
+import { caseMoved, fisherOneSided, JUDGE_FIX_ALPHA, restEmptied, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard, type JudgeFixCard, type JudgeFixCase, type JudgeFixKept, type JudgeFixRest } from "@codecast/shared/contracts/judgeFix";
 
 function fail(message: string, code = 2): never {
   console.error(fmt.error(message));
@@ -569,6 +569,21 @@ async function countRuled(m: Measured, recordOf: RecordOf, c: { moment: string; 
 /** The published judge files a case again at most once in five runs: a draw it does not repeat, which no fix can separate from. */
 export const isDraw = (b: { runs: number; hits: number }) => b.runs > 0 && b.hits * 5 <= b.runs;
 
+/**
+ * What the published judge's repeats leave to fix. `draws` when every case ran
+ * and what it repeats is too rare to measure a fix against: every case is a
+ * draw, or the cases left, pooled as ab pools them, could not separate even
+ * from a fix that ended them all (2 of 5 runs, ct-59568). The problem then
+ * closes with no fix instead of sending a fixer round three times.
+ */
+export function repeatsOutcome(cases: Array<{ runs: number; hits: number }>): "draws" | "repeats" {
+  if (cases.some((b) => b.runs === 0)) return "repeats";
+  const kept = cases.filter((b) => !isDraw(b));
+  const runs = kept.reduce((n, b) => n + b.runs, 0);
+  const best = fisherOneSided(0, runs, kept.reduce((n, b) => n + b.hits, 0), runs, "less");
+  return best !== null && best <= JUDGE_FIX_ALPHA ? "repeats" : "draws";
+}
+
 export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): void {
   judges
     .command("arm")
@@ -631,8 +646,7 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       const runs = ran.reduce((n, r) => n + r.b.runs, 0);
       const hits = ran.reduce((n, r) => n + r.b.hits, 0);
       const each = rows.map((r) => `${r.c.moment}${r.c.twins.length ? `+${r.c.twins.length}` : ""} ${r.c.expectation.replace(/^ex-[\w-]*?-(\d+)$/, "ex-$1")} ${r.b.hits}/${r.b.runs}`).join(", ");
-      // Every case ran and none is repeated: the findings were draws, and the problem closes with no fix.
-      const outcome = ran.length === rows.length && draws.length === rows.length ? "draws" : "repeats";
+      const outcome = repeatsOutcome(rows.map((r) => r.b));
       const left = new Set(draws.flatMap((r) => [`${r.c.moment}|${r.c.finding}`, ...r.c.twins.map((t) => `${t.moment}|${t.finding}`)]));
       if (outcome === "repeats" && draws.length) {
         cf.cases = cf.cases.filter((c) => !left.has(`${c.moment}|${c.finding}`));
@@ -640,7 +654,7 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       }
       // Plain words a station passes on in a shell string: no quotes, no $.
       const evidence = (outcome === "draws"
-        ? `The published judge files the ruled findings again ${hits} of ${runs} runs (${each}): draws it does not repeat, so no fix can be measured against them. Closed with no fix.`
+        ? `The published judge files the ruled findings again ${hits} of ${runs} runs (${each}): too rarely for a fix to be measured against them in ${options.reps} runs each. Closed with no fix.`
         : draws.length
           ? `The published judge repeats ${ran.length - draws.length} of ${rows.length} ruled cases (${each}); ${draws.length} at most 1 in 5 left out as draws.`
           : `The published judge repeats the ruled cases ${hits} of ${runs} runs (${each}).`).replace(/["'`$\\]/g, "");
