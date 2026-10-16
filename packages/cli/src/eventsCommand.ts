@@ -20,7 +20,7 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
-import { scopeFor } from "./signalCommand.js";
+import { scopeFor } from "./lineScope.js";
 import { GROUP_KINDS, GROUP_STATUSES, bucketSeries } from "@codecast/shared/contracts/ingest";
 import { fenceProductText } from "@codecast/shared/contracts";
 import { parseDuration } from "@codecast/shared/time";

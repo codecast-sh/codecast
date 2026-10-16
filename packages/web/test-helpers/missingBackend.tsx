@@ -57,6 +57,8 @@ export function installDom(url: string) {
     indexedDB,
     IDBKeyRange,
     HTMLElement: w.HTMLElement,
+    // A web component module (the diff renderer) registers itself at import.
+    customElements: w.customElements,
     HTMLInputElement: w.HTMLInputElement,
     HTMLTextAreaElement: w.HTMLTextAreaElement,
     HTMLButtonElement: w.HTMLButtonElement,

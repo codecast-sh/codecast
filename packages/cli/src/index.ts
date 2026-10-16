@@ -14209,7 +14209,7 @@ org
 const orgDeps = { cliPost, readWorkspace, workspaceArgs, workspaceLabel, webUrl: () => readConfig()?.web_url || WEB_URL, callingSession, realCwd: getRealCwd };
 registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
-registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId, publishDeps: { getCliEndpoint, detectCurrentSessionId } });
+registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 registerRouteCommand(program, orgDeps);
 
 // ── Team chat ────────────────────────────────────────────────────────────────

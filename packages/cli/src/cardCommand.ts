@@ -395,7 +395,7 @@ export function caseNotLive(card: { case?: { signal?: unknown } | null }, live: 
 async function alongsideUnsaid(deps: PublishDeps, task: string, card: { alongside?: []; cause?: { where?: unknown } }): Promise<string[]> {
   const where = Array.isArray(card.cause?.where) ? (card.cause!.where as unknown[]).filter((w): w is string => typeof w === "string") : [];
   if (!where.length) return [];
-  const { scopeFor } = await import("./signalCommand.js");
+  const { scopeFor } = await import("./lineScope.js");
   const scope: Record<string, unknown> = { ...(await scopeFor(deps, undefined, true).catch(() => ({}))) };
   delete scope.project;
   const projects: Array<{ title: string }> | null = await apiPost(deps, "/cli/line/trial/projects", scope, { read: true, exitOnError: false }).catch(() => null);

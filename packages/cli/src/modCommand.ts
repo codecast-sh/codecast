@@ -88,7 +88,7 @@ function typecheck(dir: string): { checked: boolean; errors: string[]; note?: st
 
 async function teamScope(deps: PublishDeps, team: string | undefined) {
   if (!team) return {};
-  const { scopeFor } = await import("./signalCommand.js");
+  const { scopeFor } = await import("./lineScope.js");
   const scope: Record<string, unknown> = (await scopeFor(deps, team, true)) ?? {};
   return scope.team_id ? { team_id: scope.team_id } : {};
 }
