@@ -72,7 +72,8 @@ export function frameOf(snap: RoleWakeSnap): string {
 }
 
 /** A fixture woken by another session's message: the turn under test is the reply, not the brief. */
-const isMessageTurn = (snap: RoleWakeSnap): boolean => snap.fixture?.routine === 'message';
+// The inbox look (S43) asks for no brief either: like a message, it is held to what it does.
+const isMessageTurn = (snap: RoleWakeSnap): boolean => snap.fixture?.routine === 'message' || snap.fixture?.routine === 'inbox';
 
 /** What the agent gets, and what the judge reads it got: the frame, then the harness note. */
 const briefingOf = (snap: RoleWakeSnap): string => withHarnessNote(frameOf(snap), snap, isMessageTurn(snap) ? [] : [BRIEF_NOTE]);

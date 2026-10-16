@@ -66,8 +66,8 @@ describe("a fix that empties a waiting proposal (tc-44)", () => {
     const ruled = judgeFixGroup(4, 20, 18, 2, "fewer");
     const controls = judgeFixGroup(10, 50, 30, 30, "more");
     expect(judgeFixVerdict(ruled, controls)).toBe("better");
-    expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3 }])).toBe("better");
-    expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3 }, { base: 4, arm: 0 }])).toBe("empties_proposal");
+    expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3, reps: 5 }])).toBe("better");
+    expect(judgeFixVerdict(ruled, controls, [{ base: 4, arm: 3, reps: 5 }, { base: 4, arm: 0, reps: 5 }])).toBe("empties_proposal");
   });
 });
 
