@@ -19,7 +19,7 @@ import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { formatAge } from "./decideCommand.js";
 import { stdinText } from "./sendBody.js";
-import { lineProjectFor, scopeFor } from "./signalCommand.js";
+import { lineProjectFor, scopeFor } from "./lineScope.js";
 import { parseProposal, renderExpectations, type ExpectationsVersion } from "@codecast/shared/contracts/expectations";
 // The line template's proposer routine, the one prompt every pass follows,
 // whether its trigger runs it daily or a person asks for one pass.

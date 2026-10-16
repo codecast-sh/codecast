@@ -61,6 +61,10 @@ const ALLOWED: Record<string, string> = {
   // real directory to tell "already redirected" from "pointed at the human's
   // state" (ct-49576). Calling the resolver here would only hide that.
   "test-helpers/codecastDir.ts": "sets and restores CODECAST_DIR; naming the real directory is its whole job",
+  // The process entry compares CODECAST_DIR with a dry run's empty directory to
+  // send a call back to the dry run's guard; it never resolves the config dir,
+  // and the resolver would grow the boot graph main.ts must keep to fastPath.
+  "main.ts": "compares CODECAST_DIR with DRY_RUN_EMPTY_CODECAST_DIR before anything loads",
 };
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "__fixtures__"]);

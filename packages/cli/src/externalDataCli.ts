@@ -6,7 +6,7 @@
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { formatAge } from "./decideCommand.js";
-import { scopeFor } from "./signalCommand.js";
+import { scopeFor } from "./lineScope.js";
 
 export { formatAge };
 

@@ -65,7 +65,7 @@ const ROWS: Row[] = [
   { file: "herdr.ts", name: "findHerdrPaneForTty", kind: "function", minLines: 10, mustContain: "await execFileAsync" },
   { file: "herdr.ts", name: "herdrSocketPaths", kind: "function", minLines: 8, mustContain: "fs.promises.readdir" },
   { file: "remote/device.ts", name: "stableHostnameAsync", kind: "function", minLines: 8, mustContain: "execFileAsync" },
-  { file: D, name: "collectResourceSnapshot", kind: "function", minLines: 30, mustContain: "classifySharedPidSessions" },
+  { file: D, name: "collectResourceSnapshotNow", kind: "function", minLines: 30, mustContain: "classifySharedPidSessions" },
   { file: D, name: "runHeartbeatMaintenance", kind: "function", minLines: 20, mustContain: "reconcileStatusFromTranscript" },
   { file: D, name: "reconcileStatusFromTranscript", kind: "function", minLines: 20, mustContain: "primeOpenTaskScan" },
   { file: D, name: "classifySharedPidSessions", kind: "function", minLines: 15, mustContain: "observeCodexOwnership" },
