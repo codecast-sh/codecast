@@ -31,6 +31,8 @@ const NOT_INSTRUCTIONS: Record<string, readonly string[]> = {
   "org-roles-run-work.md": ["escalate"],
   "org-staffing.md": ["escalate", "role name"],
   "org-roles-standing.md": ["role wakes"],
+  // An open proposal: commands that do not exist yet.
+  "agent-comms.md": ["hold", "claim"],
 };
 
 /** The leading words of every `cast ...` in a doc: inline code, and lines of a

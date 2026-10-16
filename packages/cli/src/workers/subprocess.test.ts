@@ -8,7 +8,7 @@ import { configureDaemonWorkers, closeDaemonWorkers } from "./bridge.js";
 import { workerEnv, killWorkerGroup } from "./invocation.js";
 import { FrameDecoder, encodeFrame } from "./protocol.js";
 import { execFileAsync } from "../proc.js";
-import { tmuxRunAsync, parseCodecastPaneRows, pickPaneForSession } from "../tmux.js";
+import { PANE_LIST_FORMAT, tmuxRunAsync, parseCodecastPaneRows, pickPaneForSession } from "../tmux.js";
 const main = path.resolve(import.meta.dir, "../main.ts");
 const fixture = path.join(import.meta.dir, "fixtures/parent.ts");
 const hosts: WorkerHost[] = [];
@@ -108,7 +108,7 @@ test("read-only tmux listing/capture matches direct async path on an isolated so
   const names = ["cast-term-collision-a", "cast-term-collision-b"];
   try {
     for (let i = 0; i < 2; i++) { tmux(["new-session", "-d", "-s", names[i], "sh", "-c", "printf 'probe fixture\\n'; exec sleep 60"]); tmux(["set-option", "-t", names[i], "@codecast_session_id", `sameprefix-${i}-full`]); }
-    const args = ["-L", socket, "list-sessions", "-F", "#{@codecast_session_id}|#{session_created}|#{session_name}"];
+    const args = ["-L", socket, "list-sessions", "-F", PANE_LIST_FORMAT];
     const direct = await tmuxRunAsync(args);
     const h = (await configureDaemonWorkers(true, { invocation: invocation() }))!;
     const routed = await tmuxRunAsync(args); expect(routed).toEqual(direct); expect(h.state.pid).toBeGreaterThan(1);
