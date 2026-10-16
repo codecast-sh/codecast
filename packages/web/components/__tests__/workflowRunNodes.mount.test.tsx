@@ -19,6 +19,8 @@ const restoreGlobals = replaceGlobals({
   document: dom.window.document,
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,
+  // Prism reads Element.prototype as it loads, wherever a document exists.
+  Element: dom.window.Element,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 const { createRoot } = await import("react-dom/client");

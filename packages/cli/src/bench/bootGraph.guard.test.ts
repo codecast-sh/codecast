@@ -221,7 +221,11 @@ describe("command groups stay off the boot graph", () => {
     // modules and about 25 small leaves index.ts uses. Owed next: the shared
     // contracts barrel, 77 files that reach this graph only through it, moved
     // to subpath imports.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(324);
+    // 325 on 2026-10-16: the workflows section of the agent instructions moved
+    // to contracts/snippetsWorkflow.ts to keep snippets.ts under its max-lines
+    // pin. snippets.ts composes it, and the barrel carries snippets.ts, so any
+    // split of that file adds one here until the barrel is gone.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(325);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -322,7 +326,9 @@ describe("command groups stay off the boot graph", () => {
     // 483 on 2026-10-16: orgProposal.ts and the five files only it brought
     // (orgSessionFiling, orgLead, initiative, roleAutonomy, chat/handles) left
     // when rolePlaybook.ts, reached through the barrel, stopped importing it.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(483);
+    // 484 on 2026-10-16: contracts/snippetsWorkflow.ts, split out of
+    // snippets.ts for its line pin (see the index.ts count).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(484);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

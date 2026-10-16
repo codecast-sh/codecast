@@ -46,7 +46,9 @@ mock.module("../useQueryNoThrow", () => ({
 }));
 mock.module("../useConvexSync", () => ({ useConvexSync: () => {} }));
 let timestampFetch: { resolve: (v: unknown) => void } | null = null;
+const realInboxWarm = { ...(await import("../inboxWarm")) };
 mock.module("../inboxWarm", () => ({
+  ...realInboxWarm,
   WARM_DEEP_ROWS: 50,
   deepenConversation: async () => {},
   fetchOlderPage: async () => {},

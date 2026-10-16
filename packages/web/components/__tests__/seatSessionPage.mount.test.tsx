@@ -50,7 +50,7 @@ const env = { qs: "" };
 // Only the transports and the heavy leaves are faked; the inbox page, the
 // pane, the switch and the store are real.
 const convexReact = { ...(await import("convex/react")) };
-mock.module("convex/react", () => ({ ...convexReact, useMutation: () => async () => "token", useQuery: () => undefined }));
+mock.module("convex/react", () => ({ ...convexReact, useMutation: () => async () => "token", useQuery: () => undefined, useQueries: () => ({}) }));
 mock.module("next/navigation", () => ({
   useRouter: () => ({ replace: () => {}, push: () => {} }),
   useSearchParams: () => new URLSearchParams(env.qs),
@@ -67,7 +67,8 @@ mock.module("../PlanContextPanel", () => ({ PlanContextPanel: () => null }));
 mock.module("../WorkflowContextPanel", () => ({ WorkflowContextPanel: () => null }));
 mock.module("../TriggerContextPanel", () => ({ TriggerContextPanel: () => <div data-trigger-panel /> }));
 mock.module("../ConversationPlaceholder", () => ({ ConversationPlaceholder: ({ id }: any) => <div data-placeholder={id} /> }));
-mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => <kbd>{children}</kbd> }));
+const realShortcutsHelp = { ...(await import("../KeyboardShortcutsHelp")) };
+mock.module("../KeyboardShortcutsHelp", () => ({ ...realShortcutsHelp, ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => <kbd>{children}</kbd> }));
 mock.module("../../hooks/useSeedOwnership", () => ({ useSeedOwnership: () => {} }));
 // Spread the real module: a substitution is process-global, so a stub that
 // drops its other exports breaks every file that loads it afterwards.
