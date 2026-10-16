@@ -86,14 +86,8 @@ function evalJs<T>(js: string): T | undefined {
 }
 /** Insert the text into a focused contenteditable the way a paste would, so the editor's model sees it. */
 /** Focus the editor by description and type the text as real keystrokes (paste events do not reach these editors). */
-function typeInto(editorDescription: string, lenJs: string): { len?: number; err?: string } | undefined {
-  const focused = cast(["do", `find "${editorDescription}"`, "click"], 120e3);
-  if (!focused.ok) return { err: `editor not found: ${focused.out.slice(0, 120)}` };
-  const typed = cast(["type", body], 400e3);
-  if (!typed.ok) return { err: `typing failed: ${typed.out.slice(0, 120)}` };
-  return evalJs<{ len: number }>(`JSON.stringify({len:((${lenJs})||"").trim().length})`);
-}
-const wantLen = body.trim().length;
+// Length checks ignore whitespace: editors render a blank line as one or two newlines.
+const wantLen = body.replace(/\s+/g, "").length;
 function withTab<T>(url: string, fn: () => T): T {
   // `open` exits nonzero on the page's own console errors; the transport's first wait decides.
   const open = cast(["open", url], 120e3);
@@ -118,7 +112,7 @@ async function linkedin(): Promise<string> {
       // Quill mirrors DOM mutations into its model, so a direct write is instant; keystrokes take minutes on a loaded machine.
       const ins = evalJs<{ len?: number; err?: string }>(`(()=>{const ed=[...document.querySelectorAll(".ql-editor")].find(e=>!e.closest(".comments-comment-texteditor")); if(!ed) return JSON.stringify({err:"no editor"});
         const p=document.createElement("p"); p.textContent=${JSON.stringify(body)}; ed.replaceChildren(p); ed.classList.remove("ql-blank");
-        ed.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText"})); return JSON.stringify({len:(ed.innerText||"").trim().length});})()`);
+        ed.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText"})); return JSON.stringify({len:(ed.innerText||"").replace(/\\s+/g,"").length});})()`);
       if (ins?.err) return `failed: ${ins.err}`;
       if (ins?.len !== wantLen) return `failed: editor holds ${ins?.len} chars, wanted ${wantLen}`;
       const armed = evalJs<{ enabled: boolean }>('JSON.stringify({enabled: [...document.querySelectorAll("button")].some(b=>b.innerText.trim()==="Post" && !b.disabled)})');
@@ -133,13 +127,20 @@ async function linkedin(): Promise<string> {
 
 async function x(): Promise<string> {
   const brand = "codecastsh";
-  if ([...body].length > 280) return `refused: ${[...body].length} chars, X allows 280`;
+  // X counts every URL as 23 characters (t.co), whatever its real length.
+  const xLen = [...body.replace(/https?:\/\/\S+/g, "x".repeat(23))].length;
+  if (xLen > 280) return `refused: ${xLen} chars, X allows 280`;
   if (dry) return `dry: would post as @${brand} through cast browser`;
   const switcher = '[data-testid=SideNav_AccountSwitcher_Button]';
   const activeJs = `JSON.stringify({active:(document.querySelector(${JSON.stringify(switcher)})?.innerText.match(/@(\\w+)/)||[])[1]||""})`;
   try {
     return withTab("https://x.com/home", () => {
-      const before = evalJs<{ active: string }>(activeJs)?.active ?? "";
+      cast(["do", 'wait --text "What"'], 60e3);
+      let before = "";
+      for (let i = 0; i < 6 && !before; i++) { // the sidebar's account button renders after the timeline
+        before = evalJs<{ active: string }>(activeJs)?.active ?? "";
+        if (!before) cast(["do", "wait 2000"], 30e3);
+      }
       if (!before) return "skipped: Chrome is not signed in to X";
       const switchTo = (handle: string) => {
         if ((evalJs<{ active: string }>(activeJs)?.active ?? "") === handle) return true;
@@ -149,15 +150,26 @@ async function x(): Promise<string> {
       };
       if (!switchTo(brand)) return `skipped: @${brand} is not in Chrome's X account switcher (signed in as @${before}); add it once via "Add an existing account"`;
       try {
-        cast(["open", "https://x.com/compose/post"], 120e3);
-        cast(["do", 'wait --text "What"'], 60e3);
-        const ins = typeInto("post text box in the compose dialog", 'document.querySelector("[data-testid=tweetTextarea_0]")?.innerText');
-        if (ins?.err) return `failed: ${ins.err}`;
+        // The home timeline's inline composer. /compose/post opens a modal over it whose editor the
+        // snapshot cannot see, and keystrokes through the extension echo into it thousands of times,
+        // so the text goes in as a synthetic paste (Draft.js reads clipboardData) and Post is clicked by script.
+        const composerJs = '[...document.querySelectorAll("[data-testid=tweetTextarea_0]")].filter(e=>e.getBoundingClientRect().height>0).at(-1)';
+        const pasted = evalJs<{ ok?: boolean; err?: string }>(`(()=>{const t=${composerJs};
+          if(!t) return JSON.stringify({err:"no composer"}); t.focus(); const dt=new DataTransfer(); dt.setData("text/plain", ${JSON.stringify(body)});
+          t.dispatchEvent(new ClipboardEvent("paste",{clipboardData:dt,bubbles:true,cancelable:true})); return JSON.stringify({ok:true});})()`);
+        if (pasted?.err) return `failed: ${pasted.err}`;
+        cast(["do", "wait 2000"], 30e3); // Draft.js applies the paste on its next render
+        const ins = evalJs<{ len: number }>(`JSON.stringify({len:((${composerJs})?.innerText||"").replace(/\\s+/g,"").length})`);
         if (ins?.len !== wantLen) return `failed: composer holds ${ins?.len} chars, wanted ${wantLen}`;
-        const posted = cast(["do", 'find "Post button that publishes the draft"', "click", "wait 4000"], 120e3);
-        if (!posted.ok) return `failed: Post click: ${posted.out.slice(0, 160)}`;
-        const seen = evalJs<{ sent: boolean }>('JSON.stringify({sent: !document.querySelector("[data-testid=tweetTextarea_0]") || document.body.innerText.includes("Your post was sent")})');
-        return seen?.sent ? `posted as @${brand} (https://x.com/${brand})` : "failed: composer still open after Post";
+        const clicked = evalJs<{ ok: boolean }>('(()=>{const b=document.querySelector("[data-testid=tweetButtonInline]"); if(!b||b.disabled) return JSON.stringify({ok:false}); b.click(); return JSON.stringify({ok:true});})()');
+        if (!clicked?.ok) return "failed: Post button missing or disabled";
+        cast(["do", "wait 5000"], 30e3);
+        const seen = evalJs<{ sent: boolean }>('JSON.stringify({sent: (document.querySelector("[data-testid=tweetTextarea_0]")?.innerText||"").replace(/\\s+/g,"").length===0})');
+        if (!seen?.sent) return "failed: composer still holds the text after Post";
+        cast(["open", `https://x.com/${brand}`], 120e3);
+        cast(["do", `wait --text ${JSON.stringify(text.slice(0, 40))}`], 60e3);
+        const url = evalJs<{ href?: string }>(`(()=>{const a=[...document.querySelectorAll("article")].find(x=>x.innerText.includes(${JSON.stringify(text.slice(0, 60))})); return JSON.stringify({href:a?.querySelector("a[href*=status]")?.getAttribute("href")});})()`);
+        return url?.href ? `posted as @${brand} (https://x.com${url.href})` : `failed: post not visible on x.com/${brand}`;
       } finally { if (before !== brand) switchTo(before); }
     });
   } catch (e) { return `failed: ${(e as Error).message}`; }
