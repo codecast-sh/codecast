@@ -11,19 +11,24 @@ import {
   threadStateFreshness,
   threadStateHeadline,
   threadStateCardLine,
+  threadStateRows,
   parseThreadStateStatus,
+  THREAD_STATE_AGING_MSGS,
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateFields,
   type ThreadStateFreshness,
+  type ThreadStateRow,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
 
 export interface ThreadStateView {
   /** Full text, as the agent wrote it. */
   text: string;
-  /** First line — what the session is working on. */
+  /** First line: where the work stands. */
   headline: string;
-  /** What is HAPPENING: the Status:/Blocked: line when present, else the
+  /** The lines after the headline, as the panel lays them out. */
+  rows: ThreadStateRow[];
+  /** The ask (`You:`, or an older `Blocked:` line) when there is one, else the
    * headline. The inbox card's one slot. */
   cardLine: string;
   /** Declared tri-state, null on rows written before it existed. */
@@ -33,8 +38,12 @@ export interface ThreadStateView {
   /** "4m" / "2h" / "3d", or null when the row predates the timestamp. */
   age: string | null;
   messagesSince: number | null;
-  /** "4m ago · 12 messages since" — the panel's provenance line. */
+  /** "4m ago · 12 messages since". */
   provenance: string;
+  /** The panel header's age: "4m", and "4h · 64 new messages" once the thread
+   * has run far enough past the state to age it. A state aged by the clock
+   * alone shows just its age: the few messages since are its own sign-off. */
+  stamp: string;
 }
 
 /** Pin colour by freshness, shared by every one-line surface (inbox card,
@@ -127,15 +136,22 @@ export function threadStateView(
   if (messagesSince != null && messagesSince > 0) {
     parts.push(messagesSince === 1 ? "1 message since" : `${messagesSince} messages since`);
   }
+  const rows = threadStateRows(text);
+  const stamp: string[] = ageMs == null ? [] : [compactAge(ageMs)];
+  if (messagesSince != null && messagesSince >= THREAD_STATE_AGING_MSGS) {
+    stamp.push(`${messagesSince} new messages`);
+  }
 
   return {
     text,
     headline: threadStateHeadline(text),
-    cardLine: threadStateCardLine(text),
+    rows,
+    cardLine: threadStateCardLine(text, rows),
     status: parseThreadStateStatus(fields?.thread_state_status),
     freshness,
     age,
     messagesSince,
     provenance: parts.join(" · "),
+    stamp: stamp.join(" · "),
   };
 }
