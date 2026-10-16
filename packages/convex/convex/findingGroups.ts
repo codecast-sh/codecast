@@ -330,7 +330,7 @@ export async function similarCandidates(
 }
 
 /** Embed a finding's words inside the team's grouping budget; null when there is no room or the embedding fails. */
-async function embedFinding(ctx: { runMutation: any }, scope: CallScope, text: string) {
+async function embedFinding(ctx: { runMutation: any; scheduler: any }, scope: CallScope, text: string) {
   const spent = await withinBudget(ctx, scope, "grouping", embeddingWorstCase(text), async (charge) => {
     const result = await embedText(text);
     charge(result?.cost_usd ?? 0);
@@ -344,7 +344,7 @@ async function embedFinding(ctx: { runMutation: any }, scope: CallScope, text: s
  * against by those words from now on: its kept embedding is replaced. Its
  * problem stays. False when the budget had no room or the embedding failed.
  */
-export async function reembedFinding(ctx: { runMutation: any }, scope: CallScope, finding: { signal_id: Id<"signals">; subject: string; text: string }): Promise<boolean> {
+export async function reembedFinding(ctx: { runMutation: any; scheduler: any }, scope: CallScope, finding: { signal_id: Id<"signals">; subject: string; text: string }): Promise<boolean> {
   const embedded = await embedFinding(ctx, scope, finding.text);
   if (!embedded) return false;
   await ctx.runMutation(internal.findingGroups.replaceVector, { workspace: scope.workspace, subject: finding.subject, signal_id: finding.signal_id, embedding: embedded.vector });

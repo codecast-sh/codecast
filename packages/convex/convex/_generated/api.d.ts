@@ -361,6 +361,7 @@ import type * as orgHealth from "../orgHealth.js";
 import type * as orgInit from "../orgInit.js";
 import type * as orgLine from "../orgLine.js";
 import type * as orgLineMerge from "../orgLineMerge.js";
+import type * as orgPeople from "../orgPeople.js";
 import type * as orgProposals from "../orgProposals.js";
 import type * as orgRoles from "../orgRoles.js";
 import type * as orgRootSeat from "../orgRootSeat.js";
@@ -848,6 +849,7 @@ declare const fullApi: ApiFromModules<{
   orgInit: typeof orgInit;
   orgLine: typeof orgLine;
   orgLineMerge: typeof orgLineMerge;
+  orgPeople: typeof orgPeople;
   orgProposals: typeof orgProposals;
   orgRoles: typeof orgRoles;
   orgRootSeat: typeof orgRootSeat;

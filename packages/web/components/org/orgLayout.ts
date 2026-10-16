@@ -2,8 +2,9 @@
 // nodes and edges out. No dependency: post order subtree widths, siblings
 // spaced, parents centred over their children.
 //
-// Shape of the tree: people are roots, side by side. Under a person hang the
-// roles that report to them and a STACK of their own sessions (a vertical list, so a parent with eight sessions stays one column
+// Shape of the tree: people are roots, side by side, except a person who
+// reports to another person, who hangs under them. Under a person hang the
+// people and roles that report to them and a STACK of their own sessions (a vertical list, so a parent with eight sessions stays one column
 // wide instead of eight). Roles nest the same way. A stack ends in a cluster
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
@@ -279,6 +280,18 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
   const roles = tree.roles.filter((r) => r.status !== "retired");
   const roleIds = new Set(roles.map((r) => r._id));
   const personIds = new Set(people.map((p) => p.user_id));
+  const peopleUnder = new Map<string, OrgPerson[]>();
+  const topPeople: OrgPerson[] = [];
+  for (const p of people) {
+    const to = p.reports_to_user_id;
+    if (to && to !== p.user_id && personIds.has(to)) peopleUnder.set(to, [...(peopleUnder.get(to) ?? []), p]);
+    else topPeople.push(p);
+  }
+  // A loop (refused server side) reaches no top: draw its people as tops.
+  const reached = new Set<string>();
+  const reach = (id: string) => { if (reached.has(id)) return; reached.add(id); for (const r of peopleUnder.get(id) ?? []) reach(r.user_id); };
+  for (const p of topPeople) reach(p.user_id);
+  for (const p of people) if (!reached.has(p.user_id)) { topPeople.push(p); reach(p.user_id); }
 
   const rolesUnderUser = new Map<string, OrgRole[]>();
   const rolesUnderRole = new Map<string, OrgRole[]>();
@@ -379,20 +392,30 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const id = personNodeId(p.user_id);
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
+    // The same cycle cut as roles: a loop in the snapshot draws nothing twice.
+    const reports = visiting.has(id) ? [] : (peopleUnder.get(p.user_id) ?? []);
+    visiting.add(id);
+    const reportBranches = collapsed ? [] : reports.map(personBranch);
+    visiting.delete(id);
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id) + (full ? personFullExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
-      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch)],
+      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch), ...reportBranches],
       stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "user", user_id: p.user_id }, id, p, view, filed, product ? underProject : undefined),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? p.total : 0;
-    if (collapsed) b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length;
+    if (collapsed) {
+      visiting.add(id);
+      b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length
+        + reports.reduce((n, r) => n + 1 + subtreeCount(personBranch(r)), 0);
+      visiting.delete(id);
+    }
     return b;
   };
 
   const roots = [
     ...(product?.mission ? [leaf("mission", MISSION_NODE_ID, product.mission)] : []),
-    ...people.map(personBranch),
+    ...topPeople.map(personBranch),
     ...orphanRoles.sort(byName).map(roleBranch),
   ];
   if (unowned.length) {

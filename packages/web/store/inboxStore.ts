@@ -4572,26 +4572,29 @@ type LensRole = {
   reports_to: { kind: "user"; user_id: string } | { kind: "role"; role_id: string };
   standing?: { conversation_id?: string } | null;
 };
+type LensPerson = { user_id: string; name: string; image?: string; reports_to_user_id?: string };
 export type OrgLensSources = {
   tasks: Record<string, Pick<TaskItem, "project_id">>;
   plans: Record<string, Pick<PlanItem, "project_id">>;
   projects: Record<string, Pick<ProjectItem, "_id" | "title">>;
   initiatives: Record<string, { _id: string; title: string; status: string; priority?: string; project_ids: string[]; parent_initiative_id?: string }>;
   roles: readonly LensRole[];
+  /** The workspace's people and who each reports to (orgTree.people). */
+  people: readonly LensPerson[];
   meId: string | null;
   // Every cached row, for a report's standing session: an anchor lives in its
   // own space and is rarely in the active set, but its report always leads
   // with it.
   sessions: Record<string, InboxSession>;
 };
-export type OrgLensGroup = { key: string; label: string; items: InboxSession[]; roleId?: string };
+export type OrgLensGroup = { key: string; label: string; items: InboxSession[]; roleId?: string; userId?: string; image?: string };
 
 type OrgLensState = {
   tasks: OrgLensSources["tasks"];
   plans: OrgLensSources["plans"];
   projects: OrgLensSources["projects"];
   initiatives: OrgLensSources["initiatives"];
-  orgTree: { roles: readonly LensRole[] } | null;
+  orgTree: { roles: readonly LensRole[]; people?: readonly LensPerson[] } | null;
   currentUser?: any;
   sessions: Record<string, InboxSession>;
 };
@@ -4599,6 +4602,7 @@ export function orgLensSourcesOf(state: Partial<OrgLensState> & { sessions: Reco
   return {
     tasks: state.tasks ?? {}, plans: state.plans ?? {}, projects: state.projects ?? {}, initiatives: state.initiatives ?? {},
     roles: state.orgTree?.roles ?? [],
+    people: state.orgTree?.people ?? [],
     meId: state.currentUser?._id?.toString?.() ?? null,
     sessions: state.sessions,
   };
@@ -4635,27 +4639,51 @@ function goalOfProjectMap(initiatives: OrgLensSources["initiatives"]): Map<strin
   return out;
 }
 
-// role id → the viewer's direct report it sits under (itself, when it reports
-// to the viewer), or null for a role outside the viewer's line.
-function reportRootResolver(roles: readonly LensRole[], meId: string | null): (roleId: string | null | undefined) => string | null {
-  const byId = new Map(roles.map((r) => [String(r._id), r]));
-  const memo = new Map<string, string | null>();
-  return (roleId) => {
+// A report group's key: a role's id, or `person:<user id>` for a person.
+const personReportKey = (userId: string) => `person:${userId}`;
+
+// The viewer's direct report a role or a person sits under, as a group key: a
+// role that reports to the viewer is its own report; a role under a person,
+// and a person under a person, fold into the person who reports to the
+// viewer. Null for anything outside the viewer's line.
+function reportRootResolver(src: Pick<OrgLensSources, "roles" | "people" | "meId">): { ofRole: (roleId: string | null | undefined) => string | null; ofPerson: (userId: string | null | undefined) => string | null } {
+  const { meId } = src;
+  const byId = new Map(src.roles.map((r) => [String(r._id), r]));
+  const managerOf = new Map(src.people.map((p) => [String(p.user_id), p.reports_to_user_id ? String(p.reports_to_user_id) : undefined]));
+  const personMemo = new Map<string, string | null>();
+  const ofPerson = (userId: string | null | undefined): string | null => {
+    if (!userId || !meId) return null;
+    const start = String(userId);
+    if (personMemo.has(start)) return personMemo.get(start)!;
+    let root: string | null = null;
+    let cur: string | undefined = start;
+    for (let depth = 0; cur && cur !== meId && depth < 64; depth++) {
+      const up = managerOf.get(cur);
+      if (up === meId) { root = personReportKey(cur); break; }
+      cur = up;
+    }
+    personMemo.set(start, root);
+    return root;
+  };
+  const roleMemo = new Map<string, string | null>();
+  const ofRole = (roleId: string | null | undefined): string | null => {
     if (!roleId || !meId) return null;
     const start = String(roleId);
-    if (memo.has(start)) return memo.get(start)!;
+    if (roleMemo.has(start)) return roleMemo.get(start)!;
     let cur = byId.get(start);
     let root: string | null = null;
     for (let depth = 0; cur && depth < 32; depth++) {
       if (cur.reports_to.kind === "user") {
-        root = cur.reports_to.user_id === meId && cur.status !== "retired" ? String(cur._id) : null;
+        const to = cur.reports_to.user_id;
+        root = to === meId ? (cur.status !== "retired" ? String(cur._id) : null) : ofPerson(to);
         break;
       }
       cur = byId.get(cur.reports_to.role_id);
     }
-    memo.set(start, root);
+    roleMemo.set(start, root);
     return root;
   };
+  return { ofRole, ofPerson };
 }
 
 const bySizeThenLabel = (a: OrgLensGroup, b: OrgLensGroup) => b.items.length - a.items.length || a.label.localeCompare(b.label);
@@ -4666,22 +4694,35 @@ export function groupSessionsForOrgLens(
   src: OrgLensSources,
 ): { groups: OrgLensGroup[]; projectGroups: Array<{ name: string; items: InboxSession[] }> } {
   if (mode === "reports") {
-    const rootOf = reportRootResolver(src.roles, src.meId);
+    const { ofRole, ofPerson } = reportRootResolver(src);
     const { primaryGroups, projectGroups } = groupSessionsBy(
       items,
-      (sess) => rootOf(sess.standing_role_id ?? sess.org_role_id),
-      // Reports in the org's own order; each leads with its standing session,
-      // fetched from the cache when the inbox has it set aside.
-      (byRole) => src.roles.flatMap((role) => {
-        const roleId = String(role._id);
-        if (rootOf(roleId) !== roleId) return [];
-        const leadId = role.standing?.conversation_id;
-        const rest = (byRole.get(roleId) ?? []).filter((x) => x._id !== leadId).sort(byActivity);
-        const lead = (leadId && byRole.get(roleId)?.find((x) => x._id === leadId)) || (leadId ? src.sessions[leadId] : undefined);
-        const leadRow = lead && !lead.is_pinned && !lead.inbox_killed_at ? [lead] : [];
-        const list = [...leadRow, ...rest];
-        return list.length ? [{ key: roleId, label: role.name, items: list, roleId }] : [];
-      }),
+      // A session filed under a role goes where the role goes; any other goes
+      // with the person it belongs to. The items are what the inbox already
+      // shows, so a report's group never holds a session the viewer could not see.
+      (sess) => {
+        const roleId = sess.standing_role_id ?? sess.org_role_id;
+        return roleId ? ofRole(roleId) : ofPerson(sess.owner_user_id ?? sess.user_id);
+      },
+      // Reports in the org's own order, roles then people; a role leads with
+      // its standing session, fetched from the cache when the inbox has it set aside.
+      (byKey) => [
+        ...src.roles.flatMap((role) => {
+          const roleId = String(role._id);
+          if (ofRole(roleId) !== roleId) return [];
+          const leadId = role.standing?.conversation_id;
+          const rest = (byKey.get(roleId) ?? []).filter((x) => x._id !== leadId).sort(byActivity);
+          const lead = (leadId && byKey.get(roleId)?.find((x) => x._id === leadId)) || (leadId ? src.sessions[leadId] : undefined);
+          const leadRow = lead && !lead.is_pinned && !lead.inbox_killed_at ? [lead] : [];
+          const list = [...leadRow, ...rest];
+          return list.length ? [{ key: roleId, label: role.name, items: list, roleId }] : [];
+        }),
+        ...src.people.flatMap((p): OrgLensGroup[] => {
+          const key = personReportKey(String(p.user_id));
+          const list = p.reports_to_user_id === src.meId ? byKey.get(key) : undefined;
+          return list?.length ? [{ key, label: p.name, items: list.sort(byActivity), userId: String(p.user_id), image: p.image }] : [];
+        }),
+      ],
     );
     return { groups: primaryGroups, projectGroups };
   }
@@ -4725,8 +4766,18 @@ function lensRoleSig(roles: readonly LensRole[]): string {
   }
   return sig;
 }
+// The people's names, faces and who each reports to: never their presence or session counts.
+const lensPeopleSigs = new WeakMap<object, string>();
+function lensPeopleSig(people: readonly LensPerson[]): string {
+  let sig = lensPeopleSigs.get(people);
+  if (sig === undefined) {
+    sig = people.map((p) => `${p.user_id}|${p.name}|${p.image ?? ""}|${p.reports_to_user_id ?? ""}`).join("\n");
+    lensPeopleSigs.set(people, sig);
+  }
+  return sig;
+}
 export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } } }): string {
-  const roles = lensRoleSig(state.orgTree?.roles ?? []);
+  const roles = lensRoleSig(state.orgTree?.roles ?? []) + "\u0002" + lensPeopleSig(state.orgTree?.people ?? []);
   if (!isOrgLensMode(resolveInboxViewMode(state.clientState.ui))) return roles;
   return [roles, lensTaskSig(state.tasks), lensTaskSig(state.plans), lensProjectSig(state.projects), lensGoalSig(state.initiatives)].join("\u0001");
 }
@@ -4735,7 +4786,8 @@ export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inb
 // only lenses that would change the list.
 export function orgLensAvailable(mode: OrgLensMode, items: InboxSession[], src: OrgLensSources): boolean {
   if (mode === "reports") {
-    return !!src.meId && src.roles.some((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === src.meId);
+    return !!src.meId && (src.roles.some((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === src.meId)
+      || src.people.some((p) => p.reports_to_user_id === src.meId));
   }
   if (mode === "goal" && !Object.values(src.initiatives).some((g) => OPEN_GOAL.has(g.status) && g.project_ids.length > 0)) return false;
   return items.some((x) => !!sessionProjectId(x, src));

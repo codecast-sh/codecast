@@ -14,6 +14,10 @@ const message = (id: string, channelId: string, rootId?: string): ChatMessageRow
 });
 const none = () => undefined;
 const pause = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
+// A chain of fetches lands at the runner's pace, not on a fixed clock.
+const until = async (done: () => boolean, ms = 2000) => {
+  for (const end = Date.now() + ms; !done() && Date.now() < end;) await pause(5);
+};
 const workers: ReturnType<typeof createChatPrefetcher>[] = [];
 afterEach(() => { for (const worker of workers.splice(0)) worker.dispose(); });
 
@@ -136,7 +140,7 @@ describe("the prefetch worker", () => {
         ? { root: message("root", "c"), replies: [message("reply", "c", "root"), message("sibling", "c", "root")] }
         : { messages: [message("channel-tip", "c")] });
     h.worker.update([row("c", "channel-tip")], [notification("c", "reply")]);
-    await pause(60);
+    await until(() => h.calls.length >= 3 && !!h.cache.sibling);
     expect(h.calls.map(t => t.kind)).toEqual(["channel", "message", "thread"]);
     expect(h.cache.sibling).toBeDefined();
     h.worker.update([row("c", "channel-tip")], [notification("c", "reply")]);

@@ -94,6 +94,8 @@ import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useDesktopAppWindow } from "../../hooks/useDesktopWindowRole";
+import { useNavSpacesOn } from "../../hooks/useNavSpaces";
+import { useIsPhone } from "../../hooks/useIsPhone";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
 import "../../components/chat/chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -210,16 +212,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const zenMode = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
   const headTitlebarRef = useTitlebarHead<HTMLElement>();
   const inAppWindow = useDesktopAppWindow();
-  const narrowViewport = useSyncExternalStore(
-    (cb) => {
-      if (typeof window === "undefined") return () => {};
-      const mq = window.matchMedia("(max-width: 768px)");
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
-    },
-    () => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 768px)").matches),
-    () => false,
-  );
+  const narrowViewport = useIsPhone();
   // One channel list on screen at a time: the app sidebar lists the channels,
   // so the page's own rail appears only when that sidebar is out of the way —
   // collapsed, zen mode, or a phone-width viewport. Collapsing the sidebar IS
@@ -228,7 +221,10 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   // the community page always carries its own rail (and a visitor has no
   // sidebar at all).
   // The Chat window draws no sidebar either, so the rail is the page's there.
-  const showInlineRail = community || navCollapsed || zenMode || narrowViewport || !!inAppWindow;
+  // With the space rail on (lib/navSpaces), Chat is a space whose column is
+  // this rail: the sidebar column folds away here and never lists rooms.
+  const spacesOn = useNavSpacesOn();
+  const showInlineRail = community || spacesOn || navCollapsed || zenMode || narrowViewport || !!inAppWindow;
   // Switching workspace writes BOTH the local mirror and the canonical
   // users.active_team_id (hooks/useSwitchWorkspace) — one path for every caller.
   const switchWorkspace = useSwitchWorkspace();
