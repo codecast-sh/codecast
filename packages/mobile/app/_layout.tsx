@@ -25,6 +25,7 @@ import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
+import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
 import * as Font from 'expo-font';
 import { Alert } from 'react-native';
@@ -137,7 +138,7 @@ function RootLayout() {
 
   // binaries without the native module (guarded require → no-op).
 
-  useEffect(() => { startCallKitBridge(); }, []);
+  useEffect(() => { if (!STORE_SHOTS) startCallKitBridge(); }, []);
 
   // Splash stays up past fonts. AuthProvider releases it once the SQLite
   // cache has hydrated (clientStateInitialized) and local boot trust is
@@ -271,7 +272,7 @@ function RootLayoutNav() {
           <AuthProvider>
             <ThemeProvider value={navTheme}>
               <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-              <AnalyticsIdentify />
+              {STORE_SHOTS ? null : <AnalyticsIdentify />}
               <AuthGate>
                 {/* Back is a bare chevron: the tab group has no title, so a labeled
                     back button read "(tabs)" on every pushed screen. */}
@@ -357,7 +358,7 @@ function AnalyticsIdentify() {
   return null;
 }
 
-function AuthGate({ children }: { children: React.ReactNode }) {
+function RealAuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
@@ -406,3 +407,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     </>
   );
 }
+
+// Store shots mode (lib/storeShots/flag): the store already holds the fixture
+// world, so no feeder, push registration or CallKit runs; the Live Activity
+// still follows the store, for the Lock Screen shot.
+function StoreShotsGate({ children }: { children: React.ReactNode }) {
+  useLiveActivity();
+  return <>{children}</>;
+}
+
+const AuthGate = STORE_SHOTS ? StoreShotsGate : RealAuthGate;

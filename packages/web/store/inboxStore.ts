@@ -242,7 +242,7 @@ import { defaultAgentType } from "../lib/defaultAgent";
 import { retryHostedStart } from "../lib/startHostedConversation";
 import { isHostedUi, laneOf, simpleModeAllowed } from "../components/simple/lanePaths";
 import { readLaneHint, writeLaneHint, type LaneHint } from "../components/simple/laneBoot";
-import type { SessionMapLayout } from "../components/sessionMap/sessionMapModel";
+import type { SessionMapLayout, SessionMapView } from "../components/sessionMap/sessionMapModel";
 import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
@@ -1928,10 +1928,18 @@ export type ClientUI = {
   // The /org chart's "Expand all": every role and session card opened in
   // place. Stamped LWW like org_view.
   org_expand_all?: boolean;
+  // The /org chart's companion drawer (components/org/OrgPanel), closed by the
+  // person. Absent: open. A proposal or a session named in the address opens
+  // it whatever this says.
+  org_panel?: "closed";
   // The session map's arrangement (components/sessionMap): the piles the
   // person made, where each pile and loose card sits, and which piles are
   // folded. Stamped LWW: the desk is the same on every device.
   session_map?: SessionMapLayout;
+  // How the session map is sliced: grouping, sort, pile order and filters.
+  // Kept apart from the arrangement so a view change never enters its undo
+  // history. Stamped LWW like the arrangement.
+  session_map_view?: SessionMapView;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
