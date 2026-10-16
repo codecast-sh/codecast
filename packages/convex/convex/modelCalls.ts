@@ -47,9 +47,13 @@ const projectsOf = (scope: CallScope): Id<"projects">[] => scope.project_ids ?? 
  * first and answers `{ room: false }` without running `run` when the cap has
  * no room; otherwise runs it and settles whatever `run` charged, failed or
  * not. Every model call and embedding codecast pays for goes through here.
+ * A settle that fails (every call contends for the one budget row, and a
+ * burst of judging exhausts the conflict retries) goes to the scheduler,
+ * which retries it until it lands: a hold left behind keeps the cap full
+ * for the rest of the month (364 holds, $65 of a $400 cap, 2026-10-14).
  */
 export async function withinBudget<T>(
-  ctx: { runMutation: any },
+  ctx: { runMutation: any; scheduler: any },
   scope: CallScope,
   purpose: BudgetPurpose,
   held: number,
@@ -61,7 +65,12 @@ export async function withinBudget<T>(
   try {
     return { room: true, value: await run((usd) => (cost = usd)) };
   } finally {
-    await ctx.runMutation(internal.modelCalls.settle, { workspace: scope.workspace, purpose, held, cost, project_ids: projectsOf(scope) });
+    const settle = { workspace: scope.workspace, purpose, held, cost, project_ids: projectsOf(scope) };
+    try {
+      await ctx.runMutation(internal.modelCalls.settle, settle);
+    } catch {
+      await ctx.scheduler.runAfter(0, internal.modelCalls.settle, settle);
+    }
   }
 }
 
@@ -70,7 +79,7 @@ export async function withinBudget<T>(
  * anything when the cap has no room; otherwise charges what the call cost,
  * failed or not (a call that reported no usage is charged its prompt).
  */
-export async function runModelCall(ctx: { runMutation: any }, scope: CallScope, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, timeoutMs = 60_000): Promise<ModelCallResult> {
+export async function runModelCall(ctx: { runMutation: any; scheduler: any }, scope: CallScope, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, timeoutMs = 60_000): Promise<ModelCallResult> {
   const problem = modelCallProblem(spec);
   if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
   const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);

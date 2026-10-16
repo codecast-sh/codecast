@@ -182,11 +182,22 @@ jobs:
         # jsdom window installed on globalThis outlives the file that made it.
         # One mount test then decides what hundreds of later files see, so a
         # test passes alone and fails in the suite depending on file order.
+        # Four shards, one process each, run one after another: bun keeps every
+        # isolated file's global alive until its process exits (a file that
+        # imports the store holds ~8 MB after a full GC), so the whole suite in
+        # one process climbed past 11 GB, stalled in memory pressure and was
+        # terminated (exit 143) mid-file. A shard ends its process and frees it.
         # SIM_OUT: where the multiplayer sim writes each run's report and
         # events (docs/architecture/sync-sim.md), uploaded below on failure.
         env:
           SIM_OUT: ${{ runner.temp }}/sim
-        run: bun test --isolate
+        run: |
+          status=0
+          for shard in 1 2 3 4; do
+            echo "test-web shard $shard/4"
+            bun test --isolate --shard=$shard/4 || status=1
+          done
+          exit $status
 
       - name: Upload sim artifacts
         if: failure()

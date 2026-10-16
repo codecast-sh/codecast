@@ -14,6 +14,7 @@ import { userCanAccessRole } from "./lib/orgAccess";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
+import { personReportsToMap } from "./orgPeople";
 import { pendingOnLadder } from "./sessionDecisions";
 import { isScopeless, type Scope } from "./lib/orgScope";
 import { capsFor, countersFor, trustOf } from "./lib/orgCaps";
@@ -309,14 +310,17 @@ async function orgRoleRow(ctx: Ctx, role: any, anchors: ReturnType<typeof orgAnc
 // One member as the org payloads carry them, before presence and sessions.
 // A standing agent's bot account sits on the roster for routing; it is a
 // seat's identity, drawn once under its role or anchor, never a person.
-function orgPersonRow(user: any, uid: Id<"users">, userId: Id<"users">, roleById: Map<string, string>) {
+// `reportsTo` is who each member reports to (orgPeople.personReportsToMap).
+function orgPersonRow(user: any, uid: Id<"users">, userId: Id<"users">, roleById: Map<string, string>, reportsTo: Map<string, string>) {
   if (!user || user.is_bot) return null;
+  const manager = reportsTo.get(uid.toString());
   return {
     user_id: uid,
     name: user.name ?? user.email ?? "",
     image: user.image ?? undefined,
     role: roleById.get(uid.toString()) ?? "member",
     is_me: uid.toString() === userId.toString(),
+    ...(manager ? { reports_to_user_id: manager as Id<"users"> } : {}),
   };
 }
 
@@ -331,10 +335,11 @@ export async function computeOrgTree(ctx: Ctx, userId: Id<"users">, teamId: Id<"
   const team = teamId ? await ctx.db.get(teamId) : null;
   const caller = await ctx.db.get(userId);
   const roleById = new Map(scan.memberships.map((m: any) => [m.user_id.toString(), m.role ?? "member"]));
+  const reportsTo = personReportsToMap(scan.memberships);
 
   const people = await Promise.all(scan.memberIds.map(async (uid) => {
     const user = uid.toString() === userId.toString() ? caller : await ctx.db.get(uid);
-    const person = orgPersonRow(user, uid, userId, roleById);
+    const person = orgPersonRow(user, uid, userId, roleById, reportsTo);
     if (!person) return null;
     const mine = scan.byParent.get(`user:${uid.toString()}`) ?? [];
     return {
@@ -430,8 +435,9 @@ export async function computeOrgRoles(ctx: Ctx, userId: Id<"users">, teamId: Id<
   // filed under each person are the full tree's.
   const roleById = new Map<string, string>(memberships.map((m: any) => [m.user_id.toString(), m.role ?? "member"]));
   const memberIds: Id<"users">[] = teamId ? memberships.map((m: any) => m.user_id) : [userId];
+  const reportsTo = personReportsToMap(memberships);
   const people = await Promise.all(memberIds.map(async (uid) =>
-    orgPersonRow(uid.toString() === userId.toString() ? caller : await ctx.db.get(uid), uid, userId, roleById)));
+    orgPersonRow(uid.toString() === userId.toString() ? caller : await ctx.db.get(uid), uid, userId, roleById, reportsTo)));
   const anchorRows = anchors.map((a: any) => orgAnchorRow(a));
   return {
     workspace: orgWorkspaceOf(userId, teamId, team, caller),

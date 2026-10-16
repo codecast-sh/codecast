@@ -44,6 +44,8 @@ import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChang
 export type OrgIntent =
   | { kind: "moveSession"; id: string; conversation_id: string; target: OrgParentRef; at: number }
   | { kind: "moveRole"; id: string; role_id: string; reports_to: OrgParentRef; at: number }
+  /** A person moves under another person (null: reports to nobody). */
+  | { kind: "movePerson"; id: string; user_id: string; reports_to_user_id: string | null; at: number }
   | { kind: "follow"; id: string; role_short_id: string; channel_id: string; follow: boolean; at: number }
   /** A role's fields (pause and resume, caps, trust, name, charter, scope):
    *  `from` holds the prior value of every touched field, so a refusal
@@ -280,6 +282,8 @@ export type OrgSliceActions = {
   reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => Promise<ReparentResult | undefined>;
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
+  /** Change who a team member reports to (null: nobody). Dispatch runs orgPeople.reparentPerson. */
+  reparentOrgPerson: (teamId: string, userId: string, reportsTo: string | null) => void;
   createOrgRole: (input: OrgCreateRoleInput) => void;
   /** `opts.leave_sessions`: with a scope that gains refs, the sessions in it
    *  stay with their owner (R1). The dispatch's; it paints nothing. */
@@ -573,6 +577,10 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       const role = tree.roles.find((r) => r._id === intent.role_id);
       return !role || sameParent(role.reports_to, intent.reports_to);
     }
+    case "movePerson": {
+      const person = tree.people.find((p) => p.user_id === intent.user_id);
+      return !person || (person.reports_to_user_id ?? null) === intent.reports_to_user_id;
+    }
     case "follow": {
       const role = tree.roles.find((r) => r.short_id === intent.role_short_id);
       if (!role) return true;
@@ -687,6 +695,14 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       if (orgRoleReparentMakesCycle(tree, intent.role_id, intent.reports_to)) return;
       role.reports_to = intent.reports_to;
       role.updated_at = Math.max(role.updated_at, intent.at);
+      return;
+    }
+    case "movePerson": {
+      const person = tree.people.find((p) => p.user_id === intent.user_id);
+      if (!person || (person.reports_to_user_id ?? null) === intent.reports_to_user_id) return;
+      if (intent.reports_to_user_id && orgPersonReparentMakesCycle(tree, intent.user_id, intent.reports_to_user_id)) return;
+      if (intent.reports_to_user_id) person.reports_to_user_id = intent.reports_to_user_id;
+      else delete person.reports_to_user_id;
       return;
     }
     case "follow": {
@@ -914,7 +930,7 @@ function putReplyBack(row: { reply?: OrgChangeReply }, from: OrgChangeReply | un
  *  move re-buckets a session and its counts, a retire re-homes a whole subtree,
  *  a follow edits a list. They are put back by rebuilding from the server's own
  *  last tree instead (rebuildOrgTreeFromServer). */
-const NO_REVERT_TREE_KINDS = new Set<OrgIntent["kind"]>(["moveSession", "moveRole", "retireRole", "follow"]);
+const NO_REVERT_TREE_KINDS = new Set<OrgIntent["kind"]>(["moveSession", "moveRole", "movePerson", "retireRole", "follow"]);
 
 /**
  * Put the tree back to the server's last word with the still-open intents
@@ -949,6 +965,7 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
     case "retireRole": return `Retiring @${intent.handle} ${tail}; the role is back.`;
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
+    case "movePerson": return `Moving the person ${tail}; they are back where they were.`;
     case "follow": return `${intent.follow ? "Following" : "Unfollowing"} the channel ${tail}.`;
     case "undoChange": return `${intent.redo ? "Applying" : "Taking back"} "${intent.line}"${intent.redo ? " again" : ""} ${tail}; the record is as it was.`;
   }
@@ -1047,6 +1064,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
   const drops = state.orgIntents.filter((i) =>
     (action === "reparentOrgSession" && i.kind === "moveSession" && i.conversation_id === args[0]) ||
     (action === "reparentOrgRole" && i.kind === "moveRole" && i.role_id === args[0]) ||
+    (action === "reparentOrgPerson" && i.kind === "movePerson" && i.user_id === args[1]) ||
     (action === "followOrgChannel" && i.kind === "follow" && i.role_short_id === args[0] && i.channel_id === args[1]) ||
     (action === "retireOrgRole" && i.kind === "retireRole" && i.role_id === args[0]));
   for (const i of drops) { state.dropOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
@@ -1146,6 +1164,7 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
   const subjectOf = (i: OrgIntent) =>
     i.kind === "moveSession" ? `s:${i.conversation_id}`
     : i.kind === "moveRole" ? `r:${i.role_id}`
+    : i.kind === "movePerson" ? `p:${i.user_id}`
     : i.kind === "follow" ? `f:${i.role_short_id}:${i.channel_id}`
     : i.kind === "decideChange" || i.kind === "noteChange" ? `c:${i.change_id}`
     : i.kind === "withdraw" ? `w:${i.proposal_id}`
@@ -1162,6 +1181,17 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     : "staff";
   const key = subjectOf(intent);
   draft.orgIntents = [...draft.orgIntents.filter((i) => subjectOf(i) !== key), intent];
+}
+
+/** Would making `userId` report to `managerId` close a loop? Walk up from the manager. */
+export function orgPersonReparentMakesCycle(tree: Pick<OrgTree, "people">, userId: string, managerId: string): boolean {
+  const up = new Map(tree.people.map((p) => [p.user_id, p.reports_to_user_id]));
+  let cur: string | undefined = managerId;
+  for (let depth = 0; cur && depth < 64; depth++) {
+    if (cur === userId) return true;
+    cur = up.get(cur);
+  }
+  return false;
 }
 
 /** Would making `role` report to `target` close a loop? Walk up from the target. */
@@ -1376,6 +1406,17 @@ export function createOrgSlice(): OrgSliceImpl {
         applyOrgIntent(tree, intent, row);
         pushIntent(this, intent);
       }
+    }),
+
+    reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, reportsTo: string | null) {
+      const tree = this.orgTree;
+      if (!tree) return;
+      const person = tree.people.find((p) => p.user_id === userId);
+      if (!person || (person.reports_to_user_id ?? null) === reportsTo) return;
+      if (reportsTo && orgPersonReparentMakesCycle(tree, userId, reportsTo)) return;
+      const intent: OrgIntent = { kind: "movePerson", id: intentId(), user_id: userId, reports_to_user_id: reportsTo, at: Date.now() };
+      applyOrgIntent(tree, intent);
+      pushIntent(this, intent);
     }),
 
     reparentOrgRole: asyncAction(function (this: OrgDraft, roleId: string, reportsTo: OrgParentRef, _note?: string) {

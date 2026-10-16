@@ -14,7 +14,9 @@ setDefaultTimeout(60_000);
 let dir: string, laptop: string, hostRepo: string, host: RemoteHost;
 let saved: NodeJS.ProcessEnv;
 
-const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe" }).trim();
+// The env goes by name: under bun a child spawned without one does not see
+// the HOME and GIT_CONFIG_GLOBAL each test sets, and a CI runner has no git user.
+const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe", env: process.env }).trim();
 const write = (repo: string, rel: string, text: string) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
 const read = (repo: string, rel: string) => fs.readFileSync(path.join(repo, rel), "utf-8");
 const commit = (repo: string, rel: string, text: string) => { write(repo, rel, text); git(repo, "add", rel); git(repo, "commit", "-qm", `edit ${rel}`); return git(repo, "rev-parse", "HEAD"); };
@@ -41,7 +43,7 @@ beforeEach(() => {
   git(laptop, "commit", "-qm", "base");
   hostRepo = path.join(dir, "host", "src", "app");
   fs.mkdirSync(path.dirname(hostRepo), { recursive: true });
-  execFileSync("git", ["clone", "-q", laptop, hostRepo]);
+  execFileSync("git", ["clone", "-q", laptop, hostRepo], { env: process.env });
   host = { address: "host.invalid", user: "u", keyPath: "/dev/null", remoteBaseDir: path.join(dir, "host", "work"), homeDir: path.join(dir, "host") };
 });
 
