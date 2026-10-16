@@ -4,6 +4,8 @@ import {
   normalizeThreadState,
   threadStateHeadline,
   threadStateCardLine,
+  threadStateRows,
+  threadStateAskParts,
   threadStateFreshness,
   parseThreadStateStatus,
   hasThreadState,
@@ -154,24 +156,92 @@ describe("parseThreadStateStatus", () => {
 });
 
 describe("threadStateCardLine", () => {
-  test("prefers the Status: line — what is happening beats what it is about", () => {
-    const text = "Projects as a first-class place to work\nStatus: all four done, tests green\nNext: nothing blocking";
-    expect(threadStateCardLine(text)).toBe("all four done, tests green");
+  test("takes the ask: a You: line beats the headline", () => {
+    const text = "Release is waiting on a signing key\nYou: add it to the repo secrets\nNext: re-run the release";
+    expect(threadStateCardLine(text)).toBe("add it to the repo secrets");
   });
 
-  test("a Blocked: line qualifies when there is no Status: line", () => {
+  test("an older note's Blocked: line counts as the ask", () => {
     const text = "Auth fix\nBlocked: needs a prod key\nNext: deploy";
     expect(threadStateCardLine(text)).toBe("needs a prod key");
   });
 
-  test("falls back to the headline when no labeled line exists", () => {
+  test("a Status: line never takes the slot, even ahead of a Blocked: line", () => {
+    const status = "Projects as a first-class place to work\nStatus: all four done, tests green\nNext: nothing blocking";
+    expect(threadStateCardLine(status)).toBe("Projects as a first-class place to work");
+    const both = "Build box login needs a token\nStatus: deploys wait on CI\nBlocked: the token file is empty";
+    expect(threadStateCardLine(both)).toBe("the token file is empty");
+  });
+
+  test("under a Goal: headline, the Status: line says where it stands", () => {
+    expect(threadStateCardLine("Goal: ship the chart\nStatus: waiting on review")).toBe("waiting on review");
+    expect(threadStateCardLine("Goal: ship the chart\nStatus: waiting on review\nBlocked: needs a key")).toBe("needs a key");
+  });
+
+  test("falls back to the headline when there is no ask", () => {
     expect(threadStateCardLine("Waiting on CI — nothing to decide yet")).toBe(
       "Waiting on CI — nothing to decide yet",
     );
   });
 
-  test("finds a bulleted Status: line and strips the bullet", () => {
-    expect(threadStateCardLine("Big migration\n- Status: half done")).toBe("half done");
+  test("shows an ask's words, not the command that ends it", () => {
+    const text = "Build box login is waiting on a token\nYou: paste it over ssh: `ssh -t intern 'cat > ~/.token'`";
+    expect(threadStateCardLine(text)).toBe("paste it over ssh");
+    expect(threadStateCardLine("Head\nYou: `gh secret set KEY`")).toBe("gh secret set KEY");
+    expect(threadStateCardLine("Head\nYou: run `bun test` and say if it passes")).toBe("run bun test and say if it passes");
+  });
+
+  test("a single Status: line still reads as its content", () => {
+    expect(threadStateCardLine("Status: deploying pass 3")).toBe("deploying pass 3");
+  });
+});
+
+describe("threadStateRows", () => {
+  test("one row per line after the headline, labeled by the word before the colon", () => {
+    const text = "Waiting on CI for the sync fix\nDone: fix pushed · unit tests green\n\nNext: 3 PM re-check";
+    expect(threadStateRows(text)).toEqual([
+      { label: "Done", text: "fix pushed · unit tests green" },
+      { label: "Next", text: "3 PM re-check" },
+    ]);
+  });
+
+  test("older labels and unlabeled lines keep their place", () => {
+    const text = "Big migration\nStatus: half done\n- Likely cause: the index\nthe rest waits on review";
+    expect(threadStateRows(text)).toEqual([
+      { label: "Status", text: "half done" },
+      { label: "Likely cause", text: "the index" },
+      { label: null, text: "the rest waits on review" },
+    ]);
+  });
+
+  test("a sentence with a colon is not a label", () => {
+    expect(threadStateRows("Head\nRun this when CI is green: deploy.sh")).toEqual([
+      { label: null, text: "Run this when CI is green: deploy.sh" },
+    ]);
+  });
+
+  test("a headline alone has no rows", () => {
+    expect(threadStateRows("Shipped: all four fixes verified")).toEqual([]);
+  });
+
+  test("a station's json report is left out, the result keeps it", () => {
+    const text = 'Reproduced the miss on the base\n```json\n{"reproduced": true}\n```\nNext: hand to implement';
+    expect(threadStateRows(text)).toEqual([{ label: "Next", text: "hand to implement" }]);
+    expect(threadStateResult(text)).toBe('{"reproduced": true}');
+  });
+
+  test("a report the display cap cut mid-block is left out too", () => {
+    expect(threadStateRows('Proven\nNote: see below\n```json\n{"outcome": "red", "evidence": "lo…')).toEqual([
+      { label: "Note", text: "see below" },
+    ]);
+  });
+});
+
+describe("threadStateAskParts", () => {
+  test("splits off a command that ends the ask, and only one that ends it", () => {
+    expect(threadStateAskParts("paste it: `ssh box 'x'`")).toEqual({ prose: "paste it", command: "ssh box 'x'" });
+    expect(threadStateAskParts("run `bun test` first")).toEqual({ prose: "run `bun test` first", command: null });
+    expect(threadStateAskParts("approve the gate")).toEqual({ prose: "approve the gate", command: null });
   });
 });
 

@@ -36,7 +36,8 @@ describe("when the fix landed", () => {
   const newer = git("rev-parse", "--short=10", "origin/main~1");
   const at = (sha: string) => Number(git("show", "-s", "--format=%ct", sha)) * 1000;
 
-  test("the newest landed commit the note names", () => {
+  // A pull request's CI checkout (fetch-depth 2) carries no origin/main at all.
+  test.skipIf(!newer)("the newest landed commit the note names", () => {
     expect(fixLandedAt(import.meta.dir, `Already fixed: ${older}, then ${newer} live.`)).toBe(Math.max(at(older), at(newer)));
   });
 
