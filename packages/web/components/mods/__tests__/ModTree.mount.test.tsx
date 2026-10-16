@@ -13,7 +13,8 @@ const { MemoryRouter } = await import("react-router");
 const { replaceGlobals } = await import("../../../test-helpers/globals");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { MOD_ELEMENTS } = await import("@codecast/shared/contracts/mods");
-const { ConvexProvider, ConvexReactClient } = await import("convex/react");
+const { ConvexProvider } = await import("convex/react");
+const { offlineConvexClient } = await import("../../../test-helpers/offlineConvex");
 const { ModTree, modStyle } = await import("../ModTree");
 const { ObjectsPage } = await import("../ObjectsPage");
 const { ObjectPage } = await import("../ObjectPage");
@@ -34,8 +35,7 @@ const fn = (id: string) => ({ $fn: id });
 
 // A Ref is the real entity pill, which subscribes to queries: a client whose
 // socket never opens lets it render its fallback, as it does offline.
-class NoSocket { readyState = 0; onopen = null; onclose = null; onmessage = null; onerror = null; send() {} close() {} }
-const client = new ConvexReactClient("https://example.convex.cloud", { webSocketConstructor: NoSocket as any, unsavedChangesWarning: false });
+const client = offlineConvexClient("https://example.convex.cloud");
 
 const EVERY: any = {
   t: "Column", p: { gap: 3 }, c: [

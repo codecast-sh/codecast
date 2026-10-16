@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { ClaudeArtifactEmbed, PublishedPageEmbed } from "../PublishedPageEmbed";
@@ -9,7 +9,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-const client = new ConvexReactClient("https://example.convex.cloud");
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
+const client = offlineConvexClient("https://example.convex.cloud");
 // The page's embed info answers (an open page, so the frame mounts); every other query is still loading.
 const INFO = [{ slug: "my-page", title: "A page", kind: "html", version: 1, gated: false, user: null }];
 const watchQuery = spyOn(client, "watchQuery").mockImplementation(((query: unknown) => ({

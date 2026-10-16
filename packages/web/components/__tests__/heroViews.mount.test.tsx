@@ -7,7 +7,7 @@ import { afterAll, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { MemoryRouter } from "react-router";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { Command } from "cmdk";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -16,6 +16,7 @@ import { KanbanCard } from "../tasks/TaskRow";
 import { DocRow } from "../docs/DocRow";
 import { PaletteSessionRow, PaletteSearchResultRow } from "../PaletteRows";
 import { DecisionCompactCardView } from "../decisions/DecisionCompactCard";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
 const restoreGlobals = replaceGlobals({
@@ -43,7 +44,7 @@ afterAll(() => {
 });
 
 const NOW = Date.now();
-const convex = new ConvexReactClient("https://example.convex.cloud");
+const convex = offlineConvexClient("https://example.convex.cloud");
 
 async function mount(node: React.ReactNode) {
   const container = document.createElement("div");

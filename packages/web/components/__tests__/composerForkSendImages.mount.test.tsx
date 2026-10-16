@@ -9,10 +9,11 @@ mock.module("sonner", () => ({
 }));
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
 import { pendingImageUploads } from "../../lib/draftImages";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // Fork and send (the fork button, Cmd+Shift+Enter, or Enter with a message
 // selected) delivers the composer into a new branch. The images attached in
@@ -37,7 +38,7 @@ const flushUntil = async (ready: () => boolean, budgetMs = 3_000) => {
 };
 
 function fakeConvex() {
-  const client = new ConvexReactClient("https://example.convex.cloud");
+  const client = offlineConvexClient("https://example.convex.cloud");
   (client as any).mutation = async () => "https://upload.test/storage";
   (client as any).query = async () => null;
   (client as any).watchQuery = () => ({
