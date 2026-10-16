@@ -65,6 +65,7 @@ export function inspectModSource(files: Record<string, string>, manifest: ModMan
     const w = WRITE_OF[c];
     if (w && !canWrite(manifest, w)) missing.push(`permissions.write "${w}" (for $.${c})`);
     if (c === "http.fetch" && !manifest.permissions?.fetch) missing.push(`permissions.fetch (for $.http.fetch)`);
+    if (c === "connector.read" && !manifest.permissions?.connectors?.length) missing.push(`permissions.connectors (for $.connector.read)`);
   }
   const unserved: string[] = [];
   const served = (kind: string, id: string) =>
