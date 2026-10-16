@@ -238,7 +238,10 @@ describe("command groups stay off the boot graph", () => {
     // bc5b8ded2, orgSessionFiling.ts under it rode along on every command.
     // 4340 on 2026-10-16: the snippets workflow split (see the file count)
     // adds its header, import and re-export.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4340);
+    // 4343 with the pinned state rows: threadStateRows, the ask split and the
+    // new card line in contracts/threadState.ts (+2.6 KB), and the longer
+    // Thread state section in snippets.ts (+0.6 KB). No new file.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4343);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
