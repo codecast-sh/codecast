@@ -239,13 +239,13 @@ describe("sanitizeSuggestions", () => {
     ).toEqual(["alpha one", "beta two"]);
   });
 
-  test("confidence gates: <0.7 dropped, third pill needs >=0.85", () => {
+  test("confidence gates: <0.5 dropped, third pill needs >=0.7", () => {
     expect(
       sanitizeSuggestions(
         [
-          { text: "low ball guess", confidence: 0.5 },
+          { text: "low ball guess", confidence: 0.45 },
           { text: "solid answer", confidence: 0.9 },
-          { text: "decent answer", confidence: 0.75 },
+          { text: "decent answer", confidence: 0.55 },
         ],
         null,
       ),
@@ -255,7 +255,7 @@ describe("sanitizeSuggestions", () => {
         [
           { text: "option a", confidence: 0.95 },
           { text: "option b", confidence: 0.9 },
-          { text: "option c", confidence: 0.88 },
+          { text: "option c", confidence: 0.72 },
         ],
         null,
       ),
@@ -265,7 +265,7 @@ describe("sanitizeSuggestions", () => {
         [
           { text: "option a", confidence: 0.95 },
           { text: "option b", confidence: 0.9 },
-          { text: "option c", confidence: 0.8 },
+          { text: "option c", confidence: 0.65 },
         ],
         null,
       ),
