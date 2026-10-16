@@ -199,7 +199,7 @@ test("People: a role never moves under its own report, and a member moves only w
   await m.done();
 });
 
-test("People: a click on a card opens the page it already has", async () => {
+test("People: a session or a role opens in the drawer beside the chart; a person opens the page they already have", async () => {
   tree = ORG_FIXTURE;
   seedStore("people");
   pushed.length = 0;
@@ -207,9 +207,11 @@ test("People: a click on a card opens the page it already has", async () => {
   useInboxStore.setState({ orgTree: tree } as any);
   const { done } = await mount();
   await act(async () => { last().onOpenSession("fixture-session-1"); });
-  expect(pushed.at(-1)).toBe("/conversation/fixture-session-1");
+  expect(pushed.at(-1)).toBe("/org?session=fixture-session-1");
   await act(async () => { last().onOpenObject({ kind: "role", id: "fixture-role-growth" }); });
-  expect(pushed.at(-1)).toBe("/conversation/fixture-growth-conv");
+  expect(pushed.at(-1)).toBe("/org?session=fixture-growth-conv");
+  await act(async () => { last().onOpenObject({ kind: "person", id: "nobody" }); });
+  expect(pushed.at(-1)).toBe("/team/nobody");
   await done();
 });
 
@@ -244,5 +246,25 @@ test("a card opens in place from its toggle, and Expand all opens every card, is
   // Goals has no cards to open, so no control.
   await act(async () => { q("[data-org-view='goals']", el)!.click(); });
   expect(q("[data-org-expand-all]", el)).toBeNull();
+  await done();
+});
+
+test("the drawer: with no Head of People it offers the hire, behind the shared review; closed, the header brings it back", async () => {
+  tree = ORG_FIXTURE;
+  seedStore("people");
+  useInboxStore.setState({ orgTree: tree } as any);
+  const { el, done } = await mount();
+  expect(q("[data-org-panel='home']", el)).not.toBeNull();
+  expect(q("[data-org-panel-hire]", el)).not.toBeNull();
+  // One press never hires: it opens the review that names what starts.
+  await act(async () => { q("[data-hire-head]", el)!.click(); });
+  expect(q("[data-switch-review='Hire the Head of People']")).not.toBeNull();
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>("[data-switch-review] button")].find((b) => b.textContent?.startsWith("Not now"))!.click(); });
+  // Closing the drawer is the person's choice, kept; the header's control reopens it.
+  await act(async () => { q("[data-line-drawer-close]", el)!.click(); });
+  expect(uiWrites.at(-1)).toEqual({ org_panel: "closed" });
+  expect(q("[data-org-panel]", el)).toBeNull();
+  await act(async () => { q("[data-org-panel-open]", el)!.click(); });
+  expect(uiWrites.at(-1)).toEqual({ org_panel: undefined });
   await done();
 });
