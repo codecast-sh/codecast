@@ -6,7 +6,7 @@ import { isTeamMember, resolveTeamForPath, type DirectoryMapping } from "./priva
 import { validateManifest } from "@codecast/shared/contracts/mods";
 import type { Id } from "./_generated/dataModel";
 import { LOG_CAP } from "./modLogs";
-import { withDevice } from "./modLocal";
+import { teamSharedMods, withDevice } from "./modLocal";
 
 /**
  * Codecast mods (plan pl-839, shared/contracts/mods.ts). The CLI pushes a
@@ -41,14 +41,7 @@ export const webList = query({
       .query("mods")
       .withIndex("by_user_name", (q: any) => q.eq("user_id", userId))
       .collect();
-    let shared: any[] = [];
-    if (args.team_id && (await isTeamMember(ctx, userId, args.team_id))) {
-      const teamRows = await ctx.db
-        .query("mods")
-        .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id!))
-        .collect();
-      shared = teamRows.filter((r: any) => r.shared && String(r.user_id) !== String(userId));
-    }
+    const shared = await teamSharedMods(ctx, userId, args.team_id);
     const owners = new Map<string, any>();
     const rows = [...mine, ...shared];
     for (const row of rows) {

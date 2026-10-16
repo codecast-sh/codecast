@@ -585,7 +585,8 @@ export class ModRuntime {
       }
       case "local.meta": return this.runData("local.get", args);
       case "local.call": {
-        if (!this.row.is_mine) throw new Error("a local call reaches only your own mods");
+        // A shared mod's local half runs on its author's machines and answers every member of the team.
+        if (!this.row.is_mine && !this.row.shared) throw new Error("a local call reaches only your own mods and your team's shared ones");
         if (!bridge) throw new Error("not connected");
         return await bridge.callLocal(this.id, String(a0), a1 ?? null);
       }
