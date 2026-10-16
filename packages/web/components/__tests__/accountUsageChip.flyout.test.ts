@@ -26,6 +26,24 @@ describe("usage chip hover panel vs titlebar drag", () => {
   });
 });
 
+// The same dead strip closed the header faces' card as the pointer moved down
+// onto it, and any Radix popover opened from a header control.
+describe("every flyout over the titlebar opts out of drag", () => {
+  const noDragBlock = css.match(/\[data-flyout\],[^{]*\{([^}]+)\}/)?.[0] ?? "";
+
+  test("Radix floating layers are no-drag", () => {
+    expect(noDragBlock).toContain("[data-radix-popper-content-wrapper]");
+    expect(noDragBlock).toMatch(/-webkit-app-region:\s*no-drag/);
+  });
+
+  test("the face card band and the face chat bubble carry data-flyout", () => {
+    const row = readFileSync(join(web, "components/faces/FaceRow.tsx"), "utf8");
+    const chat = readFileSync(join(web, "components/faces/FaceChatLayer.tsx"), "utf8");
+    expect(row).toMatch(/className="face-row-below"[^>]*data-flyout/);
+    expect(chat).toMatch(/className="fc-bubble"\s+data-flyout/);
+  });
+});
+
 // The switcher is a fixture of the top bar. It used to go three ways: the
 // name vanished under 1460px (leaving a bare dot), a quiet or failed query
 // blanked the whole chip, and a machine with no reported account rendered

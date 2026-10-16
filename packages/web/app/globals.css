@@ -2225,14 +2225,15 @@ diffs-container {
 :is(.electron-drag-region, .titlebar-head) :is(button, a, input, textarea, select, [role="button"], [role="tab"], [role="combobox"], [role="menuitem"], [contenteditable="true"]) {
   -webkit-app-region: no-drag;
 }
-/* Hover flyouts that hang off the titlebar. A drag region eats pointer
-   events (the window manager takes the mouse; the renderer never sees it
-   enter), so a hover panel closes the moment you move onto it. Buttons
-   already opt out above; a panel is a div.
-   Modal layers likewise: Electron draws drag regions from the DOM regardless
-   of stacking, so a modal's controls over a draggable stretch of the header
-   (the image gallery's top-right actions) never get the click. */
+/* Anything that floats over the titlebar. A drag region eats pointer events
+   (the window manager takes the mouse; the renderer never sees it), and
+   Electron draws drag regions from the DOM regardless of stacking, so a
+   hover card whose top edge crosses the header band reads as a leave on
+   the way down and closes, and a modal's controls over a draggable stretch
+   never get the click. Every Radix layer (popover, hover card, tooltip,
+   menu) is covered by its wrapper; a hand-built flyout carries data-flyout. */
 [data-flyout],
+[data-radix-popper-content-wrapper],
 [aria-modal="true"] {
   -webkit-app-region: no-drag;
 }

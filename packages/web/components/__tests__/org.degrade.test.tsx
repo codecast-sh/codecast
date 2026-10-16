@@ -26,6 +26,7 @@ useInboxStore.setState({ orgTree: { ...ORG_FIXTURE, workspace: { kind: "team", i
 test("the org chart paints its cached people and roles with every query missing", async () => {
   const page = await mountPage("/org?show=map", { org: <OrgPage /> });
   try {
+    await page.waitFor(() => page.text().includes("Head of Growth"));
     expect(describeFailures(page)).toBe("");
     const text = page.text();
     expect(text).toContain("Head of Growth");

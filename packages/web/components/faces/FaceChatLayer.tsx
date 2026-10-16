@@ -150,6 +150,7 @@ function Bubble({ bubble, barRef }: { bubble: FaceBubble; barRef: RefObject<HTML
   return (
     <div
       className="fc-bubble"
+      data-flyout
       data-phase={bubble.phase}
       data-loud={loud ? "1" : undefined}
       role="status"

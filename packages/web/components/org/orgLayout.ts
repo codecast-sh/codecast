@@ -393,7 +393,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     // The same cycle cut as roles: a loop in the snapshot draws nothing twice.
-    const reports = visiting.has(id) ? [] : (peopleUnder.get(p.user_id) ?? []);
+    const reports = (peopleUnder.get(p.user_id) ?? []).filter((r) => !visiting.has(personNodeId(r.user_id)));
     visiting.add(id);
     const reportBranches = collapsed ? [] : reports.map(personBranch);
     visiting.delete(id);

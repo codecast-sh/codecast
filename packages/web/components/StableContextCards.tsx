@@ -308,8 +308,8 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
               toggle itself shows it. */}
           {!open && <span className="text-sol-cyan/80">{chosenMode ?? "auto"}</span>}
           {effectiveMode !== "off" && feed !== undefined && !(feed as any)?.error && (
-            <span className="opacity-70 truncate">
-              — {includedCount} {includedCount === 1 ? "session pointer" : "session pointers"} injected at start
+            <span className="opacity-70 truncate" title="Sessions the agent is pointed at when it starts">
+              · {includedCount} {includedCount === 1 ? "session" : "sessions"}
             </span>
           )}
         </button>

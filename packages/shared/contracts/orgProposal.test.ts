@@ -40,6 +40,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
   adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "Platform" },
+  file_session: { kind: "file_session", session: "jx7abcd", to: "@growth", title: "Launch thread" },
   charter_edit: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
@@ -111,7 +112,7 @@ describe("parseOrgProposalSpec", () => {
   test("a proposal holds one kind of work: a mixed spec is refused with how to split it; structure and goals are capped, records are not", () => {
     const r = parseOrgProposalSpec(spec);
     expect(r.spec).toBeNull();
-    expect(r.errors).toEqual(["a proposal holds one kind of work, and this one mixes 3 record changes (plan_status, task_status, project_status), 15 structure changes (role, projects, move, retire, scope, budget, trust, routine, project_meta, adopt, file, charter_edit, authority, hire, upgrade) and 4 goal changes (initiative, initiative_projects, initiative_owner, initiative_shape): post the records as one proposal, the structure as another and the goals as a third, each with its own title and summary"]);
+    expect(r.errors).toEqual(["a proposal holds one kind of work, and this one mixes 3 record changes (plan_status, task_status, project_status), 15 structure changes (role, projects, move, retire, scope, budget, trust, routine, project_meta, adopt, file, charter_edit, authority, hire, upgrade), 4 goal changes (initiative, initiative_projects, initiative_owner, initiative_shape) and 1 session filing change (file_session): post the records as one proposal, the structure as another, the goals as a third and the session filings as a fourth, each with its own title and summary"]);
     expect(orgProposalWork(spec.changes)).toBeNull();
     expect(orgProposalWork([{ change: GOOD.role }, { change: GOOD.move }])).toBe("structure");
     expect(orgProposalWork([])).toBeNull();
@@ -119,7 +120,7 @@ describe("parseOrgProposalSpec", () => {
     const tasks = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "task_status", task: `ct-${i}`, status: "done", reason: "landed" }, rationale: "r" }));
     const metas = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "project_meta", project: `pr-${i}`, priority: "p2" }, rationale: "r" }));
     const goals = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "initiative", title: `Goal ${i}`, description: "d", projects: ["pr-1"] }, rationale: "r" }));
-    expect(ORG_PROPOSAL_MAX).toEqual({ records: null, structure: 12, goals: 12 });
+    expect(ORG_PROPOSAL_MAX).toEqual({ records: null, structure: 12, goals: 12, sessions: null });
     expect(parseOrgProposalSpec({ ...spec, changes: tasks(64) }).errors).toEqual([]);
     expect(parseOrgProposalSpec({ ...spec, changes: metas(12) }).errors).toEqual([]);
     expect(parseOrgProposalSpec({ ...spec, changes: metas(13) }).errors).toEqual(["a structure proposal holds at most 12 changes, and this one has 13: split it by area (one proposal per lead, project or goal) or leave the smaller changes for the next review"]);
@@ -719,6 +720,7 @@ describe("the words of a change", () => {
       project_meta: "Make pr-1 a high priority, make @growth its lead and write down what it is for, how it is measured, what it leaves out and its risks",
       adopt: "Make session jx7abcd the standing session of @head-of-people",
       file: "Put plan pl-1 under the project Platform",
+      file_session: "Put the session Launch thread under @growth",
       plan_status: "Mark plan pl-7 done",
       task_status: "Mark task ct-42 done",
       project_status: "Mark project Legacy paused",
