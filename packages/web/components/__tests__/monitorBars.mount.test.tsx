@@ -32,6 +32,8 @@ const startedAt = Date.now() - 20 * 3600_000;
 const session = {
   _id: sessionId,
   agent_status: "waiting",
+  updated_at: Date.now(),
+  last_heartbeat: Date.now(),
   open_tasks_at: Date.now(),
   open_tasks: [{ id: "task-watch", kind: "background", started_at: startedAt, tool_use_id: "tool-watch", description: "Prove the orphan sweep", command: "sleep 60" }],
 };
