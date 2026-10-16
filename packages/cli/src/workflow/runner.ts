@@ -486,6 +486,9 @@ async function executeSessionNode(
   let lastState = "";
   let askedOnce = false;
   let emptySince = 0;
+  let awaitingHandoff = false;
+  const routesOnHandoff = graph.edges.some((e) => e.from === node.id && /\bhandoff\b/.test(e.condition ?? ""))
+    && !graph.edges.some((e) => e.from === node.id && !/\bhandoff\b/.test(e.condition ?? ""));
   while (Date.now() - startMs < timeout) {
     await new Promise(r => setTimeout(r, pollInterval));
     const inbox = await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 });
@@ -560,12 +563,25 @@ async function executeSessionNode(
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     // conversations.getThreadState: the pinned text is `state`, its status `status`.
     const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
+    const pinnedStatus: string = pinned?.status || "";
+    // A station whose edges route only on its handoff has answered when the
+    // handoff lands, not when its hand first ends a turn. A live hand that
+    // ended a turn on a check its tool moved to the background, with nothing
+    // pinned and no handoff yet, closed implement and the run failed "no
+    // outgoing edge" while the handoff came minutes later (ct-60145, 14 runs).
+    // It is waited on within the node's timeout; one that never hands off is
+    // killed there, as any stalled hand is.
+    if (asking && pinnedStatus !== "done" && pinnedStatus !== "blocked" && routesOnHandoff && options.taskId
+      && handoffOf(await cliCall(options, "/cli/work/get", { short_id: options.taskId })) === "none") {
+      if (!awaitingHandoff) console.log(`${c.dim}  ${shortId}: ended a turn without its handoff, waiting for it${c.reset}`);
+      awaitingHandoff = true;
+      continue;
+    }
     // The pin is display text, capped; its json block is stored whole as
     // `result`, which is what the station's edges route on.
     const pinnedResult: string = typeof pinned?.result === "string" ? pinned.result : "";
     const output = `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`;
     recordNodeOutput(context, node.id, output, pinnedResult || output);
-    const pinnedStatus: string = pinned?.status || "";
     // A hand whose session holds no message and no pin never ran a turn: its
     // process never started, or its transcript went to another conversation.
     // It answered nothing, so the station fails instead of passing an empty
@@ -1105,6 +1121,10 @@ export interface RunOptions {
   loadedStamp?: string;
 }
 
+function handoffOf(task: any): string {
+  return String(task?.status || "") === "in_review" ? String(task.execution_status || "none") : "none";
+}
+
 // The task fields node prompts and edge conditions read. Loaded once at start
 // and again after every node, so a handoff or a verdict written by a hand is
 // visible to the next edge. A verdict older than `freshSince` reads as "none":
@@ -1136,7 +1156,7 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // status = in_review is the freshness signal; a hand that ended without a
   // handoff (an inline question, a decision, a crash) reads as none and no
   // edge fires, which is the failure path.
-  context["handoff"] = String(task.status || "") === "in_review" ? String(task.execution_status || "none") : "none";
+  context["handoff"] = handoffOf(task);
   // What a hand that stopped (blocked, needs_context) said in its handoff: the
   // question the line's ask gate puts to a person, whole. Only a gate's doc
   // names it (no hand's prompt does), and a person answers what they can read
