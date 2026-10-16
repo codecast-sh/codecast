@@ -53,12 +53,9 @@ async function verifyPicker() {
     input.dispatchEvent(new (dom.window as any).Event("input", { bubbles: true }));
   });
 
-  // Closed: my reachable roles as one-click chips, then the opener with its chord as keycaps.
+  // Closed and unpicked: nothing on screen, the composer is a plain new session.
   await render();
-  const opener = () => qa("button").find((b) => /role/.test(b.textContent!) && !b.hasAttribute("data-handle"))!;
-  assert.deepEqual(qa("button[data-handle]").map(handleOf), ["@growth", "@head-of-people"]);
-  assert.match(opener().textContent!, /Other role/);
-  assert.match(opener().textContent!, /R$/);
+  assert.equal(qa("button").length, 0);
   assert.equal(q("input"), null);
 
   // ⌥R opens it (capture phase on window), the caret lands in the filter.
@@ -122,7 +119,7 @@ async function verifyPicker() {
   await act(async () => q<HTMLButtonElement>("[aria-label='Start a fresh session instead']")!.click());
   assert.deepEqual(picks, ["growth", null]);
   await render();
-  assert.match(opener().textContent!, /Other role/);
+  assert.equal(qa("button").length, 0);
 
   // The new-session page hosts the picker with no dialog around it: ⌥R opens it there too.
   const host = (wrap: Record<string, string> | null) => act(async () => root.render(

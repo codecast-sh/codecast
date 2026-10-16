@@ -63,9 +63,10 @@ export async function applyFileSession(ctx: Ctx, userId: Id<"users">, boundary: 
   if (!task || workspaceKey(workspaceForResource(task)) !== key) throw new Error(`No task "${to.task}" in this workspace`);
   if (String(conv.active_task_id ?? "") === String(task._id)) return { status: "applied", note: `${named} already works ${task.short_id}` };
   await addConversationToWorkItem(ctx, userId, "task", task, conv._id);
-  await claimTaskOwnership(ctx, conv, task, { take: false });
-  await noteOrgChange(ctx, userId, whereOfSession(conv), { kind: "file_session", subject: sessionSubject(conv), before: { task_id: conv.active_task_id ? String(conv.active_task_id) : null }, after: { task_id: String(task._id) }, labels: { [String(task._id)]: task.short_id } });
-  return { status: "applied", note: `${named} now works ${task.short_id} "${task.title}"` };
+  // A task another live session owns keeps its owner: the filing links the session to it and binds nothing.
+  const bound = await claimTaskOwnership(ctx, conv, task, { take: false }).then(() => true, () => false);
+  if (bound) await noteOrgChange(ctx, userId, whereOfSession(conv), { kind: "file_session", subject: sessionSubject(conv), before: { task_id: conv.active_task_id ? String(conv.active_task_id) : null }, after: { task_id: String(task._id) }, labels: { [String(task._id)]: task.short_id } });
+  return { status: "applied", note: bound ? `${named} now works ${task.short_id} "${task.title}"` : `${named} is linked to ${task.short_id} "${task.title}", which another live session owns` };
 }
 
 // ── The person's loose sessions (org-staffing.md S43) ─────────────────────

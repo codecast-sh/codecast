@@ -165,5 +165,14 @@ function write(name: string, loose: Loose[]): void {
   console.log(`${dir}: ${loose.length} loose sessions, ${Object.keys(files).length} to file, ${keep.length} to keep`);
 }
 
+// The busy world: the work that belongs to the leads is mostly still running.
+const busy: Loose[] = [
+  ...inbox.slice(0, 7).map((s) => ({ ...s, state: 'working', ago_days: 0 })),
+  { id: 'jx7g004', title: 'Pricing page A/B test copy', path: site, state: 'working', ago_days: 0, messages: 52, files: ['@growth', 'ct-111'], said: ['Set up the A/B test on the pricing page headline.', 'Two variants live behind the flag; collecting the first day of numbers.'] },
+  { id: 'jx7m002', title: 'iOS release 2.3 build failing on CI', path: mobl, state: 'needs_input', ago_days: 0, messages: 77, files: ['@mobile', 'stay'], said: ['The iOS 2.3 release build fails on CI at signing.', 'The profile expired; should I renew it with the team account?'] },
+  inbox[8]!, inbox[9]!, inbox[10]!,
+];
+
 write('fernhill-inbox', inbox);
+write('fernhill-busy', busy);
 write('fernhill-calm', calm);

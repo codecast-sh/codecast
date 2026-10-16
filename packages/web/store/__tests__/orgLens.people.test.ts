@@ -63,3 +63,28 @@ describe("movePerson on the tree", () => {
     expect("reports_to_user_id" in tree.people[2]).toBe(false);
   });
 });
+
+// By goal: offered only when a session on screen works in a project an open
+// goal holds. A goal cached from another workspace holds none of them.
+describe("By goal availability", () => {
+  const base = sources([{ user_id: ME }]);
+  const src: OrgLensSources = {
+    ...base,
+    tasks: { t1: { project_id: "p1" } as any },
+    projects: { p1: { _id: "p1" } as any },
+  };
+  const items = [row("s1", ME, { active_task: { _id: "t1" } as any })];
+  const goal = (project_ids: string[], status = "active") => ({ g1: { _id: "g1", title: "G", status, project_ids } });
+
+  test("a goal over an on-screen session's project offers the lens", () => {
+    expect(orgLensAvailable("goal", items, { ...src, initiatives: goal(["p1"]) })).toBe(true);
+  });
+
+  test("a goal over projects nobody on screen works in does not", () => {
+    expect(orgLensAvailable("goal", items, { ...src, initiatives: goal(["p_elsewhere"]) })).toBe(false);
+  });
+
+  test("a closed goal does not", () => {
+    expect(orgLensAvailable("goal", items, { ...src, initiatives: goal(["p1"], "done") })).toBe(false);
+  });
+});

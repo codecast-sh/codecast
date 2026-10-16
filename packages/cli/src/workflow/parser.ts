@@ -131,7 +131,8 @@ class Parser {
     while (this.peekIs("SEMI")) this.consume();
   }
 
-  parseGraph(): WorkflowGraph {
+  /** The file as written: graph attributes, each declared node's attributes, the edges. */
+  parseRaw(): RawGraph {
     // optional: digraph or graph keyword
     const first = this.peek();
     if (first.type === "IDENT" && (first.value === "digraph" || first.value === "graph")) {
@@ -145,47 +146,30 @@ class Parser {
     }
 
     this.expect("LBRACE");
-
-    const graph: WorkflowGraph = {
-      name,
-      nodes: new Map(),
-      edges: [],
-    };
-
-    // Parse statements
+    const raw: RawGraph = { name, attrs: {}, nodes: new Map(), edges: [], files: [] };
     while (!this.peekIs("RBRACE") && !this.peekIs("EOF")) {
-      this.parseStatement(graph);
+      this.parseStatement(raw);
       this.skipSemis();
     }
-
     this.expect("RBRACE");
-    return graph;
+    return raw;
   }
 
-  private parseStatement(graph: WorkflowGraph) {
+  private parseStatement(raw: RawGraph) {
     const t = this.peek();
 
     // rankdir=LR (graph attribute shorthand)
     if (t.type === "IDENT" && t.value === "rankdir") {
       this.consume();
       this.expect("EQ");
-      const val = this.consume() as any;
-      graph.rankdir = val.value;
+      raw.attrs.rankdir = (this.consume() as any).value;
       return;
     }
 
     // graph [ attrs ] - graph attributes
     if (t.type === "IDENT" && t.value === "graph") {
       this.consume();
-      if (this.peekIs("LBRACKET")) {
-        const attrs = this.parseAttrList();
-        if (attrs.goal) graph.goal = attrs.goal as string;
-        if (attrs.model_stylesheet) graph.model_stylesheet = attrs.model_stylesheet as string;
-        if (attrs.fidelity) graph.fidelity = attrs.fidelity as string;
-        if (attrs.join_policy) graph.join_policy = attrs.join_policy as string;
-        if (attrs.stack) graph.stack = String(attrs.stack);
-        if (attrs.on_failure === "stop") graph.on_failure = "stop";
-      }
+      if (this.peekIs("LBRACKET")) Object.assign(raw.attrs, this.parseAttrList());
       return;
     }
 
@@ -208,31 +192,20 @@ class Parser {
     const attrs = this.peekIs("LBRACKET") ? this.parseAttrList() : {};
 
     if (ids.length === 1) {
-      // Node statement
+      // Node statement; a second one for the same id adds to the first (DOT's rule)
       const id = ids[0];
-      if (!["graph", "node", "edge", "digraph"].includes(id)) {
-        const node = this.buildNode(id, attrs);
-        graph.nodes.set(id, node);
-      }
+      if (!["graph", "node", "edge", "digraph"].includes(id)) raw.nodes.set(id, { ...raw.nodes.get(id), ...attrs });
     } else {
       // Edge statement(s)
       for (let i = 0; i < ids.length - 1; i++) {
-        const edge: WorkflowEdge = {
+        raw.edges.push({
           from: ids[i],
           to: ids[i + 1],
           label: attrs.label as string | undefined,
           condition: attrs.condition as string | undefined,
           weight: attrs.weight as number | undefined,
           fidelity: attrs.fidelity as string | undefined,
-        };
-        graph.edges.push(edge);
-
-        // Ensure nodes referenced in edges exist (as placeholder agent nodes)
-        for (const id of [ids[i], ids[i + 1]]) {
-          if (!graph.nodes.has(id)) {
-            graph.nodes.set(id, this.buildNode(id, {}));
-          }
-        }
+        });
       }
     }
   }
@@ -279,7 +252,7 @@ class Parser {
     throw new Error(`Expected value, got ${t.type}`);
   }
 
-  private buildNode(id: string, attrs: Record<string, any>): WorkflowNode {
+  static buildNode(id: string, attrs: Record<string, any>): WorkflowNode {
     const shape = (attrs.shape as NodeShape) || "box";
     const type = shapeToType(shape);
 
@@ -338,38 +311,161 @@ function shapeToType(shape: NodeShape): NodeType {
 
 // --- Public API ---
 
-export function parseWorkflowFile(filePath: string): WorkflowGraph {
-  const src = fs.readFileSync(filePath, "utf-8");
-  const graph = parseWorkflowSource(src, path.dirname(filePath));
-  graph.sources = [path.resolve(filePath), ...(graph.sources ?? [])];
+type Attr = string | number | boolean;
+
+/** One .cast file as written (or a variant merged onto its base): nothing built or read yet. */
+interface RawGraph {
+  name: string;
+  attrs: Record<string, Attr>;
+  /** Declared nodes only; an id an edge names without declaring it becomes an agent node when built. */
+  nodes: Map<string, Record<string, Attr>>;
+  edges: WorkflowEdge[];
+  /** The base files a variant was read on top of. */
+  files: string[];
+}
+
+/** Reads a file for the parser: absolute path in, its text or null when there is none. */
+export type ReadFile = (abs: string) => string | null;
+const readDisk: ReadFile = (abs) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf-8") : null);
+
+export interface ParseOptions {
+  read?: ReadFile;
+  /** False keeps each `@file` as an absolute `@/path` instead of its text (where a station's file lives). */
+  inline?: boolean;
+}
+
+export function parseWorkflowFile(filePath: string, opts: ParseOptions = {}): WorkflowGraph {
+  const read = opts.read ?? readDisk;
+  const abs = path.resolve(filePath);
+  const src = read(abs);
+  if (src === null) throw new Error(`No workflow file at ${abs}`);
+  const graph = parseWorkflowSource(src, path.dirname(abs), { ...opts, read }, abs);
+  graph.sources = [abs, ...(graph.sources ?? [])];
   return graph;
 }
 
-export function parseWorkflowSource(src: string, dir?: string): WorkflowGraph {
-  const tokens = tokenize(src);
-  const parser = new Parser(tokens);
-  const graph = parser.parseGraph();
-
-  // Resolve @file references in prompts and scripts, relative to the graph
-  // file (a builtin arrives with them inlined; templates.ts).
-  if (dir) {
-    const resolveRef = (value: string | undefined) => {
-      if (!value?.startsWith("@")) return value;
-      const refPath = path.join(dir, value.slice(1));
-      if (!fs.existsSync(refPath)) return value;
-      sources.add(path.resolve(refPath));
-      return fs.readFileSync(refPath, "utf-8");
-    };
+/**
+ * A graph from its source. With `dir` (the file's own directory), `@file`
+ * values resolve against the file that wrote them, and a graph that names
+ * `extends` is that base with this file's differences:
+ *
+ *   - graph attributes and a node's attributes override the base's, one by one;
+ *   - a node marked `removed` leaves, and an edge into it must be re-routed here;
+ *   - a node this file routes (any edge out of it) has exactly the edges
+ *     written here, so a node's routing is always read in one file.
+ *
+ * A prompt or script read from a file takes in a shared part at a line that is
+ * only `@include <file>` (relative to the including file).
+ */
+export function parseWorkflowSource(src: string, dir?: string, opts: ParseOptions = {}, file?: string): WorkflowGraph {
+  const read = opts.read ?? readDisk;
+  const raw = loadRaw(src, dir, read, file ? [file] : []);
+  const graph = buildGraph(raw);
+  const sources = new Set<string>(raw.files);
+  if (dir && opts.inline !== false) {
     // Every file the graph inlined: a runner compares them at a gate's answer (runResume.ts runnerStamp).
-    const sources = new Set<string>();
     for (const node of graph.nodes.values()) {
-      if (node.prompt) node.prompt = resolveRef(node.prompt);
-      if (node.script) node.script = resolveRef(node.script);
+      if (node.prompt) node.prompt = inlineRef(node.prompt, read, sources);
+      if (node.script) node.script = inlineRef(node.script, read, sources);
     }
-    if (sources.size) graph.sources = [...sources];
   }
-
+  if (sources.size) graph.sources = [...sources];
   return graph;
+}
+
+/** The base a graph's source names with `extends`, as written. */
+export function graphExtends(src: string): string | undefined {
+  const ext = new Parser(tokenize(src)).parseRaw().attrs.extends;
+  return ext === undefined ? undefined : String(ext);
+}
+
+function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: string[]): RawGraph {
+  const raw = new Parser(tokenize(src)).parseRaw();
+  if (dir) {
+    // `@file` against the file that wrote it, so a base's stations keep reading the base's files.
+    for (const attrs of raw.nodes.values()) {
+      for (const field of ["prompt", "script"]) {
+        const v = attrs[field];
+        if (typeof v !== "string" || !v.startsWith("@")) continue;
+        const abs = path.resolve(dir, v.slice(1));
+        if (read(abs) !== null) attrs[field] = `@${abs}`;
+      }
+    }
+  }
+  const ext = raw.attrs.extends;
+  if (ext === undefined) return raw;
+  const here = chain[chain.length - 1] ?? "the graph";
+  if (!dir) throw new Error(`${here}: extends="${ext}" resolves only from a graph file`);
+  const baseFile = path.resolve(dir, String(ext));
+  if (chain.includes(baseFile)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
+  const baseSrc = read(baseFile);
+  if (baseSrc === null) throw new Error(`${here}: extends="${ext}": no graph at ${baseFile}`);
+  const base = loadRaw(baseSrc, path.dirname(baseFile), read, [...chain, baseFile]);
+  return inherit(base, raw, baseFile, here);
+}
+
+/** `child` written on top of `base` (parseWorkflowSource names the rules). */
+function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string): RawGraph {
+  const removed = new Set([...child.nodes].filter(([, a]) => a.removed === true || a.removed === "true").map(([id]) => id));
+  for (const id of removed) if (!base.nodes.has(id)) throw new Error(`${here}: removes ${id}, which ${path.basename(baseFile)} does not have`);
+  const routed = new Set(child.edges.map((e) => e.from));
+  for (const e of child.edges) {
+    const gone = [e.from, e.to].find((id) => removed.has(id));
+    if (gone) throw new Error(`${here}: the edge ${e.from} -> ${e.to} uses ${gone}, which this file removes`);
+  }
+  for (const e of base.edges) {
+    if (removed.has(e.to) && !removed.has(e.from) && !routed.has(e.from)) {
+      throw new Error(`${here}: ${e.from} goes to ${e.to}, which this file removes: write ${e.from}'s edges here`);
+    }
+  }
+  const nodes = new Map<string, Record<string, Attr>>();
+  for (const [id, a] of base.nodes) if (!removed.has(id)) nodes.set(id, a);
+  for (const [id, a] of child.nodes) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
+  const { extends: _extends, ...attrs } = { ...base.attrs, ...child.attrs };
+  return {
+    name: child.name,
+    attrs,
+    nodes,
+    edges: [...base.edges.filter((e) => !routed.has(e.from) && !removed.has(e.from) && !removed.has(e.to)), ...child.edges],
+    files: [baseFile, ...base.files],
+  };
+}
+
+function buildGraph(raw: RawGraph): WorkflowGraph {
+  const graph: WorkflowGraph = { name: raw.name, nodes: new Map(), edges: raw.edges };
+  const a = raw.attrs;
+  if (a.rankdir !== undefined) graph.rankdir = String(a.rankdir);
+  if (a.goal) graph.goal = a.goal as string;
+  if (a.model_stylesheet) graph.model_stylesheet = a.model_stylesheet as string;
+  if (a.fidelity) graph.fidelity = a.fidelity as string;
+  if (a.join_policy) graph.join_policy = a.join_policy as string;
+  if (a.stack) graph.stack = String(a.stack);
+  if (a.on_failure === "stop") graph.on_failure = "stop";
+  for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
+  // Ensure nodes referenced in edges exist (as placeholder agent nodes)
+  for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));
+  return graph;
+}
+
+/** An absolute `@/path` value as that file's text, its `@include` lines taken in; any other value as written. */
+function inlineRef(value: string, read: ReadFile, sources: Set<string>): string {
+  if (!value.startsWith("@") || !path.isAbsolute(value.slice(1))) return value;
+  const file = value.slice(1);
+  sources.add(file);
+  return withIncludes(read(file) ?? "", file, read, sources, [file]);
+}
+
+const INCLUDE = /^@include[ \t]+(\S+)[ \t]*$/gm;
+
+function withIncludes(text: string, file: string, read: ReadFile, sources: Set<string>, stack: string[]): string {
+  return text.replace(INCLUDE, (_line, rel: string) => {
+    const abs = path.resolve(path.dirname(file), rel);
+    if (stack.includes(abs)) throw new Error(`${file}: @include ${rel} comes back to itself`);
+    const part = read(abs);
+    if (part === null) throw new Error(`${file}: @include ${rel}: no file at ${abs}`);
+    sources.add(abs);
+    return withIncludes(part.replace(/\n$/, ""), abs, read, sources, [...stack, abs]);
+  });
 }
 
 export function validateWorkflow(graph: WorkflowGraph): string[] {
