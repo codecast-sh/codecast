@@ -49,9 +49,10 @@ const isEditKey = (input) => {
  * @param {{
  *   focusedContents: () => (Electron.WebContents | null | undefined),
  *   isShell: (contents: Electron.WebContents) => boolean,
+ *   keyRunsApp?: (command: "undo" | "redo") => boolean,
  * }} deps
  */
-function createEditUndo({ focusedContents, isShell }) {
+function createEditUndo({ focusedContents, isShell, keyRunsApp = () => true }) {
   const repeating = new WeakMap();
 
   /** Watch one webContents' keys for auto-repeat (web-contents-created). */
@@ -80,6 +81,8 @@ function createEditUndo({ focusedContents, isShell }) {
       contents[command]();
       return "native";
     }
+    // The person moved app undo to another chord: ⌘Z stays text undo only.
+    if (viaKey && !keyRunsApp(command)) return "none";
     if (viaKey && repeating.get(contents)) return "repeat";
     contents.send(APP_EDIT_COMMAND, command);
     return "app";
