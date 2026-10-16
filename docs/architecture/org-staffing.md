@@ -1728,3 +1728,14 @@ A person ends up managing dozens of raw top-level sessions when nothing places t
 **Who may file without asking.** A role whose "Starts work on its own" switch a person turned on: its filings apply as they are posted, each row marked as filed by it (`routeFilings`, `orgProposals.ts`). The Head of People's switch is off by default, so its filings wait on the card until the person turns it on. A role the Head of People hires for this work starts with the switch on, like every hire.
 
 **The prompt.** No routine and no steps: the review prompt's job line names where the person's sessions belong, and the reference lists the shape. The org-review eval's Fernhill worlds (`packages/evals/fixtures/org-review/fernhill.ts`) hold a messy inbox, a busy one and a control where every loose session is the person's own.
+
+## S44. The chart's companion drawer
+
+Written 2026-10-16. The chart page (`OrgChart`) had no way in for a person without a Head of People, and a proposal reference opened the whole chart with the proposal nowhere on it. The page now carries one companion surface, a drawer on the right of the chart, in the line workspace Map's pattern (`LineDrawer`): the chart stays in view on the left, the address holds what the drawer shows, and close, Esc or the header's control decide whether it is open (`clientState.ui.org_panel`, per device).
+
+- **No Head of People:** the drawer offers the hire (`HireHeadOfPeopleCard`). The press opens the shared review (`hireHeadLedger`): one session now, or the workspace's standing agent seated; the first review now, then weekly; only approved changes apply. The hire runs its first review on its own (`performStaff`), and its proposals arrive in the drawer.
+- **A Head of People:** its standing session's real conversation (`AnchorConversation`), with the workspace's open proposals pinned above it, each opening in the drawer.
+- **`?proposal=op-N`:** the proposal first and whole: where it lives (`op-N in <workspace>`, with Switch when that is not the workspace on screen), its title, what waits or what happened, and its card (`ProposalBody`) with every control, pinned over the conversation its answers go to (the author's thread, else the Head of People's), whose send applies them. While it is open and in this workspace, its changes are drawn on the chart; a click on an entry focuses its node, and a click on a marked node focuses its entry. Arriving by address lands in the proposal's workspace; inside a reveal band the drawer names it and offers the switch instead.
+- **`?session=<id>`:** a role (its standing session) or a session from the chart, in the drawer.
+
+The corner card (`OrgIntroCard`) opens `/org?panel=open`.

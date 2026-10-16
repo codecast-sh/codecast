@@ -113,7 +113,7 @@ describe("double-start fix invariants", () => {
     // backend one: a cloud agent first, and the app-server when none owns it.
     expect(waitLoop).toMatch(/if \(await deliveryStep\([^)]*?,\s*tryBackendDelivery\)\) return true/);
     expect(waitLoop.indexOf("tryBackendDelivery")).toBeLessThan(
-      waitLoop.indexOf("startFreshSessionForDelivery"),
+      waitLoop.indexOf("deliverViaFreshStart()"),
     );
     const backendStart = daemonSource.indexOf("const tryBackendDelivery = async");
     expect(backendStart).toBeGreaterThan(-1);
