@@ -169,25 +169,36 @@ export function resolveRemoteDevice(input: { env: string | undefined; marker: bo
  * only serves conversations explicitly moved to it (owner == this device) — it
  * must never adopt, resume, or spawn sessions on its own. The launch
  * environment is read per call (tests flip it); the marker once per process.
+ * Reading never writes the marker: only a daemon's start records it.
  */
 export function isRemoteDevice(): boolean {
   if (cachedRemoteMarker === null) {
     try {
       cachedRemoteMarker = fs.existsSync(REMOTE_DEVICE_MARKER);
-      // A process launched as a remote device records it, so a daemon started
-      // later without the variable (a self-restart, a hand-run start over SSH)
-      // still knows. Without it a Mac host's daemon took itself for a laptop
-      // and froze on the window server it does not have (2026-10-05).
-      if (!cachedRemoteMarker && process.env.CODECAST_REMOTE_DEVICE === "1") {
-        fs.mkdirSync(path.dirname(REMOTE_DEVICE_MARKER), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(REMOTE_DEVICE_MARKER, "");
-        cachedRemoteMarker = true;
-      }
     } catch {
       cachedRemoteMarker = false;
     }
   }
   return resolveRemoteDevice({ env: process.env.CODECAST_REMOTE_DEVICE, marker: cachedRemoteMarker });
+}
+
+/**
+ * A daemon launched as a remote device records it, so a daemon started later
+ * without the variable (a self-restart, a hand-run start over SSH) still
+ * knows. Without it a Mac host's daemon took itself for a laptop and froze on
+ * the window server it does not have (2026-10-05). Only the daemon's start
+ * writes it: any process that read the variable once wrote it, and a test
+ * that set it marked a laptop remote for good, so every session it started
+ * scanned all its owner's conversations and ran out of memory (2026-10-15).
+ */
+export function recordRemoteLaunch(): void {
+  if (process.env.CODECAST_REMOTE_DEVICE !== "1") return;
+  try {
+    if (fs.existsSync(REMOTE_DEVICE_MARKER)) return;
+    fs.mkdirSync(path.dirname(REMOTE_DEVICE_MARKER), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(REMOTE_DEVICE_MARKER, "");
+    cachedRemoteMarker = true;
+  } catch {}
 }
 
 /**

@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "the-questions-your-agents-save-for-you",
+    title: "The questions your agents save for you",
+    dek: "Run several agents and each one will, sooner or later, need you to choose. Codecast lets an agent write that choice up as a card, put it in one queue with everyone else's, and wait. You answer the lot in one sitting, and each agent picks up from your answer.",
+    author: "the codecast team",
+    date: "2026-10-15",
+    dateLabel: "October 15, 2026",
+    readingMinutes: 6,
+    cover: { src: "/blog/the-questions-your-agents-save-for-you/card-in-thread.png", alt: "An answered decision card inside the agent's conversation in codecast, with its question and both options" },
+  },
+  {
     slug: "the-task-your-agent-reports-to",
     title: "The task your agent reports to",
     dek: "A chat thread is a bad place to keep track of work. Codecast gives every piece of work a page of its own, where the agents working on it leave their notes, their evidence and their status, and where a plan gathers the tasks that belong together.",
