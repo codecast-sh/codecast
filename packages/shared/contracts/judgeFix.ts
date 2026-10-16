@@ -154,10 +154,22 @@ export function fisherOneSided(x: number, n: number, y: number, m: number, alt: 
  * A fix that separates on fewer controls is few_controls: the edit may be
  * right, but the measurement cannot say it keeps what the judge finds.
  */
-export function judgeFixVerdict(ruled: JudgeFixGroup, controls: JudgeFixGroup, rests: Array<Pick<JudgeFixRest, "base" | "arm">> = []): JudgeFixVerdict {
+/**
+ * Whether the edit takes away what a waiting proposal rests on: its finding is
+ * filed less often under the edit by the same one-sided test the ruled cases
+ * pass. A rest filed once in five runs is a draw on either side (4/5 to 2/5,
+ * 1/5 to 0/5 move nothing), and blocking on one sent working fixes back to
+ * be rewritten (ct-60174, 2026-10-16).
+ */
+export function restEmptied(r: Pick<JudgeFixRest, "base" | "arm" | "reps">): boolean {
+  const p = fisherOneSided(r.arm, r.reps, r.base, r.reps, "less");
+  return p !== null && p <= JUDGE_FIX_ALPHA;
+}
+
+export function judgeFixVerdict(ruled: JudgeFixGroup, controls: JudgeFixGroup, rests: Array<Pick<JudgeFixRest, "base" | "arm" | "reps">> = []): JudgeFixVerdict {
   const worse = controls.runs > 0 && fisherOneSided(controls.arm, controls.runs, controls.base, controls.runs, "less");
   if (worse !== false && worse !== null && worse <= JUDGE_FIX_ALPHA) return "worse";
-  if (rests.some(caseMoved)) return "empties_proposal";
+  if (rests.some(restEmptied)) return "empties_proposal";
   const better = fisherOneSided(ruled.arm, ruled.runs, ruled.base, ruled.runs, "less");
   if (better === null || better > JUDGE_FIX_ALPHA || ruled.arm >= ruled.base) return "not_separated";
   return controls.moments < JUDGE_FIX_MIN_CONTROLS ? "few_controls" : "better";

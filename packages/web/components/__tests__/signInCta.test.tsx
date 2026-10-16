@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider } from "convex/react";
 import { SignInCta } from "../GlobalSessionPanel";
+import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // Never connects: SignInCta only registers a mutation callback, and static
 // rendering fires no effects and opens no sockets.
-const client = new ConvexReactClient("https://example.convex.cloud");
+const client = offlineConvexClient("https://example.convex.cloud");
 
 type Device = Parameters<typeof SignInCta>[0]["device"];
 

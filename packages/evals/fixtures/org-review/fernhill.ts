@@ -17,8 +17,13 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { headOfPeopleOpening } from '@codecast/shared/contracts/headOfPeoplePrompt';
+
+import { looseLines } from '../../../cli/src/orgLooseRun';
 import { homePaths } from '../../src/paths';
 import { EVERY_READ, writeFrozenVerbs, writeServedRead } from '../../src/served';
+
+const stripAnsi = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
 
 const NOW = Date.parse('2026-10-14T09:00:00.000Z');
 const DAY = 86_400_000;
@@ -135,34 +140,72 @@ function readOf(s: Loose): string {
   return [`Session ${s.id} · ${s.title} · Mara Okafor · ${s.path} · ${s.state} · ${s.messages} messages`, '', `[1] Mara: ${s.said[0]}`, `[${s.messages}] assistant: ${s.said[1]}`].join('\n');
 }
 
+type Read = { argv: string[]; out: string; prefix?: boolean };
+
+/** Every read the world answers, for the org-review snapshot and the role-wake fixture alike. */
+function worldReads(loose: Loose[]): Read[] {
+  const reads: Read[] = [
+    { argv: ['brief'], out: brief(loose) },
+    { argv: ['brief', '--json'], out: JSON.stringify({ role: { handle: 'head-of-people', name: 'Head of People' }, standing: ['2026-10-07 Company: Three leads own the three projects and the records match the work.'] }) },
+    ...loose.map((s) => ({ argv: ['read', s.id], out: readOf(s), prefix: true })),
+    ...tasks.map((t) => ({ argv: ['task', 'show', t.short_id], out: `${t.short_id} · ${t.title} · ${t.status} · plan ${t.plan} · project ${t.project}`, prefix: true })),
+    ...plans.map((p) => ({ argv: ['plan', 'show', p.short_id], out: `${p.short_id} · ${p.title} · active · ${p.done}/${p.total} done`, prefix: true })),
+    { argv: ['link'], out: 'https://codecast.sh/s/fernhill', prefix: true },
+    { argv: ['org', 'proposals'], out: 'No open proposals.', prefix: true },
+  ];
+  for (const p of projects) {
+    const body = [`${p.short_id} · ${p.title} · active · led by @${roles.find((r) => r.scope.includes(p.short_id))!.handle}`, p.description, '', ...plans.filter((x) => x.project === p.short_id).map((x) => `${x.short_id} ${x.title} (${x.done}/${x.total})`), ...tasks.filter((t) => t.project === p.short_id).map((t) => `  ${t.short_id} ${t.status} ${t.title}`)].join('\n');
+    reads.push({ argv: ['project', 'show', p.short_id], out: body, prefix: true }, { argv: ['project', 'show', p.title], out: body, prefix: true });
+  }
+  return reads;
+}
+
+const orgLs = { generated_at: NOW, roles: roles.map((r) => ({ _id: r.id, short_id: r.short_id, handle: r.handle, name: r.name, status: 'active' })), people: [{ user_id: MARA, name: 'Mara Okafor', is_me: true }], anchors: [] };
+const labelOf = (loose: Loose[]) => ({ files: Object.fromEntries(loose.filter((s) => s.files).map((s) => [s.id, s.files!])), keep: loose.filter((s) => s.keep).map((s) => s.id) });
+
 function write(name: string, loose: Loose[]): void {
   const dir = join(homePaths().snapshots, 'org-review', name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, 'reads'), { recursive: true });
   writeFileSync(join(dir, 'org-inputs.json'), JSON.stringify(inputs(loose), null, 1));
   writeFileSync(join(dir, 'org-health.json'), JSON.stringify(health, null, 1));
-  writeFileSync(join(dir, 'org-ls.json'), JSON.stringify({ generated_at: NOW, roles: roles.map((r) => ({ _id: r.id, short_id: r.short_id, handle: r.handle, name: r.name, status: 'active' })), people: [{ user_id: MARA, name: 'Mara Okafor', is_me: true }], anchors: [] }, null, 1));
+  writeFileSync(join(dir, 'org-ls.json'), JSON.stringify(orgLs, null, 1));
   writeFileSync(join(dir, 'captured.json'), JSON.stringify({ argv: [], values: { team: 'Fernhill', name }, captured_at: new Date(NOW).toISOString(), workspace: name, synthetic: true }, null, 1));
-  const serve = (argv: string[], out: string, prefix = false) => writeServedRead(dir, argv, out, 0, { prefix });
-  serve(['brief'], brief(loose));
-  serve(['brief', '--json'], JSON.stringify({ role: { handle: 'head-of-people', name: 'Head of People' }, standing: ['2026-10-07 Company: Three leads own the three projects and the records match the work.'] }));
-  for (const s of loose) serve(['read', s.id], readOf(s), true);
-  for (const p of projects) {
-    const body = [`${p.short_id} · ${p.title} · active · led by @${roles.find((r) => r.scope.includes(p.short_id))!.handle}`, p.description, '', ...plans.filter((x) => x.project === p.short_id).map((x) => `${x.short_id} ${x.title} (${x.done}/${x.total})`), ...tasks.filter((t) => t.project === p.short_id).map((t) => `  ${t.short_id} ${t.status} ${t.title}`)].join('\n');
-    serve(['project', 'show', p.short_id], body, true);
-    serve(['project', 'show', p.title], body, true);
-  }
-  for (const t of tasks) serve(['task', 'show', t.short_id], `${t.short_id} · ${t.title} · ${t.status} · plan ${t.plan} · project ${t.project}`, true);
-  for (const p of plans) serve(['plan', 'show', p.short_id], `${p.short_id} · ${p.title} · active · ${p.done}/${p.total} done`, true);
-  serve(['link'], 'https://codecast.sh/s/fernhill', true);
-  serve(['org', 'proposals'], 'No open proposals.', true);
+  for (const r of worldReads(loose)) writeServedRead(dir, r.argv, r.out, 0, { prefix: r.prefix });
   writeFrozenVerbs(dir, ['org', 'brief', EVERY_READ]);
-  const files = Object.fromEntries(loose.filter((s) => s.files).map((s) => [s.id, s.files!]));
-  const keep = loose.filter((s) => s.keep).map((s) => s.id);
+  const { files, keep } = labelOf(loose);
   const labels = join(homePaths().labels, 'org-review', name);
   mkdirSync(labels, { recursive: true });
   writeFileSync(join(labels, 'grade-sets.json'), JSON.stringify({ must_not_close: [], should_close: [], name_it: [], never_name: [], files, keep }, null, 1));
   console.log(`${dir}: ${loose.length} loose sessions, ${Object.keys(files).length} to file, ${keep.length} to keep`);
+}
+
+// The Head of People's daily look (org-staffing.md S43) as a role-wake
+// fixture: its trigger fires in its standing session over the same world, and
+// the label holds it to the same filings. Committed, since the world is synthetic.
+function writeLook(name: string, loose: Loose[], notes: string): void {
+  const now = NOW;
+  const answer = { count: loose.length, rows: loose.map((s) => ({ short_id: s.id, title: s.title, state: s.state, last_active_at: now - s.ago_days * DAY - 3_600_000, project_path: s.path })), last_look_at: now - DAY, new: loose.filter((s) => s.ago_days < 1).map((s) => s.id) };
+  const fixture = {
+    asOf: new Date(now).toISOString(),
+    notes,
+    label: labelOf(loose),
+    snapshot: {
+      captured_at: new Date(now).toISOString(),
+      fixture: { trigger: 'tr-930', routine: 'inbox', role: { handle: 'head-of-people', name: 'Head of People', reports_to: 'Mara Okafor', scope: [], goals: [], charter: headOfPeopleOpening({ workspace: 'Fernhill', person: 'Mara Okafor' }).split('\n\n')[1] } },
+      values: { role: 'head-of-people', team: 'Fernhill' },
+      reads: [
+        ...worldReads(loose).map((r) => (r.argv[0] === 'brief' ? { ...r, argv: ['brief', '@head-of-people', ...r.argv.slice(1)] } : r)),
+        { argv: ['org', 'loose'], out: stripAnsi(looseLines(answer, now).join('\n')), prefix: true },
+        { argv: ['org', 'inputs'], out: JSON.stringify(inputs(loose)), prefix: true },
+        { argv: ['org', 'health'], out: JSON.stringify(health), prefix: true },
+        { argv: ['org', 'ls'], out: JSON.stringify(orgLs), prefix: true },
+      ],
+    },
+  };
+  const path = join(import.meta.dir, '..', 'role-wake', `${name}.json`);
+  writeFileSync(path, JSON.stringify(fixture, null, 2) + '\n');
+  console.log(`${path}: ${Object.keys(fixture.label.files).length} to file, ${fixture.label.keep.length} to keep`);
 }
 
 // The busy world: the work that belongs to the leads is mostly still running.
@@ -176,3 +219,5 @@ const busy: Loose[] = [
 write('fernhill-inbox', inbox);
 write('fernhill-busy', busy);
 write('fernhill-calm', calm);
+writeLook('inbox-look-files', inbox, "S43: the Head of People's daily look fires over Mara's inbox: eight loose sessions do the growth, billing and mobile leads' work (one on an open task, one finished) and three are hers. It files the eight and leaves her three.");
+writeLook('inbox-look-calm', calm, "S43 control: the daily look fires, and every loose session in Mara's inbox is her own work. It files nothing and says so in a line.");

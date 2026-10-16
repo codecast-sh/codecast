@@ -934,7 +934,7 @@ A role never asks for the switch. Its standing text says that when it cannot sta
 Hands, wakes and tokens per day stay as the bound that keeps a runaway role from spending a week's budget in a night. They stop being something the person sets, reads about, or is asked about:
 
 - The proposal never asks about limits. The analyzer's sizing rule and the "daily allowance" asks go; a proposal names roles, scopes, records and the switch, and nothing else about a role's operation. The eval rubric's sizing line goes with it.
-- The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values with the defaults filled in, for the person who wants to look.
+- The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values, each empty (no limit) until the person sets one.
 - A role that reaches a cap waits. It writes one line in its brief and its pinned state says it is waiting for tomorrow; the org health view carries that line; nothing reaches the person's inbox or their queue. The role's standing text drops "caps are real" and the frame drops the counters.
 
 ### S23.3 A role's sessions are the role's
@@ -987,7 +987,7 @@ with the sizing line replaced by "No limits") closed no alive record, asked
 about no limit in any sample, and kept the same three asks across all three;
 records recall was 12, 10 and 6 of 41, inside the variance rounds 9 to 11
 showed. On the web the Settings tab is one switch and a closed `Limits`
-disclosure with the defaults filled in (`ScopeSettings.mount.test.tsx`); the
+disclosure, empty until set (`ScopeSettings.mount.test.tsx`); the
 hire dialog names neither; `orgProposal.changeSentence`, the history line
 (`orgLogLine`), the chips and the kind labels say "starts work on its own";
 the proposal pane's cost line and sheet are gone; the overview tile with the
@@ -1720,6 +1720,10 @@ A person ends up managing dozens of raw top-level sessions when nothing places t
 **What it sees.** `cast org inputs` carries `sessions.loose`: the caller's own top-level sessions that nothing places (no role holds them, no task binds them, no seat), newest first, up to 40, each with its title, state, folder and size (`looseSessionsOf`, `convex/lib/orgSessionFiling.ts`).
 
 **What it proposes.** One change kind, `file_session: { session, title, to }`, where `to` is `@handle` (under that role, through the reparent core), `ct-N` (the session joins the task's work, and binds to it unless another live session owns the task) or `done` (out of the inbox, as the inbox's own done). Filings are their own kind of proposal work, uncapped like the records, so a tidy arrives as one card the person clears in one pass: one ask, "File N sessions where they belong", Approve all, and a per-row reject. Each apply lands in the org log, so History reads and undoes it.
+
+**Who decides a filing.** An admin, as for any proposal, and also the person whose sessions it files: a proposal that only files sessions, every one of them the caller's own, is theirs to accept on the card without being an admin (`filesOnlyOwnSessions`). A filing of anyone else's session, and every other kind of change, still needs an admin.
+
+**How often it looks.** Sessions gather every day, so the Head of People does not wait for its weekly review: a daily trigger on its standing session, "Look at the inbox" (`syncInboxLook`, `convex/orgInbox.ts`), armed with its routine from every door that arms one. Its precheck, `cast org loose --new`, exits 0 only when a loose session started since that trigger last ran, so a day with nothing new spends nothing. The run reads `cast org loose` (the loose sessions, the new ones marked, and the filing's shape) and keeps the inbox as its opening's job says; a person pauses or cancels it like any trigger, and a retire takes it with the role.
 
 **Who may file without asking.** A role whose "Starts work on its own" switch a person turned on: its filings apply as they are posted, each row marked as filed by it (`routeFilings`, `orgProposals.ts`). The Head of People's switch is off by default, so its filings wait on the card until the person turns it on. A role the Head of People hires for this work starts with the switch on, like every hire.
 

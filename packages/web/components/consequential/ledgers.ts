@@ -141,8 +141,9 @@ export function startAgainLedger(r: { problem: string; project: string | null; b
       ...(r.about ? [{ value: `~${r.about}`, label: "until it asks you" }] : []),
     ],
     rows: [
-      listRow(r.cost),
+      // The block leads: a new run meets it again until it clears.
       ...(r.hold ? [{ k: "Blocked", v: r.hold, tone: "warn" as const }] : []),
+      listRow(r.cost),
       ...(back ? back.why.map((w, i) => ({ k: i ? "And" : "Sends back", v: w, tone: "warn" as const })) : []),
       ...(r.project ? [{ k: "Project", v: r.project }] : []),
       r.branch ? { k: "From", v: "Its fix branch", tone: "ok" } : { k: "From", v: "main" },

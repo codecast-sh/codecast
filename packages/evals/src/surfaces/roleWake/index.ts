@@ -7,7 +7,7 @@ import { UsageError } from '@platform/evals/cli';
 
 import { cliFetchRead } from '../../../../cli/src/cliHttp';
 import { defaultConfigDir, readAuthConfig } from '../../../../cli/src/config/readAuthConfig';
-import { ROLE_NEEDS_INPUT_SPEC, roleRoutineFor } from '../../../../convex/convex/lib/orgRoutine';
+import { HEAD_INBOX_PROMPT, HEAD_INBOX_TITLE, ROLE_NEEDS_INPUT_SPEC, roleRoutineFor } from '../../../../convex/convex/lib/orgRoutine';
 import { apiConfig } from '../../adapters/convo';
 import { gate, type Captured, type CaptureCtx, type SurfaceImpl } from '../../surface';
 import { meta } from './meta';
@@ -41,7 +41,8 @@ const HINT = '`./evals snapshot role-wake --trigger tr-N --team <team> --role <h
  */
 export interface RoleWakeFixture {
   trigger: string;
-  routine: 'check' | 'needs-input' | 'message';
+  /** `inbox`: the Head of People's daily look at the person's inbox (org-staffing.md S43). */
+  routine: 'check' | 'needs-input' | 'message' | 'inbox';
   role: RoleCard;
   waiting?: WaitingSession;
   /** A `message` routine: who wrote (a session short id) and what. */
@@ -65,7 +66,7 @@ export function frameOf(snap: RoleWakeSnap): string {
     if (!f.message) throw new Error('a message fixture names who wrote and what (fixture.message)');
     return formatSessionMessage(f.message.from, f.message.body, { name: f.message.name });
   }
-  const spec = f.routine === 'needs-input' ? ROLE_NEEDS_INPUT_SPEC : { ...roleRoutineFor(f.role), event: undefined };
+  const spec = f.routine === 'needs-input' ? ROLE_NEEDS_INPUT_SPEC : f.routine === 'inbox' ? { title: HEAD_INBOX_TITLE, prompt: HEAD_INBOX_PROMPT, event: undefined } : { ...roleRoutineFor(f.role), event: undefined };
   const task = { _id: `fixture-${f.trigger}`, short_id: f.trigger, title: spec.title, prompt: spec.prompt, role_id: `fixture-${f.role.handle}`, ...(spec.event ? { event_filter: { event_type: spec.event } } : {}) };
   return triggerRunFrame(task, { role: f.role, waiting: f.waiting ?? null, stashed: Boolean(f.stashed) });
 }
