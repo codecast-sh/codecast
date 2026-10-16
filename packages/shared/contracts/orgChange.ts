@@ -98,8 +98,11 @@ export type OrgLogFields = {
   questions?: InitiativeQuestion[] | null;
   decisions?: InitiativeDecision[] | null;
   sources?: IntentSource[] | null;
-  // A session.
+  // A session: who it reports to, the task it works (its id), and whether it
+  // is closed as done (out of the inbox).
   parent?: OrgSessionParent;
+  task_id?: string | null;
+  done?: boolean | null;
 };
 
 /** What the change did beyond its subject. Every part is optional and every
@@ -356,6 +359,14 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     case "routine": return { kind: "routine", handle, title: row.after.routine?.title ?? "", prompt: "", every: row.after.routine?.every ?? "" };
     case "adopt": return { kind: "adopt", handle, conversation: row.after.standing_session?.short_id ?? row.effects.seat?.short_id ?? "" };
     case "file": return { kind: "file", plan: row.subject.short_id ?? row.subject.label, project: nameOf(row, row.after.project_id, "no project") };
+    // A filing reads by where it went; an inverse (back to the person, off the task, back in the inbox) reads through orgLogLine's own words.
+    case "file_session": {
+      const session = row.subject.short_id ?? row.subject.label;
+      if (row.after.done) return { kind: "file_session", session, to: "done" };
+      if (row.after.task_id) return { kind: "file_session", session, to: nameOf(row, row.after.task_id, row.after.task_id) };
+      const role = row.after.parent?.org_role_id;
+      return role ? { kind: "file_session", session, to: `@${nameOf(row, role, role).replace(/^@/, "")}` } : null;
+    }
     // The subject's label is the record's title (recordSubject), so the log
     // reads the row the way the proposal did: "Mark done: Launch (pl-7)".
     case "plan_status": return { kind: "plan_status", plan: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "", title: row.subject.label };
@@ -559,6 +570,7 @@ export function orgLogLine(row: OrgLogRow): string {
     const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[];
     return `Change the ${andList(words) || "record"} of the goal ${row.subject.label}`;
   }
+  if (row.kind === "file_session") return `Put session ${row.subject.label} back where it was`;
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);
   return capitalize(line);
@@ -600,7 +612,7 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   lead: "lead", session: "session",
   // The goals (I1, revised): a set goal is cancelled, never erased; the other two restore their fields.
   initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner", initiative_shape: "initiative_shape",
-  file: "file", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
+  file: "file", file_session: "file_session", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
   // Hiring from a template (org-hire.md): authority restores its list; a hire
   // and an upgrade are recorded, and their way back is the host step.
   authority: "authority", hire: "hire", upgrade: "upgrade",

@@ -500,6 +500,10 @@ export default defineSchema({
     // boundary at `visibility`. Ascending by `before`; `visibility` is always
     // the highest level (teamVisibility.ts nextMembershipVisibility).
     visibility_history: v.optional(v.array(visibilitySegment)),
+    // The member this person reports to in the org chart (orgPeople.ts), a
+    // member of the same team. Routing for the chart and the inbox's By
+    // reports lens only: it grants no access to anyone's sessions.
+    reports_to_user_id: v.optional(v.id("users")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
