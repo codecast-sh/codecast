@@ -44,6 +44,8 @@ type Notification = {
   // Anonymous actors (artifact page commenters) carry identity on the row.
   actor_name?: string;
   actor_avatar?: string;
+  // A chat line a session typed: the session spoke, not its human.
+  actor_session?: { id: string; agent_type: string } | null;
   actor: {
     _id: Id<"users">;
     name?: string;
@@ -119,7 +121,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   // coloured type badge on the face (only the unread dot keeps the accent).
   const hosted = useHostedMode();
   const icon = notificationIcon(notification.type);
-  const { name: actorName, avatar: avatarUrl } = notificationActor(notification);
+  const { name: actorName, avatar: avatarUrl, session: actorSession } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   const identityRow = useSessionIdentityRow(notification.conversation_id ? String(notification.conversation_id) : null);
   // Same rule as the web bell: a row wears an agent face only when it names a
@@ -159,7 +161,9 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
     >
       {!notification.read && <RNView style={styles.unreadBar} />}
       <RNView style={styles.avatarContainer}>
-        {avatarUrl ? (
+        {actorSession ? (
+          <AgentLogoSvg agentType={actorSession.agent_type} size={38} />
+        ) : avatarUrl ? (
           <Image source={{ uri: avatarUrl }} style={styles.avatar} />
         ) : isSessionNotif ? (
           <MobileIdentityFace row={identityRow} size={38} fallback={<AgentLogoSvg agentType={agentType} size={38} />} />
@@ -168,7 +172,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
             <FontAwesome name={icon.name} size={16} color={hosted ? Theme.textMuted : icon.color} />
           </RNView>
         )}
-        {(avatarUrl || isSessionNotif) && !hosted && (
+        {(actorSession || avatarUrl || isSessionNotif) && !hosted && (
           <RNView style={[styles.iconBadge, { backgroundColor: icon.color }]}>
             <FontAwesome name={icon.name} size={8} color="#fff" />
           </RNView>

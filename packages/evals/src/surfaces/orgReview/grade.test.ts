@@ -340,7 +340,8 @@ describe.skipIf(!haveArchive)('org-review regrade against grade.py (founder arch
   // Nothing under ~/.cache/org-eval is written.
   const pyWs = join(root, 'pyhome', '.cache', 'org-eval', 'union');
   mkdirSync(join(pyWs, 'regrade'), { recursive: true });
-  for (const n of readdirSync(join(CACHE, 'union')).filter((n) => n === 'grade-sets.json' || n === 'served' || n.startsWith('round-'))) symlinkSync(join(CACHE, 'union', n), join(pyWs, n));
+  // A skipped describe still runs its body, so the archive is read only where it exists.
+  for (const n of (haveArchive ? readdirSync(join(CACHE, 'union')) : []).filter((n) => n === 'grade-sets.json' || n === 'served' || n.startsWith('round-'))) symlinkSync(join(CACHE, 'union', n), join(pyWs, n));
   const home = join(root, 'evals-home');
   const env = { ...process.env, CODECAST_EVALS_HOME: home, CODECAST_DIR: tmp('org-nocast-'), NO_COLOR: '1' };
   const spawn = (cmd: string[], extra: Record<string, string> = {}) => {
@@ -354,7 +355,7 @@ describe.skipIf(!haveArchive)('org-review regrade against grade.py (founder arch
       const st = statSync(join(CACHE, 'union', `round-${r}`, f));
       return `${r}/${f} ${st.size} ${st.mtimeMs}`;
     }));
-  const stampBefore = archiveStamp();
+  const stampBefore = haveArchive ? archiveStamp() : [];
 
   test('migrate copies labels and base8 into a scratch EVALS_HOME, and the freeze resolves', () => {
     const m = spawn(['bun', MIGRATE, '--no-commit']);

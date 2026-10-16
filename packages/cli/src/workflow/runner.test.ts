@@ -746,6 +746,15 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(byId(c2).exit).toBe(byId(a).exit);
   });
 
+  test("a run whose line profile cannot be read fails with the profile's own error", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".codecast"));
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), `[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nnewer_key = true\n`);
+    const g = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit }`);
+    expect(await runWorkflow(g, { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" })).toBe("invalid");
+    const failed = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed");
+    expect(failed?.body.fail_reason).toContain('unknown key "newer_key"');
+  });
+
   test("validateWorkflow reports a malformed condition", () => {
     const g = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit [condition="outcome = (success"] }`);
     expect(validateWorkflow(g).some(e => e.includes("condition"))).toBe(true);

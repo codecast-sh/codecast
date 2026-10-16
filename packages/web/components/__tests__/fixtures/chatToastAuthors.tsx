@@ -130,3 +130,44 @@ for (const where of ["rail", "cached row"] as const) test(`huddle digest from th
     host.remove();
   }
 });
+
+// A line a session typed is stored under the human it ran as. The card names
+// the session and wears its agent mark, never the human's photo.
+test("a session's line names the session, not the human it ran as", async () => {
+  const channelId = "channel-session-line";
+  const last = { _id: "before", user_id: "jason", created_at: Date.now(), preview: "Earlier line" };
+  const row = { channel_id: channelId, last_message: last, unread: 0, unread_mentions: 0, notify_level: "all", joined: true, sort_at: Date.now() };
+  useInboxStore.setState({
+    currentUser: { _id: "viewer" },
+    chatRail: [row],
+    chatMessages: {},
+    chatChannels: { [channelId]: { name: "team", kind: "channel" } },
+    teamMembers: [{ _id: "jason", name: "Jason", image: "https://a/jason.png" }],
+    clientState: { ui: {} },
+  });
+  toasts.length = 0;
+  function Probe() { useChatToasts(); return null; }
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Probe />));
+    const typed = {
+      _id: "typed", user_id: "jason", created_at: Date.now(), preview: "Deploys no longer re-run the tests",
+      origin: "agent", origin_session_id: "sess-1", origin_session_title: "Build machine unblock", origin_agent_type: "codex",
+    };
+    await act(async () => useInboxStore.setState({ chatRail: [{ ...row, last_message: typed, unread: 1 }] }));
+    expect(toasts).toHaveLength(1);
+    const popup = toasts[0]();
+    expect(popup.props.data.authorName).toBe("Build machine unblock");
+    expect(popup.props.data.authorAvatarUrl).toBeUndefined();
+    expect(popup.props.data.authorIsAgent).toBe(true);
+    expect(popup.props.data.authorAgentType).toBe("codex");
+    await act(async () => root.render(popup));
+    expect(host.querySelector(".ch-toast-author")?.textContent).toBe("Build machine unblock");
+    expect(host.querySelector("img[src='https://a/jason.png']")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
