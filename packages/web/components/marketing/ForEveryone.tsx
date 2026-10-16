@@ -124,7 +124,7 @@ const PICTURE_YES = routineYesWords(true);
 
 /** A part of the still before and after its entrance: 8px down and clear,
  *  then in place over 240ms, ease-out. Delays stagger the parts by 120ms. */
-const ENTER = "opacity-0 translate-y-2 transition-[opacity,transform] duration-[240ms] ease-out group-data-[in]:opacity-100 group-data-[in]:translate-y-0 motion-reduce:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none";
+const ENTER = "opacity-0 translate-y-2 transition-[opacity,transform] [transition-duration:240ms] ease-out group-data-[in]:opacity-100 group-data-[in]:translate-y-0 motion-reduce:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none";
 
 /** A still of a hosted conversation: the person's ask, the assistant's short
  *  answer in the reading face, and the approval card it raises before it
@@ -170,13 +170,13 @@ function ConversationPicture() {
           {ASKS.mondays}
         </p>
       </div>
-      <div className={`mt-5 flex gap-3 ${ENTER} delay-[120ms]`}>
+      <div className={`mt-5 flex gap-3 ${ENTER} [transition-delay:120ms]`}>
         <AssistantMark size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[16.5px] leading-[1.55]" style={{ fontFamily: READ }}>
             Happy to. Say yes and it starts Monday.
           </p>
-          <div className={`mt-4 rounded-[10px] border p-3.5 ${ENTER} delay-[240ms]`} style={{ borderColor: "var(--pd-rule, #e6dccb)", background: "var(--pd-bg, #f6f1e7)" }}>
+          <div className={`mt-4 rounded-[10px] border p-3.5 ${ENTER} [transition-delay:240ms]`} style={{ borderColor: "var(--pd-rule, #e6dccb)", background: "var(--pd-bg, #f6f1e7)" }}>
             <p className="text-[13.5px] font-semibold">{`${stepAsk(PICTURE_ROUTINE)}?`}</p>
             <p className="mt-1.5 text-[13px] leading-snug" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
               {PICTURE_SUMMARY}

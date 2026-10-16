@@ -195,6 +195,15 @@ describe('snapshot', () => {
       expect(() => runSnapshot('role-wake', ['--team', 'T', '--role', 'R', '--name', 'scratch'], () => ({ out: '', code: 0 }))).toThrow('immutable');
       expect(() => runSnapshot('role-wake', ['--role', 'R', '--name', 'other'], () => ({ out: '', code: 0 }))).toThrow('--team is required');
       expect(() => runSnapshot('title', [], () => ({ out: '', code: 0 }))).toThrow('snapshot is for the agent surfaces');
+      // An org read that keeps failing refuses the snapshot and leaves nothing behind; one that fails once is retried.
+      const failing = (fails: number) => {
+        let n = 0;
+        return (argv: string[]) => (argv[1] === 'inputs' && n++ < fails ? { out: '', code: 1 } : { out: 'ok', code: 0 });
+      };
+      expect(() => runSnapshot('role-wake', ['--team', 'T', '--role', 'R', '--name', 'broken'], failing(3))).toThrow('failed 3 times');
+      expect(existsSync(join(process.env.CODECAST_EVALS_HOME!, 'snapshots', 'role-wake', 'broken'))).toBe(false);
+      const retried = runSnapshot('role-wake', ['--team', 'T', '--role', 'R', '--name', 'retried'], failing(2));
+      expect(readFileSync(join(retried, 'org-inputs.json'), 'utf8')).toBe('ok');
     } finally {
       delete process.env.CODECAST_EVALS_HOME;
     }

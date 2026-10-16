@@ -222,4 +222,10 @@ describe("getThreadState", () => {
       (getThreadState as any)._handler(ctxAs(db, STRANGER), { session: "abc1234" }),
     ).rejects.toThrow("No session found");
   });
+
+  test("a probe asking if_exists gets null for a session it cannot see or that has not synced", async () => {
+    const db = makeFakeDb(tablesWith({ thread_state: "secret" }));
+    expect(await (getThreadState as any)._handler(ctxAs(db, STRANGER), { session: "abc1234", if_exists: true })).toBeNull();
+    expect(await (getThreadState as any)._handler(ctxAs(db, RUNNER), { session: "01a14341-cbef-7c30-87b7-e2ccf1f21016", if_exists: true })).toBeNull();
+  });
 });
