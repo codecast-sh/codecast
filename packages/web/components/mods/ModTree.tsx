@@ -22,6 +22,7 @@ import { formatRelativeTime } from "../../lib/conversationFormat";
 import { MOD_ELEMENTS, type ModNode } from "@codecast/shared/contracts/mods";
 import { isAppPath } from "../../lib/mods/host";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 type Fn = { $fn: string };
 type Invoke = (fn: string, args: unknown[]) => void;
@@ -215,6 +216,9 @@ function Heading({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
 function ModButton({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
   const onPress = useHandler(p.onPress);
   const [busy, setBusy] = useState(false);
+  // The press's busy beat ends on a timer; an unmounted button cancels it.
+  const busyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useMountEffect(() => () => { if (busyTimer.current) clearTimeout(busyTimer.current); });
   // Quiet unless asked: a mod's controls sit beside text the way a canvas
   // block's header controls do. Only primary and danger fill.
   const variant = p.variant === "primary" ? "default" : p.variant === "danger" ? "destructive" : "ghost";
@@ -230,7 +234,7 @@ function ModButton({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
         ev.stopPropagation();
         if (!onPress) return;
         setBusy(true);
-        try { onPress(); } finally { setTimeout(() => setBusy(false), 250); }
+        try { onPress(); } finally { busyTimer.current = setTimeout(() => setBusy(false), 250); }
       }}
     >
       {p.icon ? <DynamicIcon name={p.icon as any} /> : null}

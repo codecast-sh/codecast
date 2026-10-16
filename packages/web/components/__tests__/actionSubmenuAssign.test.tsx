@@ -5,7 +5,10 @@ import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // ActionSubmenu only reads router/pathname for navigation actions, never at
 // render time — a stub is enough for a static render.
+// The rest of the module stays real: the palette's import graph reads more of it.
+const realNav = { ...(await import("next/navigation")) };
 mock.module("next/navigation", () => ({
+  ...realNav,
   useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {} }),
   usePathname: () => "/",
 }));
