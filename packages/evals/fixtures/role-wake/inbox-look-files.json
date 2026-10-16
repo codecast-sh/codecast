@@ -297,7 +297,7 @@
           "org",
           "loose"
         ],
-        "out": "11 loose sessions · last look 1d ago\n      jx7g001 Draft the launch thread for v2 pricing · idle · 1d ago · /Users/mara/src/fernhill-site\n  new jx7g002 Fix pricing page copy and FAQ · working · 1h ago · /Users/mara/src/fernhill-site\n      jx7g003 Newsletter #14: what shipped in September · idle · 3d ago · /Users/mara/src/fernhill-site\n  new jx7b001 Stripe webhook retries failing with 409 · working · 1h ago · /Users/mara/src/fernhill\n      jx7b002 Invoice PDF is missing the VAT number · idle · 2d ago · /Users/mara/src/fernhill\n  new jx7b003 Partial refunds: wire the refund endpoint · working · 1h ago · /Users/mara/src/fernhill\n      jx7m001 Android push notifications not arriving · idle · 4d ago · /Users/mara/src/fernhill-mobile\n      jx7d001 Bump Node to 22 in CI · done · 9d ago · /Users/mara/src/fernhill\n      jx7p001 October investor update · idle · 1d ago · /Users/mara\n      jx7p002 Hiring plan: first support hire · idle · 2d ago · /Users/mara\n  new jx7p003 Lisbon offsite logistics · needs_input · 1h ago · /Users/mara\n\nFiling one is a proposal change (cast org propose): file_session: { session: its short id, title: its title, to: \"@handle\" | \"ct-N\" | \"done\" }: one of the person's sessions moved out of their inbox: under a role, onto a task it works, or closed as done.",
+        "out": "11 loose sessions · last look 1d ago\n      jx7g001 Draft the launch thread for v2 pricing · idle · 1d ago · /Users/mara/src/fernhill-site\n  new jx7g002 Fix pricing page copy and FAQ · working · 1h ago · /Users/mara/src/fernhill-site\n      jx7g003 Newsletter #14: what shipped in September · idle · 3d ago · /Users/mara/src/fernhill-site\n  new jx7b001 Stripe webhook retries failing with 409 · working · 1h ago · /Users/mara/src/fernhill\n      jx7b002 Invoice PDF is missing the VAT number · idle · 2d ago · /Users/mara/src/fernhill\n  new jx7b003 Partial refunds: wire the refund endpoint · working · 1h ago · /Users/mara/src/fernhill\n      jx7m001 Android push notifications not arriving · idle · 4d ago · /Users/mara/src/fernhill-mobile\n      jx7d001 Bump Node to 22 in CI · done · 9d ago · /Users/mara/src/fernhill\n      jx7p001 October investor update · idle · 1d ago · /Users/mara\n      jx7p002 Hiring plan: first support hire · idle · 2d ago · /Users/mara\n  new jx7p003 Lisbon offsite logistics · needs_input · 1h ago · /Users/mara\n\nFiling one is a proposal change (cast org propose): file_session: { session: its short id, title: its title, to: \"@handle\" | \"ct-N\" | \"done\" }: one of the person's sessions moved out of their inbox: under a role, onto a task it works, or closed as done. One change in a spec reads:\n  { \"change\": { \"kind\": \"file_session\", \"session\": \"jx7abcd\", \"title\": \"Its title\", \"to\": \"@growth\" }, \"rationale\": \"why it belongs there\" }",
         "prefix": true
       },
       {
@@ -322,6 +322,50 @@
           "ls"
         ],
         "out": "{\"generated_at\":1791968400000,\"roles\":[{\"_id\":\"ms7fernhop\",\"short_id\":\"or-1\",\"handle\":\"head-of-people\",\"name\":\"Head of People\",\"status\":\"active\"},{\"_id\":\"ms7ferngrw\",\"short_id\":\"or-2\",\"handle\":\"growth\",\"name\":\"Growth lead\",\"status\":\"active\"},{\"_id\":\"ms7fernbil\",\"short_id\":\"or-3\",\"handle\":\"billing\",\"name\":\"Billing lead\",\"status\":\"active\"},{\"_id\":\"ms7fernmob\",\"short_id\":\"or-4\",\"handle\":\"mobile\",\"name\":\"Mobile lead\",\"status\":\"active\"}],\"people\":[{\"user_id\":\"kd7fernmara0000000000000000000\",\"name\":\"Mara Okafor\",\"is_me\":true}],\"anchors\":[]}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "ls"
+        ],
+        "out": "@head-of-people · Head of People · reports to Mara Okafor · looks after no project\n  Keeps the company structure true to how the work runs.\n@growth · Growth lead · reports to Mara Okafor · looks after Marketing site\n  Owns the marketing site, launches and the newsletter.\n@billing · Billing lead · reports to Mara Okafor · looks after Billing\n  Owns payments, invoices and refunds end to end.\n@mobile · Mobile lead · reports to Mara Okafor · looks after Mobile app\n  Owns the iOS and Android app and its releases.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@head-of-people"
+        ],
+        "out": "@head-of-people · Head of People\nKeeps the company structure true to how the work runs.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@growth"
+        ],
+        "out": "@growth · Growth lead\nOwns the marketing site, launches and the newsletter.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@billing"
+        ],
+        "out": "@billing · Billing lead\nOwns payments, invoices and refunds end to end.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@mobile"
+        ],
+        "out": "@mobile · Mobile lead\nOwns the iOS and Android app and its releases.",
         "prefix": true
       }
     ]

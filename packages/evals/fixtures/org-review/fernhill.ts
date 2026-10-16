@@ -200,6 +200,8 @@ function writeLook(name: string, loose: Loose[], notes: string): void {
         { argv: ['org', 'inputs'], out: JSON.stringify(inputs(loose)), prefix: true },
         { argv: ['org', 'health'], out: JSON.stringify(health), prefix: true },
         { argv: ['org', 'ls'], out: JSON.stringify(orgLs), prefix: true },
+        { argv: ['role', 'ls'], out: roles.map((r) => `@${r.handle} · ${r.name} · reports to Mara Okafor · looks after ${r.scope.map((x) => projects.find((p) => p.short_id === x)!.title).join(', ') || 'no project'}\n  ${r.charter}`).join('\n'), prefix: true },
+        ...roles.map((r) => ({ argv: ['role', 'show', `@${r.handle}`], out: `@${r.handle} · ${r.name}\n${r.charter}`, prefix: true })),
       ],
     },
   };
