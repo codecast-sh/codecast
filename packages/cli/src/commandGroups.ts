@@ -220,6 +220,11 @@ Examples:
     load: () => import("./signalCommand.js").then((m) => m.registerSignalCommand),
   },
   {
+    token: "line",
+    description: "The line a role's tasks run on (docs/architecture/the-line.md)",
+    load: () => import("./lineCommand.js").then((m) => m.registerLineCommand),
+  },
+  {
     token: "mod",
     aliases: ["mods"],
     description: `Mods: extend codecast with panes, commands and blocks agents can draw, written as one hooks module

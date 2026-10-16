@@ -105,7 +105,7 @@ export function publishFacts(r: ResolvedLineProfile): LineProfileFacts {
 export async function publishLineProfile(deps: PublishDeps, resolved: ResolvedLineProfile): Promise<{ projects: Array<{ project: string; short_id?: string; title: string; finders: number; changed: boolean }>; unprojected: string[] }> {
   const { groups, unprojected } = publishGroups(resolved);
   if (!groups.length) throw new LineProfileError(`nothing to publish: the profile names no project (${resolved.file ?? "no .codecast/line.toml"})`);
-  const { scopeFor } = await import("./signalCommand.js");
+  const { scopeFor } = await import("./lineScope.js");
   const { deviceId } = await import("./remote/device.js");
   const result = await apiPost(deps, "/cli/line/profile/publish", {
     ...(await scopeFor(deps, undefined, true)),

@@ -36,7 +36,7 @@ import {
 import { localTimeZone } from "@codecast/shared/time";
 import { checkoutRepository, checkoutWords } from "./checkoutWords.js";
 import { c, fmt } from "./colors.js";
-import { shq } from "./remote/session-move.js";
+import { shellEscapeForSh as shq } from "./supervision.js";
 import { stdinText } from "./sendBody.js";
 import { workOriginStamp } from "./sessionIdentity.js";
 import { readTaskPulseFor, type TaskPulse } from "./taskPulse.js";

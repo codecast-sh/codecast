@@ -202,20 +202,20 @@ describe("cast initiative: which entry a person means", () => {
     expect(key("brokers before lenders")).toBe("note:brokers before lenders");
   });
   test("a miss prints the entries and the command to type next", () => {
-    const retry = "cast initiative milestone in-3 --done <n>";
+    const retry = "cast goal milestone in-3 --done <n>";
     const milestones = ["  1. Design partner signed", "  2. Pricing page live", "  3. Private beta open", "  4. General availability", `Name one by its number: ${retry}`];
     expect(pickRecordEntry(FULL, "milestones", "9", { retry })).toEqual({ error: ["No milestone 9 on in-3. It has 4:", ...milestones].join("\n") });
     expect(pickRecordEntry(FULL, "milestones", "a", { retry })).toEqual({ error: ['"a" matches 4 milestones on in-3:', ...milestones].join("\n") });
-    expect(pickRecordEntry(FULL, "decisions", "lenders", { retry: "cast initiative record in-3 --list decisions --remove <n>" })).toEqual({
-      error: 'No decision on in-3 matches "lenders". It has:\n  1. Ship to brokers first\nName one by its number: cast initiative record in-3 --list decisions --remove <n>',
+    expect(pickRecordEntry(FULL, "decisions", "lenders", { retry: "cast goal record in-3 --list decisions --remove <n>" })).toEqual({
+      error: 'No decision on in-3 matches "lenders". It has:\n  1. Ship to brokers first\nName one by its number: cast goal record in-3 --list decisions --remove <n>',
     });
     expect(pickRecordEntry(FULL, "decisions", "lenders")).toEqual({ error: 'No decision on in-3 matches "lenders". It has:\n  1. Ship to brokers first' });
   });
   test("a goal with none of a list says the command that adds one", () => {
     expect(pickRecordEntry({ short_id: "in-9" }, "milestones", "1")).toEqual({ error: 'in-9 has no milestones yet. Add one: cast goal milestone in-9 "<title>" --date <YYYY-MM-DD>' });
-    expect(pickRecordEntry({ short_id: "in-9" }, "questions", "1")).toEqual({ error: 'in-9 has no questions yet. Add one: cast initiative ask in-9 "<question>"' });
-    expect(pickRecordEntry({ short_id: "in-9" }, "decisions", "x")).toEqual({ error: 'in-9 has no decisions yet. Add one: cast initiative decide in-9 "<decision>"' });
-    expect(pickRecordEntry({ short_id: "in-9" }, "sources", "x")).toEqual({ error: "in-9 has no sources yet. Add one: cast initiative source in-9 <address or the words said>" });
+    expect(pickRecordEntry({ short_id: "in-9" }, "questions", "1")).toEqual({ error: 'in-9 has no questions yet. Add one: cast goal ask in-9 "<question>"' });
+    expect(pickRecordEntry({ short_id: "in-9" }, "decisions", "x")).toEqual({ error: 'in-9 has no decisions yet. Add one: cast goal decide in-9 "<decision>"' });
+    expect(pickRecordEntry({ short_id: "in-9" }, "sources", "x")).toEqual({ error: "in-9 has no sources yet. Add one: cast goal source in-9 <address or the words said>" });
   });
   test("a command that takes only some entries refuses the rest by name, and matches words among the ones it takes", () => {
     const { pick } = answerWrite("in-3", "1", "Per seat") as RecordWrite;
@@ -227,7 +227,7 @@ describe("cast initiative: which entry a person means", () => {
     // "price" is in an open question and an answered one: only the open one is meant.
     expect((picked("price") as any).key).toBe("do_we_price_per_seat");
     expect(picked("which market")).toEqual({ error: 'Question 1 on in-3 is already answered: "Brokers". Pass --replace to put this answer in its place.' });
-    expect(picked("lenders")).toEqual({ error: 'No open question on in-3 matches "lenders". It has:\n  2. Do we price per seat?\nName one by its number: cast initiative answer in-3 <n> "<answer>"' });
+    expect(picked("lenders")).toEqual({ error: 'No open question on in-3 matches "lenders". It has:\n  2. Do we price per seat?\nName one by its number: cast goal answer in-3 <n> "<answer>"' });
     // With --replace every question is taken.
     const replacing = (answerWrite("in-3", "1", "Per seat", { replace: true }) as RecordWrite).pick;
     expect((pickRecordEntry(two, "questions", "1", replacing) as any).key).toBe("which_market_first");
@@ -236,7 +236,7 @@ describe("cast initiative: which entry a person means", () => {
 
 describe("cast initiative: the op each record command sends", () => {
   const SEP_21 = new Date(2026, 8, 21, 12).getTime();
-  const named = (text: string, flag: string) => ({ text, retry: `cast initiative milestone in-3 ${flag} <n>` });
+  const named = (text: string, flag: string) => ({ text, retry: `cast goal milestone in-3 ${flag} <n>` });
 
   test("milestone: a title adds one, with its day in the title or in --date, and where it was set", () => {
     expect(milestoneWrite("in-3", "General availability", {})).toEqual({ verb: "Added a milestone to", op: { list: "milestones", action: "add", entry: { title: "General availability" } } });
@@ -257,7 +257,7 @@ describe("cast initiative: the op each record command sends", () => {
     expect(milestoneWrite("IN-3", undefined, { done: "Design partner signed", at: "2026-09-21" }, NOW)).toEqual({ verb: "Reached a milestone of", op: { list: "milestones", action: "close", at: SEP_21 }, pick: named("Design partner signed", "--done") });
     for (const extra of [{ date: "2026-09-21" }, { source: "ct-12" }, { date: null }]) expect(milestoneWrite("in-3", undefined, { done: "2", ...extra })).toEqual({ error: "--done takes only --at, the day it was reached. A title, --date and --source belong to a new milestone or to --edit" });
     expect(milestoneWrite("in-3", undefined, { done: "2", at: "21 Sep" })).toEqual({ error: 'Invalid --at "21 Sep": use YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time' });
-    expect(milestoneWrite("in-3", undefined, { done: "2", at: null })).toEqual({ error: "A reached milestone is reopened with: cast initiative milestone in-3 --edit <n> --at none" });
+    expect(milestoneWrite("in-3", undefined, { done: "2", at: null })).toEqual({ error: "A reached milestone is reopened with: cast goal milestone in-3 --edit <n> --at none" });
   });
   test("milestone --edit sends only what changes: the title, the day, the source, the day it was reached", () => {
     const edit = (title: string | undefined, o: any) => (milestoneWrite("in-3", title, { edit: "2", ...o }, NOW) as RecordWrite);
@@ -294,10 +294,10 @@ describe("cast initiative: the op each record command sends", () => {
   });
   test("ask and decide --edit send the wire's edit with only what changes", () => {
     expect(saidWrite("3", "questions", "Do we price per team?", { edit: "2" })).toEqual({
-      verb: "Changed a question on", op: { list: "questions", action: "edit", entry: { text: "Do we price per team?" } }, pick: { text: "2", retry: 'cast initiative ask in-3 --edit <n> "<new words>"' },
+      verb: "Changed a question on", op: { list: "questions", action: "edit", entry: { text: "Do we price per team?" } }, pick: { text: "2", retry: 'cast goal ask in-3 --edit <n> "<new words>"' },
     });
     expect(saidWrite("in-3", "decisions", undefined, { edit: "brokers", by: "@ashot", source: null })).toEqual({
-      verb: "Changed a decision on", op: { list: "decisions", action: "edit", entry: { by: "@ashot", source: null } }, pick: { text: "brokers", retry: 'cast initiative decide in-3 --edit <n> "<new words>"' },
+      verb: "Changed a decision on", op: { list: "decisions", action: "edit", entry: { by: "@ashot", source: null } }, pick: { text: "brokers", retry: 'cast goal decide in-3 --edit <n> "<new words>"' },
     });
     expect(saidWrite("in-3", "questions", undefined, { edit: "2" })).toEqual({ error: "Nothing to change: give the new words, --by or --source" });
   });
@@ -306,9 +306,9 @@ describe("cast initiative: the op each record command sends", () => {
     const write = answerWrite("in-3", "per seat", "Per seat", { at: "2026-09-21" }, NOW) as RecordWrite;
     expect(write.verb).toBe("Answered a question on");
     expect(write.op).toEqual({ list: "questions", action: "close", answer: "Per seat", at: SEP_21 });
-    expect(write.pick).toMatchObject({ text: "per seat", retry: 'cast initiative answer in-3 <n> "<answer>"' });
+    expect(write.pick).toMatchObject({ text: "per seat", retry: 'cast goal answer in-3 <n> "<answer>"' });
     expect((answerWrite("in-3", "1", "Per seat", { replace: true }) as RecordWrite)).toEqual({
-      verb: "Replaced the answer to a question on", op: { list: "questions", action: "close", answer: "Per seat" }, pick: { text: "1", retry: 'cast initiative answer in-3 <n> "<answer>"' },
+      verb: "Replaced the answer to a question on", op: { list: "questions", action: "close", answer: "Per seat" }, pick: { text: "1", retry: 'cast goal answer in-3 <n> "<answer>"' },
     });
     expect(answerWrite("in-3", "1", "Per seat", { at: "none" })).toEqual({ error: 'Invalid --at "none": use YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time' });
   });
@@ -325,7 +325,7 @@ describe("cast initiative: the op each record command sends", () => {
   });
 
   test("record --remove names its list, and the retry names it too", () => {
-    expect(removeWrite("in-3", "sources", "call:cl-42#14")).toEqual({ verb: "Removed a source from", op: { list: "sources", action: "remove" }, pick: { text: "call:cl-42#14", retry: "cast initiative record in-3 --list sources --remove <n>" } });
+    expect(removeWrite("in-3", "sources", "call:cl-42#14")).toEqual({ verb: "Removed a source from", op: { list: "sources", action: "remove" }, pick: { text: "call:cl-42#14", retry: "cast goal record in-3 --list sources --remove <n>" } });
     expect(removeWrite("in-3", "notes", "1")).toEqual({ error: 'Invalid --list "notes": milestones, questions, decisions, sources' });
   });
 });
@@ -442,7 +442,7 @@ describe("cast initiative show", () => {
   Metrics each number against its target
   Cost per intro: not reported yet, target < $250 · cost_per_intro
   Weekly active teams: 412 of 1000, behind (yesterday) · up from 380, toward the target · weekly_active_teams · https://x.test/board
-  Report a value: cast initiative report in-3 cost_per_intro=<value> --source <link or short id>
+  Report a value: cast goal report in-3 cost_per_intro=<value> --source <link or short id>
 
   Milestones
   Next milestone: Pricing page live by 2026-09-28 (1 of 4 reached)

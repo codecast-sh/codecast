@@ -54,7 +54,7 @@ export function spendLines(spend: any): string[] {
 
 export function registerLineTrialCommands(line: Command, deps: PublishDeps): void {
   const scope = async () => {
-    const { scopeFor } = await import("./signalCommand.js");
+    const { scopeFor } = await import("./lineScope.js");
     const s: Record<string, unknown> = { ...(await scopeFor(deps, undefined, true)) };
     delete s.project;
     return s;
