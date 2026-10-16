@@ -51,8 +51,10 @@ import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ShellUsageMeter } from "./plan/UsageMeter";
-import { ChatNavRow, ChatDrillList, channelSignals } from "./sidebar/ChatNav";
-import { SidebarDrillStack, useSidebarDrill } from "./sidebar/SidebarDrill";
+import { ChatNavRow, ChatDrillList } from "./sidebar/ChatNav";
+import { channelSignals } from "../lib/chatRowSignals";
+import { SidebarDrillStack } from "./sidebar/SidebarDrill";
+import { useSidebarDrill } from "../hooks/useSidebarDrill";
 import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView, orgRowsActive } from "./sidebar/SidebarNav";
 import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
 import { paneDragProps, railRowTone } from "../lib/railRow";
@@ -674,7 +676,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const drillOn = !isNarrow && !surfaceMode.hosted;
   const chatDrills = drillOn && chatOn && !chatAway;
   const tasksDrill = drillOn && !workAway && taskViewItems.length > 0;
-  const drill = useSidebarDrill(isChat && chatDrills ? "chat" : isTasks && tasksDrill ? "tasks" : null);
+  const drill = useSidebarDrill(isChat ? "chat" : isTasks ? "tasks" : null, { chat: chatDrills, tasks: tasksDrill });
 
   // Pinned projects read their title from the store (PinnedRail).
   useSyncProjects();
@@ -852,7 +854,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             pinsShown={!isNarrow && !scope}
             expanded={viewSectionOverride.chat ?? !!isChat}
             onToggle={() => setViewSectionOverride((v) => ({ ...v, chat: !(v.chat ?? !!isChat) }))}
-            onDrill={chatDrills ? drill.open : undefined}
+            onDrill={chatDrills ? () => drill.open("chat") : undefined}
             onMobileClose={onMobileClose}
           />}
           calls={callsOn && (<>
@@ -868,7 +870,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />
             </Suspense>
           </>)}
-          workAction={<AppPopOutButton app="work" />}
+          workAction={<AppPopOutButton app="work" className="mr-1" />}
           active={{
             tasks: isTasks,
             docs: isDocs || isPlans,
@@ -888,7 +890,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           }}
           // Hosted mode opens a page's saved views only when pinned open, so
           // the rail stays the pages themselves.
-          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })), onDrill: tasksDrill ? drill.open : undefined }}
+          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })), onDrill: tasksDrill ? () => drill.open("tasks") : undefined }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
           changesOn={changesOn}
