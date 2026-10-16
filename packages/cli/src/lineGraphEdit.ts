@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "./proc.js";
-import { graphHash, graphNodeHashes, parseWorkflowSource, validateWorkflow } from "./workflow/parser.js";
+import { graphExtends, graphHash, graphNodeHashes, parseWorkflowFile, validateWorkflow, type ReadFile } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { findNodeStmt, nodeAttrRaw, setNodeAttr } from "./repoLine.js";
 
@@ -64,26 +64,27 @@ const inside = (root: string, abs: string) => {
 };
 
 /**
- * Parse a graph whose `@<file>` refs are read through `read` (absolute path
- * in, text or null out), the way parseWorkflowSource reads them from disk: a
- * ref that does not resolve stays as written.
+ * Parse the graph in `castAbs` with every file (the .cast, a base it extends,
+ * a station's file) read through `read`, the way a run reads them from disk.
  */
-export function parseGraphWith(source: string, dir: string, read: (abs: string) => string | null): WorkflowGraph {
-  let graph: WorkflowGraph;
+export function parseGraphWith(castAbs: string, read: ReadFile, opts: { inline?: boolean } = {}): WorkflowGraph {
   try {
-    graph = parseWorkflowSource(source);
+    return parseWorkflowFile(castAbs, { read, ...opts });
   } catch (err) {
     throw new LineGraphError(`the graph does not parse: ${err instanceof Error ? err.message : String(err)}`);
   }
-  for (const node of graph.nodes.values()) {
-    for (const field of ["prompt", "script"] as const) {
-      const v = node[field];
-      if (!v?.startsWith("@")) continue;
-      const text = read(path.join(dir, v.slice(1)));
-      if (text !== null) node[field] = text;
-    }
+}
+
+/** The graph file that writes `node`'s `field`: this one, else the base it extends, and so on down. */
+function declaringFile(castAbs: string, node: string, field: GraphField, read: ReadFile): { file: string; source: string } | null {
+  for (let file: string | null = castAbs, hops = 0; file && hops < 16; hops++) {
+    const source = read(file);
+    if (source === null) return null;
+    if (findNodeStmt(source, node) && nodeAttrRaw(source, node, field) !== null) return { file, source };
+    const ext = graphExtends(source);
+    file = ext ? path.resolve(path.dirname(file), ext) : null;
   }
-  return graph;
+  return null;
 }
 
 const readDisk = (abs: string) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null);
@@ -97,14 +98,14 @@ export function graphOrigin(castFile: string, graph: WorkflowGraph, deviceId: st
   const abs = fs.realpathSync(path.resolve(castFile));
   const root = gitRootOf(abs);
   if (!root || !deviceId) return null;
-  const dir = path.dirname(abs);
   const files: GraphOrigin["files"] = [];
-  for (const n of parseWorkflowSource(fs.readFileSync(abs, "utf8")).nodes.values()) {
+  // Each station's own file, wherever the graph or a base it extends names it.
+  for (const n of parseGraphWith(abs, readDisk, { inline: false }).nodes.values()) {
     const entry: GraphOrigin["files"][number] = { node: n.id };
     for (const field of ["prompt", "script"] as const) {
       const v = n[field];
-      if (!v?.startsWith("@")) continue;
-      const target = path.join(dir, v.slice(1));
+      if (!v?.startsWith("@") || !path.isAbsolute(v.slice(1))) continue;
+      const target = v.slice(1);
       if (inside(root, target)) entry[field] = posixRel(root, target);
     }
     if (entry.prompt || entry.script) files.push(entry);
@@ -153,12 +154,10 @@ export function planGraphEdit(castAbs: string, args: Pick<LineGraphEditArgs, "no
   if (!args.text.trim()) throw new LineGraphError(`a step's ${field} cannot be empty`);
   const node = typeof args.node === "string" ? args.node.trim() : "";
   if (!/^[A-Za-z_][\w]*$/.test(node)) throw new LineGraphError("an edit names one step by its id");
-  const source = read(castAbs);
-  if (source === null) throw new LineGraphError(`${castAbs} could not be read`);
-  if (!findNodeStmt(source, node)) throw new LineGraphError(`the graph has no step "${node}"`);
-  const dir = path.dirname(castAbs);
+  if (read(castAbs) === null) throw new LineGraphError(`${castAbs} could not be read`);
 
-  const before = parseGraphWith(source, dir, read);
+  const before = parseGraphWith(castAbs, read);
+  if (!before.nodes.has(node)) throw new LineGraphError(`the graph has no step "${node}"`);
   const was = graphNodeHashes(before).find((n) => n.id === node)?.h ?? "";
   if (args.base_hash && args.base_hash !== was) {
     throw new LineGraphError(`${node} changed since it was read (now ${was}); reload it and edit again`);
@@ -169,19 +168,22 @@ export function planGraphEdit(castAbs: string, args: Pick<LineGraphEditArgs, "no
     throw new LineGraphError(`${node}'s ${field} in this checkout differs from the text you edited, so saving would overwrite it; bring the checkout up to date (or push it) and edit again`);
   }
 
-  const ref = refOf(nodeAttrRaw(source, node, field));
+  // The step's text is written where it is declared: in this graph, or in the base it extends (every line on that base reads the edit).
+  const at = declaringFile(castAbs, node, field, read);
+  if (!at) throw new LineGraphError(`${node}'s ${field} is written in no graph file this one reads`);
+  const ref = refOf(nodeAttrRaw(at.source, node, field));
   const overrides = new Map<string, string>();
-  let nextSource = source;
-  let target = castAbs;
+  let target = at.file;
   if (ref) {
-    target = path.resolve(dir, ref);
+    target = path.resolve(path.dirname(at.file), ref);
     if (!inside(opts.root, target)) throw new LineGraphError(`${node} reads its ${field} from ${ref}, outside the checkout`);
+    const parts = [...(read(target) ?? "").matchAll(/^@include[ \t]+(\S+)[ \t]*$/gm)].map((m) => m[1]);
+    if (parts.length) throw new LineGraphError(`${node}'s ${field} is ${path.basename(target)} with shared parts (${parts.join(", ")}); edit those files`);
     overrides.set(target, args.text);
   } else {
-    nextSource = setNodeAttr(source, node, field, dotQuote(args.text));
-    overrides.set(castAbs, nextSource);
+    overrides.set(at.file, setNodeAttr(at.source, node, field, dotQuote(args.text)));
   }
-  const after = parseGraphWith(nextSource, dir, (abs) => (overrides.has(abs) ? overrides.get(abs)! : read(abs)));
+  const after = parseGraphWith(castAbs, (abs) => (overrides.has(abs) ? overrides.get(abs)! : read(abs)));
   const errors = validateWorkflow(after);
   if (errors.length) throw new LineGraphError(`the graph would not run: ${errors.join("; ")}`);
   const graph_hash = graphHash(after);
