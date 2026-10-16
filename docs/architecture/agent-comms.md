@@ -21,14 +21,14 @@ The wording is `ORG_CONTEXT_GUIDANCE` (`packages/shared/contracts/orgWhere.ts`),
 
 Live huddle transcripts reach fed sessions through `transcripts.deliverRoutes`. In the study they were about 1,100 turns a month, and 73% of them ended in a pass.
 - **Named lines:** a line that names the agent (the ask lane) still goes at once, carrying everything unsent with it.
-- **Other talk:** unnamed talk (the context lane) waits out `CONTEXT_MIN_GAP_MS` (3 minutes) after the last context chunk. One scheduled run at the gap's end delivers what it held, so a room that falls silent does not keep it.
-- **Exceptions:** a hold's catch up, a new route's backlog and the end of the call are never gapped.
+- **Other talk:** unnamed talk (the context lane) waits out `CONTEXT_MIN_GAP_MS` (3 minutes) after the last context chunk, whether the scribe's lull or the agent's own turn ending asks for the delivery. One scheduled run at the gap's end delivers what it held, so a room that falls silent does not keep it.
+- **Exceptions:** a hold's catch up (`cast call hold`), a new route's backlog and the end of the call are never gapped.
 
 ## AC4. Monitoring
 
 `packages/evals/org-comms/monitor.py` reruns the measurement:
 1. Exports from prod.
-2. Places each sender against its recipient.
+2. Places each sender against its recipient. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line.
 3. Reads a random sample inside the recipients' transcripts.
 4. Labels the sample through `prompt-dry-run.ts`.
 5. Writes `report.json` and `report.md` under `$CODECAST_EVALS_HOME/org-comms/runs/<date>/`, set against `baseline.json` (the founding study) and every earlier run.
@@ -44,13 +44,27 @@ Every run uses a saved account profile (`--account`), so a machine login switch 
 | Metric | Baseline | Means trouble when |
 |---|---|---|
 | Unnamed huddle chunks a week | about 255 | it does not fall after AC3 |
+| Unnamed chunks inside the 3 minute gap | 92% (2026-10-13, before the fix) | it is not near zero: something delivers around the gap |
 | Huddle noise | 73% | it stays high: the gap is too short |
 | Agent-to-agent noise | 7% | it rises: chatter is coming back |
 | Could have been read, not urgent, changed nothing | 22% | it rises: the "write it down" half is not holding |
-| Out-of-line direction followed | 64% | it rises without coordination as the kind: peers are steering each other |
+| Out-of-line direction followed | 64% | it rises without coordination as the kind: peers are steering each other. Read who received it first: a lead directing a lead it manages and an ask to the owner of a file are both counted here and are the policy working |
 | Hub share | 52% | a new hub appears outside any role |
 
 ## AC5. Open proposals
 
 - **Holds and claims as objects** (`cast hold`, `cast claim`), checked by the push and deploy paths. They would turn most coordination messages into reads.
 - **Integration owners seated as roles.** The busiest informal hubs are release and merge drivers.
+
+## AC6. Weekly log
+
+### 2026-10-13
+
+First week under the policy and the huddle gap (700 messages, 109 agent to agent and 10 huddle cases read).
+
+- **Huddle delivery: the gap was not holding. Fixed and deployed.** Unnamed chunks fell from 649 to 49 a week, but the week held only two fed calls, and pacing was not the reason: 92% of consecutive unnamed chunks still reached the session under 3 minutes apart (median 40 seconds), and 6 of the 10 read ended in a pass. Cause: only the scribe's lull waited out the gap. A context chunk costs the agent a turn, the end of that turn asks for delivery again as a `settle`, and `settle` was exempt, so each pass shipped the next chunk seconds later. `sessionDeliveryVerdict` now gaps a turn's end too; the gap's own closing run arrives after the gap and still delivers. Watch the new "inside the gap" row fall toward zero.
+- **Out-of-line direction followed rose to 79% (27 of 34, baseline 64%), and reading the cases says it is not peers steering each other.** 7 were a lead directing a lead it manages (the org line, which the monitor does not yet place); 15 went to top level sessions whose lead is the person reading the turn; 10 went to workers, all asks about files or a contract the recipient owns, sent by a sibling or a peer under the same plan. No case showed a session pulled off its work by a peer. No wording change. The number moved 70, 83, 79 across three labelings of nearly the same sample, so at this size it is good to about ten points.
+- **Hub share 37% (baseline 52%).** Role sessions now receive 8% of agent traffic. The largest hub is new and outside any role: two top level sessions building the Line (jx7d8av and jx7e4fy) exchanged 73 messages, 11% of the week, over files they both edit. The cases read are productive (asks, answers, collision avoidance; one readable). It is the pair AC5's claims and an integration owner role are meant for; left alone this week, watched for a second week before proposing a seat.
+- **Agent noise 5.5%, read idle unchanged 21%:** at baseline. 4 of the 6 noise cases are one lead (jx723v8) telling workers that had finished to keep going.
+- **Monitor corrected.** It counted 45 system notices as traffic (32 "You now report to" notices as huddle chunks, 13 delivery notices as agent messages), and resolved a sender by a short id that 4,141 sessions share, which placed some parents as peers (22 of 228). It also reused a cached label when the cases under a batch number had changed. All three fixed; this week's numbers are after the fix, earlier columns are not restated.
+
