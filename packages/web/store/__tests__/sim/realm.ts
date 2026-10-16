@@ -15,8 +15,10 @@
 //
 // TIMERS. setTimeout and setInterval become deliveries on `timer:<owner>`
 // (the active window, or "global"), due at now + delay, through the net the
-// world attaches. A window's timer runs inside that window. setImmediate and
-// queueMicrotask stay real; a turn ends by draining the microtask queue.
+// world attaches. A window's timer runs inside that window. A MessageChannel
+// message is a later turn the same way (the engine paces snapshot chunks with
+// one), so it becomes a zero-delay timer for the receiving port. setImmediate
+// and queueMicrotask stay real; a turn ends by draining the microtask queue.
 //
 // STORE FACADE. useInboxStore's getState/setState/subscribe/getInitialState
 // point at the active window's store instance while it runs, so every caller
@@ -240,6 +242,36 @@ function setTimer(handler: unknown, ms: unknown, args: unknown[], repeat: boolea
   return t;
 }
 
+// A message posted on one port reaches the other on a later turn, through the
+// sim's timers, so the net orders it among every other delivery.
+class SimMessagePort {
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  other!: SimMessagePort;
+  private pending = new Set<SimTimer>();
+  postMessage(data: unknown): void {
+    const to = this.other;
+    const t = setTimer(function messagePort() {
+      to.pending.delete(t);
+      to.onmessage?.({ data });
+    }, 0, [], false);
+    to.pending.add(t);
+  }
+  close(): void {
+    for (const t of this.pending) clearTimer(t);
+    this.pending.clear();
+  }
+  start(): void {}
+}
+
+class SimMessageChannel {
+  readonly port1 = new SimMessagePort();
+  readonly port2 = new SimMessagePort();
+  constructor() {
+    this.port1.other = this.port2;
+    this.port2.other = this.port1;
+  }
+}
+
 // A timer armed before the realm was installed is a real one: it goes back to
 // the real clear.
 const realClearTimeout = globalThis.clearTimeout;
@@ -316,6 +348,7 @@ export function installRealm(seed: number, opts: RealmOptions = {}): void {
     swap(g, "setInterval", (fn: unknown, ms?: unknown, ...args: unknown[]) => setTimer(fn, ms, args, true)),
     swap(g, "clearTimeout", clearTimer),
     swap(g, "clearInterval", clearTimer),
+    swap(g, "MessageChannel", SimMessageChannel),
     ...FACADE_KEYS.map((k) => swap(facade, k, () => facadeTarget![k], true)),
   );
   // From here on, a facade read with no active window goes where the options say.

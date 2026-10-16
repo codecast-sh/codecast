@@ -52,7 +52,10 @@ test("a member's call runs on the author's machine and only the member reads the
   expect(String(row.user_id)).toBe(String(ana));
   expect(String(row.caller_id)).toBe(String(ben));
 
+  // The author's daemon is woken by the waiting call, and the wake clears once it is claimed.
+  expect(await t.query(api.modLocal.cliPendingCall, { api_token: TOKEN })).toBe(String(id));
   const { calls } = await t.mutation(api.modLocal.cliClaimCalls, { api_token: TOKEN, names: ["union"], device_name: "host" });
+  expect(await t.query(api.modLocal.cliPendingCall, { api_token: TOKEN })).toBeNull();
   expect(calls.map((c: any) => c.method)).toEqual(["refs"]);
   await t.mutation(api.modLocal.cliFinishCall, { api_token: TOKEN, id, result: { ok: 1 } });
 

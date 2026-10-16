@@ -3,7 +3,7 @@
 // (publish) and the web (the hire form) all read one definition. File handling
 // for a release folder stays in packages/cli/src/orgTemplateArtifact.ts.
 
-import { LINE_SLUG_RE } from "./orgProposal";
+import { LINE_SLUG_RE } from "./lineSlug";
 
 /** POSIX or Windows absolute, without node:path, so this module runs anywhere. */
 const isAbsolutePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);

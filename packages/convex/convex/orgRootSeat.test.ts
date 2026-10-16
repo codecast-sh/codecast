@@ -122,10 +122,10 @@ describe("orgRootSeat", () => {
     expect(again.rows.filter((r) => r.action === "seat")).toEqual([]);
     expect(again.rows.map((r) => r.action)).toEqual(["seated", "seated", "no_session"]);
     expect(tables.org_roles).toHaveLength(2);
-    // Each Head of People seat carries its routine, its needs-input trigger and
-    // its area watch (S25, S28, S29), once: three per seat, and the second run mints none.
-    for (const conv of ["conv-t", "conv-p"]) expect(tables.agent_tasks.filter((t) => t.originating_conversation_id === conv)).toHaveLength(3);
-    expect(tables.agent_tasks).toHaveLength(6);
+    // Each Head of People seat carries its routine, its needs-input trigger,
+    // its area watch and its inbox look (S25, S28, S29, S43), once: four per seat, and the second run mints none.
+    for (const conv of ["conv-t", "conv-p"]) expect(tables.agent_tasks.filter((t) => t.originating_conversation_id === conv)).toHaveLength(4);
+    expect(tables.agent_tasks).toHaveLength(8);
     expect(tables.agent_tasks).toHaveLength(armed);
   });
 
