@@ -344,6 +344,15 @@ export type MomentStorage = (typeof MOMENT_STORAGES)[number];
 export const MOMENT_RETENTIONS = ["30d", "keep"] as const;
 export type MomentRetention = (typeof MOMENT_RETENTIONS)[number];
 
+/**
+ * Where a source's judges make their model calls (learning-loop.md LL10): api
+ * (the default), on the deployment's key inside the team's model budget; or
+ * subscription, on the Claude Code login of the machine that hands the moment
+ * in (cli subscriptionCall.ts), which charges no budget.
+ */
+export const JUDGE_BACKENDS = ["api", "subscription"] as const;
+export type JudgeBackend = (typeof JUDGE_BACKENDS)[number];
+
 export const MOMENT_STATUSES = ["waiting", "extracting", "ready", "failed"] as const;
 export type MomentStatus = (typeof MOMENT_STATUSES)[number];
 

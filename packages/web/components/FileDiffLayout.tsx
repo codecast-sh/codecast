@@ -32,7 +32,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import { findCommonPrefix, shortenPrefix, stripCommonPrefix, treeOrder } from "../lib/diffFileTree";
 import { FileSidebar } from "./FileDiffSidebar";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
-import { usePaneShortcutAction, useShortcutContext } from "../shortcuts";
+import { matchesAction, usePaneShortcutAction, useShortcutContext } from "../shortcuts";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { useFollowSurface } from "../hooks/useFollowSurface";
 import { landOn } from "../hooks/useDiffAddress";
@@ -740,17 +740,19 @@ function FlowDiffView({
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (!rootRef.current?.offsetParent) return;
     const el = e.target as HTMLElement | null;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (keyBelongsElsewhere(el)) return;
+    // The actions match their own modifiers (a rebinding may add some); the
+    // bracket aliases are plain keys only.
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     const order = files.map(pathOf);
     const at = Math.max(0, order.indexOf(active ?? flow.selected?.file ?? order[0]));
-    if (e.key === "j" || e.key === "]") {
+    if (matchesAction(e, "pr.nextFile") || (plain && e.key === "]")) {
       e.preventDefault();
       if (at < order.length - 1) flow.onJumpFile(order[at + 1]);
-    } else if (e.key === "k" || e.key === "[") {
+    } else if (matchesAction(e, "pr.prevFile") || (plain && e.key === "[")) {
       e.preventDefault();
       if (at > 0) flow.onJumpFile(order[at - 1]);
-    } else if (e.key === "m" && onToggleViewed) {
+    } else if (matchesAction(e, "diff.markViewed") && onToggleViewed) {
       e.preventDefault();
       const path = order[at];
       const wasViewed = !!fileMarks?.(path)?.viewed;
@@ -1046,56 +1048,49 @@ export function FileDiffLayout({
     const isInput = keyBelongsElsewhere(target);
 
     if (isInput) return;
+    const toggleTree = matchesAction(e, "diff.toggleFileTree");
+    const help = matchesAction(e, "ui.toggleShortcutsHelp");
     // The page form walks its files itself (FlowDiffView).
-    if (flow && e.key !== "b" && e.key !== "?") return;
+    if (flow && !toggleTree && !help) return;
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
 
-    switch (e.key) {
-      case "j":
-      case "]":
-        e.preventDefault();
-        if (currentFileIndex < strippedFiles.length - 1) {
-          const nextFile = strippedFiles[currentFileIndex + 1];
-          setSelectedFile(nextFile.filename);
-          setCurrentFileIndex(currentFileIndex + 1);
-        }
-        break;
-      case "k":
-      case "[":
-        e.preventDefault();
-        if (currentFileIndex > 0) {
-          const prevFile = strippedFiles[currentFileIndex - 1];
-          setSelectedFile(prevFile.filename);
-          setCurrentFileIndex(currentFileIndex - 1);
-        }
-        break;
-      case "b":
-        e.preventDefault();
-        setSidebarOpen((prev) => !prev);
-        break;
-      case "m": {
-        // Mark the file in hand viewed and move on to the next one: the
-        // reading gesture is "done with this, what is next".
-        if (!onToggleViewed) break;
-        e.preventDefault();
-        const current = strippedFiles[currentFileIndex];
-        if (!current) break;
-        const path = current.originalFilename ?? current.filename;
-        onToggleViewed(path);
-        if (!fileMarks?.(path)?.viewed && currentFileIndex < strippedFiles.length - 1) {
-          const nextFile = strippedFiles[currentFileIndex + 1];
-          setSelectedFile(nextFile.filename);
-          setCurrentFileIndex(currentFileIndex + 1);
-        }
-        break;
+    if (matchesAction(e, "pr.nextFile") || (plain && e.key === "]")) {
+      e.preventDefault();
+      if (currentFileIndex < strippedFiles.length - 1) {
+        const nextFile = strippedFiles[currentFileIndex + 1];
+        setSelectedFile(nextFile.filename);
+        setCurrentFileIndex(currentFileIndex + 1);
       }
-      case "v":
-        e.preventDefault();
-        toggleViewMode();
-        break;
-      case "?":
-        e.preventDefault();
-        s.toggleShortcutsPanel();
-        break;
+    } else if (matchesAction(e, "pr.prevFile") || (plain && e.key === "[")) {
+      e.preventDefault();
+      if (currentFileIndex > 0) {
+        const prevFile = strippedFiles[currentFileIndex - 1];
+        setSelectedFile(prevFile.filename);
+        setCurrentFileIndex(currentFileIndex - 1);
+      }
+    } else if (toggleTree) {
+      e.preventDefault();
+      setSidebarOpen((prev) => !prev);
+    } else if (matchesAction(e, "diff.markViewed")) {
+      // Mark the file in hand viewed and move on to the next one: the
+      // reading gesture is "done with this, what is next".
+      if (!onToggleViewed) return;
+      e.preventDefault();
+      const current = strippedFiles[currentFileIndex];
+      if (!current) return;
+      const path = current.originalFilename ?? current.filename;
+      onToggleViewed(path);
+      if (!fileMarks?.(path)?.viewed && currentFileIndex < strippedFiles.length - 1) {
+        const nextFile = strippedFiles[currentFileIndex + 1];
+        setSelectedFile(nextFile.filename);
+        setCurrentFileIndex(currentFileIndex + 1);
+      }
+    } else if (e.key === "v") {
+      e.preventDefault();
+      toggleViewMode();
+    } else if (help) {
+      e.preventDefault();
+      s.toggleShortcutsPanel();
     }
   });
 

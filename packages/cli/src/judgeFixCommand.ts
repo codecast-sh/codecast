@@ -31,9 +31,9 @@ import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { scopeFor } from "./lineScope.js";
 import { JUDGES_DIR, MOMENTS_DIR, fileVersion, runExtractor, shadowDir } from "./momentsHost.js";
-import { callModel, momentForTry, repoRoot } from "./judgingCommand.js";
+import { judgeBackendOf, judgeBackendOption, judgeCall, momentForTry, repoRoot } from "./judgingCommand.js";
 import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, rulingsShown, type ExpectationsBrief, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
-import { parseExtractorHeader, type MomentRecord } from "@codecast/shared/contracts/moments";
+import { parseExtractorHeader, type JudgeBackend, type MomentRecord } from "@codecast/shared/contracts/moments";
 import { isJudgeCaseKey, type CaseTarget } from "@codecast/shared/contracts/judgeReview";
 import { caseMoved, fisherOneSided, JUDGE_FIX_ALPHA, restEmptied, judgeFixGroup, judgeFixVerdict, validateJudgeFixCard, type JudgeFixCard, type JudgeFixCase, type JudgeFixKept, type JudgeFixRest } from "@codecast/shared/contracts/judgeFix";
 
@@ -200,9 +200,9 @@ export function layOutArm(root: string, arm: string): void {
   }
 }
 
-type MomentShown = { moment: any; body: any };
+export type MomentShown = { moment: any; body: any };
 
-async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref: string): Promise<MomentShown> {
+export async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref: string): Promise<MomentShown> {
   const shown = await apiPost(deps, "/cli/moments/show", { ...scope, moment: ref }, { read: true });
   let body: any = shown.moment.kept ? await apiPost(deps, "/cli/moments/body", { ...scope, moment: ref }, { read: true }) : null;
   const local = path.join(shadowDir(), String(shown.moment.source ?? "").replace(/[^A-Za-z0-9_-]/g, "_"), `${shown.moment.short_id}.json`);
@@ -211,7 +211,7 @@ async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref
 }
 
 /** The moment as one side's extractor sees it now: the kept body, or a fresh extraction from that side's root. */
-async function momentOn(side: { root: string; fresh: boolean }, m: MomentShown, spec: JudgeSpec): Promise<MomentRecord | { error: string }> {
+export async function momentOn(side: { root: string; fresh: boolean }, m: MomentShown, spec: JudgeSpec): Promise<MomentRecord | { error: string }> {
   let raw: unknown = m.body;
   if (side.fresh) {
     const rel = `${MOMENTS_DIR}/${m.moment.kind}.ts`;
@@ -452,18 +452,19 @@ async function ruledCases(deps: PublishDeps, cf: CasesFile, recordOf: RecordOf) 
 }
 
 /** What the base side's cached runs depend on: its judges' files, the extractor files it re-extracts with (`fresh`), and the expectations it grades against. */
-async function baseStamp(cf: CasesFile, baseRoot: string, specs: Specs, fresh: string[]): Promise<string> {
+async function baseStamp(cf: CasesFile, baseRoot: string, specs: Specs, fresh: string[], on: JudgeBackend): Promise<string> {
   const files = [...cf.judges.map((j) => `${JUDGES_DIR}/${j}.md`), ...fresh.filter((p) => p.startsWith(MOMENTS_DIR))];
   const versions = Object.fromEntries(await Promise.all(files.map(async (p) => [p, fs.existsSync(path.join(baseRoot, p)) ? (await fileVersion(path.join(baseRoot, p))).slice(0, 10) : "none"])));
   // `rulings` names how the ruled cases' requests treat the team's rulings (rulingsWithheld), so runs made while they carried them are not reused.
-  return JSON.stringify({ versions, briefs: [...specs.values()].flatMap((x) => x.briefsBase.map((b) => `${b.project}@${b.version}`)), rulings: "withheld-on-ruled" });
+  // `on` names where the runs were made, so a side judged on the subscription is never set beside API runs of the other.
+  return JSON.stringify({ versions, briefs: [...specs.values()].flatMap((x) => x.briefsBase.map((b) => `${b.project}@${b.version}`)), rulings: "withheld-on-ruled", ...(on === "api" ? {} : { on }) });
 }
 
 type Measured = { found: Map<string, RunFound | null>; runs: AbRun[]; spent: number; spentBy: Record<Side, { usd: number; runs: number }>; model: string; stopped: string | null };
 const runKey = (side: Side, moment: string, judge: string, rep: number) => `${side}|${moment}|${judge}|${rep}`;
 
 /** Every unit judged `reps` times on each side asked for, on the team's budget; the base side's runs are cached in <dir>/ab-base.jsonl by what they ran. */
-async function measure(deps: PublishDeps, scope: Record<string, unknown>, o: { task: string; dir: string; specs: Specs; recordOf: RecordOf; units: Array<{ moment: string; judge: string }>; sides: Side[]; reps: number; budget: number; stamp: string; withhold?: Map<string, string[]> }): Promise<Measured> {
+async function measure(deps: PublishDeps, scope: Record<string, unknown>, o: { task: string; dir: string; specs: Specs; recordOf: RecordOf; units: Array<{ moment: string; judge: string }>; sides: Side[]; reps: number; budget: number; stamp: string; withhold?: Map<string, string[]>; on: JudgeBackend }): Promise<Measured> {
   const cachePath = path.join(o.dir, "ab-base.jsonl");
   const cache = new Map<string, RunFound>();
   if (fs.existsSync(cachePath)) for (const l of fs.readFileSync(cachePath, "utf8").split("\n").filter(Boolean)) { const r = JSON.parse(l); cache.set(r.key, readRunFound(r.found)); }
@@ -501,7 +502,7 @@ async function measure(deps: PublishDeps, scope: Record<string, unknown>, o: { t
     const rulings = ruledQuotes ? rulingsWithheld(shown, ruledQuotes, (q) => messageIn(record, q)) : shown;
     const request = judgeRequest(spec, briefs, record, Math.min(Date.now(), record.at ?? Date.now()), rulings);
     out.model = request.model;
-    const result = await callModel(deps, scope, request, `Judge A/B ${j.judge} ${o.task}`);
+    const result = await judgeCall(o.on, deps, scope, request, `Judge A/B ${j.judge} ${o.task}`);
     out.spent += result.cost_usd;
     if (!result.ok) { if (result.reason === "budget") out.stopped = "the team's model budget is full"; return out.found.set(key, null); }
     out.spentBy[j.side].usd += result.cost_usd;
@@ -513,7 +514,8 @@ async function measure(deps: PublishDeps, scope: Record<string, unknown>, o: { t
     if (found && j.side === "base") fs.appendFileSync(cachePath, JSON.stringify({ key: cached, found }) + "\n");
   };
   const queue = [...jobs];
-  await Promise.all(Array.from({ length: 6 }, async () => { while (queue.length && !out.stopped) await run(queue.shift()!); }));
+  // A subscription's window is shared with every session on the login, so it takes fewer at once.
+  await Promise.all(Array.from({ length: o.on === "subscription" ? 3 : 6 }, async () => { while (queue.length && !out.stopped) await run(queue.shift()!); }));
   return out;
 }
 
@@ -626,8 +628,9 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
     .requiredOption("--dir <dir>", "The directory `cast line judges arm` laid out")
     .option("--reps <n>", "Judge runs per case", (v: string) => parseInt(v, 10), 5)
     .option("--budget <usd>", "Stop spending past this", (v: string) => Number(v), 3)
+    .option("--on <backend>", "Where the judge calls run: api (the team's budget) or subscription (this machine's Claude Code login); default the judges' source's judge_on", judgeBackendOption)
     .option("--json", "Machine-readable output")
-    .action(async (options: { task: string; dir: string; reps: number; budget: number; json?: boolean }) => {
+    .action(async (options: { task: string; dir: string; reps: number; budget: number; on?: JudgeBackend; json?: boolean }) => {
       const dir = path.resolve(options.dir);
       const file = path.join(dir, "cases.json");
       if (!fs.existsSync(file)) fail(`No ${file}: run cast line judges arm --task ${options.task} --dir ${options.dir} first`);
@@ -639,7 +642,8 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       const recordOf = momentRecords(deps, scope, cf, baseRoot, false, specs);
       const ruled = await ruledCases(deps, cf, recordOf);
       // The same runs ab's base side reads for a prompt edit, so they are not paid for twice.
-      const m = await measure(deps, { ...scope, project: cf.project_id }, { task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base"], units: ruled, stamp: await baseStamp(cf, baseRoot, specs, []), withhold: ruledQuotesByMoment(cf.cases) });
+      const on = options.on ?? (await judgeBackendOf(deps, scope, cf.judges));
+      const m = await measure(deps, { ...scope, project: cf.project_id }, { task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base"], units: ruled, stamp: await baseStamp(cf, baseRoot, specs, [], on), withhold: ruledQuotesByMoment(cf.cases), on });
       const rows = await Promise.all(ruled.map(async (c) => ({ c, b: await countRuled(m, recordOf, c, "base", options.reps) })));
       const ran = rows.filter((r) => r.b.runs > 0);
       const draws = ran.filter((r) => isDraw(r.b));
@@ -676,8 +680,9 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
     .option("--reps <n>", "Judge runs per moment on each side", (v: string) => parseInt(v, 10), 5)
     .option("--controls <n>", "Live findings of the same judges to keep (distinct moments)", (v: string) => parseInt(v, 10), 10)
     .option("--budget <usd>", "Stop spending past this", (v: string) => Number(v), 8)
+    .option("--on <backend>", "Where the judge calls run: api (the team's budget) or subscription (this machine's Claude Code login); default the judges' source's judge_on", judgeBackendOption)
     .option("--json", "Machine-readable output")
-    .action(async (options: { task: string; dir: string; change?: string; reps: number; controls: number; budget: number; json?: boolean }) => {
+    .action(async (options: { task: string; dir: string; change?: string; reps: number; controls: number; budget: number; on?: JudgeBackend; json?: boolean }) => {
       const dir = path.resolve(options.dir);
       const file = path.join(dir, "cases.json");
       if (!fs.existsSync(file)) fail(`No ${file}: run cast line judges arm --task ${options.task} --dir ${options.dir} first`);
@@ -725,9 +730,10 @@ export function registerJudgeFixCommands(judges: Command, deps: PublishDeps): vo
       // What waiting proposals rest on, by name: a fix that stops finding one empties that proposal (tc-44).
       const rests = await restsOf(deps, scope, cf, live);
 
+      const on = options.on ?? (await judgeBackendOf(deps, scope, cf.judges));
       const m = await measure(deps, { ...scope, project: cf.project_id }, {
         task: options.task, dir, specs, recordOf, reps: options.reps, budget: options.budget, sides: ["base", "arm"],
-        units: [...ruled, ...held, ...controls, ...rests], stamp: await baseStamp(cf, baseRoot, specs, extractorChanged ? changed : []), withhold: ruledQuotesByMoment(cf.cases),
+        units: [...ruled, ...held, ...controls, ...rests], stamp: await baseStamp(cf, baseRoot, specs, extractorChanged ? changed : [], on), withhold: ruledQuotesByMoment(cf.cases), on,
       });
       const { spent, spentBy, model, stopped } = m;
 
