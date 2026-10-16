@@ -5,7 +5,9 @@
 import { describe, expect, test } from "bun:test";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { closesArgument, closesSummary, earlierFixes } from "../causeHistory";
-import { cameBackCount, problemLine, problemState } from "../timeline";
+import { cameBackCount, notDeployed, problemLine, problemState } from "../timeline";
+import { problemBand } from "../problemPage";
+import { overviewWindow, rowStrip } from "../problemsOverview";
 import { buildLineModel, carryingDeploys, decisionSaid, findingNeverShipped, historyBrief, type DeployRow, type LineModelRows, type OccurrenceRow } from "../lineModel";
 import type { MapDecision, MapRun } from "../lineMap";
 import { agentwatchGraph } from "./agentwatchGraph.fixture";
@@ -415,5 +417,42 @@ describe("closes within hours that argued the same thing", () => {
     expect(findingNeverShipped(d3, decisionSaid(d3))).toBe(true);
     const d1 = m.steps.dissolve.decisions.find((d) => d.runId === "d1")!;
     expect(findingNeverShipped(d1, decisionSaid(d1))).toBe(false);
+  });
+});
+
+describe("a fix merged by hand through its pull request (ct-57509, ct-58282)", () => {
+  const pr = "https://github.com/unionmatching/union/pull/812";
+  // The line's merge step was off: the run shipped with no merge on its record, and a person merged its branch.
+  const unmerged = { ...second, merge: undefined } as unknown as MapRun;
+  const handAt = shippedAt + HOUR;
+  const quiet: OccurrenceRow = { ...occurrences, observed: [T0 - 3 * DAY, T0 - DAY], reopened: [] };
+  const issueOf = (over: Partial<LineModelRows> = {}) => buildLineModel(rows({
+    runs: [unmerged, first], occurrences: [quiet], handMerges: new Map([["t1", { at: handAt, url: pr, branch: "codecast/line-ct-57382", into: "main" }]]), ...over,
+  }), "agentwatch").issues.find((i) => i.id === "t1")!;
+  const band = (i: ReturnType<typeof issueOf>) => problemBand({ issue: i, history: i.history, run: null, need: null, decision: null, row: null, task: { status: "in_review" }, now: NOW });
+
+  test("the history takes the pull request's merge as the attempt's, and the deploy after it carried it", () => {
+    const h = issueOf().history;
+    expect(h.attempts[1].merge).toMatchObject({ byHand: true, at: handAt, prUrl: pr, repository: "unionmatching/union", sha: "" });
+    expect(h.ships[0]).toMatchObject({ runId: "run-2", basis: "deploy", liveAt: shippedAt + DAY });
+    expect(h.deploys.map((d) => [d.id, d.how])).toEqual([["dep-1", "deployed after the merge"], ["dep-3", "deployed after the merge"]]);
+    expect(h.closes[0]).toMatchObject({ kind: "shipped", at: shippedAt + DAY });
+  });
+
+  test("the band, the row strip and the chart read the same moment: in production from that deploy", () => {
+    const i = issueOf();
+    expect(band(i)).toMatchObject({ kind: "production", liveAt: shippedAt + DAY, mergedAt: handAt, link: pr, sha: null });
+    expect(rowStrip(i.history, overviewWindow("30d", NOW)).fix).toEqual({ at: shippedAt + DAY, kind: "production" });
+    expect(notDeployed("run-2", i.history)).toBe(false);
+  });
+
+  test("with no deploy after the merge it is merged, not in production", () => {
+    const i = issueOf({ deploys: [deploys[0]] });
+    expect(band(i)).toMatchObject({ kind: "merged", mergedAt: handAt, link: pr });
+  });
+
+  test("a merge the line recorded since wins; without the pull request the line only knows its ship", () => {
+    expect(issueOf({ runs: [second, first] }).history.attempts[1].merge).toMatchObject({ sha: SHA });
+    expect(issueOf({ handMerges: undefined }).history.ships[0]).toMatchObject({ basis: "ship", merge: null });
   });
 });

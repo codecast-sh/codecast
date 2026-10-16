@@ -1,9 +1,10 @@
-import { createContext, useContext, useMemo, useState, memo } from "react";
+import { useContext, useMemo, useState, memo } from "react";
 import type { ReactNode } from "react";
 import { parsePatch, getFileStatus } from "../lib/patchParser";
 import type { PatchHunk } from "../lib/patchParser";
 import { DiffView } from "./DiffView";
 import { CodeBlock } from "./CodeBlock";
+import { MessageIdentity } from "../lib/conversationBlockContexts";
 
 // Inline diff transclusion. A message carries a ```cast-diff fenced block whose
 // body is verbatim `git diff` output; it renders as GitHub-PR-style file cards
@@ -14,12 +15,11 @@ import { CodeBlock } from "./CodeBlock";
 // synced, so the diff is a frozen snapshot of the review moment by design.
 export const DIFF_FENCE = "cast-diff";
 
-// Identity of the message a markdown body belongs to, provided by the
-// conversation view. Inside a conversation, diff lines get DiffView's
-// per-line comment affordance (comments join the shared review batch and ride
-// out on the user's next reply). On surfaces with no conversation — share
-// pages, docs — the context is absent and the diff renders inert.
-export const MessageIdentity = createContext<{ conversationId: string; messageId: string } | null>(null);
+// Inside a conversation (MessageIdentity), diff lines get DiffView's per-line
+// comment affordance (comments join the shared review batch and ride out on
+// the user's next reply). On surfaces with no conversation — share pages,
+// docs — the context is absent and the diff renders inert.
+export { MessageIdentity };
 
 export function MessageIdentityProvider({
   conversationId,
