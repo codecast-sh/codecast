@@ -14,9 +14,7 @@ setDefaultTimeout(60_000);
 let dir: string, laptop: string, hostRepo: string, host: RemoteHost;
 let saved: NodeJS.ProcessEnv;
 
-// The repos carry their own identity: a CI runner has no global git user.
-const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
-const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe", env: GIT_ENV }).trim();
+const git = (repo: string, ...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8", stdio: "pipe" }).trim();
 const write = (repo: string, rel: string, text: string) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
 const read = (repo: string, rel: string) => fs.readFileSync(path.join(repo, rel), "utf-8");
 const commit = (repo: string, rel: string, text: string) => { write(repo, rel, text); git(repo, "add", rel); git(repo, "commit", "-qm", `edit ${rel}`); return git(repo, "rev-parse", "HEAD"); };
