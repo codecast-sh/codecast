@@ -12425,12 +12425,13 @@ program
     if (success) {
       await refreshEnabledSnippets(config);
 
+      const installed = available ?? getVersion();
       if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-        console.log(`Updated to v${available} and restarted daemon`);
+        console.log(`Updated to v${installed} and restarted daemon`);
       } else if (daemonWasRunning) {
-        console.log(`Updated to v${available}; daemon code unchanged, left it running`);
+        console.log(`Updated to v${installed}; daemon code unchanged, left it running`);
       } else {
-        console.log(`Updated to v${available}`);
+        console.log(`Updated to v${installed}`);
       }
     } else {
       process.exit(1);
