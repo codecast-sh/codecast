@@ -15,6 +15,7 @@
 //   cast line trial spend rm <at>                          take back one outside entry
 //   cast line trial runs [--failed]                        each problem's latest run
 //   cast line trial rerun <ct-N>                           rerun a failed run (at its lost card when it died there)
+//   cast line trial rerun <ct-N> --fresh                   start it again from main on today's line, wherever its run stands
 //   cast line trial rerun <ct-N> --reask                   ask a waiting card again, or send its run back to work when its fix no longer answers the findings
 //   cast line trial drop <ct-N> [-m note]                  the drop station: findings left keep the problem open and due; none closes it
 //   cast line trial sweep [ct-N...] [--dry]                end runs waiting on closed problems; release closed problems' worktrees here (only the named ones')
@@ -248,21 +249,24 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     .description("Run a failed or stopped trial problem again (the review page's Rerun): one that died waiting at its own card picks up at that card; any other starts fresh from main. Under the dispatcher's billed-money cap, its accounts' quota and its run limit")
     .option("--reask", "A run waiting at a card: stop its runner here and ask that card again on the stations as they are now. A change card whose fix no longer answers its problem's findings is not worded again: with the findings changed and under half reached the run reads the problem again and works on; with none reached it ends and the problem is due a run from main")
     .option("--at <node>", "With --reask, pick the run up at this station whatever its findings (a gate the graph no longer has resumes at the station after it)")
+    .option("--fresh", "Start the problem again from main on the line as it is now, wherever its run stands: the run ends and its fix is set aside on its branch")
     .option("--json", "Machine-readable output")
-    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string }) => {
+    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string; fresh?: boolean }) => {
       if (opts.at && !opts.reask) fail("--at goes with --reask");
+      if (opts.fresh && opts.reask) fail("--fresh starts from main; --reask picks the run up where it stands");
       let asker: string | undefined;
       let entry: string | undefined;
-      if (opts.reask) {
+      if (opts.reask || opts.fresh) {
         const projects: Array<{ title: string }> = trial.opts().project ? [{ title: trial.opts().project }] : await post("/cli/line/trial/projects", {}, true);
         let row: { task: string; run_id: string } | undefined;
         for (const p of projects) row ??= ((await post("/cli/line/trial/runs", { project: p.title }, true)) as Array<{ task: string; run_id: string }>).find((r) => r.task === task);
         if (!row) fail(`${task} has no trial run`);
+        const { prepareReask, stopRunner } = await import("./workflow/reask.js");
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
-        const { prepareReask } = await import("./workflow/reask.js");
-        ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
+        if (opts.reask) ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
+        else await stopRunner(row.run_id, task).catch((e) => fail(e.message));
       }
-      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
+      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.fresh ? { fresh: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
       if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
       if (r.rebuild === "main") return console.log(`${r.task}: not asked again: ${r.why}. Its run ended, its branch is set aside, and the problem is due a new run from main (cast line trial dispatch --dry).`);
       if (r.rebuild === "investigate") return console.log(`${r.task}: not asked again: ${r.why}. Its run reads the problem again at ${r.resumed_at} and works on from there (run ${r.run_id}).`);

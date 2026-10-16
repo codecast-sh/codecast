@@ -1928,6 +1928,10 @@ export type ClientUI = {
   // The /org chart's "Expand all": every role and session card opened in
   // place. Stamped LWW like org_view.
   org_expand_all?: boolean;
+  // The /org chart's companion drawer (components/org/OrgPanel), closed by the
+  // person. Absent: open. A proposal or a session named in the address opens
+  // it whatever this says.
+  org_panel?: "closed";
   // The session map's arrangement (components/sessionMap): the piles the
   // person made, where each pile and loose card sits, and which piles are
   // folded. Stamped LWW: the desk is the same on every device.
