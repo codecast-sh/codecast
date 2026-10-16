@@ -1,4 +1,5 @@
 import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { applyFile, applyFileSession, looseSessionsOf } from "./lib/orgSessionFiling";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { action, mutation, query } from "./functions";
@@ -47,7 +48,6 @@ import {
   type OrgAdoptChange,
   type OrgBudgetChange,
   type OrgChange,
-  type OrgFileChange,
   type OrgPlanStatusChange,
   type OrgProjectChange,
   type OrgProjectMetaChange,
@@ -374,12 +374,13 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
   let sessionsUnfiled = 0;
   for (const [key, list] of scan.byParent) if (key.startsWith("user:")) sessionsUnfiled += list.length;
   const longRunning = await longRunningSessions(ctx, scan, now, work, userId, teamId);
+  const loose = await looseSessionsOf(ctx, scan, userId);
 
   return {
     members,
     labels: topOf(labels, ANALYSIS_CAPS.labels),
     git_roots: Array.from(gitRoots.values()).sort((a, b) => b.sessions - a.sessions).slice(0, ANALYSIS_CAPS.git_roots),
-    sessions: { total: scan.sessions.size, truncated: scan.truncated, unfiled: sessionsUnfiled, titles_by_path: Object.fromEntries(titlesByPath), long_running: longRunning },
+    sessions: { total: scan.sessions.size, truncated: scan.truncated, unfiled: sessionsUnfiled, loose, titles_by_path: Object.fromEntries(titlesByPath), long_running: longRunning },
     org: { roles, anchors, projects_without_role: projectsWithoutRole, whole_workspace_roles: wholeWorkspaceRoles },
   };
 }
@@ -1552,19 +1553,6 @@ async function seatExistingSession(ctx: Ctx, userId: Id<"users">, role: any, con
 // File a plan under a project (the review's "18 plans with open work under no
 // project"): both refs resolve inside the boundary, the plan row and its doc
 // take the project, the way a project merge moves them (applyProjects).
-export async function applyFile(ctx: Ctx, _userId: Id<"users">, boundary: Boundary, p: OrgFileChange, _opts: ApplyOpts): Promise<ApplyResult> {
-  const planRef = await resolveScopeRef(ctx, boundary, `plan:${p.plan}`);
-  const projectRef = await resolveScopeRef(ctx, boundary, `project:${p.project}`);
-  const plan = planRef.kind === "plan" ? await ctx.db.get(planRef.id) : null;
-  const project = projectRef.kind === "project" ? await ctx.db.get(projectRef.id) : null;
-  if (!plan || !project) throw new Error(`No ${!plan ? `plan "${p.plan}"` : `project "${p.project}"`} in this workspace`);
-  if (String(plan.project_id ?? "") === String(project._id)) return { status: "applied", note: `${plan.short_id} is already under "${project.title}"` };
-  const now = Date.now();
-  await ctx.db.patch(plan._id, { project_id: project._id, updated_at: now });
-  if (plan.doc_id) { const doc = await ctx.db.get(plan.doc_id); if (doc) await ctx.db.patch(doc._id, { project_id: project._id, updated_at: now }); }
-  await noteOrgChange(ctx, _userId, whereOfRecord(plan), { kind: "file", subject: recordSubject("plan", plan), before: { project_id: plan.project_id ?? null }, after: { project_id: String(project._id) }, labels: await labelsOf(ctx, [plan.project_id, project._id]) });
-  return { status: "applied", note: `filed ${plan.short_id} "${plan.title}" under "${project.title}"` };
-}
 
 // ── Bring records in line (org-staffing.md S9) ──────────────────────────────
 // A plan, task or project whose evidence says it is finished gets its status
@@ -1878,6 +1866,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "charter_edit": return applyCharterEdit(ctx, userId, boundary, change, opts);
     case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);
     case "file": return applyFile(ctx, userId, boundary, change, opts);
+    case "file_session": return applyFileSession(ctx, userId, boundary, change, opts);
     case "plan_status": return applyPlanStatus(ctx, userId, boundary, change, opts);
     case "task_status": return applyTaskStatus(ctx, userId, boundary, change, opts);
     case "project_status": return applyProjectStatus(ctx, userId, boundary, change, opts);

@@ -31,6 +31,8 @@ export type OrgPerson = {
   image?: string;
   role: "admin" | "member" | "owner";
   is_me: boolean;
+  /** The member this person reports to on the chart, absent at the top. */
+  reports_to_user_id?: string;
   presence?: "online" | "away" | "offline";
   counts: StateCounts;
   sessions: OrgSession[];

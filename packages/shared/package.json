@@ -23,6 +23,7 @@
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
     "./contracts/orgChange": "./contracts/orgChange.ts",
     "./contracts/orgChangeWords": "./contracts/orgChangeWords.ts",
+    "./contracts/orgSessionFiling": "./contracts/orgSessionFiling.ts",
     "./contracts/evalResult": "./contracts/evalResult.ts",
     "./contracts/evalsApi": "./contracts/evalsApi.ts",
     "./contracts/projectRef": "./contracts/projectRef.ts",

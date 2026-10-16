@@ -16,6 +16,7 @@ import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
 import { paneDragProps, railRowClass } from "../../lib/railRow";
 import { DEVELOPER_MODE, type SurfaceMode } from "../../lib/surfaceRules";
+import type { NavSpace } from "../../lib/navSpaces";
 
 /** The Threads row: every conversation you are in, with the count of those that moved. */
 export function ThreadsNavRowView({
@@ -228,6 +229,7 @@ export function SidebarNavView({
   changesOn,
   agent,
   mode = DEVELOPER_MODE,
+  space,
 }: {
   isNarrow: boolean;
   scope?: "work";
@@ -252,9 +254,14 @@ export function SidebarNavView({
   agent: { label: string; title: string; icon: ReactNode };
   /** Hosted mode's rows and words (lib/surfaces.ts); developer mode when absent. */
   mode?: SurfaceMode;
+  /** The space the rail beside this column picked (lib/navSpaces): only its
+   *  group draws, and Chat, a space of its own, leaves the Conversations
+   *  group. Absent, every group draws. */
+  space?: NavSpace;
 }) {
   const { words, page, showsPage, shows } = mode;
   const agentsGroup = shows("nav.agentsGroup");
+  const inSpace = (s: NavSpace) => !space || space === s;
   const routines = (
     <NavSection
       label={page("/triggers", "Triggers")}
@@ -267,7 +274,7 @@ export function SidebarNavView({
   );
   return (
     <>
-      {scope === "work" ? null : (<>
+      {scope === "work" || !inSpace("home") ? null : (<>
       <RailHeading label="Conversations" isNarrow={isNarrow} />
       <div className="text-sm">
         {inbox}
@@ -285,13 +292,14 @@ export function SidebarNavView({
           />
         )}
         {questions}
-        {chat}
+        {!space && chat}
         {calls}
       </div>
 
       </>)}
       {/* What you are working on. Org leads: the company the rest of this
           group files into, then its tasks and the docs and files around them. */}
+      {inSpace("work") && (<>
       <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
       <div className="text-sm">
         {/* Goals and projects are work in their own right: they need no org.
@@ -383,11 +391,12 @@ export function SidebarNavView({
           icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
       </div>
+      </>)}
 
       {/* The Work window keeps the pinned rail and the Work group, the
           two things its pages are reached through; the rest is the main
           window's. */}
-      {scope === "work" || !agentsGroup ? null : (<>
+      {scope === "work" || !agentsGroup || !inSpace("agents") ? null : (<>
       {/* The machinery that does the work: what is running right now, and the
           standing things that set it running. */}
       <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />

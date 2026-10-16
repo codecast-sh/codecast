@@ -60,6 +60,7 @@ import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
 import { RoleHoverCard } from "./identity";
 import { RoleFace } from "./org/RoleFace";
+import { OwnerAvatar } from "./OwnersBadge";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { isUnderRole } from "@codecast/shared/contracts";
@@ -3939,14 +3940,14 @@ function SessionListPanelImpl({
         ) : orgLensView ? (
         <>
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
-        {orgLensView.groups.map(({ key, label, items, roleId }) => {
+        {orgLensView.groups.map(({ key, label, items, roleId, userId, image }) => {
           const role = roleId ? rolesById.get(roleId) : undefined;
           return (
             <div key={key}>
-              {renderSection(label, items, role ? "text-sol-text" : orgLensView.mode === "goal" && key.startsWith("goal:") ? "text-sol-violet" : "text-teal-400", undefined, undefined, {
+              {renderSection(label, items, role || userId ? "text-sol-text" : orgLensView.mode === "goal" && key.startsWith("goal:") ? "text-sol-violet" : "text-teal-400", undefined, undefined, {
                 key: `${orgLensView.mode}_${key}`,
                 monoLabel: true,
-                icon: role ? <RoleFace role={role} size={14} className="shrink-0" /> : undefined,
+                icon: role ? <RoleFace role={role} size={14} className="shrink-0" /> : userId ? <OwnerAvatar name={label} image={image} size="w-3.5 h-3.5" /> : undefined,
                 ...groupTally(items),
               })}
             </div>
