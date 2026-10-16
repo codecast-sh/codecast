@@ -20,6 +20,7 @@ import { copyText } from "../lib/copyText";
 import { useEventListener } from "./useEventListener";
 import { useWatchEffect } from "./useWatchEffect";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { matchesAction } from "../shortcuts";
 import { useFollowSurface } from "./useFollowSurface";
 
 export function useDiffAddress({
@@ -65,18 +66,17 @@ export function useDiffAddress({
   useEventListener("keydown", (e: KeyboardEvent) => {
     // A background tab keeps its copy mounted under display: none.
     if (!rootRef.current?.offsetParent) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
     if (keyBelongsElsewhere(el)) return;
     // y: a link to exactly what is on screen. The desktop app has no address
     // bar, so this is how a place in it gets handed to someone.
-    if (e.key === "y") {
+    if (matchesAction(e, "pr.copyLink")) {
       e.preventDefault();
       void copyText(shareUrl(`${loc.pathname}${loc.search}${loc.hash}`), target?.anchor ? "Link to the lines copied" : "Link copied");
       return;
     }
     // Escape lets go of the selected lines, and the address drops them too.
-    if (e.key === "Escape" && here && target?.anchor) {
+    if (matchesAction(e, "pr.clearLines") && here && target?.anchor) {
       goTo(target.file, undefined, { scroll: false });
     }
   });

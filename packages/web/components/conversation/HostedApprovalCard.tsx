@@ -10,10 +10,11 @@
 import { useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Check } from "lucide-react";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { answerKeyAllowed } from "../decisions/ChangeCardView";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { matchesAction } from "../../shortcuts";
 import { APPROVAL_ANSWERS, approvalButtonLabel } from "@codecast/shared/contracts/assistant";
 import { RoutineNotifyLine } from "./RoutineNotifyLine";
 import type { QueueItem } from "../../lib/decisionQueue";
@@ -99,7 +100,7 @@ export function HostedApprovalBody({
     const onKey = (e: KeyboardEvent) => {
       if (!answerKeyAllowed(e)) return;
       if (keyBelongsElsewhere(e.target)) return;
-      const pick = e.key === "y" || e.key === "Y" ? yes : e.key === "n" || e.key === "N" ? no : undefined;
+      const pick = matchesAction(e, "permission.approve") || e.key === "Y" ? yes : matchesAction(e, "permission.deny") || e.key === "N" ? no : undefined;
       if (!pick) return;
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -132,7 +133,7 @@ export function HostedApprovalBody({
             or a line under them that the card's edge could cut. */}
         {keys && !answered && (
           <span data-hosted-approval-keys className="ml-1 hidden items-center gap-1.5 text-[11.5px] text-sol-text-dim opacity-0 transition-opacity group-hover/approval:opacity-100 group-focus-within/approval:opacity-100 sm:inline-flex">
-            <KeyCap size="xs">Y</KeyCap> yes <KeyCap size="xs">N</KeyCap> not now
+            <MenuKeyCaps action="permission.approve" className="contents" /> yes <MenuKeyCaps action="permission.deny" className="contents" /> not now
           </span>
         )}
         {others.map((o) => (

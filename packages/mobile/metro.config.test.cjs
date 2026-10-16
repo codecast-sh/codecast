@@ -164,3 +164,16 @@ for (const name of ['expo-asset', 'expo-modules-core', 'expo-file-system']) {
     expect(config.resolver.resolveRequest(sdk, name, 'ios')).toEqual(expected);
   });
 }
+
+// Store shots mode reaches a bundle only when Metro runs with its flag; every
+// other bundle resolves its modules to nothing, so a release cannot ship the
+// fixture world. The flag module itself always resolves (convex.ts, auth.tsx
+// and the root layout import it to decide).
+test('store shots modules resolve empty without EXPO_PUBLIC_STORE_SHOTS', () => {
+  expect(process.env.EXPO_PUBLIC_STORE_SHOTS).not.toBe('1');
+  const app = context(path.join(__dirname, 'lib/convex.ts'));
+  for (const name of ['./storeShots/convexStub', './storeShots/seed', './storeShots/world']) {
+    expect(config.resolver.resolveRequest(app, name, 'ios')).toEqual({ type: 'empty' });
+  }
+  expect(config.resolver.resolveRequest(app, './storeShots/flag', 'ios').filePath).toBe(path.join(__dirname, 'lib/storeShots/flag.ts'));
+});

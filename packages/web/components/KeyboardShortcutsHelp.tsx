@@ -2,7 +2,9 @@ import { cloneElement, isValidElement, useContext, useMemo, useRef, useState, ty
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction } from "../shortcuts";
-import { HELP_SECTIONS } from "../shortcuts/sections";
+import { visibleShortcutSections } from "../shortcuts/visibleSections";
+import { useKeyBindingsVersion, useShortcutParts } from "../shortcuts/registry";
+import { rebindShortcut } from "../lib/keyboardSettings";
 import { SEND_CHORDS } from "../shortcuts/sendChords";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
@@ -14,14 +16,12 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyCap";
-import { MODE_WORDS, Surface, actionLabel, actionShownIn, helpContextSurface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
+import { MODE_WORDS, Surface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
 
 /** The most keys a chord hint shows with in hosted mode. */
 const HOSTED_CHORD_MAX_KEYS = 2;
 
 const MODE_WORDS_HOSTED = MODE_WORDS.hosted;
-/** The sheet's sections named by hosted mode's pages. */
-const HOSTED_HELP_LABELS: Record<string, string> = { Tasks: MODE_WORDS_HOSTED.tasksPage, Docs: MODE_WORDS_HOSTED.docsPage };
 
 export { KeyCap };
 
@@ -30,6 +30,7 @@ export function KeyboardShortcutsPanel() {
     s => s.shortcutsPanelOpen,
     s => s.clientState.ui?.triage_bar_compact,
     s => s.clientState.ui?.inbox_shortcuts_hidden,
+    s => s.clientState.ui?.key_bindings,
   ]);
   const triageBarHidden = isTriageBarCompact(s.clientState.ui);
   const everOpened = useRef(false);
@@ -60,30 +61,23 @@ export function KeyboardShortcutsPanel() {
 
   // The palette's own rule (lib/surfaceRules ACTION_SURFACES): an action
   // hidden there is not listed here, and hosted mode names the rest in its
-  // words.
+  // words. Live bindings: a rebound action shows its own keys, an unbound one
+  // drops out.
   const mode = useSurfaceMode();
   const hosted = mode.words === MODE_WORDS_HOSTED;
+  const bindingsVersion = useKeyBindingsVersion();
+  const changed = new Set((s.clientState.ui?.key_bindings ?? []).map((o) => o.action));
   const sections = useMemo(() => {
-    const seen = new Set<string>();
-    type Row = { key: string; description: string; parts: string[] };
+    type Row = { key: string; description: string; parts: string[]; action?: ShortcutAction };
     const result: { label: string; accent: string; rows: Row[] }[] = [];
-    for (const { when, label, accent } of HELP_SECTIONS) {
-      const contextSurface = helpContextSurface(when);
-      if (contextSurface && !mode.shows(contextSurface)) continue;
-      const defs = getShortcutsByContext(when).filter(d => {
-        if (seen.has(d.action)) return false;
-        seen.add(d.action);
-        return actionShownIn(mode, d.action);
-      });
-      if (defs.length > 0) {
-        // Hosted mode names a section by its page ("To-dos", "Notes") and
-        // draws every dot in quiet ink rather than a colour per context.
-        result.push({ label: hosted ? HOSTED_HELP_LABELS[label] ?? label : label, accent: hosted ? "bg-sol-text-dim" : accent, rows: defs.map((d) => ({ key: d.action, description: actionLabel(d.action, d.description, hosted), parts: formatShortcutParts(d) })) });
+    for (const sec of visibleShortcutSections(mode, getShortcutsByContext)) {
+      if (sec.actions.length > 0) {
+        result.push({ label: sec.label, accent: sec.accent, rows: sec.actions.map((a) => ({ key: a.action, action: a.def.fixed ? undefined : a.action, description: a.label, parts: formatShortcutParts(a.def) })) });
       }
       // The composer's send chords live in their own table (they run from a
       // focused textarea, outside the registry); they read as the
       // conversation's companion, so they file right under it.
-      if (when === "conversation") {
+      if (sec.when === "conversation") {
         result.push({
           label: "Composer",
           accent: hosted ? "bg-sol-text-dim" : "bg-sol-violet",
@@ -92,7 +86,8 @@ export function KeyboardShortcutsPanel() {
       }
     }
     return result;
-  }, [mode, hosted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, hosted, bindingsVersion]);
 
   return (
     <div
@@ -138,7 +133,7 @@ export function KeyboardShortcutsPanel() {
               </div>
               <div className="space-y-0.5">
                 {rows.map((row) => (
-                  <ShortcutRow key={row.key} description={row.description} parts={row.parts} />
+                  <ShortcutRow key={row.key} description={row.description} parts={row.parts} changed={!!row.action && changed.has(row.action)} onRebind={row.action ? () => rebindShortcut(row.action) : undefined} />
                 ))}
               </div>
             </section>
@@ -148,6 +143,12 @@ export function KeyboardShortcutsPanel() {
         <div className="px-4 py-2.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
           <KeyCap size="xs">?</KeyCap> toggles this panel
           <span className="ml-auto flex items-center gap-3">
+            <button
+              onClick={() => rebindShortcut()}
+              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              Customize
+            </button>
             {triageBarHidden && (
               <Surface name="triageBar">
                 <button
@@ -174,17 +175,28 @@ export function KeyboardShortcutsPanel() {
   );
 }
 
-function ShortcutRow({ description, parts }: { description: string; parts: string[] }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1 group">
+/** A row with `onRebind` is a button: pressing it opens the keyboard
+ *  settings on that action, already listening for the new keys. */
+function ShortcutRow({ description, parts, changed, onRebind }: { description: string; parts: string[]; changed?: boolean; onRebind?: () => void }) {
+  const body = (
+    <>
       {/* A long name wraps rather than pushing its keys out of the panel. */}
-      <span className="min-w-0 flex-1 text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">{description}</span>
-      <span className="shrink-0 flex items-center gap-[3px]">
+      <span className="min-w-0 flex-1 text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">
+        {changed && <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-sol-cyan align-middle" />}
+        {description}
+      </span>
+      <span className="shrink-0 flex items-center gap-[3px] rounded group-hover:ring-1 group-hover:ring-sol-cyan/40 group-hover:ring-offset-2 group-hover:ring-offset-sol-bg transition-shadow">
         {parts.map((part, i) => (
           <KeyCap key={i}>{part}</KeyCap>
         ))}
       </span>
-    </div>
+    </>
+  );
+  if (!onRebind) return <div className="flex items-center justify-between gap-3 py-1 group">{body}</div>;
+  return (
+    <button onClick={onRebind} aria-label={`Change shortcut: ${description}`} className="flex w-full items-center justify-between gap-3 py-1 text-left group">
+      {body}
+    </button>
   );
 }
 
@@ -198,10 +210,9 @@ export function MenuKeyCaps({
   action: ShortcutAction;
   className?: string;
 }) {
-  const defs = getShortcutsForAction(action);
+  const parts = useShortcutParts(action);
   const hosted = useHostedMode();
-  if (defs.length === 0) return null;
-  const parts = formatShortcutParts(defs[0]);
+  if (!parts) return null;
   // Hosted mode teaches the short chords only: a three-key hand is a
   // power user's, and there it reads as noise beside a row's name.
   if (hosted && parts.length >= HOSTED_CHORD_MAX_KEYS + 1) return null;

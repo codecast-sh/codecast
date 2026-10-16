@@ -3,7 +3,7 @@ import { useCallback, useRef, useEffect, useState } from "react";
 import { activePaneDrag, dragCarriesPane, readPaneDrop, stageMoveLeafToTab, startPaneDrag } from "../lib/stage";
 import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, AppWindow, PanelsTopLeft } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
-import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
+import { useShortcutAction, useShortcutLabel } from "../shortcuts";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle, recordTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
@@ -43,6 +43,7 @@ export function TabBar() {
     // And for a page named by a mode word (the triggers page): the mode.
     isHostedMode,
   ]);
+  const newTabKeys = useShortcutLabel("tab.new");
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -270,7 +271,7 @@ export function TabBar() {
       <button
         onClick={handleNewTab}
         className="flex-shrink-0 p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim hover:bg-sol-bg/50 transition-colors"
-        title={`New tab (${formatShortcutLabel('tab.new')})`}
+        title={`New tab (${newTabKeys})`}
       >
         <Plus className="w-3 h-3" />
       </button>
