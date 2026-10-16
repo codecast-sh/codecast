@@ -397,6 +397,7 @@ import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConf
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
+import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -27665,6 +27666,16 @@ function restartDaemonProcess(reason: string): void {
     // free the pid file by exiting and kick the job so launchd's instance wins it.
     skipRespawn = true;
     if (!requestLaunchdRestart()) spawnReplacement();
+    persistLogQueue();
+    process.exit(0);
+  }
+  // A systemd unit (provisionLinux.ts: Restart=always, KillMode=process)
+  // brings its daemon back on exit. A replacement spawned here would outlive
+  // the exit inside the unit's cgroup and hold the pid file, so every restart
+  // of the unit exits "already running" and the unit loops every RestartSec
+  // forever (28k restarts on the Linux host, 2026-10-16).
+  if (supervisedBySystemdUnit()) {
+    skipRespawn = true;
     persistLogQueue();
     process.exit(0);
   }

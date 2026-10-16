@@ -630,7 +630,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         )}
         {conversation && !recipient && (
           <ReviewComposerContext.Provider value={composerBridge}>
-            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot, recents: false } : undefined} />
+            <NewSessionView conversation={conversation} slots={pageLayout ? { foot: footSlot, below: belowSlot } : undefined} />
           </ReviewComposerContext.Provider>
         )}
         {conversation && recipient && (
