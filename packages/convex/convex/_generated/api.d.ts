@@ -167,6 +167,7 @@ import type * as issueSync from "../issueSync.js";
 import type * as issueSyncSchema from "../issueSyncSchema.js";
 import type * as judgeRetire from "../judgeRetire.js";
 import type * as judgeReview from "../judgeReview.js";
+import type * as keyBindings from "../keyBindings.js";
 import type * as lib_access from "../lib/access.js";
 import type * as lib_accessKeys from "../lib/accessKeys.js";
 import type * as lib_activityDaily from "../lib/activityDaily.js";
@@ -661,6 +662,7 @@ declare const fullApi: ApiFromModules<{
   issueSyncSchema: typeof issueSyncSchema;
   judgeRetire: typeof judgeRetire;
   judgeReview: typeof judgeReview;
+  keyBindings: typeof keyBindings;
   "lib/access": typeof lib_access;
   "lib/accessKeys": typeof lib_accessKeys;
   "lib/activityDaily": typeof lib_activityDaily;

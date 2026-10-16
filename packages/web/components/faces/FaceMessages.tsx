@@ -300,12 +300,12 @@ export function FaceMessages({
             return (
               <div key={r.id} className="fc-row" data-me={r.me ? "1" : undefined} data-run={run ? "1" : undefined}>
                 {sep && <Place row={r} onOpen={() => openRow(r)} />}
-                <div className="fc-msg" data-new={isNew(r) ? "1" : undefined} data-failed={r.failed ? "1" : undefined}>
+                <button type="button" className="fc-msg" onClick={() => openRow(r)} title="Jump to message in chat" data-new={isNew(r) ? "1" : undefined} data-failed={r.failed ? "1" : undefined}>
                   <span className="fc-text">
                     <Preview text={r.text} />
                   </span>
                   {(tail || r.failed) && <span className="fc-at-time">{r.failed ? "not sent" : timeAgo(r.at)}</span>}
-                </div>
+                </button>
               </div>
             );
           })}
