@@ -2,7 +2,7 @@
 // yet, as the Head of People's daily look reads them, and `--new`, the quiet
 // gate that look runs behind: exit 0 only when one started since it last ran.
 
-import { FILE_SESSION_SHAPE } from "@codecast/shared/contracts/orgSessionFiling";
+import { FILE_SESSION_EXAMPLE, FILE_SESSION_SHAPE } from "@codecast/shared/contracts/orgSessionFiling";
 import { formatRelative } from "@codecast/shared/time";
 import { fmt } from "./colors.js";
 import type { OrgInitDeps } from "./orgInit.js";
@@ -35,6 +35,7 @@ export function looseLines(a: LooseAnswer, now: number): string[] {
   return [
     `${a.count} loose session${a.count === 1 ? "" : "s"}${a.count > a.rows.length ? ` (newest ${a.rows.length} shown)` : ""}${a.last_look_at ? fmt.muted(` · last look ${formatRelative(a.last_look_at, now)}`) : ""}`,
     ...a.rows.map((r) => `  ${fresh.has(r.short_id) ? fmt.highlight("new") : "   "} ${r.short_id} ${r.title} ${fmt.muted(`· ${r.state} · ${formatRelative(r.last_active_at, now)}${r.project_path ? ` · ${r.project_path}` : ""}`)}`),
-    fmt.muted(`\nFiling one is a proposal change (cast org propose): ${FILE_SESSION_SHAPE}.`),
+    fmt.muted(`\nFiling one is a proposal change (cast org propose): ${FILE_SESSION_SHAPE}. One change in a spec reads:`),
+    fmt.muted(`  ${FILE_SESSION_EXAMPLE}`),
   ];
 }

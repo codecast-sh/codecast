@@ -207,6 +207,45 @@
   color: var(--sol-text-dim);
   font-size: 10px;
 }
+/* A channel or thread divider is the way there. */
+.fc-sep-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.fc-sep-link:hover,
+.fc-sep-link:focus-visible {
+  background: color-mix(in srgb, var(--sol-text) 10%, transparent);
+  color: var(--sol-text);
+}
+.fc-sep-channel {
+  flex: none;
+  color: var(--sol-text-muted);
+}
+.fc-sep-root {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fc-sep-icon {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
+}
+.fc-sep-go {
+  opacity: 0;
+}
+.fc-sep-link:hover .fc-sep-go,
+.fc-sep-link:focus-visible .fc-sep-go {
+  opacity: 1;
+}
 /* Their lines hang left, yours right, like any chat; a run from one side
  * sits tight and a change of speaker opens a gap. */
 .fc-row {

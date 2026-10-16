@@ -115,7 +115,10 @@ a declaration.
   gate (`gates_failed`) reaches the card as its own red check, "Suite gates",
   naming each failing scenario, so the card cannot recommend Ship over it.
 - **ship** lands the change the project's way and prints one line saying what
-  is true now: live, or waiting on a deploy and where. Without one the ship
+  is true now: live, or waiting on a deploy and where. A refusal says why on
+  stderr, which the station puts on the task. Exit 3 means the default branch
+  moved past the branch after the rebase station, and the run rebases again
+  (three rebases at most). Without one the ship
   station runs Ship (docs/architecture/ship.md), which opens the pull request
   and merges in either of two cases: the profile sets `[line.merge] auto`, or
   the role that owns the line holds a merge grant (`org_roles.line_merge` with

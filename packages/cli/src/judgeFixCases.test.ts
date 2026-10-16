@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { abRunLines, isDraw, readHeldOut, readRunFound, ruledByMessage, ruledQuotesByMoment, rulingsWithheld } from "./judgeFixCommand";
+import { abRunLines, isDraw, readHeldOut, repeatsOutcome, readRunFound, ruledByMessage, ruledQuotesByMoment, rulingsWithheld } from "./judgeFixCommand";
 import { dissolveClose } from "./lineDissolveCommand";
 
 describe("ruled cases are counted per message (tc-34)", () => {
@@ -112,5 +112,23 @@ describe("held-out cases (held-out.json)", () => {
       { finding: "sg-1", why: "same apology for a broken promise" }, { finding: "sg-2", why: "" },
     ]);
     expect(readHeldOut({})).toEqual([]);
+  });
+});
+
+describe("repeatsOutcome: a judge fix is worth trying only where one could be measured", () => {
+  test("cases the judge files at most once in five are draws", () => {
+    expect(repeatsOutcome([{ runs: 5, hits: 1 }, { runs: 5, hits: 0 }])).toBe("draws");
+  });
+  test("one case filed 2 of 5 cannot separate from a fix that ends it: draws (ct-59568)", () => {
+    expect(repeatsOutcome([{ runs: 5, hits: 2 }])).toBe("draws");
+    expect(repeatsOutcome([{ runs: 5, hits: 3 }])).toBe("draws");
+  });
+  test("a case filed 4 of 5, or weaker ones pooled, can: repeats (ct-60174's 7 of 10)", () => {
+    expect(repeatsOutcome([{ runs: 5, hits: 4 }])).toBe("repeats");
+    expect(repeatsOutcome([{ runs: 5, hits: 2 }, { runs: 5, hits: 5 }])).toBe("repeats");
+    expect(repeatsOutcome([{ runs: 5, hits: 3 }, { runs: 5, hits: 3 }])).toBe("repeats");
+  });
+  test("a case that did not run leaves it to be fixed", () => {
+    expect(repeatsOutcome([{ runs: 0, hits: 0 }, { runs: 5, hits: 1 }])).toBe("repeats");
   });
 });

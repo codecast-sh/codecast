@@ -283,8 +283,13 @@ describe("line.cast template", () => {
   test("ship: a landed ship watches the cause, with or without a ship command; a refused ship ends the run", () => {
     expect(fired("ship", { outcome: "success", ...EMPTY_VARS })).toEqual(["watch"]);
     expect(fired("ship", { outcome: "success", ...UNION_VARS })).toEqual(["watch"]);
-    expect(fired("ship", { outcome: "failure", ...UNION_VARS })).toEqual(["exit"]);
-    expect(fired("ship", { outcome: "failure", ...EMPTY_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...UNION_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...EMPTY_VARS })).toEqual(["exit"]);
+  });
+
+  test("ship: a branch the default branch moved past since the rebase goes back to rebase, three rebases at most (ct-58732)", () => {
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "3", ...UNION_VARS })).toEqual(["rebase"]);
+    expect(graph.nodes.get("rebase")?.max_visits).toBe(3);
   });
 
   test("the template names no path or tool of one project: everything per project comes from the profile", () => {
@@ -566,6 +571,17 @@ describe("line.cast station scripts", () => {
     expect(calls()).toEqual([
       ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
       ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
+    ]);
+  });
+
+  test("a ship command that refuses on stderr alone puts its own words on the task (ct-58732)", () => {
+    const quiet = run("ship", { "line.commands.ship": 'echo "line: codecast/line-ct-1 is behind origin/main; rebase it first" >&2; exit 1' });
+    expect(quiet.code).toBe(1);
+    const behind = run("ship", { "line.commands.ship": 'echo "line: codecast/line-ct-1 is behind origin/main; rebase it first" >&2; exit 3' });
+    expect(behind.code).toBe(3);
+    expect(calls()).toEqual([
+      ["task", "comment", "ct-1", "Not shipped: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "blocker"],
+      ["task", "comment", "ct-1", "Rebasing again: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "progress"],
     ]);
   });
 
@@ -986,6 +1002,38 @@ describe("line.cast offline run through the session path", () => {
     expect(outcome).toBe("failed");
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
+  }, 30000);
+
+  test("a dead end names the fields its node routes on, not a review verdict it never reads", async () => {
+    effects.implement = () => { task = { ...task, status: "in_progress", execution_status: undefined }; };
+    await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
+    const ended = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed").at(-1)?.body;
+    expect(ended?.fail_reason).toBe("no outgoing edge from implement (outcome success, handoff none)");
+  }, 30000);
+
+  test("an implement hand whose agent crashed and came back is waited for, not read as having no handoff", async () => {
+    // The Mac mini, 2026-10-15 20:56 UTC: dozens of agents crashed at once and
+    // codecast restarted them. The 1.1.178 runner read each crashed implement
+    // hand (needs_input, not live) as its answer, found no handoff and failed
+    // the run; the hands handed off minutes later (ct-60104, ct-59915).
+    const settle = globalThis.fetch;
+    const reads = [
+      { work_state: "working", is_live: true, agent_status: "working", message_count: 30 },
+      ...Array(3).fill({ work_state: "needs_input", is_live: false, agent_status: "stopped", message_count: 30 }),
+      { work_state: "working", is_live: true, agent_status: "working", message_count: 32 },
+    ];
+    globalThis.fetch = (async (url: any, init: any) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (String(url).endsWith("/cli/inbox") && stationOf[body.session_ids?.[0]] === "implement" && reads.length) {
+        calls.push({ route: "/cli/inbox", body });
+        return new Response(JSON.stringify({ sessions: [{ id: body.session_ids[0], ...reads.shift() }] }), { status: 200 });
+      }
+      return settle(url, init);
+    }) as typeof fetch;
+    gateAnswers = ["S"];
+    expect(await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }))).toBe("completed");
+    expect(reads).toHaveLength(0);
+    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write"]);
   }, 30000);
 
   test("a reject verdict stops the run with the reviewer's note and asks nobody", async () => {
