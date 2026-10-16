@@ -4411,6 +4411,11 @@ cliRoute("/cli/moments/claim", async (ctx, body) => {
 cliRoute("/cli/moments/complete", async (ctx, body) => {
   return await ctx.runAction(api.moments.complete, body);
 }, { forwardDeviceId: true });
+// A source that judges on subscription hands its judging to the machine that
+// handed the moment in; the replies come back here (moments.judgedForCli).
+cliRoute("/cli/moments/judged", async (ctx, body) => {
+  return await ctx.runAction(api.moments.judgedForCli, body);
+}, { forwardDeviceId: true });
 cliRoute("/cli/moments/ls", async (ctx, body) => {
   return await ctx.runQuery(api.moments.listForCli, body);
 });

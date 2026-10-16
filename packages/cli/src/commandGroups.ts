@@ -397,6 +397,7 @@ Subcommands:
   cast sources show|pause|resume|rm|test <source>
   cast sources set <source> --moment-storage host|codecast   Change one setting, keep the rest
   cast sources set <source> --moment-retention 30d|keep     How long codecast keeps moment bodies
+  cast sources set <source> --judge-on api|subscription     Where its judges make model calls
   cast sources key rotate <source>
 
 add and key rotate record the source in the checkout's codecast.json (--write

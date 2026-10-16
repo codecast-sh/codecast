@@ -1,0 +1,533 @@
+// Codecast's keyboard actions and their default bindings, with the reasoning
+// behind each one. The web app builds its live catalog from this list
+// (web/shortcuts/registry.ts, through @platform/keys), and the CLI and the
+// server read it to name, validate and rebind actions (keyBindings.ts, `cast
+// keys`), so an action id means the same thing everywhere.
+
+export type ShortcutAction =
+  | 'session.next'
+  | 'session.prev'
+  | 'session.jumpIdle'
+  | 'session.jumpPinned'
+  | 'session.pin'
+  | 'session.markUnread'
+  | 'session.moveToBucket'
+  | 'view.switch'
+  | 'session.stash'
+  | 'session.stashHide'
+  | 'session.kill'
+  | 'session.deferAdvance'
+  | 'session.dormantAdvance'
+  | 'session.snooze'
+  | 'session.create'
+  | 'session.compose'
+  | 'session.composeDock'
+  | 'session.rename'
+  | 'session.mruSwitch'
+  | 'recents.open'
+  | 'tab.new'
+  | 'tab.close'
+  | 'tab.next'
+  | 'tab.prev'
+  | 'app.section1'
+  | 'app.section2'
+  | 'app.section3'
+  | 'app.section4'
+  | 'app.section5'
+  | 'pane.split'
+  | 'pane.close'
+  | 'pane.expand'
+  | 'pane.next'
+  | 'pane.prev'
+  | 'ui.zenToggle'
+  | 'ui.toggleShortcutsHelp'
+  | 'ui.openTours'
+  | 'ui.toggleLane'
+  | 'ui.openSettings'
+  | 'ui.undo'
+  | 'ui.redo'
+  | 'ui.undoHistory'
+  | 'undoWalk.pin'
+  | 'inbox.toggleFlatView'
+  | 'inbox.toggleTriageBar'
+  | 'nav.inbox'
+  | 'nav.back'
+  | 'nav.forward'
+  | 'search.open'
+  | 'chat.search'
+  | 'chat.pushToTalk'
+  | 'people.wall'
+  | 'palette.toggle'
+  | 'find.toggle'
+  | 'conv.toggleDiff'
+  | 'conv.toggleTree'
+  | 'conv.toggleThinking'
+  | 'conv.ask'
+  | 'conv.copyLink'
+  | 'conv.cycleDensity'
+  | 'conv.favorite'
+  | 'conv.review'
+  | 'msg.next'
+  | 'msg.prev'
+  | 'msg.fork'
+  | 'msg.clearSelection'
+  | 'msg.queue'
+  | 'msg.sendAdvance'
+  | 'msg.sendDismiss'
+  | 'msg.forkSend'
+  | 'msg.handoff'
+  | 'permission.approve'
+  | 'permission.deny'
+  | 'review.nextFile'
+  | 'review.prevFile'
+  | 'review.comment'
+  | 'compose.focus'
+  | 'compose.richToggle'
+  | 'sidebar.toggleLeft'
+  | 'sidebar.back'
+  | 'sidebar.toggleRight'
+  | 'sidebar.toggleComments'
+  | 'terminal.toggle'
+  | 'anchor.toggle'
+  | 'workbench.1'
+  | 'workbench.2'
+  | 'workbench.3'
+  | 'workbench.4'
+  | 'workbench.5'
+  | 'workbench.6'
+  | 'workbench.7'
+  | 'workbench.8'
+  | 'workbench.9'
+  | 'diff.prevChange'
+  | 'diff.nextChange'
+  | 'diff.toggleFileTree'
+  | 'diff.markViewed'
+  | 'diff.toggleSeen'
+  | 'pr.nextThread'
+  | 'pr.prevThread'
+  | 'pr.review'
+  | 'pr.nextFile'
+  | 'pr.prevFile'
+  | 'pr.copyLink'
+  | 'pr.clearLines'
+  | 'list.down'
+  | 'list.up'
+  | 'list.open'
+  | 'list.select'
+  | 'list.preview'
+  | 'list.search'
+  | 'list.edit'
+  | 'list.actions'
+  | 'list.create'
+  | 'list.selectAll'
+  | 'list.first'
+  | 'list.last'
+  | 'list.tab'
+  | 'threads.done'
+  | 'threads.reply'
+  | 'threads.openIn'
+  | 'threads.markAllRead'
+  | 'changes.today'
+  | 'changes.next'
+  | 'changes.prev'
+  | 'changes.evidence'
+  | 'changes.open'
+  | 'changes.risks'
+  | 'changes.filter'
+  | 'changes.copyLink'
+  | 'changes.escape'
+  | 'task.status'
+  | 'task.priority'
+  | 'task.labels'
+  | 'task.blocker'
+  | 'task.parent'
+  | 'task.related'
+  | 'task.assign'
+  | 'task.back'
+  | 'doc.type'
+  | 'doc.labels'
+  | 'doc.toggleEdit'
+  | 'vault.quickSwitch'
+  | 'vault.search'
+  | 'vault.find'
+  | 'vault.toggleEdit'
+  | 'vault.sourceMode'
+  | 'evals.attribute'
+  | 'evalsRun.nextSeed'
+  | 'evalsRun.prevSeed'
+  | 'evalsRun.prevBatch'
+  | 'evalsRun.nextBatch'
+  | 'evalsRun.compare'
+  | 'evalsSim.prev'
+  | 'evalsSim.next'
+  | 'evalsSim.first'
+  | 'evalsSim.last'
+  | 'evalsSim.play'
+  | 'line.settings';
+
+// The same shape as @platform/keys' ShortcutDef, written out so this package
+// needs no dependency on it.
+export interface ShortcutDef<A extends string = ShortcutAction> {
+  key: string;
+  action: A;
+  when?: string;
+  mac?: string | null;
+  skipInputCheck?: boolean | 'whenEmpty';
+  worksInModal?: boolean;
+  noRepeat?: boolean;
+  description: string;
+  // The key is read by a page's own handler rather than the dispatcher, so a
+  // rebinding would never reach it. Listed for the help panel only; the
+  // keyboard settings show it locked.
+  fixed?: true;
+}
+
+export const SHORTCUTS: ShortcutDef[] = [
+  { key: 'ctrl+j', action: 'session.next', skipInputCheck: true, description: 'Next session' },
+  { key: 'ctrl+k', action: 'session.prev', skipInputCheck: true, description: 'Previous session' },
+  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to top needs-input session' },
+  { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
+  { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
+  // Ctrl+Shift+U = Unread. Non-destructive (the next visit clears it), so a
+  // plain bypass is safe; Ctrl+U alone is the browser's view-source.
+  { key: 'ctrl+shift+u', action: 'session.markUnread', skipInputCheck: true, description: 'Mark session unread' },
+  // Ctrl+L = Label. Free in-app and in the browser on mac (address bar is
+  // Cmd+L); Ctrl+M stays compose-focus. Non-destructive (opens the label
+  // picker), so a plain `true` bypass is safe from a full composer — unlike
+  // the backspace triage chords below.
+  { key: 'ctrl+l', action: 'session.moveToBucket', skipInputCheck: true, description: 'Label session' },
+  // Ctrl+Shift+L sits next to Ctrl+L: label THIS session vs switch which
+  // label/project view the panel shows. Opens the palette's view submenu.
+  { key: 'ctrl+shift+l', action: 'view.switch', skipInputCheck: true, description: 'Switch label/project view' },
+  // Destructive backspace chords use 'whenEmpty', never true: ctrl+backspace is
+  // the OS "delete previous word" key, so an unconditional bypass fired these
+  // mid-compose — preventDefault swallowed the keystroke (no visible change)
+  // while the selected session got stashed/dismissed/deferred. With 'whenEmpty'
+  // they fire from an empty composer (the keyboard triage flow) but defer to
+  // the editor whenever there is text to delete. Stash sets the session aside
+  // with the agent still running; dismiss retires it AND kills the agent.
+  { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
+  // Stash and hide: the stash survives trigger wakes (a plain stash pops back
+  // on one). One modifier up from stash, same as dormant sits above defer.
+  { key: 'ctrl+alt+backspace', action: 'session.stashHide', skipInputCheck: 'whenEmpty', description: 'Stash and hide (stays out through trigger wakes)' },
+  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
+  { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
+  // Dormant joins the backspace triage family one modifier up from defer, its
+  // nearest verb (both park a row that returns on its own; defer on activity,
+  // dormant on a machine wake). Alt+Backspace alone is banned — it is the OS
+  // delete-word reflex, and the 'whenEmpty' bypass fires exactly when that
+  // reflex lands on an already-empty composer — but no editing reflex includes
+  // Shift: ⌥⇧⌫ is only ever a deliberate press, so it is as safe as
+  // Shift+Backspace itself. Non-destructive: the row moves to the Dormant
+  // section and comes back on its own at the next wake.
+  { key: 'alt+z', action: 'session.snooze', skipInputCheck: true, description: 'Snooze session…' },
+  { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
+  // Ctrl+N opens the new-session popup over the current view; Ctrl+Alt+N the
+  // same surface as a page in the main window. Ctrl+Shift+N is the desktop's
+  // system-wide chord for the popup, so in the app it opens the popup too.
+  { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
+  { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (page)' },
+  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'New session (popup)' },
+  // The docked composer: small, non-modal, any number at once. M as in mini.
+  // Ctrl+Shift+N stays the desktop's global chord for the compose popup.
+  // worksInModal because the same chord minimizes the center modal, whose
+  // aria-modal would otherwise make the dispatcher stand down.
+  { key: 'ctrl+shift+m', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
+  { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
+  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch recently viewed (MRU)' },
+  // Recent: the recently viewed list with its search field live, the same
+  // overlay Ctrl+Tab walks (VS Code's Open Recent chord). Ctrl+R on mac;
+  // Alt+R elsewhere, where Ctrl+R is the desktop View menu's reload and the
+  // browser's, the same split session.jumpPinned makes. The held Ctrl+Tab walk
+  // reaches search on R on every platform by itself (hooks/useRecentSwitcher),
+  // so this chord only has to open the list from rest.
+  { key: 'alt+r', mac: 'ctrl+r', action: 'recents.open', skipInputCheck: true, description: 'Search recently viewed' },
+
+  { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
+  { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },
+  // shift+bracket arrives as '[' or '{' depending on browser/layout — register
+  // both spellings per action; UI shows the first def.
+  { key: 'ctrl+shift+[', mac: 'meta+shift+[', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
+  { key: 'ctrl+shift+{', mac: 'meta+shift+{', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
+  { key: 'ctrl+shift+]', mac: 'meta+shift+]', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
+  { key: 'ctrl+shift+}', mac: 'meta+shift+}', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
+  // The Chat and Work windows: their sections by number (AppWindowBar). In
+  // hosted mode the main window answers them too (HostedSectionKeys:
+  // Inbox, Approvals, To-dos, Notes, Routines); a developer's main window
+  // has no handler, so the chords fall through there.
+  { key: 'ctrl+1', mac: 'meta+1', action: 'app.section1', skipInputCheck: true, description: 'First section (Chat or Work window)' },
+  { key: 'ctrl+2', mac: 'meta+2', action: 'app.section2', skipInputCheck: true, description: 'Second section (Chat or Work window)' },
+  { key: 'ctrl+3', mac: 'meta+3', action: 'app.section3', skipInputCheck: true, description: 'Third section (Chat or Work window)' },
+  { key: 'ctrl+4', mac: 'meta+4', action: 'app.section4', skipInputCheck: true, description: 'Fourth section (Chat or Work window)' },
+  { key: 'ctrl+5', mac: 'meta+5', action: 'app.section5', skipInputCheck: true, description: 'Fifth section (hosted mode: Routines)' },
+
+  // Stage panes (the tab's split layout). Handlers return false when the
+  // stage isn't split so the chords fall through to whatever else owns them.
+  // No ctrl/cmd+shift+w here: browsers reserve it for closing the WINDOW and
+  // never let the page see it. No skipInputCheck on the split chord: Windows
+  // spells AltGr as ctrl+alt, so firing inside an input would eat typed
+  // characters on international layouts. Arrows first for focus motion —
+  // brackets need AltGr on many European layouts and can't be typed at all.
+  { key: 'ctrl+alt+d', action: 'pane.split', description: 'Split: open this view beside itself' },
+  { key: 'ctrl+alt+w', action: 'pane.close', skipInputCheck: true, description: 'Close pane' },
+  { key: 'ctrl+alt+enter', action: 'pane.expand', skipInputCheck: true, description: 'Pane takes the whole stage' },
+  { key: 'ctrl+alt+arrowright', action: 'pane.next', skipInputCheck: true, description: 'Focus next pane' },
+  { key: 'ctrl+alt+]', action: 'pane.next', skipInputCheck: true, description: 'Focus next pane' },
+  { key: 'ctrl+alt+arrowleft', action: 'pane.prev', skipInputCheck: true, description: 'Focus previous pane' },
+  { key: 'ctrl+alt+[', action: 'pane.prev', skipInputCheck: true, description: 'Focus previous pane' },
+
+  { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
+  { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Cycle inbox view (grouped / time / label)' },
+  { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
+  // meta+, is the OS settings convention on mac; ctrl+, is taken by the inbox
+  // view cycle above, so non-mac gets the shifted variant. shift+comma arrives
+  // as ',' or '<' depending on browser/layout — register both spellings.
+  { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
+  { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
+  // The chords reach the handler from any field, and the handler
+  // (hooks/useUndoWalk) gives each field its own undo while it has one: an
+  // empty field the user edited after the entry the press would reach (a
+  // cleared draft comes back), a field with text it or its editor can still
+  // step. Otherwise the press is app undo: the triage chords fire from an
+  // empty composer and leave focus in one, and a triage step can land on a
+  // session whose composer holds a draft nobody typed here. A declined press
+  // goes on to the field. noRepeat: a held chord is one undo, not the whole
+  // stack at key-repeat speed. The second ui.undo row keeps ⌃Z working on mac
+  // (off mac it is the same chord).
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, skipInputCheck: true, description: 'Redo' },
+  // ⌃Y is redo off mac only: in a mac text field it is the system yank.
+  { key: 'ctrl+y', mac: null, action: 'ui.redo', noRepeat: true, skipInputCheck: true, description: 'Redo' },
+  // ⌘⌥Z means nothing to a text field, so on mac the history chord opens the
+  // card from the composer too (the second row; it is autofocused on every
+  // conversation page). Off mac Ctrl+Alt is AltGr, and AltGr+Z types a letter
+  // on some layouts (Polish ż), so Ctrl+Alt+Z stays out of fields there; the
+  // second row's Win+Alt+Z off mac is no text either.
+  { key: 'ctrl+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', description: 'Undo history' },
+  { key: 'meta+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', skipInputCheck: true, description: 'Undo history' },
+  // H pins the held undo peek (hooks/useUndoWalk). The context is live only
+  // while the peek shows or fades, and these rows sit above conv.toggleThinking
+  // so they win the H there. ⌘H belongs to the OS on mac, so H pins during the
+  // fade; off mac, Ctrl+H pins with the modifier still held. A plain H in a
+  // text field is the field's: once the modifier is up it may be the first
+  // letter of a word. Ctrl+H (modifier held) and the history chord, which no
+  // one types, pin from a field.
+  { key: 'h', action: 'undoWalk.pin', when: 'undoWalk', description: 'Pin the undo history open' },
+  { key: 'ctrl+h', mac: 'meta+h', action: 'undoWalk.pin', when: 'undoWalk', skipInputCheck: true, description: 'Pin the undo history open' },
+
+  { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
+
+  { key: 'meta+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
+  { key: 'ctrl+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
+  { key: 'meta+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
+  { key: 'ctrl+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
+  // Hold to talk, in an open DM. The registry fires the PRESS; the release is a
+  // keyup, which this dispatcher does not have a channel for (see
+  // hooks/useHoldToTalk). It is here rather than hand-rolled whole so the key is
+  // listed in the shortcuts help, guarded against modals the same way every
+  // other binding is, and rebindable when bindings become rebindable.
+  //
+  // A modifier chord, and skipInputCheck, because the hand that wants to talk is
+  // resting in the composer: the binding has to survive a focused text box, and
+  // anything that survives a text box must be impossible to type.
+  { key: 'ctrl+shift+space', action: 'chat.pushToTalk', when: 'chat.dm', skipInputCheck: true, description: 'Talk in this DM (press again to stop)' },
+  { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, worksInModal: true, description: 'Toggle command palette' },
+  // THE TEAM, FROM ANYWHERE. The wall answers "who is around, and can I just
+  // ask them?" — a question people have in the middle of something else, so it
+  // costs one chord from wherever they are rather than a trip to a window.
+  //
+  // Cmd+Shift+P, and the same chord off mac, which is why it reads `meta` with
+  // no variant: Ctrl+Shift+P is already Pin/unpin session, and a second def on
+  // that combo would lose the race to it forever. Same choice the palette makes
+  // one line above (meta+k, no ctrl variant).
+  { key: 'meta+shift+p', action: 'people.wall', skipInputCheck: true, description: 'The team' },
+
+  // Find inside the open vault note. Listed BEFORE the desktop page-find so a
+  // visible note claims the chord first; the vault handler declines (falls
+  // through to find.toggle, or to the browser) whenever no note is on screen
+  // in reading mode.
+  { key: 'ctrl+f', mac: 'meta+f', action: 'vault.find', skipInputCheck: true, description: 'Find in note' },
+  { key: 'meta+f', action: 'find.toggle', when: 'desktop', skipInputCheck: true, description: 'Find in page' },
+  // History back/forward, desktop only: in a browser tab these chords belong
+  // to the browser, which walks its own history. Mac takes the browser
+  // convention (Cmd+[ / Cmd+]); elsewhere Ctrl+[ is the sidebar toggle, so the
+  // other browser convention (Alt+Arrow) applies. Each window runs its own
+  // listener, so the chord walks the history of the window that has focus.
+  // The app menu ("Go" in packages/electron/main.js) carries the same
+  // accelerators as the fallback for a window without this handler.
+  { key: 'alt+arrowleft', mac: 'meta+[', action: 'nav.back', when: 'desktop', skipInputCheck: true, description: 'Back' },
+  { key: 'alt+arrowright', mac: 'meta+]', action: 'nav.forward', when: 'desktop', skipInputCheck: true, description: 'Forward' },
+
+  { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
+  { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle branch map' },
+  // Ctrl+B opens the branch map, and unlike `t` it fires while the composer is
+  // focused — the map lives above the message input, so you reach for it
+  // mid-typing. ('B' for branches.) Ctrl (not Cmd) for consistency with the
+  // app's other Ctrl chords.
+  { key: 'ctrl+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
+  { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
+  { key: 'a', action: 'conv.ask', when: 'conversation', description: 'Ask this session a question' },
+  // Obsidian's search chord, sharing keys with conv.favorite below. Listed
+  // FIRST on purpose: a background conversation tab keeps the 'conversation'
+  // context active while the vault tab is visible, so favorite would otherwise
+  // always win. The vault handler declines (returns false) unless the vault is
+  // the visible tab, and the dispatcher then falls through to favorite.
+  { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'vault.search', skipInputCheck: true, description: 'Search files' },
+  { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
+  { key: 'r', action: 'conv.review', when: 'conversation', description: 'Quote selected text into your reply' },
+  { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
+  { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.cycleDensity', when: 'conversation', skipInputCheck: true, description: 'Cycle message density' },
+  // ⌘⇧E swaps the plain composer textarea for the rich (TipTap) editor. The
+  // handler is hand-rolled inside the composer — it has to run with the
+  // textarea focused and move focus into the editor it creates — so this def
+  // exists to list the key in the shortcuts help (the pushToTalk pattern).
+  // meta with no ctrl variant on purpose: ctrl+shift+e is session.rename,
+  // which wins at the capture listener.
+  { key: 'meta+shift+e', action: 'compose.richToggle', when: 'conversation', skipInputCheck: true, description: 'Toggle rich compose editor' },
+
+  { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
+  { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },
+  { key: 'alt+k', action: 'msg.prev', when: 'conversation', description: 'Previous user message' },
+  { key: 'alt+f', action: 'msg.fork', when: 'conversation', description: 'Fork from message' },
+  { key: 'ctrl+enter', action: 'msg.queue', when: 'conversation', skipInputCheck: true, description: 'Queue message' },
+  { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, description: 'Send and advance' },
+  { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, description: 'Send and stash' },
+  { key: 'ctrl+shift+enter', mac: 'meta+shift+enter', action: 'msg.forkSend', when: 'conversation', skipInputCheck: true, description: 'Fork and send' },
+  { key: 'alt+shift+h', action: 'msg.handoff', when: 'conversation', skipInputCheck: true, description: 'Hand off to a teammate' },
+  { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
+  { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
+
+  { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
+  { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
+  // Out of the Chat or Tasks level of the sidebar (sidebar/SidebarDrill),
+  // back to the menu: the toggle's chord with Shift. Off mac Ctrl+Shift+[ is
+  // the previous tab, so Alt takes it there. Both spellings of shift+bracket,
+  // as tab.prev registers them.
+  { key: 'alt+shift+[', mac: 'ctrl+shift+[', action: 'sidebar.back', skipInputCheck: true, description: 'Back to the sidebar menu' },
+  { key: 'alt+shift+{', mac: 'ctrl+shift+{', action: 'sidebar.back', skipInputCheck: true, description: 'Back to the sidebar menu' },
+  { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
+  { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
+  // The anchor is reachable from anywhere: one chord opens its slide-over
+  // (the last anchor you spoke to) without leaving the page you are on.
+  { key: 'ctrl+shift+a', mac: 'meta+shift+a', action: 'anchor.toggle', skipInputCheck: true, description: 'Talk to Anchor' },
+  // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
+  // vault is connected, so the chord costs nothing in vault-less workspaces.
+  { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open a note' },
+  // Obsidian's edit/read chord. skipInputCheck because the editor it toggles IS
+  // an input; the handler declines unless the vault is the visible tab with a
+  // note open, so the chord costs nothing anywhere else.
+  { key: 'ctrl+e', mac: 'meta+e', action: 'vault.toggleEdit', skipInputCheck: true, description: 'Toggle note edit / read mode' },
+  // Live preview is the editing mode Cmd+E lands on; this jumps past it to the
+  // raw file, and back to live preview when you're done looking.
+  { key: 'ctrl+shift+e', mac: 'meta+shift+e', action: 'vault.sourceMode', skipInputCheck: true, description: 'Toggle note source mode' },
+  { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
+  // Workbenches: switch the whole chrome to a saved arrangement (rail order —
+  // see lib/workbenchSwitch). One key, wholesale — never a per-panel tweak.
+  { key: 'alt+1', action: 'workbench.1', skipInputCheck: true, description: 'Switch to saved layout 1' },
+  { key: 'alt+2', action: 'workbench.2', skipInputCheck: true, description: 'Switch to saved layout 2' },
+  { key: 'alt+3', action: 'workbench.3', skipInputCheck: true, description: 'Switch to saved layout 3' },
+  { key: 'alt+4', action: 'workbench.4', skipInputCheck: true, description: 'Switch to saved layout 4' },
+  { key: 'alt+5', action: 'workbench.5', skipInputCheck: true, description: 'Switch to saved layout 5' },
+  { key: 'alt+6', action: 'workbench.6', skipInputCheck: true, description: 'Switch to saved layout 6' },
+  { key: 'alt+7', action: 'workbench.7', skipInputCheck: true, description: 'Switch to saved layout 7' },
+  { key: 'alt+8', action: 'workbench.8', skipInputCheck: true, description: 'Switch to saved layout 8' },
+  { key: 'alt+9', action: 'workbench.9', skipInputCheck: true, description: 'Switch to saved layout 9' },
+
+  { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
+  { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
+  { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
+
+
+  { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
+  { key: ']', action: 'diff.nextChange', when: 'diff', description: 'Next change' },
+  { key: 'b', action: 'diff.toggleFileTree', when: 'diff', description: 'Toggle file tree' },
+  // The pull request page's own keys. Handled on the page, listed here so the
+  // help panel names them.
+  { key: 'm', action: 'diff.markViewed', when: 'diff', description: 'Mark the file viewed and move on' },
+  // Delta's binding. Marks the file in hand viewed (a viewed file folds) or
+  // clears the mark; the mark lapses by itself when the file changes again.
+  { key: 'ctrl+alt+y', mac: 'meta+alt+y', action: 'diff.toggleSeen', when: 'diff', description: 'Mark the file viewed, or clear the mark' },
+  { key: 'n', action: 'pr.nextThread', when: 'diff', description: 'Next open thread' },
+  { key: 'p', action: 'pr.prevThread', when: 'diff', description: 'Previous open thread' },
+  { key: 'r', action: 'pr.review', when: 'diff', description: 'Open your review' },
+  { key: 'j', action: 'pr.nextFile', when: 'diff', description: 'Next file' },
+  { key: 'k', action: 'pr.prevFile', when: 'diff', description: 'Previous file' },
+  { key: 'y', action: 'pr.copyLink', when: 'diff', description: 'Copy a link to this view and the selected lines' },
+  { key: 'escape', action: 'pr.clearLines', when: 'diff', description: 'Let go of the selected lines' },
+
+  { key: 'j', action: 'list.down', when: 'list', description: 'Move down' },
+  { key: 'k', action: 'list.up', when: 'list', description: 'Move up' },
+  { key: 'enter', action: 'list.open', when: 'list', description: 'Open item' },
+  { key: 'x', action: 'list.select', when: 'list', description: 'Toggle select' },
+  { key: 'space', action: 'list.preview', when: 'list', description: 'Preview' },
+  { key: '/', action: 'list.search', when: 'list', description: 'Search' },
+  { key: 'e', action: 'list.edit', when: 'list', description: 'Edit name' },
+  { key: 'd', action: 'list.actions', when: 'list', description: 'Actions menu' },
+  { key: 'c', action: 'list.create', when: 'list', description: 'New item' },
+  { key: 'ctrl+a', mac: 'meta+a', action: 'list.selectAll', when: 'list', description: 'Select all' },
+  { key: '1', action: 'list.tab', when: 'list', description: 'Switch tab (1–9)' },
+  { key: 'home', action: 'list.first', when: 'list', description: 'Jump to top' },
+  { key: 'end', action: 'list.last', when: 'list', description: 'Jump to bottom' },
+
+  // Tasks and Docs keys, hand-rolled where they live (the list pages' palette
+  // shortcuts in app/tasks and app/docs, the task detail page's handler, and
+  // DocumentDetailLayout's edit toggle). The defs exist so the shortcuts help
+  // covers them; the 'tasks'/'docs' contexts are never activated, so they are
+  // inert in dispatch.
+  // The Threads reader's inbox verbs. The walk itself is the list context
+  // (j/k/Enter/Home/End, which the page also declares); these are the verbs
+  // an inbox adds. `e` is Gmail's archive and the list context's rename: the
+  // list def wins the match, the page registers no rename, so the dispatch
+  // declines and falls through to done. Shift+I is Gmail's mark-read.
+  { key: 'e', action: 'threads.done', when: 'threads', description: 'Done — archive the thread and move to the next' },
+  { key: 'r', action: 'threads.reply', when: 'threads', description: 'Reply — focus the composer' },
+  { key: 'o', action: 'threads.openIn', when: 'threads', description: 'Open the task, room or page' },
+  { key: 'shift+i', action: 'threads.markAllRead', when: 'threads', description: 'Mark every thread in the view read' },
+  // The Changes edition (components/changes, spec 6.1). The page activates
+  // the context while it is the active pane and its handlers decline
+  // otherwise. Escape fires from the filter field too, so it can clear it.
+  { key: 't', action: 'changes.today', when: 'changes', noRepeat: true, description: 'Back to today' },
+  { key: 'j', action: 'changes.next', when: 'changes', description: 'Next story' },
+  { key: 'k', action: 'changes.prev', when: 'changes', description: 'Previous story' },
+  { key: 'e', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story' },
+  { key: 'enter', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story' },
+  { key: 'o', action: 'changes.open', when: 'changes', noRepeat: true, description: 'Open the story session, else its largest commit' },
+  { key: 'r', action: 'changes.risks', when: 'changes', noRepeat: true, description: 'Risks only' },
+  { key: '/', action: 'changes.filter', when: 'changes', noRepeat: true, description: 'Filter stories' },
+  { key: 'c', action: 'changes.copyLink', when: 'changes', noRepeat: true, description: 'Copy a link to the story' },
+  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Clear the filter text and leave the field, else close the evidence, then clear filters' },
+  // The Evals area (components/evals, spec 4). Its walks use the list
+  // context (j/k/Enter); these are the verbs an Evals view adds. Each page
+  // activates the context while it is the active pane.
+  { key: 'b', action: 'evals.attribute', when: 'evals', description: 'Attribute a regression: the newest worse pair on the wall, the pinned pair on a surface' },
+  { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
+  { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
+  { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },
+  { key: 'b', action: 'task.blocker', when: 'tasks', description: 'Add blocker (detail page)' },
+  { key: 't', action: 'task.parent', when: 'tasks', description: 'Set parent (detail page)' },
+  { key: 'k', action: 'task.related', when: 'tasks', description: 'Link related task (detail page)' },
+  { key: 'a', action: 'task.assign', when: 'tasks', description: 'Assign (task list)' },
+  { key: 'backspace', action: 'task.back', when: 'tasks', description: 'Back to task list (detail page)' },
+  { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
+  { key: 'l', action: 'doc.labels', when: 'docs', description: 'Edit labels' },
+  { key: 'ctrl+e', mac: 'meta+e', action: 'doc.toggleEdit', when: 'docs', description: 'Toggle edit mode (doc page)' },
+  // One eval run in full (@platform/evals/react RunView, evals-ui.md 4.4). The page
+  // activates the context while it is the active pane.
+  { key: 'j', action: 'evalsRun.nextSeed', when: 'evalsRun', description: 'Next seed of this freeze in the batch' },
+  { key: 'k', action: 'evalsRun.prevSeed', when: 'evalsRun', description: 'Previous seed of this freeze in the batch' },
+  { key: '[', action: 'evalsRun.prevBatch', when: 'evalsRun', description: 'The same freeze in the previous batch' },
+  { key: ']', action: 'evalsRun.nextBatch', when: 'evalsRun', description: 'The same freeze in the next batch' },
+  { key: 'c', action: 'evalsRun.compare', when: 'evalsRun', description: 'Pick a second rep to compare with' },
+  // One Multiplayer sim run (components/evals/SimRunView, evals-ui.md 4.7): the
+  // playhead walks the deliveries. The view activates the context while it is
+  // the active pane.
+  { key: 'arrowleft', action: 'evalsSim.prev', when: 'evalsSim', description: 'Playhead back one delivery' },
+  { key: 'arrowright', action: 'evalsSim.next', when: 'evalsSim', description: 'Playhead forward one delivery' },
+  { key: 'home', action: 'evalsSim.first', when: 'evalsSim', description: 'Playhead to the first delivery' },
+  { key: 'end', action: 'evalsSim.last', when: 'evalsSim', description: 'Playhead to the failing delivery, else the last' },
+  { key: 'p', action: 'evalsSim.play', when: 'evalsSim', description: 'Play or pause the deliveries' },
+  // A project's line workspace (components/line/workspace/LineWorkspace): the
+  // way to its settings, the comma of the app's settings chord without the modifier.
+  { key: ',', action: 'line.settings', when: 'line', description: "Open this line's settings" },
+];
