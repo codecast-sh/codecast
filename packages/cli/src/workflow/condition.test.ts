@@ -67,6 +67,9 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = success and category != prompt and category != line", { outcome: "success", category: "line" }, false],
     ["outcome = success and (category = prompt or category = line)", { outcome: "success", category: "line" }, true],
     ["outcome = success and (category = prompt or category = line)", { outcome: "success", category: "code" }, false],
+    // A change to the line skips the code stations (prove, implement) for its own path.
+    ["category != line", { category: "code" }, true],
+    ["category != line", { category: "line" }, false],
     // The eval station: exit 1 is a failed verdict, anything else could not score.
     ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "1" }, true],
     ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "2" }, false],
