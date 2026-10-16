@@ -179,6 +179,8 @@ export const momentsTables = {
     month: v.string(),
     spent_usd: v.number(),
     held_usd: v.number(),
+    /** When a hold was last granted: a full cap with none granted for longer than any call runs holds only leftovers. */
+    last_granted_at: v.optional(v.number()),
     by_purpose: budgetPurposes,
     refused: v.number(),
     last_refused_at: v.optional(v.number()),
