@@ -42,7 +42,7 @@ export function MobileDrawer({
         data-cc-mobile-drawer={side}
         className={cn(
           "cc-mobile-drawer flex flex-col w-[85vw] max-w-sm p-0 bg-sol-bg-alt text-sol-text border-sol-border shadow-xl",
-          "data-[state=open]:duration-[220ms] data-[state=closed]:duration-[180ms]",
+          "data-[state=open]:[animation-duration:220ms] data-[state=closed]:[animation-duration:180ms]",
           className,
         )}
       >
