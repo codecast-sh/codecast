@@ -12,7 +12,7 @@ import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 const T0 = 1_700_000_000_000;
 
 function session(over: Partial<InboxSession> = {}): InboxSession {
-  return { _id: "s1", agent_status: "idle", ...(over as any) } as InboxSession;
+  return { _id: "s1", agent_status: "idle", updated_at: Date.now(), last_heartbeat: Date.now(), ...(over as any) } as InboxSession;
 }
 
 function item(over: Partial<QueueItem> = {}): QueueItem {
