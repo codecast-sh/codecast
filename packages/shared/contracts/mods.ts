@@ -138,7 +138,7 @@ export type ModManifest = {
    * and reaches the app through what it publishes and the calls the UI makes.
    */
   local?: { main: string; description?: string };
-  /** What agents should know to use this mod well (its objects, its fences, when to reach for them). `cast mod guide` prints it. */
+  /** What agents should know to use this mod well (its objects, its fences, when to reach for them), usually from AGENTS.md beside the manifest. Every session the mod applies to starts with it, and `cast mod guide` prints it. */
   agents?: string;
 };
 
