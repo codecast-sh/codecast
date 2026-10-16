@@ -1,17 +1,18 @@
 /**
- * Bring a host's cast up to this laptop's: `cast hosts update` and the host
- * prep every cloud wake runs (cloud/prepare.ts readyHostHome) both go through
- * here.
+ * Keep a host's cast current: `cast hosts update` and the host prep every
+ * cloud wake runs (cloud/prepare.ts readyHostHome) both go through here.
  *
- * A host built from this checkout never updates itself (its updater stands
- * down in dev mode), so without this a host stays on the build it was
- * provisioned with while every host-side fix lands only on the laptop: a cloud
- * host sat on 1.1.160 for four days and nine releases (2026-10-04).
+ * A host runs the published release, so forced updates and the Settings
+ * Update button reach it like any other client. A build of this checkout
+ * (`--from-checkout`) is for trying an unreleased fix: the updater treats it as
+ * a dev build and refuses every update, so a host left on one fell behind
+ * (1.1.160 for four days and nine releases on 2026-10-04; 1.1.178 kept
+ * retrying undeliverable station wakes after 1.1.179 shipped, 2026-10-16).
  */
 import { compareVersions } from "../browser/engine.js";
 import { cliSourceVersion, hasHostBuildSource, installLinuxCast, restartHostDaemon } from "../browser/provisionLinux.js";
+import { latestReleaseVersion, type HostCastSource } from "./installRelease.js";
 import { remoteExec } from "../browser/remote.js";
-import { getVersion } from "../cliVersion.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { installMacCast } from "./updateMac.js";
 import { MAC_HOST_PATH, macServiceLabel } from "./provisionMac.js";
@@ -29,9 +30,9 @@ export interface HostCastUpdate {
   restart?: { pid: string } | { refused: string };
 }
 
-/** The version this laptop installs on a host: the checkout's, else the running release. */
-export function laptopCastVersion(): string {
-  return hasHostBuildSource() ? cliSourceVersion() : getVersion();
+/** The version an install from this source puts on a host, or null when the release cannot be read. */
+export function hostCastTarget(source: HostCastSource): string | null {
+  return source === "checkout" && hasHostBuildSource() ? cliSourceVersion() : latestReleaseVersion();
 }
 
 /** The host's cast version, or null when it has none or does not answer. */
@@ -49,14 +50,15 @@ export function readHostCastVersion(host: RemoteHost, platform: HostCastPlatform
  * onto it. A Linux restart that would end sessions in the daemon's own tmux
  * server is refused unless forced; the refusal is returned, not thrown.
  */
-export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opts: { restart: boolean; force?: boolean }, log: (message: string) => void): HostCastUpdate {
+export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opts: { restart: boolean; force?: boolean; source?: HostCastSource }, log: (message: string) => void): HostCastUpdate {
+  const source = opts.source ?? "release";
   if (platform === "darwin") {
-    const version = installMacCast(host, log);
+    const version = installMacCast(host, log, source);
     if (!opts.restart) return { version };
     remoteExec(host, `sudo -n launchctl kickstart -k system/${macServiceLabel(host.user)}`, 60_000);
     return { version, restart: { pid: "launchd" } };
   }
-  const { version } = installLinuxCast(host, log);
+  const { version } = installLinuxCast(host, log, source);
   if (!opts.restart) return { version };
   try {
     return { version, restart: restartHostDaemon(host, { force: opts.force }) };
@@ -67,17 +69,17 @@ export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opt
 }
 
 /**
- * The prep step: update the host only when this laptop's cast is strictly
- * newer. Never a downgrade (a worktree at an older commit must not roll the
- * host back), and never on an equal version (worktrees at one version would
- * take turns replacing each other's build). Non-fatal: a host that cannot be
- * updated keeps its build and the placement goes on.
+ * The prep step: put the latest release on the host only when the host is
+ * strictly behind it. Never a downgrade (a host trying a newer checkout build
+ * keeps it), and nothing when the release cannot be read. Non-fatal: a host
+ * that cannot be updated keeps its build and the placement goes on.
  */
-export function castForPrepare(host: RemoteHost, platform: HostCastPlatform, log: (message: string) => void, deps: { read?: typeof readHostCastVersion; update?: typeof updateHostCast; laptop?: () => string } = {}): string {
-  const laptop = (deps.laptop ?? laptopCastVersion)();
+export function castForPrepare(host: RemoteHost, platform: HostCastPlatform, log: (message: string) => void, deps: { read?: typeof readHostCastVersion; update?: typeof updateHostCast; latest?: () => string | null } = {}): string {
   const current = (deps.read ?? readHostCastVersion)(host, platform);
-  if (current && compareVersions(laptop, current) <= 0) return `cast ${current} on the host`;
-  log(`host cast ${current ?? "missing"} is behind this laptop's ${laptop}; updating it…`);
+  const latest = (deps.latest ?? (() => hostCastTarget("release")))();
+  if (!latest) return `cast ${current ?? "missing"} on the host (the latest release could not be read)`;
+  if (current && compareVersions(latest, current) <= 0) return `cast ${current} on the host`;
+  log(`host cast ${current ?? "missing"} is behind the ${latest} release; updating it…`);
   try {
     // A Mac restart ends the sessions it runs, so only Linux, whose restart refuses that, moves its daemon here.
     const up = (deps.update ?? updateHostCast)(host, platform, { restart: platform === "linux" }, log);
