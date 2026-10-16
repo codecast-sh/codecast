@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { __createInboxStoreForTests, __inboxStoreWindowBindings, useInboxStore } from "../inboxStore";
 import { __gestureBridgeSimSlots, gestureSourceToken } from "../gestureBridge";
 import { __syncTransactionIdleForTests, resetSyncTransactionForTests, syncTransaction } from "../syncTransaction";
-import { __viewNavSimSlots, _resetViewNavForTests, consumeViewNav, declareViewNav } from "../viewNav";
+import { __viewNavSimSlots, _resetViewNavForTests, consumeViewNav, declareViewNav, freshHomeLaunchPending } from "../viewNav";
 import { freshSlots, restoreSlots, saveSlots } from "./sim/windowSlots";
 
 // The seams the multiplayer sim stands on (docs/architecture/multiplayer-sim-harness.md,
@@ -85,15 +85,17 @@ describe("window slots", () => {
     expect(gestureSourceToken()).toBe(own);
   });
 
-  it("swap the view-nav intent token and counter", () => {
+  it("swap the view-nav intent token, counter and fresh-home launch", () => {
     declareViewNav("gesture");
     const saved = nav.get();
-    expect(saved).toEqual({ pendingSource: "gesture", appliedNavCount: 0 });
-    nav.set({ pendingSource: null, appliedNavCount: 3 });
+    expect(saved).toEqual({ pendingSource: "gesture", appliedNavCount: 0, freshHomeLaunch: false });
+    nav.set({ pendingSource: null, appliedNavCount: 3, freshHomeLaunch: true });
     expect(consumeViewNav()).toBeNull();
     expect(nav.get().appliedNavCount).toBe(3);
+    expect(freshHomeLaunchPending()).toBe(true);
     nav.set(saved);
     expect(consumeViewNav()).toBe("gesture");
+    expect(freshHomeLaunchPending()).toBe(false);
   });
 
   it("report a sync transaction as busy only while one is open", () => {
