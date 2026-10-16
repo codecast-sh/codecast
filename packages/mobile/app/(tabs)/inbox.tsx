@@ -42,6 +42,7 @@ import * as Haptics from 'expo-haptics';
 import { openCompose } from '@/lib/compose';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { InboxLensBar } from '@/components/inbox/InboxLensBar';
+import { AreaBar } from '@/components/nav/AreaBar';
 
 /** How a hosted inbox section draws: its same-name suffixes, whether it
  *  waits on the person (the accent dot), and whether it never folds. */
@@ -894,6 +895,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           {ListFooter}
         </ScrollView>
       )}
+      {panel && <AreaBar />}
 
     </SafeAreaView>
   );
