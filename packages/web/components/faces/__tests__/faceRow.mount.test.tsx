@@ -385,6 +385,31 @@ describe("a face opens one card", () => {
     expect(read()).toEqual([["them", "is the deploy green?"], ["me", "yes, shipped"]]);
   });
 
+  test("a new line scrolls the card's messages to the bottom, even once the card holds its full 30", async () => {
+    const DM = "chatchannels:dm-ann";
+    const now = Date.now();
+    const line = (i: number) => ({ _id: `m${i}`, channel_id: DM, user_id: i % 2 ? ANN : ME, content: `line ${i}`, created_at: now - 100_000 + i });
+    const lines: Record<string, unknown> = {};
+    for (let i = 0; i < 30; i++) lines[`m${i}`] = line(i);
+    useInboxStore.setState({
+      chatChannels: { [DM]: { _id: DM, kind: "dm", dm_key: dmKeyFor(activeTeamIdOf(useInboxStore.getState()) ?? "", [ME, ANN]) } },
+      chatMessages: lines,
+      chatReads: {},
+    } as any);
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+    await h.click(h.circle(ANN));
+    const list = h.q(".fc-list")!;
+    let top = 0;
+    Object.defineProperty(list, "scrollHeight", { configurable: true, get: () => 900 });
+    Object.defineProperty(list, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = v) });
+    await act(async () => {
+      useInboxStore.setState({ chatMessages: { ...lines, m30: line(30) } } as any);
+    });
+    expect(h.all(".fc-row")).toHaveLength(30);
+    expect(h.all(".fc-text").at(-1)?.textContent).toBe("line 30");
+    expect(top).toBe(900);
+  });
+
   test("the card closes from its own close button", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
     await h.click(h.circle(ANN));
