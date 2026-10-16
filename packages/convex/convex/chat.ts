@@ -637,6 +637,20 @@ export const listCommunityChannels = query({
 });
 
 // The server half of the client's ChatRailRow (web store/chatSlice.ts): the
+// The session that typed a line, for every read that names a line's author
+// apart from the full row (the rail's last line, a search hit): the line is
+// stored under the human the session ran as, and naming that human is wrong.
+// Empty for anyone else's line, so the payload only grows where it matters.
+function sessionOriginOf(row: Doc<"chat_messages">) {
+  if (row.origin !== "agent" || !row.origin_session_id || row.author_kind === "agent") return {};
+  return {
+    origin: row.origin,
+    origin_session_id: row.origin_session_id,
+    origin_session_title: row.origin_session_title,
+    origin_agent_type: row.origin_agent_type,
+  };
+}
+
 // derived per-channel summary the rail paints before any message is loaded.
 type ChatRailRow = {
   channel_id: Id<"chat_channels">;
@@ -651,6 +665,10 @@ type ChatRailRow = {
     user_id: Id<"users">;
     author_kind: "user" | "agent";
     external_author?: Doc<"chat_messages">["external_author"];
+    origin?: Doc<"chat_messages">["origin"];
+    origin_session_id?: string;
+    origin_session_title?: string;
+    origin_agent_type?: string;
     created_at: number;
     preview: string;
     // Present when the newest line is a thread reply. The toast layer uses
@@ -786,6 +804,7 @@ async function railFor(
             user_id: lastMessage.user_id,
             author_kind: lastMessage.author_kind ?? "user",
             ...(lastMessage.external_author ? { external_author: lastMessage.external_author } : {}),
+            ...sessionOriginOf(lastMessage),
             created_at: lastMessage.created_at,
             preview: plainPreview(lastMessage.content, 120),
             ...(lastMessage.thread_root_id
@@ -1190,6 +1209,7 @@ export const searchMessages = query({
         // A Slack line's user_id is the workspace bridge; the snapshot names
         // the person who actually wrote it.
         external_author: row.external_author,
+        ...sessionOriginOf(row),
         external: row.external,
         created_at: row.created_at,
         snippet: searchSnippet(row.content, args.q, 200),

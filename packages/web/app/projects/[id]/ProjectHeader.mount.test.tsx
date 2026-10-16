@@ -57,7 +57,8 @@ async function verifyProjectHeader() {
   const calls: string[] = [];
   const asked: unknown[] = [];
   const state: any = {
-    currentUser: { _id: "fixture-user-me", name: "Ashot" },
+    // Staff: the Line tab is open to staff only (surfaceRules STAFF_ONLY_SURFACES).
+    currentUser: { _id: "fixture-user-me", name: "Ashot", staff: true },
     clientState: { ui: { active_team_id: "fixture-team" } },
     teams: [{ _id: "fixture-team", name: "Fixture" }, { _id: "home-team", name: "Codecast" }],
     projects: { [PID]: { ...serverRow } } as Record<string, any>,
@@ -152,17 +153,16 @@ async function verifyProjectHeader() {
   await mount();
   assert.deepEqual(calls.filter((c) => c.startsWith("replace:")), [], "the `pj-` address stays");
 
-  // ── one row: up to the Projects list, the name, its id, its facts, About and Share ──
+  // ── one row: up to the Projects list, the name, its id, its facts and Share ──
   const header = q("[data-intent-header]")!;
   assert.ok(header, "the board's header");
   assert.equal(q("[data-intent-stripe]"), null, "no stripe: the row is the header");
   assert.equal(header.querySelectorAll("[data-intent-row]").length, 1, "one row above the tabs");
-  assert.equal(q("[data-intent-back]")!.getAttribute("href"), "/org/projects", "back goes up to the Projects view");
+  assert.equal(q("[data-intent-back]")!.getAttribute("href"), "/projects", "back goes up to the Projects page");
   assert.equal(q("[data-project-title]")!.textContent, "Agent org");
   assert.equal(q("[data-project-title]")!.tagName, "H1");
   assert.equal(q("[data-project-title]")!.getAttribute("title"), "Agent org", "one line, its whole name the tooltip");
   assert.equal(q("[data-intent-id]")!.textContent, "pj-agentorg");
-  assert.equal(q("[data-project-about]")!.getAttribute("href"), "/org/pj-agentorg", "About opens the project's sheet");
   assert.equal(q("[data-share]")!.getAttribute("data-share"), "/projects/pj-agentorg");
   const chips = q("[data-intent-chips]")!;
   assert.match(chips.querySelector("[data-project-pick='status']")!.textContent!, /Active/);
@@ -173,12 +173,12 @@ async function verifyProjectHeader() {
   const partOf = chips.querySelector(`[data-project-initiatives='${PID}']`)!;
   assert.match(partOf.textContent!, /^Serves/);
   assert.ok(partOf.querySelector("[data-pill='initiative:in-1']"), "the goal it serves");
-  // What the project is, its charter, folder, repositories and progress are its sheet's.
-  for (const gone of ["[data-charter]", "[data-inline-edit='Project folder']", "[data-repository-links]", "[data-initiative-progress]", "[data-project-counts]"]) assert.equal(q(gone), null, `${gone} is the sheet's, not the board's`);
+  // What the project is for, its charter and repositories live on its About tab, not in the header.
+  for (const gone of ["[data-charter]", "[data-inline-edit='Project folder']", "[data-repository-links]", "[data-initiative-progress]", "[data-project-counts]"]) assert.equal(q(gone), null, `${gone} is not the header's`);
   assert.doesNotMatch(header.textContent!, /The org chart, roles and scopes\./);
 
-  // ── four tabs, kept in the URL ──
-  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "line", "expectations"]);
+  // ── five tabs, kept in the URL ──
+  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "about", "line", "expectations"]);
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "tasks");
   assert.equal(q("[data-scope-tab='tasks']")!.getAttribute("aria-current"), "page");
   assert.ok(q(`[data-task-list='${PID}']`), "it opens on the project's tasks");
@@ -188,6 +188,11 @@ async function verifyProjectHeader() {
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "timeline");
   assert.ok(q(`[data-project-timeline='${PID}']`));
   assert.equal(q("[data-task-list]"), null);
+  await click(q("[data-scope-tab='about']"));
+  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg?tab=about");
+  await repaint();
+  assert.ok(q("[data-project-about-tab]"), "About: what it is for, its charter, its repositories");
+  assert.ok(q("[data-charter]"), "the charter edits in place on the About tab");
   await click(q("[data-scope-tab='tasks']"));
   assert.equal(calls.at(-1), "replace:/projects/pj-agentorg", "the first tab is the bare address");
   await repaint();

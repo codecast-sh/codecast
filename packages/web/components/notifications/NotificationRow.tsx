@@ -89,7 +89,7 @@ type RowProps = {
 
 export function NotificationRow({ notification, onOpen, onContextMenu, size = "bell", nested, mode = DEVELOPER_MODE }: RowProps) {
   const label = sessionLabel(notification.conversation);
-  const { name: actorName, avatar: actorAvatar } = notificationActor(notification);
+  const { name: actorName, avatar: actorAvatar, session: actorSession } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   const agentIcon = showsAgentIcon(notification);
   const typeLabel = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
@@ -110,7 +110,12 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
       } ${!notification.read ? (nested ? "bg-sol-bg-alt/20" : "bg-sol-bg-alt/40") : size === "page" ? "bg-sol-bg" : ""}`}
     >
       <div className="flex items-start gap-3">
-        {actorAvatar ? (
+        {actorSession ? (
+          // A session spoke (a chat line it typed): its agent mark, as chat draws it.
+          <div className="flex-shrink-0 mt-0.5">
+            <AgentIcon agentType={actorSession.agent_type} className={av} />
+          </div>
+        ) : actorAvatar ? (
           <AvatarImg
             src={actorAvatar}
             alt={actorName || ""}

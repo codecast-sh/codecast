@@ -43,9 +43,11 @@ mock.module("../../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, u
 const realChatSync = await import("../../../hooks/useChatSync");
 mock.module("../../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}) }));
 
+// Where the card sent the reader in chat.
+const openedChat: string[] = [];
 mock.module("../../../hooks/useOpenDm", () => ({
   useOpenDm: () => () => {},
-  useOpenChatPath: () => () => {},
+  useOpenChatPath: () => (path: string) => openedChat.push(path),
 }));
 
 // The camera tiles and the walkie's status, as the engine publishes them:
@@ -112,6 +114,7 @@ const { walkieStageWords } = await import("../../../hooks/useWalkie");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { dmKeyFor } = await import("@codecast/shared/chat");
 const { activeTeamIdOf } = await import("../../../lib/activeTeam");
+const faceChat = await import("../../../lib/chat/faceChat");
 
 afterAll(() => {
   mock.module("../../../lib/calls/callManager", () => realCallManager);
@@ -383,6 +386,42 @@ describe("a face opens one card", () => {
     await h.click(h.q(".face-card-close")!);
     await h.click(h.circle(ANN));
     expect(read()).toEqual([["them", "is the deploy green?"], ["me", "yes, shipped"]]);
+  });
+
+  test("a thread line in the card names its thread, opens it in chat, and the reply goes into it", async () => {
+    const TEAM = "chatchannels:team";
+    const now = Date.now();
+    useInboxStore.setState({
+      chatChannels: { [TEAM]: { _id: TEAM, kind: "channel", name: "team" } },
+      chatMessages: {
+        r1: { _id: "r1", channel_id: TEAM, user_id: BO, content: "Deploys no longer re-run the tests", created_at: now - 300_000 },
+        t1: { _id: "t1", channel_id: TEAM, user_id: ANN, thread_root_id: "r1", content: "agree, ship it", created_at: now - 120_000 },
+        r2: { _id: "r2", channel_id: TEAM, user_id: BO, content: "Who owns the desktop build?", created_at: now - 200_000 },
+        t2: { _id: "t2", channel_id: TEAM, user_id: ANN, thread_root_id: "r2", content: "I can take it", created_at: now - 60_000 },
+      },
+      chatReads: {},
+    } as any);
+    const off = faceChat.registerFaceChatLayer({ canShow: () => true } as any);
+    // As the rail hands them over: replies whose roots it never named.
+    for (const [id, at] of [["t1", now - 120_000], ["t2", now - 60_000]] as const) {
+      faceChat.deliverChatToFace(ANN, { messageId: id, channelId: TEAM, channelName: "team", isDm: false, inThread: true, preview: "…", at, loud: false, count: 1 }, () => {});
+    }
+    try {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      await h.click(h.circle(ANN));
+      const seps = h.all(".fc-sep-link");
+      expect(seps.map((b) => [b.querySelector(".fc-sep-channel")?.textContent, b.querySelector(".fc-sep-root")?.textContent])).toEqual([
+        ["#team", "Deploys no longer re-run the tests"],
+        ["#team", "Who owns the desktop build?"],
+      ]);
+      expect(h.q<HTMLInputElement>(".fc-reply input")!.placeholder).toBe("Reply in the #team thread…");
+      openedChat.length = 0;
+      await h.click(seps[0]);
+      expect(openedChat).toEqual([`/chat/${TEAM}?m=t1`]);
+    } finally {
+      off();
+      faceChat.__resetFaceChat();
+    }
   });
 
   test("a new line scrolls the card's messages to the bottom, even once the card holds its full 30", async () => {
