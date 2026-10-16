@@ -239,12 +239,19 @@ describe("resolveRemoteDevice", () => {
   });
 });
 
-test("a process launched as a remote device leaves the marker, so a later start without the variable still knows", () => {
+test("a daemon launched as a remote device leaves the marker, so a later start without the variable still knows; reading the variable alone leaves none", () => {
   const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "remote-marker-"));
-  const probe = `import { isRemoteDevice } from ${JSON.stringify(require("node:path").join(import.meta.dir, "device.ts"))}; console.log(isRemoteDevice());`;
-  const run = (env: Record<string, string>) => Bun.spawnSync(["bun", "-e", probe], { env: { ...process.env, CODECAST_REMOTE_DEVICE: "", CODECAST_DIR: dir, ...env } }).stdout.toString().trim();
-  expect(run({})).toBe("false");
-  expect(run({ CODECAST_REMOTE_DEVICE: "1" })).toBe("true");
-  expect(require("node:fs").existsSync(require("node:path").join(dir, "remote-device"))).toBe(true);
-  expect(run({})).toBe("true");
+  const device = JSON.stringify(require("node:path").join(import.meta.dir, "device.ts"));
+  const read = `import { isRemoteDevice } from ${device}; console.log(isRemoteDevice());`;
+  const launch = `import { isRemoteDevice, recordRemoteLaunch } from ${device}; recordRemoteLaunch(); console.log(isRemoteDevice());`;
+  const run = (probe: string, env: Record<string, string>) => Bun.spawnSync(["bun", "-e", probe], { env: { ...process.env, CODECAST_REMOTE_DEVICE: "", CODECAST_DIR: dir, ...env } }).stdout.toString().trim();
+  const marker = () => require("node:fs").existsSync(require("node:path").join(dir, "remote-device"));
+  expect(run(read, {})).toBe("false");
+  // A test (or any command) that sets the variable reads remote, and marks nothing.
+  expect(run(read, { CODECAST_REMOTE_DEVICE: "1" })).toBe("true");
+  expect(marker()).toBe(false);
+  expect(run(read, {})).toBe("false");
+  expect(run(launch, { CODECAST_REMOTE_DEVICE: "1" })).toBe("true");
+  expect(marker()).toBe(true);
+  expect(run(read, {})).toBe("true");
 });
