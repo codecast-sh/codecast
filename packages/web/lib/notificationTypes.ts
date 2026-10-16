@@ -145,15 +145,20 @@ export const typeColors: Record<string, string> = {
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
  *  commenter, session-typed line) wins over the live user, which for Slack
- *  inbound is the workspace bridge rather than who posted. */
+ *  inbound is the workspace bridge rather than who posted. A line a session
+ *  typed is FROM the session (`actor_session`, notifications.list): it wears
+ *  the session's agent mark, never the photo of the human it ran as. */
 export function notificationActor(n: {
   actor?: { name?: string; github_username?: string; github_avatar_url?: string } | null;
   actor_name?: string;
   actor_avatar?: string;
-}): { name: string | undefined; avatar: string | undefined } {
+  actor_session?: { id: string; agent_type: string } | null;
+}): { name: string | undefined; avatar: string | undefined; session: { id: string; agent_type: string } | null } {
+  const session = n.actor_session ?? null;
   return {
     name: n.actor_name || n.actor?.name || n.actor?.github_username,
-    avatar: n.actor_avatar || n.actor?.github_avatar_url,
+    avatar: session ? undefined : n.actor_avatar || n.actor?.github_avatar_url,
+    session,
   };
 }
 

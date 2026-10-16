@@ -3,7 +3,7 @@ import Link from "next/link";
 import { SlackLogo } from "../SlackLogo";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { useChatMembers, useChatMessageRow, useEnsureChatMessage } from "../../hooks/useChatSync";
-import { authorFor, slackAuthorFor } from "../../lib/chatViews";
+import { lineAuthorFor } from "../../lib/chatViews";
 import { useInboxStore } from "../../store/inboxStore";
 
 // A quoted message inside a chat line. The server writes one as a blockquote
@@ -50,12 +50,12 @@ function ChatQuoteCard({ head, children }: { head: QuoteHead; children: ReactNod
   const row = useChatMessageRow(head.messageId);
   const { byId } = useChatMembers();
   const channel = useInboxStore((s) => (head.channelId ? s.chatChannels[head.channelId]?.name : undefined));
-  const author = row ? slackAuthorFor(row) ?? authorFor(row.user_id, row.author_kind, byId) : null;
+  const author = row ? lineAuthorFor(row, { members: byId }) : null;
   const name = author?.name ?? head.name;
   const meta = (
     <>
       {author ? (
-        <CommentAvatar name={name} image={author.avatarUrl} isAgent={author.isAgent} size={18} letters={2} />
+        <CommentAvatar name={name} image={author.avatarUrl} isAgent={author.isAgent} agentType={author.session?.agentType} size={18} letters={2} />
       ) : (
         <span className="ch-quote-slack"><SlackLogo className="w-3 h-3" /></span>
       )}

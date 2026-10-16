@@ -12,7 +12,7 @@ import { ChatModalLegend } from "./ChatModalLegend";
 import { highlightMatch } from "../GlobalSearch";
 import { isConvexId } from "../../lib/entityLinks";
 import { dmOtherIds, startOfDay } from "@codecast/shared/chat";
-import { authorFor, channelDisplayName, slackAuthorFor, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
+import { channelDisplayName, lineAuthorFor, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
 import type { ChatChannelView } from "./chatTypes";
 import type { ChatMessageRow } from "../../store/chatSlice";
 import "./chat.css";
@@ -42,6 +42,10 @@ type SearchHit = {
   author_kind: "user" | "agent";
   external_author?: ChatMessageRow["external_author"];
   external?: ChatMessageRow["external"];
+  origin?: ChatMessageRow["origin"];
+  origin_session_id?: string;
+  origin_session_title?: string;
+  origin_agent_type?: string;
   created_at: number;
   snippet: string;
   permalink: string;
@@ -346,7 +350,7 @@ export function ChatSearch({
                 {g.hits.map((h) => {
                   flatIdx++;
                   const idx = flatIdx;
-                  const author = slackAuthorFor(h) ?? authorFor(h.user_id, h.author_kind, byId as any);
+                  const author = lineAuthorFor(h, { members: byId as any });
                   return (
                     <button
                       key={h._id}
@@ -362,6 +366,7 @@ export function ChatSearch({
                         name={author.name}
                         image={author.avatarUrl}
                         isAgent={author.isAgent}
+                        agentType={author.session?.agentType}
                         size={22}
                         letters={1}
                       />

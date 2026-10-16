@@ -1593,6 +1593,18 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   } catch (err) {
     if (!(err instanceof LineProfileError)) throw err;
     console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    // A run the daemon handed this runner fails with the profile's words. Left
+    // unreported it stayed taken until the server's sweep called it unclaimed
+    // (a profile key newer than the machine's cast, Union 2026-10-15).
+    if (options.runId && !options.dryRun) {
+      await reportProgress(options, {
+        current_node_id: startNode.id,
+        node_id: startNode.id,
+        node_status: "failed",
+        run_status: "failed",
+        fail_reason: `the line profile could not be read on this machine: ${err.message}`,
+      });
+    }
     return "invalid";
   }
   // A run with no cause keeps its files under its own id, so a resume finds them.

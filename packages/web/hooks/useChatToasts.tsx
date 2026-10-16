@@ -13,7 +13,7 @@ import { chatToastTier, isHistoryLine, type ChatToastTier } from "../lib/chatTim
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
-import { knownAgentMember, memberName, slackAuthorFor, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
+import { knownAgentMember, memberName, sessionAuthorFor, slackAuthorFor, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -261,7 +261,9 @@ export function useChatToasts(): void {
       const isCall = !!(full?.call ?? last.call);
       const author = byId.get(String(last.user_id)) ?? knownAgentMember(String(last.user_id));
       const slackAuthor = slackAuthorFor(full?.external_author ? full : last);
-      const isAgent = !slackAuthor && (last.author_kind === "agent" || !!author?.is_bot);
+      // A line a session typed is stored under its human: name the session.
+      const sessionAuthor = slackAuthor ? null : sessionAuthorFor(full?.origin_session_id ? full : last, { members: byId });
+      const isAgent = !slackAuthor && (!!sessionAuthor || last.author_kind === "agent" || !!author?.is_bot);
       const data: ChatToastData = {
         messageId,
         channelId,
@@ -272,9 +274,10 @@ export function useChatToasts(): void {
             )
           : channelRow?.name ?? "channel",
         isDm,
-        authorName: isCall ? "Huddle" : slackAuthor?.name ?? memberName(author),
+        authorName: isCall ? "Huddle" : slackAuthor?.name ?? sessionAuthor?.name ?? memberName(author),
         authorAvatarUrl: isCall ? undefined : slackAuthor ? slackAuthor.avatarUrl : isAgent ? undefined : author?.image || author?.github_avatar_url,
         authorIsAgent: isAgent,
+        authorAgentType: sessionAuthor?.session?.agentType,
         preview: toastPreview(full?.content ?? last.preview ?? ""),
         tier,
         // How many messages this card stands in for: the server's unread count
@@ -329,10 +332,10 @@ export function useChatToasts(): void {
       // A Slack line authors as the workspace bridge ("Union (Slack)"): the
       // row's snapshot, else the notification's, names who actually spoke.
       const slackAuthor = full?.external_author ? slackAuthorFor(full) : fromRail?.external_author ? slackAuthorFor(fromRail) : null;
-      const viaSlack = !!slackAuthor || memberKind(author) === "slack";
-      const isAgent = !viaSlack && (!!author?.is_bot || full?.author_kind === "agent" || fromRail?.author_kind === "agent");
-      const isDm = n.type === "chat_dm" || st.chatChannels?.[channelId]?.kind === "dm";
       const face = notificationActor(n);
+      const viaSlack = !!slackAuthor || memberKind(author) === "slack";
+      const isAgent = !viaSlack && (!!face.session || !!author?.is_bot || full?.author_kind === "agent" || fromRail?.author_kind === "agent");
+      const isDm = n.type === "chat_dm" || st.chatChannels?.[channelId]?.kind === "dm";
       const name = slackAuthor?.name || n.actor_name || memberName(author);
       present(
         {
@@ -343,6 +346,7 @@ export function useChatToasts(): void {
           authorName: name,
           authorAvatarUrl: isAgent ? undefined : slackAuthor?.avatarUrl || face.avatar || author?.image || author?.github_avatar_url,
           authorIsAgent: isAgent,
+          authorAgentType: face.session?.agent_type,
           preview: toastPreview(full?.content ?? fromRail?.preview ?? notifBody(n.message ?? "")),
           tier: "loud",
           inThread: n.type === "chat_reply" || !!threadRootId,

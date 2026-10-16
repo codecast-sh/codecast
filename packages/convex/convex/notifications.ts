@@ -309,12 +309,12 @@ export const list = query({
         const conversation = notification.conversation_id
           ? await ctx.db.get(notification.conversation_id)
           : null;
-        // Slack inbound lines are stored under the workspace bridge. The
-        // snapshot (or, for rows written before it was filled, the message's
-        // external_author) is the person who posted.
-        const needMessageFace = !notification.actor_name && actor?.bot_kind === "slack" && notification.chat_message_id;
-        const message = needMessageFace
-          ? await ctx.db.get(notification.chat_message_id!)
+        // A chat line's author is not always the user on the row: Slack inbound
+        // lines are stored under the workspace bridge (the snapshot, or for old
+        // rows the message's external_author, is who posted), and a line a
+        // session typed is stored under its human (the session is who spoke).
+        const message = notification.chat_message_id
+          ? await ctx.db.get(notification.chat_message_id)
           : null;
         const face = displayNotificationActor(notification, actor, message);
         return {
@@ -326,6 +326,7 @@ export const list = query({
             github_username: actor.github_username,
             github_avatar_url: face.avatar,
           } : null,
+          actor_session: face.session,
           conversation: conversation ? {
             _id: conversation._id,
             title: conversation.title,

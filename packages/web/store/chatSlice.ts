@@ -291,6 +291,11 @@ export type ChatRailRow = {
     user_id: string;
     author_kind?: "user" | "agent";
     external_author?: ChatExternalAuthor;
+    /** A line a session typed: who to name instead of its human (lineAuthorFor). */
+    origin?: "agent";
+    origin_session_id?: string;
+    origin_session_title?: string;
+    origin_agent_type?: string;
     created_at: number;
     preview: string;
     thread_root_id?: string;

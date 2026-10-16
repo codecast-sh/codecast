@@ -51,7 +51,7 @@ import { collapseSameTitle } from "../lib/mentionRanking";
 import { sessionSearchHaystack, mergeSearchRows, rankSessions, sessionStanding, type SessionStanding } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
-import { channelDisplayName, dmCounterpart, memberName, slackAuthorFor } from "../lib/chatViews";
+import { channelDisplayName, dmCounterpart, lineAuthorFor, memberName, type LineAuthorFields } from "../lib/chatViews";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
@@ -1934,9 +1934,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions, state.followLeaderId ?? null).slice(0, 6);
   }, [open, query, picking]);
 
-  const chatMemberName = useCallback((userId: string) => {
+  const chatAuthorName = useCallback((hit: LineAuthorFields) => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
-    return memberName(members.find((m) => String(m._id) === String(userId)));
+    return lineAuthorFor(hit, { members: new Map(members.map((m) => [String(m._id), m])) }).name;
   }, []);
 
   const projectRows = useWorkspaceCollection<any>("projects");
@@ -3670,7 +3670,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm">{h.snippet}</div>
                   <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
-                    {slackAuthorFor(h)?.name ?? chatMemberName(h.user_id)} · {h.channel_kind === "dm" ? "direct message" : `#${h.channel_name}`}
+                    {chatAuthorName(h)} · {h.channel_kind === "dm" ? "direct message" : `#${h.channel_name}`}
                   </div>
                 </div>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(h.created_at)}</span>

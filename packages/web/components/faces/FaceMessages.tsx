@@ -1,10 +1,10 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, CornerDownRight } from "lucide-react";
 import { dmKeyFor } from "@codecast/shared/chat";
 import { useInboxStore, type ChatMessageRow } from "../../store/inboxStore";
 import { findDmChannelId } from "../../store/chatSlice";
-import { useChannelMessagesSync } from "../../hooks/useChatSync";
+import { useChannelMessagesSync, useEnsureChatMessage } from "../../hooks/useChatSync";
 import { useOpenChatPath } from "../../hooks/useOpenDm";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { isConvexId } from "../../lib/entityLinks";
@@ -28,7 +28,26 @@ const CARD_LINES = 30;
 /** A pause this long starts a new run of lines. */
 const RUN_GAP_MS = 5 * 60_000;
 
-type Row = { id: string; channelId: string; threadRootId?: string; inThread?: boolean; isDm: boolean; text: string; at: number; me: boolean; failed?: boolean };
+type Row = {
+  id: string;
+  channelId: string;
+  threadRootId?: string;
+  inThread?: boolean;
+  isDm: boolean;
+  text: string;
+  at: number;
+  me: boolean;
+  failed?: boolean;
+  /** The thread's opening line, once the store holds it. */
+  rootText?: string;
+};
+
+/** Loads one message the store has not seen (a channel line the rail only
+ *  previewed, or the root of its thread). Renders nothing. */
+function EnsureMessage({ id }: { id: string }) {
+  useEnsureChatMessage(id);
+  return null;
+}
 
 /** @mentions lifted out of a line: one naming you is marked, the rest just read as names. */
 export function Preview({ text }: { text: string }) {
@@ -72,6 +91,18 @@ function channelSig(messages: Record<string, ChatMessageRow> | undefined, channe
   return s;
 }
 
+/** The channel lines from elsewhere as the card reads them: each line, its
+ *  thread's root, and that root's text. Wakes when a fetch lands one. */
+function threadsSig(messages: Record<string, ChatMessageRow> | undefined, ids: string[]): string {
+  let s = "";
+  for (const id of ids) {
+    const m = messages?.[id];
+    const root = m?.thread_root_id ? messages?.[m.thread_root_id] : undefined;
+    s += `${id}:${m?.content?.length ?? -1}:${m?.thread_root_id ?? ""}:${root?.content?.length ?? -1},`;
+  }
+  return s;
+}
+
 export function FaceMessages({
   memberId,
   name,
@@ -92,6 +123,8 @@ export function FaceMessages({
   const dmSig = useInboxStore((s: any) => channelSig(s.chatMessages, dmId));
   const channels = useInboxStore((s: any) => s.chatChannels as Record<string, { kind?: string }>);
   const recent = useFaceChatRecent(memberId);
+  const elsewhereIds = useMemo(() => recent.filter((a) => a.channelId !== dmId && !a.isDm).map((a) => a.messageId), [recent, dmId]);
+  const elsewhereSig = useInboxStore((s: any) => threadsSig(s.chatMessages, elsewhereIds));
   const unreadIds = useFaceChatUnreadIds(memberId);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -139,14 +172,23 @@ export function FaceMessages({
     }
     dm.sort((a, b) => a.at - b.at);
     for (const r of dm.slice(-CARD_LINES)) byId.set(r.id, r);
-    // A channel line the store has loaded reads in full, not as the rail's preview.
+    // A channel line the store has loaded reads in full, not as the rail's
+    // preview, and a reply learns its thread from its own row.
     for (const r of byId.values()) {
       const m = messages[r.id];
-      if (!r.isDm && m?.content) r.text = toastPreview(m.content, 2000);
+      if (r.isDm || !m) continue;
+      if (m.content) r.text = toastPreview(m.content, 2000);
+      if (m.thread_root_id) r.threadRootId = String(m.thread_root_id);
+      const root = r.threadRootId ? messages[r.threadRootId] : undefined;
+      if (root?.content) r.rootText = toastPreview(root.content, 200);
     }
     return [...byId.values()].sort((a, b) => a.at - b.at);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dmSig is the real dep on chatMessages
-  }, [recent, dmSig, dmId, viewerId, channels]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dmSig and elsewhereSig are the real deps on chatMessages
+  }, [recent, dmSig, elsewhereSig, dmId, viewerId, channels]);
+
+  // Lines and thread roots the card names but the store lacks.
+  const st = useInboxStore.getState().chatMessages as Record<string, ChatMessageRow>;
+  const missing = rows.flatMap((r) => (r.isDm ? [] : [r.id, ...(r.threadRootId ? [r.threadRootId] : [])])).filter((id) => !st?.[id]);
 
   const isNew = (r: Row) => !r.me && (unreadIds.includes(r.id) || (r.isDm && r.at > readFloor));
   const theirLast = [...rows].reverse().find((r) => !r.me);
@@ -178,15 +220,20 @@ export function FaceMessages({
   // The reply goes where they last spoke; with nothing from them, to the DM.
   const target = theirLast ?? null;
   const toDm = !target || target.isDm;
-  const replyWhere = toDm ? "direct message" : whereOf(target.channelId, false, target.threadRootId);
+  const replyWhere = toDm ? "direct message" : whereOf(target.channelId, false, target.threadRootId).replace(/^thread in (.*)$/, "in the $1 thread");
   // A reply in a thread whose root this window never loaded cannot be
   // answered here (it would land in the channel): the thread opens instead.
   const replyHere = !(target?.inThread && !target.threadRootId);
 
-  const openChatAt = () => {
+  /** A permalink to a reply opens its thread on that line (app/chat/page.tsx). */
+  const openRow = (r: Row) => {
     onLeave();
+    openChat(`/chat/${r.channelId}?m=${r.id}`);
+  };
+  const openChatAt = () => {
     const at = target ?? newestDm;
-    if (at) return openChat(`/chat/${at.channelId}?m=${at.id}`);
+    if (at) return openRow(at);
+    onLeave();
     openChat(`/chat/${useInboxStore.getState().openDmChannel([memberId])}`);
   };
 
@@ -219,9 +266,11 @@ export function FaceMessages({
   // A run is one speaker, one place, without a long pause: it sits tight and
   // wears its time once, on its last line.
   const mixed = rows.some((r) => !r.isDm);
-  const whereOfRow = (r: Row) => (r.isDm ? "direct message" : whereOf(r.channelId, false, r.threadRootId ?? r.inThread).replace(/^in /, ""));
+  // A place is the DM, a channel, or one thread in it: two threads in #team
+  // are two places. A reply whose thread is still loading stands alone.
+  const placeOf = (r: Row) => (r.isDm ? "dm" : `${r.channelId}:${r.threadRootId ?? (r.inThread ? r.id : "")}`);
   const joins = (a: Row | undefined, b: Row | undefined) =>
-    !!a && !!b && a.me === b.me && b.at - a.at < RUN_GAP_MS && (!mixed || whereOfRow(a) === whereOfRow(b));
+    !!a && !!b && a.me === b.me && b.at - a.at < RUN_GAP_MS && (!mixed || placeOf(a) === placeOf(b));
   return (
     <div className="fc-card-msgs" style={{ "--fc-hue": hueFor(name) } as React.CSSProperties}>
       <div className="fc-card-msgs-head">
@@ -238,16 +287,19 @@ export function FaceMessages({
           <ArrowUpRight />
         </Button>
       </div>
+      {missing.map((id) => (
+        <EnsureMessage key={id} id={id} />
+      ))}
       {rows.length > 0 && (
         <div ref={listRef} className="fc-list">
           {rows.map((r, i) => {
             const prev = rows[i - 1];
-            const sep = mixed && (!prev || whereOfRow(prev) !== whereOfRow(r));
+            const sep = mixed && (!prev || placeOf(prev) !== placeOf(r));
             const run = !sep && joins(prev, r);
             const tail = !joins(r, rows[i + 1]);
             return (
               <div key={r.id} className="fc-row" data-me={r.me ? "1" : undefined} data-run={run ? "1" : undefined}>
-                {sep && <div className="fc-sep">{whereOfRow(r)}</div>}
+                {sep && <Place row={r} onOpen={() => openRow(r)} />}
                 <div className="fc-msg" data-new={isNew(r) ? "1" : undefined} data-failed={r.failed ? "1" : undefined}>
                   <span className="fc-text">
                     <Preview text={r.text} />
@@ -282,5 +334,25 @@ export function FaceMessages({
         </div>
       )}
     </div>
+  );
+}
+
+/** Where a run of lines was said, as the way there: the channel, and for a
+ *  thread the line that opened it. Opens that place in chat on that line. */
+function Place({ row, onOpen }: { row: Row; onOpen: () => void }) {
+  if (row.isDm) return <div className="fc-sep">direct message</div>;
+  const channel = whereOf(row.channelId, false).replace(/^in /, "");
+  const thread = !!(row.threadRootId || row.inThread);
+  return (
+    <button type="button" className="fc-sep fc-sep-link" onClick={onOpen} title={thread ? `Open the thread in ${channel}` : `Open ${channel}`}>
+      <span className="fc-sep-channel">{channel}</span>
+      {thread && (
+        <>
+          <CornerDownRight className="fc-sep-icon" />
+          <span className="fc-sep-root">{row.rootText ?? "thread"}</span>
+        </>
+      )}
+      <ArrowUpRight className="fc-sep-icon fc-sep-go" />
+    </button>
   );
 }

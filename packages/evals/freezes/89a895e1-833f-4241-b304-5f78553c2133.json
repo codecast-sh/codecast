@@ -1,0 +1,26 @@
+{
+  "name": "role-wake inbox-look-calm",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:inbox-look-calm"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:inbox-look-calm",
+    "title": "role-wake inbox-look-calm"
+  },
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/inbox-look-calm.json"
+  },
+  "judge": "files nothing, since every loose session is Mara's own work, and says so in a line or two; it proposes no filing, asks Mara nothing, and invents no work",
+  "notes": null,
+  "tags": [],
+  "id": "89a895e1-833f-4241-b304-5f78553c2133",
+  "createdAt": "2026-10-16T04:18:58.358Z"
+}
