@@ -27,8 +27,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { formatAcceleratorParts } from "../../shortcuts";
+import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { formatAcceleratorParts, withShortcut } from "../../shortcuts";
 import { ConfirmButton } from "../integrations/parts";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { prMergeLedger } from "../consequential/ledgers";
@@ -151,17 +151,17 @@ export function ReviewMenu({
           <button
             type="button"
             className="pr-verb inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors"
-            title="Choose a verdict and send your notes (r)"
+            title={withShortcut("Choose a verdict and send your notes", "pr.review")}
           >
             <Send className="w-3.5 h-3.5" />
             Finish review
-            <KeyCap size="xs">r</KeyCap>
+            <MenuKeyCaps action="pr.review" className="contents" />
           </button>
         ) : (
           <button
             type="button"
             className={`pr-verb inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors ${count ? "" : "opacity-90"}`}
-            title={count ? `${count} ${count === 1 ? "note" : "notes"} waiting in your review (r)` : "Review this pull request (r)"}
+            title={withShortcut(count ? `${count} ${count === 1 ? "note" : "notes"} waiting in your review` : "Review this pull request", "pr.review")}
           >
             <CircleDot className="w-3.5 h-3.5" />
             {count ? `Review · ${count}` : "Review"}
@@ -197,7 +197,7 @@ export function ReviewMenu({
                   onClick={() => { setOpen(false); onWalk(); }}
                 >
                   Start with the {openThreads} open {openThreads === 1 ? "thread" : "threads"}
-                  <KeyCap size="xs">n</KeyCap>
+                  <MenuKeyCaps action="pr.nextThread" className="contents" />
                 </button>
               )}
             </div>
@@ -556,7 +556,7 @@ export function MoreMenu({
 
           <DropdownMenuSeparator className="bg-sol-border" />
           <div className="px-2 py-1.5 text-[10px] text-sol-text-dim flex items-center gap-1.5 flex-wrap">
-            <KeyCap size="xs">r</KeyCap> review <KeyCap size="xs">n</KeyCap> <KeyCap size="xs">p</KeyCap> threads <KeyCap size="xs">m</KeyCap> viewed
+            <MenuKeyCaps action="pr.review" className="contents" /> review <MenuKeyCaps action="pr.nextThread" className="contents" /> <MenuKeyCaps action="pr.prevThread" className="contents" /> threads <MenuKeyCaps action="diff.markViewed" className="contents" /> viewed
           </div>
         </DropdownMenuContent>
       </DropdownMenu>

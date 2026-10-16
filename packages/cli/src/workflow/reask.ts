@@ -32,13 +32,7 @@ export async function prepareReask(deps: PublishDeps, runId: string, ref: string
   if (at && graph && !graph.nodes.has(at)) throw new Error(`The run's graph has no station ${at}`);
   if (!at && gate && graph && !graph.nodes.has(gate)) throw new Error(`${ref} waits at ${gate}, which its graph no longer has: pick it up with --at <station>`);
   // Stopped last, so a refusal above leaves the run waiting as it was.
-  const { liveRunnerPid } = await import("./runResume.js");
-  const pid = liveRunnerPid(runId);
-  if (pid) {
-    process.kill(pid, "SIGTERM");
-    for (let i = 0; i < 50 && liveRunnerPid(runId); i++) await new Promise((r) => setTimeout(r, 100));
-    if (liveRunnerPid(runId)) throw new Error(`The runner waiting on ${ref} (pid ${pid}) did not stop`);
-  }
+  await stopRunner(runId, ref);
   const start = graph ? [...graph.nodes.values()].find((n) => n.type === "start") : undefined;
   return {
     run: got?.run ?? null,
@@ -46,4 +40,14 @@ export async function prepareReask(deps: PublishDeps, runId: string, ref: string
     asker: (gate && graph?.nodes.get(gate)?.asker) || undefined,
     entry: start ? graph!.edges.find((e) => e.from === start.id)?.to : undefined,
   };
+}
+
+/** Stop this machine's runner on `runId`, if one is alive, and wait for it to exit. */
+export async function stopRunner(runId: string, ref: string): Promise<void> {
+  const { liveRunnerPid } = await import("./runResume.js");
+  const pid = liveRunnerPid(runId);
+  if (!pid) return;
+  process.kill(pid, "SIGTERM");
+  for (let i = 0; i < 50 && liveRunnerPid(runId); i++) await new Promise((r) => setTimeout(r, 100));
+  if (liveRunnerPid(runId)) throw new Error(`The runner on ${ref} (pid ${pid}) did not stop`);
 }

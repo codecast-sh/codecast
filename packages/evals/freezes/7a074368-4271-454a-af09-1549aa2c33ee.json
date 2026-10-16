@@ -1,0 +1,26 @@
+{
+  "name": "role-wake inbox-look-current",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:inbox-look-current"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:inbox-look-current",
+    "title": "role-wake inbox-look-current"
+  },
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/inbox-look-current.json"
+  },
+  "judge": "changes nothing, since op-41's three filings are all still right and the three loose sessions outside it are all Mara's own work (one of them new since the last look): it names no revise, no propose and no withdraw, asks Mara nothing, and its reply is a line or two saying nothing needs to move (naming the still-open op-41 is fine); a reply that is only working notes, or that presents op-41 as new, falls short",
+  "notes": null,
+  "tags": [],
+  "id": "7a074368-4271-454a-af09-1549aa2c33ee",
+  "createdAt": "2026-10-16T20:41:31.994Z"
+}
