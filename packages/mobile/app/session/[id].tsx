@@ -79,7 +79,7 @@ import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -4458,7 +4458,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     for (let i = originalIndex - 1; i >= 0; i--) {
       const prev = allMessages[i];
       if (isToolResultCarrier(prev)) continue;
-      if (prev.role === 'user' && prev.content && isCommandMessage(prev.content)) continue;
+      if (prev.role === 'user' && prev.content && (isCommandMessage(prev.content) || isPollResponsePayload(prev.content))) continue;
       prevNonToolResult = prev;
       break;
     }
@@ -4471,6 +4471,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (isToolResultCarrier(item)) {
       return null;
     }
+    // A poll answer is keys the app pressed on the person's behalf; the
+    // question card above already shows the pick (web's poll_response kind).
+    if (item.role === 'user' && isPollResponsePayload(item.content)) return null;
     if (retryFold?.hidden.has(item._id)) return null;
 
     // A hosted turn's stop notice: one calm block with its move, and

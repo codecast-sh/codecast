@@ -9,6 +9,7 @@ import {
   TRIAGE_CONVERSATION_FIELDS,
   VISIBILITY_CONVERSATION_FIELDS,
 } from "@codecast/shared/contracts";
+import { PLACEMENT_LIVENESS_FIELDS } from "./conversations";
 
 // The manifest (contracts/conversationFields) is the single declaration of what
 // a conversation field is for. Two things have to stay true for it to be worth
@@ -66,6 +67,17 @@ describe("conversation field manifest", () => {
     test(`${name} carries every sendable field`, () => {
       const exempt = name === "buildSubagentChildRow" ? CHILD_ROW_EXEMPT : new Set<string>();
       const missing = SENDABLE_CONVERSATION_FIELDS.filter((f) => !exempt.has(f) && !carries(body, f));
+      expect(missing).toEqual([]);
+    });
+  }
+
+  // A child row reads no children of its own, so nothing can keep it producing.
+  const CHILD_ROW_PLACEMENT_EXEMPT = new Set(["producing_until"]);
+
+  for (const [name, body] of rowProjections) {
+    test(`${name} carries every liveness fact placement reads`, () => {
+      const exempt = name === "buildSubagentChildRow" ? CHILD_ROW_PLACEMENT_EXEMPT : new Set<string>();
+      const missing = PLACEMENT_LIVENESS_FIELDS.filter((f) => !exempt.has(f) && !carries(body, f));
       expect(missing).toEqual([]);
     });
   }
