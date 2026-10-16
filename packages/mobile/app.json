@@ -195,6 +195,13 @@
         }
       ],
       [
+        "expo-media-library",
+        {
+          "photosPermission": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded.",
+          "savePhotosPermission": false
+        }
+      ],
+      [
         "expo-callkit-telecom",
         {
           "sounds": [

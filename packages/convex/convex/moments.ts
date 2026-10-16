@@ -37,6 +37,7 @@ import { judgeInputs } from "./momentsSchema";
 import { judgeRunRow, liveBodyKey, momentRefs, momentView, readKeptBody } from "./lib/momentBody";
 import { putChunk } from "./replays";
 import { runModelCall, type CallScope } from "./modelCalls";
+import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/modelCall";
 import { reembedFinding } from "./findingGroups";
 import { linesSince, renderExpectations, type ExpectationsVersion } from "@codecast/shared/contracts/expectations";
 import {
@@ -51,7 +52,7 @@ import {
   type MomentWindow,
 } from "@codecast/shared/contracts/moments";
 import { newOnResample, readRulings, type Ruling } from "./judgeRetire";
-import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingKey, findingKeyScope, findingSignal, judgeRequest, narrowBrief, parseJudgeReply, quotesShareMessage, rulingsShown, type ExpectationsBrief, type JudgeFinding, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
+import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingKey, findingKeyScope, findingSignal, judgeRequest, narrowBrief, parseJudgeReply, quotesShareMessage, rulingsShown, type ExpectationsBrief, type JudgeFinding, type JudgeHandoff, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
 
 /** Moments one claim hands a host. */
 const CLAIM_BATCH = 5;
@@ -361,7 +362,7 @@ export const complete = action({
     output: v.optional(v.string()),
     error: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ moment: string; status: "ready" | "failed" | "waiting"; storage?: string; judged?: JudgeOutcome[]; error?: string }> => {
+  handler: async (ctx, args): Promise<{ moment: string; status: "ready" | "failed" | "waiting"; storage?: string; judged?: JudgeOutcome[]; judge_here?: JudgeHandoff; error?: string }> => {
     const f: Finishing = await ctx.runQuery(internal.moments.finishing, { api_token: args.api_token, device_id: args.device_id, moment: args.moment });
     if (args.error !== undefined || args.output === undefined) {
       const error = args.error || "the extractor printed nothing";
@@ -413,8 +414,8 @@ export const complete = action({
     });
     // Another hand back of this claim already settled it, and judged it.
     if (!won) return { moment: args.moment, status: "ready", storage };
-    const judged = await judgeMoment(ctx, f, record, f.moment.rejudge_lines);
-    return { moment: args.moment, status: "ready", storage, judged };
+    const { judged, handoff } = await judgeMoment(ctx, f, record, f.moment.rejudge_lines);
+    return { moment: args.moment, status: "ready", storage, judged, ...(handoff ? { judge_here: handoff } : {}) };
   },
 });
 
@@ -462,6 +463,7 @@ export const recordRun = internalMutation({
     inputs: v.optional(judgeInputs),
     lines: v.optional(v.array(v.string())),
     model: v.string(),
+    backend: v.optional(v.literal("subscription")),
     cost_usd: v.number(),
   },
   handler: async (ctx, args) => {
@@ -503,74 +505,186 @@ export async function judgeInputsOf(record: Pick<MomentRecord, "blocks">): Promi
 }
 
 /**
- * Every judge of the moment's kind reads it (LL8), one call each inside the
- * team's budget. A shadow judge's findings stay on its run; a live judge's
- * also file, each into the project holding the expectation it cites, as the
- * person who set the source up (the way promoted signals file, X6).
+ * Every judge of the moment's kind reads it (LL8), one call each. A shadow
+ * judge's findings stay on its run; a live judge's also file, each into the
+ * project holding the expectation it cites, as the person who set the source
+ * up (the way promoted signals file, X6).
+ *
+ * Where the call runs is the source's judge_on. On api (the default) it runs
+ * here, inside the team's budget. On subscription nothing is sent from here:
+ * judgeMoment answers with the requests (JudgeHandoff), the machine that
+ * handed the moment in runs each on its Claude Code login, and
+ * `/cli/moments/judged` brings the replies back to settleJudge, the same
+ * recorder an API reply goes through.
  */
-async function judgeMoment(ctx: any, f: Finishing, record: MomentRecord, only?: string[]): Promise<JudgeOutcome[]> {
-  const where = { workspace: f.moment.workspace, ...(f.moment.team_id ? { team_id: f.moment.team_id } : {}) };
-  const outcomes: JudgeOutcome[] = [];
-  const rulings = await rulingsOn(ctx, f.moment.workspace, record);
-  const inputs = await judgeInputsOf(record);
-  const scoped = only?.length ? new Set(only) : null;
+async function judgeMoment(ctx: any, f: Finishing, record: MomentRecord, only?: string[]): Promise<{ judged: JudgeOutcome[]; handoff?: JudgeHandoff }> {
+  const reading = await readingOf(ctx, f, record, only);
+  const judged: JudgeOutcome[] = [];
+  const requests: JudgeHandoff["requests"] = [];
+  const here = (f.source.config?.judge_on ?? "api") === "api";
   for (const judge of f.judges) {
-    // The lines as they stood at the time the facts describe (the judge's clock): one that came into force later is not graded here.
-    const current: Array<ExpectationsBrief & { project_id: Id<"projects"> }> = await ctx.runQuery(internal.moments.briefsFor, { project_ids: judge.project_ids, ...(judge.parts?.length ? { parts: judge.parts } : {}) });
-    const briefs = current.map((b) => briefAt(b, record.at ?? record.event_at));
-    const expectations = briefs.map((b) => ({ project_id: b.project_id, version: b.version }));
-    const base = { judge_id: judge._id, moment_id: f.moment._id, expectations, model: judge.model, inputs, ...(scoped ? { lines: [...scoped] } : {}) };
-    const ids = briefs.flatMap((b) => b.ids);
-    const later = briefs.flatMap((b) => b.later);
-    // A re-read scoped to some lines (`--lines`): the judge still reads every line, as it does live, but files and lets go only under those.
-    const inScope = (line: string) => !scoped || scoped.has(line);
-    if (!ids.length) {
-      const reason = "its projects have no expectations to grade against yet";
-      await ctx.runMutation(internal.moments.recordRun, { ...base, status: "skipped", reason, findings: 0, cost_usd: 0 });
-      outcomes.push({ judge: judge.name, status: "skipped", findings: 0, filed: 0, reason, cost_usd: 0 });
-      continue;
-    }
-    const spec: JudgeSpec = { name: judge.name, moment: judge.moment_kind, model: judge.model, max_tokens: judge.max_tokens, projects: judge.projects, mode: judge.mode, prompt: judge.prompt };
-    // The judge's clock is the time the facts describe: now for a live read, the as-of time for a replay.
-    const clock = Math.min(Date.now(), record.at ?? Date.now());
+    const p = await prepareJudge(ctx, f, record, judge, reading);
+    if ("outcome" in p) { judged.push(p.outcome); continue; }
+    if (!here) { requests.push({ judge: judge.name, request: p.request }); continue; }
     // Charged to the projects whose expectations it grades.
-    const result = await runModelCall(ctx, { ...where, project_ids: judge.project_ids }, "judge", judgeRequest(spec, briefs, record, clock, rulings), `Judge ${judge.name}`);
-    if (!result.ok) {
-      const status = result.reason === "budget" ? "skipped" : "failed";
-      await ctx.runMutation(internal.moments.recordRun, { ...base, status, reason: result.error, findings: 0, cost_usd: result.cost_usd });
-      outcomes.push({ judge: judge.name, status, findings: 0, filed: 0, reason: result.error, cost_usd: result.cost_usd });
-      continue;
-    }
-    const parsed = parseJudgeReply(result.text, ids);
-    if (!parsed) {
-      const reason = "the answer held no deviations list";
-      await ctx.runMutation(internal.moments.recordRun, { ...base, status: "failed", reason, findings: 0, cost_usd: result.cost_usd });
-      outcomes.push({ judge: judge.name, status: "failed", findings: 0, filed: 0, reason, cost_usd: result.cost_usd });
-      continue;
-    }
-    const startedAt = Date.now();
-    const filedNow = judge.mode === "live" ? await fileFindings(ctx, f, judge, briefs, parsed.findings.filter((x) => inScope(x.expectation)), record, where, { messages: inputs.messages, fresh: scoped }) : { ids: [], keys: [], held: [], waiting: [] };
-    const signalIds = filedNow.ids;
-    // Judged again: this moment now stands behind what the run filed or found again, and no longer behind
-    // what it filed before and did not find now, which leaves its problems once no moment stands behind it.
-    if (judge.mode === "live") {
-      await ctx.runMutation(internal.judgeRetire.settleRun, { moment_id: f.moment._id, moment: f.moment.short_id, judge: judge.name, judge_version: judge.version, held: [...signalIds, ...filedNow.held], keep: filedNow.keys, shown: ids.filter(inScope), ...(later.some(inScope) ? { later: later.filter(inScope) } : {}), inputs, ...(scoped ? { fresh: [...scoped] } : {}), before: startedAt, actor: f.source.owner_user_id });
-    }
-    await ctx.runMutation(internal.moments.recordRun, {
-      ...base,
-      status: "ok",
-      findings_json: JSON.stringify(parsed.findings),
-      findings: parsed.findings.length,
-      ...(parsed.uncited ? { uncited: parsed.uncited } : {}),
-      ...(signalIds.length ? { signal_ids: signalIds } : {}),
-      ...(filedNow.held.length ? { held_ids: filedNow.held } : {}),
-      ...(filedNow.waiting.length ? { waiting: filedNow.waiting } : {}),
-      cost_usd: result.cost_usd,
-    });
-    outcomes.push({ judge: judge.name, status: "ok", findings: parsed.findings.length, filed: signalIds.length, cost_usd: result.cost_usd });
+    const result = await runModelCall(ctx, { ...p.where, project_ids: judge.project_ids }, "judge", p.request, `Judge ${judge.name}`);
+    judged.push(await settleJudge(ctx, f, record, p, result, reading));
   }
-  return outcomes;
+  if (here || !requests.length) return { judged };
+  return { judged, handoff: { moment: f.moment.short_id, clock: reading.clock, record, ...(only?.length ? { lines: only } : {}), requests } };
 }
+
+/** What every judge of one reading shares: the team's rulings on its messages, its input hashes, the clock, the lines it is scoped to. */
+type Reading = { rulings: JudgeRuling[]; inputs: { messages: string; facts: string }; clock: number; scoped: Set<string> | null };
+async function readingOf(ctx: any, f: Finishing, record: MomentRecord, only?: string[], clock?: number): Promise<Reading> {
+  return {
+    rulings: await rulingsOn(ctx, f.moment.workspace, record),
+    inputs: await judgeInputsOf(record),
+    // The judge's clock is the time the facts describe: now for a live read, the as-of time for a replay.
+    clock: clock ?? Math.min(Date.now(), record.at ?? Date.now()),
+    scoped: only?.length ? new Set(only) : null,
+  };
+}
+
+/** One judge's call on a moment, ready to send; or the run it skipped, already recorded. */
+type Prepared = {
+  judge: Doc<"judges">;
+  briefs: Array<ExpectationsBrief & { project_id: Id<"projects">; later: string[] }>;
+  ids: string[];
+  request: ModelCallSpec;
+  where: { workspace: string; team_id?: Id<"teams"> };
+  base: Record<string, unknown>;
+};
+async function prepareJudge(ctx: any, f: Finishing, record: MomentRecord, judge: Doc<"judges">, reading: Reading): Promise<Prepared | { outcome: JudgeOutcome }> {
+  const where = { workspace: f.moment.workspace, ...(f.moment.team_id ? { team_id: f.moment.team_id } : {}) };
+  // The lines as they stood at the time the facts describe (the judge's clock): one that came into force later is not graded here.
+  const current: Array<ExpectationsBrief & { project_id: Id<"projects"> }> = await ctx.runQuery(internal.moments.briefsFor, { project_ids: judge.project_ids, ...(judge.parts?.length ? { parts: judge.parts } : {}) });
+  const briefs = current.map((b) => briefAt(b, record.at ?? record.event_at));
+  const expectations = briefs.map((b) => ({ project_id: b.project_id, version: b.version }));
+  const base = { judge_id: judge._id, moment_id: f.moment._id, expectations, model: judge.model, inputs: reading.inputs, ...(reading.scoped ? { lines: [...reading.scoped] } : {}) };
+  const ids = briefs.flatMap((b) => b.ids);
+  if (!ids.length) {
+    const reason = "its projects have no expectations to grade against yet";
+    await ctx.runMutation(internal.moments.recordRun, { ...base, status: "skipped", reason, findings: 0, cost_usd: 0 });
+    return { outcome: { judge: judge.name, status: "skipped", findings: 0, filed: 0, reason, cost_usd: 0 } };
+  }
+  const spec: JudgeSpec = { name: judge.name, moment: judge.moment_kind, model: judge.model, max_tokens: judge.max_tokens, projects: judge.projects, mode: judge.mode, prompt: judge.prompt };
+  return { judge, briefs, ids, request: judgeRequest(spec, briefs, record, reading.clock, reading.rulings), where, base };
+}
+
+/** A judge's reply, from the API or a subscription, recorded: a failure as a failed run, an answer parsed, filed when the judge is live, and kept on its run. */
+async function settleJudge(ctx: any, f: Finishing, record: MomentRecord, p: Prepared, result: ModelCallResult, reading: Reading, backend?: "subscription"): Promise<JudgeOutcome> {
+  const { judge, briefs, ids, where } = p;
+  const base = { ...p.base, ...(backend ? { backend } : {}) };
+  const later = briefs.flatMap((b) => b.later);
+  const scoped = reading.scoped;
+  // A re-read scoped to some lines (`--lines`): the judge still reads every line, as it does live, but files and lets go only under those.
+  const inScope = (line: string) => !scoped || scoped.has(line);
+  if (!result.ok) {
+    const status = result.reason === "budget" ? "skipped" : "failed";
+    await ctx.runMutation(internal.moments.recordRun, { ...base, status, reason: result.error, findings: 0, cost_usd: result.cost_usd });
+    return { judge: judge.name, status, findings: 0, filed: 0, reason: result.error, cost_usd: result.cost_usd };
+  }
+  const parsed = parseJudgeReply(result.text, ids);
+  if (!parsed) {
+    const reason = "the answer held no deviations list";
+    await ctx.runMutation(internal.moments.recordRun, { ...base, status: "failed", reason, findings: 0, cost_usd: result.cost_usd });
+    return { judge: judge.name, status: "failed", findings: 0, filed: 0, reason, cost_usd: result.cost_usd };
+  }
+  const startedAt = Date.now();
+  const filedNow = judge.mode === "live" ? await fileFindings(ctx, f, judge, briefs, parsed.findings.filter((x) => inScope(x.expectation)), record, where, { messages: reading.inputs.messages, fresh: scoped }) : { ids: [], keys: [], held: [], waiting: [] };
+  const signalIds = filedNow.ids;
+  // Judged again: this moment now stands behind what the run filed or found again, and no longer behind
+  // what it filed before and did not find now, which leaves its problems once no moment stands behind it.
+  if (judge.mode === "live") {
+    await ctx.runMutation(internal.judgeRetire.settleRun, { moment_id: f.moment._id, moment: f.moment.short_id, judge: judge.name, judge_version: judge.version, held: [...signalIds, ...filedNow.held], keep: filedNow.keys, shown: ids.filter(inScope), ...(later.some(inScope) ? { later: later.filter(inScope) } : {}), inputs: reading.inputs, ...(scoped ? { fresh: [...scoped] } : {}), before: startedAt, actor: f.source.owner_user_id });
+  }
+  await ctx.runMutation(internal.moments.recordRun, {
+    ...base,
+    status: "ok",
+    findings_json: JSON.stringify(parsed.findings),
+    findings: parsed.findings.length,
+    ...(parsed.uncited ? { uncited: parsed.uncited } : {}),
+    ...(signalIds.length ? { signal_ids: signalIds } : {}),
+    ...(filedNow.held.length ? { held_ids: filedNow.held } : {}),
+    ...(filedNow.waiting.length ? { waiting: filedNow.waiting } : {}),
+    cost_usd: result.cost_usd,
+  });
+  return { judge: judge.name, status: "ok", findings: parsed.findings.length, filed: signalIds.length, cost_usd: result.cost_usd };
+}
+
+/**
+ * A moment whose judging was handed to a machine, being handed back
+ * (`/cli/moments/judged`): checked as its hand-in was. The daemon that
+ * extracted it names its device, which must still be the one its extractor
+ * runs on; a person's `cast line moments rejudge` names their workspace.
+ * Either way the source must judge on subscription.
+ */
+export const judgedFinishing = internalQuery({
+  args: { ...scopeArgs, device_id: v.optional(v.string()), moment: v.string() },
+  handler: async (ctx, args): Promise<Finishing> => {
+    const moment = await ctx.db.query("moments").withIndex("by_short_id", (q: any) => q.eq("short_id", args.moment.trim())).first();
+    if (!moment || moment.status !== "ready") throw new Error(`${args.moment} is not a ready moment`);
+    const ex = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", moment.source_id).eq("kind", moment.kind)).first();
+    if (args.device_id) {
+      const auth = await verifyApiToken(ctx, args.api_token ?? "");
+      if (!auth || !ex || ex.device_id !== args.device_id || ex.publisher_user_id !== auth.userId) throw new Error("Unauthorized");
+    } else {
+      const { workspaceKey } = await scopeOf(ctx, args);
+      if (moment.workspace !== workspaceKey) throw new Error(`No moment ${args.moment} in this workspace`);
+    }
+    const source = (await ctx.db.get(moment.source_id))!;
+    if (source.config?.judge_on !== "subscription") throw new Error(`${source.name} judges on the API; a judgment made elsewhere is not taken`);
+    return { moment, source, judges: await liveJudges(ctx, moment), window: await windowOf(ctx, moment, ex?.quiet_ms ?? DEFAULT_QUIET_MS) };
+  },
+});
+
+const judgedResult = v.object({
+  ok: v.boolean(),
+  text: v.optional(v.string()),
+  error: v.optional(v.string()),
+  input_tokens: v.optional(v.number()),
+  output_tokens: v.optional(v.number()),
+  stop_reason: v.optional(v.union(v.string(), v.null())),
+});
+
+/**
+ * The replies to a JudgeHandoff (`/cli/moments/judged`), each settled as an
+ * API reply is. The request is prepared again from the record and clock the
+ * handoff carried, so what is graded and recorded is what was asked; a judge
+ * the handoff did not ask, or one removed since, is passed over.
+ */
+export const judgedForCli = action({
+  args: {
+    ...scopeArgs,
+    device_id: v.optional(v.string()),
+    moment: v.string(),
+    clock: v.number(),
+    lines: v.optional(v.array(v.string())),
+    /** The MomentRecord the handoff carried, as JSON. */
+    record: v.string(),
+    results: v.array(v.object({ judge: v.string(), result: judgedResult })),
+  },
+  handler: async (ctx, args): Promise<{ moment: string; judged: JudgeOutcome[] }> => {
+    const { moment, clock, lines, record: recordJson, results, device_id, ...scope } = args;
+    const f: Finishing = await ctx.runQuery(internal.moments.judgedFinishing, { ...scope, ...(device_id ? { device_id } : {}), moment });
+    const record = JSON.parse(recordJson) as MomentRecord;
+    if (record.kind !== f.moment.kind || record.subject !== f.moment.subject) throw new Error(`the record handed back is not ${moment}'s`);
+    const reading = await readingOf(ctx, f, record, lines, clock);
+    const judged: JudgeOutcome[] = [];
+    for (const { judge: name, result: r } of results) {
+      const judge = f.judges.find((j) => j.name === name);
+      if (!judge) continue;
+      const p = await prepareJudge(ctx, f, record, judge, reading);
+      if ("outcome" in p) { judged.push(p.outcome); continue; }
+      const result: ModelCallResult = r.ok && r.text !== undefined
+        ? { ok: true, text: r.text, usage: { input_tokens: r.input_tokens ?? 0, output_tokens: r.output_tokens ?? 0 }, cost_usd: 0, model: judge.model, stop_reason: r.stop_reason ?? null }
+        : { ok: false, reason: "failed", error: (r.error || "the subscription call gave no answer").slice(0, 500), cost_usd: 0, model: judge.model };
+      judged.push(await settleJudge(ctx, f, record, p, result, reading, "subscription"));
+    }
+    return { moment, judged };
+  },
+});
 
 /**
  * The team's rulings on messages this moment shows, under any line (LL11): a
@@ -677,7 +791,7 @@ export const listForCli = query({
       const ex: Doc<"moment_extractors">[] = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", s._id)).collect();
       for (const e of ex) extractors.push({ source: s.name, kind: e.kind, version: e.version, quiet_ms: e.quiet_ms, published_at: e.published_at });
       const live: Doc<"judges">[] = (await ctx.db.query("judges").withIndex("by_source_name", (q: any) => q.eq("source_id", s._id)).collect()).filter((j: Doc<"judges">) => !j.removed_at);
-      for (const j of live) judges.push({ source: s.name, name: j.name, version: j.version, moment: j.moment_kind, model: j.model, mode: j.mode, projects: j.projects });
+      for (const j of live) judges.push({ source: s.name, name: j.name, version: j.version, moment: j.moment_kind, model: j.model, mode: j.mode, projects: j.projects, judge_on: s.config?.judge_on ?? "api" });
       if (live.length) findings.push({ source: s.name, ...(await findingFreshness(ctx, s._id, ex, live)) });
     }
     return { moments: moments.map((m) => momentView(m, Date.now())), extractors, judges, findings };
@@ -795,9 +909,9 @@ export const rejudging = internalQuery({
  */
 export const rejudgeForCli = action({
   args: { ...scopeArgs, moments: v.array(v.string()), lines: v.optional(v.array(v.string())) },
-  handler: async (ctx, args): Promise<Array<{ moment: string; judged?: JudgeOutcome[]; error?: string }>> => {
+  handler: async (ctx, args): Promise<Array<{ moment: string; judged?: JudgeOutcome[]; judge_here?: JudgeHandoff; error?: string }>> => {
     const { moments, lines, ...scope } = args;
-    const out: Array<{ moment: string; judged?: JudgeOutcome[]; error?: string }> = [];
+    const out: Array<{ moment: string; judged?: JudgeOutcome[]; judge_here?: JudgeHandoff; error?: string }> = [];
     for (const ref of moments.slice(0, 5)) {
       const r = await ctx.runQuery(internal.moments.rejudging, { ...scope, moment: ref });
       if ("error" in r) { out.push({ moment: ref, error: r.error }); continue; }
@@ -805,7 +919,8 @@ export const rejudgeForCli = action({
       if (!body) { out.push({ moment: ref, error: "codecast does not keep this moment's body (host storage, or past its 30 days)" }); continue; }
       const { body_key: _, ...f } = r;
       const record: MomentRecord = { ...body, window: { from: f.window.from, to: Math.max(f.window.to, body.at ?? body.event_at) } };
-      out.push({ moment: ref, judged: await judgeMoment(ctx, f, record, lines) });
+      const { judged, handoff } = await judgeMoment(ctx, f, record, lines);
+      out.push({ moment: ref, judged, ...(handoff ? { judge_here: handoff } : {}) });
     }
     return out;
   },
