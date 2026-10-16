@@ -51,6 +51,7 @@ import {
 import { useMigrationBatches, useMigrationCandidates } from "../../../hooks/useSyncMigrations";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
+import { agentStatusAt } from "../../../lib/liveness";
 import { cn } from "../../../lib/utils";
 import { MigrationStatusPill } from "../../../components/MigrationStatusPill";
 import {
@@ -345,7 +346,8 @@ export default function MigratePanel() {
       const out: Record<string, string | undefined> = {};
       for (const c of candidates) {
         const row = s.sessions[s.resolveLiveSessionId(c._id)] ?? s.conversations[c._id];
-        if (row?.agent_status) out[c._id] = row.agent_status;
+        const status = row ? agentStatusAt(row, now) : undefined;
+        if (status) out[c._id] = status;
       }
       return out;
     }),

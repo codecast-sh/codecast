@@ -41,6 +41,7 @@ import { BLOCKED_BANNER_KINDS, isHostedAgentType, isStackedAsk } from "@codecast
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
+import { agentStatusAt } from "./liveness";
 
 export type QueueItemSource = "decide" | "ask" | "permission";
 
@@ -98,7 +99,7 @@ function isReachable(s: InboxSession | undefined): boolean {
   // AskUserQuestion side.
   if (s.inbox_killed_at) return false;
   if (s.is_unresponsive) return false;
-  if (s.agent_status === "stopped") return false;
+  if (agentStatusAt(s, Date.now()) === "stopped") return false;
   return true;
 }
 

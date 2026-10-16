@@ -20,6 +20,7 @@ import {
   projectInbox,
   rollupParentIdOf,
   selectWorkingSet,
+  trustedStatusAt,
   type ProjectableInboxRow,
 } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
@@ -151,10 +152,12 @@ describe("the overlay is the shared projection over its own facts", () => {
       const row: ProjectableInboxRow = { ...c } as any;
       if (lv) {
         // The overlay's FACTS (never its stamps) land on the row, exactly as a
-        // replica's applier merges them.
-        for (const f of ["agent_status", "is_idle", "is_unresponsive", "awaiting_input", "message_count", "updated_at", "last_turn_allows_park"]) {
+        // replica's applier merges them, and the status placement reads is
+        // the verdict the replica derives from the shipped raw one.
+        for (const f of INBOX_FACT_FIELDS) {
           if (lv[f] !== undefined) (row as any)[f] = lv[f];
         }
+        row.agent_status = trustedStatusAt(row, EPOCH) ?? null;
         if (lv.asking) asking.add(c._id);
       }
       rows.push(row);

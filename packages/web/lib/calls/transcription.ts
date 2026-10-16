@@ -18,6 +18,7 @@
 // except through convex mutations.
 import { Room, RoomEvent, Track } from "livekit-client";
 import { addressesAgent, agentSpokenNames, callSpeakerName, isAgentFaceIdentity, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { agentStatusAt } from "../liveness";
 import { useInboxStore } from "../../store/inboxStore";
 import { characterFor } from "../sessionIdentity";
 import { findSessionRow } from "./findSessionRow";
@@ -45,7 +46,8 @@ const pacing: ScribePacing = {
   busy() {
     const st = useInboxStore.getState() as any;
     const rows = feedTargets.map((t) => findSessionRow(st, t)).filter(Boolean);
-    return rows.length > 0 && rows.every((row) => MID_TURN_AGENT_STATUSES.has(row.agent_status ?? ""));
+    const now = Date.now();
+    return rows.length > 0 && rows.every((row) => MID_TURN_AGENT_STATUSES.has(agentStatusAt(row, now) ?? ""));
   },
   addressed(text) {
     const st = useInboxStore.getState() as any;

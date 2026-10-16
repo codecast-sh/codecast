@@ -384,7 +384,7 @@ export function SessionsView() {
         // Authoritative: reuse the inbox's own predicates verbatim. A settled
         // row's `rest` verdict picks needs_input / done / dormant, exactly as
         // the inbox sections do.
-        const c = classifySession(inbox);
+        const c = classifySession(inbox, now);
         needsInput = c.waiting && c.rest === "needs_input";
         workState = c.waiting ? c.rest : c.idle ? "idle" : "working";
       } else if (s.agent_status) {

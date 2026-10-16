@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
+import { agentStatusAt } from "../../lib/liveness";
 import { readLiveScreenText } from "../../lib/terminal/termSessions";
 import {
   parseCompactionProgress,
@@ -103,7 +104,7 @@ export function CompactionProgressCard({
 export function LiveCompactionCard({ conversationId, expanded }: { conversationId: string; expanded?: boolean }) {
   const snap = useInboxStore(useShallow((s) => {
     const sess = s.sessions[conversationId];
-    if (!sess || sess.agent_status !== "compacting") return null;
+    if (!sess || agentStatusAt(sess, Date.now()) !== "compacting") return null;
     return {
       tmux: sess.tmux_session ?? null,
       startedAt: sess.agent_status_updated_at ?? null,

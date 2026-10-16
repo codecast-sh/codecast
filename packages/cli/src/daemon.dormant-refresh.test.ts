@@ -117,7 +117,6 @@ describe("dormant background task refresh", () => {
     const row: ProjectableInboxRow = {
       ...dormant(now - 30 * 60_000, now - 30_000),
       agent_status: "waiting",
-      agent_status_raw: "waiting",
       thread_state_status: null,
       open_tasks: [{ id: "w301mlcjt", kind: "workflow" }],
     };

@@ -11,6 +11,7 @@ import { isHostedAgentType } from "@codecast/shared/contracts";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useInboxStore } from "../../store/inboxStore";
+import { agentStatusAt } from "../../lib/liveness";
 import { conversationTitle } from "../../lib/conversationTitle";
 import { usePlanMeter } from "../simple/usePlanFigures";
 import { useUpgradesOpen } from "../simple/billing";
@@ -25,7 +26,8 @@ function useBusyElsewhere(conversationId: string): string | null {
   return useInboxStore((s) => {
     for (const [id, row] of Object.entries(s.sessions)) {
       if (id === conversationId || !isHostedAgentType(row?.agent_type)) continue;
-      if (row?.agent_status === "working" || row?.agent_status === "thinking") return conversationTitle(row);
+      const status = row ? agentStatusAt(row, Date.now()) : undefined;
+      if (status === "working" || status === "thinking") return conversationTitle(row);
     }
     return null;
   });

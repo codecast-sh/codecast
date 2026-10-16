@@ -17,7 +17,7 @@ import type { InboxSession, SessionDecisionItem } from "../../store/inboxStore";
 import { isTriggerFailing, lastRunHeadline, type TaskRow } from "../triggerTasks";
 import type { MailAbilities } from "@codecast/convex/convex/lib/whisk";
 import type { WalletAccountLine, WalletSummary } from "@codecast/convex/convex/lib/wallet";
-import { sessionLiveAt } from "../../lib/liveness";
+import { agentStatusAt, sessionLiveAt } from "../../lib/liveness";
 import { describeConnectorError } from "../../lib/connectorReturn";
 
 import { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath } from "./lanePaths";
@@ -87,7 +87,7 @@ export type LaneStateRow = Parameters<typeof sessionLiveAt>[0] & Pick<InboxSessi
 export function conversationState(row: LaneStateRow, openApprovals: number, now: number): ConversationState {
   if (openApprovals > 0 || row.awaiting_input) return "waiting";
   if (row.has_pending) return "working";
-  const status = row.agent_status_raw ?? row.agent_status;
+  const status = agentStatusAt(row, now);
   if (status && !ACTIVE_AGENT_STATUSES.has(status) && !row.last_role_is_user) return "done";
   return sessionLiveAt(row, now) ? "working" : "done";
 }
