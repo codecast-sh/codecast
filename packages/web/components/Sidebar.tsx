@@ -61,7 +61,6 @@ import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { isOpsPath } from "./ops/opsPaths";
-import type { NavSpace } from "../lib/navSpaces";
 
 const CreateTaskModal = lazy(() =>
   import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
@@ -74,9 +73,6 @@ const CreateChannelModal = lazy(() =>
 );
 const NewMessageModal = lazy(() =>
   import("./chat/NewMessageModal").then((module) => ({ default: module.NewMessageModal })),
-);
-const OccupancyChip = lazy(() =>
-  import("./calls/OccupancyChip").then((module) => ({ default: module.OccupancyChip })),
 );
 const LiveNowRail = lazy(() =>
   import("./calls/LiveNow").then((module) => ({ default: module.LiveNowRail })),
@@ -95,10 +91,6 @@ interface SidebarProps {
   /** Which groups to draw. The Work window's own rail is the pinned rail
    *  and the Work group (lib/desktopApps); the main window draws them all. */
   scope?: "work";
-  /** The space the space rail picked (lib/navSpaces): the column draws only
-   *  that space's rows. Absent (a phone's drawer, hosted mode, an app
-   *  window), it draws every group. */
-  space?: NavSpace;
 }
 
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
@@ -181,202 +173,6 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
 }) {
   const unread = useThreadUnread();
   return <ThreadsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} unread={unread} />;
-});
-
-// Chat's sidebar row. Isolated for the same reason NeedsInputCountBadge is: the
-// unread numbers move whenever anyone on the team says anything, and that must
-// re-render one row rather than the whole rail.
-//
-// The rule the rail already follows, applied one level up: unread is WEIGHT plus
-// a dot, and only a mention gets a number. A count of ordinary chatter teaches
-// people to ignore counts, and then the one that matters is invisible inside it.
-/** The live signals a chat row wears wherever it lives — the Chat sublist and
- *  the pinned rail spread this same pair, so the rules can't drift: a huddle
- *  you can walk into first, then a mention count, then the unread dot.
- *
- *  The huddle chip goes in `control` and the counts in `trailing`, because the
- *  two answer to different rules on hover. The counts are information and give
- *  the row's width to the hover actions; the chip is the join button, and
- *  hiding it on hover meant the pointer wiped it out on the way to clicking
- *  it — the one gesture on the row you could never complete with a mouse. */
-function channelSignals(
-  channel: import("../store/chatSlice").ChatRailChannel,
-  viewer: string,
-  teamMembers: import("../lib/chatViews").ChatMember[],
-): { control: React.ReactNode; trailing: React.ReactNode } {
-  return {
-    control: (
-      <Suspense fallback={null}>
-        <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
-      </Suspense>
-    ),
-    trailing: (
-      <span className="flex items-center gap-1.5">
-        {/* A mirrored channel wears the Slack mark as its label: its name is
-            the Slack channel's name, so the mark says where the name is from. */}
-        {channel.slack && (
-          <SlackLogo
-            className="nav-slack-mark w-2.5 h-2.5 flex-shrink-0"
-            muted={channel.slack.state !== "live"}
-            title={`${MIRROR_STATE_LABEL[channel.slack.state]} · #${channel.slack.name}`}
-          />
-        )}
-        {(channel.mentionCount ?? 0) > 0 ? (
-          <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-red text-white" small kind="mention" />
-        ) : (channel.unreadCount ?? 0) > 0 ? (
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
-        ) : null}
-      </span>
-    ),
-  };
-}
-
-const ChatNavRow = memo(function ChatNavRow({
-  isActive,
-  isNarrow,
-  pathname,
-  pinsShown,
-  expanded,
-  onToggle,
-  onMobileClose,
-}: {
-  isActive: boolean;
-  isNarrow: boolean;
-  pathname: string | null;
-  /** The pinned rail is on screen with its channel pins, so those carry their
-   *  own unread signals and the Chat row leaves them out of its totals. */
-  pinsShown: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  onMobileClose?: () => void;
-}) {
-  const rail = useChatRail();
-  const router = useRouter();
-  // Signature-gated roster (useChatMembers), not the raw array: this row is
-  // always mounted and memo-isolated, and teamMembers re-pushes on presence
-  // heartbeats that change nothing a rail row shows.
-  const { members: teamMembers, viewerId: viewer } = useChatMembers();
-  const openDm = useOpenDm();
-  // The app's one context-menu system: one instance for the whole list, rows
-  // open it from the ⋯ button and from right-click alike.
-  const channelMenu = useChannelMenu();
-  // Same rule the saved-view rows follow: the pin action names the state it
-  // would change, so a pinned channel offers "Unpin" right where it was pinned.
-  const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
-  const isChannelPinned = (id: string) => pinnedKeys.split(",").includes(`channel:${id}`);
-  // Pin ids resolved to LIVE channel ids: a channel pinned while it was an
-  // optimistic stub keeps the stub id in the pin, and the rail rows carry the
-  // server id — the client_id forwarding (same as useSupersededChannelId)
-  // reconnects them so the pinned row still dedupes out of this sublist.
-  const pinnedLiveIds = useInboxStore((s) =>
-    readPins(s)
-      .filter((p) => p.kind === "channel" && !isThreadsPin(p))
-      .map((p) => supersededChannelId(s.chatChannels as any, p.id) ?? p.id)
-      .join(","),
-  );
-  const pinnedLiveIdSet = pinnedLiveIds.split(",");
-
-  // Channels first, then direct messages — each half keeps its own activity
-  // order. The icon carries the distinction: a hash is a room, a face is a
-  // person, so the rail needs no group headers to read at a glance. A pinned
-  // channel already has a row in the Pinned rail up top; listing it here too
-  // would duplicate it, so the sublist skips it.
-  const ordered = [...rail.filter((c) => c.kind !== "dm"), ...rail.filter((c) => c.kind === "dm")]
-    .filter((c) => !pinnedLiveIdSet.includes(c.id));
-  // Count what the pins don't already show: a pinned DM's mentions badge its
-  // pinned row, and repeating them on Chat points at a list that hides them.
-  const { channels, mentions } = chatUnreadTotals(pinsShown ? ordered : rail);
-  const items = ordered.map((c) => {
-    const counterpart = dmCounterpart(c, teamMembers);
-    const dmIcon = counterpart ? (
-      <CommentAvatar
-        name={memberName(counterpart)}
-        image={counterpart.image || counterpart.github_avatar_url}
-        size={14}
-        letters={1}
-      />
-    ) : (
-      <Users className="w-3 h-3 flex-shrink-0 opacity-60" />
-    );
-    return {
-    id: c.id,
-    name: channelDisplayName(c, teamMembers),
-    icon: c.muted
-      ? <BellOff className="w-3 h-3 flex-shrink-0 opacity-50" aria-label="Muted" />
-      : c.kind === "dm" ? dmIcon
-      : c.isPrivate ? <Lock className="w-3 h-3 flex-shrink-0 opacity-60" />
-      : <Hash className="w-3 h-3 flex-shrink-0 opacity-60" />,
-    active: pathname === `/chat/${c.id}`,
-    ...channelSignals(c, String(viewer), teamMembers),
-    actions: [
-      {
-        key: "pin",
-        title: isChannelPinned(c.id) ? "Unpin from top" : "Pin to top of sidebar",
-        icon: isChannelPinned(c.id) ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
-        onClick: () => togglePin("channel", c.id, channelDisplayName(c, teamMembers)),
-      },
-      {
-        key: "manage",
-        title: "Channel settings",
-        icon: <MoreHorizontal className="w-3 h-3" />,
-        onClick: (e?: React.MouseEvent) => {
-          if (e) channelMenu.open(e, { channelId: c.id, notifyLevel: c.notifyLevel });
-        },
-      },
-    ],
-    onSelect: () => {
-      router.push(`/chat/${c.id}`);
-      onMobileClose?.();
-    },
-    onContextMenu: (e: React.MouseEvent) =>
-      channelMenu.open(e, { channelId: c.id, notifyLevel: c.notifyLevel }),
-    };
-  });
-
-  // The DM half of the rail never runs dry: teammates without an open room sit
-  // below the real conversations, dimmer, one click from becoming one. Same
-  // helper as the chat page's rail, so the two lists cannot disagree.
-  const suggestedItems = suggestedDmMembers(
-    rail.filter((c) => c.kind === "dm"),
-    teamMembers,
-    viewer,
-    5,
-  ).map((m) => ({
-    id: `suggest-${m._id}`,
-    name: memberName(m),
-    title: `Message ${memberName(m)}`,
-    icon: (
-      <span className="opacity-70">
-        <CommentAvatar name={memberName(m)} image={memberAvatarUrl(m)} size={14} letters={1} />
-      </span>
-    ),
-    active: false,
-    dim: true,
-    // The affordance appears where a real row's actions do: a pencil on hover
-    // says "click starts a conversation" without shouting on every row.
-    trailing: <SquarePen className="w-3 h-3 text-sol-text-dim opacity-0 group-hover/v:opacity-100 flex-shrink-0" aria-hidden="true" />,
-    onSelect: () => {
-      openDm([String(m._id)]);
-      onMobileClose?.();
-    },
-  }));
-
-  return (
-    <>
-      <ChatNavSectionView
-        isActive={isActive}
-        isNarrow={isNarrow}
-        onMobileClose={onMobileClose}
-        channels={channels}
-        mentions={mentions}
-        items={[...items, ...suggestedItems]}
-        headerAction={<AppPopOutButton app="chat" className="mr-1" />}
-        expanded={expanded}
-        onToggle={onToggle}
-      />
-      <ChannelContextMenu state={channelMenu} />
-    </>
-  );
 });
 
 // Calls' sidebar row. Isolated like ChatNavRow: presence heartbeats move
@@ -634,12 +430,9 @@ function PinnedRail({
 const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
-export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, space }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  // Pins, bookmarks, layouts and workspaces are Home's: they are where you
-  // start from, not part of Work or Agents.
-  const home = !space || space === "home";
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
   const orgRows = orgRowsActive(pathname);
@@ -1011,10 +804,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         )}
         {/* Pins lead the developer rail; hosted mode's leads with the inbox and
             keeps its pins after Work. */}
-        {!isNarrow && !surfaceMode.hosted && home && pinnedRail}
+        {!isNarrow && !surfaceMode.hosted && pinnedRail}
         <SidebarNavView
           mode={surfaceMode}
-          space={space}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -1100,11 +892,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
 
         {!isNarrow && surfaceMode.hosted && <div className="mt-4">{pinnedRail}</div>}
 
-        {home && <Surface name="mods.sidebar">
+        <Surface name="mods.sidebar">
           <ModSidebarSections isNarrow={isNarrow} />
-        </Surface>}
+        </Surface>
 
-        {scope === "work" || !home ? null : (<>
+        {scope === "work" ? null : (<>
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">

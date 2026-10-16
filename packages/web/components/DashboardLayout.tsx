@@ -109,9 +109,6 @@ import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
 import { HostedSectionKeys } from "./HostedSectionKeys";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
-import { useNavSpacesOn } from "../hooks/useNavSpaces";
-import { navSpaceFor } from "../lib/navSpaces";
-import { SpaceRail } from "./sidebar/SpaceRail";
 import { DESKTOP_APPS, desktopAppWindow, routeElsewhere } from "../lib/desktopApps";
 import { routerNavigate } from "../lib/tabRoutes";
 import { tabTitle } from "../lib/tabTitle";
@@ -1038,11 +1035,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The Work window carries a rail of its own (the pinned rail and the Work
   // group, lib/desktopApps `nav`); the Chat window's page carries its rail.
   const appRail = appWindow ? DESKTOP_APPS[appWindow].nav === "sidebar" : false;
-  // The space rail (lib/navSpaces) picks which rows the sidebar column lists.
-  // Chat's column is the chat page's own room list, so there the column folds.
-  const spacesOn = useNavSpacesOn() && !hideSidebar;
-  const navSpace = spacesOn ? navSpaceFor(pathname) : undefined;
-  const sidebarHidden = appRail ? isMobile : !!hideSidebar || navHidden || isMobile || !!appWindow || navSpace === "chat";
+  const sidebarHidden = appRail ? isMobile : !!hideSidebar || navHidden || isMobile || !!appWindow;
 
   // Animated collapse/expand: panels are flex-grow sized with no built-in
   // transition, so we enable one (globals.css `.sidebar-animating`) only for
@@ -1108,7 +1101,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Hover-peek: with a side panel collapsed, touching the screen edge slides the
   // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
-  const peekEnabled = navHidden && !hideSidebar && !isMobile && !appWindow && navSpace !== "chat";
+  const peekEnabled = navHidden && !hideSidebar && !isMobile && !appWindow;
 
   // The context slot owns the rail's width. Its size field serves whichever
   // pane holds the edge — a percent for the session list, pixels for the
@@ -1473,9 +1466,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
-      <div className="flex-1 min-h-0 flex">
-      {spacesOn && <SpaceRail />}
-      <div className="flex-1 min-w-0 min-h-0 flex relative">
+      <div className="flex-1 min-h-0 flex relative">
         {/* Collapsed-panel hover peeks: edge hotzone + sliding overlay. Scoped to
             this container so they start below the header/banners, not the viewport. */}
         <EdgePeek side="left" enabled={peekEnabled} width={280}>
@@ -1484,7 +1475,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               directoryFilter={directoryFilter}
               isMobileOpen={false}
               onMobileClose={noop}
-              space={navSpace}
             />
           </ErrorBoundary>
         </EdgePeek>
@@ -1535,7 +1525,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                       isMobileOpen={isMobileSidebarOpen}
                       onMobileClose={closeMobileSidebar}
                       scope={appRail && appWindow === "work" ? "work" : undefined}
-                      space={navSpace}
                     />
                   </ErrorBoundary>
                 </div>
@@ -1552,7 +1541,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <ErrorBoundary name="AnchorPanel" level="panel">
           <AnchorPanel />
         </ErrorBoundary>
-      </div>
       </div>
 
       {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily

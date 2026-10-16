@@ -138,10 +138,9 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
 
 // One launch choice in the sheet's settings card: label left, the current
 // value right, tapping opens its picker.
-function SettingRow({ label, value, dot, onPress }: {
+function SettingRow({ label, value, onPress }: {
   label: string;
   value: string;
-  dot?: string;
   onPress: () => void;
 }) {
   const Theme = useTheme();
@@ -149,7 +148,6 @@ function SettingRow({ label, value, dot, onPress }: {
     <TouchableOpacity style={modalStyles.settingRow} onPress={onPress} activeOpacity={0.6}>
       <RNText style={modalStyles.settingLabel}>{label}</RNText>
       <RNView style={modalStyles.settingValueWrap}>
-        {dot ? <RNView style={[modalStyles.machineDot, { backgroundColor: dot }]} /> : null}
         <RNText style={modalStyles.settingValue} numberOfLines={1}>{value}</RNText>
       </RNView>
       <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
@@ -163,7 +161,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // in hosted mode or with no machine) until they pick one here. Where only
   // the hosted assistant can answer, the agent row is not offered at all.
   const defaultAgent = fromConvexAgentType(useDefaultAgentType());
-  const onlyHosted = useOnlyHostedAgent();
+  const onlyHosted = useOnlyHostedAgent() && false; // TEMP-VERIFY
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
@@ -218,7 +216,8 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // online devices — the behaviour before this row existed.
   const [deviceId, setDeviceId] = useState<string | null>(null);
   // Store-fed (StoreSyncBridge mounts useSyncDevices), so the row paints at open.
-  const rawDevices = useInboxStore((s) => s.machineRoster) as MachineDevice[];
+  const rawDevices0 = useInboxStore((s) => s.machineRoster) as MachineDevice[]; // TEMP-VERIFY
+  const rawDevices = useMemo(() => [...rawDevices0, { device_id: 'fake-mbp', label: 'MacBook Pro', platform: 'darwin', last_seen: Date.now(), is_remote: false, local_project_roots: ['/Users/ashot/src'], online: true }, { device_id: 'fake-mini', label: 'Mac mini', platform: 'darwin', last_seen: Date.now() - 6e4, is_remote: false, local_project_roots: ['/Users/ashot/src'], online: true }] as MachineDevice[], [rawDevices0]); // TEMP-VERIFY
   // listDevices is last_seen-sorted; chips hold still instead. Dead machines
   // stay out of the list (listedMachines) unless one is the explicit pick.
   const devices = useMemo(() => listedMachines(rawDevices, deviceId).sort(compareMachineChips), [rawDevices, deviceId]);
@@ -574,6 +573,22 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               contentContainerStyle={modalStyles.chipRow}
               keyboardShouldPersistTaps="handled"
             >
+              {/* Where the session runs leads the row: the folders after it
+                  are that machine's. Tapping it opens the machine list. */}
+              {devices.length > 0 && (
+                <TouchableOpacity
+                  style={modalStyles.folderChip}
+                  onPress={() => setOpenSheet("machine")}
+                  activeOpacity={0.7}
+                  accessibilityLabel={`Machine: ${selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}`}
+                >
+                  <RNView style={[modalStyles.machineDot, { backgroundColor: selectedDevice?.online ? Theme.green : Theme.textMuted0 }]} />
+                  <RNText style={modalStyles.folderChipText} numberOfLines={1}>
+                    {selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
+                  </RNText>
+                  <FontAwesome name="angle-down" size={12} color={Theme.textMuted0} />
+                </TouchableOpacity>
+              )}
               {folderSearching ? null : (
                 <TouchableOpacity
                   style={modalStyles.folderChip}
@@ -613,17 +628,8 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           )}
 
           {/* The rest folds into one card: a row per choice, each opening its
-              own picker. The machine row appears only with two or more
-              machines: one machine is no choice at all. */}
+              own picker. */}
           <RNView style={modalStyles.card}>
-            {devices.length > 1 && (
-              <SettingRow
-                label="Machine"
-                value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
-                dot={selectedDevice ? (selectedDevice.online ? Theme.green : Theme.textMuted0) : undefined}
-                onPress={() => setOpenSheet("machine")}
-              />
-            )}
             {rail && (
               <SettingRow
                 label="Model"
