@@ -12,14 +12,14 @@
 
 import type { ReactNode } from "react";
 import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from "@/components/conversation/ConversationHeaderBar";
-import { ConversationAgeFacts, ConversationMetadata, WorkingStatusLineView } from "@/components/conversation/sessionChrome";
+import { ConversationMetadata, WorkingStatusLineView } from "@/components/conversation/sessionChrome";
 import { AssistantBlock, UserPrompt } from "@/components/conversation/blocks/turnBlocks";
 import { ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "@/components/ComposerShell";
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { typed } from "../timeline";
 import { fly, useFilmTime } from "../filmClock";
 import { FilmGrow, FilmSwap } from "../film";
-import { DESK, leadMessages, STEER } from "../fixtures/desk";
+import { DESK, STEER } from "../fixtures/desk";
 import { ENTRIES, PREV, VIEWER, WORKING_CUES, WORKING_LABELS, type Entry } from "../fixtures/conversation";
 import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
 import { LEAD_TURN_ENDS } from "./conversation.motion";
@@ -49,19 +49,15 @@ function EntryView({ e, now, done }: { e: Entry; now: number; done: boolean }) {
   );
 }
 
-/** The header: the open session, then the lead with its status, model, age and who is looking. */
-export function LeadHeader({ now }: PartProps) {
-  const messages = useFilmTime(leadMessages);
+/** The header: the open session, then the lead with its status, model and who is looking. */
+export function LeadHeader(_: PartProps) {
   return (
     <div className="relative h-full bg-sol-bg">
       <div {...fly("desk/conversation.prevHead")} className="absolute inset-0">
         <ConversationHeaderBar
           title={<ConversationHeaderTitle text={PREV.title} />}
           status={<AgentStatusPill agentStatus="working" />}
-          facts={<>
-            <ConversationMetadata agentType={PREV.agent} model={PREV.model} />
-            <ConversationAgeFacts startedAt={now - PREV.age} messageCount={PREV.messages} />
-          </>}
+          facts={<ConversationMetadata agentType={PREV.agent} model={PREV.model} />}
         />
       </div>
       <div {...fly("desk/conversation.head")} className="absolute inset-0 bg-sol-bg">
@@ -69,10 +65,7 @@ export function LeadHeader({ now }: PartProps) {
           title={<ConversationHeaderTitle text={SESSIONS.lead.title} />}
           // One status for the turn, the one the working line under the transcript shows: what it is doing goes in that line's label ("thinking", "editing retry.ts"), never a second status here.
           status={<AgentStatusPill agentStatus="working" />}
-          facts={<>
-            <ConversationMetadata agentType={SESSIONS.lead.agent} model={VIEWER.model} />
-            <ConversationAgeFacts startedAt={now - 20_000} messageCount={messages} />
-          </>}
+          facts={<ConversationMetadata agentType={SESSIONS.lead.agent} model={VIEWER.model} />}
           // Always laid out, so the header never reflows: the face fades in as Sarah starts watching (conversation.motion.ts).
           actions={<span {...fly("desk/conversation.viewer")} className="inline-flex"><ViewerFaces members={[VIEWER.sarah]} size={18} /></span>}
         />

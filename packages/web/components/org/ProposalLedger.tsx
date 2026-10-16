@@ -60,21 +60,31 @@ export type ProposalEntryModel = {
   totals: { count: string; line: string | null };
 };
 
+/** A proposal's entries from its changes and the records they are read against. */
+function entriesOf(changes: readonly OrgProposalChange[], live: SubjectLive | null, opts: SubjectOptions): ProposalEntryModel {
+  const rows = changes.filter((c) => c.status !== "removed");
+  const work = orgProposalWork(rows);
+  const records = work === "records" && rows.length > 1;
+  const named = (xs: readonly { _id: string; title: string; short_id?: string }[]) => xs.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id }));
+  const names = askNames(live?.tree, live ? { projects: named(live.projects), plans: named(live.plans) } : undefined);
+  return {
+    work, records, names, live,
+    cards: records ? [] : proposalSubjects(changes, live, opts),
+    groups: records ? recordGroupCards(changes, names) : [],
+    totals: proposalTotals(rows, names),
+  };
+}
+
 export function useProposalEntries(proposal: Proposal | undefined, changes: readonly OrgProposalChange[]): ProposalEntryModel {
   const { live, opts } = useCardInputs(proposal, changes);
-  return useMemo(() => {
-    const rows = changes.filter((c) => c.status !== "removed");
-    const work = orgProposalWork(rows);
-    const records = work === "records" && rows.length > 1;
-    const named = (xs: readonly { _id: string; title: string; short_id?: string }[]) => xs.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id }));
-    const names = askNames(live?.tree, live ? { projects: named(live.projects), plans: named(live.plans) } : undefined);
-    return {
-      work, records, names, live,
-      cards: records ? [] : proposalSubjects(changes, live, opts),
-      groups: records ? recordGroupCards(changes, names) : [],
-      totals: proposalTotals(rows, names),
-    };
-  }, [changes, live, opts]);
+  return useMemo(() => entriesOf(changes, live, opts), [changes, live, opts]);
+}
+
+/** Several proposals of one workspace read against the same records: each with its entries. */
+export function useProposalSetEntries<P extends Proposal>(items: readonly { proposal: P; changes: readonly OrgProposalChange[] }[]): { proposal: P; changes: readonly OrgProposalChange[]; entries: ProposalEntryModel }[] {
+  const all = useMemo(() => items.flatMap((i) => i.changes), [items]);
+  const { live, opts } = useCardInputs(items[0]?.proposal, all);
+  return useMemo(() => items.map((i) => ({ ...i, entries: entriesOf(i.changes, live, opts) })), [items, live, opts]);
 }
 
 // ---------------------------------------------------------------- the batch
@@ -183,7 +193,7 @@ function useFocusChange(changes: readonly OrgProposalChange[]): OrgProposalChang
 
 /** A card with its answer read from and written to the batch; read only when
  *  there is no batch to write to, or the proposal is not open. */
-function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }: { proposal: Proposal; batch: ProposalBatch; card: SubjectCard; number?: number; focusId: string | null } & Omit<React.ComponentProps<typeof ProposalSubjectCard>, "card" | "answer" | "onAnswer" | "focused">) {
+export function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }: { proposal: Proposal; batch: ProposalBatch; card: SubjectCard; number?: number; focusId: string | null } & Omit<React.ComponentProps<typeof ProposalSubjectCard>, "card" | "answer" | "onAnswer" | "focused">) {
   const { answer, onAnswer, revised } = useCardAnswer(proposal, batch.key, batch.comments, card, number);
   const focused = !!focusId && [...card.changes, ...card.carried, ...card.riders].some((c) => c._id === focusId);
   const hireReview = useHireReview();
@@ -194,7 +204,7 @@ function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }: { pro
   return (
     <>
       <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} {...rest} />
-      {hireReview.element}
+      {acceptRest.element}
     </>
   );
 }
@@ -217,7 +227,7 @@ function useHireReview(): { open: (roles: ReturnType<typeof newRolesOf>, go: () 
   };
 }
 
-function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { proposal: Proposal; batch: ProposalBatch; group: RecordGroupCard; focus: OrgProposalChange | null; lone: boolean; open: boolean; onOpen: (v: boolean) => void }) {
+export function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { proposal: Proposal; batch: ProposalBatch; group: RecordGroupCard; focus: OrgProposalChange | null; lone: boolean; open: boolean; onOpen: (v: boolean) => void }) {
   const { answer, onAnswer, revised } = useEntryAnswer(batch.key, batch.comments, groupRef(proposal, group), group.rows.map((r) => r.change));
   const focusSeq = focus && group.seqs.includes(focus.seq) ? focus.seq : null;
   return <RecordGroupRow card={group} answer={answer} onAnswer={proposal.status === "open" ? onAnswer : undefined} open={open} onOpen={onOpen} lone={lone} focusSeq={focusSeq} revisedNew={revised || undefined} />;
@@ -231,13 +241,15 @@ function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { 
 /** A records proposal this small shows every record at once; past it, the groups fold to their totals. */
 const OPEN_RECORDS = 6;
 
-export function ProposalEntries({ proposal, changes, entries, batch, limit = 12, className }: {
+export function ProposalEntries({ proposal, changes, entries, batch, limit = 12, why, className }: {
   proposal: Proposal;
   changes: readonly OrgProposalChange[];
   entries: ProposalEntryModel;
   batch: ProposalBatch;
   /** Page size for subject cards; "Show all N" past it. */
   limit?: number;
+  /** Draw each change's reason. Off where the proposal's summary already says it (one change under its summary). */
+  why?: boolean;
   className?: string;
 }) {
   const [all, setAll] = useState(false);
@@ -263,7 +275,7 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
       <ol className="m-0 list-none p-0 [&>li:first-child>*]:border-t-0">
         {shown.map((card, i) => (
           <li key={card.key} className="m-0 p-0">
-            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { className: "py-[14px]" } : { ordinal: i + 1 })} />
+            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} why={why} {...(lone ? { className: "py-[14px]" } : { ordinal: i + 1 })} />
           </li>
         ))}
       </ol>
@@ -278,57 +290,71 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
 
 // ---------------------------------------------------------------- the foot
 
-/** What the foot counts: every entry that can still be answered. */
-type Entry = { key: string; waiting: number; ref: ProposalCardRef };
+/** What "Accept all" counts: every entry that can still be answered, with the changes a hire review reads. */
+export type BatchEntry = { waiting: number; ref: ProposalCardRef; changes: readonly OrgProposalChange[] };
+const entryId = (proposalId: string, key: string) => `${proposalId}|${key}`;
+
+/**
+ * "Accept all" over entries of one proposal or many: the press stages an
+ * accept on every waiting entry with no answer, and pressed again withdraws
+ * only those. Approving a new role opens the shared hire review first.
+ * `retick` rewrites the staged accepts with or without the "leave them" tick.
+ */
+export function useAcceptRest(list: readonly BatchEntry[], batch: ProposalBatch) {
+  const hireReview = useHireReview();
+  const [put, setPut] = useState<string[]>([]);
+  const proposals = new Set(list.map((e) => e.ref.proposal.id));
+  const answers = (batch.comments ?? []).filter((c): c is PendingComment & { proposal: PendingProposalAnswer } => !!c.proposal && proposals.has(c.proposal.id));
+  const idOf = (a: { proposal: PendingProposalAnswer }) => entryId(a.proposal.id, a.proposal.card);
+  const answered = new Set(answers.map(idOf));
+  const rest = list.filter((e) => e.waiting > 0 && !answered.has(entryId(e.ref.proposal.id, e.ref.key)));
+  const putStill = put.filter((id) => answers.some((a) => idOf(a) === id && a.proposal.verdict === "approve"));
+  const write = (ref: ProposalCardRef, answer: SubjectAnswer | null) => { if (batch.key) answerProposalCard(batch.key, ref, answer); };
+  const approve = (tick: boolean): SubjectAnswer => ({ verdict: "approve", ...(tick ? { leave_sessions: true } : {}) });
+  const staged = () => putStill.flatMap((id) => list.filter((e) => entryId(e.ref.proposal.id, e.ref.key) === id));
+  const press = (leave = false) => {
+    if (putStill.length) { for (const e of staged()) write(e.ref, null); setPut([]); return; }
+    const go = () => { for (const e of rest) write(e.ref, approve(leave)); setPut(rest.map((e) => entryId(e.ref.proposal.id, e.ref.key))); };
+    const roles = newRolesOf(rest.flatMap((e) => e.changes));
+    if (roles.length) hireReview.open(roles, go); else go();
+  };
+  const retick = (v: boolean) => { for (const e of staged()) write(e.ref, approve(v)); };
+  return {
+    rest, answers,
+    pressed: putStill.length > 0,
+    leave: answers.some((a) => putStill.includes(idOf(a)) && !!a.proposal.leave_sessions),
+    press, retick,
+    element: hireReview.element,
+  };
+}
 
 /**
  * The foot of a proposal's ledger. Left: Map, when the card is not on the org
  * screen (`onMap`). Right, while anything waits and a batch key exists:
- * "Approve all N" while nothing is answered or decided, "Approve the rest"
- * once something is (a quiet word; it stages an approve on every waiting
- * entry with no answer, and pressed again withdraws only those). When
- * nothing waits, what happened in words. Read only: one quiet line, once.
+ * "Accept all N" while nothing is answered or decided, "Accept the rest"
+ * once something is (useAcceptRest). When nothing waits, what happened in
+ * words. Read only: one quiet line, once.
  */
 export function ProposalFoot({ proposal, entries, batch, onMap, takeover, className }: {
   proposal: Proposal & Pick<OrgProposalListRow, "author">;
   entries: ProposalEntryModel;
   batch: ProposalBatch;
   onMap?: () => void;
-  /** What "Approve the rest" would take over (R1): the phrase, and the "leave them" box over the row, whose tick rides on the approvals it puts as `leave_sessions`. */
+  /** What "Accept the rest" would take over (R1): the phrase, and the "leave them" box over the row, whose tick rides on the approvals it puts as `leave_sessions`. */
   takeover?: { phrase: string } | null;
   className?: string;
 }) {
-  const answers = proposalAnswersOf(batch.comments, proposal._id);
-  const hireReview = useHireReview();
-  // The entries "Approve the rest" put an answer on, so a second press takes back only those.
-  const [put, setPut] = useState<string[]>([]);
   const [leaveLocal, setLeaveLocal] = useState(false);
   const withdrawn = proposal.status === "withdrawn";
-  const list: Entry[] = entries.records
-    ? entries.groups.map((g) => ({ key: g.key, waiting: g.waiting, ref: groupRef(proposal, g) }))
-    : entries.cards.map((c, i) => ({ key: c.key, waiting: c.waiting, ref: cardRef(proposal, c, i + 1) }));
+  const list: BatchEntry[] = entries.records
+    ? entries.groups.map((g) => ({ waiting: g.waiting, ref: groupRef(proposal, g), changes: [] }))
+    : entries.cards.map((c, i) => ({ waiting: c.waiting, ref: cardRef(proposal, c, i + 1), changes: c.changes }));
   const open = list.filter((e) => e.waiting > 0).length;
-  const answered = new Set(answers.map((a) => a.proposal.card));
-  const rest = list.filter((e) => e.waiting > 0 && !answered.has(e.key));
-  const putStill = put.filter((k) => answers.some((a) => a.proposal.card === k && a.proposal.verdict === "approve"));
-  const pressed = putStill.length > 0;
-  const leave = pressed ? answers.some((a) => putStill.includes(a.proposal.card) && a.proposal.leave_sessions) : leaveLocal;
-  const write = (ref: ProposalCardRef, answer: SubjectAnswer | null) => { if (batch.key) answerProposalCard(batch.key, ref, answer); };
-  const approve = (tick: boolean): SubjectAnswer => ({ verdict: "approve", ...(tick ? { leave_sessions: true } : {}) });
-  const approveRest = () => {
-    if (pressed) {
-      for (const key of putStill) { const e = list.find((x) => x.key === key); if (e) write(e.ref, null); }
-      setPut([]);
-      return;
-    }
-    const go = () => { for (const e of rest) write(e.ref, approve(leave)); setPut(rest.map((e) => e.key)); };
-    const roles = entries.records ? [] : newRolesOf(entries.cards.filter((c) => rest.some((e) => e.key === c.key)).flatMap((c) => c.changes));
-    if (roles.length) hireReview.open(roles, go); else go();
-  };
-  const onLeave = (v: boolean) => {
-    setLeaveLocal(v);
-    for (const key of putStill) { const e = list.find((x) => x.key === key); if (e) write(e.ref, approve(v)); }
-  };
+  const acceptRest = useAcceptRest(list, batch);
+  const { rest, pressed, answers } = acceptRest;
+  const leave = pressed ? acceptRest.leave : leaveLocal;
+  const approveRest = () => acceptRest.press(leave);
+  const onLeave = (v: boolean) => { setLeaveLocal(v); acceptRest.retick(v); };
   const decided = list.some((e) => e.waiting === 0);
   const restLabel = answers.length === 0 && !decided ? `${ORG_REPLY_WORDS.approve.act} all ${rest.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
   const answerable = !!batch.key && !withdrawn && proposal.status === "open" && open > 0;
@@ -350,7 +376,7 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
       )}
       {/* A closing row with nothing in it draws no rule. */}
       {(above || left || right || outcome) && <LedgerClosingRow className={cn("mt-2", className)} above={above} left={left} right={right} outcome={outcome} />}
-      {hireReview.element}
+      {acceptRest.element}
     </>
   );
 }

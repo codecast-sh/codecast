@@ -2,21 +2,19 @@
 // One entry of the proposal ledger (docs/architecture/org-staffing.md S39):
 // every change a proposal makes to one goal, one project, one role or one
 // record, read as a plain sentence, the fields it moves with what was there
-// before, the reason, and the person's answer: Approve, Reject, or a reply in
-// their own words. An answer fires nothing: the controls give way to a band
-// that says what the send will do, and the composer's send applies the
-// approvals and tells the agent, in words, what was rejected and what was
-// said. The only boxes are things a person can press; the rest is type on
-// hairlines, and colour appears only on a priority dot, a state word and the
-// band's wash. Nothing on the card is filled: the composer's send is the one
-// filled button, because it is the one press that acts.
+// before, why the author proposes it, and the person's answer: Accept, or
+// Adjust in their own words (Reject is one press inside that field). An
+// answer fires nothing: the controls give way to a band that says what the
+// send will do, and the composer's send applies the acceptances and tells the
+// agent, in words, what was rejected and what was said. The only boxes are
+// things a person can press; the rest is type on hairlines.
 //
 // Callback driven: no store, no router. The ledger hands it a `SubjectCard`
 // from `proposalSubjects`, this card's pending `answer`, `onAnswer` to put,
 // replace or withdraw it, and `focused` from the store's orgFocusChangeId.
 import React, { useRef, useState, type ButtonHTMLAttributes } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, CheckSquare, Flag, FolderClosed, ListChecks, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, CheckSquare, Flag, FolderClosed, ListChecks, PencilLine, Sparkles, X } from "lucide-react";
 import { passageDiff, type ChangeField, type PassagePart } from "@codecast/shared/contracts/orgChangeWords";
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, type OrgChangeReply, type OrgChangeStatus, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -29,8 +27,8 @@ import { cn } from "../../lib/utils";
 import { PRIORITY_META } from "../charter/charterMeta";
 import { FIELD_SIZING_STYLE } from "../composerLayout";
 import { KeyCap } from "../KeyCap";
+import { Button } from "../ui/button";
 import { Avatar } from "../tasks/TaskCommentStream";
-import { OrgButton } from "./OrgButton";
 import { RoleFace } from "./RoleFace";
 import { TakeoverEdit } from "./TakeoverEdit";
 import { CHIP_STATUS, GHOST } from "./orgMeta";
@@ -165,7 +163,7 @@ type DataHooks = { [hook: `data-${string}`]: string | boolean | undefined };
 export const FIELD_ASKS: Record<OrgReplyVerdict, string> = {
   reject: "Why not? Say what you want instead.",
   approve: "Say something about this change",
-  note: "Say something about this change",
+  note: "What should change?",
 };
 
 /**
@@ -176,12 +174,14 @@ export const FIELD_ASKS: Record<OrgReplyVerdict, string> = {
  * leaving the field closes it and keeps what was saved. Keys never reach the
  * frame around it: a space would fold the card.
  */
-export function LedgerReplyField({ value, ask, onChange, onClose, className, ...rest }: {
+export function LedgerReplyField({ value, ask, onChange, onClose, aside, className, ...rest }: {
   value: string;
   /** The prompt in the empty field. */
   ask: string;
   onChange: (text: string) => void;
   onClose: () => void;
+  /** A control at the end of the key line (Reject). It keeps the field's focus, so pressing it never closes the field. */
+  aside?: React.ReactNode;
   className?: string;
 } & DataHooks) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -217,6 +217,7 @@ export function LedgerReplyField({ value, ask, onChange, onClose, className, ...
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">return</KeyCap> save</span>
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">shift</KeyCap><KeyCap size="xs">return</KeyCap> new line</span>
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">esc</KeyCap> close</span>
+        {aside && <span className="ml-auto" onMouseDown={(e) => e.preventDefault()}>{aside}</span>}
       </div>
     </div>
   );
@@ -244,49 +245,60 @@ export function useAnswerField(answer: SubjectAnswer | null | undefined, onAnswe
   const [fieldOpen, setFieldOpen] = useState(false);
   const open = fieldOpen && !!onAnswer && enabled;
   const close = () => { setFieldOpen(false); if (answer?.verdict === "note" && !answer.text?.trim()) onAnswer?.(null); };
+  const verdict = answer?.verdict ?? "note";
+  // Adjusting can go as far as no: one press turns the words into a rejection, and back.
+  const reject = verdict !== "approve" && (
+    <LedgerWord
+      className={cn("-mr-2 h-6 text-[11px]", verdict === "reject" && WORD_PRESSED)}
+      aria-pressed={verdict === "reject"}
+      onClick={() => onAnswer?.({ verdict: verdict === "reject" ? "note" : "reject", ...(answer?.text ? { text: answer.text } : {}) })}
+      data-subject-reject
+    >
+      {verdict === "reject" && <X className="-ml-0.5 mr-1 h-3 w-3" aria-hidden />}
+      {ORG_REPLY_WORDS.reject.act}
+    </LedgerWord>
+  );
   const field = (props: { className?: string } & DataHooks) => open && (
     <LedgerReplyField
       value={answer?.text ?? ""}
-      ask={asks[answer?.verdict ?? "note"] ?? FIELD_ASKS[answer?.verdict ?? "note"]}
-      onChange={(t) => onAnswer?.({ ...answer, verdict: answer?.verdict ?? "note", text: t })}
+      ask={asks[verdict] ?? FIELD_ASKS[verdict]}
+      onChange={(t) => onAnswer?.({ ...answer, verdict, text: t })}
       onClose={close}
-      data-subject-reply-field={answer?.verdict ?? "note"}
+      aside={reject}
+      data-subject-reply-field={verdict}
       {...props}
     />
   );
   return { open, setOpen: setFieldOpen, field };
 }
 
-/** The three answers on an entry that waits. Approve is a quiet outline,
- *  never filled: an answer only stages, and the composer's send is the one
- *  filled button that acts. Reject opens the field; Reply opens it with the
- *  verdict as it stands. */
+/** The two answers on an entry that waits: Accept, the filled face, and
+ *  Adjust, which opens the field for the person's own words (Reject is in
+ *  there). A press only stages; the composer's send acts. */
 export function AnswerControls({ answer, retry, dense, onAnswer, onOpen, open }: {
   answer: SubjectAnswer | null | undefined;
   retry: boolean;
-  /** Tighter words, for a strip that must fit a chart card. */
+  /** Tighter faces, for a strip that must fit a chart card. */
   dense?: boolean;
   onAnswer: (answer: SubjectAnswer | null) => void;
   /** Open or close the reply field. */
   onOpen: (open: boolean) => void;
   open: boolean;
 }) {
-  const tight = dense ? "px-1.5 text-[11px]" : undefined;
-  const verdict = answer?.verdict;
-  const toggle = (v: OrgReplyVerdict) => {
-    if (verdict === v) { onAnswer(null); onOpen(false); return; }
-    onAnswer({ verdict: v, ...(answer?.text ? { text: answer.text } : {}) });
-    onOpen(v === "reject");
-  };
+  const tight = dense ? "h-6 px-2 text-[11px]" : undefined;
+  const accepted = answer?.verdict === "approve";
+  const adjusting = open || answer?.verdict === "note" || answer?.verdict === "reject";
   return (
-    <>
-      <OrgButton size="sm" quiet className={tight} aria-pressed={verdict === "approve"} onClick={() => toggle("approve")} data-subject-approve>
-        {verdict === "approve" && <Check className="-ml-0.5 h-3 w-3" aria-hidden />}
+    <span className="inline-flex items-center gap-1.5">
+      <Button variant="outline" size="xs" className={cn("bg-transparent", tight)} aria-expanded={open} aria-pressed={adjusting} onClick={() => onOpen(!open)} data-subject-reply>
+        <PencilLine aria-hidden />
+        {ORG_REPLY_WORDS.note.act}
+      </Button>
+      <Button variant="green" size="xs" className={tight} aria-pressed={accepted} onClick={() => { onAnswer(accepted ? null : { verdict: "approve", ...(answer?.text ? { text: answer.text } : {}) }); onOpen(false); }} data-subject-approve>
+        <Check aria-hidden />
         {retry ? "Retry" : ORG_REPLY_WORDS.approve.act}
-      </OrgButton>
-      <LedgerWord className={cn(tight, verdict === "reject" && WORD_PRESSED)} aria-pressed={verdict === "reject"} onClick={() => toggle("reject")} data-subject-reject>{ORG_REPLY_WORDS.reject.act}</LedgerWord>
-      <LedgerWord className={cn(tight, !dense && "-mr-2")} aria-expanded={open} onClick={() => onOpen(!open)} data-subject-reply>{ORG_REPLY_WORDS.note.act}</LedgerWord>
-    </>
+      </Button>
+    </span>
   );
 }
 
@@ -446,7 +458,12 @@ function Added({ field }: { field: ChangeField }) {
   const before = new Set((field.before?.items ?? []).map((x) => x.toLowerCase()));
   const kept = (field.after?.items ?? []).filter((x) => before.has(x.toLowerCase()));
   const added = (field.after?.items ?? []).filter((x) => !before.has(x.toLowerCase()));
-  return <span>{kept.join(", ")}{kept.length > 0 && added.length > 0 && " "}{added.length > 0 && <span className={QUIET}>+ {added.join(", ")}</span>}</span>;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      {kept.length > 0 && <span className={SOFT}>{kept.join(", ")}</span>}
+      {added.map((x) => <ins key={x} className={cn(CHIP, "bg-[color-mix(in_srgb,var(--sol-green)_14%,transparent)] px-1.5 py-0 font-medium text-[color:var(--ink-green)]")} data-diff="added"><span aria-hidden>+</span>{x}</ins>)}
+    </span>
+  );
 }
 
 /** One field: its label, then the value, or what was there, an arrow, and
@@ -540,13 +557,13 @@ function recordHome(change: OrgProposalChange["change"]): { type: "plan" | "proj
 // ---------------------------------------------------------------- verdicts and state
 
 const STATE_WORDS: Partial<Record<SubjectStatus | OrgChangeStatus, [string, string]>> = {
-  accepted: ["Approved, applying", "text-[color:var(--ink-cyan)]"],
+  accepted: ["Accepted, applying", "text-[color:var(--ink-cyan)]"],
   applied: ["Applied", "text-[color:var(--ink-green)]"],
   skipped: ["Rejected", QUIET],
   mixed: ["", MUTED],
 };
 
-/** Where a decided entry stands, in a word: "Approved, applying" in cyan
+/** Where a decided entry stands, in a word: "Accepted, applying" in cyan
  *  while the approval lands, "Applied" in green once it did, "Rejected"
  *  quiet. `words` replaces the word for a group ("Applying 10 of 18", "12
  *  applied, 2 failed"). The word stays mounted so the colour settles. */
@@ -588,7 +605,7 @@ export function RecordPill({ type, id, title }: { type: "task" | "plan" | "proje
 // ---------------------------------------------------------------- layout
 
 // Wide (over 560px of card): number, reading column, verdict gutter (196px:
-// Approve, Reject and Reply on one line). Narrow: number and reading column,
+// Adjust and Accept on one line). Narrow: number and reading column,
 // with the answers in a right aligned row under the entry. With no layout
 // given the card asks its own width. Tailwind reads these strings whole, so
 // each form is written out.
@@ -636,6 +653,8 @@ export type ProposalSubjectCardProps = {
   revisedNew?: boolean;
   /** The store's focus (orgFocusChangeId) names a change of this card: marked, and scrolled into view once. */
   focused?: boolean;
+  /** Draw the author's reason for each change (default). Off where something above already says it. */
+  why?: boolean;
   className?: string;
 };
 
@@ -672,7 +691,7 @@ export function useFocusScroll(ref: React.RefObject<HTMLElement | null>, focused
   }, [focused, ref]);
 }
 
-export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, className }: ProposalSubjectCardProps) {
+export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, why: showWhy = true, className }: ProposalSubjectCardProps) {
   const hover = useOrgHover();
   // A ghost line on the company document points at one of this card's
   // changes, or this card points at its line (lightChanges on hover).
@@ -734,15 +753,16 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
     : controls(card.status === "failed");
   const revisionKind = (seq: number) => card.changes.find((c) => c.seq === seq)?.revision?.kind;
   const field = replyField({});
-  // The fields and where the record sits share one gutter. The author's reasons stay in its conversation.
+  // The fields, why, and where the record sits share one gutter.
   const gutter = gutterOf([...card.rows.map((r) => r.label), ...(home ? ["Project"] : [])]);
+  const why = (reasons: readonly string[]) => showWhy && reasons.length > 0 && <LedgerRow label="Why" className={SOFT} data-subject-why><Clamp lines={4}>{reasons.join("\n")}</Clamp></LedgerRow>;
   const homeRow = home && <LedgerRow label={home.type === "plan" ? "Plan" : "Project"} data-subject-home={home.type}><RecordPill {...home} title={home.id} /></LedgerRow>;
 
   return (
     <div
       ref={rootRef}
-      className={cn("not-prose min-w-0 text-left transition-[background-color,box-shadow] duration-150", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null && "border-t", className)}
-      style={{ borderColor: LEDGER_HAIR, ...(lit ? { background: "color-mix(in srgb, var(--sol-violet) 11%, transparent)", boxShadow: "inset 2px 0 0 var(--sol-violet)" } : {}) }}
+      className={cn("not-prose min-w-0 text-left transition-[background-color] duration-150", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null ? "border-t" : "-mx-2 rounded-md px-2", className)}
+      style={{ borderColor: LEDGER_HAIR, ...(lit ? { background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)" } : {}) }}
       onMouseEnter={() => { hover?.(leadId); lightChanges(card.change_ids); }}
       onMouseLeave={() => { hover?.(null); lightChanges(null); }}
       onFocus={() => { hover?.(leadId); lightChanges(card.change_ids); }}
@@ -780,7 +800,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
           return (
             <React.Fragment key={group.key}>
               <div className={cn("col-start-2 min-w-0", i === 0 ? "mt-2" : "mt-[18px]")} data-subject-group={group.change?.seq ?? "all"}>
-                <Fields fields={group.rows} faces={card.faces} tone={groupTone(split ? status : state)} clamp={!card.purpose} record={record} gutter={gutter} layout={mode} extra={i === groups.length - 1 ? homeRow : undefined} />
+                <Fields fields={group.rows} faces={card.faces} tone={groupTone(split ? status : state)} clamp={!card.purpose} record={record} gutter={gutter} layout={mode} extra={(showWhy && group.reasons.length > 0) || (i === groups.length - 1 && homeRow) ? <>{why(group.reasons)}{i === groups.length - 1 && homeRow}</> : undefined} />
                 {failed && <FailNote note={failed.note} className="mt-1.5" />}
                 {/* On a card whose changes ended differently each group carries the words said about it. */}
                 {split && group.change && (

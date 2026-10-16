@@ -8,7 +8,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
-import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
+import { formatShortcutLabel, matchesAction, useShortcutAction, type ShortcutAction } from "../shortcuts";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { FilterDropdown, FilterOptionList, type FilterOption } from "./FilterDropdown";
 import { groupsWithItems, visibleGroups } from "../lib/listGroups";
@@ -551,7 +551,7 @@ export interface GenericListViewProps<T> {
    *  selection's refs, so the first message can just say what to do with them
    *  ("merge these two"). */
   getComposeRef?: (item: T) => string | null | undefined;
-  paletteShortcuts?: { key: string; mode: string; label: string }[];
+  paletteShortcuts?: { action: ShortcutAction; mode: string; label: string }[];
   paletteProps?: { teamMembers?: any[]; currentUser?: any };
 
   renderPreview?: (item: T, onClose: () => void, onOpen: () => void) => ReactNode;
@@ -949,7 +949,7 @@ export function GenericListView<T>({
       if (extraKeyHandler?.(e, stop)) return;
 
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) { stop(); openPalette("root"); return; }
-      if (e.key === "x" && !e.metaKey && !e.ctrlKey) {
+      if (matchesAction(e, "list.select")) {
         stop();
         if (focusedItem) {
           if (onToggleItem) onToggleItem(focusedItem);
@@ -964,53 +964,53 @@ export function GenericListView<T>({
 
       if (paletteShortcuts) {
         for (const ps of paletteShortcuts) {
-          if (e.key === ps.key && !e.metaKey && !e.ctrlKey) {
+          if (matchesAction(e, ps.action)) {
             stop(); openPalette(ps.mode); return;
           }
         }
       }
 
-      if (e.key === "d" && !e.metaKey && !e.ctrlKey) { stop(); openPalette("actions"); return; }
-      if (e.key === "e" && !e.metaKey && !e.ctrlKey && onItemEdit) {
+      if (matchesAction(e, "list.actions")) { stop(); openPalette("actions"); return; }
+      if (matchesAction(e, "list.edit") && onItemEdit) {
         stop();
         if (focusedItem) setEditingId(getItemId(focusedItem));
         return;
       }
-      if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
+      if (matchesAction(e, "list.selectAll")) {
         stop();
         setSelectedIds(new Set(visibleItems.map(getItemId)));
         return;
       }
-      if (e.key === " " && !e.metaKey && !e.ctrlKey) {
+      if (matchesAction(e, "list.preview")) {
         stop();
         if (focusedItem) toggleDetail(focusedItem);
         return;
       }
 
-      if ((e.key === "j" || e.key === "ArrowDown") && !e.metaKey && !e.ctrlKey) {
+      if (matchesAction(e, "list.down") || (e.key === "ArrowDown" && !e.metaKey && !e.ctrlKey)) {
         stop();
         setFocusIndex((i) => Math.min(i + 1, visibleItems.length - 1));
         return;
       }
-      if ((e.key === "k" || e.key === "ArrowUp") && !e.metaKey && !e.ctrlKey) {
+      if (matchesAction(e, "list.up") || (e.key === "ArrowUp" && !e.metaKey && !e.ctrlKey)) {
         stop();
         setFocusIndex((i) => Math.max(i - 1, 0));
         return;
       }
-      if (e.key === "Enter") {
+      if (matchesAction(e, "list.open")) {
         stop();
         if (focusedItem) router.push(getItemRoute(focusedItem));
         return;
       }
-      if (e.key === "/" && !e.metaKey && !e.ctrlKey && getSearchText) { stop(); setShowSearch(true); return; }
-      if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
+      if (matchesAction(e, "list.search") && getSearchText) { stop(); setShowSearch(true); return; }
+      if (matchesAction(e, "list.create")) {
         stop();
         if (quickAddRef.current) quickAddRef.current.focus();
         else onCreate();
         return;
       }
-      if (e.key === "Home") { stop(); setFocusIndex(0); return; }
-      if (e.key === "End") { stop(); setFocusIndex(Math.max(0, visibleItems.length - 1)); return; }
+      if (matchesAction(e, "list.first")) { stop(); setFocusIndex(0); return; }
+      if (matchesAction(e, "list.last")) { stop(); setFocusIndex(Math.max(0, visibleItems.length - 1)); return; }
 
       const tabKeys: Record<string, number> = {};
       tabs.forEach((_, i) => { tabKeys[String(i + 1)] = i; });

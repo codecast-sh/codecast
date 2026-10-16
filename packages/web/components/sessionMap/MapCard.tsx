@@ -60,6 +60,8 @@ function MidBody({ s }: { s: MapSession }) {
   );
 }
 
+const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+
 /** The live session: messages scroll in the card, the composer stays at its foot. */
 function Stage({ id }: { id: string }) {
   const row = useInboxStore((st) => st.sessions[id]);
@@ -80,7 +82,8 @@ function Stage({ id }: { id: string }) {
   }, []);
   if (!row) return null;
   return (
-    <div ref={scroller} className="map-stage nodrag nowheel nopan min-h-0 flex-1 cursor-auto">
+    // Clicks here belong to the session (reading, selecting text, the composer): they never select the card or move the camera.
+    <div ref={scroller} className="map-stage nodrag nowheel nopan min-h-0 flex-1 cursor-auto" onClick={stop} onDoubleClick={stop}>
       <SessionInlineThread session={row} seen={false} maxRows={30} foot={false} />
     </div>
   );
