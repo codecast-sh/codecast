@@ -61,7 +61,6 @@ import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { isOpsPath } from "./ops/opsPaths";
-import type { NavSpace } from "../lib/navSpaces";
 
 const CreateTaskModal = lazy(() =>
   import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
@@ -95,10 +94,6 @@ interface SidebarProps {
   /** Which groups to draw. The Work window's own rail is the pinned rail
    *  and the Work group (lib/desktopApps); the main window draws them all. */
   scope?: "work";
-  /** The space the space rail picked (lib/navSpaces): the column draws only
-   *  that space's rows. Absent (a phone's drawer, hosted mode, an app
-   *  window), it draws every group. */
-  space?: NavSpace;
 }
 
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
@@ -634,12 +629,9 @@ function PinnedRail({
 const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
-export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, space }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  // Pins, bookmarks, layouts and workspaces are Home's: they are where you
-  // start from, not part of Work or Agents.
-  const home = !space || space === "home";
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
   const orgRows = orgRowsActive(pathname);
@@ -1011,10 +1003,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         )}
         {/* Pins lead the developer rail; hosted mode's leads with the inbox and
             keeps its pins after Work. */}
-        {!isNarrow && !surfaceMode.hosted && home && pinnedRail}
+        {!isNarrow && !surfaceMode.hosted && pinnedRail}
         <SidebarNavView
           mode={surfaceMode}
-          space={space}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -1100,11 +1091,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
 
         {!isNarrow && surfaceMode.hosted && <div className="mt-4">{pinnedRail}</div>}
 
-        {home && <Surface name="mods.sidebar">
+        <Surface name="mods.sidebar">
           <ModSidebarSections isNarrow={isNarrow} />
-        </Surface>}
+        </Surface>
 
-        {scope === "work" || !home ? null : (<>
+        {scope === "work" ? null : (<>
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
