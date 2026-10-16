@@ -71,3 +71,26 @@ export function ledgerLines(l: SwitchLedger): string[] {
     ...(l.stop ? [`To stop: ${l.stop}`] : []),
   ];
 }
+
+/** Hiring the Head of People: its standing session starts (or the workspace's
+ *  standing agent takes the seat), and its first company review runs at once,
+ *  then weekly, each ending in proposals the person decides. */
+export function hireHeadLedger(r: { workspace: string; host: string; seats: string | null }): SwitchLedger {
+  return {
+    name: "Hire the Head of People",
+    subject: r.workspace,
+    shift: null,
+    figures: [
+      r.seats ? { value: "0", label: "new sessions" } : { value: "1", label: "session now", tone: "warn" },
+      { value: "1", label: "review now", tone: "warn" },
+    ],
+    rows: [
+      r.seats ? { k: "Seat", v: `${r.seats}, kept as it is` } : { k: "Runs on", v: `${r.host}'s machine` },
+      { k: "Reviews", v: "Now, then weekly", tone: "warn" },
+      { k: "Changes", v: "Only what you approve", tone: "ok" },
+    ],
+    stop: "Pause or retire",
+    confirm: "Hire and start",
+    keep: "Not now",
+  };
+}

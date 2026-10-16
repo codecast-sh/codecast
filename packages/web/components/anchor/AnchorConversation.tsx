@@ -22,6 +22,9 @@ import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME } from "@codecast/
 import { RoleFace } from "../org/RoleFace";
 import type { HireAssistantResult } from "../../store/orgSlice";
 import { findProposalCardMessage, type JumpRequest } from "../org/orgScreenModel";
+import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { hireHeadLedger } from "../consequential/roleOnline";
 
 /** How many newer pages a time jump reads while looking for its card. */
 const FIND_PAGES_MAX = 4;
@@ -194,6 +197,12 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const team = tree?.workspace.kind === "team" ? tree.workspace : null;
+  // Hiring starts an agent and its first review: one confirmed press through the shared review.
+  const [reviewing, setReviewing] = useState(false);
+  const me = useTrackedStore([(st) => st.currentUser?.name]).currentUser as { name?: string } | undefined;
+  const { space } = useAnchorSpace(team ? "team" : "user", team?.id);
+  const seats = (space?.anchor?.bot_name as string | undefined) ?? (space?.anchor ? "The standing agent" : null);
+  const ledger = hireHeadLedger({ workspace: tree?.workspace.name ?? "This workspace", host: me?.name || "Your", seats });
 
   const create = async () => {
     if (!tree || !meId) return;
@@ -245,12 +254,15 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
         <Button
           variant="cyan"
           size="lg"
-          onClick={create}
+          onClick={() => setReviewing(true)}
           disabled={busy || !tree || !meId}
           className="mt-5 w-full rounded-lg"
+          aria-haspopup="dialog"
+          data-hire-head
         >
           {busy ? "Bringing it online…" : `Hire ${HEAD_OF_PEOPLE_NAME}`}
         </Button>
+        {reviewing && <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void create(); }} />}
         <p className="text-[11px] text-sol-text-dim mt-3">You can rename it and give it a face on its page.</p>
       </div>
     </div>
