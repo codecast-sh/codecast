@@ -13,6 +13,7 @@ import { openPrincipalDispatchOutbox } from './dispatchOutbox';
 import * as SplashScreen from 'expo-splash-screen';
 import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldReleaseSplash } from './authTrust';
 import { bootMark } from './bootProfile';
+import { STORE_SHOTS } from './storeShots/flag';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
@@ -63,7 +64,7 @@ function parseAccessIdentity(token: string | null): { principalId: string; subje
   }
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+function RealAuthProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
   const accessToken = useAuthToken();
@@ -431,6 +432,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthContext.Provider>
   );
 }
+
+// Store shots mode (lib/storeShots/flag): signed in as the fixture world's
+// Alex Rivera with no server. Seeds the store once the disk cache has
+// hydrated, so the cache can never merge over the fixture rows.
+function StoreShotsAuthProvider({ children }: { children: ReactNode }) {
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (!hydrated || seeded) return;
+    require('./storeShots/seed').seedStoreShots();
+    setSeeded(true);
+    void SplashScreen.hideAsync();
+  }, [hydrated, seeded]);
+  const done = async () => {};
+  return (
+    <AuthContext.Provider
+      value={{
+        isAuthenticated: true,
+        isLoading: false,
+        currentUserId: 'hero-u-me',
+        isBiometricAvailable: false,
+        isBiometricEnabled: false,
+        isAppleAuthAvailable: false,
+        signInWithGitHub: done,
+        signInWithApple: done,
+        signInWithEmail: async () => ({ needsVerification: false }),
+        signUpWithEmail: async () => ({ needsVerification: false }),
+        verifyEmailCode: done,
+        signOut: done,
+        enableBiometric: done,
+        disableBiometric: done,
+        authenticateWithBiometric: async () => true,
+      }}
+    >
+      {seeded ? children : null}
+    </AuthContext.Provider>
+  );
+}
+
+export const AuthProvider = STORE_SHOTS ? StoreShotsAuthProvider : RealAuthProvider;
 
 export function useAuth() {
   const context = useContext(AuthContext);

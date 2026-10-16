@@ -136,8 +136,15 @@
 [data-squeeze~="6"] .cq-sq6 { display: none !important; }
 [data-squeeze~="2"] .cq-sq2-tight { max-width: 9rem !important; }
 [data-sv-convhead] .cq-squeeze-row .cc-panel__title {
-  flex: 1 0 auto;
+  flex: 0 0 auto;
   min-width: 0;
+}
+/* The conversation's name is the header's one bright thing: full text
+   colour, a step above the facts beside it, no tracking. */
+[data-sv-convhead] .cc-panel__title {
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--sol-text);
 }
 [data-sv-convhead] [data-squeeze~="5"] .cc-panel__title {
   flex-shrink: 1;
@@ -4016,6 +4023,21 @@ diffs-container {
 .minimal-style [data-cc-topbar-group] > div > button:hover,
 .minimal-style [data-cc-topbar-group] > button:hover {
   background: var(--sol-bg-highlight) !important;
+}
+
+/* New session is the header's primary action: a filled tile in ink, so it
+   stands apart from the quiet icons beside it, in every style. */
+@media (min-width: 768px) {
+  [data-cc-topbar-group] button[data-cc-compose],
+  .minimal-style [data-cc-topbar-group] button[data-cc-compose] {
+    color: var(--sol-text) !important;
+    background: color-mix(in srgb, var(--sol-text) 9%, transparent) !important;
+    border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent) !important;
+  }
+  [data-cc-topbar-group] button[data-cc-compose]:hover,
+  .minimal-style [data-cc-topbar-group] button[data-cc-compose]:hover {
+    background: color-mix(in srgb, var(--sol-text) 15%, transparent) !important;
+  }
 }
 
 .minimal-style [data-cc-topbar-actions] .font-mono {

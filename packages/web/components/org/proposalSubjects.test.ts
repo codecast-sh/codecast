@@ -584,13 +584,13 @@ describe("status", () => {
   test("the card's words, and each row keeps its own change's seq on a card that ended differently", () => {
     const pair = (a: OrgProposalChange["status"], b: OrgProposalChange["status"]) => cardsOf([{ ...TREE[5], status: a }, { ...TREE[4], status: b }, TREE[0]])[1];
     expect(subjectStatusWords(pair("proposed", "proposed"))).toBe("2 to decide");
-    expect(subjectStatusWords(pair("applied", "applied"))).toBe("Approved");
-    expect(subjectStatusWords(pair("accepted", "applied"))).toBe("Approved");
+    expect(subjectStatusWords(pair("applied", "applied"))).toBe("Accepted");
+    expect(subjectStatusWords(pair("accepted", "applied"))).toBe("Accepted");
     expect(subjectStatusWords(pair("skipped", "skipped"))).toBe("Rejected");
     expect(subjectStatusWords(pair("failed", "failed"))).toBe("Failed");
-    expect(subjectStatusWords(pair("applied", "failed"))).toBe("1 of 2 approved, 1 failed");
+    expect(subjectStatusWords(pair("applied", "failed"))).toBe("1 of 2 accepted, 1 failed");
     expect(subjectStatusWords(pair("proposed", "failed"))).toBe("1 of 2 failed");
-    expect(subjectStatusWords(pair("applied", "proposed"))).toBe("1 of 2 approved");
+    expect(subjectStatusWords(pair("applied", "proposed"))).toBe("1 of 2 accepted");
     expect(subjectStatusWords(pair("skipped", "proposed"))).toBe("1 of 2 rejected");
     const mixed = pair("applied", "proposed");
     expect(mixed).toMatchObject({ status: "mixed", waiting: 1 });
@@ -624,20 +624,20 @@ describe("status", () => {
     const at = (statuses: Partial<Record<number, OrgProposalChange["status"]>>) => cardsOf(RANKING.map((c) => ({ ...c, status: statuses[c.seq] ?? c.status })));
     expect(proposalProgressWords(at({}))).toBe("9 to decide");
     const mid = at({ 1: "applied", 2: "accepted", 3: "skipped", 4: "failed" });
-    expect(proposalProgressWords(mid)).toBe("5 of 9 to decide · 2 approved, 1 rejected, 1 failed");
+    expect(proposalProgressWords(mid)).toBe("5 of 9 to decide · 2 accepted, 1 rejected, 1 failed");
     expect(subjectCounts(mid)).toEqual({ total: 9, waiting: 5, approved: 2, rejected: 1, failed: 1 });
     const all = Object.fromEntries(RANKING.map((c) => [c.seq, "applied" as const]));
-    expect(proposalProgressWords(at(all))).toBe("9 approved");
-    expect(proposalProgressWords(at({ ...all, 8: "skipped", 9: "skipped" }))).toBe("7 approved, 2 rejected");
+    expect(proposalProgressWords(at(all))).toBe("9 accepted");
+    expect(proposalProgressWords(at({ ...all, 8: "skipped", 9: "skipped" }))).toBe("7 accepted, 2 rejected");
     expect(proposalProgressWords([])).toBe("");
-    for (const words of [proposalProgressWords(mid), ...mid.map(subjectStatusWords)]) expect(words).not.toMatch(/accept|skip/i);
+    for (const words of [proposalProgressWords(mid), ...mid.map(subjectStatusWords)]) expect(words).not.toMatch(/skip/i);
     // Two changes on one goal are one card to count, whatever their numbers.
     expect(proposalProgressWords(cardsOf(TREE))).toBe("5 to decide");
   });
 
   test("a records proposal counts its records, with the noun", () => {
     expect(proposalProgressWords([], ORG_RECORDS_FIXTURE_PROPOSAL.changes)).toBe("64 records to decide");
-    expect(proposalProgressWords([], ORG_RECORDS_FIXTURE_PROPOSAL_SENT.changes)).toBe("15 of 64 records to decide · 30 applied, 8 approved, 9 rejected, 2 failed");
+    expect(proposalProgressWords([], ORG_RECORDS_FIXTURE_PROPOSAL_SENT.changes)).toBe("15 of 64 records to decide · 30 applied, 8 accepted, 9 rejected, 2 failed");
     const done = ORG_RECORDS_FIXTURE_PROPOSAL.changes.map((c, i) => ({ ...c, status: i < 62 ? ("applied" as const) : ("skipped" as const) }));
     expect(proposalProgressWords([], done)).toBe("62 applied, 2 rejected");
     // One record is a card, counted as cards are.
