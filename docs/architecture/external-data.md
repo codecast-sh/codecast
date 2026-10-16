@@ -802,8 +802,9 @@ Actions suite does not name its workflow.
 team `resolveTeamForRepository` routes the repository to; a repository no team
 routes to files nowhere), created on the first run with the team's earliest
 admin as owner and `promote: []`, so it fires triggers but files no cause
-until a person turns promotion on with `cast sources update`. It is listed by
-`cast sources ls` like any other, and pausing it stops CI filing. A person's
+until a person turns promotion on with `cast sources set github-ci --promote
+<transitions>`. It is listed by `cast sources ls` like any other, and pausing
+it stops CI filing. A person's
 own source already named `github-ci` keeps the name and CI then files nowhere.
 Each run is one `check` occurrence through `upsertGroup`, the path every feed
 shares: one group per repository and workflow, fingerprint
