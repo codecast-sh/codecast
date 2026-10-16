@@ -1,0 +1,26 @@
+{
+  "name": "role-wake inbox-look-current",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:inbox-look-current"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:inbox-look-current",
+    "title": "role-wake inbox-look-current"
+  },
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/inbox-look-current.json"
+  },
+  "judge": "changes nothing, since op-41's three filings are all still right and the only new loose session is Mara's own: it names no revise, no propose and no withdraw, asks Mara nothing, and says so in a line or two",
+  "notes": null,
+  "tags": [],
+  "id": "7a074368-4271-454a-af09-1549aa2c33ee",
+  "createdAt": "2026-10-16T20:41:31.994Z"
+}

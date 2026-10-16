@@ -25,6 +25,7 @@ import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPicke
 import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
+import { RecentScreenshots } from '@/components/session/RecentScreenshots';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
@@ -534,6 +535,10 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               onSend={handleSubmit}
               cardStyle={modalStyles.promptCard}
               inputStyle={modalStyles.promptInput}
+            />
+            <RecentScreenshots
+              attachedUris={images.selectedImages.map((img) => img.uri)}
+              onAttach={(shot) => images.attachImages([shot])}
             />
           </RNView>
           {/* The viewer's pinned agents (users.pinned_agents, registry order)
