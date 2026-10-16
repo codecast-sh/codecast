@@ -481,8 +481,11 @@ export function proposalTotals(changes: ReadonlyArray<{ seq: number; change: Org
     return { count: `${n} changes to goals`, line: `${n} changes to goals: ${andList(halves)}.` };
   }
   const counts = new Map<Bucket, number>();
-  for (const { change } of live) for (const b of bucketsOf(change)) counts.set(b, (counts.get(b) ?? 0) + 1);
+  // Mixed work (several proposals read as one set): records say what they do, the rest are counted under the nouns.
+  const records = work === null ? live.filter((c) => bucketsOf(c.change)[0] === "record") : [];
+  for (const { change } of live) for (const b of bucketsOf(change)) if (!(records.length && b === "record")) counts.set(b, (counts.get(b) ?? 0) + 1);
   const parts = [...counts].map(([b, k]) => `${k} ${BUCKET_WORDS[b][k === 1 ? 0 : 1]}`);
+  if (records.length) parts.push(recordTotalsWords(orgRecordGroups(records, names).flatMap((g) => g.totals)));
   return { count: `${n} changes`, line: parts.length === 1 ? `${parts[0]}.` : `${n} changes: ${andList(parts)}.` };
 }
 

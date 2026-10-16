@@ -441,8 +441,8 @@ export function DocListContent() {
         );
       }}
       paletteShortcuts={[
-        { key: "t", mode: "type", label: "type" },
-        { key: "l", mode: "labels", label: "labels" },
+        { action: "doc.type", mode: "type", label: "type" },
+        { action: "doc.labels", mode: "labels", label: "labels" },
       ]}
       contextMenuContent={(items) => (
         <DocMenuItems docs={items} onOpen={(d) => router.push(`/docs/${d._id}`)} />

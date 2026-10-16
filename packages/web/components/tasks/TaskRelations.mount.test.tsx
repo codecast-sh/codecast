@@ -144,8 +144,8 @@ test("a task with no relations shows the blocker add and one line for the other 
   const lone = task(9);
   const { container, root } = await mount(<TaskRelations task={lone} tasks={{ id9: lone }} onAdd={() => {}} />);
   expect([...container.querySelectorAll("[data-relation]")].map((r) => (r as HTMLElement).dataset.relation)).toEqual(["Blocked by", "add"]);
-  expect(rowOf(container, "Blocked by")!.textContent).toBe("Blocked byAdd blocker…b");
-  expect(rowOf(container, "add")!.textContent).toBe("Link related…kSet parent…t");
+  expect(rowOf(container, "Blocked by")!.textContent).toBe("Blocked byAdd blocker…B");
+  expect(rowOf(container, "add")!.textContent).toBe("Link related…KSet parent…T");
   root.unmount();
 });
 
