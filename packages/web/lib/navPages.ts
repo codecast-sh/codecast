@@ -53,6 +53,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   // The company on one canvas, and its two read views. Teams without the org
   // feature keep them too: goals and projects need no agents.
+  { label: "Session Map", path: "/map", icon: "map", aliases: ["Board", "Desk"], keywords: "canvas zoom piles arrange sessions board desk spatial roles reporting org overview all sessions" },
   { label: "Org", path: "/org", icon: "network", aliases: ["Team", "Company"], keywords: "people mission roles organization org chart reporting structure members canvas" },
   { label: "Goals", path: "/org/goals", icon: "map", aliases: ["Roadmap"], keywords: "goal initiatives objectives strategy mission health progress owner" },
   { label: "Projects", path: "/org/projects", icon: "grid", keywords: "project leads progress status active planning paused" },

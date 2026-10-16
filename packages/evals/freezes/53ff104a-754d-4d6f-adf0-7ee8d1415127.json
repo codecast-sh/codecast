@@ -1,0 +1,28 @@
+{
+ "name": "anchor-brief role-level-question",
+ "anchor": {
+  "kind": "message",
+  "id": "fixture:role-level-question"
+ },
+ "subject": {
+  "kind": "synthetic",
+  "id": "anchor-brief:role-level-question",
+  "title": "anchor-brief role-level-question"
+ },
+ "asOf": "2026-10-14T09:00:00.000Z",
+ "trigger": {
+  "type": "anchor-brief"
+ },
+ "meta": {
+  "surface": "anchor-brief",
+  "visibility": "public",
+  "snapshot": "fixtures/anchor-brief/role-level-question.json"
+ },
+ "judge": "answers in a few lines from its brief and sessions (billing rewrite in progress, the webhooks reference waiting on the v1 events decision sd-55), names what waits on Mara, starts no session and reads no code",
+ "notes": null,
+ "tags": [
+  "scope"
+ ],
+ "id": "53ff104a-754d-4d6f-adf0-7ee8d1415127",
+ "createdAt": "2026-10-14T16:00:00.000Z"
+}

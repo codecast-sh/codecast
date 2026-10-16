@@ -308,7 +308,7 @@ function Landing({ landing }: { landing: RunLanding }) {
       <dl className="rp-facts" data-run-landing={landing.liveAt ? "production" : m ? "merged" : "built"}>
         <div>
           <dt>Merged</dt>
-          <dd>{m ? <>{day(m.at)} into {m.into} · {m.prUrl
+          <dd>{m ? <>{day(m.at)}{m.into ? ` into ${m.into}` : ""} · {m.prUrl
             ? <a className="lw-link" href={m.prUrl} target="_blank" rel="noreferrer">Pull request<ArrowUpRight className="w-3 h-3 inline" aria-hidden /></a>
             : <span className="rp-mono" title={m.sha}>{m.sha.slice(0, 7)}</span>}</> : "No merge recorded"}</dd>
         </div>
