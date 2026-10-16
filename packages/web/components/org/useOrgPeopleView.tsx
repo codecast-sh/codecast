@@ -49,7 +49,7 @@ function SessionsUnderPager({ parentId, teamId, cursor, onPage }: {
   return null;
 }
 
-export type MoveSubject = { kind: "session" | "role"; id: string; title: string };
+export type MoveSubject = { kind: "session" | "role" | "person"; id: string; title: string };
 
 export type OrgPeopleView = {
   view: OrgLayoutView;
@@ -133,6 +133,10 @@ export function useOrgPeopleView(tree: OrgTree | null): OrgPeopleView {
   const currentParentOf = useCallback((subject: MoveSubject): OrgParentRef | null => {
     if (!tree) return null;
     if (subject.kind === "role") return tree.roles.find((r) => r._id === subject.id)?.reports_to ?? null;
+    if (subject.kind === "person") {
+      const to = tree.people.find((p) => p.user_id === subject.id)?.reports_to_user_id;
+      return to ? { kind: "user", user_id: to } : null;
+    }
     for (const p of tree.people) if (p.sessions.some((x) => x._id === subject.id)) return { kind: "user", user_id: p.user_id };
     for (const r of tree.roles) if (r.sessions.some((x) => x._id === subject.id)) return { kind: "role", role_id: r._id };
     for (const [pid, rows] of Object.entries(expanded)) if (rows.some((x) => x._id === subject.id)) return parentRefOfNodeId(pid);

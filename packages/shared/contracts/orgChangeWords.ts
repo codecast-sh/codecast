@@ -21,6 +21,7 @@ import {
   orgRecordGroups,
   RECORD_ACT_WORDS,
   recordGroupTotalsLine,
+  sessionDestination,
   type ChangeWords as ChangeLineWords,
   type OrgAskNames,
   type OrgChange,
@@ -125,6 +126,7 @@ function subjectName(c: OrgChange, names?: OrgAskNames): string | null {
     case "move": case "retire": case "scope": case "budget": case "trust": case "routine": case "adopt": case "authority": case "hire": case "charter_edit": return role(c.handle);
     case "project_meta": return project(c.project);
     case "file": return names?.plan?.(c.plan) ?? c.plan;
+    case "file_session": return c.title?.trim() || names?.session?.(c.session) || c.session;
     case "upgrade": return c.instance;
     case "plan_status": return c.title?.trim() || names?.plan?.(c.plan) || c.plan;
     case "task_status": return c.title?.trim() || c.task;
@@ -272,6 +274,15 @@ function fieldsOf(c: OrgChange, ctx: ChangeWordsCtx): Draft[] {
     }
     case "adopt": return [field("session", "Session", "text", text(names?.session?.(c.conversation) ?? c.conversation, { ref: { kind: "session", id: c.conversation } }), read("standing_session", (raw) => words((raw as { short_id?: string } | null)?.short_id, NONE.unset)))];
     case "file": return [field("project", "Project", "ref", projectText(c.project), read("project_id", named("project", NONE.project)))];
+    // The session itself, one press away, and where it goes.
+    case "file_session": {
+      const d = sessionDestination(c.to);
+      const goes = !d || d.kind === "done" ? text("done") : d.kind === "task" ? text(names?.task?.(d.task) ?? d.task, { ref: { kind: "task", id: d.task } }) : roleText(d.handle);
+      return [
+        set("session", "Session", "text", text(c.title?.trim() || names?.session?.(c.session) || c.session, { ref: { kind: "session", id: c.session } })),
+        set("goes", d?.kind === "done" ? "Closes as" : d?.kind === "task" ? "Joins" : "Reports to", d?.kind === "done" ? "text" : "ref", goes),
+      ];
+    }
     case "charter_edit": return c.edits.map((e, i): Draft => {
       const key = `charter_edit:${i}`, lab = "Charter";
       if (e.op === "replace") return { key, label: lab, kind: "passage", op: "change", before: text(e.before), after: text(e.after), diff: passageDiff(e.before, e.after) };
@@ -426,6 +437,7 @@ const BUCKET_WORDS = {
   priority: ["project priority", "project priorities"], charter: ["project charter", "project charters"],
   move: ["move", "moves"], area: ["area change", "area changes"], retire: ["retirement", "retirements"], rewrite: ["charter rewrite", "charter rewrites"],
   setting: ["setting", "settings"], record: ["record", "records"], goal: ["change to a goal", "changes to goals"],
+  session: ["session filed", "sessions filed"],
 } as const;
 type Bucket = keyof typeof BUCKET_WORDS;
 
@@ -434,6 +446,7 @@ function bucketsOf(c: OrgChange): Bucket[] {
     case "role": return [c.seat ? "seat" : "role"];
     case "projects": return c.changes.map((x) => (x.op === "create" ? "project" : "merge"));
     case "file": return ["file"];
+    case "file_session": return ["session"];
     case "project_meta": return [c.goal == null && c.success_metrics == null && c.non_goals == null && c.risks == null && !c.owner && c.priority ? "priority" : "charter"];
     case "move": return ["move"];
     case "scope": return ["area"];
@@ -499,6 +512,7 @@ export function chipLine(change: OrgChange): string {
     case "project_meta": return [change.project, change.priority, change.owner ? `owner ${at(change.owner)}` : ""].filter(Boolean).join(" · ");
     case "adopt": return `adopt ${change.conversation}`;
     case "file": return `${change.plan} under ${change.project}`;
+    case "file_session": return sessionDestination(change.to)?.kind === "done" ? "done" : `under ${change.to.trim()}`;
     case "authority": return change.authority.map((g) => g.kind).join(" · ");
     case "hire": return `${change.template} ${change.version}`;
     case "upgrade": return `to ${change.to}`;

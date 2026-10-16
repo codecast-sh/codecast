@@ -169,6 +169,7 @@ export function OrgChart() {
             onReparentRequest: moves.requestMove,
             onNodeContextMenu,
             canDrag: moves.canDrag,
+            canDropPerson: moves.canDropPerson,
             resetKey: moves.resetKey,
             onToggleOpen: people.toggleOpen,
             sessionProject: people.sessionProject,
