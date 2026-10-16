@@ -125,7 +125,7 @@ export async function warnIfThreadStateStale(deps: PublishDeps): Promise<void> {
   try {
     const session = deps.detectCurrentSessionId();
     if (!session) return;
-    const row = await apiPost(deps, "/cli/sessions/state/get", { session }, { read: true, exitOnError: false });
+    const row = await apiPost(deps, "/cli/sessions/state/get", { session, if_exists: true }, { read: true, exitOnError: false });
     const notice = staleStateNotice(row, Date.now());
     if (notice) console.log(fmt.muted(`  ${notice}`));
   } catch {}

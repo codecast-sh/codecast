@@ -48,6 +48,7 @@ import { agentCommentLevelValidator } from "./threadReads";
 import { gatedSnippetAvailability } from "./teamFeatures";
 import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
 import { readLocalViewRevision } from "./localFirstCommands";
+import { daemonLastSeenStale } from "./lib/daemonLiveness";
 import {
   CURRENT_USER_GRANT_KEY,
   CURRENT_USER_VIEW_CONTRACT_ID,
@@ -491,7 +492,6 @@ export const daemonHeartbeat = mutation({
     // the OCC contention / 1011 WS storm. Mirror updateUserActivity: read first,
     // patch only what changed, and refresh the volatile liveness/queue fields on
     // a throttle (the readers only need minute-granularity online detection).
-    const HEARTBEAT_WRITE_THROTTLE_MS = 50 * 1000;
     const existingUser = await ctx.db.get(auth.userId);
     const newPending = args.pending_sync_count ?? 0;
     const newOldest = args.oldest_pending_ms ?? 0;
@@ -543,8 +543,7 @@ export const daemonHeartbeat = mutation({
     // Volatile liveness/queue fields: refresh on a throttle, when queue zeroness
     // flips (so a newly-stuck queue still surfaces promptly), or when we're already
     // writing a sticky change anyway.
-    const lastSeenStale =
-      !existingUser?.daemon_last_seen || now - existingUser.daemon_last_seen > HEARTBEAT_WRITE_THROTTLE_MS;
+    const lastSeenStale = daemonLastSeenStale(existingUser?.daemon_last_seen, now);
     const queueZeronessFlipped =
       ((existingUser?.daemon_pending_sync_count ?? 0) === 0) !== (newPending === 0);
     // Same rule for load: a loop that just started (or stopped) freezing must

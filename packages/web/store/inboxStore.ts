@@ -77,7 +77,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand } from "@codecast/shared/contracts";
-import { liveFactsOf } from "../lib/liveness";
+import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -646,15 +646,15 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
+  // The daemon's own status, before any trust rule. Never read it as what the
+  // agent is doing: derive that at read time (agentStatusAt, deriveLiveAt),
+  // since a verdict moves with time while this fact does not (ct-56054).
   agent_status?: AgentStatus;
   // The is_idle inputs (ct-47609), overlay-owned facts: the replica re-derives
   // is_idle / is_unresponsive / the trusted status at its own clock from these
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
-  // The daemon's raw status beside the overlay's verdict (agent_status): the
-  // re-derivation trusts this one, since a verdict does not replay (ct-56054).
-  agent_status_raw?: string | null;
   // The settle's own facts (ct-49533): agent_status_boundary says the status
   // settled the row on a resume / clear / manual compact rather than on a turn
   // ending — a placement input, and the signal any completion-reactive surface
@@ -2812,8 +2812,10 @@ const EMPTY_PENDING_SEND_IDS: ReadonlySet<string> = new Set<string>();
 // The daemon definitively reports the agent as running. Used both to
 // short-circuit idle detection and to decide when a "pending working" send has
 // been confirmed (status flipped active) vs is still in-flight.
-export function isAgentActive(session: Pick<InboxSession, "agent_status">): boolean {
-  return !!session.agent_status && ACTIVE_AGENT_STATUSES.has(session.agent_status);
+export type AgentStatusFacts = Pick<InboxSession, "agent_status" | "updated_at" | "last_heartbeat" | "open_tasks" | "open_tasks_at">;
+export function isAgentActive(session: AgentStatusFacts, now = Date.now()): boolean {
+  const status = agentStatusAt(session, now);
+  return !!status && ACTIVE_AGENT_STATUSES.has(status);
 }
 
 // convHasPendingSend / sessionsWithPendingSend (the pending_send overlay's
@@ -2841,11 +2843,11 @@ export function showsBlockedBadge(
 }
 
 export function pendingSendConsumed(
-  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
+  session: (AgentStatusFacts & Pick<InboxSession, "is_idle" | "has_pending">) | undefined,
   sentBaselineTs?: number,
 ): boolean {
   if (!session || session.has_pending || sentBaselineTs == null || (session.updated_at ?? 0) <= sentBaselineTs) return false;
-  const status = session.agent_status;
+  const status = agentStatusAt(session, Date.now());
   return !!session.is_idle || !!(status && (ACTIVE_AGENT_STATUSES.has(status) || DEAD_AGENT_STATUSES.has(status)));
 }
 
@@ -2891,7 +2893,7 @@ function hostedAnswerTaken(
 export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
-  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at" | "agent_type"> | undefined,
+  session: (AgentStatusFacts & Pick<InboxSession, "is_idle" | "has_pending" | "agent_type">) | undefined,
   _focusedConvId: string | null,
   localMessages?: Message[],
   decisions?: DecisionEvidence,
@@ -2957,15 +2959,16 @@ export function isSessionEffectivelyIdle(session: InboxSession): boolean {
 // attention. No pinned exemption: placement of pinned rows is the caller's
 // concern (they never leave the Pinned group).
 export function isSessionHardBlocked(
-  session: Pick<InboxSession, "_id" | "agent_status" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status">,
+  session: AgentStatusFacts & Pick<InboxSession, "_id" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status">,
   sessionsWithQueuedMessages?: Set<string>,
+  now = Date.now(),
 ): boolean {
   if (sessionsWithQueuedMessages?.has(session._id)) return false;
   if (session.inbox_killed_at) return false;
   return isHardBlocked({
     awaitingInput: !!session.awaiting_input,
     pendingApiError: session.pending_api_error === true,
-    agentStatus: session.agent_status ?? undefined,
+    agentStatus: agentStatusAt(session, now),
     messageCount: session.message_count ?? 0,
     isUnresponsive: !!session.is_unresponsive,
     declaredStatus: session.thread_state_status ?? null,
@@ -2992,36 +2995,33 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
-const _placementCache = new WeakMap<object, { bucket: InboxBucket; work_state: WorkState }>();
-const _classifyCache = new WeakMap<object, SessionVerdict>();
-/** One row's bucket and work state from its shipped live fields, outside the
+type RowVerdict = { bucket: InboxBucket; work_state: WorkState };
+const _placementCache = new WeakMap<object, { live: string; p: RowVerdict }>();
+const _classifyCache = new WeakMap<RowVerdict, SessionVerdict>();
+/** One row's bucket and work state from its live fields at `now`, outside the
  *  working set: the per-row placement the inbox sections use, without the
- *  membership fold. For a surface listing rows the inbox may not hold. */
-export function sessionPlacement(s: InboxSession): { bucket: InboxBucket; work_state: WorkState } {
-  let p = _placementCache.get(s);
-  if (!p) {
-    // The shipped live fields as they stand — no clock, no re-derivation.
-    const live: LiveFacts = {
-      agent_status: s.agent_status ?? null,
-      is_idle: !!s.is_idle,
-      is_unresponsive: !!s.is_unresponsive,
-      awaiting_input: !!s.awaiting_input,
-      daemon_alive: !!s.is_connected,
-    };
-    p = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0));
-    _placementCache.set(s, p);
-  }
+ *  membership fold. For a surface listing rows the inbox may not hold. The
+ *  live fields derive from the row's facts at the caller's clock, the rule
+ *  the chokepoint runs, and the placement is reused while they stand. */
+export function sessionPlacement(s: InboxSession, now = Date.now()): RowVerdict {
+  const live = deriveLiveAt(liveFactsOf(s), now);
+  const key = liveKeyOf(live);
+  const hit = _placementCache.get(s);
+  if (hit && hit.live === key) return hit.p;
+  const p = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0));
+  _placementCache.set(s, { live: key, p });
   return p;
 }
-/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
-export function sessionWorkState(s: InboxSession): WorkState {
-  return sessionPlacement(s).work_state;
+/** Who acts next on a session (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession, now = Date.now()): WorkState {
+  return sessionPlacement(s, now).work_state;
 }
-export function classifySession(s: InboxSession): SessionVerdict {
-  let c = _classifyCache.get(s);
+export function classifySession(s: InboxSession, now = Date.now()): SessionVerdict {
+  const p = sessionPlacement(s, now);
+  let c = _classifyCache.get(p);
   if (!c) {
-    c = verdictOfWorkState(sessionWorkState(s));
-    _classifyCache.set(s, c);
+    c = verdictOfWorkState(p.work_state);
+    _classifyCache.set(p, c);
   }
   return c;
 }
@@ -3688,6 +3688,7 @@ function questionPredicate(ids: ReadonlySet<string>): (session: InboxSession) =>
 // previous call's; clearing the slot memo keeps assertions on fresh refs.
 export function __resetInboxPlacementCacheForTests(): void {
   _placedMemo.clear();
+  _lastParityCheckAt = 0;
   _placementDeadlineMemo = null;
   _membershipKey = null;
   _membershipVal = null;
@@ -4105,7 +4106,16 @@ function assertPlacementParity(
 ): void {
   try {
     const { proj } = projectReplicaInbox(state, { scope: ctx.scope, focusedId: ctx.focusedId, epoch: ctx.epoch, now: ctx.now, scoped: ctx.scoped, askingOf: ctx.askingOf });
+    // An in-flight row deviates on purpose, and its riders follow it there:
+    // give each in-flight row its overlay bucket and ride again, so a teammate
+    // of an in-flight lead is compared against the same ride, not skipped.
+    const pure = new Map<string, { bucket: InboxBucket; below_fold: boolean }>();
     for (const [id, p] of proj.placements) {
+      const overlay = ctx.inFlight(id) ? ctx.placements.get(id) : undefined;
+      pure.set(id, { bucket: overlay?.bucket ?? p.bucket, below_fold: p.below_fold });
+    }
+    rideLeadPlacements(pure, (id) => ctx.scoped[id]);
+    for (const [id, p] of pure) {
       if (ctx.inFlight(id)) continue; // declared overlay carve-out
       const mine = ctx.placements.get(id);
       if (!mine) {
@@ -10871,13 +10881,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // (2026-09-14), so the line never waits on the sessions row.
       const session = this.sessions[convId];
       const agentType = session?.agent_type ?? this.conversations[convId]?.agent_type;
-      // The press claims the daemon's own status as well as the verdict: the
-      // live derivation trusts agent_status_raw over agent_status (ct-56054),
-      // so a lock on the verdict alone would let an overlay push put a
-      // working raw status under it and keep the stopped row working.
+      // The press claims the daemon's own status, the one fact every reader
+      // derives the row's state from, so an overlay push cannot put a working
+      // status back under it while the stop is in flight.
       if (session) {
         session.agent_status = "idle";
-        session.agent_status_raw = "idle";
         session.is_idle = true;
       }
       // One line per interruption, not per press. A second Escape on a turn

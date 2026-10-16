@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Command } from 'commander';
@@ -61,11 +61,18 @@ export function runSnapshot(surface: string, args: string[], run: (argv: string[
   const capturedAt = new Date().toISOString();
   const captured: Array<{ argv: string[]; out: string }> = [];
   for (const argv of reads) {
-    const { out, code } = run(argv);
+    const legacy = legacyFile(argv);
+    let { out, code } = run(argv);
+    // The org reads are the world every other read hangs off, and one fails now and then under load (an empty
+    // `org inputs` with exit 1): retry it, and refuse the snapshot rather than save a world with nothing in it.
+    for (let tries = 1; legacy && code !== 0 && tries < 3; tries++) ({ out, code } = run(argv));
+    if (legacy && code !== 0) {
+      rmSync(dir, { recursive: true, force: true });
+      throw new Error(`cast ${argv.join(' ')} failed 3 times (exit ${code}); nothing saved, run the snapshot again`);
+    }
     const text = redactSecrets(out);
     writeServedRead(dir, argv, text, code);
     for (const alias of aliases.filter((a) => a.from === servedReadKey(argv))) writeServedRead(dir, alias.serve, text, code);
-    const legacy = legacyFile(argv);
     if (legacy) writeFileSync(join(dir, legacy), text);
     captured.push({ argv, out: text });
     console.log(`${code === 0 ? 'captured' : `captured (exit ${code})`}  cast ${argv.join(' ')}`);
