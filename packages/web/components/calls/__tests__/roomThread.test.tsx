@@ -485,7 +485,7 @@ test("the composer names the one agent in the room", async () => {
   useInboxStore.setState({
     currentUser: { _id: "u-me" },
     liveRooms: [],
-    sessions: { conv_other: { _id: "conv_other", title: "Team huddle", agent_type: "claude_code", agent_status: "working" } },
+    sessions: { conv_other: { _id: "conv_other", title: "Team huddle", agent_type: "claude_code", agent_status: "working", updated_at: Date.now(), last_heartbeat: Date.now() } },
   } as any);
   const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me" }];
   const r = await render(
