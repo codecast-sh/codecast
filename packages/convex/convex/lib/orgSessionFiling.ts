@@ -69,20 +69,17 @@ export async function applyFileSession(ctx: Ctx, userId: Id<"users">, boundary: 
 }
 
 // ── The person's loose sessions (org-staffing.md S43) ─────────────────────
-// The sessions in the caller's own inbox that report to them alone: no role
-// holds them, and they are no seat. Newest first, with the facts a filing
-// needs (where it runs, the task it works, its state); `cast read` says the rest.
-export async function looseSessionsOf(ctx: Ctx, scan: OrgScan, userId: Id<"users">) {
-  const mine = (scan.byParent.get(`user:${String(userId)}`) ?? []).filter((s: any) => !s.is_anchor);
-  const rows = mine
+// The sessions in the caller's own inbox that nothing places: no role holds
+// them, no task binds them, and they are no seat. Newest first, with the facts
+// a filing needs; `cast read` says the rest.
+export async function looseSessionsOf(_ctx: Ctx, scan: OrgScan, userId: Id<"users">) {
+  const rows = (scan.byParent.get(`user:${String(userId)}`) ?? [])
     .map((s: any) => ({ s, raw: scan.sessions.get(String(s._id))?.raw }))
-    .filter(({ raw }) => raw && !raw.standing_role_id && !raw.org_role_id)
+    .filter(({ s, raw }) => raw && !s.is_anchor && !raw.standing_role_id && !raw.org_role_id && !raw.active_task_id)
     .sort((a, b) => b.s.updated_at - a.s.updated_at);
-  const listed = rows.slice(0, LOOSE_SESSIONS_CAP);
-  const tasks = await Promise.all(listed.map(({ raw }) => (raw.active_task_id ? ctx.db.get(raw.active_task_id) : null)));
   return {
     count: rows.length,
-    rows: listed.map(({ s, raw }, i) => ({
+    rows: rows.slice(0, LOOSE_SESSIONS_CAP).map(({ s, raw }) => ({
       short_id: s.short_id ?? String(s._id).slice(0, 7),
       title: s.title,
       state: s.state,
@@ -90,7 +87,6 @@ export async function looseSessionsOf(ctx: Ctx, scan: OrgScan, userId: Id<"users
       started_at: raw.started_at ?? null,
       messages: raw.message_count ?? 0,
       project_path: raw.project_path ?? null,
-      ...(tasks[i] ? { task: { short_id: (tasks[i] as any).short_id, title: (tasks[i] as any).title } } : {}),
     })),
   };
 }

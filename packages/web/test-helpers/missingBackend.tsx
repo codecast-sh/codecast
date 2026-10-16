@@ -199,6 +199,9 @@ export type MountedSurface = {
   // Errors no boundary caught (the whole root went down).
   uncaught: Error[];
   text: () => string;
+  // Lets the page keep working until `done` holds or `ms` passes. A busy
+  // process (deep in the suite) paints later than the mount's own settle.
+  waitFor: (done: () => boolean, ms?: number) => Promise<void>;
   unmount: () => Promise<void>;
 };
 
@@ -235,6 +238,14 @@ async function mountSurface(node: React.ReactNode): Promise<MountedSurface> {
     caught,
     uncaught,
     text: () => container.textContent ?? "",
+    waitFor: async (done, ms = 10_000) => {
+      const deadline = Date.now() + ms;
+      while (!done() && Date.now() < deadline) {
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+      }
+    },
     unmount: async () => {
       await act(async () => root.unmount());
       container.remove();

@@ -252,6 +252,7 @@ import type * as lib_orgOwnership from "../lib/orgOwnership.js";
 import type * as lib_orgRouter from "../lib/orgRouter.js";
 import type * as lib_orgRoutine from "../lib/orgRoutine.js";
 import type * as lib_orgScope from "../lib/orgScope.js";
+import type * as lib_orgSessionFiling from "../lib/orgSessionFiling.js";
 import type * as lib_pageReaders from "../lib/pageReaders.js";
 import type * as lib_personLabel from "../lib/personLabel.js";
 import type * as lib_prSessions from "../lib/prSessions.js";
@@ -740,6 +741,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orgRouter": typeof lib_orgRouter;
   "lib/orgRoutine": typeof lib_orgRoutine;
   "lib/orgScope": typeof lib_orgScope;
+  "lib/orgSessionFiling": typeof lib_orgSessionFiling;
   "lib/pageReaders": typeof lib_pageReaders;
   "lib/personLabel": typeof lib_personLabel;
   "lib/prSessions": typeof lib_prSessions;
