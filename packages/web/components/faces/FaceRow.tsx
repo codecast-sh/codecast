@@ -762,6 +762,7 @@ export function FaceRow({
           ref={belowRef}
           className="face-row-below"
           data-chrome-hit
+          data-flyout
           data-notch={band?.notch != null ? "1" : undefined}
           style={
             band
