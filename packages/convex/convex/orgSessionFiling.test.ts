@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performAcceptAll, performCreateProposal } from "./orgProposals";
 import { looseSessionsOf } from "./lib/orgSessionFiling";
+import { newSinceLook, syncInboxLook } from "./orgInbox";
+import { HEAD_INBOX_EVERY_MS, HEAD_INBOX_TITLE } from "./lib/orgRoutine";
 
 // The person's sessions filed where they belong (org-staffing.md S43): a
 // filing goes under a role, onto a task, or out of the inbox as done, through
@@ -10,6 +12,7 @@ import { looseSessionsOf } from "./lib/orgSessionFiling";
 
 const ME = "u".repeat(31) + "m";
 const BOT = "u".repeat(31) + "b";
+const MATE = "u".repeat(31) + "t";
 const TEAM = "teams_acme" as any;
 const WS = `team:${TEAM}`;
 const NOW = 1_800_000_000_000;
@@ -19,8 +22,8 @@ const HOP = "org_roles_hop";
 function fixtures(o: { hopTrust?: string } = {}) {
   const conv = (id: string, short: string, title: string, extra: Record<string, any> = {}) => ({ _id: id, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title, short_id: short, session_id: id, project_path: "/repo", updated_at: NOW, created_at: 1, message_count: 4, ...extra });
   return makeFakeDb({
-    users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: BOT, name: "Bot", email: "bot@x.ai" }],
-    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }],
+    users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: BOT, name: "Bot", email: "bot@x.ai" }, { _id: MATE, name: "Mate", email: "mate@x.ai" }],
+    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }, { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 }],
     teams: [{ _id: TEAM, name: "Acme" }],
     counters: [],
     org_roles: [
@@ -41,6 +44,7 @@ function fixtures(o: { hopTrust?: string } = {}) {
       conv("conversations_tweet", "jxtweet", "Draft the launch thread"),
       conv("conversations_refund", "jxrefnd", "Wire the refund endpoint"),
       conv("conversations_ci", "jxcinod", "Bump Node in CI"),
+      conv("conversations_mate", "jxmate1", "Mate's onboarding fix", { user_id: MATE }),
     ],
   });
 }
@@ -85,6 +89,56 @@ describe("filing the person's sessions", () => {
   test("a filing to nowhere is refused at post", async () => {
     const db = fixtures();
     await expect(performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, spec: spec([filing("jxtweet", "growth")]) })).rejects.toThrow('to is "@handle"');
+  });
+});
+
+describe("who decides a filing", () => {
+  test("a member who is no admin accepts the filings of their own sessions on the card", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), MATE as any, { team_id: TEAM, spec: spec([filing("jxmate1", "@growth")]) });
+    await performAcceptAll(ctxOf(db), MATE as any, { proposal: r.short_id });
+    expect(await db.get("conversations_mate")).toMatchObject({ org_role_id: GROWTH });
+  });
+
+  test("a member cannot decide a filing of someone else's session, nor any other kind of change", async () => {
+    const db = fixtures();
+    const theirs = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "conversations_hop", spec: spec([filing("jxmate1", "@growth"), filing("jxtweet", "@growth")]) });
+    await expect(performAcceptAll(ctxOf(db), MATE as any, { proposal: theirs.short_id })).rejects.toThrow("team admin can decide it");
+    const structure = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, spec: spec([{ change: { kind: "budget", handle: "growth", caps: { wakes_per_day: 9 } }, rationale: "quiet" }]) });
+    await expect(performAcceptAll(ctxOf(db), MATE as any, { proposal: structure.short_id })).rejects.toThrow("team admin can decide it");
+    expect(await db.get("conversations_mate")).not.toHaveProperty("org_role_id");
+  });
+});
+
+describe("the Head of People's daily look at the inbox", () => {
+  const standing = (db: any) => db.get("conversations_hop");
+  const looks = async (db: any) => (await db.query("agent_tasks").collect()).filter((t: any) => t.title === HEAD_INBOX_TITLE);
+
+  test("arms once, daily, behind the gate that spends nothing without a new loose session", async () => {
+    const db = fixtures();
+    const role = await db.get(HOP);
+    expect(await syncInboxLook(ctxOf(db), role, await standing(db), NOW)).toBe("armed");
+    expect(await syncInboxLook(ctxOf(db), role, await standing(db), NOW)).toBe("kept");
+    const [look] = await looks(db);
+    expect(await looks(db)).toHaveLength(1);
+    expect(look).toMatchObject({ schedule_type: "recurring", interval_ms: HEAD_INBOX_EVERY_MS, precheck: `cast org loose --new --team ${TEAM}`, role_id: HOP });
+  });
+
+  test("only the Head of People looks, and a look the person cancelled stays cancelled", async () => {
+    const db = fixtures();
+    expect(await syncInboxLook(ctxOf(db), await db.get(GROWTH), await db.get("conversations_growth"), NOW)).toBe("none");
+    await syncInboxLook(ctxOf(db), await db.get(HOP), await standing(db), NOW);
+    const [look] = await looks(db);
+    await db.patch(look._id, { status: "cancelled" });
+    expect(await syncInboxLook(ctxOf(db), await db.get(HOP), await standing(db), NOW)).toBe("kept");
+    expect(await looks(db)).toHaveLength(1);
+  });
+
+  test("new means started since the look last ran; before any look every loose session is new", () => {
+    const rows = [{ short_id: "a", started_at: 100, last_active_at: 500 }, { short_id: "b", started_at: 300, last_active_at: 300 }, { short_id: "c", started_at: null, last_active_at: 400 }];
+    expect(newSinceLook(rows, 200).map((r) => r.short_id)).toEqual(["b", "c"]);
+    expect(newSinceLook(rows, 1000)).toEqual([]);
+    expect(newSinceLook(rows, null)).toHaveLength(3);
   });
 });
 
