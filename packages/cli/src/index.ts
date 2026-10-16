@@ -12425,12 +12425,13 @@ program
     if (success) {
       await refreshEnabledSnippets(config);
 
+      const installed = available ?? getVersion();
       if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-        console.log(`Updated to v${available} and restarted daemon`);
+        console.log(`Updated to v${installed} and restarted daemon`);
       } else if (daemonWasRunning) {
-        console.log(`Updated to v${available}; daemon code unchanged, left it running`);
+        console.log(`Updated to v${installed}; daemon code unchanged, left it running`);
       } else {
-        console.log(`Updated to v${available}`);
+        console.log(`Updated to v${installed}`);
       }
     } else {
       process.exit(1);
@@ -21052,9 +21053,23 @@ workflow
     }
     // A rerun asked from the trial page proves against unfixed code (lineTrialBranch.ts).
     if (!resume && run.fresh_branch && run.task_short_id) {
-      const { freshRunBranch } = await import("./lineTrialBranch.js");
-      const fresh = await freshRunBranch(projectPath, graph, run.task_short_id);
-      console.log(`On ${fresh.branch} from ${fresh.base}${fresh.set_aside ? `; the earlier run's branch is codecast/${fresh.set_aside}` : ""}`);
+      const { freshRunBranch, runHandsVia } = await import("./lineTrialBranch.js");
+      const post = async (route: string, body: Record<string, unknown>) => (await fetch(`${siteUrl}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, ...body }),
+      })).json();
+      try {
+        const fresh = await freshRunBranch(projectPath, graph, run.task_short_id, new Date(), runHandsVia(post));
+        console.log(`On ${fresh.branch} from ${fresh.base}${fresh.set_aside ? `; the earlier run's branch is codecast/${fresh.set_aside}` : ""}`);
+      } catch (err) {
+        // Refused (an earlier run's hand still works in the worktree): the run
+        // ends here with why, rather than waiting as pending with no runner.
+        const why = err instanceof Error ? err.message : String(err);
+        console.error(why);
+        await post("/cli/workflow-runs/progress", { run_id: runId, current_node_id: "start", node_id: "start", node_status: "failed", run_status: "failed", fail_reason: why.slice(0, 1500) }).catch(() => {});
+        process.exit(1);
+      }
     }
     const { runWorkflow, stopRunOnSignals } = await import("./workflow/runner.js");
     const runOpts = {
