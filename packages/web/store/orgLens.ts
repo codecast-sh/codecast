@@ -238,6 +238,9 @@ export function orgLensAvailable(mode: OrgLensMode, items: InboxSession[], src: 
     return !!src.meId && (src.roles.some((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === src.meId)
       || src.people.some((p) => p.reports_to_user_id === src.meId));
   }
-  if (mode === "goal" && !Object.values(src.initiatives).some((g) => OPEN_GOAL.has(g.status) && g.project_ids.length > 0)) return false;
+  if (mode === "goal") {
+    const goals = goalOfProjectMap(src.initiatives);
+    return items.some((x) => { const pid = sessionProjectId(x, src); return !!pid && goals.has(pid); });
+  }
   return items.some((x) => !!sessionProjectId(x, src));
 }
