@@ -1,6 +1,8 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
-export type StatusPillSpec = { tone: string; dot: string; label: string; short: string };
+/** `quiet`: a resting state the runner pill already shows, so the header
+ *  draws only the dot and keeps the word in its hover. */
+export type StatusPillSpec = { tone: string; dot: string; label: string; short: string; quiet?: boolean };
 
 const LIVE_TONES = {
   thinking: { tone: "text-sol-violet", dot: "animate-pulse bg-sol-violet", label: "Thinking", short: "Think" },
@@ -20,7 +22,7 @@ const DELIVERING: Record<string, StatusPillSpec> = {
   connected: { tone: "text-sol-cyan", dot: "bg-sol-cyan animate-pulse", label: "Delivering", short: "Dlvr" },
 };
 
-const DISCONNECTED: StatusPillSpec = { tone: "text-sol-text-dim/60", dot: "bg-sol-text-dim/30", label: "Disconnected", short: "Disc" };
+const DISCONNECTED: StatusPillSpec = { tone: "text-sol-text-dim/60", dot: "bg-sol-text-dim/30", label: "Disconnected", short: "Disc", quiet: true };
 
 /**
  * What the conversation header's status pill says for a daemon-reported agent

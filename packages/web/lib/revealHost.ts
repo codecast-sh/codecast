@@ -154,7 +154,16 @@ export function useIsRevealOpen(hostKey: string | null, href: string): boolean {
  * exists, whether it is the open reveal, a toggle bound to its host and its
  * own element, and the re-place when it mounts already open.
  */
+/** A surface that opens some addresses itself, beside what the reader is
+ *  looking at (the org page's drawer opens a proposal). A reference to one of
+ *  those inside it opens there instead of a band under its line: a band would
+ *  draw the whole surface again inside itself. */
+export type RevealInPlace = { claims: (href: string) => boolean; isOpen: (href: string) => boolean; toggle: (href: string) => void };
+export const RevealInPlaceCtx = createContext<RevealInPlace | null>(null);
+
 export function useRevealRef(target: RevealTarget, ref: RefObject<HTMLElement | null>) {
+  const inPlace = useContext(RevealInPlaceCtx);
+  const claimed = !!inPlace && inPlace.claims(target.href);
   const host = useRevealHost();
   const hostKey = host?.hostKey ?? null;
   const open = useIsRevealOpen(hostKey, target.href);
@@ -162,8 +171,10 @@ export function useRevealRef(target: RevealTarget, ref: RefObject<HTMLElement | 
     if (open && hostKey && ref.current) reattachReveal(hostKey, target.href, ref.current);
   }, [open, hostKey, target.href, ref]);
   const toggle = useCallback(() => {
-    if (hostKey && ref.current) toggleReveal(hostKey, target, ref.current);
-  }, [hostKey, target, ref]);
+    if (claimed) inPlace!.toggle(target.href);
+    else if (hostKey && ref.current) toggleReveal(hostKey, target, ref.current);
+  }, [claimed, inPlace, hostKey, target, ref]);
+  if (claimed) return { host: true, open: inPlace!.isOpen(target.href), toggle };
   return { host: host !== null, open, toggle };
 }
 

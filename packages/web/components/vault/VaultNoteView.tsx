@@ -8,6 +8,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { BookOpen, FileText, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { withShortcut } from "../../shortcuts";
 import { VaultFileHeader } from "./VaultFileHeader";
 import { VaultLinkContext, VaultMarkdown, FoldScopeContext } from "./VaultMarkdown";
 import { useVaultLinkCtx } from "./useVaultLinkCtx";
@@ -153,8 +154,8 @@ export const VaultNoteView = memo(function VaultNoteView({
               aria-pressed={mode !== "reading"}
               title={
                 mode === "reading"
-                  ? "Edit (Ctrl+E) · raw source with Ctrl+Shift+E"
-                  : `Read (Ctrl+E) — editing in ${mode === "live" ? "live preview" : "source"}`
+                  ? withShortcut("Edit", "vault.toggleEdit")
+                  : withShortcut(`Read, editing in ${mode === "live" ? "live preview" : "source"}`, "vault.toggleEdit")
               }
               className={`mt-1.5 flex-shrink-0 transition-colors ${
                 mode !== "reading" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
