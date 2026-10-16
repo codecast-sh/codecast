@@ -149,6 +149,7 @@ function worldReads(loose: Loose[]): Read[] {
     { argv: ['brief'], out: brief(loose) },
     { argv: ['brief', '--json'], out: JSON.stringify({ role: { handle: 'head-of-people', name: 'Head of People' }, standing: ['2026-10-07 Company: Three leads own the three projects and the records match the work.'] }) },
     ...loose.map((s) => ({ argv: ['read', s.id], out: readOf(s), prefix: true })),
+    ...loose.map((s) => ({ argv: ['summary', s.id], out: `${s.title}: ${s.said[1]}`, prefix: true })),
     ...tasks.map((t) => ({ argv: ['task', 'show', t.short_id], out: `${t.short_id} · ${t.title} · ${t.status} · plan ${t.plan} · project ${t.project}`, prefix: true })),
     ...plans.map((p) => ({ argv: ['plan', 'show', p.short_id], out: `${p.short_id} · ${p.title} · active · ${p.done}/${p.total} done`, prefix: true })),
     { argv: ['link'], out: 'https://codecast.sh/s/fernhill', prefix: true },
@@ -190,7 +191,8 @@ function writeLook(name: string, loose: Loose[], notes: string): void {
   const fixture = {
     asOf: new Date(now).toISOString(),
     notes,
-    label: labelOf(loose),
+    // A session the last look already saw may stay: a daily look that re-proposed it every day would nag.
+    label: { ...labelOf(loose), files: Object.fromEntries(Object.entries(labelOf(loose).files).map(([id, to]) => [id, answer.new.includes(id) ? to : [...to, 'stay']])) },
     snapshot: {
       captured_at: new Date(now).toISOString(),
       fixture: { trigger: 'tr-930', routine: 'inbox', role: { handle: 'head-of-people', name: 'Head of People', reports_to: 'Mara Okafor', scope: [], goals: [], charter: headOfPeopleOpening({ workspace: 'Fernhill', person: 'Mara Okafor' }).split('\n\n')[1] } },

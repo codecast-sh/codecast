@@ -4,21 +4,24 @@
   "label": {
     "files": {
       "jx7g001": [
-        "@growth"
+        "@growth",
+        "stay"
       ],
       "jx7g002": [
         "@growth",
         "ct-111"
       ],
       "jx7g003": [
-        "@growth"
+        "@growth",
+        "stay"
       ],
       "jx7b001": [
         "@billing"
       ],
       "jx7b002": [
         "@billing",
-        "ct-213"
+        "ct-213",
+        "stay"
       ],
       "jx7b003": [
         "ct-212",
@@ -26,10 +29,12 @@
       ],
       "jx7m001": [
         "@mobile",
-        "ct-131"
+        "ct-131",
+        "stay"
       ],
       "jx7d001": [
-        "done"
+        "done",
+        "stay"
       ]
     },
     "keep": [
@@ -158,6 +163,94 @@
           "jx7p003"
         ],
         "out": "Session jx7p003 · Lisbon offsite logistics · Mara Okafor · /Users/mara · needs_input · 14 messages\n\n[1] Mara: Plan the Lisbon offsite for the four of us in November.\n[14] assistant: Two venues shortlisted; which week do you prefer?",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g001"
+        ],
+        "out": "Draft the launch thread for v2 pricing: Five posts drafted in launch/thread.md, linking the new pricing page.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g002"
+        ],
+        "out": "Fix pricing page copy and FAQ: Updated pricing.tsx and faq.mdx; checking the comparison table next.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g003"
+        ],
+        "out": "Newsletter #14: what shipped in September: Draft in newsletter/14.md, waiting on two screenshots.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b001"
+        ],
+        "out": "Stripe webhook retries failing with 409: The idempotency key is reused across events; fixing the handler in billing/webhooks.ts.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b002"
+        ],
+        "out": "Invoice PDF is missing the VAT number: Found the template field; the VAT id is not passed from the customer record yet.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b003"
+        ],
+        "out": "Partial refunds: wire the refund endpoint: POST /refunds now takes an amount; writing the Stripe partial refund call.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7m001"
+        ],
+        "out": "Android push notifications not arriving: The legacy FCM endpoint is gone; this needs the FCM v1 migration.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7d001"
+        ],
+        "out": "Bump Node to 22 in CI: Merged in #482, CI is green on Node 22. Nothing left to do.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p001"
+        ],
+        "out": "October investor update: Draft has revenue, burn and the three asks; you wanted to add the hiring note.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p002"
+        ],
+        "out": "Hiring plan: first support hire: Compared three options; you were leaning to a contractor until January.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p003"
+        ],
+        "out": "Lisbon offsite logistics: Two venues shortlisted; which week do you prefer?",
         "prefix": true
       },
       {
