@@ -34,7 +34,7 @@ Read \`cast org inputs\` and \`cast org health\`, the projects, the recent sessi
 
 ## Talk it through
 
-Hold everything you read, and say what the person needs to decide. A proposal holds one kind of work, so a review posts up to three, each with its own title and summary: the records, the structure (roles, reporting, areas, charters) and the goals. The records proposal takes every stale record you settled. A structure or goals proposal stays small enough to read whole, at most twelve changes; when the work warrants more, lead with what matters most and leave the rest for the next review. Your first message has three parts, and nothing else:
+Hold everything you read, and say what the person needs to decide. A proposal holds one kind of work, so a review posts one for each kind it has, each with its own title and summary: the records, the structure (roles, reporting, areas, charters), the goals and {person}'s session filings. The records proposal takes every stale record you settled. A structure or goals proposal stays small enough to read whole, at most twelve changes; when the work warrants more, lead with what matters most and leave the rest for the next review. Your first message has three parts, and nothing else:
 
 1. How far the records have fallen behind the work: how many are out of date (the inputs list them, each with its reason; open and in flight counts are load, not staleness), which of them you can show are finished (the records proposal), and what the rest are and who will sort them.
 2. The structure you propose, as its proposal, and the goals as theirs. Say in a few sentences what each role will actually do and why the work needs it. The card says what each change does, what was there before and why, so never write the changes out beside it.
@@ -115,7 +115,7 @@ function headOfPeopleReference(facts: HeadOfPeoplePromptFacts): string {
     compactJson(example),
     "```",
     ``,
-    `A proposal holds one kind of work, and propose refuses a spec that mixes them: records (plan_status, task_status, project_status, any number), structure (every other shape but the goals, at most 12 changes) or goals (the initiative shapes, at most 12). Every change carries \`rationale\`, and may carry \`evidence\` ([{ label, href? }]), \`expected_effect\` and \`risk\`. A ref is a short id or a title. The change shapes, where \`title\` on a record's change is its title as filed:`,
+    `A proposal holds one kind of work, and propose refuses a spec that mixes them: records (plan_status, task_status, project_status, any number), structure (every other shape but the goals and the filings, at most 12 changes), goals (the initiative shapes, at most 12) or session filings (file_session, any number). Every change carries \`rationale\`, and may carry \`evidence\` ([{ label, href? }]), \`expected_effect\` and \`risk\`. A ref is a short id or a title. The change shapes, where \`title\` on a record's change is its title as filed:`,
     `- plan_status: { plan, status: "done" | "abandoned" | "active", reason, title, project?: the project it is filed under }`,
     `- task_status: { task, status: "done" | "dropped" | "open" | "backlog", reason, title, plan?: the plan it sits under, project?: its project }; a task dropped under a plan the same proposal closes is refused, because the plan's close drops it`,
     `- project_status: { project, status: "paused" | "done" | "active", reason, title }`,
@@ -132,6 +132,7 @@ function headOfPeopleReference(facts: HeadOfPeoplePromptFacts): string {
     `- initiative_shape: { initiative, parent?: ref | null (null makes it the mission or a top level goal), metrics?: [{ name, target }] (replaces the list), why?, done_when?, milestones?, sources?, questions?: [text], decisions?: [text] (each list adds to the goal's record and replaces nothing), title }: where a goal that exists sits in the tree, how it is measured, and what its record says`,
     `- hire: { handle, template, version, digest, instance: a slug naming this hire, project: ref }: a role hired from a template; \`template\`, \`version\` and \`digest\` are that row's id, version and digest in the inputs' \`templates\`, and the role change of the same handle, with the project in its scope, sits beside it`,
     `- retire: { handle, reason? }`,
+    `- file_session: { session: its short id, title: its title, to: "@handle" | "ct-N" | "done" }: one of the person's sessions moved out of their inbox: under a role, onto a task it works, or closed as done; the inputs' \`sessions.loose\` lists the sessions that sit in the inbox with no role`,
   ].join("\n");
 }
 
