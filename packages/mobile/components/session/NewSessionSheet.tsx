@@ -613,10 +613,10 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           )}
 
           {/* The rest folds into one card: a row per choice, each opening its
-              own picker. The machine row appears only with two or more
-              machines: one machine is no choice at all. */}
+              own picker. The machine row shows even with one machine, so where
+              the session runs is always in view. */}
           <RNView style={modalStyles.card}>
-            {devices.length > 1 && (
+            {devices.length > 0 && (
               <SettingRow
                 label="Machine"
                 value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
