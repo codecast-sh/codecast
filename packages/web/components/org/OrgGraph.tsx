@@ -37,7 +37,7 @@ import { useZoomLevel, zoomLevelOf, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
-import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
+import { orgPersonReparentMakesCycle, orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
 import type { FlowMap, RoleFlow } from "./orgFlow";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
@@ -75,7 +75,7 @@ function nodeIdOfObject(nodes: readonly { id: string }[], o: OrgGraphObject | nu
 }
 
 export type OrgReparentRequest = {
-  subject: { kind: "session"; id: string; title: string } | { kind: "role"; id: string; title: string };
+  subject: { kind: "session" | "role" | "person"; id: string; title: string };
   target: OrgParentRef;
   targetTitle: string;
   /** Screen position of the drop, for the confirm popover. */
@@ -114,6 +114,9 @@ export type OrgGraphProps = {
   /** Which cards may be picked up. A card the page would refuse on drop is
    *  not draggable at all, so nothing ever snaps back silently. */
   canDrag?: (node: OrgLayoutNode) => boolean;
+  /** Whether a dragged person may go under this person: the halo lights only
+   *  where the move is allowed. Absent: anywhere the tree allows. */
+  canDropPerson?: (userId: string, managerId: string) => boolean;
   /** The Everything chart: drop a role's card on a person or another role to
    *  have it report there. Absent, its cards do not move. */
   onMoveRole?: (roleId: string, to: OrgParentRef, toTitle: string) => void;
@@ -159,7 +162,7 @@ export type OrgGraphProps = {
   product?: { sessionProject: Readonly<Record<string, string>> };
 };
 
-const DRAGGABLE = new Set(["session", "role"]);
+const DRAGGABLE = new Set(["session", "role", "person"]);
 
 // The chart's own gestures; chrome off swaps in STILL_FLOW_PROPS for them.
 const CHART_FLOW_PROPS = { nodesConnectable: false, elementsSelectable: true, panOnScroll: true, zoomOnDoubleClick: false } as const;
@@ -228,7 +231,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view: baseView, selectedId: pickedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople, ring = null, dimGoals = false, onOpenObject, onOpenChange, onTalk, onMoveRole, onToggleOpen, product } = props;
+  const { tree, view: baseView, selectedId: pickedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, canDropPerson, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople, ring = null, dimGoals = false, onOpenObject, onOpenChange, onTalk, onMoveRole, onToggleOpen, product } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -514,6 +517,14 @@ function OrgGraphInner(props: OrgGraphProps) {
         if (orgRoleReparentMakesCycle(tree, subject.role._id, ref)) return false;
         return !sameParent(subject.role.reports_to, ref);
       }
+      // A person goes under a person, never a role, and never under someone
+      // who already reports to them.
+      if (subject?.kind === "person") {
+        const p = subject.person;
+        if (ref.kind !== "user" || ref.user_id === p.user_id || ref.user_id === p.reports_to_user_id) return false;
+        if (orgPersonReparentMakesCycle(tree, p.user_id, ref.user_id)) return false;
+        return canDropPerson ? canDropPerson(p.user_id, ref.user_id) : true;
+      }
       return true;
     });
     if (candidates.length === 0) return null;
@@ -526,7 +537,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       return da - db;
     });
     return byId.get(candidates[0].id) ?? null;
-  }, [rf, byId, tree]);
+  }, [rf, byId, tree, canDropPerson]);
 
   /** On the Everything chart: the person or role card a dragged role would
    *  report to, never itself, one of its own reports, or where it already is. */
@@ -571,7 +582,7 @@ function OrgGraphInner(props: OrgGraphProps) {
     setDropTargetId(null);
     setDraggingId(null);
     const subject = byId.get(node.id);
-    if (!target || !subject || (subject.kind !== "session" && subject.kind !== "role")) {
+    if (!target || !subject || (subject.kind !== "session" && subject.kind !== "role" && subject.kind !== "person")) {
       // No target: snap back to the layout position.
       setNodes(flowNodes);
       return;
@@ -581,7 +592,8 @@ function OrgGraphInner(props: OrgGraphProps) {
     onReparentRequest({
       subject: subject.kind === "session"
         ? { kind: "session", id: subject.session._id, title: subject.session.title || subject.session.short_id }
-        : { kind: "role", id: subject.role._id, title: subject.role.name },
+        : subject.kind === "role" ? { kind: "role", id: subject.role._id, title: subject.role.name }
+        : { kind: "person", id: subject.person.user_id, title: subject.person.name },
       target: ref,
       targetTitle: titleOf(target),
       at: { x: me.clientX, y: me.clientY },
