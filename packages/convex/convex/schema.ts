@@ -5711,7 +5711,9 @@ export default defineSchema({
   // claimed by a daemon that runs that half, answered with a result or an error.
   mod_calls: defineTable({
     mod_id: v.id("mods"),
+    // The author: whose machines run the call. caller_id is who made it and reads the answer.
     user_id: v.id("users"),
+    caller_id: v.optional(v.id("users")),
     method: v.string(),
     args: v.any(),
     status: v.union(v.literal("pending"), v.literal("running"), v.literal("done"), v.literal("failed")),

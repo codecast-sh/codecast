@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { isTeamMember } from "./privacy";
 import type { Id } from "./_generated/dataModel";
 
 /**
@@ -26,6 +27,20 @@ export async function tokenUser(ctx: any, api_token: string): Promise<Id<"users"
 
 export async function ownMod(ctx: any, userId: Id<"users">, name: string) {
   return await ctx.db.query("mods").withIndex("by_user_name", (q: any) => q.eq("user_id", userId).eq("name", name)).first();
+}
+
+/** A team's shared mods other members wrote, when the viewer belongs to it: what a member runs beside their own. */
+export async function teamSharedMods(ctx: any, userId: Id<"users">, teamId: Id<"teams"> | undefined) {
+  if (!teamId || !(await isTeamMember(ctx, userId, teamId))) return [];
+  const rows = await ctx.db.query("mods").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
+  return rows.filter((r: any) => r.shared && String(r.user_id) !== String(userId));
+}
+
+/** The author, or a member of the team the mod is shared with: who may read its local half's values and call into it. */
+export async function reachesMod(ctx: any, userId: Id<"users">, mod: any): Promise<boolean> {
+  if (!mod) return false;
+  if (String(mod.user_id) === String(userId)) return true;
+  return !!mod.shared && !!mod.team_id && (await isTeamMember(ctx, userId, mod.team_id));
 }
 
 /** The daemon's view: every enabled mod of this user with a local half. */
@@ -155,12 +170,19 @@ export const cliFinishCall = mutation({
   },
 });
 
-/** Everything this viewer's local halves published. Feeds the store's modState collection. */
+/**
+ * Everything the local halves this viewer runs published: their own, and those
+ * of the team's shared mods, which the author's machines serve to every
+ * member. Feeds the store's modState collection.
+ */
 export const webState = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return await ctx.db.query("mod_state").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+    const mine = await ctx.db.query("mod_state").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+    const shared = (await teamSharedMods(ctx, userId, args.team_id)).filter((m: any) => m.local_code);
+    const theirs = await Promise.all(shared.map((m: any) => ctx.db.query("mod_state").withIndex("by_mod_key", (q: any) => q.eq("mod_id", m._id)).collect()));
+    return [...mine, ...theirs.flat()];
   },
 });

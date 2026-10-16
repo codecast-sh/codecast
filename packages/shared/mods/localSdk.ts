@@ -58,13 +58,18 @@ async function api(path: string, body: Record<string, unknown>): Promise<any> {
   return json;
 }
 
+/** Writes in flight, chained: one at a time, so two new keys never race each other's key-count check and a key's writes land in order. */
+let publishing: Promise<void> = Promise.resolve();
+
 function flushPublish(): void {
   publishTimer = null;
   const batch = [...pendingPublish.entries()];
   pendingPublish.clear();
-  for (const [key, value] of batch) {
-    api("/cli/mods/publish-state", { name: init!.name, key, value, device_name: init!.deviceName }).catch((err) => console.error(`publish ${key}: ${errorText(err)}`));
-  }
+  publishing = publishing.then(async () => {
+    for (const [key, value] of batch) {
+      await api("/cli/mods/publish-state", { name: init!.name, key, value, device_name: init!.deviceName }).catch((err) => console.error(`publish ${key}: ${errorText(err)}`));
+    }
+  });
 }
 
 async function run(argv: string[], opts: { cwd?: string; timeoutMs?: number } = {}): Promise<RunResult> {

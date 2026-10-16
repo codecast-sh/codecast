@@ -22,7 +22,7 @@ import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { OptionSheet } from '@/components/OptionSheet';
 import { SettingsSwitch } from '@/components/settings/SettingsUI';
 import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
-import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
+import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
@@ -32,7 +32,7 @@ import { Serif } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceDisplayName } from '@/components/DevicesSection';
-import { AgentLogoSvg } from '@/components/AgentLogo';
+import { AgentGlyph } from '@/components/AgentLogo';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { awaitSessionLanding, closeCompose, useCompose } from '@/lib/compose';
 
@@ -75,8 +75,8 @@ export function ComposeHost() {
 }
 
 // Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
-// has one. Tints the selected pill's border/background/label; the logo tile
-// itself is the shared AgentLogoSvg (same marks as web's AgentTypeIcon).
+// has one. Tints the selected pill's border/background/label; the logo
+// itself is the shared AgentGlyph (web AgentTypeIcon marks and colors).
 const agentAccents: Record<AgentClientId, string> = {
   claude: Theme.orange,
   codex: Theme.green,
@@ -159,12 +159,11 @@ function SettingRow({ label, value, dot, onPress }: {
 
 function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
   const Theme = useTheme();
-  const words = useModeWords();
   // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
   // in hosted mode or with no machine) until they pick one here. Where only
   // the hosted assistant can answer, the agent row is not offered at all.
   const defaultAgent = fromConvexAgentType(useDefaultAgentType());
-  const onlyHosted = useOnlyHostedAgent();
+  const onlyHosted = useOnlyHostedAgent() && false; // TEMP-VERIFY
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
@@ -482,7 +481,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
             activeOpacity={0.7}
           >
             <RNView style={{ opacity: active ? 1 : 0.55 }}>
-              <AgentLogoSvg agentType={a.id} size={18} />
+              <AgentGlyph agentType={a.id} size={16} />
             </RNView>
             <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
               {a.label}
@@ -496,19 +495,20 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <RNView style={modalStyles.header}>
-          <RNText style={[modalStyles.title, hostedSheet && modalStyles.hostedSheetTitle]}>{hostedSheet ? LANE_COPY.intro.sheetTitle : words.newConversation}</RNText>
-          <TouchableOpacity
-            onPress={onClose}
-            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-            accessibilityLabel="Close"
-          >
-            {/* The hosted sheet's close is a thin stroke, as its starters' arrows are. */}
-            {hostedSheet
-              ? <Ionicons name="close" size={24} color={Theme.textMuted} />
-              : <FontAwesome name="times" size={20} color={Theme.textMuted} />}
-          </TouchableOpacity>
-        </RNView>
+        {/* The sheet closes by swiping down; only the hosted sheet carries a
+            title, because its question is the prompt. */}
+        {hostedSheet ? (
+          <RNView style={modalStyles.header}>
+            <RNText style={[modalStyles.title, modalStyles.hostedSheetTitle]}>{LANE_COPY.intro.sheetTitle}</RNText>
+            <TouchableOpacity
+              onPress={onClose}
+              hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+              accessibilityLabel="Close"
+            >
+              <Ionicons name="close" size={24} color={Theme.textMuted} />
+            </TouchableOpacity>
+          </RNView>
+        ) : <RNView style={modalStyles.grabber} />}
 
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           {/* The hosted assistant needs no machine, folder, model or context:
@@ -730,6 +730,7 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.borderLight,
   },
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  grabber: { alignSelf: "center", width: 36, height: 5, borderRadius: 3, marginTop: 8, marginBottom: Spacing.sm, backgroundColor: Theme.borderLight },
   // The hosted sheet's question, in the reading face.
   hostedSheetTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
