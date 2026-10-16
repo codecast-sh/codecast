@@ -29,6 +29,7 @@
 //   Plus a TaskStop tool_use naming the task id → "stopped".
 
 import { AGENT_IDLE_GRACE_MS, type OpenTaskReport } from "@codecast/shared/contracts";
+import { agentStatusAt } from "../lib/liveness";
 
 export type MonitorStatus = "watching" | "ended" | "timed_out" | "stopped";
 
@@ -383,8 +384,9 @@ export function watchingMonitors(rows: MonitorRow[], now: number, agentStartedAt
 // daemon speaks for (no agent_status at all — an unmanaged import, a row the
 // liveness overlay no longer covers) can claim a live process only inside the
 // idle grace after its last activity. Any daemon-reported status short of
-// "stopped" is proof of a live process: the server coerces a lapsed heartbeat
-// to "stopped" (caught here) and a quiet-but-alive agent only to "idle".
+// "stopped" is proof of a live process: the trusted status (agentStatusAt)
+// turns a lapsed heartbeat into "stopped" (caught here) and a quiet-but-alive
+// agent only into "idle".
 //
 // Deliberately NOT the status-trust decay (isLivenessStale / STATUS_TRUST_TTL_MS).
 // That decay says "an active status this quiet can no longer be believed" —
@@ -395,12 +397,13 @@ export function watchingMonitors(rows: MonitorRow[], now: number, agentStartedAt
 // effectiveMonitorStatus over agent_started_at, and the harness itself writes
 // a "stopped" notice for the tasks a resume orphaned.
 export function isWatchHostDead(
-  session: { agent_status?: string | null; message_count?: number; updated_at?: number; inbox_killed_at?: number | null },
+  session: Parameters<typeof agentStatusAt>[0] & { message_count?: number; inbox_killed_at?: number | null },
   now: number,
 ): boolean {
   if (session.inbox_killed_at) return true;
-  if (session.agent_status === "stopped") return true;
-  if (session.agent_status) return false;
+  const status = agentStatusAt(session, now);
+  if (status === "stopped") return true;
+  if (status) return false;
   return (session.message_count ?? 0) > 0 && now - (session.updated_at || 0) >= AGENT_IDLE_GRACE_MS;
 }
 

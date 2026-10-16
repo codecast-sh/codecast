@@ -28,6 +28,7 @@ import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
+import { agentStatusAt } from "../../../lib/liveness";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
 import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
@@ -702,6 +703,11 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
   );
 }
 
+// What the recipient agent is doing now, the verdict its queue label reads.
+function recipientStatusOf(row: Parameters<typeof agentStatusAt>[0] | undefined): string | undefined {
+  return row ? agentStatusAt(row, Date.now()) : undefined;
+}
+
 export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, pendingReason, pendingScreen, pendingMessageId, recipientConversationId, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; pendingReason?: string; pendingScreen?: string; pendingMessageId?: string; recipientConversationId?: string; variant?: "session" | "teammate" | "agent"; color?: string; summary?: string; linkToConversationId?: string }) {
   const relativeTime = useRelativeTime();
   // A queued card is never a dead end: the person can send it again, cancel
@@ -730,9 +736,9 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
     }
   };
   const s = useTrackedStore([
-    st => pendingStatus && recipientConversationId ? st.sessions[recipientConversationId]?.agent_status : undefined,
+    st => pendingStatus && recipientConversationId ? recipientStatusOf(st.sessions[recipientConversationId]) : undefined,
   ]);
-  const recipientStatus = recipientConversationId ? s.sessions[recipientConversationId]?.agent_status : undefined;
+  const recipientStatus = recipientConversationId ? recipientStatusOf(s.sessions[recipientConversationId]) : undefined;
   const isPending = !!pendingStatus;
   const queueLabel = sessionMessageQueueLabel(pendingStatus, pendingReason, recipientStatus);
   // The SAME card renders an inter-agent teammate broadcast and a subagent's report to the

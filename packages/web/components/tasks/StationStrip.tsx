@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Eye, GitBranch } from "lucide-react";
 import { shortDay } from "../../lib/line/runReport";
-import { classifySession, useTrackedStore, type TaskItem } from "../../store/inboxStore";
+import { classifySession, sessionWorkState, useTrackedStore, type TaskItem } from "../../store/inboxStore";
 import { useTeamTaskStatusList, statusVisual } from "../../lib/taskStatuses";
 import { useWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -60,7 +60,7 @@ function HandLink({ conversationId, sessionId, fallbackTitle, isActive }: { conv
   const s = useTrackedStore([
     (st) => {
       const r = conversationId ? st.sessions[conversationId] : sessionId ? Object.values(st.sessions).find((x: any) => x.session_id === sessionId) : undefined;
-      return r ? `${r._id}|${r.title}|${r.is_idle ? 1 : 0}|${r.agent_status ?? ""}|${r.awaiting_input ? 1 : 0}|${r.is_unresponsive ? 1 : 0}|${r.is_connected ? 1 : 0}` : "";
+      return r ? `${r._id}|${r.title}|${sessionWorkState(r)}` : "";
     },
   ]);
   const row = conversationId ? s.sessions[conversationId] : sessionId ? Object.values(s.sessions).find((x: any) => x.session_id === sessionId) : undefined;

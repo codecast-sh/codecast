@@ -333,7 +333,7 @@ function NowRule({ y, slide }: { y: number; slide: boolean }) {
     <div
       aria-hidden
       data-undo-now
-      className={cn("absolute left-3 right-3 top-0 h-0 z-10 pointer-events-none", slide && "transition-transform duration-[160ms] ease-out motion-reduce:transition-none")}
+      className={cn("absolute left-3 right-3 top-0 h-0 z-10 pointer-events-none", slide && "transition-transform [transition-duration:160ms] ease-out motion-reduce:transition-none")}
       style={{ transform: `translateY(${y}px)` }}
     >
       <span className="absolute left-0 right-0 -top-px h-px" style={{ background: "linear-gradient(to right, var(--sol-cyan), color-mix(in srgb, var(--sol-cyan) 45%, transparent))" }} />

@@ -24,8 +24,8 @@
 #   --list-with-tests       print the ones that have a test suite
 #   --test                  install the mirror as one workspace and run every package's tests
 #
-#   --mirror <dir>     the mirror root: packages/, its workspace package.json,
-#                      vendor-manifest.txt and a copy of this script
+#   --mirror <dir>     the mirror root: packages/, its workspace package.json and
+#                      tsconfig.base.json, vendor-manifest.txt and a copy of this script
 #   --consumers <glob> package.json files whose @platform deps define the set (repeatable)
 #   --root <dir>       the app root that messages print paths relative to
 #                      (default: the git toplevel holding the mirror)
@@ -51,6 +51,8 @@
 # workspace links to mirrored siblings. --test installs there once, so a
 # package's @platform peer resolves to its mirrored sibling and never to npm,
 # and each package's tests run with the tooling the canonical repo gives them.
+# The root tsconfig.base.json every package's tsconfig extends is copied beside
+# it as-is, so tools reading a mirrored tsconfig (vite, esbuild) find its base.
 # The app's own lockfile never sees any of it.
 set -euo pipefail
 
@@ -98,6 +100,7 @@ ROOT="$(cd "${ROOT:-$(default_root)}" && pwd)"
 PKGS="$MIRROR/packages"
 MANIFEST="$MIRROR/vendor-manifest.txt"
 WORKSPACE="$MIRROR/package.json"
+BASE_TSCONFIG="$MIRROR/tsconfig.base.json"
 show() { echo "${1#"$ROOT"/}"; }
 PKGS_SHOW="$(show "$PKGS")"
 MANIFEST_SHOW="$(show "$MANIFEST")"
@@ -164,6 +167,7 @@ tree_hash() {
 # The manifest's name for the mirror's workspace package.json: no package can
 # be called this, so it never collides with one.
 WORKSPACE_ENTRY="(workspace)"
+BASE_TSCONFIG_ENTRY="(tsconfig.base)"
 file_hash() { "${SHA[@]}" < "$1" | cut -d' ' -f1; }
 
 # The mirror's workspace root, from the canonical root package.json: the
@@ -191,6 +195,8 @@ workspace_json() {
 write_workspace() {
   workspace_json > "$WORKSPACE.tmp" && mv -f "$WORKSPACE.tmp" "$WORKSPACE"
   echo "wrote $(show "$WORKSPACE")"
+  cp "$PLATFORM_DIR/tsconfig.base.json" "$BASE_TSCONFIG"
+  echo "wrote $(show "$BASE_TSCONFIG")"
 }
 
 write_manifest() {
@@ -201,6 +207,7 @@ write_manifest() {
       printf '%s  %s\n' "$(tree_hash "$PKGS/$p")" "$p"
     done
     if [[ -f "$WORKSPACE" ]]; then printf '%s  %s\n' "$(file_hash "$WORKSPACE")" "$WORKSPACE_ENTRY"; fi
+    if [[ -f "$BASE_TSCONFIG" ]]; then printf '%s  %s\n' "$(file_hash "$BASE_TSCONFIG")" "$BASE_TSCONFIG_ENTRY"; fi
   } > "$MANIFEST"
   echo "wrote $MANIFEST_SHOW"
 }
@@ -266,7 +273,7 @@ check_manifest() {
     echo "$MANIFEST_SHOW is missing: run $VENDOR_CMD --write-manifest"
     return 1
   fi
-  local listed; listed=$(awk -v w="$WORKSPACE_ENTRY" '!/^#/ && NF && $2 != w { print $2 }' "$MANIFEST" | sort -u)
+  local listed; listed=$(awk '!/^#/ && NF && $2 !~ /^\(/ { print $2 }' "$MANIFEST" | sort -u)
   if [[ "$listed" != "$packages" ]]; then
     echo "$MANIFEST_SHOW covers a different package set than the workspace deps:"
     diff <(echo "$listed") <(echo "$packages") | sed 's/^/  /' || true
@@ -282,16 +289,19 @@ check_manifest() {
     fi
   done
 
-  # 5. The workspace root is the one the last vendor run wrote. A mirror
-  # vendored before the mirror had one carries neither, and passes.
-  expected=$(awk -v w="$WORKSPACE_ENTRY" '!/^#/ && $2 == w { print $1 }' "$MANIFEST")
-  if [[ -n "$expected" && ! -f "$WORKSPACE" ]]; then
-    echo "$(show "$WORKSPACE") is missing: run $VENDOR_CMD"
-    drift=1
-  elif [[ -f "$WORKSPACE" && "$expected" != "$(file_hash "$WORKSPACE")" ]]; then
-    echo "$(show "$WORKSPACE") does not match the manifest: it was edited by hand, or written without updating $MANIFEST_SHOW"
-    drift=1
-  fi
+  # 5. The root files are the ones the last vendor run wrote. A mirror
+  # vendored before it had one carries neither the file nor its entry, and passes.
+  while read -r f entry; do
+    expected=$(awk -v w="$entry" '!/^#/ && $2 == w { print $1 }' "$MANIFEST")
+    if [[ -n "$expected" && ! -f "$f" ]]; then
+      echo "$(show "$f") is missing: run $VENDOR_CMD"
+      drift=1
+    elif [[ -f "$f" && "$expected" != "$(file_hash "$f")" ]]; then
+      echo "$(show "$f") does not match the manifest: it was edited by hand, or written without updating $MANIFEST_SHOW"
+      drift=1
+    fi
+  done <<<"$WORKSPACE $WORKSPACE_ENTRY
+$BASE_TSCONFIG $BASE_TSCONFIG_ENTRY"
 
   if [[ $drift -eq 0 ]]; then echo "vendored platform packages are internally consistent"; fi
   return $drift
@@ -359,6 +369,9 @@ if [[ "$MODE" == "--check" ]]; then
   done
   if ! cmp -s <(workspace_json) "$WORKSPACE" 2>/dev/null; then
     echo "$(show "$WORKSPACE") differs from what $PLATFORM_DIR/package.json makes of it"; drift=1
+  fi
+  if ! cmp -s "$PLATFORM_DIR/tsconfig.base.json" "$BASE_TSCONFIG"; then
+    echo "$(show "$BASE_TSCONFIG") differs from $PLATFORM_DIR/tsconfig.base.json"; drift=1
   fi
   if [[ -f "$CANONICAL_SCRIPT" && -f "$MIRROR_SCRIPT" ]] && ! cmp -s "$CANONICAL_SCRIPT" "$MIRROR_SCRIPT"; then
     echo "$(show "$MIRROR_SCRIPT") differs from $CANONICAL_SCRIPT"; drift=1

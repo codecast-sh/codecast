@@ -249,7 +249,7 @@ export function SessionCardView({
   // hasn't confirmed delivery yet (status not active). Clears the moment
   // status goes active or the server echoes the message.
   const isPendingSend = liveness.pendingSend;
-  const isPendingWorking = isPendingSend && !isAgentActive(session);
+  const isPendingWorking = isPendingSend && !isAgentActive(session, now);
   // The amber blocked chip drops the instant the user acts on the session —
   // see showsBlockedBadge. The clock keeps the stamp's TTL live so an expired
   // one brings the chip back on its own.

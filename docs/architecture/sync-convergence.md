@@ -368,8 +368,8 @@ message is a user turn (`last_role_is_user`, probed), the row's own heartbeat
 (`daemon_alive_until`, the user's daemons folded in), the instant its last producing
 child goes quiet (`producing_until`), and whether an AskUserQuestion poll is open
 (`auq_open`). Those six ship as facts (beside `child_asking`, the asking rollup's child
-half, C3), with the daemon's raw status (`agent_status_raw`) beside the overlay's
-coerced `agent_status`, and ONE shared function, `deriveLiveAt(facts, t)`,
+half, C3), with `agent_status` the daemon's raw status, never a coerced verdict
+(every reader derives the verdict, `trustedStatusAt`), and ONE shared function, `deriveLiveAt(facts, t)`,
 is the idle rule: the overlay runs it at its epoch to stamp the row, the replica runs it
 at its own clock to render, and the time flip runs it at each deadline on both sides.
 Every term is monotone in `t` for fixed facts, so it only ever moves a row toward

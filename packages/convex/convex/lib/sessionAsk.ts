@@ -401,7 +401,7 @@ export function selectAskContext(lines: AskLine[], opts: AskContextOptions): Ask
   // Mark what lies between two shown lines: lines skipped for the budget, or
   // the stretch of a long session that was never read at all.
   const skipped = (from: number, to: number) => {
-    if (from <= to) parts.push(`[… msg ${refOf(from)}–${refOf(to)} not shown …]`);
+    if (from <= to) parts.push(`[… ${to - from + 1} ${to === from ? "message" : "messages"} not shown …]`);
   };
   const gap = (from: number, to: number) => {
     const unread = opts.unreadAfter;
@@ -458,9 +458,9 @@ A session is work unfolding over time. People change their minds, agents try thi
 
 Weigh evidence by what it is. A tool call records what the agent attempted, not what happened; its result, and what the session did next, say whether it worked. The human's turns carry the decisions and corrections with the most authority. A compaction summary is the session's own recap of earlier work: use it to orient, but when exact values, wording or requirements matter, rely on the original lines if they are present.
 
-The excerpts are a selection from the session, and the gaps are marked. If they do not answer the question, say plainly that it is not found in this session, and name the closest lines if any are useful. Never fill a gap with a plausible guess.
+The excerpts are a selection from the session: the messages that bear most on the question, with the rest left out as marked gaps. The gaps are how every answer is read and need no mention of their own. If the excerpts do not answer the question, say plainly that it is not found in this session, and name the closest lines if any are useful. Never fill a gap with a plausible guess.
 
-Lead with the direct answer in a sentence or three. Then give the evidence as short bullets, each citing the session messages it rests on as msg <number> (or msg <from>–<to>), the number from that message's bracketed marker, so the reader can open them with cast read. Line numbers inside the excerpts, such as those in a file the agent read, are not message numbers. When the answer changed during the session, say so: what was said first and where, and what replaced it. When the prompt says a stretch of the session was not read, end the answer by naming that stretch, since whatever it holds could change the answer and the reader cannot tell otherwise. Plain text, no preamble.`;
+Lead with the direct answer in a sentence or three. Then give the evidence as short bullets, each citing the session messages it rests on as msg <number> (or msg <from>–<to>), the number from that message's bracketed marker, so the reader can open them with cast read. Every message number you write is a citation the reader will open, so write one only for a message whose text you were shown, and keep each range to the messages the point rests on. Line numbers inside the excerpts, such as those in a file the agent read, are not message numbers. When the answer changed during the session, say so: what was said first and where, and what replaced it. Plain text, no preamble.`;
 
 export interface AskPromptInput {
   question: string;
@@ -490,7 +490,7 @@ Excerpts, oldest first:
 ${excerpts}
 </${EXCERPTS_TAG}>
 
-Question again: ${input.question}${input.unread ? `\nThe messages between msg ${input.unread.headLines} and msg -${input.unread.tailLines} were not read; say so in the answer.` : ""}`;
+Question again: ${input.question}${input.unread ? `\nThe messages between msg ${input.unread.headLines} and msg -${input.unread.tailLines} were not read: end the answer by naming that stretch, since whatever it holds could change the answer and the reader cannot tell otherwise.` : ""}`;
 }
 
 // ── The two requests ──────────────────────────────────────────────────────

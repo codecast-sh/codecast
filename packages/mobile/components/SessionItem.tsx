@@ -6,6 +6,7 @@ import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
+import { agentStatusAt } from '@codecast/web/lib/liveness';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -36,7 +37,11 @@ export type SessionData = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending?: boolean;
+  // The daemon's raw status; the row's dot reads the verdict (agentStatusAt).
   agent_status?: string;
+  last_heartbeat?: number | null;
+  open_tasks?: unknown[] | null;
+  open_tasks_at?: number | null;
   is_deferred?: boolean;
   is_pinned?: boolean;
   last_user_message?: string | null;
@@ -142,12 +147,15 @@ export function agentColor(agentType: string): string {
   }
 }
 
-export function statusColor(session: SessionData): string {
+const isProducingStatus = (status: string | undefined) => status === "working" || status === "thinking";
+
+export function statusColor(session: SessionData, now = Date.now()): string {
   if (session.session_error) return Theme.red;
   if (session.is_unresponsive) return Theme.orange;
   if (session.has_pending) return Theme.accent;
-  if (session.agent_status === "working" || session.agent_status === "thinking") return Theme.greenBright;
-  if (session.agent_status === "permission_blocked") return Theme.orange;
+  const status = agentStatusAt(session, now);
+  if (isProducingStatus(status)) return Theme.greenBright;
+  if (status === "permission_blocked") return Theme.orange;
   if (session.is_idle) return Theme.textMuted0;
   if (session.is_connected) return Theme.greenBright;
   return Theme.textMuted0;
@@ -198,7 +206,7 @@ export function PulsingDot({ color }: { color: string }) {
 function StatusDot({ session }: { session: SessionData }) {
   const Theme = useTheme();
   const color = statusColor(session);
-  const isAnimated = session.agent_status === "working" || session.agent_status === "thinking" || session.has_pending;
+  const isAnimated = isProducingStatus(agentStatusAt(session, Date.now())) || session.has_pending;
   if (isAnimated) return <PulsingDot color={color} />;
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
