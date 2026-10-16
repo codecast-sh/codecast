@@ -23,7 +23,7 @@ test("request writes optimistic command state, never a false parked status; skip
 });
 
 test("store classifier and signatures reflect parking and wake while ignoring heartbeat churn", () => {
-  const base: any = { _id: 'a', agent_status: 'dormant', is_idle: true, message_count: 5, updated_at: 100 };
+  const base: any = { _id: 'a', agent_status: 'dormant', is_idle: true, message_count: 5, updated_at: Date.now(), last_heartbeat: Date.now() };
   const parked = { ...base, agent_status: 'hibernated', hibernated_at: 100 };
   expect(classifySession(parked).rest).toBe('dormant');
   expect(classifySession({ ...parked, session_error: 'Wake failed' }).rest).toBe('needs_input');

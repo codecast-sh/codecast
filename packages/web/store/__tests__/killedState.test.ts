@@ -66,7 +66,7 @@ describe("killed precedence in the shared classifiers", () => {
   it("a killed row is effectively idle even while its agent_status still says working", () => {
     expect(isSessionEffectivelyIdle(killed({ agent_status: "working", is_idle: false }))).toBe(true);
     // Control: the same row alive is not idle.
-    expect(isSessionEffectivelyIdle(session(REAL_A, { agent_status: "working", is_idle: false }))).toBe(false);
+    expect(isSessionEffectivelyIdle(session(REAL_A, { agent_status: "working", is_idle: false, updated_at: Date.now(), last_heartbeat: Date.now() }))).toBe(false);
   });
 
   it("a killed row is effectively idle even while a server-queued message is pending", () => {

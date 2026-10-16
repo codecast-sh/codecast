@@ -9,8 +9,10 @@ let seq = 0;
 const sess = (extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: `c${++seq}`,
   session_id: `s${seq}`,
-  // Fresh by default: within the liveness TTLs relative to NOW.
+  // Fresh by default: within the liveness TTLs relative to NOW, its daemon
+  // heartbeating.
   updated_at: NOW - 10_000,
+  last_heartbeat: NOW - 5_000,
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,

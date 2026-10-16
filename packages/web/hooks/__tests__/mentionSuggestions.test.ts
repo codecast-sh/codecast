@@ -51,7 +51,7 @@ describe("mention suggestions", () => {
       },
       plans: { p1: { _id: "p1", title: "Plan", workspace: "team:team", status: "active", goal: "Launch release", updated_at: 300 } },
       sessions: {
-        session1: { _id: "session1", title: "Session", team_id: "team", message_count: 8, agent_status: "working", agent_type: "codex", model: "gpt-6", updated_at: 400 },
+        session1: { _id: "session1", title: "Session", team_id: "team", message_count: 8, agent_status: "working", agent_type: "codex", model: "gpt-6", updated_at: 400, last_heartbeat: Date.now() },
         worker: { _id: "worker", title: "Worker", team_id: "team", is_subagent: true },
       },
       _lastViewedAt: { session1: 300 },
@@ -63,7 +63,9 @@ describe("mention suggestions", () => {
     expect(mentionItemMatches(result[4], "")).toBe(false);
     expect(mentionItemMatches(result[4], "worker")).toBe(true);
     expect(result[0]).toMatchObject({ label: "Live task", status: "done", priority: "high", updatedAt: 100, viewedAt: 500 });
-    expect(result[1]).toMatchObject({ status: "working", agentType: "codex", model: "gpt-6", messageCount: 8 });
+    // The status is the verdict, not the daemon's raw word: a "working" row
+    // quiet past the trust TTL while its daemon heartbeats reads idle.
+    expect(result[1]).toMatchObject({ status: "idle", agentType: "codex", model: "gpt-6", messageCount: 8 });
     expect(result[3].label).toBe("Live doc");
     expect(mentionItemMatches(result[2], "launch release")).toBe(true);
     expect(mentionItemMatches(result[1], "session")).toBe(true);
