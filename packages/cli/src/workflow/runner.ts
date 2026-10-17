@@ -1,7 +1,6 @@
 import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
-import { failReasonWords, handedBackWords, roundsOutWords } from "@codecast/shared/contracts/lineWords";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { countingSemaphore } from "../semaphore.js";
@@ -15,7 +14,7 @@ import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
-import { deadEndReason, profileFailure } from "./runFailure.js";
+import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
 import { claimRun, readCheckpoint, resumePoint, runnerStamp, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import presenterBase from "./presenter.md" with { type: "text" };
 import * as fs from "fs";
@@ -1267,79 +1266,6 @@ async function queueTaskDecision(options: RunOptions, question: string, note: st
   return !!result;
 }
 
-const quotedTitle = (context: Record<string, string>, fallback: string) => {
-  const title = context["task_title"] || fallback;
-  return `“${title.length > 80 ? `${title.slice(0, 79)}…` : title}”`;
-};
-
-// A fence that cannot be closed by the text inside it.
-function fenced(text: string): string {
-  const longest = Math.max(2, ...[...text.matchAll(/`{3,}/g)].map((m) => m[0].length));
-  const fence = "`".repeat(longest + 1);
-  return `${fence}text\n${text}\n${fence}`;
-}
-
-/**
- * What a station said when it failed, for a person reading cold. A check
- * that prints `{ steps: [{ name, ok, detail }], logs }` on stdout (line-
- * profile.md LP4) reads as a checklist; the rest of its output, the human
- * log, follows as a code block rather than prose a markdown renderer would
- * fold into one paragraph.
- */
-export function stationFailureMarkdown(context: Record<string, string>, nodeId: string): string {
-  let json: any;
-  try { json = JSON.parse(context[`${nodeId}.json`] ?? ""); } catch {}
-  const steps = Array.isArray(json?.steps) ? json.steps.filter((s: any) => typeof s?.name === "string") : [];
-  const list = steps.map((s: any) => `- ${s.ok === false ? "✗" : "✓"} ${s.name}${s.ok === false && s.detail ? `: ${String(s.detail)}` : ""}`).join("\n");
-  const raw = context[`${nodeId}.output`] || context["last_error"] || "";
-  const log = raw.split("\n").filter((line) => !(json && /^\s*\{/.test(line) && extractJsonOutput(line) !== undefined)).join("\n").trim();
-  const tail = log.length > 1500 ? `…${log.slice(-1500)}` : log;
-  return [list, tail ? fenced(tail) : "", typeof json?.logs === "string" ? `Logs: ${json.logs}` : ""].filter(Boolean).join("\n\n");
-}
-
-/**
- * The failure path's card (the-line.md L4): a question that says what
- * stopped the run and a body that shows why, from the station that sent the
- * last round back. The blocker comment is `summary` over the same body.
- */
-export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, taskId: string): { question: string; summary: string; body: string } {
-  const reason = state.failReason || "workflow failed";
-  const label = (id: string) => graph.nodes.get(id)?.label || id;
-  const title = quotedTitle(state.context, taskId);
-  const handoff = state.context["handoff"];
-  const at = state.currentNodeId;
-  const hand = at ? state.context[`${at}.session_id`] : undefined;
-  const footer = hand ? `\n\n${label(at)} session: ${hand}` : "";
-  if (handoff === "blocked" || handoff === "needs_context") {
-    const said = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
-    return {
-      question: `${label(at)} handed off ${handoff} on ${title}. What next?`,
-      summary: handedBackWords(label(at), handoff),
-      body: `${said}${footer}`.trim(),
-    };
-  }
-  if (/max_visits/.test(reason)) {
-    const visits = graph.nodes.get(at)?.max_visits ?? state.visitCounts[at] - 1;
-    // The station that routed into the visit over the limit: its edge label
-    // ("checks failed", "changes") is the reason the round was sent back.
-    const from = state.completed[state.completed.length - 1];
-    const sentBack = from && from !== at ? from : undefined;
-    const edgeLabel = sentBack ? graph.edges.find((e) => e.from === sentBack && e.to === at)?.label : undefined;
-    const says = sentBack ? `${label(sentBack)} still says “${edgeLabel || state.context[`${sentBack}.outcome`] || "failed"}”` : "";
-    const lead = `**${label(at)} ran ${visits} times, the most this line allows${sentBack ? `, and ${label(sentBack)} sent the last round back` : ""}.** The task is parked in review as blocked.`;
-    const detail = !sentBack ? ""
-      : state.context[`${sentBack}.outcome`] === "failure" ? `\n\n**${label(sentBack)}**\n\n${stationFailureMarkdown(state.context, sentBack)}`
-      : state.context["review_note"] ? `\n\n**${label(sentBack)}**\n\n${state.context["review_note"]}` : "";
-    return {
-      question: `${sentBack ? `${says} after` : "Stopped after"} ${visits} ${label(at)} rounds on ${title}. What next?`,
-      summary: roundsOutWords(label(at)),
-      body: `${lead}${detail}${footer}`,
-    };
-  }
-  const detail = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
-  return { question: `${title} failed. What next?`, summary: failReasonWords(reason, label), body: `${detail}${footer}`.trim() };
-}
-
 // A station's name, fixed at spawn: the node and what it works on, so the row
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
 // unattended preamble every station's prompt opens with. A station that
@@ -1812,7 +1738,12 @@ async function driveRun(
     }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    await returnTaskOnFailure(options, graph, state);
+    // The run is reported over first: that stops its hands. The blocker
+    // comment that follows goes to the session that owns the task, which is
+    // often the hand itself, and a hand still reading as working is woken by
+    // it: ct-59998's dead Implement hand was resumed by its own run's failure
+    // comment three seconds after the run ended, and kept working the task
+    // with no run waiting on it (2026-10-16).
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -1822,6 +1753,7 @@ async function driveRun(
         fail_reason: state.failReason,
       });
     }
+    await returnTaskOnFailure(options, graph, state);
     return "failed";
   }
   return "completed";
