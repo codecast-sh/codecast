@@ -1395,10 +1395,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           // rows have no selection), with the gesture's Undo toast.
           onToggleItem={hostedMode ? toggleTodoDone : undefined}
           paletteShortcuts={[
-            { key: "s", mode: "status", label: "status" },
-            { key: "p", mode: "priority", label: "priority" },
-            { key: "l", mode: "labels", label: "labels" },
-            { key: "a", mode: "assign", label: "assign" },
+            { action: "task.status", mode: "status", label: "status" },
+            { action: "task.priority", mode: "priority", label: "priority" },
+            { action: "task.labels", mode: "labels", label: "labels" },
+            { action: "task.assign", mode: "assign", label: "assign" },
           ]}
           paletteProps={{ teamMembers, currentUser: currentUser ?? undefined }}
           onItemEdit={handleTitleEdit}

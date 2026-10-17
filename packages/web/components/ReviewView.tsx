@@ -5,7 +5,7 @@ import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useShortcutContext, useShortcutAction } from "../shortcuts";
 import { useInboxStore } from "../store/inboxStore";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 
 interface FileDiff {
   path: string;
@@ -374,10 +374,10 @@ export function ReviewView({ prId }: { prId: string }) {
       {showShortcuts && (
         <div className="sol-header px-4 py-1.5 text-[10px] text-sol-text-dim">
           <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> files</span>
-            <span className="flex items-center gap-1"><KeyCap size="xs">C</KeyCap> comment</span>
+            <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><MenuKeyCaps action="review.nextFile" className="contents" /><span className="text-sol-text-dim/40">/</span><MenuKeyCaps action="review.prevFile" className="contents" /></span> files</span>
+            <span className="flex items-center gap-1"><MenuKeyCaps action="review.comment" className="contents" /> comment</span>
             <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
-              <KeyCap size="xs">?</KeyCap> all shortcuts
+              <MenuKeyCaps action="ui.toggleShortcutsHelp" className="contents" /> all shortcuts
             </button>
           </div>
         </div>

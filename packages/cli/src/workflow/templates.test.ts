@@ -893,7 +893,7 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
   });
 
-  test("a hand that never settles is killed and the task returns to open", async () => {
+  test("a hand that never settles fails its node, which ends the hand, and the task returns to open", async () => {
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
@@ -902,9 +902,9 @@ describe("line.cast offline run through the session path", () => {
       }
       return settle(url, init);
     }) as typeof fetch;
-    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ agentTimeout: 30 }));
+    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ agentTimeout: 30, runId: "run_1" }));
     expect(outcome).toBe("failed");
-    expect(calls.some((c) => c.route === "/cli/sessions/kill" && c.body.session === "conv_1")).toBe(true);
+    expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "failed" && c.body.session_id === "s1")).toBe(true);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
     expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("killed");
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);

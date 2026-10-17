@@ -1,4 +1,5 @@
 // /resources: every machine you run, what it spends, and which sessions spend it.
+import { useSearchParams } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { ResourceMonitor } from "../../components/resources/ResourceMonitor";
 import { useResourceMonitor } from "../../hooks/useResourceMonitor";
@@ -7,6 +8,7 @@ import { useResourceActions } from "../../hooks/useResourceActions";
 function ResourcesView() {
   const data = useResourceMonitor();
   const { actions, plans } = useResourceActions(data.sessions, data.plans, data.batches, data.now);
+  const offload = useSearchParams().get("offload") ?? undefined;
   return (
     <div className="h-full min-h-0">
       <ResourceMonitor
@@ -17,6 +19,7 @@ function ResourcesView() {
         plans={plans}
         runs={data.runs}
         actions={actions}
+        openOffload={offload}
       />
     </div>
   );

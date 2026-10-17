@@ -99,7 +99,7 @@ export function Workflow() {
   return (
     <Section
       id="workflows"
-      title="When one prompt is not enough: workflows"
+      title="Workflows for work with several steps"
       lede={<>A trigger runs one prompt. Some work has a shape: implement, verify, loop on failure, stop for a person before anything ships. A workflow writes that shape down as a DOT graph and binds it to a task or plan.</>}
     >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -125,7 +125,7 @@ export function Workflow() {
           An agent starts a run against a task or plan, and the Workflows page lists every run. Each agent node is its own session, streamed live with the graph&apos;s progress beside it. A gate holds the run and shows its choices as buttons in the dashboard, with a push notification to your phone and desktop. Your answer goes to the next node.
         </Body>
         <Body>
-          The split is simple. A trigger decides when something runs. A workflow decides what runs in what order, with the same steps and the same gates every time. Writing the graph and starting a run happen from a session or the CLI (<C>cast workflow run flow.cast --task ct-4102</C>); the app is where you watch it and answer its gates.
+          A trigger decides when something runs; a workflow decides what runs in what order, with the same steps and the same gates every time. Writing the graph and starting a run happen from a session or the CLI (<C>cast workflow run flow.cast --task ct-4102</C>); the app is where you watch it and answer its gates.
         </Body>
       </div>
     </Section>
