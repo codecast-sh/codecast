@@ -54,8 +54,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // next turn may reuse them.
   "store/inboxStore.ts:_membershipKey": "window",
   "store/inboxStore.ts:_membershipVal": "window",
-  "store/inboxStore.ts:_visibleKey": "window",
-  "store/inboxStore.ts:_visibleVal": "window",
+  "store/inboxStore.ts:_visibleMemo": "window",
   "store/inboxStore.ts:_pendingSendSigRef": "window",
   "store/inboxStore.ts:_pendingSendSig": "window",
   "store/inboxStore.ts:_placementDeadlineMemo": "window",
@@ -286,7 +285,7 @@ type InboxSlots = ReturnType<InboxBindings["get"]>;
 // The inboxStore window bindings declared as const collections: set() refills
 // them in place, and the store's own setter reassigns the rest. A binding
 // missing here is never restored, which realm.selftest's round trip catches.
-const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "retiredAckTs"] as const;
+const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "_visibleMemo", "retiredAckTs"] as const;
 
 // inboxStore exports its live window bindings; the copying lives here. A
 // snapshot copies the const collections and both levels of _heldOverlayFacts
@@ -317,8 +316,7 @@ function inboxStoreSeam(b: InboxBindings): SlotSeam {
       deferredDeletedSessions: new Set(),
       _membershipKey: null,
       _membershipVal: null,
-      _visibleKey: null,
-      _visibleVal: null,
+      _visibleMemo: new Map(),
       _pendingSendSigRef: undefined,
       _pendingSendSig: "",
       _placementDeadlineMemo: null,

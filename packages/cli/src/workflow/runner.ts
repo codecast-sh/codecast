@@ -1812,7 +1812,12 @@ async function driveRun(
     }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    await returnTaskOnFailure(options, graph, state);
+    // The run is reported over first: that stops its hands. The blocker
+    // comment that follows goes to the session that owns the task, which is
+    // often the hand itself, and a hand still reading as working is woken by
+    // it: ct-59998's dead Implement hand was resumed by its own run's failure
+    // comment three seconds after the run ended, and kept working the task
+    // with no run waiting on it (2026-10-16).
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -1822,6 +1827,7 @@ async function driveRun(
         fail_reason: state.failReason,
       });
     }
+    await returnTaskOnFailure(options, graph, state);
     return "failed";
   }
   return "completed";

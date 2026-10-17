@@ -2678,9 +2678,11 @@ const SYNC_ACTIVITY_FIELDS: ReadonlySet<string> = new Set(["sessions", "sessionD
 // Team scope stays server-gated (teamInboxIds): the replica lacks the
 // visibility inputs to select a team working set (C4), so the board renders
 // exactly what the team subscription reported, unpartitioned.
-let _visibleKey: unknown[] | null = null;
 type InboxVisible = { visibleSessions: Record<string, InboxSession>; oldCount: number; membership: InboxMembership | null; scoped: Record<string, InboxSession> };
-let _visibleVal: InboxVisible | null = null;
+// One memo per scope and focused row, like placeInboxRows' slots: the badges
+// ask for "mine" with no focus while the panel asks with the open row, and a
+// single shared slot made each evict the other and rescan every session.
+const _visibleMemo = new Map<string, { key: unknown[]; val: InboxVisible }>();
 export function computeInboxVisible(
   state: {
     sessions: Record<string, InboxSession>;
@@ -2712,8 +2714,10 @@ export function computeInboxVisible(
   // computeInboxMembership.
   const deps = opts?.deps ?? keepOverlayDeps(state.sessions, focusedId, state.pendingSessionCreates);
   const key = [state.sessions, scope, showOld, meId, teamInboxIds, focusedId, epoch, [...deps.pendingCreateIds].sort().join(",")];
-  if (_visibleKey && _visibleVal && key.length === _visibleKey.length && key.every((v, i) => Object.is(v, _visibleKey![i]))) {
-    return _visibleVal;
+  const slot = `${scope}\x1f${focusedId ?? ""}`;
+  const memo = _visibleMemo.get(slot);
+  if (memo && key.length === memo.key.length && key.every((v, i) => Object.is(v, memo.key[i]))) {
+    return memo.val;
   }
   const scoped = filterInboxScope(state.sessions, scope, meId, teamInboxIds, focusedId);
   let result: InboxVisible;
@@ -2723,8 +2727,8 @@ export function computeInboxVisible(
     const membership = computeInboxMembership(scoped, epoch);
     result = { ...partitionWorkingSet(scoped, membership, { showOld, deps }), membership, scoped };
   }
-  _visibleKey = key;
-  _visibleVal = result;
+  _visibleMemo.set(slot, { key, val: result });
+  if (_visibleMemo.size > PLACED_MEMO_CAP) _visibleMemo.delete(_visibleMemo.keys().next().value!);
   return result;
 }
 
@@ -3728,8 +3732,7 @@ export function __resetInboxPlacementCacheForTests(): void {
   _placementDeadlineMemo = null;
   _membershipKey = null;
   _membershipVal = null;
-  _visibleKey = null;
-  _visibleVal = null;
+  _visibleMemo.clear();
 }
 // Dev-only parity throttle (assertPlacementParity below).
 let _lastParityCheckAt = 0;
@@ -15459,12 +15462,12 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
+  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {
   get: windowBindings,
   set(s: ReturnType<typeof windowBindings>): void {
-    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
+    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
   },
 };
