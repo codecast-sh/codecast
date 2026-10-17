@@ -36,8 +36,8 @@ export function Scenarios() {
   return (
     <section className="py-16 sm:py-24" style={{ backgroundColor: SOL.base03 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-6">
-        <h2 className="font-mono text-2xl sm:text-3xl font-bold tracking-tight mb-3" style={{ color: SOL.base3 }}>From a question to the conversation that answers it</h2>
-        <p className="text-[16px] sm:text-[17px] leading-7 max-w-2xl mb-10" style={{ color: SOL.base1 }}>Most questions about code are questions about a past conversation. Each of these takes one or two steps.</p>
+        <h2 className="font-mono text-2xl sm:text-3xl font-bold tracking-tight mb-3" style={{ color: SOL.base3 }}>Example questions and how to answer them</h2>
+        <p className="text-[16px] sm:text-[17px] leading-7 max-w-2xl mb-10" style={{ color: SOL.base1 }}>Each of these is answered by a past conversation, in one or two steps.</p>
         <ol className="divide-y" style={{ borderColor: "#0a4352" }}>
           {SCENARIOS.map((s, i) => (
             <li key={s.when} className="grid gap-4 md:grid-cols-[48px_minmax(0,4fr)_minmax(0,5fr)_minmax(0,4fr)] md:gap-6 py-6" style={{ borderColor: "#0a4352" }}>
@@ -71,7 +71,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Does every commit get a Codecast-Session trailer?",
-    a: <>No. The trailer comes from codecast&apos;s hook in Claude Code, and only for sessions your team can see. Commits from other agents, or without a trailer, are matched by hash, then by subject and time. That match is good but not certain; a trailer is.</>,
+    a: <>No. The trailer comes from codecast&apos;s hook in Claude Code, and only for sessions your team can see. Commits from other agents, or without a trailer, are matched by hash, then by subject and time. That match is usually right but can be wrong, while a trailer names the session exactly.</>,
   },
   {
     q: "Does cast diff see every change?",
@@ -201,7 +201,7 @@ export function Closing() {
         )}
         <div id="install" className="grid gap-10 lg:grid-cols-2 items-center rounded-2xl px-6 py-10 sm:px-10 sm:py-12" style={{ backgroundColor: SOL.base03 }}>
           <div>
-            <h2 className="font-mono text-2xl sm:text-[32px] font-bold tracking-tight leading-tight mb-4" style={{ color: SOL.base3 }}>Your agents have been taking notes all along.</h2>
+            <h2 className="font-mono text-2xl sm:text-[32px] font-bold tracking-tight leading-tight mb-4" style={{ color: SOL.base3 }}>Get started with memory</h2>
             <p className="text-[16px] leading-7 mb-6" style={{ color: SOL.base1 }}>
               Install codecast and your sessions become searchable, askable and blameable. Answer yes to agent memory and your agents start reading it too.
             </p>

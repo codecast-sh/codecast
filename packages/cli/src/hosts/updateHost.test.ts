@@ -4,27 +4,33 @@ import { castForPrepare, hostCastPlatform } from "./updateHost.js";
 
 const host = { user: "ubuntu", address: "10.0.0.1", keyPath: "/k" } as RemoteHost;
 
-function run(laptop: string, current: string | null, update: () => any = () => ({ version: laptop, restart: { pid: "42" } })) {
-  const calls: Array<{ platform: string; restart: boolean }> = [];
+function run(latest: string | null, current: string | null, update: () => any = () => ({ version: latest, restart: { pid: "42" } })) {
+  const calls: Array<{ platform: string; restart: boolean; source?: string }> = [];
   const lines: string[] = [];
   const line = castForPrepare(host, "linux", (m) => lines.push(m), {
-    laptop: () => laptop,
+    latest: () => latest,
     read: () => current,
-    update: (_h, platform, opts) => { calls.push({ platform, restart: opts.restart }); return update(); },
+    update: (_h, platform, opts) => { calls.push({ platform, restart: opts.restart, source: opts.source }); return update(); },
   });
   return { line, calls, lines };
 }
 
-test("a host behind the laptop is updated and its daemon restarted onto the new build", () => {
+test("a host behind the latest release gets that release and its daemon restarted onto it", () => {
   const r = run("1.1.169", "1.1.160");
-  expect(r.calls).toEqual([{ platform: "linux", restart: true }]);
+  expect(r.calls).toEqual([{ platform: "linux", restart: true, source: undefined }]);
   expect(r.line).toBe("host cast updated to 1.1.169 and its daemon restarted onto it");
 });
 
-test("an equal or newer host is left alone: no downgrade, no flapping between worktrees at one version", () => {
+test("an equal or newer host is left alone: no downgrade of a host trying a newer checkout build", () => {
   expect(run("1.1.169", "1.1.169").calls).toEqual([]);
   expect(run("1.1.160", "1.1.169").calls).toEqual([]);
   expect(run("1.1.160", "1.1.169").line).toBe("cast 1.1.169 on the host");
+});
+
+test("an unreadable release changes nothing", () => {
+  const r = run(null, "1.1.160");
+  expect(r.calls).toEqual([]);
+  expect(r.line).toContain("could not be read");
 });
 
 test("a host with no cast gets one; a refused restart and a failed install are reported, never thrown", () => {
@@ -35,7 +41,7 @@ test("a host with no cast gets one; a refused restart and a failed install are r
 
 test("a Mac host is updated without a restart, which would end its sessions", () => {
   const calls: boolean[] = [];
-  castForPrepare(host, "darwin", () => {}, { laptop: () => "2.0.0", read: () => "1.0.0", update: (_h, _p, opts) => { calls.push(opts.restart); return { version: "2.0.0" }; } });
+  castForPrepare(host, "darwin", () => {}, { latest: () => "2.0.0", read: () => "1.0.0", update: (_h, _p, opts) => { calls.push(opts.restart); return { version: "2.0.0" }; } });
   expect(calls).toEqual([false]);
   expect(hostCastPlatform({ provider: "scaleway-mac" })).toBe("darwin");
   expect(hostCastPlatform({ platform: "darwin" })).toBe("darwin");

@@ -3,6 +3,7 @@
 // handlers, and <Surface> for a mount that is simply on or off.
 import { Fragment, createElement, useMemo, type ReactNode } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { makeCollectionSig } from "../store/wakeSig";
 import { isHostedUi, simpleModeAllowed } from "../components/simple/lanePaths";
 import type { LaneHint } from "../components/simple/laneBoot";
 import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
@@ -67,13 +68,12 @@ export function useAssistantScope(): { only: boolean; hosted: boolean; setEveryt
  *  name a conversation (an approval, a queue item). Re-renders only when the
  *  set changes, never on a heartbeat. */
 export function useAssistantConversationIds(): ReadonlySet<string> {
-  const sig = useInboxStore((s) => {
-    let ids = "";
-    for (const id in s.sessions) if (inAssistantScope(s.sessions[id]?.agent_type)) ids += `${id},`;
-    return ids;
-  });
-  return useMemo(() => new Set(sig.split(",").filter(Boolean)), [sig]);
+  const sig = useInboxStore((s) => assistantIdsSig(s.sessions));
+  return useMemo(() => new Set(sig.split("\n").filter(Boolean)), [sig]);
 }
+// Memoized by the collection and per row: the selector runs on every store
+// write, and a walk of every session there costs each write the whole cache.
+const assistantIdsSig = makeCollectionSig<{ _id: string; agent_type?: string }>((row) => (inAssistantScope(row?.agent_type) ? row._id : ""));
 
 function setAssistantScopeEverything(everything: boolean): void {
   useInboxStore.getState().updateClientUI({ hosted_inbox_everything: everything });

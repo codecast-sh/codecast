@@ -150,6 +150,8 @@ export const momentsTables = {
     /** Lines it filed and let go under, when scoped (`--lines`); absent for a run over every line. */
     lines: v.optional(v.array(v.string())),
     model: v.string(),
+    /** Where the call ran when not the API: subscription, on the Claude Code login of the machine that handed it in (charged no budget). */
+    backend: v.optional(v.literal("subscription")),
     cost_usd: v.number(),
     at: v.number(),
   })

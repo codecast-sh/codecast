@@ -21,23 +21,22 @@ export function TabGroupSection() {
   return (
     <Section
       id="your-chrome"
-      label="Cast"
-      title="Your Chrome, your logins. Agents get one tab group."
+      title="Agent tabs open in a Cast group in your own Chrome"
       lede={<>The codecast extension lets agent sessions open tabs in the Chrome you already use. Every agent tab opens in the background, inside a red <strong style={{ color: CAST_RED }}>Cast</strong> group. Your own tabs, windows and focus stay where you left them.</>}
     >
       <CastTabStrip />
 
       <div className="mt-12 grid md:grid-cols-2 gap-x-14 gap-y-9">
-        <Fact title="No clone, no copied cookies">
-          The agent uses the profile you are signed into. A dashboard behind SSO, a staging site, an admin panel: if your Chrome can open it, the agent can read it. Nothing syncs your profile anywhere.
+        <Fact title="It uses the Chrome profile you are signed into">
+          The agent uses the profile you are signed into, with no cloned profile or copied cookies. If your Chrome can open a page, such as a dashboard behind SSO, a staging site or an admin panel, the agent can read it. Nothing syncs your profile anywhere.
         </Fact>
-        <Fact title="Background tabs, always">
+        <Fact title="Agent tabs open in the background">
           <C>cast browser open</C> creates the tab directly at the URL, in the background. Your screen only changes when an agent runs <C>show</C>, which it does when you asked to see the page or must act in it.
         </Fact>
-        <Fact title="One tab per session, and it knows which">
+        <Fact title="One tab per session">
           <C>open</C> reuses the session&apos;s tab. <C>tabs</C> lists this session&apos;s tabs and <C>tabs --all</C> every agent&apos;s. Several agents can share one Chrome without stepping on each other.
         </Fact>
-        <Fact title="You can always see who is driving">
+        <Fact title="How to tell a tab is being driven">
           A driven page wears a thin red border (hidden in screenshots), the toolbar icon shows a <span className="font-mono text-[12px] font-bold px-1 rounded text-white" style={{ backgroundColor: CAST_RED }}>CAST</span> badge, and Chrome shows its own debugging banner while a tab is attached. <C>stop</C> closes the session&apos;s tab when the work is done.
         </Fact>
       </div>
@@ -67,7 +66,7 @@ export function CastTabStrip() {
       <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
         <div className="rounded-lg bg-white/70 px-4 py-3">
           <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
-          <div style={{ color: INK }}>Mail, a doc, a pull request. Never touched, never closed, never brought forward by an agent.</div>
+          <div style={{ color: INK }}>Mail, a doc, a pull request. An agent never touches, closes or brings forward these tabs.</div>
         </div>
         <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
           <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
@@ -112,11 +111,9 @@ export function RefsSection() {
   return (
     <Section
       id="refs"
-      label="#e7"
-      color={REF_BLUE}
       tone="sand"
-      title="Read the page as a list of things to press, then press one."
-      lede={<>From here down is the agent&apos;s side: commands it runs, so you never type them. A snapshot is the page&apos;s accessibility tree, cut down to what an agent can act on. Each element gets a ref like <C>#e7</C>, and every acting verb takes one. No pixel guessing, no brittle selectors. Hover a row to see what it points at.</>}
+      title="How an agent reads a page and acts on it"
+      lede={<>From here down is the agent&apos;s side: commands it runs, so you never type them. A snapshot is the page&apos;s accessibility tree, cut down to what an agent can act on. Each element gets a ref like <C>#e7</C>, and every acting verb takes one, so the agent does not guess at pixel positions or write fragile selectors. Hover a row to see what it points at.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-6 items-stretch">
         <TermShell label="cast browser snapshot -i -s main" bodyClassName="p-0">
@@ -154,7 +151,7 @@ export function RefsSection() {
         <Tip cmd="read" color={REF_BLUE}>The page as clean text, for &quot;what does this page say&quot;. <C>get text &lt;sel&gt;</C> reads one element.</Tip>
       </div>
       <p className="mt-6 text-[15px] leading-7 max-w-3xl" style={{ color: SOL.base01 }}>
-        Refs survive a re-render. Each snapshot records every ref&apos;s role, name and position among its namesakes, so when the page refreshes and <C>#e5</C> goes stale, cast finds the element at the same position again, the third &quot;Delete&quot; and not the first.
+        Refs survive a re-render. Each snapshot records every ref&apos;s role, name and position among its namesakes, so when the page refreshes and <C>#e5</C> goes stale, cast finds the element at the same position again, so the third &quot;Delete&quot; stays the third.
       </p>
     </Section>
   );
@@ -182,10 +179,8 @@ export function DoSection() {
   return (
     <Section
       id="do"
-      label="do"
-      color={SOL.green}
-      title="Five steps, one process."
-      lede={<>Every <C>cast</C> command spends one to three seconds starting up for about 85 ms of work in the browser. <C>cast browser do</C> runs a whole flow in one process, so an agent that can see three steps ahead pays for one start, not three.</>}
+      title="Running several steps in one command"
+      lede={<>Every <C>cast</C> command spends one to three seconds starting up for about 85 ms of work in the browser. <C>cast browser do</C> runs a whole flow in one process, so an agent that can see three steps ahead pays for one startup across all three.</>}
     >
       <div className="rounded-2xl p-5 sm:p-7" style={{ backgroundColor: "#fffaf0", border: "1px solid #eee3c6" }}>
         <TimelineRow label="five commands">
@@ -221,7 +216,7 @@ export function DoSection() {
           <li><Strong>A step without a ref</Strong> acts on whatever the last <C>find</C> matched, so a flow reads like instructions to a person.</li>
           <li><Strong>It stops at the first failing step</Strong> and reports what ran and what never did. <C>--keep-going</C> carries on past it.</li>
           <li><Strong>Each step&apos;s result shows in the conversation</Strong> as one row, with one screenshot at the end instead of a frame per step.</li>
-          <li><Strong>Waits are for the state you mean.</Strong> <C>wait --text</C>, <C>--url</C>, <C>--load</C> or <C>--fn</C>, not a fixed sleep.</li>
+          <li><Strong>Waits watch for a specific state</Strong> with <C>wait --text</C>, <C>--url</C>, <C>--load</C> or <C>--fn</C>, instead of sleeping for a fixed time.</li>
         </ul>
       </div>
     </Section>
@@ -259,10 +254,8 @@ export function EvidenceSection() {
   return (
     <Section
       id="evidence"
-      label="in the thread"
-      color={SOL.yellow}
-      title="What the agent saw ends up in the conversation."
-      lede="You should not have to ask an agent for proof. Screenshots render under the step that took them, and a failing step brings its own context."
+      title="Screenshots and errors in the conversation"
+      lede="Screenshots render under the step that took them, and a failing step comes back with its own context."
     >
       <div className="grid lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-8 items-start">
         {/* The conversation */}
@@ -306,10 +299,10 @@ export function EvidenceSection() {
           <Evidence title="The same page at another size" agent="viewport mobile">
             The agent can show you the page as a phone, a tablet or an exact size sees it, then put the tab back.
           </Evidence>
-          <Evidence title="Errors arrive with the failure">
-            A step that fails comes back with the page&apos;s console errors and failed requests, newest first, and a picture of what the screen showed. You see why without asking.
+          <Evidence title="Console errors and failed requests with each failure">
+            A step that fails comes back with the page&apos;s console errors and failed requests, newest first, and a picture of what the screen showed.
           </Evidence>
-          <Evidence title="Each row has its controls" >
+          <Evidence title="Controls on each row">
             <b style={{ color: INK }}>open tab</b> brings the agent&apos;s tab forward in your Chrome. <b style={{ color: INK }}>watch live</b> streams it into a pane beside the thread.
           </Evidence>
         </div>
@@ -387,7 +380,7 @@ const SCENARIOS: Scenario[] = [
     lines: [
       $(<>open https://admin.acme.dev/customers/4821</>),
       $(<>get text &quot;[role=main] section.plan&quot;</>),
-      <>{note("no token, no API client: your Chrome is already signed in")}</>,
+      <>{note("your Chrome is already signed in, so no token or API client is needed")}</>,
     ],
     lands: <>The text it read, quoted in the agent&apos;s answer. The visit is recorded on the machine&apos;s audit trail as one origin.</>,
   },
@@ -423,10 +416,8 @@ export function ScenariosSection() {
   return (
     <Section
       id="uses"
-      label="jobs"
-      color={SOL.cyan}
       tone="sand"
-      title="What agents reach for it to do."
+      title="What agents use the browser for"
       lede="Most of it is the work a person does in a browser after writing code: look at the result, read something behind a login, chase a bug report, check a phone layout."
     >
       <div className="grid lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)] gap-5 lg:gap-8 items-start">
@@ -471,10 +462,8 @@ export function WheelSection() {
   return (
     <Section
       id="wheel"
-      label="Take the wheel"
-      color={HUMAN_CYAN}
       tone="sand"
-      title="When a page needs a person, you step in without leaving the thread."
+      title="Taking over when a page needs a person"
       lede="Some pages are yours to handle: a sign-in, a two-factor prompt, a camera permission. The agent says so and waits. You sign in, in the same tab, and it carries on."
     >
       <div className="grid lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-8 items-start">
@@ -561,11 +550,9 @@ export function SafetySection() {
   return (
     <Section
       id="safety"
-      label="127.0.0.1"
-      color={SOL.violet}
       tone="dark"
-      title="It runs on your machine, and it keeps a record."
-      lede="Giving an agent your signed-in browser is a real grant. So the connection never leaves the machine, every site an agent lands on is written down, and a project can limit where agents may go at all."
+      title="Local connection, audit trail and allowlist"
+      lede="Your signed-in browser gives an agent a lot of access, so the connection never leaves the machine, every site an agent lands on is written down, and a project can limit where agents may go at all."
     >
       {/* The bridge diagram */}
       <div className="rounded-2xl p-5 sm:p-8" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
@@ -585,7 +572,7 @@ export function SafetySection() {
 
       <div className="mt-10 grid lg:grid-cols-2 gap-6 items-start [&>*]:min-w-0">
         <div>
-          <h3 className="font-mono font-bold text-[16px]" style={{ color: SOL.base2 }}>Every origin, recorded</h3>
+          <h3 className="font-mono font-bold text-[16px]" style={{ color: SOL.base2 }}>An audit trail of every origin</h3>
           <p className="mt-2 mb-4 text-[15px] leading-7" style={{ color: SOL.base1 }}>
             The audit trail is always on. It keeps origins, never full URLs, because paths and query strings carry tokens. A refused navigation is on the trail too. The app has no view of it yet; read it in a terminal.
           </p>
@@ -600,9 +587,9 @@ export function SafetySection() {
           </TermShell>
         </div>
         <div>
-          <h3 className="font-mono font-bold text-[16px]" style={{ color: SOL.base2 }}>An allowlist, when you want one</h3>
+          <h3 className="font-mono font-bold text-[16px]" style={{ color: SOL.base2 }}>An optional allowlist</h3>
           <p className="mt-2 mb-4 text-[15px] leading-7" style={{ color: SOL.base1 }}>
-            Off by default. Turn it on per project, or per machine with <C dark>browser_allow</C> in <C dark>~/.codecast/config.json</C>. An empty list allows nothing. A click or redirect that lands off the list is flagged, never silently allowed.
+            Off by default. Turn it on per project, or per machine with <C dark>browser_allow</C> in <C dark>~/.codecast/config.json</C>. An empty list allows nothing. A click or redirect that lands off the list is flagged.
           </p>
           <TermShell label=".codecast/workspace.toml" bodyClassName="px-4 py-3">
             <div style={{ color: SOL.base01 }}># agents in this repo may only browse these</div>
@@ -658,9 +645,7 @@ export function ElsewhereSection() {
   return (
     <Section
       id="elsewhere"
-      label="cloud"
-      color={SOL.magenta}
-      title="Sessions on a cloud host can borrow your sign-in."
+      title="Using your sign-ins from a cloud host"
       lede={<>A session on your cloud host has no Chrome of yours. When it needs a site you are signed in to, the agent asks your laptop to carry that one login across, over SSH, into the host&apos;s browser. There is no button for this; the agent does it.</>}
     >
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8 items-start [&>*]:min-w-0">
@@ -709,8 +694,8 @@ const REFERENCE: { group: string; color: string; rows: [string, string][] }[] = 
       ["click · hover · focus", "On a #eNN ref or a CSS selector"],
       ["type <ref> <text> [--submit]", "Type, then Enter"],
       ["fill · select · press", "Fields, dropdowns, keys"],
-      ["scroll · drag · upload", "The rest of the hands"],
-      ["wait --text|--url|--fn", "For the state you mean"],
+      ["scroll · drag · upload", "Scrolling, dragging, file uploads"],
+      ["wait --text|--url|--fn", "For text, a URL or a JavaScript condition"],
     ],
   },
   {
@@ -744,7 +729,7 @@ const REFERENCE: { group: string; color: string; rows: [string, string][] }[] = 
 
 export function ReferenceSection() {
   return (
-    <Section id="reference" label="for scripts" color={SOL.base01} tone="sand" title="For scripts and agents: every command." lede={<>Agents learn these from their instructions; you only need them to script it yourself. Every verb is <C>cast browser &lt;verb&gt;</C>, and <C>cast browser help &lt;verb&gt;</C> prints its flags.</>}>
+    <Section id="reference" tone="sand" title="Command reference" lede={<>Agents learn these from their instructions; you only need them to script it yourself. Every verb is <C>cast browser &lt;verb&gt;</C>, and <C>cast browser help &lt;verb&gt;</C> prints its flags.</>}>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-10">
         {REFERENCE.map((g) => (
           <div key={g.group}>
@@ -781,7 +766,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Why is it sometimes slow?",
-    a: <>Chrome throttles background tabs, and on a busy machine a hidden tab can go quiet for tens of seconds. Steps say what they are waiting on rather than hang silently. Restarting Chrome through codecast (<C>cast browser chrome restart</C>) adds the switch that keeps agent tabs at normal priority, and agents batch steps to cut the rest.</>,
+    a: <>Chrome throttles background tabs, and on a busy machine a hidden tab can go quiet for tens of seconds. Steps report what they are waiting on. Restarting Chrome through codecast (<C>cast browser chrome restart</C>) adds the switch that keeps agent tabs at normal priority, and agents batch steps to cut the rest.</>,
   },
   {
     q: "Can an agent read my other tabs?",
@@ -793,13 +778,13 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Is there a separate agent browser?",
-    a: <>Only if you explicitly ask for one. Your Chrome is the default every time, including before pairing and after restarts; a missing extension shows you a setup card, never a quiet switch to another browser.</>,
+    a: <>Only if you explicitly ask for one. Your Chrome is the default every time, including before pairing and after restarts; a missing extension shows you a setup card and does not switch to another browser.</>,
   },
 ];
 
 export function LimitsSection() {
   return (
-    <Section id="limits" label="limits" color={SOL.orange} title="What it does not do, and what it needs.">
+    <Section id="limits" title="Requirements and limits">
       <div className="divide-y rounded-2xl overflow-hidden" style={{ borderColor: "#eadfc2", border: "1px solid #eadfc2", backgroundColor: "#fffaf0" }}>
         {LIMITS.map((l, i) => (
           <details key={l.q} className="group px-5 sm:px-6 py-4" open={i < 2} style={{ borderColor: "#eadfc2" }}>

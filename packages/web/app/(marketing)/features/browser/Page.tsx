@@ -6,7 +6,7 @@ import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
 import { HeroStage } from "./HeroStage";
-import { BX_CSS, C, CAST_RED, GroupChip, INK } from "./kit";
+import { BX_CSS, C, CAST_RED, INK } from "./kit";
 import { Shot } from "../kit";
 import { DoSection, ElsewhereSection, EvidenceSection, LimitsSection, ReferenceSection, RefsSection, SafetySection, ScenariosSection, TabGroupSection, WheelSection } from "./Sections";
 
@@ -44,12 +44,8 @@ function Hero() {
       <div className="relative max-w-7xl mx-auto px-5 sm:px-8 pt-12 sm:pt-16 pb-6 sm:pb-8">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-10 lg:gap-16 items-end [&>*]:min-w-0">
         <div className="max-w-3xl">
-          <div className="bx-rise flex items-center gap-2.5 text-[13px] font-mono" style={{ ...rise(0), color: SOL.base01 }}>
-            <GroupChip label="Cast" />
-            <span>Browser</span>
-          </div>
-          <h1 className="bx-rise mt-5 font-mono font-bold text-[34px] sm:text-[46px] lg:text-[54px] leading-[1.06] tracking-[-0.04em] [text-wrap:balance]" style={{ ...rise(0.08), color: INK }}>
-            Your agents get a tab in the Chrome you are already signed in to.
+          <h1 className="bx-rise font-mono font-bold text-[34px] sm:text-[46px] lg:text-[54px] leading-[1.06] tracking-[-0.04em] [text-wrap:balance]" style={{ ...rise(0.08), color: INK }}>
+            Your agents get a tab in the Chrome you are already signed in to
           </h1>
           <p className="bx-rise mt-6 text-[16px] sm:text-[17.5px] leading-8 max-w-2xl" style={{ ...rise(0.16), color: SOL.base01 }}>
             Each agent session drives its own background tab in your real Chrome, inside a red Cast tab group. It reads the page as numbered refs, acts on them, and posts every screenshot, console error and failed request into the conversation. You keep working in your own tabs.
@@ -109,7 +105,7 @@ function Related() {
   return (
     <section style={{ backgroundColor: SOL.base3 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-20" style={{ borderTop: "1px solid #eee3c6" }}>
-        <h2 className="font-mono font-bold text-[22px] sm:text-[26px] tracking-tight" style={{ color: INK }}>Works with</h2>
+        <h2 className="font-mono font-bold text-[22px] sm:text-[26px] tracking-tight" style={{ color: INK }}>Related features</h2>
         <div className="mt-8 grid sm:grid-cols-2 gap-4">
           {items.map((f) => (
             <Link
@@ -136,7 +132,7 @@ function Closing() {
     <section style={{ backgroundColor: SOL.base2 }}>
       <div className="max-w-3xl mx-auto px-5 sm:px-8 py-20 sm:py-24 text-center">
         <h2 className="font-mono font-bold text-[28px] sm:text-[38px] leading-[1.12] tracking-[-0.03em] [text-wrap:balance]" style={{ color: INK }}>
-          Install codecast, add the extension, and your agents can see what your users see.
+          Get started with the browser
         </h2>
         <figure className="mt-10 max-w-md mx-auto">
           <Shot

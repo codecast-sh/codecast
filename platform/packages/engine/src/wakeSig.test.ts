@@ -31,6 +31,18 @@ describe("rowSigExcluding", () => {
     expect(rowSigExcluding(null, deny)).toBe("none");
     expect(rowSigExcluding(undefined, deny)).toBe("none");
   });
+
+  it("reads each row once per denylist and recomputes for a new row ref", () => {
+    let reads = 0;
+    const row = { _id: "a", get title() { reads++; return "x"; } };
+    const first = rowSigExcluding(row, deny);
+    expect(rowSigExcluding(row, deny)).toBe(first);
+    expect(reads).toBe(1);
+    rowSigExcluding(row, new Set(["_id"]));
+    expect(reads).toBe(2);
+    expect(rowSigExcluding({ ...row }, deny)).toBe(first);
+    expect(reads).toBe(3);
+  });
 });
 
 describe("makeCollectionSig", () => {

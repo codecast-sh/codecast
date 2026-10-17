@@ -24,5 +24,8 @@ export const machineResourceTables = {
   machine_resources: defineTable({
     user_id: v.id("users"), device_id: v.string(), received_at: v.number(),
     snapshot: resourceSnapshot, history: v.array(resourcePoint),
+    // The last overload notification for this machine (machineResources.overloadAlertDue):
+    // the incident it announced, so one incident rings once, and when.
+    overload_alert: v.optional(v.object({ since: v.number(), level: v.union(v.literal("elevated"), v.literal("critical")), at: v.number() })),
   }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]),
 };

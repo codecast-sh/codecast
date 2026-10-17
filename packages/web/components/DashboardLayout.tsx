@@ -28,7 +28,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Bot } from "lucide-react";
+import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { TriageBar } from "./triage/TriageBar";
@@ -52,6 +52,7 @@ import { LocalDeviceProbe } from "../hooks/useLocalDeviceId";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { useWallet } from "../hooks/useWallet";
 import { TopbarButton, TopbarChip, TopbarTray } from "./TopbarButton";
+import { NewMenu } from "./NewMenu";
 import { TopbarRow } from "./TopbarRow";
 import { PhoneCallStrip } from "./calls/PhoneCallStrip";
 import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
@@ -240,10 +241,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
         }}
         aria-label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
       >
-        {/* A glyph, not a light: the tray's lights are states (sync, a
-            fault), and this is a count of agents at work. Steady, because in
-            the tray only a fault pulses. */}
-        <Bot className="h-3.5 w-3.5 shrink-0 text-sol-green" />
+        {/* The count alone; the tooltip spells out what it counts. */}
         <span className="text-sol-text">{activeAgentCount}</span>
       </TopbarChip>
     </ShortcutTooltip>
@@ -863,8 +861,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // reachable here too without a separate eager-create path. Project can be empty
   // (the null-state ProjectSwitcher lets the user pick before sending).
   // `main`: always into the main view, never the session rail (a fresh
-  // launch, before the route has settled on the inbox).
-  const handleNewFullSession = useCallback((opts?: { main?: boolean }) => {
+  // launch, before the route has settled on the inbox). `landing`: the fresh
+  // launch's home screen, whose blank is not shown as a starting session.
+  const handleNewFullSession = useCallback((opts?: { main?: boolean; landing?: boolean }) => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     const store = useInboxStore.getState();
     // The selected conversation's agent carries over; the default
@@ -876,6 +875,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       gitRoot: gitRoot || path || undefined,
       deferCreate: true,
       reuse: true,
+      landing: opts?.landing,
       // Source project + agent from the LIVE stub at create time (not these
       // closure values) so a project/agent switch in NewSessionView before the
       // first send sticks — same contract as the compose popup.
@@ -896,7 +896,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useWatchEffect(() => {
     if (!clientStateInitialized || !freshHomeLaunchPending()) return;
     settleFreshHomeLaunch();
-    handleNewFullSession({ main: true });
+    handleNewFullSession({ main: true, landing: true });
   }, [clientStateInitialized, handleNewFullSession]);
 
   // Bridge for the Electron "New Session" affordances (the palette's "open full"
@@ -1329,9 +1329,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
           </>}
           search={
-            <ErrorBoundary name="GlobalSearch" level="inline">
-              <GlobalSearch />
-            </ErrorBoundary>
+            <>
+              <ErrorBoundary name="GlobalSearch" level="inline">
+                <GlobalSearch />
+              </ErrorBoundary>
+              {/* Making something pairs with finding it. */}
+              <ErrorBoundary name="NewMenu" level="inline">
+                <NewMenu />
+              </ErrorBoundary>
+            </>
           }
           status={<TopbarTray>
             {/* The sync light leads, the steady facts follow, and an alert
@@ -1358,22 +1364,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </Surface>
           </TopbarTray>}
           actions={<>
-            <ShortcutTooltip label={words.newConversation} action="session.create">
+            {/* Below sm the search slot, and the pill in it, fold away;
+                hosted mode keeps starting a conversation on the phone. */}
+            {hostedMode && (
               <TopbarButton
-                onClick={(e) => {
-                  handleNewFullSession();
-                  tipActions.whisper('session.create', e);
-                }}
+                onClick={() => handleNewFullSession()}
                 aria-label={words.newConversation}
-                // In hosted mode starting a conversation is the main thing,
-                // so the phone keeps it, as a ghost button in ink like its
-                // neighbours (globals.css [data-cc-compose]).
-                desktopOnly={!hostedMode}
+                className="sm:hidden"
                 data-cc-compose=""
               >
-                <Plus />
+                <SquarePen />
               </TopbarButton>
-            </ShortcutTooltip>
+            )}
             <ErrorBoundary name="HeaderPins" level="inline">
               <HeaderPins />
             </ErrorBoundary>

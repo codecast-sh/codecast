@@ -108,7 +108,7 @@ export function CommentFlow() {
       <Stage n="2" label="You choose what to send" foot={<>From the owner link, <strong style={{ color: SOL.base02 }}>Send all</strong> delivers every unsent comment as one message. Your own comments can go straight to the session, or post to the page without sending.</>}>
         <OwnerQueue />
       </Stage>
-      <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is marked as untrusted feedback, never as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
+      <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is labeled as untrusted feedback, and the agent is told not to treat it as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
         <SessionMessage />
       </Stage>
     </div>
@@ -121,7 +121,7 @@ export function Comments() {
       id="comments"
       n="03"
       tone="sand"
-      title="Readers comment on the page. You decide what reaches the agent."
+      title="Reader comments, and which ones reach the agent"
       lede={<>Anyone with the link can pin a comment to a sentence. Comments collect on the page as a discussion. Only the page&apos;s owner can send them into the session that published it, where the agent reads them, revises the file and publishes the next version to the same link.</>}
     >
       <CommentFlow />
@@ -129,7 +129,7 @@ export function Comments() {
       <div className="mt-14 grid lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] gap-8 items-start">
         <div className="min-w-0">
           <Shot src="/features/publish/page-discussion.webp" alt="A published test page with a comment pinned at 0:20 on its timeline, and the Discussion panel open: Pin on page, General note, and the comment Make the dock a touch wider, marked addressed in v3" width={1600} height={912} />
-          <Caption>A real page after the loop: the note is pinned to the moment it was about, and the panel marks it addressed in the version that fixed it.</Caption>
+          <Caption>A real page after one round of comments. The note is pinned to the moment it was about, and the panel marks it addressed in the version that fixed it.</Caption>
         </div>
         <div className="space-y-4">
           <Note>

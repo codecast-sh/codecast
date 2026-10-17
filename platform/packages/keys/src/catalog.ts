@@ -115,7 +115,17 @@ interface ParsedKey {
   key: string;
 }
 
+// Every keydown checks the event against every def, so a combo is parsed
+// once and the result reused: the set of combos is the catalog's, and fixed.
+const parsedCombos = new Map<string, ParsedKey>();
+
 function parseKeyCombo(combo: string): ParsedKey {
+  let parsed = parsedCombos.get(combo);
+  if (!parsed) parsedCombos.set(combo, (parsed = parseKeyComboUncached(combo)));
+  return parsed;
+}
+
+function parseKeyComboUncached(combo: string): ParsedKey {
   const parts = combo.toLowerCase().split('+');
   const result: ParsedKey = { ctrl: false, meta: false, alt: false, shift: false, key: '' };
   for (const part of parts) {

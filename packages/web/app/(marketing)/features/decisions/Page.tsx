@@ -24,7 +24,7 @@ function Related() {
   return (
     <section style={{ backgroundColor: SOL.base3 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-8 py-20">
-        <h2 className="font-mono font-bold text-[24px] sm:text-[28px] tracking-[-0.03em] mb-8" style={{ color: SOL.base03 }}>Works with</h2>
+        <h2 className="font-mono font-bold text-[24px] sm:text-[28px] tracking-[-0.03em] mb-8" style={{ color: SOL.base03 }}>Related features</h2>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {items.map(({ slug, why, f }) => (
             <Link key={slug} href={featureHref(slug)} className="group rounded-xl border p-5 transition-colors hover:bg-[rgba(238,232,213,.5)]" style={{ borderColor: LINE }}>
@@ -47,7 +47,7 @@ function Cta() {
       <div className="max-w-6xl mx-auto px-5 sm:px-8 py-20 sm:py-24 grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 items-center">
         <div>
           <h2 className="font-mono font-bold text-[28px] sm:text-[36px] leading-[1.12] tracking-[-0.03em]" style={{ color: SOL.base3 }}>
-            Let your agents ask. Answer when you sit down.
+            Get started with decisions
           </h2>
           <p className="mt-5 text-[16px] leading-7 max-w-lg" style={{ color: SOL.base1 }}>
             Install codecast, open <b style={{ color: SOL.base2 }}>Agent features</b> from your account menu and switch on <b style={{ color: SOL.base2 }}>Decision queue</b>. Your agents learn when to queue a choice and how to write the card, and the queue waits in <b style={{ color: SOL.base2 }}>Questions</b> on the web, the desktop app and your phone.

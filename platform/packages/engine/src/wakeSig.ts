@@ -45,11 +45,23 @@ export function stableRefId(o: object): number {
 
 // Single-row signature: every own field except the denied (churn) ones. Object
 // values fold in via stableRefId so a nested change still flips the signature.
+// Memoized by the row ref and the denylist: every subscriber re-reads its row's
+// signature on every store write, and a row the write did not touch keeps its
+// ref, so a list of N cards rebuilds one row's string per write, not N.
+const rowSigs = new WeakMap<ReadonlySet<string>, WeakMap<object, string>>();
 export function rowSigExcluding(
   row: Record<string, any> | null | undefined,
   deny: ReadonlySet<string>,
 ): string {
   if (!row) return "none";
+  let byRow = rowSigs.get(deny);
+  if (!byRow) rowSigs.set(deny, (byRow = new WeakMap()));
+  let sig = byRow.get(row);
+  if (sig === undefined) byRow.set(row, (sig = rowSigUncached(row, deny)));
+  return sig;
+}
+
+function rowSigUncached(row: Record<string, any>, deny: ReadonlySet<string>): string {
   let sig = "";
   for (const k in row) {
     if (deny.has(k)) continue;

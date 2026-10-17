@@ -76,6 +76,7 @@ import { closeTaskWithGuard } from "../../../lib/taskActions";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { DocDates } from "../../../components/DocDates";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
+import { matchesAction } from "../../../shortcuts";
 import { useFollowScroll } from "../../../hooks/useFollowSurface";
 
 const STATUS_OPTIONS = [
@@ -490,28 +491,28 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         stop();
         openCmd("root");
-      } else if (e.key === "s" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.status")) {
         stop();
         openCmd("status");
-      } else if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.priority")) {
         stop();
         openCmd("priority");
-      } else if (e.key === "l" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.labels")) {
         stop();
         openCmd("labels");
-      } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.blocker")) {
         stop();
         openCmd("blocker");
-      } else if (e.key === "t" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.parent")) {
         stop();
         openCmd("parent");
-      } else if (e.key === "k" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.related")) {
         stop();
         openCmd("related");
       } else if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
         stop();
         startEditTitle();
-      } else if (e.key === "Backspace" && !e.metaKey && !e.ctrlKey) {
+      } else if (matchesAction(e, "task.back")) {
         stop();
         router.push("/tasks");
       } else if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) {
