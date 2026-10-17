@@ -122,8 +122,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import * as net from "node:net";
-import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
-import { accountTokenFilePath, fleetStoreDir, fleetStoreEnabled } from "../src/ccAccounts.ts";
+import { NEUTRAL_SYSTEM, callArgs, callEnv, callReplies, isolatedEnv, loginToken, profileToken } from "../src/subscriptionCall.ts";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -243,33 +242,6 @@ if (readOnly && call) refuse("--read-only does not apply to --call: a call has n
 if (claudeMdFile && call) refuse("--claude-md does not apply to --call: a call carries no CLAUDE.md");
 if (claudeMdFile && !fs.existsSync(claudeMdFile)) refuse(`--claude-md: no such file ${claudeMdFile}`);
 
-/** A saved profile's setup token (`cast accounts token <name>`): a fixed sign-in
- *  in a 0600 env file, so a run can spend that account's window while the
- *  machine's login stays untouched. `--account <profile>` picks it; the token
- *  still reaches the child through its environment only. */
-function profileToken(name: string): string {
-  const file = accountTokenFilePath(name);
-  if (!fs.existsSync(file)) throw new Error(`profile ${name} has no setup token; mint one with: cast accounts token ${name}`);
-  const m = fs.readFileSync(file, "utf8").match(/CLAUDE_CODE_OAUTH_TOKEN=['"]?([^'"\s]+)/);
-  if (!m) throw new Error(`no CLAUDE_CODE_OAUTH_TOKEN in ${file}`);
-  return m[1];
-}
-/** The login a run spends: the fleet store's item, which the daemon rewrites
- *  on every account switch, then the machine item (or the scoped one when this
- *  shell runs under a config dir) for a machine without a fleet store. */
-function loginToken(): string {
-  const items = [...(fleetStoreEnabled() ? ccKeychainReadItems(fleetStoreDir()) : []), ...ccKeychainReadItems()];
-  for (const item of items) {
-    const r = spawnSync("security", ccKeychainReadArgs(item), { encoding: "utf8" });
-    if (r.status !== 0 || !r.stdout.trim()) continue;
-    try {
-      const tok = JSON.parse(r.stdout.trim())?.claudeAiOauth?.accessToken;
-      if (tok) return tok;
-    } catch { /* not this item */ }
-  }
-  throw new Error("no Claude Code login in the keychain or the fleet store; run `claude` once on this machine, or pass --account <profile>");
-}
-
 fs.mkdirSync(runDir, { recursive: true });
 // One run per run dir. A run started over a live one deletes the live one's
 // config dir and env file, and that agent goes on with no guard first on its
@@ -296,13 +268,13 @@ const isolation = call ? null : "sandbox-exec";
 
 fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation, claudeMd: claudeMdFile ?? null, cwd: agentCwd ?? null, readOnly }, null, 1) + "\n");
 
-// CLAUDE_CODE_MAX_OUTPUT_TOKENS reaches the child only from --max-output-tokens,
-// never inherited, so args.json says every cap the run had.
-const DROP = new Set(["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODECAST_LAUNCH_TOKEN", "CODECAST_SESSION_ID", "TMUX", "TMUX_PANE", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"]);
-const env: Record<string, string> = {};
-for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !DROP.has(k)) env[k] = v;
-env.CLAUDE_CONFIG_DIR = configDir;
-env.CLAUDE_CODE_OAUTH_TOKEN = arg("account") ? profileToken(arg("account")!) : loginToken();
+// The child env (src/subscriptionCall.ts isolatedEnv): none of the launching
+// session's identity, the login as CLAUDE_CODE_OAUTH_TOKEN alone, and
+// CLAUDE_CODE_MAX_OUTPUT_TOKENS only from --max-output-tokens, never
+// inherited, so args.json says every cap the run had. A call carries no model
+// key either: claude bills an ANTHROPIC_API_KEY ahead of the login. An agent
+// run keeps the shell's keys, since what it replays may need them.
+const env = isolatedEnv({ configDir, token: arg("account") ? profileToken(arg("account")!) : loginToken(), stripModelKeys: call, ...(maxOutputTokens ? { maxOutputTokens: Number(maxOutputTokens) } : {}) });
 env.CODECAST_DIR = noCast;
 env.RUN_DIR = runDir;
 if (serveDir) env.DRY_RUN_SERVE_DIR = serveDir;
@@ -320,7 +292,6 @@ env.CLAUDE_ENV_FILE = envFile;
 // (src/main.ts), so no call leaves the served world whatever PATH it took.
 env.DRY_RUN_GUARD = path.join(guardDir, "cast");
 env.DRY_RUN_EMPTY_CODECAST_DIR = noCast;
-if (maxOutputTokens) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOutputTokens;
 if (sandbox) Object.assign(env, sandbox.env);
 
 /**
@@ -418,7 +389,7 @@ if (guardGap) { fs.rmSync(pidFile, { force: true }); refuse(`the dry run's guard
 // prompt and three short reminders (environment, model, date) before the
 // prompt, about 175 input tokens (measured 2026-10-01 on 2.1.286).
 // CLAUDE_CODE_SIMPLE would drop them but refuses OAuth.
-if (call) Object.assign(env, { CLAUDE_CODE_DISABLE_THINKING: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_ATTACHMENTS: "1" });
+if (call) Object.assign(env, callEnv(false));
 
 const started = Date.now();
 
@@ -444,26 +415,6 @@ function watchChild(pid: number | undefined) {
   return w;
 }
 
-/** The system prompt of a --call run with no --system file: prod calls without
- *  a system prompt send none, and claude always sends one, so it is one short
- *  neutral line rather than Claude Code's own. */
-const NEUTRAL_SYSTEM = "Follow the user's instructions.";
-
-/** Each model response of a --call run, folded from its partial-message
- *  stream events: the text, stop_reason and usage the API returned. */
-function callReplies(events: any[]): { text: string; stop_reason: string | null; usage: Record<string, unknown> }[] {
-  const replies: { text: string; stop_reason: string | null; usage: Record<string, unknown> }[] = [];
-  for (const d of events) {
-    const e = d.type === "stream_event" ? d.event : undefined;
-    if (e?.type === "message_start") replies.push({ text: "", stop_reason: null, usage: { ...e.message?.usage } });
-    const r = replies[replies.length - 1];
-    if (!r) continue;
-    if (e?.type === "content_block_delta" && e.delta?.type === "text_delta") r.text += e.delta.text;
-    if (e?.type === "message_delta") { r.stop_reason = e.delta?.stop_reason ?? null; Object.assign(r.usage, e.usage); }
-  }
-  return replies;
-}
-
 /** One turn of the run: the opening (the prompt file on stdin as the whole
  *  user message, in --call mode as in an agent run), or a reply resumed into
  *  the same session (`promptText`). Writes <name>.json and <name>.txt;
@@ -474,21 +425,20 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
     const out = fs.openSync(streamPath, "w");
     const err = fs.openSync(path.join(runDir, name === "out" ? "err.txt" : `${name}.err.txt`), "w");
     const stdin = promptText === undefined ? fs.openSync(promptFile, "r") : "ignore";
+    // A call's flags are the subscription call's own (src/subscriptionCall.ts callArgs).
+    // --strict-mcp-config in an agent run too: a .mcp.json in any parent of the run dir
+    // (the home folder's, say) otherwise starts its servers inside every rep.
     const turn = call
-      ? ["-p", "--tools", "", ...(systemFile ? ["--system-prompt-file", systemFile] : ["--system-prompt", NEUTRAL_SYSTEM]), "--strict-mcp-config", "--disable-slash-commands"]
-      // --strict-mcp-config here too: a .mcp.json in any parent of the run dir
-      // (the home folder's, say) otherwise starts its servers inside every rep.
-      : [...(resume ? ["--resume", resume] : []), "-p", ...(promptText === undefined ? [] : [promptText]), "--allowedTools", ...tools, "--dangerously-skip-permissions", "--strict-mcp-config"];
+      ? callArgs({ model: model!, ...(systemFile ? { systemFile } : { systemText: NEUTRAL_SYSTEM }) })
+      : [
+          "--setting-sources", claudeMdFile ? "user,project" : "project",
+          ...(resume ? ["--resume", resume] : []), "-p", ...(promptText === undefined ? [] : [promptText]), "--allowedTools", ...tools, "--dangerously-skip-permissions", "--strict-mcp-config",
+          "--max-turns", maxTurns,
+          "--model", model!,
+          "--output-format", "stream-json", "--verbose",
+        ];
     const command = [...(sandbox?.prefix ?? []), "claude"];
-    const child = spawn(command[0], [
-      ...command.slice(1),
-      "--setting-sources", claudeMdFile ? "user,project" : "project",
-      ...turn,
-      "--max-turns", maxTurns,
-      "--model", model!,
-      "--output-format", "stream-json", "--verbose",
-      ...(call ? ["--include-partial-messages"] : []),
-    ], { cwd: agentCwd ?? runDir, env, stdio: [stdin, out, err], detached: true });
+    const child = spawn(command[0], [...command.slice(1), ...turn], { cwd: agentCwd ?? runDir, env, stdio: [stdin, out, err], detached: true });
     const watchdog = watchChild(child.pid);
     liveChild = child.pid ?? null;
     child.on("exit", (exitCode) => {

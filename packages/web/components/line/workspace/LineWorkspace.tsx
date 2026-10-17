@@ -20,7 +20,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useStageWide } from "../../../hooks/useStageWide";
-import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../../shortcuts";
+import { hasOpenModal, useShortcutAction, useShortcutContext, withShortcut } from "../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import { lineSettingsHref } from "../../../lib/lineSettings";
 import { lineProjectParam } from "../../../lib/line/lineStations";
@@ -280,7 +280,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
             : <ProcessPicker picks={picks} drawn={model.graphKey} here={here} projectTitle={project?.title ?? null} onPick={(k) => k && pickProcess(k, !!projectId && !pinned && !here.has(k))} />)}
           {!embedded && scoped && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
           <div className="lw-head-right">
-            <Link href={settingsHref} className="lw-iconbtn" aria-label="Line settings" aria-current={settings ? "page" : undefined} title="Settings (,)" data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
+            <Link href={settingsHref} className="lw-iconbtn" aria-label="Line settings" aria-current={settings ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
           </div>
         </header>
 

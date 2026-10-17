@@ -16,7 +16,7 @@ import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPla
 import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession } from "./types";
-import { SPREAD_CEILING, assignDestinations, loadShift } from "../../lib/resourceOffload";
+import { SPREAD_CEILING, assignDestinations, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
 
 const movable = (r: OffloadCandidate["perDestination"][string] | undefined) => r?.readiness === "ready" || r?.readiness === "preflight_required";
@@ -95,73 +95,55 @@ function LoadBar({ label, before, after }: { label: string; before?: number; aft
 /** `destinationId` is set only when the user sent this one session somewhere other than the batch. */
 type Choice = { checked: boolean; destinationId?: string };
 
-function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void }) {
-  const outside = c.stops.filter((p) => p.detached);
-  return (
-    <label className={cn("flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-sol-bg-highlight/40", !checked && "opacity-55")} data-candidate={c.sessionId}>
-      <input
-        type="checkbox"
-        aria-label={`Move ${title}`}
-        className="h-4 w-4 shrink-0 accent-[var(--sol-cyan,#2aa198)]"
-        checked={checked}
-        onChange={(e) => onCheck(e.target.checked)}
-      />
-      <span className="min-w-[6rem] flex-1">
-        <span className="block truncate text-[13px] text-sol-text">{title}</span>
-        {outside.length > 0 && (
-          <span className="block truncate text-[10px] text-sol-orange" title={`Also stops what it left running outside its process tree: ${namedStops(outside, 20)}`}>
-            also stops {outside.length} outside its tree
-          </span>
-        )}
-      </span>
-      {c.disruption === "mid_turn" && <span className="shrink-0 text-[10px] text-sol-yellow">working</span>}
-      {elsewhere && <span className="inline-flex min-w-0 max-w-[7rem] shrink items-center gap-1 text-[10px] text-sol-text-muted" title={elsewhere.name}>{destIcon(elsewhere)}<span className="truncate">{elsewhere.name}</span></span>}
-      <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">
-        {[c.relief.cpu !== undefined ? fmtCpu(c.relief.cpu) : undefined, c.relief.rssHigh !== undefined ? fmtBytes(c.relief.rssHigh) : undefined].filter(Boolean).join(" · ")}
-      </span>
-    </label>
-  );
+const movableHere = (plan: OffloadPlan) => plan.candidates.filter((c) => plan.destinations.some((d) => movable(c.perDestination[d.deviceId])));
+const round5 = (n: number) => Math.round(n / 5) * 5;
+
+/**
+ * Where the dial starts. Under pressure: enough of the movable load to bring
+ * the hottest measure back to about 70%, all of it when that is not enough.
+ * Otherwise half.
+ */
+function startingPercent(plan: OffloadPlan): number {
+  const sample = plan.sourceSample;
+  const peak = Math.max(sample.cpuPercent ?? 0, memoryUsed(sample) / Math.max(sample.memoryTotal, 1) * 100);
+  if (!plan.incident || peak <= 70) return 50;
+  const movableShare = movableHere(plan).reduce((n, c) => n + loadShareOf(c, sample), 0);
+  if (movableShare <= 0) return 100;
+  return Math.min(100, Math.max(10, Math.ceil((((peak - 70) / peak) / movableShare) * 20) * 5));
 }
 
-function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
-  c: OffloadCandidate; session?: ResourceSession; plan: OffloadPlan; destinationId?: string; onDestination: (id: string) => void;
-}) {
-  const dest = destinationId ? c.perDestination[destinationId] : undefined;
+const cores = (cpu: number) => `${(cpu / 100).toFixed(cpu >= 1000 ? 0 : 1)} cores`;
+
+/** The dial: how much of the load the movable sessions carry to move off, and what that frees. */
+function LoadDial({ value, count, freed, onChange }: { value: number; count: number; freed: { cpu?: number; rss: number }; onChange: (n: number) => void }) {
+  const fill = { background: `linear-gradient(to right, var(--sol-cyan) ${value}%, color-mix(in srgb, var(--sol-border) 25%, transparent) ${value}%)` };
   return (
-    <div className="space-y-1">
-      <div className="text-sol-text-secondary">{session?.title ?? c.sessionId}</div>
-      <div>{[session?.shortId, projectName(session?.projectPath), c.reason].filter(Boolean).join(" · ")}</div>
-      {dest?.notes?.map((n) => <div key={n} className="text-sol-text-dim">{n}</div>)}
-      {dest?.passed && dest.passed.length > 0 && (
-        <div className="flex gap-1.5"><Check className="mt-px h-3 w-3 shrink-0 text-sol-green" />Checked: {dest.passed.join("; ")}</div>
-      )}
-      {c.stops.length > 0 && <div>Stops here: {namedStops(c.stops, 8)}</div>}
-      {c.staysLocal.length > 0 && <div>Stays here: {c.staysLocal.map((s) => s.label).join(", ")}</div>}
-      {plan.destinations.length > 1 && (
-        <div className="flex flex-wrap gap-1 pt-0.5" role="radiogroup" aria-label="Destination">
-          {plan.destinations.map((d) => {
-            const r = c.perDestination[d.deviceId];
-            const picked = destinationId === d.deviceId;
-            return (
-              <button
-                key={d.deviceId}
-                type="button"
-                role="radio"
-                aria-checked={picked}
-                disabled={!movable(r)}
-                title={!movable(r) ? r?.blockers.join("\n") : undefined}
-                onClick={() => onDestination(d.deviceId)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] disabled:cursor-not-allowed disabled:opacity-40",
-                  picked ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 hover:text-sol-text",
-                )}
-              >
-                {destIcon(d)}{d.name}
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div className="space-y-2 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-dial>
+      <div className="flex items-baseline gap-2 text-[11px]">
+        <span className="text-sol-text-dim">Move off</span>
+        <span className="text-[20px] font-semibold tabular-nums leading-none text-sol-text">{value}%</span>
+        <span className="text-sol-text-dim">of session load</span>
+        <span className="ml-auto tabular-nums text-sol-text-muted">
+          {count === 0 ? "nothing" : [plural(count, "session"), freed.cpu !== undefined ? cores(freed.cpu) : undefined, fmtBytes(freed.rss)].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        aria-label="Share of session load to move off"
+        aria-valuetext={`${value}%, ${plural(count, "session")}`}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={fill}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-sol-bg [&::-moz-range-thumb]:bg-sol-cyan [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-sol-bg [&::-webkit-slider-thumb]:bg-sol-cyan"
+      />
+      <div className="flex justify-between text-[10px] tabular-nums text-sol-text-dim">
+        {[0, 25, 50, 75, 100].map((n) => (
+          <button key={n} type="button" onClick={() => onChange(n)} className={cn("hover:text-sol-text", n === value && "text-sol-text")}>{n}%</button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -180,19 +162,26 @@ export type OffloadReviewProps = {
 
 export function OffloadReview({ plan, sessions, sourceName, now, initialSelected, actions, actionsDisabledReason, onClose }: OffloadReviewProps) {
   const byId = React.useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
+  const preselect = initialSelected?.length ? new Set(initialSelected) : undefined;
+  // The dial picks the sessions once per turn of the dial; ticking a box by hand takes over until the dial moves again.
+  const [dial, setDial] = React.useState<number | null>(() => preselect ? null : startingPercent(plan));
+  const sliced = (pct: number, prev: Record<string, Choice>) => {
+    const ids = new Set(sliceForPercent(movableHere(plan), plan.sourceSample, pct).ids);
+    return Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...prev[c.sessionId], checked: ids.has(c.sessionId) }]));
+  };
   // Choices survive new samples: the plan is rebuilt every sample, the user's review is not.
-  const [edited, setChoices] = React.useState<Record<string, Choice>>({});
+  const [edited, setChoices] = React.useState<Record<string, Choice>>(() => dial === null ? {} : sliced(dial, {}));
+  const turnDial = (pct: number) => { setDial(pct); setChoices((s) => sliced(pct, s)); };
   const [chosenMode, setMode] = React.useState<string>(AUTO);
   const [wait, setWait] = React.useState(SAFE_WAITS[1]?.value ?? SAFE_WAITS[0].value);
 
   // A host no session can move to (offline for good, blocked for all) is not a choice.
   const reachable = plan.destinations.filter((d) => plan.candidates.some((c) => movable(c.perDestination[d.deviceId])));
   const mode = chosenMode === AUTO || reachable.some((d) => d.deviceId === chosenMode) ? chosenMode : AUTO;
-  const preselect = initialSelected?.length ? new Set(initialSelected) : undefined;
   const pinned = (c: OffloadCandidate) => { const id = edited[c.sessionId]?.destinationId; return id && movable(c.perDestination[id]) ? id : undefined; };
-  const canMove = plan.candidates.filter((c) => plan.destinations.some((d) => movable(c.perDestination[d.deviceId])));
+  const canMove = movableHere(plan);
   const blocked = plan.candidates.filter((c) => !canMove.includes(c));
-  const isChecked = (c: OffloadCandidate) => edited[c.sessionId]?.checked ?? (preselect ? preselect.has(c.sessionId) : true);
+  const isChecked = (c: OffloadCandidate) => edited[c.sessionId]?.checked ?? (preselect ? preselect.has(c.sessionId) : false);
   const picked = canMove.filter(isChecked);
   const auto = assignDestinations(plan, picked.filter((c) => !pinned(c)), mode);
   const destOf = (c: OffloadCandidate) => pinned(c) ?? auto.get(c.sessionId) ?? c.suggestedDestinationId ?? plan.destinations.find((d) => movable(c.perDestination[d.deviceId]))?.deviceId ?? "";
@@ -214,6 +203,8 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
     rss: cs.reduce((a, c) => a + (c.relief.rssHigh ?? 0), 0),
   });
   const leaving = sumOf(going);
+  const poolShare = canMove.reduce((n, c) => n + loadShareOf(c, plan.sourceSample), 0);
+  const achieved = poolShare > 0 ? round5(going.reduce((n, c) => n + loadShareOf(c, plan.sourceSample), 0) / poolShare * 100) : 0;
   const source = loadShift(plan.sourceSample, leaving, -1);
   const receiving = plan.destinations
     .map((d) => ({ d, cs: going.filter((c) => destOf(c) === d.deviceId) }))
@@ -222,7 +213,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const unevaluated = (initialSelected ?? []).filter((id) => !plan.candidates.some((c) => c.sessionId === id) && !plan.notOffered.some((n) => n.sessionId === id));
   const midTurn = going.some((c) => c.disruption === "mid_turn");
   const allChecked = canMove.length > 0 && picked.length === canMove.length;
-  const setAll = (checked: boolean) => setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }])));
+  const setAll = (checked: boolean) => { setDial(null); setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }]))); };
   const titleOf = (id: string) => byId.get(id)?.title ?? id;
   // Grouped by reason, largest first: a count per reason reads at a glance where a line per session does not.
   const stayGroups = groupBy([
@@ -242,10 +233,16 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
       <header className="flex items-start gap-3 px-5 pb-3 pt-5">
         <div className="min-w-0 flex-1">
           <h2 className="text-[17px] font-semibold tracking-tight text-sol-text">Free up {sourceName}</h2>
-          <p className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-sol-text-muted" title={plan.incident.reason}>
-            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", plan.incident.level === "critical" ? "bg-sol-red" : "bg-sol-yellow")} />
-            {plan.incident.reason} for {fmtAgo(plan.incident.since, now).replace(/ ago$/, "")}
-          </p>
+          {plan.incident ? (
+            <p className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-sol-text-muted" title={plan.incident.reason}>
+              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", plan.incident.level === "critical" ? "bg-sol-red" : "bg-sol-yellow")} />
+              {plan.incident.reason} for {fmtAgo(plan.incident.since, now).replace(/ ago$/, "")}
+            </p>
+          ) : (
+            <p className="mt-1 flex items-center gap-1.5 text-[12px] text-sol-text-muted">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sol-green" />Running normally
+            </p>
+          )}
         </div>
         <button type="button" onClick={onClose} aria-label="Close review" className="-mr-1 rounded-full p-1.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"><X className="h-4 w-4" /></button>
       </header>
@@ -263,6 +260,10 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
           <LoadBar label="CPU" before={source.before.cpu} after={going.length ? source.after.cpu : undefined} />
           <LoadBar label="Memory" before={source.before.memory} after={going.length ? source.after.memory : undefined} />
         </div>
+
+        {plan.destinations.length > 0 && canMove.length > 0 && (
+          <LoadDial value={dial ?? achieved} count={going.length} freed={leaving} onChange={turnDial} />
+        )}
 
         {plan.destinations.length === 0 ? (
           <div className="rounded-xl bg-sol-bg-alt px-4 py-3 text-[12px] text-sol-text-secondary">
@@ -328,7 +329,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
                         title={titleOf(c.sessionId)}
                         checked={checked}
                         elsewhere={checked && host && (hostsUsed > 1 || !!pinned(c)) ? host : undefined}
-                        onCheck={(v) => setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: v } }))}
+                        onCheck={(v) => { setDial(null); setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: v } })); }}
                       />
                     );
                   })}
