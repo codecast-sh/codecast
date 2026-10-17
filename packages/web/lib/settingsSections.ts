@@ -16,6 +16,7 @@ export type SettingsSectionId =
   | "plan"
   | "notifications"
   | "sounds"
+  | "keyboard"
   | "calls"
   | "team"
   | "sync"
@@ -42,6 +43,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/plan": "plan",
   "/settings/notifications": "notifications",
   "/settings/sounds": "sounds",
+  "/settings/keyboard": "keyboard",
   "/settings/calls": "calls",
   "/settings/team": "team",
   "/settings/sync": "sync",

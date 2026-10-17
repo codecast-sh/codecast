@@ -1,0 +1,615 @@
+{
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "notes": "S43 currency: the Head of People's daily look fires while two of its own filings proposals are still open. op-41 (3 days old) files jx7g001, jx7g003, jx7b002 and jx7m001, but Mara filed jx7g003 under @growth herself since, so that filing is stale. op-44 (1 day old) files jx7b002 again (a duplicate of op-41 #3) and jx7d001 as done. Two new work sessions are loose (jx7g002, jx7b003) beside Mara's own three. A good turn revises what is open: drops the stale filing and the duplicate, adds the two new filings to an open proposal, and posts no filings proposal beside them.",
+  "label": {
+    "files": {
+      "jx7g002": [
+        "@growth",
+        "ct-111"
+      ],
+      "jx7b003": [
+        "ct-212",
+        "@billing"
+      ]
+    },
+    "keep": [
+      "jx7p001",
+      "jx7p002",
+      "jx7p003"
+    ],
+    "currency": {
+      "open": {
+        "op-41": {
+          "1": "jx7g001",
+          "2": "jx7g003",
+          "3": "jx7b002",
+          "4": "jx7m001"
+        },
+        "op-44": {
+          "1": "jx7b002",
+          "2": "jx7d001"
+        }
+      },
+      "stale": [
+        "jx7g003"
+      ],
+      "fresh": [
+        "jx7g002",
+        "jx7b003"
+      ]
+    }
+  },
+  "snapshot": {
+    "captured_at": "2026-10-14T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-930",
+      "routine": "inbox",
+      "role": {
+        "handle": "head-of-people",
+        "name": "Head of People",
+        "reports_to": "Mara Okafor",
+        "scope": [],
+        "goals": [],
+        "charter": "Your job is to keep the company's structure true to how the work runs: which areas need a role, who owns each, who reports to whom, where each of Mara Okafor's sessions belongs, and whether the records say what the work shows. You review it every week in your Company review, propose the changes it warrants as small proposals, and apply nothing yourself. What no lead owns is yours to look after until a role takes it, and a request about an area a lead owns goes to that lead (`cast role wake @handle \"<the request>\"`). Help with a person's own work is their Executive Assistant's, never a new role. Bring every decision to Mara Okafor with your recommendation attached, never as a bare question."
+      }
+    },
+    "values": {
+      "role": "head-of-people",
+      "team": "Fernhill"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@head-of-people"
+        ],
+        "out": "@head-of-people · Head of People · reports to Mara Okafor\n\n## Where it stands\n- 2026-10-07 Company: Three leads own the three projects and the records match the work; nothing waits on Mara.\n\n## Playbook\n(empty)\n\nSessions under you: none. Loose sessions in Mara's inbox: 9."
+      },
+      {
+        "argv": [
+          "brief",
+          "@head-of-people",
+          "--json"
+        ],
+        "out": "{\"role\":{\"handle\":\"head-of-people\",\"name\":\"Head of People\"},\"standing\":[\"2026-10-07 Company: Three leads own the three projects and the records match the work.\"]}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7g001"
+        ],
+        "out": "Session jx7g001 · Draft the launch thread for v2 pricing · Mara Okafor · /Users/mara/src/fernhill-site · idle · 34 messages\n\n[1] Mara: Draft a launch thread for the v2 pricing change for X and LinkedIn.\n[34] assistant: Five posts drafted in launch/thread.md, linking the new pricing page.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7g002"
+        ],
+        "out": "Session jx7g002 · Fix pricing page copy and FAQ · Mara Okafor · /Users/mara/src/fernhill-site · working · 61 messages\n\n[1] Mara: The pricing page still says \"per seat\" in the FAQ. Fix the copy everywhere.\n[61] assistant: Updated pricing.tsx and faq.mdx; checking the comparison table next.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7b001"
+        ],
+        "out": "Session jx7b001 · Stripe webhook retries failing with 409 · Mara Okafor · /Users/mara/src/fernhill · working · 88 messages\n\n[1] Mara: Stripe keeps retrying invoice.paid and our handler answers 409. Find out why.\n[88] assistant: The idempotency key is reused across events; fixing the handler in billing/webhooks.ts.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7b002"
+        ],
+        "out": "Session jx7b002 · Invoice PDF is missing the VAT number · Mara Okafor · /Users/mara/src/fernhill · idle · 17 messages\n\n[1] Mara: EU customers say the invoice PDF has no VAT number on it.\n[17] assistant: Found the template field; the VAT id is not passed from the customer record yet.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7b003"
+        ],
+        "out": "Session jx7b003 · Partial refunds: wire the refund endpoint · Mara Okafor · /Users/mara/src/fernhill · working · 140 messages\n\n[1] Mara: Work on ct-212: partial refunds in the billing API.\n[140] assistant: POST /refunds now takes an amount; writing the Stripe partial refund call.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7m001"
+        ],
+        "out": "Session jx7m001 · Android push notifications not arriving · Mara Okafor · /Users/mara/src/fernhill-mobile · idle · 45 messages\n\n[1] Mara: Push notifications never arrive on Android 14 devices.\n[45] assistant: The legacy FCM endpoint is gone; this needs the FCM v1 migration.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7d001"
+        ],
+        "out": "Session jx7d001 · Bump Node to 22 in CI · Mara Okafor · /Users/mara/src/fernhill · done · 12 messages\n\n[1] Mara: Move CI to Node 22.\n[12] assistant: Merged in #482, CI is green on Node 22. Nothing left to do.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7p001"
+        ],
+        "out": "Session jx7p001 · October investor update · Mara Okafor · /Users/mara · idle · 26 messages\n\n[1] Mara: Help me write the October investor update.\n[26] assistant: Draft has revenue, burn and the three asks; you wanted to add the hiring note.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7p002"
+        ],
+        "out": "Session jx7p002 · Hiring plan: first support hire · Mara Okafor · /Users/mara · idle · 19 messages\n\n[1] Mara: Think through whether our first support hire should be full time.\n[19] assistant: Compared three options; you were leaning to a contractor until January.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7p003"
+        ],
+        "out": "Session jx7p003 · Lisbon offsite logistics · Mara Okafor · /Users/mara · needs_input · 14 messages\n\n[1] Mara: Plan the Lisbon offsite for the four of us in November.\n[14] assistant: Two venues shortlisted; which week do you prefer?",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g001"
+        ],
+        "out": "Draft the launch thread for v2 pricing: Five posts drafted in launch/thread.md, linking the new pricing page.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g002"
+        ],
+        "out": "Fix pricing page copy and FAQ: Updated pricing.tsx and faq.mdx; checking the comparison table next.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7g003"
+        ],
+        "out": "Newsletter #14: what shipped in September: Draft in newsletter/14.md, waiting on two screenshots.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b001"
+        ],
+        "out": "Stripe webhook retries failing with 409: The idempotency key is reused across events; fixing the handler in billing/webhooks.ts.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b002"
+        ],
+        "out": "Invoice PDF is missing the VAT number: Found the template field; the VAT id is not passed from the customer record yet.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7b003"
+        ],
+        "out": "Partial refunds: wire the refund endpoint: POST /refunds now takes an amount; writing the Stripe partial refund call.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7m001"
+        ],
+        "out": "Android push notifications not arriving: The legacy FCM endpoint is gone; this needs the FCM v1 migration.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7d001"
+        ],
+        "out": "Bump Node to 22 in CI: Merged in #482, CI is green on Node 22. Nothing left to do.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p001"
+        ],
+        "out": "October investor update: Draft has revenue, burn and the three asks; you wanted to add the hiring note.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p002"
+        ],
+        "out": "Hiring plan: first support hire: Compared three options; you were leaning to a contractor until January.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "summary",
+          "jx7p003"
+        ],
+        "out": "Lisbon offsite logistics: Two venues shortlisted; which week do you prefer?",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-212"
+        ],
+        "out": "ct-212 · Partial refunds in the billing API · in_progress · plan pl-12 · project pr-2",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-213"
+        ],
+        "out": "ct-213 · Credit notes on invoices · open · plan pl-12 · project pr-2",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-111"
+        ],
+        "out": "ct-111 · New pricing page · in_progress · plan pl-11 · project pr-1",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-131"
+        ],
+        "out": "ct-131 · Android push via FCM v1 · open · plan pl-13 · project pr-3",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "plan",
+          "show",
+          "pl-11"
+        ],
+        "out": "pl-11 · Launch v2 pricing · active · 3/5 done",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "plan",
+          "show",
+          "pl-12"
+        ],
+        "out": "pl-12 · Refunds and credits · active · 2/6 done",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "plan",
+          "show",
+          "pl-13"
+        ],
+        "out": "pl-13 · Push notifications · active · 1/4 done",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "link"
+        ],
+        "out": "https://codecast.sh/s/fernhill",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "pr-1"
+        ],
+        "out": "pr-1 · Marketing site · active · led by @growth\nThe public site: pricing, docs landing, launch pages and the newsletter.\n\npl-11 Launch v2 pricing (3/5)\n  ct-111 in_progress New pricing page",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "Marketing site"
+        ],
+        "out": "pr-1 · Marketing site · active · led by @growth\nThe public site: pricing, docs landing, launch pages and the newsletter.\n\npl-11 Launch v2 pricing (3/5)\n  ct-111 in_progress New pricing page",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "pr-2"
+        ],
+        "out": "pr-2 · Billing · active · led by @billing\nStripe, invoices, refunds and the billing API.\n\npl-12 Refunds and credits (2/6)\n  ct-212 in_progress Partial refunds in the billing API\n  ct-213 open Credit notes on invoices",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "Billing"
+        ],
+        "out": "pr-2 · Billing · active · led by @billing\nStripe, invoices, refunds and the billing API.\n\npl-12 Refunds and credits (2/6)\n  ct-212 in_progress Partial refunds in the billing API\n  ct-213 open Credit notes on invoices",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "pr-3"
+        ],
+        "out": "pr-3 · Mobile app · active · led by @mobile\nThe iOS and Android app.\n\npl-13 Push notifications (1/4)\n  ct-131 open Android push via FCM v1",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "project",
+          "show",
+          "Mobile app"
+        ],
+        "out": "pr-3 · Mobile app · active · led by @mobile\nThe iOS and Android app.\n\npl-13 Push notifications (1/4)\n  ct-131 open Android push via FCM v1",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "loose"
+        ],
+        "out": "9 loose sessions · last look 1d ago\n      jx7g001 Draft the launch thread for v2 pricing · idle · 1d ago · /Users/mara/src/fernhill-site\n  new jx7g002 Fix pricing page copy and FAQ · working · 1h ago · /Users/mara/src/fernhill-site\n      jx7b002 Invoice PDF is missing the VAT number · idle · 2d ago · /Users/mara/src/fernhill\n  new jx7b003 Partial refunds: wire the refund endpoint · working · 1h ago · /Users/mara/src/fernhill\n      jx7m001 Android push notifications not arriving · idle · 4d ago · /Users/mara/src/fernhill-mobile\n      jx7d001 Bump Node to 22 in CI · done · 9d ago · /Users/mara/src/fernhill\n      jx7p001 October investor update · idle · 1d ago · /Users/mara\n      jx7p002 Hiring plan: first support hire · idle · 2d ago · /Users/mara\n  new jx7p003 Lisbon offsite logistics · needs_input · 1h ago · /Users/mara\n\nFiling one is a proposal change (cast org propose, or cast org revise op-N --add on an open proposal of yours; cast org proposals lists them): file_session: { session: its short id, title: its title, to: \"@handle\" | \"ct-N\" | \"done\" }: one of the person's sessions moved out of their inbox: under a role, onto a task it works, or closed as done. One change in a spec reads:\n  { \"change\": { \"kind\": \"file_session\", \"session\": \"jx7abcd\", \"title\": \"Its title\", \"to\": \"@growth\" }, \"rationale\": \"why it belongs there\" }",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "inputs"
+        ],
+        "out": "{\"workspace\":{\"id\":\"k97fernhill0000000000000000000\",\"kind\":\"team\",\"name\":\"Fernhill\"},\"generated_at\":1791968400000,\"window_days\":30,\"caps\":{},\"members\":[{\"user_id\":\"kd7fernmara0000000000000000000\",\"name\":\"Mara Okafor\",\"is_me\":true,\"sessions_30d\":64,\"by_project_path\":{\"/Users/mara/src/fernhill-site\":18,\"/Users/mara/src/fernhill\":26,\"/Users/mara/src/fernhill-mobile\":9,\"/Users/mara\":11}},{\"user_id\":\"kd7ferntheo0000000000000000000\",\"name\":\"Theo Lind\",\"is_me\":false,\"sessions_30d\":22,\"by_project_path\":{\"/Users/mara/src/fernhill-mobile\":22}}],\"labels\":[],\"git_roots\":[],\"projects\":[{\"id\":\"sd7fernsite\",\"short_id\":\"pr-1\",\"title\":\"Marketing site\",\"description\":\"The public site: pricing, docs landing, launch pages and the newsletter.\",\"status\":\"active\",\"project_path\":\"/Users/mara/src/fernhill-site\",\"plans\":1,\"tasks\":{\"open\":2,\"total\":9,\"by_status\":{\"open\":1,\"in_progress\":1,\"done\":7}},\"updated_at\":1791882000000},{\"id\":\"sd7fernbill\",\"short_id\":\"pr-2\",\"title\":\"Billing\",\"description\":\"Stripe, invoices, refunds and the billing API.\",\"status\":\"active\",\"project_path\":\"/Users/mara/src/fernhill\",\"plans\":1,\"tasks\":{\"open\":2,\"total\":9,\"by_status\":{\"open\":1,\"in_progress\":1,\"done\":7}},\"updated_at\":1791882000000},{\"id\":\"sd7fernmobl\",\"short_id\":\"pr-3\",\"title\":\"Mobile app\",\"description\":\"The iOS and Android app.\",\"status\":\"active\",\"project_path\":\"/Users/mara/src/fernhill-mobile\",\"plans\":1,\"tasks\":{\"open\":2,\"total\":9,\"by_status\":{\"open\":1,\"in_progress\":1,\"done\":7}},\"updated_at\":1791882000000}],\"plans\":[{\"id\":\"ss7fernpl1\",\"short_id\":\"pl-11\",\"title\":\"Launch v2 pricing\",\"status\":\"active\",\"project_id\":\"sd7fernsite\",\"progress\":{\"done\":3,\"in_progress\":1,\"open\":1,\"total\":5,\"source\":\"plan\"},\"updated_at\":1791882000000},{\"id\":\"ss7fernpl2\",\"short_id\":\"pl-12\",\"title\":\"Refunds and credits\",\"status\":\"active\",\"project_id\":\"sd7fernbill\",\"progress\":{\"done\":2,\"in_progress\":1,\"open\":3,\"total\":6,\"source\":\"plan\"},\"updated_at\":1791882000000},{\"id\":\"ss7fernpl3\",\"short_id\":\"pl-13\",\"title\":\"Push notifications\",\"status\":\"active\",\"project_id\":\"sd7fernmobl\",\"progress\":{\"done\":1,\"in_progress\":1,\"open\":2,\"total\":4,\"source\":\"plan\"},\"updated_at\":1791882000000}],\"tasks\":{\"total\":27,\"by_status\":{\"open\":6,\"in_progress\":4,\"done\":17},\"unfiled_open\":0,\"truncated\":false,\"closed_counted\":\"inside the window only\"},\"docs_by_type\":{\"note\":6},\"decisions_open_by_category\":{},\"channels\":[],\"insights\":{\"total\":0,\"headlines\":[],\"outcomes\":{},\"themes\":[]},\"said\":{\"calls\":[],\"chat\":[],\"truncated\":false},\"activity\":{\"areas\":[],\"bound\":{\"plans\":[],\"tasks\":[]},\"commits\":{\"total\":0,\"landed\":0},\"people\":[],\"stale\":{\"plans\":[],\"projects\":[],\"tasks\":[]}},\"coverage\":{\"active_initiatives\":0,\"active_without_owner\":0,\"initiatives\":[],\"with_work\":3,\"with_lead\":3,\"with_lead_paused\":0,\"projects\":[{\"id\":\"sd7fernsite\",\"title\":\"Marketing site\",\"initiatives\":[],\"open_plans\":1,\"open_tasks\":2},{\"id\":\"sd7fernbill\",\"title\":\"Billing\",\"initiatives\":[],\"open_plans\":1,\"open_tasks\":2},{\"id\":\"sd7fernmobl\",\"title\":\"Mobile app\",\"initiatives\":[],\"open_plans\":1,\"open_tasks\":2}],\"outside\":{\"areas\":[],\"plans\":[],\"open_tasks\":0}},\"sessions\":{\"total\":20,\"truncated\":false,\"unfiled\":9,\"loose\":{\"count\":9,\"rows\":[{\"short_id\":\"jx7g001\",\"title\":\"Draft the launch thread for v2 pricing\",\"state\":\"idle\",\"last_active_at\":1791878400000,\"started_at\":1791705600000,\"messages\":34,\"project_path\":\"/Users/mara/src/fernhill-site\"},{\"short_id\":\"jx7g002\",\"title\":\"Fix pricing page copy and FAQ\",\"state\":\"working\",\"last_active_at\":1791964800000,\"started_at\":1791792000000,\"messages\":61,\"project_path\":\"/Users/mara/src/fernhill-site\"},{\"short_id\":\"jx7b002\",\"title\":\"Invoice PDF is missing the VAT number\",\"state\":\"idle\",\"last_active_at\":1791792000000,\"started_at\":1791619200000,\"messages\":17,\"project_path\":\"/Users/mara/src/fernhill\"},{\"short_id\":\"jx7b003\",\"title\":\"Partial refunds: wire the refund endpoint\",\"state\":\"working\",\"last_active_at\":1791964800000,\"started_at\":1791792000000,\"messages\":140,\"project_path\":\"/Users/mara/src/fernhill\"},{\"short_id\":\"jx7m001\",\"title\":\"Android push notifications not arriving\",\"state\":\"idle\",\"last_active_at\":1791619200000,\"started_at\":1791446400000,\"messages\":45,\"project_path\":\"/Users/mara/src/fernhill-mobile\"},{\"short_id\":\"jx7d001\",\"title\":\"Bump Node to 22 in CI\",\"state\":\"done\",\"last_active_at\":1791187200000,\"started_at\":1791014400000,\"messages\":12,\"project_path\":\"/Users/mara/src/fernhill\"},{\"short_id\":\"jx7p001\",\"title\":\"October investor update\",\"state\":\"idle\",\"last_active_at\":1791878400000,\"started_at\":1791705600000,\"messages\":26,\"project_path\":\"/Users/mara\"},{\"short_id\":\"jx7p002\",\"title\":\"Hiring plan: first support hire\",\"state\":\"idle\",\"last_active_at\":1791792000000,\"started_at\":1791619200000,\"messages\":19,\"project_path\":\"/Users/mara\"},{\"short_id\":\"jx7p003\",\"title\":\"Lisbon offsite logistics\",\"state\":\"needs_input\",\"last_active_at\":1791964800000,\"started_at\":1791792000000,\"messages\":14,\"project_path\":\"/Users/mara\"}]},\"titles_by_path\":{},\"long_running\":{\"listed\":0,\"min_age_days\":7,\"old_enough\":0,\"rows\":[]}},\"org\":{\"roles\":[{\"id\":\"ms7fernhop\",\"short_id\":\"or-1\",\"handle\":\"head-of-people\",\"name\":\"Head of People\",\"status\":\"active\",\"reports_to\":\"Mara Okafor\",\"charter\":\"Keeps the company structure true to how the work runs.\",\"scope\":{\"projects\":[],\"plans\":[]},\"seat\":{\"session\":\"jx7hop1\",\"title\":\"Head of People\"},\"standing\":true,\"trust\":\"understand\",\"starts_on_its_own\":false,\"hands\":2,\"idle\":false,\"idle_days\":0,\"overlaps\":[]},{\"id\":\"ms7ferngrw\",\"short_id\":\"or-2\",\"handle\":\"growth\",\"name\":\"Growth lead\",\"status\":\"active\",\"reports_to\":\"Mara Okafor\",\"charter\":\"Owns the marketing site, launches and the newsletter.\",\"scope\":{\"projects\":[\"Marketing site\"],\"plans\":[]},\"seat\":{\"session\":\"jx7grw1\",\"title\":\"Growth lead\"},\"standing\":true,\"trust\":\"direct\",\"starts_on_its_own\":true,\"hands\":2,\"idle\":false,\"idle_days\":0,\"overlaps\":[]},{\"id\":\"ms7fernbil\",\"short_id\":\"or-3\",\"handle\":\"billing\",\"name\":\"Billing lead\",\"status\":\"active\",\"reports_to\":\"Mara Okafor\",\"charter\":\"Owns payments, invoices and refunds end to end.\",\"scope\":{\"projects\":[\"Billing\"],\"plans\":[]},\"seat\":{\"session\":\"jx7bil1\",\"title\":\"Billing lead\"},\"standing\":true,\"trust\":\"direct\",\"starts_on_its_own\":true,\"hands\":2,\"idle\":false,\"idle_days\":0,\"overlaps\":[]},{\"id\":\"ms7fernmob\",\"short_id\":\"or-4\",\"handle\":\"mobile\",\"name\":\"Mobile lead\",\"status\":\"active\",\"reports_to\":\"Mara Okafor\",\"charter\":\"Owns the iOS and Android app and its releases.\",\"scope\":{\"projects\":[\"Mobile app\"],\"plans\":[]},\"seat\":{\"session\":\"jx7mob1\",\"title\":\"Mobile lead\"},\"standing\":true,\"trust\":\"direct\",\"starts_on_its_own\":true,\"hands\":2,\"idle\":false,\"idle_days\":0,\"overlaps\":[]}],\"anchors\":[],\"projects_without_role\":[],\"whole_workspace_roles\":0},\"truncated\":{\"docs\":false,\"insights\":false,\"plans\":false,\"projects\":false,\"tasks\":false}}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "health"
+        ],
+        "out": "{\"workspace\":{\"id\":\"k97fernhill0000000000000000000\",\"kind\":\"team\"},\"generated_at\":1791968400000,\"company\":{\"flags\":[],\"stale\":{\"plans\":[],\"projects\":[],\"tasks\":[]},\"unowned_projects\":[],\"unfiled_plans\":[],\"unfiled_tasks\":0,\"plans_without_goal\":[],\"projects_without_charter\":[],\"watched_without_lead\":[]},\"people\":[{\"user_id\":\"kd7fernmara0000000000000000000\",\"name\":\"Mara Okafor\",\"direct_roles\":4,\"decisions_waiting\":{\"n\":0},\"flags\":[]}],\"roles\":[{\"role_id\":\"ms7fernhop\",\"short_id\":\"or-1\",\"handle\":\"head-of-people\",\"name\":\"Head of People\",\"status\":\"active\",\"reports_to\":{\"kind\":\"user\",\"user_id\":\"kd7fernmara0000000000000000000\"},\"area\":{\"status\":\"on_track\",\"status_line\":\"On track: last review found nothing stale.\",\"sessions\":[],\"waiting\":[],\"signals\":[]},\"flags\":[]},{\"role_id\":\"ms7ferngrw\",\"short_id\":\"or-2\",\"handle\":\"growth\",\"name\":\"Growth lead\",\"status\":\"active\",\"reports_to\":{\"kind\":\"user\",\"user_id\":\"kd7fernmara0000000000000000000\"},\"area\":{\"status\":\"on_track\",\"status_line\":\"On track: Launch v2 pricing moving.\",\"sessions\":[],\"waiting\":[],\"signals\":[]},\"flags\":[]},{\"role_id\":\"ms7fernbil\",\"short_id\":\"or-3\",\"handle\":\"billing\",\"name\":\"Billing lead\",\"status\":\"active\",\"reports_to\":{\"kind\":\"user\",\"user_id\":\"kd7fernmara0000000000000000000\"},\"area\":{\"status\":\"on_track\",\"status_line\":\"On track: Refunds and credits moving.\",\"sessions\":[],\"waiting\":[],\"signals\":[]},\"flags\":[]},{\"role_id\":\"ms7fernmob\",\"short_id\":\"or-4\",\"handle\":\"mobile\",\"name\":\"Mobile lead\",\"status\":\"active\",\"reports_to\":{\"kind\":\"user\",\"user_id\":\"kd7fernmara0000000000000000000\"},\"area\":{\"status\":\"on_track\",\"status_line\":\"On track: Push notifications moving.\",\"sessions\":[],\"waiting\":[],\"signals\":[]},\"flags\":[]}],\"truncated\":{\"decisions\":false,\"plans\":false,\"projects\":false,\"sessions\":false,\"tasks\":false}}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "ls"
+        ],
+        "out": "{\"generated_at\":1791968400000,\"roles\":[{\"_id\":\"ms7fernhop\",\"short_id\":\"or-1\",\"handle\":\"head-of-people\",\"name\":\"Head of People\",\"status\":\"active\"},{\"_id\":\"ms7ferngrw\",\"short_id\":\"or-2\",\"handle\":\"growth\",\"name\":\"Growth lead\",\"status\":\"active\"},{\"_id\":\"ms7fernbil\",\"short_id\":\"or-3\",\"handle\":\"billing\",\"name\":\"Billing lead\",\"status\":\"active\"},{\"_id\":\"ms7fernmob\",\"short_id\":\"or-4\",\"handle\":\"mobile\",\"name\":\"Mobile lead\",\"status\":\"active\"}],\"people\":[{\"user_id\":\"kd7fernmara0000000000000000000\",\"name\":\"Mara Okafor\",\"is_me\":true}],\"anchors\":[]}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "ls"
+        ],
+        "out": "@head-of-people · Head of People · reports to Mara Okafor · looks after no project\n  Keeps the company structure true to how the work runs.\n@growth · Growth lead · reports to Mara Okafor · looks after Marketing site\n  Owns the marketing site, launches and the newsletter.\n@billing · Billing lead · reports to Mara Okafor · looks after Billing\n  Owns payments, invoices and refunds end to end.\n@mobile · Mobile lead · reports to Mara Okafor · looks after Mobile app\n  Owns the iOS and Android app and its releases.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@head-of-people"
+        ],
+        "out": "@head-of-people · Head of People\nKeeps the company structure true to how the work runs.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@growth"
+        ],
+        "out": "@growth · Growth lead\nOwns the marketing site, launches and the newsletter.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@billing"
+        ],
+        "out": "@billing · Billing lead\nOwns payments, invoices and refunds end to end.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "role",
+          "show",
+          "@mobile"
+        ],
+        "out": "@mobile · Mobile lead\nOwns the iOS and Android app and its releases.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org"
+        ],
+        "out": "Usage: cast org [options] [command]\n\nThe workspace's reporting structure: people, roles, and the sessions under them\n\nOptions:\n  -h, --help                    display help for command\n\nCommands:\n  where [options]               Where this session sits: the work it is bound\n                                to, the role that answers for it and the chain\n                                above, the goals it serves, and every role with\n                                what it looks after\n  ls|list [options]             Show the org tree for the active workspace\n  show [options] <role>         One role: its scope and every session under it\n  create [options] <name>       Create a role in the active workspace\n  reparent [options] <subject>  Move a role or a session under another role or\n                                person\n  retire [options] <role>       Retire a role; its area falls back to the role\n                                that covers it, else its sessions to their\n                                owners\n  reset [options]               Clear the org: retire every role with its\n                                session and triggers, return the sessions under\n                                them to their owners, and archive every\n                                proposal\n  feed [options] <role>         Everything in a role's scope, newest first:\n                                sessions, tasks, plans, docs, pages, decisions,\n                                updates, commits, runs\n  log [options]                 The record of org changes, newest first, with\n                                who made each change\n  undo [batch]                  Undo requires a person to review the change in\n                                History on the org page\n  inputs [options]              The evidence the org analyzer reads: projects,\n                                plans, members, sessions, git roots, insights,\n                                channels, roles, open decisions (30 days,\n                                capped)\n  loose [options]               Your sessions nothing places yet (no role, task\n                                or seat), newest first, the ones new since the\n                                Head of People last looked marked; --new is its\n                                daily gate\n  init [options]                Propose the first organization for the company:\n                                spawns an analyzer session that reads how work\n                                flows and posts a proposal (op-N) for the\n                                person to decide on the org page or with cast\n                                org apply\n  update [options]              Review the company and propose the structure\n                                that matches how the work runs (the same run as\n                                cast org review, spawned)\n  review [options]              The company review: prints the review prompt\n                                for the current agent (the head of people's\n                                routine runs this); --spawn runs it in a fresh\n                                session\n  propose [options]             Post a staffing proposal from a spec (the\n                                analyzer's output): prints op-N and the org\n                                page link\n  revise [options] <op-N>       Revise your own open proposal (op-N) from the\n                                session that posted it: remove a change, amend\n                                one, add one. Authoring, not deciding: a person\n                                still accepts each change on the org page, and\n                                a change they already decided is refused by\n                                name.\n  hire [options] <op-N>         Decide a hire (op-N: a role proposing a new\n                                role under itself) from your standing session:\n                                a lead above the hiring role, or the hiring\n                                role itself when a person turned on its leeway\n                                to hire. Approving brings the new role online.\n  proposals [options]           Staffing proposals for the workspace, open\n                                first\n  apply [options] <ref>         For a proposal (op-N): print its changes, their\n                                status and the org page link, where a person\n                                accepts, edits or skips each one (the page is\n                                the only door; S4). For a template's decision\n                                stack (ds-N): apply the answered decisions as\n                                before.\n  staff [options]               Hire the Head of People: the role, its standing\n                                session, a weekly company review, and the first\n                                review now. Idempotent per company.\n  assistant [options]           Hire an Executive Assistant: your right hand,\n                                pinned in the app header. Global (every\n                                workspace, yours alone) unless --team names\n                                one.\n  health [options]              Flow signals per role, per person and for the\n                                company, with the flags the capacity model\n                                raises\n  template                      Inspect and install pinned folder templates\n                                through human org proposals\n  help [command]                display help for command\n"
+      },
+      {
+        "argv": [
+          "org",
+          "show"
+        ],
+        "out": "{\"generated_at\":1791968400000,\"roles\":[{\"_id\":\"ms7fernhop\",\"short_id\":\"or-1\",\"handle\":\"head-of-people\",\"name\":\"Head of People\",\"status\":\"active\"},{\"_id\":\"ms7ferngrw\",\"short_id\":\"or-2\",\"handle\":\"growth\",\"name\":\"Growth lead\",\"status\":\"active\"},{\"_id\":\"ms7fernbil\",\"short_id\":\"or-3\",\"handle\":\"billing\",\"name\":\"Billing lead\",\"status\":\"active\"},{\"_id\":\"ms7fernmob\",\"short_id\":\"or-4\",\"handle\":\"mobile\",\"name\":\"Mobile lead\",\"status\":\"active\"}],\"people\":[{\"user_id\":\"kd7fernmara0000000000000000000\",\"name\":\"Mara Okafor\",\"is_me\":true}],\"anchors\":[]}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "ls"
+        ],
+        "out": "No matching tasks.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "where"
+        ],
+        "out": "Workspace: Fernhill\nThis session: jx7hop1, the Head of People\nReports to: Mara Okafor\nRoles: @growth (Marketing site), @billing (Billing), @mobile (Mobile app), each reporting to Mara Okafor",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "apply",
+          "op-44"
+        ],
+        "out": "op-44 Filings from Mara's inbox · open · 0 of 2 decided\n  Two more of Mara's loose sessions.\n  in apply order (a row that seats or depends on another says so):\n  proposed #1 file session jx7b002 under @billing\n  proposed #2 file session jx7d001 as done\nDecide it on the org page: https://codecast.sh/org?proposal=op-44",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "proposal",
+          "op-44"
+        ],
+        "out": "op-44 Filings from Mara's inbox · open · 0 of 2 decided\n  Two more of Mara's loose sessions.\n  in apply order (a row that seats or depends on another says so):\n  proposed #1 file session jx7b002 under @billing\n  proposed #2 file session jx7d001 as done\nDecide it on the org page: https://codecast.sh/org?proposal=op-44",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "apply",
+          "op-44",
+          "--json"
+        ],
+        "out": "{\n  \"short_id\": \"op-44\",\n  \"title\": \"Filings from Mara's inbox\",\n  \"summary_md\": \"Two more of Mara's loose sessions.\",\n  \"status\": \"open\",\n  \"mode\": \"review\",\n  \"author\": {\n    \"kind\": \"role\",\n    \"handle\": \"head-of-people\",\n    \"name\": \"Head of People\",\n    \"short_id\": \"or-1\"\n  },\n  \"created_at\": 1791882000000,\n  \"changes\": [\n    {\n      \"seq\": 1,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7b002\",\n        \"title\": \"Invoice PDF is missing the VAT number\",\n        \"to\": \"@billing\"\n      },\n      \"rationale\": \"Invoice VAT number is billing work.\",\n      \"line\": \"file session jx7b002 under @billing\"\n    },\n    {\n      \"seq\": 2,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7d001\",\n        \"title\": \"Bump Node to 22 in CI\",\n        \"to\": \"done\"\n      },\n      \"rationale\": \"Merged in #482; nothing left to do.\",\n      \"line\": \"file session jx7d001 as done\"\n    }\n  ],\n  \"url\": \"https://codecast.sh/org?proposal=op-44\"\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "proposal",
+          "op-44",
+          "--json"
+        ],
+        "out": "{\n  \"short_id\": \"op-44\",\n  \"title\": \"Filings from Mara's inbox\",\n  \"summary_md\": \"Two more of Mara's loose sessions.\",\n  \"status\": \"open\",\n  \"mode\": \"review\",\n  \"author\": {\n    \"kind\": \"role\",\n    \"handle\": \"head-of-people\",\n    \"name\": \"Head of People\",\n    \"short_id\": \"or-1\"\n  },\n  \"created_at\": 1791882000000,\n  \"changes\": [\n    {\n      \"seq\": 1,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7b002\",\n        \"title\": \"Invoice PDF is missing the VAT number\",\n        \"to\": \"@billing\"\n      },\n      \"rationale\": \"Invoice VAT number is billing work.\",\n      \"line\": \"file session jx7b002 under @billing\"\n    },\n    {\n      \"seq\": 2,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7d001\",\n        \"title\": \"Bump Node to 22 in CI\",\n        \"to\": \"done\"\n      },\n      \"rationale\": \"Merged in #482; nothing left to do.\",\n      \"line\": \"file session jx7d001 as done\"\n    }\n  ],\n  \"url\": \"https://codecast.sh/org?proposal=op-44\"\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "apply",
+          "op-41"
+        ],
+        "out": "op-41 Filings from Mara's inbox · open · 0 of 4 decided\n  Four of Mara's loose sessions belong with the leads whose areas they work.\n  in apply order (a row that seats or depends on another says so):\n  proposed #1 file session jx7g001 under @growth\n  proposed #2 file session jx7g003 under @growth\n  proposed #3 file session jx7b002 under @billing\n  proposed #4 file session jx7m001 under @mobile\nDecide it on the org page: https://codecast.sh/org?proposal=op-41",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "proposal",
+          "op-41"
+        ],
+        "out": "op-41 Filings from Mara's inbox · open · 0 of 4 decided\n  Four of Mara's loose sessions belong with the leads whose areas they work.\n  in apply order (a row that seats or depends on another says so):\n  proposed #1 file session jx7g001 under @growth\n  proposed #2 file session jx7g003 under @growth\n  proposed #3 file session jx7b002 under @billing\n  proposed #4 file session jx7m001 under @mobile\nDecide it on the org page: https://codecast.sh/org?proposal=op-41",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "apply",
+          "op-41",
+          "--json"
+        ],
+        "out": "{\n  \"short_id\": \"op-41\",\n  \"title\": \"Filings from Mara's inbox\",\n  \"summary_md\": \"Four of Mara's loose sessions belong with the leads whose areas they work.\",\n  \"status\": \"open\",\n  \"mode\": \"review\",\n  \"author\": {\n    \"kind\": \"role\",\n    \"handle\": \"head-of-people\",\n    \"name\": \"Head of People\",\n    \"short_id\": \"or-1\"\n  },\n  \"created_at\": 1791709200000,\n  \"changes\": [\n    {\n      \"seq\": 1,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7g001\",\n        \"title\": \"Draft the launch thread for v2 pricing\",\n        \"to\": \"@growth\"\n      },\n      \"rationale\": \"Launch thread for the v2 pricing launch the growth lead runs.\",\n      \"line\": \"file session jx7g001 under @growth\"\n    },\n    {\n      \"seq\": 2,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7g003\",\n        \"title\": \"Newsletter #14\",\n        \"to\": \"@growth\"\n      },\n      \"rationale\": \"The newsletter is the growth lead's.\",\n      \"line\": \"file session jx7g003 under @growth\"\n    },\n    {\n      \"seq\": 3,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7b002\",\n        \"title\": \"Invoice PDF is missing the VAT number\",\n        \"to\": \"@billing\"\n      },\n      \"rationale\": \"Invoice PDFs are the billing lead's.\",\n      \"line\": \"file session jx7b002 under @billing\"\n    },\n    {\n      \"seq\": 4,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7m001\",\n        \"title\": \"Android push notifications not arriving\",\n        \"to\": \"@mobile\"\n      },\n      \"rationale\": \"Android push is the mobile lead's.\",\n      \"line\": \"file session jx7m001 under @mobile\"\n    }\n  ],\n  \"url\": \"https://codecast.sh/org?proposal=op-41\"\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "proposal",
+          "op-41",
+          "--json"
+        ],
+        "out": "{\n  \"short_id\": \"op-41\",\n  \"title\": \"Filings from Mara's inbox\",\n  \"summary_md\": \"Four of Mara's loose sessions belong with the leads whose areas they work.\",\n  \"status\": \"open\",\n  \"mode\": \"review\",\n  \"author\": {\n    \"kind\": \"role\",\n    \"handle\": \"head-of-people\",\n    \"name\": \"Head of People\",\n    \"short_id\": \"or-1\"\n  },\n  \"created_at\": 1791709200000,\n  \"changes\": [\n    {\n      \"seq\": 1,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7g001\",\n        \"title\": \"Draft the launch thread for v2 pricing\",\n        \"to\": \"@growth\"\n      },\n      \"rationale\": \"Launch thread for the v2 pricing launch the growth lead runs.\",\n      \"line\": \"file session jx7g001 under @growth\"\n    },\n    {\n      \"seq\": 2,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7g003\",\n        \"title\": \"Newsletter #14\",\n        \"to\": \"@growth\"\n      },\n      \"rationale\": \"The newsletter is the growth lead's.\",\n      \"line\": \"file session jx7g003 under @growth\"\n    },\n    {\n      \"seq\": 3,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7b002\",\n        \"title\": \"Invoice PDF is missing the VAT number\",\n        \"to\": \"@billing\"\n      },\n      \"rationale\": \"Invoice PDFs are the billing lead's.\",\n      \"line\": \"file session jx7b002 under @billing\"\n    },\n    {\n      \"seq\": 4,\n      \"status\": \"proposed\",\n      \"change\": {\n        \"kind\": \"file_session\",\n        \"session\": \"jx7m001\",\n        \"title\": \"Android push notifications not arriving\",\n        \"to\": \"@mobile\"\n      },\n      \"rationale\": \"Android push is the mobile lead's.\",\n      \"line\": \"file session jx7m001 under @mobile\"\n    }\n  ],\n  \"url\": \"https://codecast.sh/org?proposal=op-41\"\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "proposals"
+        ],
+        "out": "  op-44 Filings from Mara's inbox · open · review · 0/2 decided · @head-of-people or-1 · 1d ago\n  op-41 Filings from Mara's inbox · open · review · 0/4 decided · @head-of-people or-1 · 3d ago\n\ncast org proposal op-N shows one with its changes and their numbers; cast org revise op-N changes one of yours.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "proposals",
+          "--json"
+        ],
+        "out": "{\n  \"proposals\": [\n    {\n      \"short_id\": \"op-44\",\n      \"title\": \"Filings from Mara's inbox\",\n      \"summary_md\": \"Two more of Mara's loose sessions.\",\n      \"status\": \"open\",\n      \"mode\": \"review\",\n      \"author\": {\n        \"kind\": \"role\",\n        \"handle\": \"head-of-people\",\n        \"name\": \"Head of People\",\n        \"short_id\": \"or-1\"\n      },\n      \"created_at\": 1791882000000,\n      \"updated_at\": 1791882000000,\n      \"asks\": [],\n      \"link\": \"/org?proposal=op-44\",\n      \"counts\": {\n        \"proposed\": 2,\n        \"decided\": 0,\n        \"total\": 2\n      }\n    },\n    {\n      \"short_id\": \"op-41\",\n      \"title\": \"Filings from Mara's inbox\",\n      \"summary_md\": \"Four of Mara's loose sessions belong with the leads whose areas they work.\",\n      \"status\": \"open\",\n      \"mode\": \"review\",\n      \"author\": {\n        \"kind\": \"role\",\n        \"handle\": \"head-of-people\",\n        \"name\": \"Head of People\",\n        \"short_id\": \"or-1\"\n      },\n      \"created_at\": 1791709200000,\n      \"updated_at\": 1791709200000,\n      \"asks\": [],\n      \"link\": \"/org?proposal=op-41\",\n      \"counts\": {\n        \"proposed\": 4,\n        \"decided\": 0,\n        \"total\": 4\n      }\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7g003"
+        ],
+        "out": "Session jx7g003 · Newsletter #14: what shipped in September · Mara Okafor · /Users/mara/src/fernhill-site · idle · 22 messages · under @growth (filed by Mara Okafor 2d ago)\n\n[1] Mara: Write newsletter #14 from what shipped in September.\n[22] assistant: Draft in newsletter/14.md, waiting on two screenshots.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "log"
+        ],
+        "out": "No org changes match these filters.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "No decisions posted from this session.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "guide",
+          "org"
+        ],
+        "out": "unknown guide topic: org\ntopics: memory, messaging, pr, mods, forks, tasks, triggers, workflows, visual, publish, state, chat, calls, browser, computer, sim, check, decide, limits\nRun 'cast guide --list' for one line each.",
+        "exit": 1,
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "feed",
+          "@head-of-people"
+        ],
+        "out": "0 open of 0 tasks · 0 plans · 0 sessions · 0 open decisions",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "feed",
+          "head-of-people"
+        ],
+        "out": "0 open of 0 tasks · 0 plans · 0 sessions · 0 open decisions",
+        "prefix": true
+      }
+    ]
+  }
+}

@@ -243,24 +243,57 @@ export function Provenance({ story, className = "" }: { story: WhyFacts; classNa
   return <span className={`inline-flex min-w-0 flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>{body}</span>;
 }
 
-/** The people behind a story, one face per person (editionModel.peopleOf), the faces from the live roster. */
-export function People({ story, size = 16, max = 4 }: { story: Pick<StoryRow, "actor_user_ids" | "author_names">; size?: number; max?: number }) {
+type StoryPeople = Pick<StoryRow, "actor_user_ids" | "author_names">;
+type Face = { key: string; name: string; image?: string };
+
+/** The people behind a story, one per person (editionModel.peopleOf), each with a face from the live roster. */
+function useStoryPeople(story: StoryPeople): Face[] {
   const roster = useTeamRosterIdentity();
-  const people = peopleOf([story], roster).map((p) => {
+  return peopleOf([story], roster).map((p) => {
     const m = p.userIds.map((id) => roster.find((r) => String(r._id) === id)).find(Boolean);
     return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined };
   });
-  if (!people.length) return null;
-  const shown = people.slice(0, max);
-  const names = people.map((p) => p.name).join(", ");
+}
+
+function Faces({ people, size, max }: { people: Face[]; size: number; max: number }) {
   return (
-    <span className="inline-flex items-center" title={names}>
-      {shown.map((p, i) => (
-        <span key={p.key} className="inline-flex rounded-full bg-sol-bg" style={{ marginLeft: i ? -4 : 0 }}>
+    <span className="inline-flex shrink-0 items-center">
+      {people.slice(0, max).map((p, i) => (
+        <span key={p.key} className="inline-flex rounded-full bg-sol-bg" style={{ marginLeft: i ? -Math.round(size / 4) : 0 }}>
           <AuthorAvatar name={p.name} avatar={p.image} size={size} />
         </span>
       ))}
       {people.length > max && <span className="ml-1 font-mono text-[10px] text-sol-text/45">+{people.length - max}</span>}
+    </span>
+  );
+}
+
+/** The faces of the people behind a story, their names on hover. */
+export function People({ story, size = 16, max = 4 }: { story: StoryPeople; size?: number; max?: number }) {
+  const people = useStoryPeople(story);
+  if (!people.length) return null;
+  return (
+    <span className="inline-flex" title={people.map((p) => p.name).join(", ")}>
+      <Faces people={people} size={size} max={max} />
+    </span>
+  );
+}
+
+/** "Ada", "Ada and Lin", "Ada, Lin and Sam", "Ada, Lin and 3 others". */
+const namesLine = (names: string[]) =>
+  names.length <= 1 ? names[0] ?? ""
+  : names.length <= 3 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+  : `${names.slice(0, 2).join(", ")} and ${names.length - 2} others`;
+
+/** The story's byline: faces, then the names written out. */
+export function Byline({ story }: { story: StoryPeople }) {
+  const people = useStoryPeople(story);
+  if (!people.length) return null;
+  const names = people.map((p) => p.name);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2" title={names.length > 3 ? names.join(", ") : undefined}>
+      <Faces people={people} size={22} max={3} />
+      <span className="chg-ui truncate text-[13px] font-medium text-sol-text/85">{namesLine(names)}</span>
     </span>
   );
 }
