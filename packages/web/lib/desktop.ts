@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
+import type { DesktopMenuKeys } from "@codecast/shared/contracts/keyBindings";
 import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
 import { cmpVersions, parseShellVersion } from "./desktopFloor";
 import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
@@ -180,6 +181,8 @@ declare global {
       // menu takes the key before the page, so the shell hands the press to
       // the app's undo (packages/electron/editUndo.js). Absent on older builds.
       onAppEditCommand?: (cb: (command: "undo" | "redo") => void) => () => void;
+      // The menu bar's accelerators, following the person's key bindings.
+      setMenuKeys?: (keys: DesktopMenuKeys | null) => void;
       getMeetingDetect?: () => Promise<MeetingDetectConfig>;
       setMeetingDetect?: (patch: {
         mode?: MeetingDetectMode;

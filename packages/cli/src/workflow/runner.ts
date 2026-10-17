@@ -427,9 +427,26 @@ const EMPTY_HAND_GRACE_MS = 120_000;
 // reachable with cast send/read and opened with the unattended opening
 // (the-line.md L11). It nests under the run's own session (L10). The runner then waits for it to settle: done or
 // needs_input, killed, or its process gone. A hand that outlives the node
-// timeout is killed and the node fails; runWorkflow's failure path returns the
-// task to open with a comment.
+// timeout fails the node; runWorkflow's failure path returns the task to open
+// with a comment. However the station ends, the server stops its hand when the
+// runner reports the node over (workflow_runs.stopStationHands). A run the
+// server never registered has nobody to report to, so its runner stops the
+// hand itself.
 async function executeSessionNode(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  context: Record<string, string>,
+  cwd: string,
+  options: RunOptions,
+  onSpawned?: () => void,
+): Promise<NodeOutcome> {
+  const outcome = await waitOnStation(node, graph, context, cwd, options, onSpawned);
+  const hand = context[`${node.id}.conversation_id`];
+  if (!options.runId && hand) await cliCall(options, "/cli/sessions/kill", { session: hand });
+  return outcome;
+}
+
+async function waitOnStation(
   node: WorkflowNode,
   graph: WorkflowGraph,
   context: Record<string, string>,
@@ -453,12 +470,12 @@ async function executeSessionNode(
     context["branch"] = `codecast/${worktreeName}`;
   }
   // A resumed run waits on the hand its runner left working (runResume.ts)
-  // rather than starting the station over; a hand that died with it does not
-  // count, and the station starts anew.
+  // rather than starting the station over; a hand that died with it, or was
+  // stopped when the run ended, does not count, and the station starts anew.
   const left = options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
   if (options.resumed) options.resumed.hand = null;
   const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
-  const reattach = !!leftRow && (leftRow.is_live || leftRow.work_state === "done" || leftRow.work_state === "needs_input");
+  const reattach = !!leftRow && !leftRow.is_killed && (leftRow.is_live || leftRow.work_state === "done" || leftRow.work_state === "needs_input");
 
   let hand: { conversationId: string; shortId: string };
   if (reattach) {
@@ -509,7 +526,6 @@ async function executeSessionNode(
       emptySince ||= Date.now();
       if (Date.now() - emptySince >= EMPTY_HAND_GRACE_MS) {
         console.log(`  ${c.red}✗ ${shortId} could not start${c.reset}: ${String(row.session_error).split("\n")[0]}`);
-        await cliCall(options, "/cli/sessions/kill", { session: conversationId });
         context["last_error"] = `hand ${shortId} at ${node.id} could not start: ${String(row.session_error).slice(0, 1500)}`;
         context["station_dead"] = node.id;
         return "failure";
@@ -574,7 +590,6 @@ async function executeSessionNode(
       emptySince ||= Date.now();
       if (row.is_live && !row.is_killed && Date.now() - emptySince < EMPTY_HAND_GRACE_MS) continue;
       console.log(`  ${c.red}✗ ${shortId} never ran a turn${c.reset}`);
-      await cliCall(options, "/cli/sessions/kill", { session: conversationId });
       context["last_error"] = `hand ${shortId} at ${node.id} never ran a turn: its session holds no messages and no result`;
       context["station_dead"] = node.id;
       return "failure";
@@ -601,19 +616,10 @@ async function executeSessionNode(
       return "failure";
     }
     console.log(`  ${c.green}✓ settled${c.reset} ${c.dim}(${state})${c.reset}`);
-    // A station that declared done has handed the run its answer and holds
-    // nothing for a person: retire it, or a later settle with no verdict
-    // files it under needs input for good. Its transcript stays and it
-    // restarts on a send. One that ended on a question stays as it is; the
-    // run's failure path puts that on the task as a blocker.
-    if (!row.is_killed && (state === "done" || pinnedStatus === "done")) {
-      await cliCall(options, "/cli/sessions/kill", { session: conversationId });
-    }
     return "success";
   }
 
   console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m — killing ${shortId}`);
-  await cliCall(options, "/cli/sessions/kill", { session: conversationId });
   context["last_error"] = `hand ${shortId} killed after ${Math.round(timeout / 60_000)}m at ${node.id}`;
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
@@ -719,6 +725,10 @@ async function executeFanout(
     // overwrite each other's last_error.
     for (const [k, v] of Object.entries(ctx)) {
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
+    }
+    // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
+    if (options.runId) {
+      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`] });
     }
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);

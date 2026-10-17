@@ -1,5 +1,6 @@
 import { ConvexReactClient } from "convex/react";
 import { recoveringWebSocket } from "@codecast/shared/network";
+import { STORE_SHOTS } from "./storeShots/flag";
 
 // Fall back to production, never to "": build 28 shipped with a stale
 // EXPO_PUBLIC_CONVEX_URL (the pre-migration Convex Cloud deployment) and every
@@ -21,7 +22,11 @@ export function isTrustedImageSrc(src: string): boolean {
   return !!m && m[1].toLowerCase() === CONVEX_ORIGIN;
 }
 
-export const convex = new ConvexReactClient(CONVEX_URL, {
-  unsavedChangesWarning: false,
-  webSocketConstructor: recoveringWebSocket(),
-});
+// Store shots mode (lib/storeShots/flag) swaps in an offline stub: the app
+// renders the fixture world and no socket opens.
+export const convex: ConvexReactClient = STORE_SHOTS
+  ? require("./storeShots/convexStub").storeShotsConvex
+  : new ConvexReactClient(CONVEX_URL, {
+      unsavedChangesWarning: false,
+      webSocketConstructor: recoveringWebSocket(),
+    });

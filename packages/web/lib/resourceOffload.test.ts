@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assignDestinations, buildOffloadPlan, loadShift, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
+import { assignDestinations, buildOffloadPlan, loadShareOf, loadShift, movableShare, sliceForPercent, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
 import type { OffloadCandidate, OffloadPlan } from "../components/resources/types";
 import type { ResourcePoint } from "@codecast/shared/contracts";
 const point = (at: number): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 1000, memoryAvailable: 500, memoryAvailableIsEstimate: true, pressure: "normal", load1: 20, logicalCpus: 8, processCount: 1 });
@@ -80,5 +80,34 @@ describe("assignDestinations", () => {
     const cs = [cand("x", 10), { ...cand("y", 10, ["b"]), suggestedDestinationId: "b" }];
     const got = assignDestinations(plan([host("a", 900), host("b", 900)], cs), cs, "a");
     expect(Object.fromEntries(got)).toEqual({ x: "a", y: "b" });
+  });
+});
+
+describe("sliceForPercent", () => {
+  const ok = { readiness: "preflight_required" as const, blockers: [], pending: [] };
+  // 8 cores at 50% = 400 CPU in use; 600 of 1000 memory in use.
+  const sample = { ...point(0), cpuPercent: 50, logicalCpus: 8, memoryTotal: 1000, memoryAvailable: 400 };
+  const cand = (id: string, cpu: number, rss: number, disruption: "idle" | "mid_turn" = "idle"): OffloadCandidate => ({ sessionId: id, reason: "", confidence: "low", relief: { cpu, rssHigh: rss }, stops: [], staysLocal: [], disruption, perDestination: { a: ok } });
+  const cs = [cand("big", 200, 300), cand("mid", 80, 120), cand("small", 20, 30), cand("busy", 200, 300, "mid_turn")];
+
+  test("a session's share is the mean of its CPU and memory shares", () => {
+    expect(loadShareOf(cs[0], sample)).toBe(0.5);
+    expect(loadShareOf(cs[2], sample)).toBe(0.05);
+  });
+
+  test("idle sessions go before working ones, biggest first, and the overshoot is trimmed", () => {
+    expect(sliceForPercent(cs, sample, 0)).toEqual({ ids: [], share: 0 });
+    expect(sliceForPercent(cs, sample, 40).ids).toEqual(["big"]);
+    expect(sliceForPercent(cs, sample, 55).ids).toEqual(["big", "small"]);
+    expect(sliceForPercent(cs, sample, 65).ids).toEqual(["big", "mid"]);
+    expect(sliceForPercent(cs, sample, 90).ids).toEqual(["big", "busy"]);
+    expect(sliceForPercent(cs.slice(0, 3), sample, 60).ids).toEqual(["big", "mid"]);
+  });
+
+  test("asking for more than can move takes everything and says how much that is", () => {
+    const r = sliceForPercent(cs.slice(0, 3), sample, 100);
+    expect(r.ids).toHaveLength(3);
+    expect(r.share).toBeCloseTo(0.75);
+    expect(movableShare(cs, sample)).toBe(1);
   });
 });

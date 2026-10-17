@@ -861,9 +861,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // Fills the circle exactly, so the speaking ring stays a ring around the
-  // photo rather than a border with a gap.
-  bigAvatarImage: { width: 84, height: 84, borderRadius: 42 },
+  // Fills the circle's content box: the speaking ring's border shrinks that
+  // box, so a fixed 84pt photo would paint over the ring and hide it.
+  bigAvatarImage: { width: "100%", height: "100%", borderRadius: 42 },
   speakingRing: { borderWidth: 3, borderColor: Theme.cyan },
   bigAvatarLetter: { fontSize: 30, color: Theme.bgAlt },
   avatarNameRow: { flexDirection: "row", alignItems: "center", gap: 5 },

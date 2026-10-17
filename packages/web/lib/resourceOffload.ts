@@ -23,8 +23,10 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
   // The source is reporting, so it is up even when its device heartbeat lags;
   // otherwise every session reads as stranded on an offline machine.
   const devices = input.devices.map(d => d.device_id === source.deviceId && !d.online ? { ...d, online: true } : d);
+  // Offered whenever the laptop is reporting live, so load can be moved off any
+  // time; the incident only colors the review.
+  if (source.role !== "local" || !freshResourceMachine(source, now)) return null;
   const incident = sustainedResourcePressure(source.history, now);
-  if (!incident || source.role !== "local" || !freshResourceMachine(source, now)) return null;
   const hosts = machines.filter(m => m.role === "cloud_linux" || m.role === "cloud_mac");
   const plan: OffloadPlan = {
     deviceId: source.deviceId, sourceSample: source.snapshot!.sample, incident, generatedAt: source.snapshot!.sample.at,
@@ -146,4 +148,50 @@ export function assignDestinations(plan: OffloadPlan, picked: OffloadCandidate[]
     sum.rss += c.relief.rssHigh ?? 0;
   }
   return out;
+}
+
+/** A candidate's share of the source's load: the mean of its share of the CPU and of the memory in use. */
+export function loadShareOf(c: OffloadCandidate, sample: ResourcePoint): number {
+  const cpuUsed = (sample.cpuPercent ?? 0) * Math.max(sample.logicalCpus, 1);
+  const memUsed = memoryUsed(sample);
+  const cpu = cpuUsed > 0 ? Math.min(1, (c.relief.cpu ?? 0) / cpuUsed) : 0;
+  const mem = memUsed > 0 ? Math.min(1, (c.relief.rssHigh ?? 0) / memUsed) : 0;
+  return cpuUsed > 0 ? (cpu + mem) / 2 : mem;
+}
+
+/**
+ * The cheapest set of sessions that takes `percent` of the source's load off.
+ * Idle sessions go before working ones (a working one waits for its turn to
+ * end). Within that order each step takes the smallest session that finishes
+ * the target, or the largest when none does, so the fewest sessions and the
+ * least extra load move; a final pass drops any session the target no longer
+ * needs. Returns the ids in move order and the share actually covered, which
+ * falls short only when every movable session together is less than asked.
+ */
+export function sliceForPercent(candidates: OffloadCandidate[], sample: ResourcePoint, percent: number): { ids: string[]; share: number } {
+  const EPS = 1e-9;
+  const target = Math.max(0, Math.min(100, percent)) / 100;
+  const pool = candidates.map((c) => ({ c, share: loadShareOf(c, sample) })).filter((r) => r.share > 0);
+  const picked: typeof pool = [];
+  let sum = 0;
+  while (sum + EPS < target) {
+    const tier = pool.filter((r) => r.c.disruption !== "mid_turn");
+    const left = tier.length ? tier : pool;
+    if (!left.length) break;
+    const need = target - sum;
+    const finishing = left.filter((r) => r.share + EPS >= need).sort((a, b) => a.share - b.share)[0];
+    const next = finishing ?? left.reduce((a, b) => (b.share > a.share ? b : a));
+    pool.splice(pool.indexOf(next), 1);
+    picked.push(next);
+    sum += next.share;
+  }
+  for (const r of [...picked].sort((a, b) => a.share - b.share)) {
+    if (sum - r.share + EPS >= target) { picked.splice(picked.indexOf(r), 1); sum -= r.share; }
+  }
+  return { ids: picked.map((r) => r.c.sessionId), share: sum };
+}
+
+/** The most load every movable session together can take off, as a share. */
+export function movableShare(candidates: OffloadCandidate[], sample: ResourcePoint): number {
+  return Math.min(1, candidates.reduce((n, c) => n + loadShareOf(c, sample), 0));
 }

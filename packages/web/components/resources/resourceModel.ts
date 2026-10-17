@@ -115,6 +115,16 @@ export function freshness(m: ResourceMachine, now: number): Freshness {
 
 export const memoryUsed = (p: ResourcePoint) => Math.max(0, p.memoryTotal - p.memoryAvailable);
 export const memoryUsedPct = (p: ResourcePoint) => (p.memoryTotal > 0 ? (memoryUsed(p) / p.memoryTotal) * 100 : undefined);
+
+/**
+ * How loaded a machine is right now, 0 to 100: its busiest of CPU and memory
+ * in use, raised to the operating system's own verdict when that is worse
+ * (elevated memory pressure reads at least 80, critical at least 95).
+ */
+export function loadPercent(p: ResourcePoint): number {
+  const floor = p.pressure === "critical" ? 95 : p.pressure === "elevated" ? 80 : 0;
+  return Math.min(100, Math.max(floor, p.cpuPercent ?? 0, memoryUsedPct(p) ?? 0));
+}
 export const loadPerCore = (p: ResourcePoint) => p.load1 / Math.max(1, p.logicalCpus);
 
 // ---- grouping ----
