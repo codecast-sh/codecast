@@ -4,7 +4,7 @@
 // sessions are spending it. Presentational: it renders ResourceMonitorProps
 // and calls back, so the live page and the fixture preview share every pixel.
 import React from "react";
-import { AlertTriangle, Cloud, Laptop, Search, X } from "lucide-react";
+import { AlertTriangle, Cloud, CloudUpload, Laptop, Search, X } from "lucide-react";
 import { sustainedResourcePressure } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
 import { HealthStrip, MiniTrace } from "./HealthStrip";
@@ -118,9 +118,10 @@ function MachineList({ machines, now, onPick }: { machines: ResourceMachine[]; n
   );
 }
 
-export function ResourceMonitor({ machines, sessions, ready, now, plans = [], runs = [], actions, actionsDisabledReason, sampleNotice }: ResourceMonitorProps) {
+export function ResourceMonitor({ machines, sessions, ready, now, plans = [], runs = [], actions, actionsDisabledReason, sampleNotice, openOffload }: ResourceMonitorProps) {
   const reporting = machines.filter((m) => m.snapshot || m.online);
-  const defaultMachine = plans[0]?.deviceId
+  const defaultMachine = (openOffload && machines.some((m) => m.deviceId === openOffload) ? openOffload : undefined)
+    ?? plans.find((p) => p.incident)?.deviceId
     ?? reporting.find((m) => m.role === "local" && freshness(m, now) === "live")?.deviceId
     ?? reporting[0]?.deviceId ?? "all";
   const [machineId, setMachineId] = React.useState<string>(defaultMachine);
@@ -134,6 +135,13 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   const [query, setQuery] = React.useState("");
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [reviewing, setReviewing] = React.useState<{ deviceId: string; preselect?: string[] } | null>(null);
+  // A notification's link opens the review once its machine's plan exists; plans arrive with the first sample.
+  const opened = React.useRef<string | undefined>(undefined);
+  React.useEffect(() => {
+    if (!openOffload || opened.current === openOffload || !plans.some((p) => p.deviceId === openOffload)) return;
+    opened.current = openOffload;
+    setReviewing({ deviceId: openOffload });
+  }, [openOffload, plans]);
 
   const scope = machineId === "all" ? machines : machines.filter((m) => m.deviceId === machineId);
   const machine = machineId === "all" ? undefined : scope[0];
@@ -155,8 +163,8 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
     return { cpu: a.cpu + t.cpu, rss: a.rss + t.rss, count: a.count + t.count };
   }, { cpu: 0, rss: 0, count: 0 });
 
-  const plan = plans.find((p) => p.deviceId === (reviewing?.deviceId ?? machine?.deviceId)) ?? (machineId === "all" ? plans[0] : undefined);
-  const incident = plan?.incident ?? (machine && fr === "live" ? sustainedResourcePressure(machine.history, now) : null);
+  const plan = plans.find((p) => p.deviceId === (reviewing?.deviceId ?? machine?.deviceId)) ?? (machineId === "all" ? plans.find((p) => p.incident) : undefined);
+  const incident = plan ? plan.incident : (machine && fr === "live" ? sustainedResourcePressure(machine.history, now) : null);
   const destinations = new Map(machines.map((m) => [m.deviceId, m.name]));
   for (const p of plans) for (const d of p.destinations) destinations.set(d.deviceId, d.name);
   const selectedIds = [...selected];
@@ -214,6 +222,11 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
               })}
             </nav>
           )}
+          {plan && !incident && !reviewing && (
+            <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-[11px] text-sol-text hover:bg-sol-bg-highlight">
+              <CloudUpload className="h-3.5 w-3.5 text-sol-cyan" />Move load to cloud
+            </button>
+          )}
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -239,7 +252,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                   </span>
                   {plan && (
                     <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="rounded bg-sol-text px-2 py-0.5 text-[11px] font-semibold text-sol-bg hover:opacity-90">
-                      Review suggestion
+                      Move load to cloud
                     </button>
                   )}
                 </div>
@@ -270,7 +283,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                     <button
                       type="button"
                       disabled={!plan}
-                      title={!plan ? "Moves are suggested while a machine is under sustained pressure; Settings → Migration moves sessions any time" : undefined}
+                      title={!plan ? "Pick a laptop that is reporting live" : undefined}
                       onClick={() => plan && setReviewing({ deviceId: plan.deviceId, preselect: selectedIds })}
                       className="rounded px-1.5 py-0.5 text-sol-cyan hover:bg-sol-bg-highlight disabled:cursor-not-allowed disabled:opacity-40"
                     >

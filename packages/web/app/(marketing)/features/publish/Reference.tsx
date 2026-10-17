@@ -57,7 +57,7 @@ export function Reference() {
     <Section
       id="reference"
       n="08"
-      title="For scripts and agents: every command."
+      title="Command reference for scripts and agents"
       lede={<>Agents learn these from their instructions; you only need them to script it yourself. Everything the page&apos;s own menus do is also a command, so an agent never needs the browser to manage a page. A <C>&lt;target&gt;</C> is a slug or the local path published, and every command takes <C>--json</C>.</>}
     >
       <div className="flex gap-1 rounded-lg p-1 w-fit" role="tablist" style={{ backgroundColor: "rgba(0,43,54,.06)" }}>

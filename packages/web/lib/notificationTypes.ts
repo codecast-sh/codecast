@@ -15,6 +15,8 @@ export const sessionTypes = new Set([
   // An alert about a whole machine, but it belongs where a reader looks for "my
   // agents are not moving": a frozen daemon is why nothing is coming back.
   "daemon_overloaded",
+  // A laptop under sustained load: every agent on it slows down.
+  "machine_overloaded",
   // The hourly fold-up of sessions waiting for input. Names no conversation —
   // it opens the inbox.
   "sessions_need_input",
@@ -94,6 +96,7 @@ export const typeLabels: Record<string, string> = {
   chat_added: "added you to a channel",
   chat_post: "posted in a channel you follow",
   daemon_overloaded: "daemon under load",
+  machine_overloaded: "machine overloaded",
   sessions_need_input: "waiting for you",
   goal_stall: "focus stalled",
   device_shared: "shared a machine",
@@ -132,6 +135,7 @@ export const typeColors: Record<string, string> = {
   chat_added: "text-sol-cyan",
   chat_post: "text-sol-cyan",
   daemon_overloaded: "text-sol-orange",
+  machine_overloaded: "text-red-400",
   sessions_need_input: "text-sol-green",
   goal_stall: "text-sol-yellow",
   device_shared: "text-sol-cyan",
@@ -231,6 +235,8 @@ export function notificationRoute(
   // A device has no page of its own; the roster with its health is the place a
   // reader can act on the alert.
   if (entityType === "device") return "/settings/devices";
+  // A machine by daemon device id: its offload review on Resources, ready to move load off.
+  if (entityType === "machine") return `/resources?offload=${encodeURIComponent(entityId)}`;
   // A team: its settings, where join requests wait for an admin.
   if (entityType === "team") return "/settings/team";
   // A role's page opens on its Scope tab, where a person who reports to it

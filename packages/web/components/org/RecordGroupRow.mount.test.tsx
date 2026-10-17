@@ -1,6 +1,6 @@
 // Mounts a records proposal (docs/architecture/org-staffing.md S9, S39) in
 // jsdom over the fixture world: one collapsed row per record group with its
-// title, totals line and three answers, the records behind it twenty at a
+// title, totals line and its answers (Adjust and Accept, Reject in the field), the records behind it twenty at a
 // time, the band a staged answer leaves, and the words after a send. The
 // card is the real one (EntityObjectCard over the store); only the server and
 // the links are mocked. Groups stay closed, and one opens at a time.
@@ -119,15 +119,19 @@ test("op-901 draws six group rows in order, each titled and totalled, all closed
   expect(c.querySelectorAll("[data-subject-kind]").length).toBe(6);
   expect(c.querySelector("[data-group-rows]")).toBeNull();
   expect(groups(c).every((g) => g.querySelector("[data-group-toggle]")!.getAttribute("aria-expanded") === "false")).toBe(true);
-  expect(groups(c).every((g) => g.querySelector("[data-subject-approve]") && g.querySelector("[data-subject-reject]") && g.querySelector("[data-subject-reply]"))).toBe(true);
-  // One entry's Approve is a quiet outline; the foot offers the rest.
-  expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Approve all 6");
+  expect(groups(c).every((g) => g.querySelector("[data-subject-approve]") && g.querySelector("[data-subject-reply]"))).toBe(true);
+  // Reject waits inside the Adjust field, never beside the answers.
+  expect(c.querySelector("[data-subject-reject]")).toBeNull();
+  expect(groups(c).map((g) => g.querySelector("[data-subject-verdicts]")!.textContent)).toEqual(TABLE.map(() => "AdjustAccept"));
+  // Each entry's Accept is the filled green face; the foot offers the rest.
+  expect(groups(c).every((g) => g.querySelector("[data-subject-approve]")!.className.includes("cc-btn-green"))).toBe(true);
+  expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Accept all 6");
   expect(c.querySelector("[data-send-answers], [data-proposal-reply], [data-subject-pending]")).toBeNull();
   expect(c.textContent).not.toMatch(/on your next message|Filed under no project/);
   React.act(() => root.unmount());
 });
 
-test("Approve on a group stages one answer over every record in it, named by the group; the band replaces the controls; Undo clears", () => {
+test("Accept on a group stages one answer over every record in it, named by the group; the band replaces the controls; Undo clears", () => {
   const root = mount(inThread(card("op-901")));
   const c = q("[data-card='op-901']");
   const a = () => group(c, "project:pr-901");
@@ -135,9 +139,9 @@ test("Approve on a group stages one answer over every record in it, named by the
   expect(batch()).toEqual([["group:project:pr-901", "approve", "", 20, 20, "Matching Engine & Funnel"]]);
   expect(calls).toEqual([]);
   expect(a().getAttribute("data-subject-answer")).toBe("approve");
-  expect(a().querySelector("[data-staged]")!.textContent).toBe("Approved. Applies when you send.Undo");
+  expect(a().querySelector("[data-staged]")!.textContent).toBe("Accepted. Applies when you send.Undo");
   expect(a().querySelector("[data-subject-approve]")).toBeNull();
-  expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Approve the rest");
+  expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Accept the rest");
   click(a().querySelector("[data-staged-undo]")!);
   expect(batch()).toEqual([]);
   expect(a().querySelector("[data-staged]")).toBeNull();
@@ -146,7 +150,7 @@ test("Approve on a group stages one answer over every record in it, named by the
   clearBatch();
 });
 
-test("Approve all 6 stages every group, reads pressed with a check, and pressed again takes them all back", () => {
+test("Accept all 6 stages every group, reads pressed with a check, and pressed again takes them all back", () => {
   const root = mount(inThread(card("op-901")));
   const c = q("[data-card='op-901']");
   const rest = () => c.querySelector<HTMLElement>("[data-approve-rest]")!;
@@ -159,17 +163,19 @@ test("Approve all 6 stages every group, reads pressed with a check, and pressed 
   expect(groups(c).every((g) => g.querySelector("[data-staged='approve']"))).toBe(true);
   click(rest());
   expect(batch()).toEqual([]);
-  expect(rest().textContent).toBe("Approve all 6");
+  expect(rest().textContent).toBe("Accept all 6");
   expect(calls).toEqual([]);
   React.act(() => root.unmount());
   clearBatch();
 });
 
-test("Reject on a group opens the field with the group's ask; the words and Enter stage a rejection with them", () => {
+test("Adjust on a group opens the field; Reject in it asks the group's why; the words and Enter stage a rejection with them", () => {
   const root = mount(inThread(card("op-901")));
   const c = q("[data-card='op-901']");
   const b = () => group(c, "project:pr-902");
-  click(b().querySelector("[data-subject-reject]")!);
+  click(b().querySelector("[data-subject-reply]")!);
+  expect(batch()).toEqual([]);
+  click(b().querySelector("[data-subject-reply-field] [data-subject-reject]")!);
   const ta = b().querySelector<HTMLTextAreaElement>("[data-subject-reply-field] textarea")!;
   expect(ta.placeholder).toBe("Why not? Say which records to leave out, by number, or what to change.");
   type(ta, "Leave #20 out");
@@ -178,7 +184,7 @@ test("Reject on a group opens the field with the group's ask; the words and Ente
   expect(b().querySelector("[data-subject-reply-field]")).toBeNull();
   expect(b().querySelector("[data-staged]")!.textContent).toBe("Rejected. Sent when you send.UndoYou: Leave #20 out");
   expect(b().querySelector("[data-subject-you]")!.getAttribute("data-subject-you")).toBe("reject");
-  // Reply asks the same way about these records.
+  // Adjust asks the same way about these records.
   click(group(c, "plan:pl-911").querySelector("[data-subject-reply]")!);
   expect(group(c, "plan:pl-911").querySelector<HTMLTextAreaElement>("[data-subject-reply-field] textarea")!.placeholder).toBe("Say something about these records");
   expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("false");
@@ -235,7 +241,7 @@ test("a proposal whose records all fall in one loose group is All N records, car
   expect(c.querySelector("[data-proposal-totals]")).toBeNull();
   expect(g.querySelector("[data-group-toggle]")!.getAttribute("aria-expanded")).toBe("false");
   expect(g.querySelector("[data-group-show]")!.textContent).toBe("Show the 55 records");
-  // One entry: its Approve is the whole decision, and the foot adds none.
+  // One entry: its Accept is the whole decision, and the foot adds none.
   expect(c.querySelector("[data-approve-rest]")).toBeNull();
   expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("55 records to decide");
   React.act(() => root.unmount());
@@ -276,7 +282,7 @@ test("after the send: Applied, Applying 10 of 18, Rejected with the words, 2 fai
     expect(c.querySelector("[data-staged]"), name).toBeNull();
     // The meta line names the failures in red.
     const meta = c.querySelector("[data-proposal-meta]")!;
-    expect(meta.getAttribute("data-proposal-meta"), name).toBe("15 of 64 records to decide · 30 applied, 8 approved, 9 rejected, 2 failed");
+    expect(meta.getAttribute("data-proposal-meta"), name).toBe("15 of 64 records to decide · 30 applied, 8 accepted, 9 rejected, 2 failed");
     expect(Array.from(meta.querySelectorAll("span")).find((s) => s.textContent === "2 failed")!.className, name).toContain("--ink-red");
     // Open, the failed rows carry their note and the applied rows of a part-way group their own word.
     click(p1.querySelector("[data-group-toggle]")!);
@@ -315,7 +321,7 @@ useInboxStore.setState((s: any) => ({
   orgProposalChanges: { ...s.orgProposalChanges, ...Object.fromEntries(MIXED.changes.map((c) => [c._id, c])) },
 }));
 
-test("Approve on a group part way landed stages only the records that wait (3 of 18), so the send's button and words count and name them alone", () => {
+test("Accept on a group part way landed stages only the records that wait (3 of 18), so the send's button and words count and name them alone", () => {
   const root = mount(inThread(card("op-906")));
   const c = q("[data-card='op-906']");
   const g = group(c, "project:pr-902");
@@ -327,7 +333,7 @@ test("Approve on a group part way landed stages only the records that wait (3 of
   expect(pending[0].proposal.change_ids.every((id: string) => useInboxStore.getState().orgProposalChanges[id].status === "proposed")).toBe(true);
   expect(batchSendWords(pending)).toMatchObject({ applies: 3, button: "Send and apply 3", head: "3 changes will apply when you send" });
   clearBatch();
-  // Approve all counts the same three.
+  // Accept all counts the same three.
   click(c.querySelector("[data-approve-rest]")!);
   expect(batchSendWords(useInboxStore.getState().reviewComments[CONV]).applies).toBe(64 - 15);
   clearBatch();

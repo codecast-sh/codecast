@@ -96,7 +96,7 @@ const WAYS: { syntax: string; result: string }[] = [
   { syntax: "A page the agent puts on its own line", result: "The live page, framed in the thread. Its bar has Pin a note, Copy link, Expand, Open beside your work and Open in a new tab; drag the bottom edge to resize." },
   { syntax: "The same, with a caption", result: "The same frame, with the agent's caption under it." },
   { syntax: "A page named inside a sentence", result: "A small pill with the page's title." },
-  { syntax: "A single picture", result: "The image inline, captioned. Screenshots come this way, not as pages." },
+  { syntax: "A single picture", result: "The image inline, captioned. Agents send screenshots this way." },
 ];
 
 export function Places() {
@@ -105,8 +105,8 @@ export function Places() {
       id="conversation"
       n="01"
       tone="sand"
-      title="The page shows up where the work is discussed."
-      lede={<>In a codecast conversation, a published link is not a bare URL. The agent puts it on its own line and the live page renders in the thread, so you review the deliverable without leaving the session that made it.</>}
+      title="Published pages in the conversation"
+      lede={<>In a codecast conversation, the agent puts a published link on its own line and the live page renders in the thread, so you review the deliverable without leaving the session that made it.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-10 items-start">
         <ConversationMock />
@@ -120,7 +120,7 @@ export function Places() {
             ))}
           </ul>
           <p className="mt-6 text-[15px] leading-7" style={{ color: SOL.base01 }}>
-            A note you pin on a framed page rides on your next message to the agent, quoted with the spot it points at, so &quot;make this wider&quot; arrives with the &quot;this&quot;.
+            A note you pin on a framed page goes out with your next message to the agent, quoted along with the spot on the page it points at.
           </p>
           <Note className="mt-5">
             For agents and scripts: <C>cast image</C> uploads one picture (PNG, JPEG, GIF, WebP, AVIF or BMP) and prints a stable link plus the markdown to paste, so nobody is handed a local path their browser cannot open.
@@ -130,13 +130,13 @@ export function Places() {
 
       <div className="mt-16 grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8 items-center rounded-2xl border p-6 sm:p-8 bg-white/60" style={{ borderColor: "rgba(88,110,117,.2)" }}>
         <div>
-          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Attached to the task it proves.</h3>
+          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Pages attach to the task they back</h3>
           <p className="mt-3 text-[15px] leading-7" style={{ color: SOL.base01 }}>
             When the publishing session is working on a task, the page attaches to that task as evidence, stamped with the stage the task was at. Whoever opens the task finds the report, the screenshot page or the dashboard that backs the claim. An agent can name a different task or a plan instead.
           </p>
         </div>
         <div>
-          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>Every page in one place.</h3>
+          <h3 className="font-mono text-[18px] font-bold tracking-tight" style={{ color: SOL.base03 }}>All your pages in the sidebar</h3>
           <p className="mt-3 text-[15px] leading-7" style={{ color: SOL.base01 }}>
             <b style={{ color: SOL.base02 }}>Pages</b> in the sidebar lists what you published, then your team&apos;s, each card showing its gates, views and open comments. A card&apos;s menu has Open, Copy link, Manage, Edit and Delete.
           </p>

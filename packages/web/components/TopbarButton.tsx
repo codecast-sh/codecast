@@ -35,7 +35,7 @@ export const TopbarButton = forwardRef<
 
 /**
  * The top bar's status chips (model usage, daemon, running agents), one
- * treatment: a 24px capsule that sits inside the status tray, neutral at
+ * treatment: a 24px chip with the icon buttons' corners, neutral at
  * rest, with the state carried by its dot. Only `alert` (something is wrong
  * right now) tints the fill and the text in `tone`. Before it, each chip drew
  * its own tinted fill, border and glow, and four of them side by side read as
@@ -53,7 +53,7 @@ export const TopbarChip = forwardRef<
       {...props}
       data-topbar-chip={tinted ? "alert" : ""}
       className={cn(
-        "flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[11px] font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60",
+        "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60",
         tinted ? "hover:brightness-110" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
         className,
       )}
@@ -62,13 +62,17 @@ export const TopbarChip = forwardRef<
   );
 });
 
-/** The tray the status chips sit in: one outlined capsule for the whole group. */
+/**
+ * The status chips' group: no outline of its own, closed by the same hairline
+ * that separates the bar's other zones. The hairline is a pseudo-element so
+ * the group (and its divider) disappears whenever no chip renders.
+ */
 export function TopbarTray({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
       data-cc-topbar-tray
       className={cn(
-        "hidden md:has-[*]:flex h-7 shrink-0 items-center gap-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt/40 p-px",
+        "hidden md:has-[*]:flex h-7 shrink-0 items-center gap-0.5 after:ml-2.5 after:h-4 after:w-px after:bg-sol-border after:content-['']",
         className,
       )}
     >
