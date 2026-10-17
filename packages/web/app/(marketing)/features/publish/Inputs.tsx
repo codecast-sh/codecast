@@ -78,7 +78,7 @@ const ROWS: Row[] = [
     file: <FileToken name="report.html" glyph="HTML" kind="html" />,
     kind: "html",
     rules: [
-      <>Ships exactly as written. Scripts run, charts draw, forms work.</>,
+      <>Published as written, with scripts, charts and forms working.</>,
       <>The title comes from the <C>&lt;title&gt;</C> tag, else the filename.</>,
       <>The page runs in a browser sandbox with no access to your codecast sign-in, so a script on it can&apos;t act as you.</>,
     ],
@@ -87,7 +87,7 @@ const ROWS: Row[] = [
     file: <FileToken name="findings.md" glyph="MD" kind="markdown" />,
     kind: "markdown",
     rules: [
-      <>Renders as a clean reading page. Nobody has to write HTML for a write-up.</>,
+      <>Renders as a reading page, so a write-up needs no HTML.</>,
       <>The title comes from the first heading.</>,
       <>Diffs between versions compare the markdown source, so a changed sentence reads as one changed line.</>,
     ],
@@ -109,8 +109,8 @@ export function Inputs() {
       id="inputs"
       n="05"
       tone="sand"
-      title="Three kinds of input, one kind of link."
-      lede={<>The agent publishes whatever it already wrote. A file or folder is the page&apos;s identity: when the agent publishes the same one again, the same page updates.</>}
+      title="HTML files, markdown files and folders"
+      lede={<>The agent publishes whatever it already wrote. Each page is tied to the file or folder it came from, so publishing the same one again updates the same page.</>}
     >
       <div className="divide-y rounded-2xl border bg-white/60" style={{ borderColor: "rgba(88,110,117,.2)" }}>
         {ROWS.map((r) => (
