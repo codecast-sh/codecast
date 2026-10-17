@@ -48,6 +48,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, type OptimisticImage } from "../store/inboxStore";
+import { useChangedState } from "../hooks/useChangedState";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
@@ -100,6 +101,19 @@ const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({
 // Chat's caret-anchored @ and # popup. Wide enough that a session row's name,
 // its meta run, its id and its age share one line.
 const CHAT_AC_WIDTH = 560;
+// The @ and / popup floats over what sits above the composer once that
+// leaves it this much room; below it (a docked compose sheet, whose frame
+// grows with its content) the popup stays in the flow and grows the frame.
+const AC_OVERLAY_MIN_ROOM = 240;
+
+// Room above `el` before the nearest ancestor that clips it (or the viewport).
+function roomAboveInClip(el: HTMLElement): number {
+  let clipTop = 0;
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (getComputedStyle(node).overflowY !== "visible") { clipTop = Math.max(0, node.getBoundingClientRect().top); break; }
+  }
+  return el.getBoundingClientRect().top - clipTop;
+}
 
 const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
 const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
@@ -403,17 +417,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // narrower than the popup (a reply thread) caps it at the composer's width.
   const acAnchorRef = useRef<HTMLDivElement>(null);
   const [acCaretLeft, setAcCaretLeft] = useState(0);
-  // The popup grows upward from the anchor, so a composer near the top of the
-  // viewport (the palette's send step) caps it at the room above, or its top
-  // rows render offscreen.
+  // The popup grows upward from the anchor over what sits above the
+  // composer, capped at the room its clipping frame leaves there: a composer
+  // near the top of the viewport (the palette's send step) or inside a
+  // fixed-height dialog (the new-session popup) would otherwise lose its top
+  // rows. Pushing the composer down instead clips the composer itself.
   const [acRoomAbove, setAcRoomAbove] = useState<number | undefined>(undefined);
   useLayoutEffect(() => {
-    if (!chatMentionMode || !acTrigger) return;
+    if (!acTrigger) return;
     const ta = textareaRef.current;
     const host = acAnchorRef.current;
     if (!ta || !host) return;
-    setAcRoomAbove(Math.max(160, host.getBoundingClientRect().top - 18));
-    if (acTrigger.type === "/") return;
+    setAcRoomAbove(roomAboveInClip(host) - 18);
+    if (!chatMentionMode || acTrigger.type === "/") return;
     const caret = textareaCaretRect(ta, acTrigger.startPos);
     const taRect = ta.getBoundingClientRect();
     const hostRect = host.getBoundingClientRect();
@@ -1257,7 +1273,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [composeMode, setMessage]);
 
-  const [isMultiline, setIsMultiline] = useState(false);
+  // Measured after every keystroke (the Safari height fallback, the resize
+  // observer): set only on a change.
+  const [isMultiline, setIsMultiline] = useChangedState(false);
   useWatchEffect(() => {
     const el = textareaRef.current;
     if (!FIELD_SIZING_SUPPORTED || !el) return;
@@ -1280,7 +1298,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // (an unparsed font, say) only leaves the text wrapping beside the controls
   // as before; it can never oscillate.
   const controlsRowRef = useRef<HTMLDivElement>(null);
-  const [fitsBesideControls, setFitsBesideControls] = useState(true);
+  // Measured from a layout effect after every keystroke: set only on a change.
+  const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const measureFitsBesideControls = useCallback(() => {
     const ta = textareaRef.current;
@@ -2609,16 +2628,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const chatKey = parseChatDraftKey(conversationId);
+            const overlay = chatMentionMode || (acRoomAbove ?? 0) >= AC_OVERLAY_MIN_ROOM;
             const dropdown = (
               <div
                 ref={acRef}
-                className={chatMentionMode
-                  ? "absolute bottom-0 mb-1.5 z-30"
-                  : `mx-auto mb-1.5 ${colClass}`}
+                className={!overlay
+                  ? `mx-auto mb-1.5 ${colClass}`
+                  : `absolute bottom-0 mb-1.5 z-30 ${chatMentionMode ? "" : "inset-x-0"}`}
                 style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "min(100%, calc(100vw - 24px))" } : undefined}
               >
                 <MentionMenu
-                  style={chatMentionMode ? { maxHeight: acRoomAbove } : undefined}
+                  className={overlay && !chatMentionMode ? `mx-auto ${colClass}` : undefined}
+                  style={overlay ? { maxHeight: Math.max(160, acRoomAbove ?? 0) } : undefined}
                   items={acItems}
                   selectedIndex={clampedAcIndex}
                   onHover={setAcIndex}
@@ -2630,10 +2651,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 />
               </div>
             );
-            if (!chatMentionMode) return dropdown;
             // Zero height on purpose: it contributes no layout, only the
-            // positioning context the caret-anchored popup hangs from.
-            return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
+            // positioning context the floating popup hangs from.
+            return <>
+              <div ref={acAnchorRef} className="relative h-0">{overlay && dropdown}</div>
+              {!overlay && dropdown}
+            </>;
           })()}
       </>}
       fieldTop={<>

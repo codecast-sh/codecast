@@ -216,7 +216,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     expect(readCheckpoint(runDir, runId)?.visit_counts.build).toBe(1);
   }, 30000);
 
-  test("a station whose hand died with its runner starts that station again", async () => {
+  test("a station whose hand died with its runner, and was not revived, starts again with the old hand stopped", async () => {
     hangOn = "/cli/inbox";
     void runWorkflow(graph(), options());
     const runDir = lineRunDir(tmpDir, `line-${runId}`);
@@ -228,8 +228,9 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     handRow = (id) => (id === "conv_build_2" ? { id, work_state: "working", is_live: false } : { id, work_state: "done", is_live: false });
 
     gateAnswer = "S";
-    const outcome = await runWorkflow(graph(), options({ resume: row({ current_node_id: "build" }) }));
+    const outcome = await runWorkflow(graph(), options({ resume: row({ current_node_id: "build" }), reviveGraceMs: 50 }));
     expect(outcome).toBe("completed");
+    expect(calls.some((c) => c.route === "/cli/sessions/kill" && c.body.session === "conv_build_2")).toBe(true);
     expect(calls.filter((c) => c.route === "/cli/spawn").map((c) => c.body.title)).toEqual(["Build"]);
     expect(calls.some((c) => c.route === "/cli/spawn" && c.body.title === "Ground")).toBe(false);
   }, 30000);
