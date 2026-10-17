@@ -16,7 +16,7 @@ import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPla
 import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession } from "./types";
-import { SPREAD_CEILING, assignDestinations, loadShift } from "../../lib/resourceOffload";
+import { SPREAD_CEILING, assignDestinations, loadShareOf, loadShift, movableShare, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
 
 const movable = (r: OffloadCandidate["perDestination"][string] | undefined) => r?.readiness === "ready" || r?.readiness === "preflight_required";
@@ -94,6 +94,51 @@ function LoadBar({ label, before, after }: { label: string; before?: number; aft
 
 /** `destinationId` is set only when the user sent this one session somewhere other than the batch. */
 type Choice = { checked: boolean; destinationId?: string };
+
+const movableHere = (plan: OffloadPlan) => plan.candidates.filter((c) => plan.destinations.some((d) => movable(c.perDestination[d.deviceId])));
+const round5 = (n: number) => Math.round(n / 5) * 5;
+
+/** Where the dial starts: under pressure, enough to bring the hottest measure back to about 70%; otherwise a quarter. */
+function startingPercent(plan: OffloadPlan, max: number): number {
+  const peak = Math.max(plan.sourceSample.cpuPercent ?? 0, memoryUsed(plan.sourceSample) / Math.max(plan.sourceSample.memoryTotal, 1) * 100);
+  const want = plan.incident && peak > 70 ? Math.ceil(((peak - 70) / peak) * 20) * 5 : 25;
+  return Math.max(5, Math.min(round5(max), want));
+}
+
+/** The dial: how much of the machine's load to move off. Past what can move, the track is dimmed. */
+function LoadDial({ value, achieved, max, count, onChange }: { value: number; achieved: number; max: number; count: number; onChange: (n: number) => void }) {
+  return (
+    <div className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-dial>
+      <div className="flex items-baseline gap-2 text-[11px]">
+        <span className="text-sol-text-dim">Move off</span>
+        <span className="text-[20px] font-semibold tabular-nums leading-none text-sol-text">{value}%</span>
+        <span className="text-sol-text-dim">of load</span>
+        <span className="ml-auto tabular-nums text-sol-text-muted">{count === 0 ? "nothing selected" : `${plural(count, "session")} · ${achieved}%`}</span>
+      </div>
+      <div className="relative">
+        <div aria-hidden className="pointer-events-none absolute inset-y-0 my-auto h-1.5 w-full overflow-hidden rounded-full bg-sol-border/25">
+          <div className="absolute inset-y-0 left-0 bg-sol-cyan/20" style={{ width: `${max}%` }} />
+          <div className="absolute inset-y-0 left-0 bg-sol-cyan" style={{ width: `${Math.min(value, max)}%` }} />
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={value}
+          aria-label="Share of load to move off"
+          aria-valuetext={`${value}% of load, ${plural(count, "session")}`}
+          onChange={(e) => onChange(Math.min(Number(e.target.value), Math.max(5, round5(max))))}
+          className="relative h-5 w-full cursor-pointer appearance-none bg-transparent accent-[var(--sol-cyan,#2aa198)] [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-sol-bg [&::-webkit-slider-thumb]:bg-sol-cyan"
+        />
+      </div>
+      <div className="flex justify-between text-[10px] tabular-nums text-sol-text-dim">
+        <span>0%</span>
+        <span>{Math.round(max)}% can move</span>
+      </div>
+    </div>
+  );
+}
 
 function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void }) {
   const outside = c.stops.filter((p) => p.detached);
@@ -180,19 +225,27 @@ export type OffloadReviewProps = {
 
 export function OffloadReview({ plan, sessions, sourceName, now, initialSelected, actions, actionsDisabledReason, onClose }: OffloadReviewProps) {
   const byId = React.useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
+  const preselect = initialSelected?.length ? new Set(initialSelected) : undefined;
+  const maxPct = movableShare(movableHere(plan), plan.sourceSample) * 100;
+  // The dial picks the sessions once per turn of the dial; ticking a box by hand takes over until the dial moves again.
+  const [dial, setDial] = React.useState<number | null>(() => preselect ? null : startingPercent(plan, maxPct));
+  const sliced = (pct: number, prev: Record<string, Choice>) => {
+    const ids = new Set(sliceForPercent(movableHere(plan), plan.sourceSample, pct).ids);
+    return Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...prev[c.sessionId], checked: ids.has(c.sessionId) }]));
+  };
   // Choices survive new samples: the plan is rebuilt every sample, the user's review is not.
-  const [edited, setChoices] = React.useState<Record<string, Choice>>({});
+  const [edited, setChoices] = React.useState<Record<string, Choice>>(() => dial === null ? {} : sliced(dial, {}));
+  const turnDial = (pct: number) => { setDial(pct); setChoices((s) => sliced(pct, s)); };
   const [chosenMode, setMode] = React.useState<string>(AUTO);
   const [wait, setWait] = React.useState(SAFE_WAITS[1]?.value ?? SAFE_WAITS[0].value);
 
   // A host no session can move to (offline for good, blocked for all) is not a choice.
   const reachable = plan.destinations.filter((d) => plan.candidates.some((c) => movable(c.perDestination[d.deviceId])));
   const mode = chosenMode === AUTO || reachable.some((d) => d.deviceId === chosenMode) ? chosenMode : AUTO;
-  const preselect = initialSelected?.length ? new Set(initialSelected) : undefined;
   const pinned = (c: OffloadCandidate) => { const id = edited[c.sessionId]?.destinationId; return id && movable(c.perDestination[id]) ? id : undefined; };
-  const canMove = plan.candidates.filter((c) => plan.destinations.some((d) => movable(c.perDestination[d.deviceId])));
+  const canMove = movableHere(plan);
   const blocked = plan.candidates.filter((c) => !canMove.includes(c));
-  const isChecked = (c: OffloadCandidate) => edited[c.sessionId]?.checked ?? (preselect ? preselect.has(c.sessionId) : true);
+  const isChecked = (c: OffloadCandidate) => edited[c.sessionId]?.checked ?? (preselect ? preselect.has(c.sessionId) : false);
   const picked = canMove.filter(isChecked);
   const auto = assignDestinations(plan, picked.filter((c) => !pinned(c)), mode);
   const destOf = (c: OffloadCandidate) => pinned(c) ?? auto.get(c.sessionId) ?? c.suggestedDestinationId ?? plan.destinations.find((d) => movable(c.perDestination[d.deviceId]))?.deviceId ?? "";
@@ -214,6 +267,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
     rss: cs.reduce((a, c) => a + (c.relief.rssHigh ?? 0), 0),
   });
   const leaving = sumOf(going);
+  const achieved = Math.round(going.reduce((n, c) => n + loadShareOf(c, plan.sourceSample), 0) * 100);
   const source = loadShift(plan.sourceSample, leaving, -1);
   const receiving = plan.destinations
     .map((d) => ({ d, cs: going.filter((c) => destOf(c) === d.deviceId) }))
@@ -222,7 +276,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const unevaluated = (initialSelected ?? []).filter((id) => !plan.candidates.some((c) => c.sessionId === id) && !plan.notOffered.some((n) => n.sessionId === id));
   const midTurn = going.some((c) => c.disruption === "mid_turn");
   const allChecked = canMove.length > 0 && picked.length === canMove.length;
-  const setAll = (checked: boolean) => setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }])));
+  const setAll = (checked: boolean) => { setDial(null); setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }]))); };
   const titleOf = (id: string) => byId.get(id)?.title ?? id;
   // Grouped by reason, largest first: a count per reason reads at a glance where a line per session does not.
   const stayGroups = groupBy([
@@ -242,10 +296,16 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
       <header className="flex items-start gap-3 px-5 pb-3 pt-5">
         <div className="min-w-0 flex-1">
           <h2 className="text-[17px] font-semibold tracking-tight text-sol-text">Free up {sourceName}</h2>
-          <p className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-sol-text-muted" title={plan.incident.reason}>
-            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", plan.incident.level === "critical" ? "bg-sol-red" : "bg-sol-yellow")} />
-            {plan.incident.reason} for {fmtAgo(plan.incident.since, now).replace(/ ago$/, "")}
-          </p>
+          {plan.incident ? (
+            <p className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-sol-text-muted" title={plan.incident.reason}>
+              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", plan.incident.level === "critical" ? "bg-sol-red" : "bg-sol-yellow")} />
+              {plan.incident.reason} for {fmtAgo(plan.incident.since, now).replace(/ ago$/, "")}
+            </p>
+          ) : (
+            <p className="mt-1 flex items-center gap-1.5 text-[12px] text-sol-text-muted">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sol-green" />Running normally
+            </p>
+          )}
         </div>
         <button type="button" onClick={onClose} aria-label="Close review" className="-mr-1 rounded-full p-1.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"><X className="h-4 w-4" /></button>
       </header>
@@ -263,6 +323,10 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
           <LoadBar label="CPU" before={source.before.cpu} after={going.length ? source.after.cpu : undefined} />
           <LoadBar label="Memory" before={source.before.memory} after={going.length ? source.after.memory : undefined} />
         </div>
+
+        {plan.destinations.length > 0 && canMove.length > 0 && (
+          <LoadDial value={dial ?? achieved} achieved={achieved} max={maxPct} count={going.length} onChange={turnDial} />
+        )}
 
         {plan.destinations.length === 0 ? (
           <div className="rounded-xl bg-sol-bg-alt px-4 py-3 text-[12px] text-sol-text-secondary">
@@ -328,7 +392,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
                         title={titleOf(c.sessionId)}
                         checked={checked}
                         elsewhere={checked && host && (hostsUsed > 1 || !!pinned(c)) ? host : undefined}
-                        onCheck={(v) => setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: v } }))}
+                        onCheck={(v) => { setDial(null); setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: v } })); }}
                       />
                     );
                   })}

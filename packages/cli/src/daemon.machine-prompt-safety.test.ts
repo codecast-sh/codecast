@@ -883,6 +883,19 @@ describe("machine prompt delivery safety", () => {
       await expect(f.deliver("the brief")).resolves.toBe(true);
       expect(f.events).toEqual([]);
       expect(f.launchPromptCarries.size).toBe(0);
+      // Terminal, from the local echo: an "injected" row waits on ingest, and the
+      // healer re-pends it for a second paste when ingest stalls (jx74wc8).
+      expect(f.statuses).toContainEqual(expect.objectContaining({ messageId: "update", status: "delivered" }));
+    });
+
+    test("keeps the carry when the delivered mark fails, so the retry settles it instead of pasting", async () => {
+      const f = fixture("tmux", true);
+      f.state.menu = null;
+      carry(f, { taken: true });
+      f.deps.syncService.updateMessageStatus = async () => { throw new Error("backend down"); };
+      await expect(f.deliver("the brief")).rejects.toThrow("backend down");
+      expect(f.launchPromptCarries.size).toBe(1);
+      expect(f.bodies).toEqual([]);
     });
 
     test("is not pasted by a delivery that was already waiting for the session to start", async () => {
@@ -962,6 +975,42 @@ describe("machine prompt delivery safety", () => {
       expect(f.bodies).toEqual(["continue"]);
       expect(f.deps.messagesInFlight.has("update")).toBe(false);
       expect(f.deps.conversationDeliveryActive.has("conv")).toBe(false);
+    });
+
+    test("an attempt that never settles is reclaimed past its ttl, and never pastes once it wakes", async () => {
+      // Under load 500 an attempt hung before its paste and never returned. It
+      // kept the conversation's slot, and every later message to the session
+      // was skipped as "delivery already active" for hours (jx77xjt, 2026-10-16).
+      const f = fixture();
+      f.state.menu = null;
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>(resolve => { releaseHang = resolve; });
+      const claim = f.deps.syncService.claimPendingMessageForDelivery;
+      let claims = 0;
+      f.deps.syncService.claimPendingMessageForDelivery = async (...args: [string]) => {
+        // The scanner claims first; the second claim is the attempt's own admission.
+        if (++claims === 2) await hang;
+        return claim(...args);
+      };
+      const first = f.scan([{ _id: "update", content: "continue" }]);
+      for (let i = 0; i < 20 && claims < 2; i++) await tick();
+      const budget = f.timers.find((t: any) => t.ms === deliveryTimeoutMsFor("continue", undefined, 180_000));
+      await budget!.fn();
+      await first;
+      expect(f.deps.conversationDeliveryActive.has("conv")).toBe(true);
+      await f.timers.find((t: any) => t.ms === 1000 && !t.cancelled)!.fn();
+      const entry = f.deps.messagesInFlight.get("update");
+      entry.ts -= entry.ttlMs + 1;
+      await f.scan([{ _id: "update", content: "continue", retry_count: 1 }]);
+      expect(f.bodies).toEqual(["continue"]);
+      expect(f.deps.conversationDeliveryActive.has("conv")).toBe(false);
+      // The abandoned attempt wakes: its admission is refused before any paste,
+      // and it releases nothing the next delivery holds.
+      f.deps.conversationDeliveryActive.add("conv");
+      releaseHang();
+      for (let i = 0; i < 50; i++) await tick();
+      expect(f.bodies).toEqual(["continue"]);
+      expect(f.deps.conversationDeliveryActive.has("conv")).toBe(true);
     });
 
     test("a message the pane took the capped number of times is cancelled and said in the session", async () => {

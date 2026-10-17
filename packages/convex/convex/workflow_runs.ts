@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
@@ -345,6 +346,32 @@ export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = 
   if (run.status === "completed" || run.status === "failed") return;
   await withdrawOpenGate(ctx, run, now);
   await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
+  await stopStationHands(ctx, run);
+}
+
+// A station's hand is a session process on a machine, holding the run's
+// worktree. It ends with its station: when the runner reports the station
+// over (settled, failed, timed out), and, for every hand the run still holds,
+// when the run ends however it ends (completed, failed, a Ctrl-C on the
+// runner, a cancel). The stop keeps the card: the hand reads ended in the
+// inbox with its transcript, and a send restarts it. A runner that is
+// restarted or dies (SIGTERM, SIGHUP, a crash) reports nothing, so the hand
+// it was waiting on keeps working for the runner that resumes the run
+// (runResume.ts). The run's worktree outlives the hand: the next station
+// works in it, and the line releases it (lineTrialBranch.ts). Hands are the
+// node sessions nested under the run's own session (runner spawnHand);
+// `nodeIds` limits the stop to those stations.
+export async function stopStationHands(ctx: Ctx, run: any, nodeIds?: string[]): Promise<number> {
+  if (run.run_kind === "workflow" || !run.primary_conversation_id) return 0;
+  let stopped = 0;
+  for (const node of run.node_statuses ?? []) {
+    if (!node.session_id || (nodeIds && !nodeIds.includes(node.node_id))) continue;
+    const conv: any = await findConversationByAnyRef(ctx as any, node.session_id, run.user_id);
+    if (!conv || conv.inbox_killed_at || String(conv.parent_conversation_id ?? "") !== String(run.primary_conversation_id)) continue;
+    await killConversation(ctx, run.user_id, { conversation_id: conv._id, mark_completed: true }, { cause: "station_ended", keepWorkspace: true });
+    stopped++;
+  }
+  return stopped;
 }
 
 // A run that ends, however it ends, takes back the question it was waiting
@@ -1049,6 +1076,10 @@ export const updateProgress = mutation({
     // leaves no open gate behind. The run is already patched past its pause,
     // so the withdraw keeps this report's fail_reason.
     if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, run, now);
+    const runOver = args.run_status === "completed" || args.run_status === "failed";
+    if (runOver || args.node_status !== "running") {
+      await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, runOver ? undefined : [args.node_id]);
+    }
 
     // Sync status to bound task/plan
     if (args.run_status) {

@@ -2,8 +2,8 @@
 // The introduction anywhere (docs/architecture/org-staffing.md S20). Once per
 // person, on the next visit to any page, a card rises from the bottom right
 // corner: one face, "Meet your organization", two lines and two actions. See
-// it opens the org page, where the first visit (OrgIntro) does the real
-// introducing; Not now closes it. Either answer, and seeing the org page by
+// it opens the org page with its drawer on the Head of People, or on the
+// offer to hire one (OrgPanel); Not now closes it. Either answer, and seeing the org page by
 // any route, writes org_upsell_seen through the store, so a person who found
 // the feature on their own is never sold it afterwards.
 //

@@ -136,8 +136,15 @@
 [data-squeeze~="6"] .cq-sq6 { display: none !important; }
 [data-squeeze~="2"] .cq-sq2-tight { max-width: 9rem !important; }
 [data-sv-convhead] .cq-squeeze-row .cc-panel__title {
-  flex: 1 0 auto;
+  flex: 0 0 auto;
   min-width: 0;
+}
+/* The conversation's name is the header's one bright thing: full text
+   colour, a step above the facts beside it, no tracking. */
+[data-sv-convhead] .cc-panel__title {
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--sol-text);
 }
 [data-sv-convhead] [data-squeeze~="5"] .cc-panel__title {
   flex-shrink: 1;

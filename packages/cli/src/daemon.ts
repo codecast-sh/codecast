@@ -29,6 +29,7 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
 import type { ChildProcess } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
+import { raiseThreadToInteractiveQos } from "./threadQos.js";
 import { countingSemaphore } from "./semaphore.js";
 import { poolFile } from "./sim/pool.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
@@ -397,6 +398,7 @@ import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConf
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
+import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -710,6 +712,24 @@ export function missingFolderError(recordedPath: string): string {
   return `${recordedPath} isn't on this machine. Start the session in a folder this machine has.`;
 }
 
+// A new session started in a folder that isn't here yet (the new-session
+// picker's "create" choice) gets that folder. Only a plain folder inside this
+// machine's home: a recorded remote, or a repo root other than the folder
+// itself (pickers stamp git_root = the folder on a fresh start), means a
+// checkout to clone, not an empty directory to invent; a path outside home
+// came from another machine.
+export function creatableStartFolder(
+  rawPath: string,
+  home: string | undefined,
+  recorded: { git_root: string | null; git_remote_url: string | null } | null,
+): string | null {
+  if (!home || !rawPath || !path.isAbsolute(rawPath) || UNSAFE_PATH_RE.test(rawPath)) return null;
+  if (recorded?.git_remote_url) return null;
+  const resolved = path.resolve(rawPath);
+  if (recorded?.git_root && path.resolve(recorded.git_root) !== resolved) return null;
+  return resolved.startsWith(path.resolve(home) + path.sep) ? resolved : null;
+}
+
 // When a resume can't be placed in a real local checkout, mirror start_session:
 // stay silent if another device owns the conversation (it will run it), else
 // surface "clone it first" on the conversation. Never falls back to $HOME.
@@ -946,10 +966,11 @@ async function placeArrivedSession(sessionId: string, cwd: string | undefined, r
   log(`[REPARENT] ${sessionId.slice(0, 8)} placed in ${cwd}${placed?.updated ? "" : " (server unchanged)"}`);
 }
 
+const UNSAFE_PATH_RE = /[;|&`$(){}<>"\r\n\0]/;
 function validatePath(p: string): string | null {
   if (!p || typeof p !== "string") return null;
   if (!path.isAbsolute(p)) return null;
-  if (/[;|&`$(){}<>"\r\n\0]/.test(p)) return null;
+  if (UNSAFE_PATH_RE.test(p)) return null;
   const resolved = path.resolve(p);
   if (resolved !== p && resolved !== p.replace(/\/+$/, "")) return null;
   if (!fs.existsSync(resolved)) return null;
@@ -1616,7 +1637,7 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
   const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
   const cmdText = `${[castCmd, ...castPrefix].join(" ")} workflow run-daemon ${runId}`;
   try {
-    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await typeIntoPane(tmuxSession, cmdText);
     log(`[REMOTE] Started workflow run ${runId} in tmux: ${tmuxSession}`);
     return { tmux_session: tmuxSession };
@@ -2066,7 +2087,9 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // during one BOTH the mark and the JSONL echo ack stall past the TTL (2026-07-13 storm:
 // 'gogo' processed 7x, ct-38507). The hard cap is the last-resort redelivery deadline when
 // confirmation never arrives.
-const messagesInFlight = new Map<string, { ts: number; conversationId: string; ttlMs?: number }>();
+// `owner` is the delivery attempt the entry belongs to. A reclaim replaces it,
+// and from then on the old attempt may neither paste nor release anything.
+const messagesInFlight = new Map<string, { ts: number; conversationId: string; ttlMs?: number; owner?: object }>();
 // `pasted` flips once the paste was SEEN in the composer and submitted: only
 // such an entry is vouched to the server (collectPastedInjectedIds, the
 // paste_verified stamp). A pre-paste entry exists solely for dedup.
@@ -5914,11 +5937,13 @@ async function killConversationBackends(
   // parent's own kill is unaffected: it owns its process, so it takes the branch
   // below and tears its tree down normally.
   const teardownPlan = planSessionTeardown(sessionId ? await acquireSessionProcessOwnership(sessionId) : "unknown");
+  let sessionPid: number | undefined;
   if (sessionId && !result && !teardownPlan.reapPidTree) {
     log(`[REMOTE] Skipping process teardown for ${shortId(sessionId)}: does not own its process (conversation ${conversationId.slice(0, 12)})`);
   } else if (sessionId && !result) {
     const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
     if (proc) {
+      sessionPid = proc.pid;
       const tmuxTarget = await findTmuxPaneForTty(proc.tty);
       if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
         const tmuxSessionName = tmuxTarget.split(":")[0];
@@ -5970,6 +5995,15 @@ async function killConversationBackends(
   // what the owner-skip path in executeRemoteCommand runs on its own.
   if (await killLocalPanesForConversation(conversationId, sessionId, "REMOTE") > 0 && !result) {
     result = "killed_tmux";
+  }
+
+  // A kill is verified, not requested: the process the session ran in is
+  // gone when the command reports done. One that outlived its pane's reap
+  // (a tree that left the pane, a SIGTERM it ignored) is reaped once more, and
+  // one that still stands is the command's error, never a quiet "killed".
+  if (sessionPid && pidAlive(sessionPid)) {
+    await reapPidTree(sessionPid);
+    if (pidAlive(sessionPid)) error = `pid ${sessionPid} of session ${shortId(sessionId!)} survived the kill`;
   }
 
   // A kill is a clean slate. Wipe per-session/per-conversation caches that
@@ -6532,6 +6566,18 @@ async function executeRemoteCommand(
               log(`[REMOTE] start_session: no local checkout, but ${String(conversationId).slice(0, 12)} is owned by ${owner.slice(0, 8)} — staying silent`);
               break;
             }
+            const creatable = creatableStartFolder(rawPath, process.env.HOME, projectInfo);
+            if (creatable) {
+              try {
+                fs.mkdirSync(creatable, { recursive: true });
+                resolved = { path: creatable, remapped: false, reason: `created ${creatable}` };
+                log(`[REMOTE] start_session created folder ${creatable}`);
+              } catch (err) {
+                log(`[REMOTE] start_session could not create ${creatable}: ${err instanceof Error ? err.message : err}`);
+              }
+            }
+          }
+          if (!resolved) {
             const remote = projectInfo?.git_remote_url ?? null;
             // Unlike a background resume, a start always has a person waiting on
             // its first message, so it never refuses in silence: with nothing to
@@ -6815,7 +6861,7 @@ async function executeRemoteCommand(
             // the tracked backend, started-session registry, and delivery state.
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
           }
-          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+          await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           // Tag the tmux so warm-restart can rebuild startedSessionTmux from `tmux ls`.
           if (conversationId) {
             await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
@@ -7225,7 +7271,7 @@ async function executeRemoteCommand(
         const switchKill = parsed.switch_agent === true || pendingAgentSwitches.has(conversationId);
         const killed = switchKill
           ? await killConversationBackendsForAgentSwitch(conversationId, sessionIdHint)
-          : await killConversationBackends(conversationId, sessionIdHint, true);
+          : await killConversationBackends(conversationId, sessionIdHint, parsed.keep_workspace !== true);
         result = killed.result;
         error = killed.error;
         break;
@@ -8196,7 +8242,7 @@ async function executeRemoteCommand(
             const blankAccount = blankAgentType === "claude" ? await blankLaunchAccount(conversationId) : { prefix: "" as string, account: undefined as string | undefined };
             const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
-              tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+              await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
               // by conversation (findLiveTmuxForConversation / warm-restart). Without
               // the tag it is orphaned: a later fresh-start can't see it and spawns
@@ -10372,24 +10418,30 @@ export function sessionProcessOwnership(sessionId: string, opts?: { staleOk?: bo
   } catch { return "unknown"; }
 }
 
+/** Every Codex rollout under `home`, by session id: one walk of ~/.codex/sessions. */
+async function walkCodexRollouts(home: string): Promise<Map<string, string[]>> {
+  const files = new Map<string, string[]>();
+  const job: ScanJob = { name: "walk", root: path.join(home, ".codex", "sessions"), policy: { files: "jsonl" }, stats: false, requireComplete: true };
+  const apply = (rows: ScanRow[]) => {
+    for (const row of rows) if (row.type === "file") {
+      const id = row.name.match(TRAILING_UUID_JSONL_RE)?.[1];
+      if (id) files.set(id, [...(files.get(id) ?? []), row.path]);
+    }
+  };
+  if (daemonWorkersEnabled()) await visitScan(job, apply);
+  else {
+    const { scanPages } = await import("./workers/scanJobs.js");
+    for await (const rows of scanPages(job)) { apply(rows); await yieldScanBatch(); }
+  }
+  return files;
+}
+
 let codexOwnershipScan: { home: string; generation: number; pending: Promise<Map<string, string[]>> } | undefined;
 async function freshCodexOwnershipFiles(): Promise<Map<string, string[]>> {
   const home = process.env.HOME || "", generation = sessionFileIndexGeneration;
   if (codexOwnershipScan?.home === home && codexOwnershipScan.generation === generation) return codexOwnershipScan.pending;
   const pending = (async () => {
-    const files = new Map<string, string[]>();
-    const job: ScanJob = { name: "walk", root: path.join(home, ".codex", "sessions"), policy: { files: "jsonl" }, stats: false, requireComplete: true };
-    const apply = (rows: ScanRow[]) => {
-      for (const row of rows) if (row.type === "file") {
-        const id = row.name.match(TRAILING_UUID_JSONL_RE)?.[1];
-        if (id) files.set(id, [...(files.get(id) ?? []), row.path]);
-      }
-    };
-    if (daemonWorkersEnabled()) await visitScan(job, apply);
-    else {
-      const { scanPages } = await import("./workers/scanJobs.js");
-      for await (const rows of scanPages(job)) { apply(rows); await yieldScanBatch(); }
-    }
+    const files = await walkCodexRollouts(home);
     if (home !== (process.env.HOME || "") || generation !== sessionFileIndexGeneration || !sessionFileIndexReady) throw new ScanCancelled("ownership evidence changed");
     return files;
   })();
@@ -10397,6 +10449,18 @@ async function freshCodexOwnershipFiles(): Promise<Map<string, string[]>> {
   codexOwnershipScan = entry;
   try { return await pending; }
   finally { if (codexOwnershipScan === entry) codexOwnershipScan = undefined; }
+}
+
+// The rollout walk alone, bound to HOME and not to the session-file index: a
+// refresh of the Claude index says nothing about ~/.codex/sessions. Concurrent
+// asks share one walk.
+let codexRolloutWalk: { home: string; pending: Promise<Map<string, string[]>> } | undefined;
+function codexRolloutsNow(home: string): Promise<Map<string, string[]>> {
+  if (codexRolloutWalk?.home === home) return codexRolloutWalk.pending;
+  const entry = { home, pending: walkCodexRollouts(home) };
+  codexRolloutWalk = entry;
+  void entry.pending.finally(() => { if (codexRolloutWalk === entry) codexRolloutWalk = undefined; }).catch(() => {});
+  return entry.pending;
 }
 
 async function observeCodexOwnership(sessionId: string, rollout: string, home: string): Promise<ProcessOwnership> {
@@ -10412,6 +10476,22 @@ async function observeCodexOwnership(sessionId: string, rollout: string, home: s
 export async function acquireSessionProcessOwnership(sessionId: string, signal?: AbortSignal): Promise<ProcessOwnership> {
   const home = process.env.HOME || "";
   if (!home || signal?.aborted) return "unknown";
+  // Borrowing is a Codex shape: a subagent thread runs inside its parent's
+  // process. A top-level Claude transcript names a process of its own, so it
+  // is owned unless a Codex rollout under the same id says otherwise, and
+  // that takes only the rollout walk. The path below waits out a full refresh
+  // of the session-file index and answers "unknown" whenever the index moves
+  // meanwhile, which under load is every time: kills skipped a hand's
+  // teardown for 15 minutes and left it running (agentwatch Propose,
+  // 2026-10-16, 232 skipped teardowns that day).
+  const known = findSessionFile(sessionId);
+  if (known?.agentType === "claude" && !known.path.split(path.sep).includes("subagents")) {
+    try {
+      const rollouts = await codexRolloutsNow(home);
+      if (signal?.aborted || home !== (process.env.HOME || "")) return "unknown";
+      return rollouts.has(sessionId) ? "unknown" : "owned";
+    } catch { return "unknown"; }
+  }
   await ensureSessionFileIndex();
   const generation = sessionFileIndexGeneration;
   const current = () => !signal?.aborted && home === (process.env.HOME || "") && generation === sessionFileIndexGeneration && sessionFileIndexReady;
@@ -24202,6 +24282,14 @@ export function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, 
   }
 }
 
+// Dead, provably not an agent, or now another session's agent. A ps that gave
+// no answer proves none of these, so the cached pid stands.
+async function cachedProcessGone(sessionId: string, cached: { pid: number; filledAt: number }, label: string): Promise<boolean> {
+  return !isProcessRunning(cached.pid)
+    || (await agentProcessVerdict(cached.pid)) === false
+    || await rejectsForeignProcess(sessionId, cached.pid, label, Math.floor(cached.filledAt / 1000));
+}
+
 export async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
   // Supersession outranks the TTL: a registry hook claim newer than this
   // mapping proves it stale however recently the pid checked out as alive.
@@ -24211,7 +24299,7 @@ export async function getCachedSessionProcess(sessionId: string): Promise<Claude
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
     // Alive, an agent, and still THIS session's agent — a cached pid outlives an
     // in-process /clear or /resume switch as easily as it outlives the process.
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache", Math.floor(cached.filledAt / 1000))) {
+    if (await cachedProcessGone(sessionId, cached, "cache")) {
       sessionProcessCache.delete(sessionId);
       return null;
     }
@@ -24224,7 +24312,7 @@ export async function getCachedSessionProcess(sessionId: string): Promise<Claude
 async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
     if (dropSupersededProcessCacheEntry(sessionId)) continue;
-    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache sweep", Math.floor(cached.filledAt / 1000))) {
+    if (await cachedProcessGone(sessionId, cached, "cache sweep")) {
       sessionProcessCache.delete(sessionId);
     }
   }
@@ -24671,11 +24759,16 @@ export async function resolveLiveTmuxTarget(
   const isMaterialized = materializedSessions.has(sessionId);
   const proc = isMaterialized ? null : await findSessionProcess(sessionId, agentType);
   if (proc) {
-    if (!(await isAgentProcess(proc.pid))) {
+    const verdict = await agentProcessVerdict(proc.pid);
+    if (verdict === false) {
       // Leftover shell, not an agent — drop the stale process cache and give up on it.
       sessionProcessCache.delete(sessionId);
       return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
     }
+    // An unanswered ps leaves the pid this session resolved to as its agent.
+    // Reading it as dead sent a live session (jx77xjt, 2026-10-16, load 500)
+    // down the auto-resume path, which starts a second agent beside it.
+    if (verdict === null) logDelivery(`ps gave no answer for pid=${proc.pid}; keeping it as session ${sessionId.slice(0, 8)}'s agent`);
     let pane = await findTmuxPaneForTty(proc.tty);
     // A process can OUTLIVE the pane that launched it while still holding that
     // pane's tty. Kill the launch wrapper and the agent is reparented to init,
@@ -25108,6 +25201,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const data = await fetchExport(siteUrl, config.auth_token, conversationId);
       if (!hasResumableMessages(data)) {
         logDelivery(`Reconstitution skipped for ${sessionId.slice(0, 8)}: conversation has no resumable messages`);
+        unresumableConversations.add(conversationId);
         return false;
       }
       const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
@@ -26203,7 +26297,7 @@ async function startFreshSessionForDelivery(
   if (pendingSessionStarts.has(conversationId)) throw new PendingDeliveryHeldError();
 
   try {
-    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", "claude").catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
@@ -26410,8 +26504,15 @@ function carryLaunchPrompt(messageId: string, carry: Omit<LaunchPromptCarry, "st
 
 /** Delivery's answer for a message a launch command carried: true once the
  *  transcript holds the prompt. A pane that died gives the message back to the
- *  ordinary path; one still booting holds it for the next attempt. */
-async function settleLaunchPrompt(messageId: string): Promise<boolean> {
+ *  ordinary path; one still booting holds it for the next attempt.
+ *
+ *  The transcript row is the agent's own echo, so the row is marked delivered
+ *  from it here. Left "injected", it waited for that echo to reach the server
+ *  through ingest; while ingest kept failing on the session, the healer re-pended
+ *  it and the prompt was pasted a second time (jx74wc8, 2026-10-16). The carry is
+ *  dropped only after the write lands, so a failed write retries here rather than
+ *  falling through to a paste. */
+async function settleLaunchPrompt(messageId: string, syncService: Pick<SyncService, "updateMessageStatus">): Promise<boolean> {
   const carry = launchPromptCarries.get(messageId);
   if (!carry) return false;
   const pane: StartedSessionInfo = { tmuxSession: carry.tmuxSession, projectPath: carry.projectPath, startedAt: carry.startedAt, agentType: "claude", sessionId: carry.sessionId };
@@ -26419,6 +26520,7 @@ async function settleLaunchPrompt(messageId: string): Promise<boolean> {
   for (;;) {
     const jsonl = await fs.promises.readFile(carry.transcript, "utf-8").catch(() => "");
     if (transcriptHasUserPrompt(jsonl)) {
+      await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
       launchPromptCarries.delete(messageId);
       logDelivery(`msg=${messageId.slice(0, 8)} delivered as the launch prompt of ${carry.tmuxSession}`);
       return true;
@@ -26457,7 +26559,7 @@ async function deliverMessage(...args: Parameters<typeof deliverMessageIntoSessi
     return await deliverMessageIntoSession(...args);
   } catch (err) {
     if (!(err instanceof LaunchPromptCarriedError)) throw err;
-    return settleLaunchPrompt(args[4]);
+    return settleLaunchPrompt(args[4], args[3]);
   }
 }
 
@@ -26472,11 +26574,14 @@ async function deliverMessageIntoSession(
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
   const admitPending = createDeliveryAdmission(syncService, messageId, conversationId);
+  const owner = messagesInFlight.get(messageId)?.owner;
   // Asked before every injection, so a delivery already under way when the
   // session launched with this message can never put a second copy in front
-  // of the agent.
+  // of the agent, and an attempt the scanner reclaimed never pastes beside
+  // the one that replaced it.
   const admit = async (): Promise<void> => {
     if (launchPromptCarried(messageId)) throw new LaunchPromptCarriedError();
+    if (owner && messagesInFlight.get(messageId)?.owner !== owner) throw new PendingDeliveryHeldError();
     await admitPending();
   };
   await deliveryStep(messageId, "admit_first", admit);
@@ -26670,77 +26775,85 @@ async function deliverMessageIntoSession(
     }
   }
 
+  // Try delivering via a recently started tmux session (from start_session command)
+  const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
+    try {
+      await tmuxExec(["has-session", "-t", entry.tmuxSession]);
+      let ready = false;
+      const startTime = Date.now();
+      for (let i = 0; i < 60; i++) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
+        const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
+        if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
+        if (probe.state === "fatal") {
+          log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
+          deleteStartedSession(conversationId);
+          return false;
+        }
+        if (probe.state === "ready") {
+          log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
+          ready = true;
+          break;
+        }
+      }
+      if (!ready) {
+        log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+      }
+      // Brief settle after the prompt paints. This is NOT the readiness
+      // guarantee — injectViaTmux gates Enter on the pasted payload actually
+      // rendering in the composer (awaitTmuxComposerPayload, ct-40212), so a
+      // slow input handler stalls the gate, not the submit. The 500ms just
+      // lets the freshly painted frame stop redrawing, and a client with no
+      // readiness entry of its own keeps exactly that.
+      const readiness = localAgentClient(entry.agentType).paneReadiness;
+      await new Promise(resolve => setTimeout(resolve, readiness?.settleMs ?? 500));
+      const startedTmuxTarget = entry.tmuxSession + ":0.0";
+      // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
+      // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
+      // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
+      // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
+      // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
+      // "delivered". If we marked after and the ack won the race it would find no row and the
+      // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
+      // → duplicate reply. Marking first guarantees the ack always has a row to promote.
+      await deliveryStep(messageId, "admit_started", admit);
+      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+      await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
+      syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+      log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+      watchForPrompt(startedTmuxTarget, conversationId);
+      return true;
+    } catch (err) {
+      if (err instanceof PendingDeliveryHeldError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // A deaf-but-painted composer (payload never rendered) or a paste that
+      // provably never reached the agent are conditions of THIS healthy,
+      // still-booting pane. Falling through would start a SECOND instance
+      // beside it (the incident's duplicated-backend shape) — rethrow so the
+      // delivery layer retries into the same pane after backoff instead.
+      if (isDeliveryVerdict(err)) throw err;
+      log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
+      // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
+      if (Date.now() - entry.startedAt > 60_000) {
+        deleteStartedSession(conversationId);
+      }
+      return false;
+    }
+  };
+
+  // A blank agent for this conversation, with the message typed into it: the
+  // fallback for a conversation that has no session to reach or resume.
+  const deliverViaFreshStart = async (): Promise<boolean> => {
+    const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
+    if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
+    return !!freshEntry && await tryStartedTmux(freshEntry);
+  };
+
   if (!sessionId) {
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
-    // Try delivering via a recently started tmux session (from start_session command)
-    const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
-      try {
-        await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        let ready = false;
-        const startTime = Date.now();
-        for (let i = 0; i < 60; i++) {
-          await new Promise(resolve => setTimeout(resolve, 250));
-          // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
-          const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
-          if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
-          if (probe.state === "fatal") {
-            log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
-            deleteStartedSession(conversationId);
-            return false;
-          }
-          if (probe.state === "ready") {
-            log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
-            ready = true;
-            break;
-          }
-        }
-        if (!ready) {
-          log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
-        }
-        // Brief settle after the prompt paints. This is NOT the readiness
-        // guarantee — injectViaTmux gates Enter on the pasted payload actually
-        // rendering in the composer (awaitTmuxComposerPayload, ct-40212), so a
-        // slow input handler stalls the gate, not the submit. The 500ms just
-        // lets the freshly painted frame stop redrawing, and a client with no
-        // readiness entry of its own keeps exactly that.
-        const readiness = localAgentClient(entry.agentType).paneReadiness;
-        await new Promise(resolve => setTimeout(resolve, readiness?.settleMs ?? 500));
-        const startedTmuxTarget = entry.tmuxSession + ":0.0";
-        // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
-        // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
-        // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
-        // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
-        // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
-        // "delivered". If we marked after and the ack won the race it would find no row and the
-        // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
-        // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        await deliveryStep(messageId, "admit_started", admit);
-        markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await deliveryStep(messageId, "inject_started", () => injectViaTmux(startedTmuxTarget, content, entry.agentType, { delivery: { messageId, conversationId } }));
-        syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-        log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        watchForPrompt(startedTmuxTarget, conversationId);
-        return true;
-      } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        // A deaf-but-painted composer (payload never rendered) or a paste that
-        // provably never reached the agent are conditions of THIS healthy,
-        // still-booting pane. Falling through would start a SECOND instance
-        // beside it (the incident's duplicated-backend shape) — rethrow so the
-        // delivery layer retries into the same pane after backoff instead.
-        if (isDeliveryVerdict(err)) throw err;
-        log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
-        // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
-        if (Date.now() - entry.startedAt > 60_000) {
-          deleteStartedSession(conversationId);
-        }
-        return false;
-      }
-    };
-
     const started = startedSessionTmux.get(conversationId);
     if (started && await tryStartedTmux(started)) return true;
 
@@ -26786,9 +26899,7 @@ async function deliverMessageIntoSession(
         sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
         if (!sessionId) {
           logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-          const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
-          if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
-          if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+          if (await deliverViaFreshStart()) return true;
           log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
@@ -26799,9 +26910,7 @@ async function deliverMessageIntoSession(
       sessionId = (await deliveryStep(messageId, "materialize", () => materializeSession(conversationId, conversationCache, titleCache, syncService)))!;
       if (!sessionId) {
         logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
-        const freshEntry = await deliveryStep(messageId, "start_fresh", () => startFreshSessionForDelivery(conversationId));
-        if (await deliveryStep(messageId, "app_server_recovered", tryBackendDelivery)) return true;
-        if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+        if (await deliverViaFreshStart()) return true;
         logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
@@ -27005,6 +27114,15 @@ async function deliverMessageIntoSession(
   // days, ~780 rows across the fleet on 2026-10-14, ct-56547).
   if (fatal && unresumableConversations.has(conversationId)) {
     throw new UndeliverableMessageError(`session ${sessionId.slice(0, 8)} cannot resume (${resumeFatalReasons.get(sessionId)}) and its conversation has nothing to rebuild it from`);
+  }
+  // A session that died before its first message reached it (a reboot while
+  // its first delivery was still typing) left no transcript and its
+  // conversation holds nothing to rebuild one from, so no resume can ever
+  // succeed. Nothing is lost by starting it over: a blank agent with this
+  // message is exactly the session that was meant to exist.
+  if (unresumableConversations.has(conversationId) && !findSessionFile(sessionId)) {
+    logDelivery(`Session ${sessionId.slice(0, 8)} never started and has nothing to resume, starting fresh for conv=${conversationId.slice(0, 12)}`);
+    if (await deliverViaFreshStart()) return true;
   }
   logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${fatal ? "fatal" : "transient"})`);
   return false;
@@ -27375,13 +27493,19 @@ async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number
 // reconcile, process-tree scans). As a sync `ps` it blocked the event loop
 // ~1.8s per call under load (SLOW-SYNC-SPAWN, 2026-08-21) — dozens of calls per
 // sweep froze delivery for the whole fleet.
-async function isAgentProcess(pid: number): Promise<boolean> {
+// null when the pid is alive but ps gave no answer: under heavy load its 3s
+// budget runs out, and that says nothing about what runs there.
+async function agentProcessVerdict(pid: number): Promise<boolean | null> {
   try {
     const { stdout } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
     return isRecognizedAgentComm(stdout.trim());
   } catch {
-    return false;
+    return isProcessRunning(pid) ? null : false;
   }
+}
+
+async function isAgentProcess(pid: number): Promise<boolean> {
+  return (await agentProcessVerdict(pid)) === true;
 }
 
 let skipRespawn = false;
@@ -27665,6 +27789,16 @@ function restartDaemonProcess(reason: string): void {
     // free the pid file by exiting and kick the job so launchd's instance wins it.
     skipRespawn = true;
     if (!requestLaunchdRestart()) spawnReplacement();
+    persistLogQueue();
+    process.exit(0);
+  }
+  // A systemd unit (provisionLinux.ts: Restart=always, KillMode=process)
+  // brings its daemon back on exit. A replacement spawned here would outlive
+  // the exit inside the unit's cgroup and hold the pid file, so every restart
+  // of the unit exits "already running" and the unit loops every RestartSec
+  // forever (28k restarts on the Linux host, 2026-10-16).
+  if (supervisedBySystemdUnit()) {
+    skipRespawn = true;
     persistLogQueue();
     process.exit(0);
   }
@@ -29523,6 +29657,9 @@ async function main(): Promise<void> {
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
     process.exit(0);
   }
+
+  // The control plane outranks the work it supervises (threadQos.ts).
+  if (!raiseThreadToInteractiveQos() && process.platform === "darwin") log("[RESOURCES] could not raise the daemon thread to interactive QoS; it competes with the fleet at default priority");
 
   // Refresh the session-start hooks on boot when stable mode is enabled: the
   // scripts and the opencode plugin ship with the CLI (they delegate to
@@ -31972,9 +32109,16 @@ async function main(): Promise<void> {
             continue;
           }
           logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${ttlMs / 1000}s TTL, retrying`);
+          // The attempt that held this entry also holds its conversation's
+          // slot, and an attempt that never settles never gives it back: every
+          // later message to the session skipped as "delivery already active"
+          // for hours (jx77xjt, 2026-10-16). Abandon it here. Replacing the
+          // entry's owner fences it out of every later paste (admit) and release.
           messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(inFlight.conversationId);
         }
-        messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
+        const owner = {};
+        messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, owner });
 
         // Per-conversation serialization: only one message delivers to a given tmux
         // pane at a time. The subscription fires reactively when the first completes,
@@ -31985,6 +32129,11 @@ async function main(): Promise<void> {
           continue;
         }
         conversationDeliveryActive.add(msg.conversation_id);
+        const ownsInFlight = () => messagesInFlight.get(msg._id)?.owner === owner;
+        const releaseInFlight = () => {
+          messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(msg.conversation_id);
+        };
 
         const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
         logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
@@ -32011,8 +32160,7 @@ async function main(): Promise<void> {
           }
           if (fetchError !== null) {
             logDelivery(`Image fetch failed for msg=${msg._id.slice(0, 8)} (${fetchError}); re-pending instead of delivering without it`);
-            messagesInFlight.delete(msg._id);
-            conversationDeliveryActive.delete(msg.conversation_id);
+            releaseInFlight();
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
             continue;
           }
@@ -32037,8 +32185,7 @@ async function main(): Promise<void> {
             await syncService.updateMessageStatus({ messageId: msg._id, status: "injected", ...(lastInjected.pasted ? { pasteVerified: true } : {}) });
             lastInjected.confirmed = true; // a served status write IS the confirmation
           } catch {}
-          messagesInFlight.delete(msg._id);
-          conversationDeliveryActive.delete(msg.conversation_id);
+          releaseInFlight();
           continue;
         }
 
@@ -32057,16 +32204,19 @@ async function main(): Promise<void> {
         // writes over a live attempt (five copies of one trigger prompt, 2026-10-05).
         let timedOut = false;
         let attempt: Promise<boolean> | undefined;
-        const releaseInFlight = () => {
-          messagesInFlight.delete(msg._id);
-          conversationDeliveryActive.delete(msg.conversation_id);
-        };
         // The timeout already scheduled a retry, and the attempt went on to mark
         // the row "injected" before it gave up: nothing would re-pend it, and the
         // session sat until the server's stale-injected sweep (20 minutes for
         // five revived sessions on 2026-10-06). A late success needs nothing.
+        // An attempt a reclaim abandoned leaves the message to the attempt that
+        // replaced it; it re-pends only when nothing else holds the message.
         const settleLateAttempt = (outcome: unknown) => {
+          const abandoned = !ownsInFlight();
           releaseInFlight();
+          if (abandoned && messagesInFlight.has(msg._id)) {
+            logDelivery(`ABANDONED: msg=${msg._id.slice(0, 8)} reclaimed attempt ended ${outcome === true ? "delivered" : "undelivered"}; a newer attempt owns it`);
+            return;
+          }
           if (outcome === true) {
             logDelivery(`LATE SUCCESS: msg=${msg._id.slice(0, 8)} delivered after its attempt timed out`);
             return;
@@ -32080,7 +32230,7 @@ async function main(): Promise<void> {
           const rawAgent = typeof msg.conversation_agent_type === "string" ? msg.conversation_agent_type : undefined;
           const agentType = rawAgent ? fromConvexAgentType(rawAgent) : undefined;
           const timeoutMs = deliveryTimeoutMsFor(messageContent, agentType, DELIVERY_TIMEOUT_MS);
-          messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, ttlMs: timeoutMs + IN_FLIGHT_GRACE_MS });
+          messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, ttlMs: timeoutMs + IN_FLIGHT_GRACE_MS, owner });
           attempt = deliverMessage(
             msg.conversation_id,
             messageContent,
