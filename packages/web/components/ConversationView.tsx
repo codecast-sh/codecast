@@ -1635,6 +1635,10 @@ const ConversationViewInner = (
 
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
+    // Rows placed by `top`, not translate3d: a 3D transform makes every row a
+    // compositor layer, and the browser re-layers the whole page on each frame
+    // that moves the caret, so each keystroke paid for every visible row.
+    directDomUpdatesMode: "position",
     onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
@@ -4846,7 +4850,6 @@ const ConversationViewInner = (
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
-                    top: 0,
                     left: 0,
                     width: "100%",
                     ...(visible ? {} : { height: 0, overflow: "hidden" }),

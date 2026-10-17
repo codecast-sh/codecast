@@ -43,25 +43,6 @@ export function stableRefId(o: object): number {
   return id;
 }
 
-// A signature function's interner: a rebuild whose content equals one of the
-// last few signatures returns that same string. Subscribers compare signatures
-// with Object.is, which for two distinct strings with equal content walks every
-// character, and a signature over thousands of rows is megabytes: compared once
-// per subscriber per store write for as long as the content holds. Interned,
-// the compare is a pointer check. Several are kept, not one, because the same
-// function also signs other collections in between (a filtered or projected
-// copy), which would evict a single remembered string.
-export function createInterner(size = 3): (signature: string) => string {
-  const recent = new Map<string, string>();
-  return (signature) => {
-    const seen = recent.get(signature);
-    if (seen !== undefined) return seen;
-    recent.set(signature, signature);
-    if (recent.size > size) recent.delete(recent.keys().next().value!);
-    return signature;
-  };
-}
-
 // Single-row signature: every own field except the denied (churn) ones. Object
 // values fold in via stableRefId so a nested change still flips the signature.
 // Memoized by the row ref and the denylist: every subscriber re-reads its row's
@@ -97,17 +78,20 @@ function rowSigUncached(row: Record<string, any>, deny: ReadonlySet<string>): st
 //
 // The signature is a short digest, not the projections themselves: a hash per
 // row (its key and projection, cached by the row ref) folded into two sums and
-// the row count. A rebuild after one row changed hashes that row only, and the
+// the row count. A projection of null leaves the row out of the signature. A rebuild after one row changed hashes that row only, and the
 // result compares in constant time. Joined projections over thousands of rows
 // were megabytes, rebuilt on every heartbeat and compared character by
 // character by every subscriber on every store write. It answers equality
 // only: never parse it. Key order does not count; membership and every
 // projection do.
 export function makeCollectionSig<T>(
-  project: (row: T) => string,
+  project: (row: T) => string | null,
 ): (collection: Record<string, T>) => string {
   const signatures = new WeakMap<Record<string, T>, string>();
   const hashedByRow = new WeakMap<object, RowHash>();
+  // A row that is not an object (a set kept as { id: true }) is cached by its
+  // key and value instead, so it is not hashed again on every rebuild.
+  const hashedByKey = new Map<string, RowHash & { value: unknown }>();
   return (collection: Record<string, T>): string => {
     const cached = signatures.get(collection);
     if (cached !== undefined) return cached;
@@ -117,11 +101,14 @@ export function makeCollectionSig<T>(
     for (const id in collection) {
       const row = collection[id];
       const keyed = row !== null && typeof row === "object";
-      let h = keyed ? hashedByRow.get(row as object) : undefined;
-      if (h === undefined || h.id !== id) {
-        h = rowHash(id, project(row));
+      let h: RowHash | undefined = keyed ? hashedByRow.get(row as object) : hashedByKey.get(id);
+      if (h === undefined || h.id !== id || (!keyed && (h as { value: unknown }).value !== row)) {
+        const projected = project(row);
+        h = projected === null ? { id, a: 0, b: 0, left: true } : rowHash(id, projected);
         if (keyed) hashedByRow.set(row as object, h);
+        else hashedByKey.set(id, { ...h, value: row });
       }
+      if (h.left) continue;
       a = (a + h.a) | 0;
       b = (b + h.b) | 0;
       n++;
@@ -132,7 +119,8 @@ export function makeCollectionSig<T>(
   };
 }
 
-type RowHash = { id: string; a: number; b: number };
+// `left`: the projection returned null, so the row is not counted.
+type RowHash = { id: string; a: number; b: number; left?: true };
 
 // Two independent 32-bit hashes of the row's key and projection (cyrb53's
 // mixing), so the folded pair carries 64 bits.

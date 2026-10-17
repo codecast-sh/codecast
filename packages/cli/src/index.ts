@@ -89,8 +89,6 @@ import {
   foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
-  graphChange,
-  graphChangeText,
   isTerminalTaskStatus,
   openBlockerLabels,
   parkingLine,
@@ -16714,27 +16712,9 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   for (const l of offFrontierLines(t, t.not_ready)) console.log(`  ${c.dim}${l}${c.reset}`);
   if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
-  // Linked sessions by short id — the handle `cast read` / `cast diff` take —
-  // so a task's working session is one line away, not a regex over comments.
-  if (t.sessions?.length) {
-    console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
-    for (const sess of t.sessions) {
-      console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
-    }
-  }
-  if (t.history?.length) {
-    console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
-    for (const h of t.history) {
-      // Graph changes in the web timeline's words (task-graph.md TG11).
-      const graph = graphChange(h);
-      const what = h.action === "created"
-        ? "created this task"
-        : graph ? graphChangeText(graph) : `${h.field}: ${h.old_value || "none"} to ${h.new_value || "none"}`;
-      const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
-      const actor = !h.actor || h.actor === "system" ? "codecast" : h.actor;
-      console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${actor} ${what}${from}`);
-    }
-  }
+  const show = await import("./taskShow.js");
+  for (const l of show.formatTaskSessions(t.sessions ?? [])) console.log(l);
+  for (const l of show.formatTaskHistory(t.history ?? [])) console.log(l);
   if (t.comments?.length) {
     const COMMENT_TYPE_ICONS: Record<string, string> = {
       progress: `${c.blue}↳${c.reset}`,
@@ -16754,11 +16734,10 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   // The line (the-line.md L10): decisions, runs, evidence. Empty sections are skipped.
   if (line) {
-    const { formatTaskDecisions, formatTaskRuns, formatTaskEvidence } = await import("./taskShow.js");
     const now = Date.now();
-    for (const l of formatTaskDecisions(line.decisions, t, now)) console.log(l);
-    for (const l of formatTaskRuns(line.runs, now)) console.log(l);
-    for (const l of formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
+    for (const l of show.formatTaskDecisions(line.decisions, t, now)) console.log(l);
+    for (const l of show.formatTaskRuns(line.runs, now)) console.log(l);
+    for (const l of show.formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
   }
   console.log();
 }
@@ -21037,8 +21016,13 @@ workflow
     // a person has answered.
     const { isMidRun, handOffRun } = await import("./workflow/runResume.js");
     const resume = isMidRun(run);
-    const { graphForDaemonRun } = await import("./workflow/daemonGraph.js");
+    const { graphForDaemonRun, daemonGraphFile, publishDaemonGraph } = await import("./workflow/daemonGraph.js");
     const graph = graphForDaemonRun(run, wf, projectPath, deviceId(), resume);
+    const graphFile = daemonGraphFile(run, wf, deviceId(), resume);
+    if (graphFile) {
+      await publishDaemonGraph(graphFile, wf, deviceId(), (route, body) => cliPost(route, body, { throwOnError: true }))
+        .catch((err) => console.error(`Could not publish ${graphFile}: ${err instanceof Error ? err.message : err}`));
+    }
     if (!graph) {
       console.error(`Workflow has no nodes — cannot execute. "${run.workflow_name ?? wf.name}" is neither a pushed workflow nor a shipped template.`);
       process.exit(1);
