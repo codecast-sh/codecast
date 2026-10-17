@@ -39,7 +39,7 @@ const MODES: Mode[] = [
   },
   {
     key: "on", label: "on event", color: SOL.magenta, name: "When something happens",
-    body: <>An event from GitHub, Linear, or your running product, picked from a list. An agent can narrow it to one repository, pull request or source. Events that arrive while a run is working are kept for the next run, not dropped.</>,
+    body: <>An event from GitHub, Linear, or your running product, picked from a list. An agent can narrow it to one repository, pull request or source. Events that arrive while a run is working are kept for the next run.</>,
     example: "Respond to new PR review comments · on a PR comment in #482",
   },
 ];
@@ -64,7 +64,7 @@ export function Clocks() {
   return (
     <Section
       id="fire"
-      title="Three ways to fire"
+      title="Run once, on a cadence, or on an event"
       lede={<>Every trigger is the same thing: a prompt, a title, a short ID like <C>tr-42</C>, and a <b>When</b>. On the Triggers page, <b>New trigger</b> opens the form below. The agent in a conversation sets the same thing when you ask it to follow up later.</>}
     >
       <Shot

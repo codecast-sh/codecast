@@ -7,7 +7,7 @@ import Link from "next/link";
 import { MessageSquare, MapPin, Github, ArrowUpRight, Pin, Activity } from "lucide-react";
 import { AgentTypeIcon, formatAgentType } from "../../../components/AgentTypeIcon";
 import { AvatarImg } from "../../../lib/avatarCache";
-import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
+import { ActivityHeatmap, fmtHours } from "../../../components/ActivityHeatmap";
 import { TimelineCharts, fmtDayLabel, fmtK, type PunchRow } from "../../../components/ActivityCharts";
 import { LogoMark } from "../../../components/Logo";
 import { ThemeToggle } from "../../../components/ThemeToggle";
@@ -70,6 +70,16 @@ export default function PublicProfilePage() {
     return m;
   }, [pins]);
 
+  // Year totals for the stat row, from the same day rows the graph draws.
+  const yearTotals = useMemo(() => {
+    const rows = (heatmap ?? []) as FeedDay[];
+    return {
+      hours: rows.reduce((t, d) => t + d.hours, 0),
+      sessions: rows.reduce((t, d) => t + d.sessions, 0),
+      activeDays: rows.filter((d) => d.sessions > 0).length,
+    };
+  }, [heatmap]);
+
   // undefined = still loading; null = no such (enabled) profile → 404.
   if (profile === undefined) return <ProfileShell><ProfileSkeleton /></ProfileShell>;
   if (profile === null) return <ProfileShell><NotFound username={username} /></ProfileShell>;
@@ -128,21 +138,27 @@ export default function PublicProfilePage() {
         )}
 
         {/* Stats */}
-        <div className="reveal reveal-1 mt-6 flex flex-wrap gap-2.5">
-          <StatChip label="pinned" value={profile.stats.pinned_sessions} />
-          <StatChip label="messages" value={profile.stats.pinned_messages} />
+        <div className="reveal reveal-1 mt-7 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          {showActivity && yearTotals.sessions > 0 && (
+            <>
+              <StatChip label="agent hours" value={fmtHours(yearTotals.hours)} />
+              <StatChip label="sessions" value={yearTotals.sessions.toLocaleString()} />
+              <StatChip label="active days" value={yearTotals.activeDays.toLocaleString()} />
+            </>
+          )}
+          <StatChip label="pinned" value={profile.stats.pinned_sessions.toLocaleString()} />
         </div>
 
         {/* Contribution graph */}
         {showActivity && heatmap && heatmap.length > 0 && (
-          <section className="reveal reveal-2 mt-9 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
+          <section className="reveal reveal-2 mt-9 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-5 py-4">
             <ActivityHeatmap data={heatmap} label="Contribution activity" />
           </section>
         )}
 
         {/* Detailed charts — hour-of-day punchcard + per-day/hourly series */}
         {showActivity && punchcard !== undefined && punchcard.length > 0 && (
-          <section className="reveal reveal-2 mt-4 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
+          <section className="reveal reveal-2 mt-4 rounded-2xl border border-sol-border/25 bg-sol-card/60 px-5 py-4">
             <TimelineCharts punchcard={punchcard} />
           </section>
         )}
@@ -150,8 +166,8 @@ export default function PublicProfilePage() {
         {/* Pinned sessions */}
         <section className="reveal reveal-2 mt-10">
           <div className="flex items-center gap-2 mb-3">
-            <Pin className="w-3.5 h-3.5 text-sol-text-muted/70" />
-            <h2 className="text-[11px] uppercase tracking-widest font-bold text-sol-text-muted/70">
+            <Pin className="w-3.5 h-3.5 text-sol-text-muted" />
+            <h2 className="text-[11px] uppercase tracking-wider font-semibold text-sol-text-muted">
               Pinned sessions
             </h2>
           </div>
@@ -175,8 +191,8 @@ export default function PublicProfilePage() {
         {showActivity && feedDays.length > 0 && (
           <section className="reveal reveal-3 mt-10">
             <div className="flex items-center gap-2 mb-3">
-              <Activity className="w-3.5 h-3.5 text-sol-text-muted/70" />
-              <h2 className="text-[11px] uppercase tracking-widest font-bold text-sol-text-muted/70">
+              <Activity className="w-3.5 h-3.5 text-sol-text-muted" />
+              <h2 className="text-[11px] uppercase tracking-wider font-semibold text-sol-text-muted">
                 Recent activity
               </h2>
             </div>
@@ -280,11 +296,11 @@ function SessionCard({ pin }: { pin: any }) {
   );
 }
 
-function StatChip({ label, value }: { label: string; value: number }) {
+function StatChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-sol-border/25 bg-sol-card/60 px-3.5 py-2">
-      <span className="text-base font-bold text-sol-text tabular-nums">{value}</span>
-      <span className="ml-1.5 text-[11px] text-sol-text-muted">{label}</span>
+    <div className="rounded-xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
+      <div className="text-xl font-bold text-sol-text tabular-nums leading-none">{value}</div>
+      <div className="mt-1.5 text-[11px] text-sol-text-muted">{label}</div>
     </div>
   );
 }

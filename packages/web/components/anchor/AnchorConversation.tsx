@@ -22,6 +22,9 @@ import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME } from "@codecast/
 import { RoleFace } from "../org/RoleFace";
 import type { HireAssistantResult } from "../../store/orgSlice";
 import { findProposalCardMessage, type JumpRequest } from "../org/orgScreenModel";
+import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { hireAssistantLedger, hireHeadLedger } from "../consequential/roleOnline";
 
 /** How many newer pages a time jump reads while looking for its card. */
 const FIND_PAGES_MAX = 4;
@@ -194,6 +197,12 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const team = tree?.workspace.kind === "team" ? tree.workspace : null;
+  // Hiring starts an agent and its first review: one confirmed press through the shared review.
+  const [reviewing, setReviewing] = useState(false);
+  const me = useTrackedStore([(st) => st.currentUser?.name]).currentUser as { name?: string } | undefined;
+  const { space } = useAnchorSpace(team ? "team" : "user", team?.id);
+  const seats = (space?.anchor?.bot_name as string | undefined) ?? (space?.anchor ? "The standing agent" : null);
+  const ledger = hireHeadLedger({ workspace: tree?.workspace.name ?? "This workspace", host: me?.name || "Your", seats });
 
   const create = async () => {
     if (!tree || !meId) return;
@@ -219,39 +228,31 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
     }
   };
 
-  const who = team ? `${team.name}'s agent` : "your agent";
   return (
     <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`}>
       <div className="max-w-md w-full text-center">
         <div className={`mx-auto ${compact ? "mb-3" : "mb-5"} flex items-center justify-center`}>
           <HeadOfPeopleFace size={compact ? 44 : 56} />
         </div>
-        <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2`}>Meet {who}</h1>
-        <p className="text-sm text-sol-text-muted mb-5 leading-relaxed">
-          {team
-            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${HEAD_OF_PEOPLE_NAME}: it reads how work flows, proposes who should own what in a weekly review, looks after what no lead owns, and answers in chat and Slack until the team hires an Executive Assistant.`
-            : `One standing agent that is yours alone. It sits at the top of your org as ${HEAD_OF_PEOPLE_NAME}: it reads how your work flows and proposes the roles that would carry it.`}
-        </p>
-        <div className="text-left space-y-3">
-          <div>
-            <span className="text-xs text-sol-text-dim">Project it lives and works in</span>
-            <ProjectPathPicker value={project} onChange={setProject} className="mt-1" />
-            <span className="text-[11px] text-sol-text-dim/70">
-              It runs on your machine at this path. Leave blank to let the daemon pick.
-            </span>
-          </div>
-        </div>
+        <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-1.5`}>{HEAD_OF_PEOPLE_NAME}</h1>
+        <p className="text-sm text-sol-text-muted mb-5">Proposes who owns what. You approve each change.</p>
+        <label className="block text-left">
+          <span className="text-xs text-sol-text-dim">Runs in</span>
+          <ProjectPathPicker value={project} onChange={setProject} className="mt-1" />
+        </label>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
         <Button
           variant="cyan"
           size="lg"
-          onClick={create}
+          onClick={() => setReviewing(true)}
           disabled={busy || !tree || !meId}
           className="mt-5 w-full rounded-lg"
+          aria-haspopup="dialog"
+          data-hire-head
         >
           {busy ? "Bringing it online…" : `Hire ${HEAD_OF_PEOPLE_NAME}`}
         </Button>
-        <p className="text-[11px] text-sol-text-dim mt-3">You can rename it and give it a face on its page.</p>
+        {reviewing && <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void create(); }} />}
       </div>
     </div>
   );
@@ -269,6 +270,11 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
   const [project, setProject] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Hiring starts an agent: one confirmed press through the shared review.
+  const [reviewing, setReviewing] = useState(false);
+  const me = useTrackedStore([(st) => st.currentUser?.name]).currentUser as { name?: string } | undefined;
+  const reachWords = reach === "global" || !team ? "All your workspaces" : reach === "team" ? `${team.name}, shared with the team` : `${team.name}, yours alone`;
+  const ledger = hireAssistantLedger({ name: name.trim() || EXECUTIVE_ASSISTANT_NAME, reach: reachWords, host: me?.name || "Your" });
 
   const hire = async () => {
     setBusy(true);
@@ -327,9 +333,10 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
           </div>
         </div>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
-        <Button variant="cyan" size="lg" onClick={hire} disabled={busy || !tree} className="mt-4 w-full rounded-lg" data-assistant-hire>
+        <Button variant="cyan" size="lg" onClick={() => setReviewing(true)} disabled={busy || !tree} className="mt-4 w-full rounded-lg" aria-haspopup="dialog" data-assistant-hire>
           {busy ? "Bringing it online…" : `Hire ${EXECUTIVE_ASSISTANT_NAME}`}
         </Button>
+        {reviewing && <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void hire(); }} />}
       </div>
     </div>
   );

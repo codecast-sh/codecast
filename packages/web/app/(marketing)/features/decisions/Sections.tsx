@@ -55,9 +55,9 @@ export function ThreeWays() {
   return (
     <Section
       id="why"
-      title="An agent at a fork has two bad options. This is the third."
-      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. Codecast puts the question in a queue instead. A queued question costs you almost nothing to receive, so the bar for asking drops: a choice the agent would have made silently and mentioned in passing goes to the queue.</>}
-      aside={<>The tracks below are an illustrative afternoon, not a measurement. The shape is the point: who loses time, and when.</>}
+      title="Three ways an agent can handle a choice it cannot make alone"
+      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. Codecast puts the question in a queue instead. Because a queued question costs you almost nothing to receive, agents also queue the choices they would otherwise have made silently and mentioned in passing.</>}
+      aside={<>The tracks below show an illustrative afternoon, made up rather than measured. They compare who loses time in each approach, and when.</>}
     >
       <div className="grid grid-cols-[72px_1fr] sm:grid-cols-[96px_1fr] gap-3 mb-2">
         <span />
@@ -66,15 +66,15 @@ export function ThreeWays() {
         </div>
       </div>
       <div className="space-y-4">
-        <Lane name="Stop and ask" accent={SOL.red} verdict="Your focus breaks at the agent's pace, not yours.">
+        <Lane name="Stop and ask" accent={SOL.red} verdict="The agent interrupts you each time it reaches a choice.">
           <Track d={0} who="you" segs={[{ from: 0, to: 0.18, color: you, label: "your work" }, { from: 0.2, to: 0.42, color: you }, { from: 0.45, to: 0.7, color: you }, { from: 0.73, to: 1, color: you }]} marks={[{ at: 0.19, label: "ping", color: SOL.red }, { at: 0.435, label: "ping", color: SOL.red }, { at: 0.715, label: "ping", color: SOL.red }]} />
           <Track d={0.1} who="agent" segs={[{ from: 0, to: 0.18, color: agent, label: "working" }, { from: 0.2, to: 0.42, color: agent }, { from: 0.45, to: 0.7, color: agent }, { from: 0.73, to: 1, color: agent }]} />
         </Lane>
-        <Lane name="Decide alone" accent={SOL.orange} verdict="Nobody waits, and then the work comes undone.">
+        <Lane name="Decide alone" accent={SOL.orange} verdict="Nobody waits, but you find the guess in the diff and the agent redoes the work.">
           <Track d={0.2} who="you" segs={[{ from: 0, to: 0.82, color: you, label: "your work, uninterrupted" }, { from: 0.84, to: 1, color: SOL.orange, label: "reading the diff" }]} />
           <Track d={0.3} who="agent" segs={[{ from: 0, to: 0.2, color: agent, label: "working" }, { from: 0.2, to: 0.84, color: agent, label: "building on its guess" }, { from: 0.86, to: 1, color: SOL.orange, label: "redo", striped: true }]} marks={[{ at: 0.2, label: "picks alone", color: SOL.orange }]} />
         </Lane>
-        <Lane name="Queue it" accent={Y} verdict="The agent asks once with the evidence. You answer in a sitting you chose.">
+        <Lane name="Queue it" accent={Y} verdict="The agent asks once with the evidence, and you answer when you next clear the queue.">
           <Track d={0.4} who="you" segs={[{ from: 0, to: 0.62, color: you, label: "your work, uninterrupted" }, { from: 0.63, to: 0.69, color: Y }, { from: 0.71, to: 1, color: you }]} marks={[{ at: 0.66, label: "clear the queue", color: Y }]} />
           <Track d={0.5} who="agent" segs={[{ from: 0, to: 0.2, color: agent, label: "working" }, { from: 0.2, to: 0.66, color: agent, label: "other work, or parked", striped: true }, { from: 0.68, to: 1, color: agent, label: "on your answer" }]} marks={[{ at: 0.2, label: "asks", color: Y }]} />
         </Lane>
@@ -104,9 +104,9 @@ export function Anatomy() {
     <Section
       id="anatomy"
       tone="sand"
-      title="The agent writes the whole card. You never open the session."
+      title="What the agent puts on a decision card"
       lede={<>One question, 2 to 9 options, and the reasoning: what it found, what each option costs, and why it cannot pick. Each option carries its consequence under its label, so you compare outcomes where you click.</>}
-      aside={<>An agent cannot post a bare question: codecast refuses one with no reasoning or evidence, and warns the agent when the reasoning is thin or an option does not say what happens if chosen.</>}
+      aside={<>Codecast refuses a question posted with no reasoning or evidence, and warns the agent when the reasoning is thin or an option does not say what happens if chosen.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,7fr)_minmax(0,4fr)] gap-8 items-start">
         <Shot
@@ -135,9 +135,9 @@ export function Modes() {
   return (
     <Section
       id="modes"
-      title="Wait for the answer, or keep going on a default."
+      title="Blocking and advisory asks"
       lede={<>Blocking is the default: the agent asks and stops, and the session shows <i>Waiting on your decision</i> until you answer. An advisory ask names a default and the agent carries on with it, while your answer can still override it.</>}
-      aside={<>The rule the agent is given: advisory only when the default is cheap to undo. Answers often land an hour later and disagree, and everything built on the default in that hour is work to unwind. If reversing costs more than waiting, block.</>}
+      aside={<>Agents are told to ask in advisory mode only when the default is cheap to undo. Answers often land an hour later and disagree, and everything built on the default in that hour is work to unwind. If reversing costs more than waiting, block.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-2 gap-5">
         <div className="rounded-xl border p-5 flex flex-col" style={{ borderColor: "rgba(181,137,0,.45)", backgroundColor: SOL.base3 }}>
@@ -197,7 +197,7 @@ export function Evidence() {
     <Section
       id="evidence"
       tone="sand"
-      title="When a paragraph is not enough, the card carries the evidence."
+      title="Attaching evidence to a decision"
       lede={<>A decision that deserves proof gets a page. The agent can attach a report that renders under the question, give each option its own page so two designs sit side by side, or attach a long document.</>}
       aside={<>A card with a document, option pages or an answer beyond a single choice links to the decision&apos;s own page, where there is room to read.</>}
     >
@@ -238,8 +238,8 @@ export function Clearing() {
   return (
     <Section
       id="queue"
-      title="One sitting, in an order you can predict."
-      lede={<><b style={{ color: TEXT, fontWeight: 600 }}>Questions</b> in the sidebar counts what is waiting on you and opens the queue as a list; <b style={{ color: TEXT, fontWeight: 600 }}>one at a time</b> walks it as full cards. The order is a rule, not a score. Blocked asks whose session can still take an answer come first. Blocked asks on a stopped session come next. Advisory asks come last. Inside each group the oldest is first, because a parked agent costs more the longer it waits.</>}
+      title="Clearing the queue, and the order it follows"
+      lede={<><b style={{ color: TEXT, fontWeight: 600 }}>Questions</b> in the sidebar counts what is waiting on you and opens the queue as a list; <b style={{ color: TEXT, fontWeight: 600 }}>one at a time</b> walks it as full cards. The order follows a fixed rule. Blocked asks whose session can still take an answer come first. Blocked asks on a stopped session come next. Advisory asks come last. Inside each group the oldest is first, because a parked agent costs more the longer it waits.</>}
       aside={<>Every ask shows its age two ways: wall clock, and how many messages the session has written since. A blocking ask with traffic after it means someone already answered in the thread.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] gap-8 items-start">
@@ -294,7 +294,7 @@ export function Stacks() {
     <Section
       id="stacks"
       tone="sand"
-      title="Stacks: an ordered set you clear in one go."
+      title="Stacks of related decisions"
       lede={<>A stack groups related asks, like everything a launch needs from you, into a checklist with an id such as <C>ds-7</C>. An agent can build one as it asks, or you click <b style={{ color: TEXT, fontWeight: 600 }}>group into a stack</b> in the list, tick the cards and name it.</>}
       aside={<>Blocking members never get an automatic answer. The auto default only answers advisory members, from a server job every 5 minutes, counted from when each joined the stack.</>}
     >
@@ -320,8 +320,8 @@ export function KeepTrue() {
   return (
     <Section
       id="edit"
-      title="An ask stays correct until someone answers it."
-      lede={<>A posted decision belongs to the agent. When the facts change it rewrites the card in place, keeping its age and its spot in your queue. When the question stops mattering it withdraws it, and the conversation shows the ask as withdrawn. A stale question costs your attention and earns nothing.</>}
+      title="Editing or withdrawing an open ask"
+      lede={<>A posted decision belongs to the agent. When the facts change it rewrites the card in place, keeping its age and its spot in your queue. When the question stops mattering it withdraws it, and the conversation shows the ask as withdrawn.</>}
       aside={<>Staleness is measured. Each ask records how far the session had got when it was posted; after 2 hours or 30 messages the agent is told to update or withdraw it. Asking the same question again updates the open card instead of adding a second.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-2 gap-5">
@@ -349,12 +349,12 @@ const ASK: [string, string][] = [
   ["Hard to reverse", "a schema, a data model, a protocol"],
   ["Spends money or quota", "or touches billing, auth, or anything user facing in prod"],
   ["Deletes or migrates data", "or drops something only a backup can bring back"],
-  ["Taste, not evidence", "speed against correctness, breadth against depth"],
+  ["Settled by taste", "speed against correctness, breadth against depth"],
   ["A guess about the product", "what you want it to do, when nothing says"],
 ];
 const NEVER: [string, string][] = [
   ["Anything more reading answers", "the code, the docs or past sessions already say"],
-  ["A status update", "progress belongs on the task, not in your queue"],
+  ["A status update", "progress goes on the task"],
   ["A probe, a test, a layout sample", "every ask reaches your real queue and phone"],
 ];
 
@@ -363,9 +363,9 @@ export function Belongs() {
     <Section
       id="rules"
       tone="sand"
-      title="What an agent should queue, and what it should never queue."
+      title="What an agent should and should not queue"
       lede={<>Switching on <b style={{ color: TEXT, fontWeight: 600 }}>Decision queue</b> in <b style={{ color: TEXT, fontWeight: 600 }}>Agent features</b> teaches agents where the line is. Because the queue does not interrupt you, the bar sits lower than for an inline question: if the agent would have picked a direction and mentioned it in passing, it queues it.</>}
-      aside={<>The card is the whole message. After posting, the agent writes nothing more about it; a reply that only repeats the card ends the turn.</>}
+      aside={<>After posting, the agent writes nothing more about the decision. If its reply would only repeat the card, it ends the turn instead.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] gap-5">
         <div className="rounded-xl border p-5 sm:p-6" style={{ borderColor: "rgba(181,137,0,.45)", backgroundColor: SOL.base3 }}>
@@ -424,7 +424,7 @@ function Toks({ text }: { text: string }) {
 
 export function Reference() {
   return (
-    <Section id="reference" title="For scripts and agents" lede={<>Agents ask through the <C>cast decide</C> command, and anything on this page can be scripted with it. <C>cast decide --help</C> and <C>cast stack --help</C> print the rest.</>}>
+    <Section id="reference" title="Commands for scripts and agents" lede={<>Agents ask through the <C>cast decide</C> command, and anything on this page can be scripted with it. <C>cast decide --help</C> and <C>cast stack --help</C> print the rest.</>}>
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: LINE }}>
         {REF.map(([c, d], i) => (
           <div key={c} className="dq-ref-row grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] gap-x-6 gap-y-1 px-4 sm:px-5 py-3 border-b last:border-b-0" style={{ borderColor: LINE, backgroundColor: i % 2 ? "rgba(238,232,213,.35)" : SOL.base3 }}>
@@ -445,7 +445,7 @@ const FAQ: [string, ReactNode][] = [
   ["Who receives it?", <>By default, whoever the asking session reports to: its owners and the first person its reporting line reaches. An agent can name people in the session&apos;s workspace instead.</>],
   ["Can an agent answer for me?", <>On teams using the org chart, a role can recommend an option, and a role holding a grant for that kind of question may answer it. Production, billing, data, access, external and product questions always stay with a person, and a person&apos;s answer always wins the race.</>],
   ["How many options?", <>2 to 9, mapped to the keys 1 to 9. For more structure an ask can take several choices, an order, or a short form.</>],
-  ["Does blocking freeze the agent?", <>No. The agent is told to end its turn after asking. The session parks because the agent stops, not because anything locks it.</>],
+  ["Does blocking freeze the agent?", <>No. The agent is told to end its turn after asking. The session parks because the agent stops; nothing locks it.</>],
   ["Can I change an answer?", <>No. Once a row is answered, an edit or cancel fails and prints the answer. To change course, send the session a message.</>],
   ["What if the agent crashes and retries?", <>Posting the same question from the same session updates the open row, so a retry does not create a duplicate.</>],
 ];

@@ -79,6 +79,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "slack github linear google gmail notion connect oauth apps webhooks issues sync whisk mail email calendar", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
   { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
+  { label: "Keyboard Shortcuts", path: "/settings/keyboard", icon: "settings", keywords: "keys hotkeys keybindings rebind customize chords", secondary: true },
   { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },
   { label: "Calls", path: "/settings/calls", icon: "settings", keywords: "camera microphone mic devices walkie huddle meeting record", secondary: true },
 ];

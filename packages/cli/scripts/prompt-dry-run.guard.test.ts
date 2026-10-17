@@ -108,6 +108,15 @@ describe("guard cast: served reads", () => {
     expect(w.log()).toContain("SERVED org inputs --team T --json");
   });
 
+  test("a captured proposals listing is served, and --withdraw is never served, even under a prefix", () => {
+    const argv = ["org", "proposals"];
+    const w = world({ files: { [`reads/${servedReadKey(argv)}.out`]: "  op-41 Filings\n", [`reads/${servedReadKey(argv)}.prefix`]: argv.map((a) => `${a}\x1f`).join("") } });
+    expect(w.cast("org", "proposals").out).toBe("  op-41 Filings\n");
+    expect(w.cast("org", "proposals", "--json").out).toBe("  op-41 Filings\n");
+    expect(w.cast("org", "proposals", "--withdraw", "op-41").code).not.toBe(0);
+    expect(w.log()).not.toContain("SERVED org proposals --withdraw");
+  });
+
   test("a captured read is served with its exit code", () => {
     const argv = ["sessions", "--json"];
     const w = world({ files: { [`reads/${servedReadKey(argv)}.out`]: "[]\n", [`reads/${servedReadKey(argv)}.exit`]: "3\n" } });

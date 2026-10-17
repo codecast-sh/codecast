@@ -35,8 +35,9 @@ describe("the Head of People prompt", () => {
   });
 
   test("an open proposal is a fact in the reference; the team flag rides every workspace verb", () => {
-    const p = headOfPeoplePrompt({ workspace: "Acme", person: "Ada", team: "Acme", open: { short_id: "op-3", title: "Company review: Acme", decided: 1, total: 4 } });
-    expect(p).toContain('Still open: op-3 "Company review: Acme", 1 of 4 changes decided.');
+    const now = Date.UTC(2026, 9, 16);
+    const p = headOfPeoplePrompt({ workspace: "Acme", person: "Ada", team: "Acme", now, open: [{ short_id: "op-3", title: "Company review: Acme", decided: 1, total: 4, created_at: now - 8 * 86_400_000 }, { short_id: "op-5", title: "File two sessions", decided: 0, total: 2 }] });
+    expect(p).toContain('Still open:\n- op-3 "Company review: Acme", 1 of 4 changes decided, posted 8 days ago.\n- op-5 "File two sessions", 0 of 2 changes decided.');
     for (const verb of ["inputs", "health", "propose", "proposals"]) expect(p).toContain(`cast org ${verb} --team "Acme"`);
   });
 });

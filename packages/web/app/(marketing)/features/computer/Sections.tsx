@@ -175,10 +175,9 @@ export function Guardrails() {
 
       {/* stdin */}
       <div className="md:col-span-2 lg:col-span-1 rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-        <div className="font-mono text-[12px]" style={{ color: SOL.violet }}>--value-stdin</div>
-        <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secrets go in through stdin</h3>
+        <h3 className="font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secrets go in through stdin</h3>
         <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
-          <span className="font-mono">--text-stdin</span> and <span className="font-mono">--value-stdin</span> keep a token out of shell history and <span className="font-mono">ps</span>. Passing both a flag and stdin, or stdin from a terminal, is an error rather than a guess.
+          <span className="font-mono">--text-stdin</span> and <span className="font-mono">--value-stdin</span> keep a token out of shell history and <span className="font-mono">ps</span>. Passing both a flag and stdin, or stdin from a terminal, fails with an error.
         </p>
         <div className="mt-4 rounded-lg px-3 py-2.5 font-mono text-[12px] leading-[1.7] break-words" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
           <span style={{ color: SOL.green }}>$</span> printf &apos;%s&apos; &quot;$TOKEN&quot; | cast computer set-value --app &lt;app&gt; --element-index 42 --value-stdin
@@ -188,8 +187,7 @@ export function Guardrails() {
       {/* The behaviour rule: a band across both columns */}
       <div className="md:col-span-2 lg:col-span-3 rounded-2xl p-6 sm:p-8 grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] items-center" style={{ backgroundColor: "color-mix(in srgb, #b58900 10%, #073642)", border: "1px solid rgba(181,137,0,0.35)" }}>
         <div>
-          <div className="font-mono text-[12px]" style={{ color: SOL.yellow }}>the behaviour rule</div>
-          <h3 className="mt-2 font-mono font-bold text-[21px] sm:text-[24px] leading-tight" style={{ color: SOL.base2 }}>Reading is the agent&apos;s. Leaving a mark is yours.</h3>
+          <h3 className="font-mono font-bold text-[21px] sm:text-[24px] leading-tight" style={{ color: SOL.base2 }}>The agent reads on its own and waits for you before changing anything</h3>
           <p className="mt-3 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
             Every agent with codecast installed carries the same standing instruction: do not push, submit a form, send a message, buy anything, delete data or change account settings unless you asked for that action. In an app holding sensitive content, read only what you were asked to read.
           </p>
@@ -220,8 +218,7 @@ export function ReadVsMark() {
 export function BlockedAppsCard() {
   return (
     <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-      <div className="font-mono text-[12px]" style={{ color: SOL.red }}>refused</div>
-      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
+      <h3 className="font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
       <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
         The helper itself refuses these, under any name an agent tries. No setting or instruction turns it off.
       </p>
@@ -238,8 +235,7 @@ export function BlockedAppsCard() {
 export function RedactedCard() {
   return (
     <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-      <div className="font-mono text-[12px]" style={{ color: SOL.cyan }}>[redacted]</div>
-      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
+      <h3 className="font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
       <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
         A password, passcode or one-time code field shows as <span className="font-mono" style={{ color: SOL.base2 }}>[redacted]</span> in every tree, so its value never reaches the agent&apos;s context or your transcript.
       </p>
