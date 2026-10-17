@@ -22,8 +22,17 @@ import { workflowRunLastActivity } from "./workflowRunLive.js";
 
 // The statuses that mean the turn was not over. "waiting" is the daemon's word
 // for a finished turn that still owns background work. A permission prompt
-// waits on a person, and "dormant" waits on a trigger that will wake it anyway.
+// waits on a person. "dormant" waits on a machine: a trigger or a message
+// wakes it through delivery, which resumes a dead process anyway, but a wake
+// the session armed inside its own process (a background command, a Monitor)
+// died with it and never fires. The Implement hand of ct-59998 pinned dormant
+// on a background check and a Monitor, the machine restarted under it, and
+// its run sat waiting on a wake that no longer existed (2026-10-16). So a
+// dormant session is revived when its transcript still holds open background
+// work (ReviveFacts.wakeDiedWithProcess).
 export const REVIVABLE_STATUSES: ReadonlySet<string> = new Set(["working", "thinking", "compacting", "waiting"]);
+// What the watchdog asks midWorkReviveDecision about, and keeps the status file of.
+export const REVIVE_CANDIDATE_STATUSES: ReadonlySet<string> = new Set([...REVIVABLE_STATUSES, "dormant"]);
 
 // A session silent this long died on work nobody would expect to resume now;
 // the first pass after this ships must not wake sessions that died days ago.
@@ -68,7 +77,7 @@ export type ReviveLifecycle = {
 export const UNFINISHED_STATUS_FILE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export function statusFileExpired(status: string | undefined, mtimeMs: number, now: number, finishedTtlMs: number): boolean {
-  const ttl = REVIVABLE_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
+  const ttl = REVIVE_CANDIDATE_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
   return now - mtimeMs > ttl;
 }
 
@@ -96,6 +105,9 @@ export type ReviveFacts = {
   interruptedByUser: boolean;
   /** The turn ended on a usage limit; the account recovery chain owns it. */
   limitParked: boolean;
+  /** A dormant session's transcript still holds background work it armed
+   *  (a background command, a Monitor): its wake was inside the process. */
+  wakeDiedWithProcess?: boolean;
   /** Earlier revives of this session, epoch ms. */
   priorRevives: readonly number[];
   now: number;
@@ -104,7 +116,8 @@ export type ReviveFacts = {
 export type ReviveDecision = { revive: true } | { revive: false; reason: string };
 
 export function midWorkReviveDecision(f: ReviveFacts): ReviveDecision {
-  if (!REVIVABLE_STATUSES.has(f.status ?? "")) return { revive: false, reason: "turn-finished" };
+  const ownWake = f.status === "dormant" && !!f.wakeDiedWithProcess;
+  if (!REVIVABLE_STATUSES.has(f.status ?? "") && !ownWake) return { revive: false, reason: "turn-finished" };
   if (f.ageMs > REVIVE_MAX_AGE_MS) return { revive: false, reason: "too-old" };
   // Unknown hide state fails toward the old behavior (mark it completed): a
   // revive the person did not want costs a turn, and here nothing says they
