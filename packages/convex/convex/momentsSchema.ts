@@ -15,7 +15,7 @@ import { v } from "convex/values";
 /** The embedding grouping compares by (lib/embeddings.ts): OpenAI text-embedding-3-small. */
 export const FINDING_VECTOR_DIMENSIONS = 1536;
 
-/** What a judge run read, as hashes: the messages (what was said) and the facts and text the extractor computed (moments.judgeInputsOf). */
+/** What a judge run read, as hashes: the messages (what was said) and the facts and text the extractor computed (lib/momentJudging.judgeInputsOf). */
 export const judgeInputs = v.object({ messages: v.string(), facts: v.string() });
 
 const momentStatus = v.union(v.literal("waiting"), v.literal("extracting"), v.literal("ready"), v.literal("failed"));
@@ -145,7 +145,7 @@ export const momentsTables = {
     held_ids: v.optional(v.array(v.id("signals"))),
     /** Evidence keys it found and did not file, being one resample (judgeRetire.newOnResample): a read that found a key counts as a find when a later read weighs its misses. */
     waiting: v.optional(v.array(v.string())),
-    /** Hashes of what it read (moments.judgeInputsOf): a later miss lets a finding go at once only when these or the judge changed (judgeRetire.settleRun). */
+    /** Hashes of what it read (lib/momentJudging.judgeInputsOf): a later miss lets a finding go at once only when these or the judge changed (judgeRetire.settleRun). */
     inputs: v.optional(judgeInputs),
     /** Lines it filed and let go under, when scoped (`--lines`); absent for a run over every line. */
     lines: v.optional(v.array(v.string())),

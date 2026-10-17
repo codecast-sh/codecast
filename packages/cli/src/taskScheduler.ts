@@ -228,17 +228,32 @@ export function buildRunScript(input: {
 // failure answers "not yet"; the cap still bounds the run.
 export async function runPaneFinished(
   tmuxSession: string,
-  childrenOf: (pid: string) => Promise<string> = async (pid) =>
-    (await execAsync(`pgrep -P ${pid}`).catch(() => ({ stdout: "" }))).stdout,
+  childrenOf: (pid: string) => Promise<string | null> = paneChildren,
 ): Promise<boolean> {
   const panes = await tmuxRunAsync(["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000 });
   if (panes.status !== 0) return isTmuxSessionMissingError(panes);
   const pids = panes.stdout.trim().split(/\s+/).filter(Boolean);
   if (pids.length === 0) return false;
   for (const pid of pids) {
-    if ((await childrenOf(pid)).trim()) return false;
+    const children = await childrenOf(pid);
+    if (children === null || children.trim()) return false;
   }
   return true;
+}
+
+/**
+ * The pids under `pid`, "" when it has none, null when pgrep could not say.
+ * pgrep exits 1 for no match; a timeout or a failed fork under load is not
+ * that answer, and reading it as one ended a live run 88 s after its launch
+ * at a load of 500 (tr-1474, 2026-10-17).
+ */
+export async function paneChildren(pid: string, exec: (cmd: string) => Promise<{ stdout: string }> = execAsync): Promise<string | null> {
+  try {
+    return (await exec(`pgrep -P ${pid}`)).stdout;
+  } catch (err) {
+    const e = err as { code?: unknown; killed?: boolean; signal?: unknown };
+    return e.code === 1 && !e.killed && !e.signal ? "" : null;
+  }
 }
 
 export class TaskScheduler {

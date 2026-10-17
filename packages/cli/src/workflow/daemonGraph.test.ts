@@ -2,7 +2,7 @@
 // workflows row still executes, because run-daemon resolves the shipped
 // template by the run's name.
 import { describe, expect, test } from "bun:test";
-import { graphForDaemonRun } from "./daemonGraph";
+import { daemonGraphFile, graphForDaemonRun, publishDaemonGraph } from "./daemonGraph";
 
 const EMPTY = { name: "workflow", goal: "Ship the thing", nodes: [], edges: [] };
 
@@ -60,5 +60,44 @@ describe("graphForDaemonRun", () => {
   test("null when the run has no nodes and its name is not a shipped template", () => {
     expect(graphForDaemonRun({ workflow_name: "not-a-template", project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: undefined, project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
+  });
+});
+
+describe("publishDaemonGraph", () => {
+  test("a run reading its graph file here publishes that file, with the file's goal, to the row it came from", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { spawnSync } = require("node:child_process");
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemonpublish-")));
+    spawnSync("git", ["init", "-q", root]);
+    fs.mkdirSync(path.join(root, "line"));
+    fs.writeFileSync(path.join(root, "line/present.md"), "Present the fix as it stands now.");
+    const source = `digraph g { graph [goal="$task_title"]; start [shape=Mdiamond]; present [prompt="@present.md"]; exit [shape=Msquare]; start -> present -> exit }`;
+    fs.writeFileSync(path.join(root, "line/g.cast"), source);
+    const wf = { name: "Trial line", slug: "trial-line", nodes: [], edges: [], origin: { device_id: "dev-a", root, file: "line/g.cast" } };
+
+    // Only a server-queued run or a resume on the machine that holds the file reads it, so only those publish.
+    const file = daemonGraphFile({ fresh_branch: false }, wf, "dev-a", true)!;
+    expect(file).toBe(path.join(root, "line/g.cast"));
+    expect(daemonGraphFile({ fresh_branch: false }, wf, "dev-a", false)).toBeNull();
+    expect(daemonGraphFile({ fresh_branch: true }, wf, "dev-b", false)).toBeNull();
+    expect(daemonGraphFile({ fresh_branch: true }, { ...wf, origin: { ...wf.origin, file: "line/gone.cast" } }, "dev-a", false)).toBeNull();
+
+    const posts: Array<{ route: string; body: any }> = [];
+    await publishDaemonGraph(file, wf, "dev-a", async (route, body) => { posts.push({ route, body }); return {}; });
+    expect(posts).toHaveLength(1);
+    const { route, body } = posts[0];
+    expect(route).toBe("/cli/workflows/upsert");
+    expect(body.slug).toBe("trial-line");
+    expect(body.name).toBe("Trial line");
+    expect(body.goal).toBe("$task_title");
+    expect(body.source).toBe(source);
+    expect(body.origin.file).toBe("line/g.cast");
+    // The hashes a run records for this file are the hashes it publishes, so its waiting decision reads as current.
+    const run = graphForDaemonRun({ workflow_name: "g", fresh_branch: false, current_node_id: "present", goal_override: "One problem's title" }, wf, root, "dev-a", true)!;
+    const { graphNodeHashes } = require("./parser");
+    expect(body.origin.nodes).toEqual(graphNodeHashes(run));
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
