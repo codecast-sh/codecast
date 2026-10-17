@@ -9,6 +9,8 @@
 # With DRY_RUN_SERVE_DIR set, reads answer from a saved world instead:
 #  - `cast org inputs|health|ls` from org-inputs.json, org-health.json and
 #    org-ls.json in it (the layout older served dirs have);
+#  - `cast org proposals` from its captured read when the world holds one,
+#    else "No open proposals."; with --withdraw it writes and is refused;
 #  - any argv from reads/<key>.out, exit code from reads/<key>.exit (0 when
 #    absent). The key is the sha256 of each argument followed by \x1f, the same
 #    key packages/evals/src/served.ts computes when it captures the reads;
@@ -70,8 +72,10 @@ case "${1:-} ${2:-}" in
   "org inputs"*) serve_file org-inputs.json ;;
   "org health"*) serve_file org-health.json ;;
   "org ls"*|"org list"*) serve_file org-ls.json ;;
-  "org proposals"*) mark SERVED; echo "No open proposals."; exit 0 ;;
 esac
+# `org proposals --withdraw op-N` writes, so no served listing answers it.
+withdraw=""
+if [ "${1:-} ${2:-}" = "org proposals" ]; then for a in "$@"; do [[ "$a" == --withdraw* ]] && withdraw=1; done; fi
 
 # The key a read is filed under, served or recorded live: sha256 of each
 # argument followed by \x1f (packages/evals/src/served.ts servedReadKey).
@@ -88,7 +92,7 @@ serve_read() {
   [ -f "$SERVE/reads/$1.exit" ] && code="$(tr -dc 0-9 < "$SERVE/reads/$1.exit")"
   exit "${code:-0}"
 }
-if [ -n "$SERVE" ] && [ $# -gt 0 ]; then
+if [ -n "$SERVE" ] && [ $# -gt 0 ] && [ -z "$withdraw" ]; then
   key="$(read_key "$@")"
   [ -f "$SERVE/reads/$key.out" ] && serve_read "$key"
   printf -v joined '%s\x1f' "$@"
@@ -101,6 +105,8 @@ if [ -n "$SERVE" ] && [ $# -gt 0 ]; then
   done
   [ -n "$best" ] && [ -f "$SERVE/reads/$best.out" ] && serve_read "$best"
 fi
+# A world that holds no proposals listing has none open.
+if [ "${1:-} ${2:-}" = "org proposals" ] && [ -z "$withdraw" ]; then mark SERVED; echo "No open proposals."; exit 0; fi
 
 # A read, by verb. `org review` prints the review prompt and only starts a
 # session with --spawn.

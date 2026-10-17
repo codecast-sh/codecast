@@ -158,6 +158,14 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .action(async (options: any) => (await run()).listProposals(deps, options));
 
   org
+    .command("proposal")
+    .description("One proposal (op-N): its changes with their numbers and status, what its author revised, and the org page link. The numbers are what `cast org revise` takes.")
+    .argument("<op-N>", "The proposal")
+    .option(...TEAM_OPT)
+    .option("--json", "Machine-readable output")
+    .action(async (ref: string, options: any) => (await run()).showProposal(deps, ref, options));
+
+  org
     .command("apply")
     .description("For a proposal (op-N): print its changes, their status and the org page link, where a person accepts, edits or skips each one (the page is the only door; S4). For a template's decision stack (ds-N): apply the answered decisions as before.")
     .argument("<ref>", "A proposal (op-N) or, for templates that still use one, a decision stack (ds-N)")

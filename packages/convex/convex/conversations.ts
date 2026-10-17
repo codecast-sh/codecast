@@ -9143,6 +9143,16 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     is_idle: childIsIdle,
     awaiting_input: false,
     is_unresponsive: false,
+    // The facts placement re-derives the status from (PLACEMENT_LIVENESS_FIELDS),
+    // carried exactly as the top-level row carries them. Without the heartbeat a
+    // child quiet past the window read stopped while is_connected said live: a
+    // station hand mid tool call settled as needs_input (ct-59591).
+    status: child.status ?? "active",
+    agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(child._id.toString()) ?? null,
+    agent_status_boundary: maps.settleFactsMap.get(child._id.toString())?.boundary === true,
+    turn_completed_at: maps.settleFactsMap.get(child._id.toString())?.turnCompletedAt ?? null,
+    hibernated_at: maps.hibernatedAtMap.get(child._id.toString()) ?? null,
+    last_heartbeat: maps.lastHeartbeatMap.get(child._id.toString()) ?? null,
     is_connected: !!childDaemon,
     has_pending: !!child.has_pending_messages,
     is_deferred: false,
@@ -10382,9 +10392,17 @@ export function ownAsk(
 // The one placement call for a conversation, from the doc plus its
 // liveness-shaped fields (the overlay's derived values or the enriched row's —
 // same names, same meaning). Both the overlay and inboxForCLI go through here.
+// The liveness facts placeConversationRow reads off a row. Every row projection
+// it places carries each of them (conversationFields.guard.test.ts): a fact a
+// projection omits reads as absent, and an absent heartbeat reads as a dead one.
+export const PLACEMENT_LIVENESS_FIELDS = [
+  "agent_status", "updated_at", "is_idle", "awaiting_input", "is_unresponsive", "agent_status_boundary",
+  "open_tasks", "open_tasks_at", "producing_until", "last_heartbeat",
+] as const satisfies ReadonlyArray<keyof LivenessFields>;
+
 export function placeConversationRow(
   conv: any,
-  lv: Partial<Pick<LivenessFields, "agent_status" | "updated_at" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at" | "producing_until" | "last_heartbeat">>,
+  lv: Partial<Pick<LivenessFields, (typeof PLACEMENT_LIVENESS_FIELDS)[number]>>,
   asking: boolean,
   lastUserMessage: string | null | undefined,
   now: number,
@@ -13831,7 +13849,7 @@ export async function enqueueKillAndResume(
 
 /** The kill itself, for every caller that has already authenticated: the
  *  daemon teardown, the completed stamp, and the sweeps that keep it dead. */
-export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean; cause?: string }) {
+export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean; cause?: string; keepWorkspace?: boolean }) {
   noteWriteCause(ctx, opts?.cause ?? "killSession");
   const conv = await ctx.db.get(args.conversation_id);
   // The runner, or the session's second-party owner — same rule as
@@ -13852,6 +13870,8 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       conversation_id: args.conversation_id,
       session_id: args.session_id ?? conv?.session_id,
       cause: opts?.cause ?? "killSession",
+      // The worktree is someone else's to release (a run's, shared by its stations).
+      ...(opts?.keepWorkspace ? { keep_workspace: true } : {}),
     }),
     created_at: Date.now(),
   });

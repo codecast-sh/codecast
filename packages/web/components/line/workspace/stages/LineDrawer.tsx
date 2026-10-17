@@ -19,9 +19,10 @@ import "./stages.css";
 export const STAGE_NAMES: Record<LineStage, string> = { moments: "Moments", expectations: "Expectations", judges: "Judges", grouping: "Grouping", dispatch: "Dispatch" };
 
 /** The drawer's frame: what it holds, a way to the other stages, and close. */
-export function LineDrawer({ label, onClose, children, nav }: { label: string; onClose: () => void; children: ReactNode; nav?: ReactNode }) {
+export function LineDrawer({ label, onClose, children, nav, edge }: { label: string; onClose: () => void; children: ReactNode; nav?: ReactNode; /** A resize handle on the drawer's left edge. */ edge?: ReactNode }) {
   return (
     <aside className="lw-drawer" aria-label={label} data-line-drawer={label}>
+      {edge}
       <header className="lw-drawer-head">
         {nav}
         <button type="button" className="lw-iconbtn lw-drawer-close" onClick={onClose} aria-label="Close" title="Close (Esc)" data-line-drawer-close>

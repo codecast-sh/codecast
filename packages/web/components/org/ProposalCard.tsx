@@ -13,6 +13,7 @@
 // names it) and the send applies it; nothing is decided on a press.
 import React from "react";
 import { cn } from "../../lib/utils";
+import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { proposalProgressWords } from "./proposalSubjects";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
@@ -59,10 +60,10 @@ export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListR
 // ---------------------------------------------------------------- the body
 
 /**
- * The card's body: the totals line, the entries, the foot. Only what a
- * person decides: the author's own words stay in its conversation, where it
- * posted the proposal. `compact` is a tile sharing a row with other cards:
- * the totals only. `onMap`
+ * The card's body: the author's summary (what this proposal is and why, the
+ * context a person decides in), the totals line, the entries, the foot.
+ * `compact` is a tile sharing a row with other cards: the summary clamped
+ * and the totals only. `onMap`
  * opens the map beside the conversation; absent, the card opens the org
  * screen itself, unless it already sits on it (the screen feeds the hover
  * channel, so a card that can light the map needs no Map word).
@@ -83,8 +84,13 @@ export function ProposalBody({ proposal, changes, compact, onMap }: {
     <div className={cn("not-prose min-w-0", LEDGER_INKS)} data-proposal-card={proposal.short_id} data-proposal-work={entries.work ?? undefined} data-proposal-readonly={readonly || undefined}>
       {changes.length === 0 ? <ProposalLoading /> : (
         <>
+          {proposal.summary_md?.trim() && (
+            <div className={cn("mb-2.5 text-[13px] leading-[20px] text-[color:var(--sol-text-secondary)] [&_p]:my-0 [&_p+p]:mt-1.5", compact && "line-clamp-2")} data-proposal-summary>
+              <MarkdownRenderer content={proposal.summary_md} />
+            </div>
+          )}
           {totals && <p className="m-0 mb-1.5 text-[12.5px] leading-[18px] text-[color:var(--sol-text-muted)] [text-wrap:pretty]" data-proposal-totals>{totals}</p>}
-          {!compact && <ProposalEntries proposal={proposal} changes={changes} entries={entries} batch={batch} />}
+          {!compact && <ProposalEntries proposal={proposal} changes={changes} entries={entries} batch={batch} why={!(entries.cards.length === 1 && proposal.summary_md?.trim())} />}
           {!compact && <ProposalFoot proposal={proposal} entries={entries} batch={batch} onMap={map} />}
         </>
       )}
