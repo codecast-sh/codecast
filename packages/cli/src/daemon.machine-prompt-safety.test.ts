@@ -883,6 +883,19 @@ describe("machine prompt delivery safety", () => {
       await expect(f.deliver("the brief")).resolves.toBe(true);
       expect(f.events).toEqual([]);
       expect(f.launchPromptCarries.size).toBe(0);
+      // Terminal, from the local echo: an "injected" row waits on ingest, and the
+      // healer re-pends it for a second paste when ingest stalls (jx74wc8).
+      expect(f.statuses).toContainEqual(expect.objectContaining({ messageId: "update", status: "delivered" }));
+    });
+
+    test("keeps the carry when the delivered mark fails, so the retry settles it instead of pasting", async () => {
+      const f = fixture("tmux", true);
+      f.state.menu = null;
+      carry(f, { taken: true });
+      f.deps.syncService.updateMessageStatus = async () => { throw new Error("backend down"); };
+      await expect(f.deliver("the brief")).rejects.toThrow("backend down");
+      expect(f.launchPromptCarries.size).toBe(1);
+      expect(f.bodies).toEqual([]);
     });
 
     test("is not pasted by a delivery that was already waiting for the session to start", async () => {

@@ -2,14 +2,13 @@
 
 // Header chip: live model usage for ONE provider — the one backing the
 // session you're viewing (sticky to the last shown when the selection is
-// neither Claude nor Codex). A status dot carries its most-utilized limit
-// window — green with headroom, orange near the limit, red once sessions on
+// neither Claude nor Codex). A small bar carries its most-utilized limit
+// window: green with headroom, orange near the limit, red once sessions on
 // it are blocked. Last-known accounts stay in the bar while the daemon is
 // quiet or offline so a session-limit surprise (or a missing switcher) never
 // is one; switching itself stays blocked until the machine is back.
-// The chip never leaves the bar. It keeps its account name at every width, it
-// holds the slot with a dim placeholder that opens the accounts
-// page. A control that disappears is one the reader has to go looking for.
+// The chip never leaves the bar: with no account it holds the slot with a dim
+// placeholder that opens the accounts page. A control that disappears is one the reader has to go looking for.
 // Hovering the chip opens the full panel with the real meters: the ACTIVE
 // accounts broken out on top (what's "on" right now), the rest grouped by
 // email below, the auto-switch toggle, and the path to Settings.
@@ -33,7 +32,6 @@ import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } f
 import { usageTone } from "../lib/usageTone";
 import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge } from "./MintTokenDialog";
-import { StatusDot } from "./StatusDot";
 import { TopbarChip } from "./TopbarButton";
 
 type ProfileRow = {
@@ -101,33 +99,31 @@ function ClaudeSwitchControl({
   );
 }
 
-// The chip's visible slice: status dot + provider icon + account name — the
-// same dot-led shape as the daemon and agents chips beside it, and a fixed
-// layout that never reflows on hover (the percentages live in the hover
-// panel). The dot pings while the window is pegged: that is the state that
-// parks sessions, and the one the reader must not miss.
+// The chip's visible slice: provider icon + a small meter of the worst limit
+// window, filled and tinted by how close it is to full. The account name and
+// exact percent live in the hover panel; the bar answers the one
+// question the chip is for at a glance. It pulses once the window is pegged:
+// that is the state that parks sessions, and the one the reader must not miss.
 function ProviderSegment({
   icon,
-  label,
   percent,
   tone,
   title,
 }: {
   icon: ReactNode;
-  label: string;
   percent: number | null;
   tone: string;
   title: string;
 }) {
+  const fill = percent == null ? 0 : Math.min(100, Math.max(0, percent));
   return (
     <span className="flex items-center gap-1.5" aria-label={title}>
-      {/* Healthy usage needs no light: the chip's tint says when it is not. */}
-      {percent != null && percent >= 80 && <StatusDot color={tone} ping={percent >= 100} />}
       {icon}
-      {/* The account's name folds away on a narrow bar; the icon and the
-          chip's tint still say which provider and whether it is near a limit. */}
-      <span className="hidden xl:block max-w-[88px] truncate">
-        {label}
+      <span className="relative h-1 w-8 shrink-0 overflow-hidden rounded-full bg-sol-border/60">
+        <span
+          className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ${fill >= 100 ? "animate-pulse" : ""}`}
+          style={{ width: `${fill}%`, background: tone }}
+        />
       </span>
     </span>
   );
@@ -390,21 +386,19 @@ export function AccountUsageChip() {
         {shown === "claude" ? (
           <ProviderSegment
             icon={<ClaudeIcon className="h-3 w-3 shrink-0 text-sol-orange" />}
-            label={resolved.claudeLabel}
             percent={worst}
             tone={claudeTone}
             title={
               sw.switching
                 ? machineSwitchPendingCopy(sw.phase, sw.switching, device.label)
                 : !claudeUsed
-                  ? `Claude "${active?.name}" — no usage this week`
-                  : `Claude "${active?.name}" — worst limit window at ${worst != null ? Math.round(worst) : "?"}%`
+                  ? `Claude "${resolved.claudeLabel}" — no usage this week`
+                  : `Claude "${resolved.claudeLabel}" — worst limit window at ${worst != null ? Math.round(worst) : "?"}%`
             }
           />
         ) : (
           <ProviderSegment
             icon={<OpenAIIcon className="h-3 w-3 shrink-0 text-emerald-400" />}
-            label={codexLabel}
             percent={codexWorst}
             tone={codexTone}
             title={

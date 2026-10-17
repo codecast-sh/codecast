@@ -6,7 +6,7 @@ import { useInboxStore, type SavedViewRow } from "../store/inboxStore";
 import { chipFilterOf, matchesWorkbench, type WorkbenchSnapshot } from "../store/workbench";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
+import { getShortcutsForAction, formatShortcutParts, useKeyBindingsVersion, type ShortcutAction } from "../shortcuts";
 
 // Saved layouts (store/workbench.ts): the whole chrome arrangement as a named,
 // one-click switch. Nothing ships by default — every row here is one the user
@@ -26,6 +26,7 @@ export function WorkbenchSection({
   isNarrow: boolean;
   onMobileClose?: () => void;
 }) {
+  useKeyBindingsVersion();
   const router = useRouter();
   const pathname = usePathname();
   const workspace = useInboxStore((s) => s.workspace);

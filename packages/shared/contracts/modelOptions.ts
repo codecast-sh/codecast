@@ -42,6 +42,15 @@ export interface ModelOption {
  *  temperature, and it thinks by default inside max_tokens. */
 export const CHEAP_MODEL = "claude-haiku-5-5";
 
+/**
+ * Whether a one-shot model call on this model runs with thinking off. The
+ * cheap model thinks by default and its thinking spends the reply's
+ * max_tokens, so the server's API body turns it off (convex lib/anthropic.ts)
+ * and a subscription call (cli subscriptionCall.ts) does the same; every other
+ * model thinks as the API's default has it, on both.
+ */
+export const sendsThinkingOff = (model: string): boolean => model === CHEAP_MODEL;
+
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model" },
   { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable", contextWindow: 1_000_000 },

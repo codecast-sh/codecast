@@ -76,7 +76,7 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
     const state: AskState = remaining > 0 ? "open" : skipped === changes.length ? "skipped" : "accepted";
     const verdictLine =
       state === "skipped" ? "Rejected"
-      : state === "accepted" ? (skipped > 0 ? `Approved, ${skipped} rejected` : "Approved")
+      : state === "accepted" ? (skipped > 0 ? `Accepted, ${skipped} rejected` : "Accepted")
       : failed > 0 ? `${plural(failed, "change", "changes")} failed. Approve tries ${failed === 1 ? "it" : "them"} again`
       : decided > 0 ? `${decided} of ${changes.length} changes answered`
       : null;
