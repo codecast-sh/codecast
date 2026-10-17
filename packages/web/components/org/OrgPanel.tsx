@@ -39,21 +39,15 @@ import type { OrgTree } from "./orgTypes";
 export type OrgPanelTarget = { kind: "home" } | { kind: "proposal"; ref: string; /** One of its changes, by seq. */ focus?: string } | { kind: "session"; id: string };
 
 /** A proposal link (`/org?proposal=op-N[&focus=n]`) as the drawer's target, else null. */
-export function proposalTargetOf(href: string): Extract<OrgPanelTarget, { kind: "proposal" }> | null {
+function proposalTargetOf(href: string): Extract<OrgPanelTarget, { kind: "proposal" }> | null {
   if (!href.startsWith("/org?")) return null;
   const params = new URLSearchParams(href.slice("/org?".length));
   const ref = params.get("proposal");
   return ref ? { kind: "proposal", ref, ...(params.get("focus") ? { focus: params.get("focus")! } : {}) } : null;
 }
 
-/** The drawer's width is the reader's, dragged from its left edge and kept per device. The
- *  default fits a proposal's fields without truncating; the chart always keeps `ORG_CHART_MIN`. */
-export const ORG_PANEL = { key: "codecast.org-panel-w", min: 420, fallback: 620 } as const;
-export const ORG_CHART_MIN = 280;
-export const orgPanelWidth = (containerWidth: number, chosen: number) => Math.max(Math.min(ORG_PANEL.min, containerWidth), Math.min(chosen, containerWidth - ORG_CHART_MIN));
-
 /** A proposal row's workspace, as the reader's own teams name it. */
-export function proposalWorkspace(row: Pick<OrgProposalListRow, "team_id">, teams: ReadonlyArray<{ _id: unknown; name?: string }>): { teamId: string | null; name: string } {
+function proposalWorkspace(row: Pick<OrgProposalListRow, "team_id">, teams: ReadonlyArray<{ _id: unknown; name?: string }>): { teamId: string | null; name: string } {
   if (!row.team_id) return { teamId: null, name: "Personal" };
   return { teamId: row.team_id, name: teams.find((t) => String(t._id) === row.team_id)?.name ?? "Another workspace" };
 }
