@@ -1,12 +1,13 @@
 "use client";
 
-// The top bar's machine gauge: a quiet vital sign for the laptops you run
-// sessions on. It sits muted while they are fine and takes a tone only when
-// one is genuinely struggling (critical memory pressure, or an incident that
-// has outlasted a build or a test run). Hovering it shows the vitals and the
-// sessions doing the work; clicking it opens Resources. It never interrupts.
+// The top bar's machine gauge: a live vital sign for the laptops you run
+// sessions on. Its needle sits at the busiest laptop's load (loadPercent) and
+// its color warms from muted through yellow to red as the load climbs; a dot
+// marks sustained pressure, the same incident the overload notification
+// reports. Hovering it shows the vitals, the sessions doing the work and a way
+// to move load to the cloud; clicking it opens Resources. It never interrupts.
 import { useContext, useMemo } from "react";
-import { Gauge } from "lucide-react";
+import { CloudUpload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { sustainedResourcePressure, type ResourceIncident, type ResourcePoint, type ResourcePressure } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -19,28 +20,49 @@ import { useDevices } from "../DeviceBadge";
 import { TopbarButton } from "../TopbarButton";
 import { HoverCard } from "../ui/HoverCard";
 import { MiniTrace } from "./HealthStrip";
-import { attribute, fmtAgo, fmtBytes, fmtCpu, freshness, memoryUsedPct } from "./resourceModel";
+import { attribute, fmtAgo, fmtBytes, fmtCpu, freshness, loadPercent, memoryUsedPct } from "./resourceModel";
 import type { ResourceMachine } from "./types";
 
-// The Resources page shows every incident; the gauge takes a tone only for
-// critical pressure or an incident that has lasted this long.
-const TONE_AFTER_MS = 10 * 60_000;
 // How far back the card's traces reach.
 const TRACE_MS = 30 * 60_000;
 
 export type Level = "calm" | "elevated" | "critical";
 
-export function levelOf(incident: ResourceIncident | null, now: number): Level {
-  if (!incident) return "calm";
-  if (incident.level === "critical") return "critical";
-  return now - incident.since >= TONE_AFTER_MS ? "elevated" : "calm";
+export function levelOf(incident: ResourceIncident | null): Level {
+  return incident?.level ?? "calm";
+}
+
+/** The gauge's color at a load: muted to 50%, warming to yellow by 75%, red from 90%. */
+export function loadColor(load: number): string {
+  const t = (from: number, to: number) => Math.round(Math.min(1, Math.max(0, (load - from) / (to - from))) * 100);
+  if (load <= 75) return `color-mix(in srgb, var(--sol-yellow) ${t(50, 75)}%, var(--sol-text-muted))`;
+  return `color-mix(in srgb, var(--sol-red) ${t(75, 90)}%, var(--sol-yellow))`;
+}
+
+/** The needle's angle in degrees from pointing at 0% load; the dial's arc sweeps 240°. */
+export const needleAngle = (load: number) => (Math.min(100, Math.max(0, load)) / 100) * 240;
+
+/** A gauge glyph drawn to the load: the arc fills to it and the needle points at it. */
+function LoadGauge({ load }: { load: number }) {
+  const ease = "motion-safe:transition-[transform,stroke-dasharray,color] motion-safe:duration-700 motion-safe:ease-out";
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" aria-hidden style={{ color: loadColor(load) }} className={ease}>
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" opacity={0.3} />
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={100} style={{ strokeDasharray: `${Math.max(0.1, load)} 100` }} className={ease} />
+      {/* Drawn at 0% (down-left, toward the arc's start) and turned about the hub. */}
+      <g className={ease} style={{ transform: `rotate(${needleAngle(load)}deg)`, transformOrigin: "12px 14px" }}>
+        <path d="M12 14 6.8 17" />
+      </g>
+      <circle cx="12" cy="14" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
 }
 
 const RANK: Record<Level, number> = { calm: 0, elevated: 1, critical: 2 };
 const TONE: Record<Level, string> = { calm: "", elevated: "text-sol-yellow", critical: "text-sol-red" };
 const DOT: Record<Level, string> = { calm: "", elevated: "bg-sol-yellow", critical: "bg-sol-red" };
 
-type Watched = { machine: ResourceMachine; incident: ResourceIncident | null; level: Level };
+type Watched = { machine: ResourceMachine; incident: ResourceIncident | null; level: Level; load: number };
 
 /** The local machine to show: the one in the worst state among those reporting live. */
 function useWatchedMachine(now: number): Watched | null {
@@ -51,8 +73,9 @@ function useWatchedMachine(now: number): Watched | null {
     for (const machine of joinMachines(devices, rows)) {
       if (machine.role !== "local" || freshness(machine, now) !== "live") continue;
       const incident = sustainedResourcePressure(machine.history, now);
-      const level = levelOf(incident, now);
-      if (!best || RANK[level] > RANK[best.level]) best = { machine, incident, level };
+      const level = levelOf(incident);
+      const load = loadPercent(machine.snapshot!.sample);
+      if (!best || RANK[level] > RANK[best.level] || (RANK[level] === RANK[best.level] && load > best.load)) best = { machine, incident, level, load };
     }
     return best;
   }, [devices, rows, now]);
@@ -63,12 +86,12 @@ export function ResourcePressureGauge() {
   const router = useRouter();
   const watched = useWatchedMachine(now);
   if (!watched) return null;
-  const { machine, incident, level } = watched;
-  const label = level === "calm" ? `${machine.name}: resources` : `${machine.name}: ${incident!.reason.toLowerCase()}`;
+  const { machine, incident, level, load } = watched;
+  const label = `${machine.name}: ${Math.round(load)}% load${level === "calm" ? "" : `, ${incident!.reason.toLowerCase()}`}`;
   return (
     <HoverCard side="bottom" align="end" className="w-[360px]" focusable card={<GaugeCard watched={watched} now={now} />}>
-      <TopbarButton onClick={() => router.push("/resources")} aria-label={label} className={cn(level !== "calm" && TONE[level])}>
-        <Gauge />
+      <TopbarButton onClick={() => router.push("/resources")} aria-label={label}>
+        <LoadGauge load={load} />
         {level !== "calm" && (
           <span aria-hidden className={cn("absolute right-0.5 top-0.5 h-2 w-2 rounded-full ring-2 ring-sol-bg", DOT[level], level === "critical" && "motion-safe:animate-pulse")} />
         )}
@@ -108,7 +131,7 @@ function GaugeCard({ watched: { machine, incident, level }, now }: { watched: Wa
 
       <TopUsers machine={machine} level={level} />
 
-      <ResourcesLink />
+      <ResourcesLink deviceId={machine.deviceId} hot={level !== "calm"} />
     </div>
   );
 }
@@ -176,14 +199,22 @@ function TopUsers({ machine, level }: { machine: ResourceMachine; level: Level }
   );
 }
 
-function ResourcesLink() {
+function ResourcesLink({ deviceId, hot }: { deviceId: string; hot: boolean }) {
   const router = useRouter();
   const close = useContext(HoverCardClose);
+  const go = (path: string) => { close?.(); router.push(path); };
   return (
-    <div className="mt-2.5 flex border-t border-sol-border/30 pt-2.5">
+    <div className="mt-2.5 flex gap-1.5 border-t border-sol-border/30 pt-2.5">
       <button
         type="button"
-        onClick={() => { close?.(); router.push("/resources"); }}
+        onClick={() => go(`/resources?offload=${encodeURIComponent(deviceId)}`)}
+        className={cn("inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11.5px]", hot ? "bg-sol-cyan font-semibold text-sol-bg hover:opacity-90" : "border border-sol-border/50 text-sol-text hover:bg-sol-bg-alt")}
+      >
+        <CloudUpload className="h-3.5 w-3.5" />Move load to cloud
+      </button>
+      <button
+        type="button"
+        onClick={() => go("/resources")}
         className="h-7 rounded-md border border-sol-border/50 px-2.5 text-[11.5px] text-sol-text hover:bg-sol-bg-alt"
       >
         Open Resources

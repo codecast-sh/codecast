@@ -34,6 +34,7 @@ import {
 import { taskPriority } from "../../lib/taskPriority";
 import { useTaskActiveSession } from "./taskActiveSession";
 import { useSurface } from "../../lib/surfaces";
+import { withShortcut } from "../../shortcuts";
 
 // The task list row and the board card. The tasks page lays them out; every
 // write goes through the callbacks it passes (ItemRowState, onAssign), so a
@@ -127,7 +128,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       <button
         onClick={(e) => { e.stopPropagation(); state.onOpenPalette("status"); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
-        title="Change status (s)"
+        title={withShortcut("Change status", "task.status")}
         // Hosted mode names the circle by what it does to this to-do; the
         // shortcut stays in the tooltip.
         aria-label={internals ? undefined : `Mark ${sentenceCase(task.title)} ${closed ? "not done" : "done"}`}
@@ -303,14 +304,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <button
             onClick={(e) => { e.stopPropagation(); onTriage(task, "active"); }}
             className="p-1 rounded hover:bg-sol-green/20 text-sol-text-dim hover:text-sol-green transition-colors"
-            title="Promote to active (y)"
+            title="Promote to active"
           >
             <Check className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onTriage(task, "dismissed"); }}
             className="p-1 rounded hover:bg-sol-red/20 text-sol-text-dim hover:text-sol-red transition-colors"
-            title="Dismiss (Backspace)"
+            title="Dismiss"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -319,7 +320,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
-          title="Set priority (p)"
+          title={withShortcut("Set priority", "task.priority")}
         >
           <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
         </button>

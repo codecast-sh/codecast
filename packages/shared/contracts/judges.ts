@@ -194,6 +194,22 @@ export function judgeRequest(spec: Pick<JudgeSpec, "model" | "max_tokens" | "pro
   };
 }
 
+/**
+ * Judging handed to the machine that handed a moment in, for a source that
+ * judges on subscription (JUDGE_BACKENDS): each judge's request as the server
+ * built it, and what the server needs back to settle the replies (the record
+ * and clock it read them with, the lines a scoped re-read files under). The
+ * machine runs each request (cli subscriptionCall.ts) and posts the replies to
+ * `/cli/moments/judged`.
+ */
+export interface JudgeHandoff {
+  moment: string;
+  clock: number;
+  record: MomentRecord;
+  lines?: string[];
+  requests: Array<{ judge: string; request: ModelCallSpec }>;
+}
+
 export interface JudgeFinding {
   expectation: string;
   severity: number;

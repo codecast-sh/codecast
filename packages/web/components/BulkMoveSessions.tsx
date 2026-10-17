@@ -124,7 +124,7 @@ export function BulkSessionMenuItems({
         icon={ArrowRightLeft}
         onSelect={() => useInboxStore.getState().openPalette({ targets: sessions, targetType: "session", mode: "device" })}
       >
-        Move {n} sessions… <span className="ml-auto text-[10px] text-sol-text-dim">⌘K</span>
+        Move {n} sessions…
       </CtxItem>
       <CtxSub>
         <CtxSubTrigger icon={Tag}>Label {n} sessions</CtxSubTrigger>

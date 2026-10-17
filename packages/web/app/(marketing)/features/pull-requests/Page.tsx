@@ -49,10 +49,10 @@ export default function PullRequestsPage() {
       <Section
         id="sessions"
         n={2}
-        title="Every pull request knows its sessions"
+        title="The sessions behind each pull request"
         lede={
           <p>
-            When an agent wrote the change, the reasoning is in a transcript, not in the description. So the pull request
+            When an agent wrote the change, its reasoning lives in the session transcript. So the pull request
             carries links to the conversations that made it: the shepherd in the header, the other sessions and tasks beside it,
             and a session on every commit. A reviewer is one click from what the agent was trying to do.
           </p>
@@ -65,7 +65,7 @@ export default function PullRequestsPage() {
         id="batch"
         n={3}
         tone="paper"
-        title="A review is one batch with one verdict"
+        title="Send held notes as one review"
         lede={
           <p>
             Hold a note on each line that needs one, from the Files view. Held notes are yours alone and are drawn dashed. When you finish, they leave together as one GitHub review under your account, and if a session
@@ -79,7 +79,7 @@ export default function PullRequestsPage() {
       <Section
         id="shepherd"
         n={4}
-        title="The shepherd: what wakes it, and what it reads"
+        title="What wakes the shepherd session and what it reads"
         lede={
           <p>
             The <b>Shepherd</b> line in the header names the session that owns the pull request. Agents that open one through
@@ -95,7 +95,7 @@ export default function PullRequestsPage() {
       <Section
         id="ship"
         n={5}
-        title="Ask for a pull request; the agent sees it to the merge"
+        title="Ask an agent to open a pull request and see it to the merge"
         lede={
           <p>
             The agent that opens the pull request also shepherds it: commits, a description that links the session, the
@@ -113,8 +113,8 @@ export default function PullRequestsPage() {
       <Section
         id="names"
         n={7}
-        title="Whose name is on it"
-        lede={<p>Most acts go out under the codecast GitHub app. The ones that carry judgement go out as you.</p>}
+        title="Which GitHub account each act uses"
+        lede={<p>Comments go out under the codecast GitHub app, a review verdict only under your own GitHub account, and the rest under yours when it is connected, with the app as the fallback.</p>}
       >
         <Names />
       </Section>
@@ -123,18 +123,18 @@ export default function PullRequestsPage() {
         id="terminal"
         n={8}
         tone="paper"
-        title="For scripts and agents"
+        title="The cast pr commands for scripts and agents"
         lede={<p>Every act on the page has a <C>cast pr</C> verb, which is how the shepherd works. You can use the same verbs from a terminal or a script. The read verbs, as they print:</p>}
       >
         <Tour />
         <div className="mt-12"><Reference /></div>
       </Section>
 
-      <Section id="limits" n={9} title="Limits and plain answers">
+      <Section id="limits" n={9} title="Limits and common questions">
         <Limits />
       </Section>
 
-      <Section id="related" n={10} tone="paper" title="Works with">
+      <Section id="related" n={10} tone="paper" title="Related features">
         <Related />
       </Section>
 

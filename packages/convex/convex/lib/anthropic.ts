@@ -5,17 +5,11 @@
 
 import { priceFor, usageCost } from "@platform/agent/meter";
 import { replyText, type MessagesRequest } from "@platform/assistant/messages";
-import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
+import { CHEAP_MODEL, sendsThinkingOff } from "@codecast/shared/contracts/modelOptions";
 
-export { CHEAP_MODEL };
-
-/**
- * Whether prod posts this model with thinking off. The cheap model thinks by
- * default and its thinking spends the reply's max_tokens, so anthropicBody
- * turns it off; the evals read the same rule to know which surfaces their
- * replay cannot match.
- */
-export const sendsThinkingOff = (model: string): boolean => model === CHEAP_MODEL;
+// sendsThinkingOff: whether prod posts this model with thinking off; the evals
+// read the same rule to know which surfaces their replay cannot match.
+export { CHEAP_MODEL, sendsThinkingOff };
 /** The current Sonnet, for work the cheap model is too small for. It refuses any temperature. */
 export const STRONG_MODEL = "claude-sonnet-5-5";
 

@@ -11,14 +11,15 @@
 // checkout that runs `cast line judging` and follows it (web lib/line/setupJudging.ts).
 import fs from "node:fs";
 import path from "node:path";
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { lineProjectFor, scopeFor } from "./lineScope.js";
 import { JUDGES_DIR, fileVersion } from "./momentsHost.js";
 import { execFileAsync } from "./proc.js";
 import { judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, type ExpectationsBrief, type JudgeFinding, type JudgeSpec } from "@codecast/shared/contracts/judges";
-import { parseExtractorOutput, type MomentRecord } from "@codecast/shared/contracts/moments";
+import { JUDGE_BACKENDS, parseExtractorOutput, type JudgeBackend, type MomentRecord } from "@codecast/shared/contracts/moments";
+import { subscriptionModelCall } from "./subscriptionCall.js";
 import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/modelCall";
 import setupPass from "./judgingSetup.md" with { type: "text" };
 import { registerJudgeFixCommands } from "./judgeFixCommand.js";
@@ -114,6 +115,28 @@ export async function callModel(deps: PublishDeps, scope: Record<string, unknown
   }
 }
 
+/** One judge call where the source's judges make theirs: on the team's budget (callModel), or on this machine's Claude Code login. */
+export async function judgeCall(on: JudgeBackend, deps: PublishDeps, scope: Record<string, unknown>, request: ModelCallSpec, label: string): Promise<ModelCallResult> {
+  return on === "subscription" ? await subscriptionModelCall(request) : await callModel(deps, scope, request, label);
+}
+
+/**
+ * Where these judges make their calls unless told otherwise: their source's
+ * judge_on (`cast sources set <source> --judge-on`), so a replay of a judge
+ * spends where the published judge does. api when none of them is published.
+ */
+export async function judgeBackendOf(deps: PublishDeps, scope: Record<string, unknown>, judges: string[]): Promise<JudgeBackend> {
+  const ls = await apiPost(deps, "/cli/moments/ls", { ...scope, limit: 1 }, { read: true, exitOnError: false }).catch(() => null);
+  const on = (ls?.judges ?? []).find((j: any) => judges.includes(j.name))?.judge_on;
+  return on === "subscription" ? "subscription" : "api";
+}
+
+/** A --on value, checked. */
+export function judgeBackendOption(v: string): JudgeBackend {
+  if (!(JUDGE_BACKENDS as readonly string[]).includes(v)) throw new InvalidArgumentError(`one of ${JUDGE_BACKENDS.join(", ")}`);
+  return v as JudgeBackend;
+}
+
 function readJudge(root: string, ref: string): { spec: JudgeSpec; file: string } {
   const file = fs.existsSync(ref) && ref.endsWith(".md") ? path.resolve(ref) : path.join(root, JUDGES_DIR, `${ref}.md`);
   if (!fs.existsSync(file)) fail(`No judge at ${path.relative(root, file) || file}: a judge is ${JUDGES_DIR}/<name>.md in the product's repository`);
@@ -152,6 +175,7 @@ export function registerJudgingCommands(line: Command, deps: PublishDeps): void 
     .option("--team <name|id|personal>", "Workspace whose budget pays and whose projects' expectations it reads")
     .option("--prompt", "Print the exact request for the first moment and send nothing")
     .option("--proposal <xp-N>", "Judge under the expectations as they would read with this open proposal applied")
+    .option("--on <backend>", "Where the calls run: api (the team's budget) or subscription (this machine's Claude Code login); default the judge's source's judge_on", judgeBackendOption)
     .option("--json", "Machine-readable output")
     .addHelpText("after", `
 A judge file is a header between two --- lines, then its prompt:
@@ -175,7 +199,7 @@ An extractor (.codecast/moments/<kind>.ts) reads the event on stdin and prints o
               {"type": "text", "title": "...", "text": "..."}],
    "refs": [{"label": "thread", "id": "t_81", "table": "threads"}], "at": "<iso>"}
 Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
-    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; prompt?: boolean; json?: boolean; proposal?: string }) => {
+    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; prompt?: boolean; json?: boolean; proposal?: string; on?: JudgeBackend }) => {
       const root = await repoRoot(process.cwd());
       const { spec, file } = readJudge(root, judgeRef);
       const briefs: ExpectationsBrief[] = [];
@@ -218,7 +242,9 @@ Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
           return;
         }
         // Charged to the judge's first project, the one whose expectations it grades.
-        const result = await callModel(deps, await scopeFor(deps, options.team, false, spec.projects[0]), request, `Judge try ${spec.name}`);
+        const callScope = await scopeFor(deps, options.team, false, spec.projects[0]);
+        options.on ??= await judgeBackendOf(deps, callScope, [spec.name]);
+        const result = await judgeCall(options.on, deps, callScope, request, `Judge try ${spec.name}`);
         const outcome: TryOutcome = { moment: name, result };
         if (result.ok) {
           const parsed = parseJudgeReply(result.text, ids);

@@ -1,7 +1,7 @@
 // Mounts the proposal card (docs/architecture/org-staffing.md S24, S39) in
 // jsdom against stubbed store rows: a proposed proposal (a new role under the
-// founder and a move onto it, drawn as two entries with their own Approve,
-// Reject and Reply and a foot with Approve the rest), an applied one
+// founder and a move onto it, drawn as two entries with their own Adjust and
+// Accept, Reject inside the Adjust field, and a foot with Accept the rest), an applied one
 // (what happened, in words), and a failed one (Retry, the note). An answer
 // joins the pending batch of the conversation whose composer is in reach and
 // decides nothing; the controls give way to a band until the composer sends.
@@ -132,7 +132,7 @@ const foot = (c: HTMLElement) => c.querySelector<HTMLElement>("[data-ledger-clos
 /** Approving a new role opens the shared confirm; this presses its confirm. */
 const confirmOnline = () => click(q("[data-switch-confirm]"));
 
-test("a proposed proposal: meta, lead, totals, one entry per subject; Approve stages a band in the batch and decides nothing; Undo takes it back", () => {
+test("a proposed proposal: meta, lead, totals, one entry per subject; Accept stages a band in the batch and decides nothing; Undo takes it back", () => {
   const root = mount(inThread(card("op-1")));
   const c = q("[data-card='op-1']");
   expect(c.querySelector(".entity-card")).not.toBeNull();
@@ -144,8 +144,9 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(c.querySelector("[data-proposal-author='role']")!.textContent).not.toContain("@");
   expect(c.querySelector(".entity-card")!.getAttribute("data-entity-card")).toBe("proposal");
   expect(c.querySelector("a[title='Open proposal']")).not.toBeNull();
-  // The letter's lead, then the totals in one sentence.
+  // The author's summary at the top, then the totals in one sentence.
   expect(c.querySelector("[data-proposal-letter]")).toBeNull();
+  expect(c.querySelector("[data-proposal-summary]")!.textContent).toBe("Why bring platform under one lead.");
   expect(c.querySelector("[data-proposal-totals]")!.textContent).toBe("2 changes: 1 new role and 1 move.");
   expect(c.querySelector("[data-proposal-card]")!.getAttribute("data-proposal-card")).toBe("op-1");
   expect(c.querySelector("[data-proposal-card]")!.getAttribute("data-proposal-work")).toBe("structure");
@@ -164,15 +165,16 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(reports.getAttribute("data-field-after")).toBe("Head of Platform");
   expect(reports.querySelector("[data-face='person']")).not.toBeNull();
   expect(reports.querySelector("[data-face='role']")).not.toBeNull();
-  expect(c.textContent).not.toContain("Because c1-role.");
+  // Two entries: each change's reason reads as its own Why row.
+  expect(Array.from(c.querySelectorAll("[data-subject-why]")).map((w) => w.textContent)).toEqual(["Because c1-role.", "Because c1-move."]);
   expect(c.querySelector("[data-tree-row], [data-ghost-tag], [data-proposal-rationale], [data-subject-edit], [data-send-answers], [data-proposal-reply], [data-subject-pending]")).toBeNull();
-  expect(c.textContent).not.toMatch(/accept|skip|\bask\b|on your next message|\bEdit\b|Send \d/i);
+  expect(c.textContent).not.toMatch(/skip|\bask\b|on your next message|\bEdit\b|Send \d/i);
 
-  // Before any answer the foot has Approve all, nothing filled.
-  expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Approve all 2");
+  // Before any answer the foot has Accept all, nothing filled.
+  expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Accept all 2");
   expect(foot(c).querySelector<HTMLElement>("[data-approve-rest]")!.style.background).toBe("");
 
-  // One entry's Approve: one answer in the batch, naming the card, its changes, the number the person sees and the subject.
+  // One entry's Accept: one answer in the batch, naming the card, its changes, the number the person sees and the subject.
   click(c.querySelector("[data-subject='role:growth'] [data-subject-approve]")!);
   expect(batch()).toEqual([["role:growth", "approve", "", [2], ["c1-move"], 2, "Head of Growth"]]);
   expect(calls).toEqual([]);
@@ -181,8 +183,8 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(growth().getAttribute("data-subject-status")).toBe("proposed");
   expect(growth().querySelector("[data-subject-approve]")).toBeNull();
   expect(growth().querySelector("[data-staged]")!.getAttribute("data-staged")).toBe("approve");
-  expect(growth().querySelector("[data-staged]")!.textContent).toBe("Approved. Applies when you send.Undo");
-  expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Approve the rest");
+  expect(growth().querySelector("[data-staged]")!.textContent).toBe("Accepted. Applies when you send.Undo");
+  expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Accept the rest");
   // Undo empties the batch and brings the controls back.
   click(growth().querySelector("[data-staged-undo]")!);
   expect(batch()).toEqual([]);
@@ -193,11 +195,14 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   clearBatch();
 });
 
-test("Reject opens the field inside the band; typing writes the body; Enter closes it and shows You; the frame never toggles", () => {
+test("Reject inside the Adjust field stages the band around the field; typing writes the body; Enter closes it and shows You; the frame never toggles", () => {
   const root = mount(inThread(card("op-1")));
   const c = q("[data-card='op-1']");
-  click(c.querySelector("[data-subject='role:platform'] [data-subject-reject]")!);
   const platform = () => c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
+  expect(platform().querySelector("[data-subject-reject]")).toBeNull();
+  click(platform().querySelector("[data-subject-reply]")!);
+  expect(batch()).toEqual([]);
+  click(platform().querySelector("[data-subject-reply-field] [data-subject-reject]")!);
   expect(platform().querySelector("[data-staged]")!.textContent).toBe("Rejected. Sent when you send.Undo");
   const ta = platform().querySelector<HTMLTextAreaElement>("[data-answer-area] [data-subject-reply-field] textarea")!;
   expect(ta.placeholder).toBe("Why not? Say what you want instead.");
@@ -212,7 +217,7 @@ test("Reject opens the field inside the band; typing writes the body; Enter clos
   expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("false");
   expect(platform().querySelector("[data-subject-reply-field]")).toBeNull();
   expect(platform().querySelector("[data-staged] [data-subject-you]")!.textContent).toBe("You: Not yet");
-  // Every card answered: nothing is left for "Approve the rest".
+  // Every card answered: nothing is left for "Accept the rest".
   click(c.querySelector("[data-subject='role:growth'] [data-subject-approve]")!);
   expect(c.querySelector("[data-approve-rest]")).toBeNull();
   // Open, the card is the same ledger, reading the same batch.
@@ -227,14 +232,15 @@ test("Reject opens the field inside the band; typing writes the body; Enter clos
   clearBatch();
 });
 
-test("Approve all 2 with nothing answered, Approve the rest after one answer, pressed again withdraws only what it put; a word with a check", () => {
+test("Accept all 2 with nothing answered, Accept the rest after one answer, pressed again withdraws only what it put; a word with a check", () => {
   const root = mount(inThread(card("op-1")));
   const c = q("[data-card='op-1']");
   const rest = () => c.querySelector<HTMLElement>("[data-ledger-close] [data-approve-rest]")!;
-  expect(rest().textContent).toBe("Approve all 2");
-  // One card answered by hand first.
+  expect(rest().textContent).toBe("Accept all 2");
+  // One card answered by hand first: Adjust, then Reject in its field.
+  click(c.querySelector("[data-subject='role:growth'] [data-subject-reply]")!);
   click(c.querySelector("[data-subject='role:growth'] [data-subject-reject]")!);
-  expect(rest().textContent).toBe("Approve the rest");
+  expect(rest().textContent).toBe("Accept the rest");
   // The rest holds a new role: the press opens the online review, and nothing is staged until it is confirmed.
   click(rest());
   expect(q("[data-switch-review]").getAttribute("data-switch-review")).toBe("Bring @platform online");
@@ -249,10 +255,10 @@ test("Approve all 2 with nothing answered, Approve the rest after one answer, pr
   expect(batch().map((b) => [b[0], b[1]])).toEqual([["role:growth", "reject"]]);
   expect(rest().getAttribute("aria-pressed")).toBe("false");
   expect(rest().querySelector("svg")).toBeNull();
-  // With nothing answered it reads "Approve all 2" and answers both.
+  // With nothing answered it reads "Accept all 2" and answers both.
   click(c.querySelector("[data-subject='role:growth'] [data-staged-undo]")!);
   expect(batch()).toEqual([]);
-  expect(rest().textContent).toBe("Approve all 2");
+  expect(rest().textContent).toBe("Accept all 2");
   click(rest());
   confirmOnline();
   expect(batch().map((b) => [b[0], b[1]])).toEqual([["role:platform", "approve"], ["role:growth", "approve"]]);
@@ -262,39 +268,43 @@ test("Approve all 2 with nothing answered, Approve the rest after one answer, pr
   clearBatch();
 });
 
-test("after the send: no bands; accepted reads Approved, applying, then applied reads Applied; the meta and the outcome say what happened", () => {
+test("after the send: no bands; accepted reads Accepted, applying, then applied reads Applied; the meta and the outcome say what happened", () => {
   const landing = mount(inThread(card("op-7")));
   const l = q("[data-card='op-7']");
   expect(l.querySelector("[data-staged], [data-subject-approve], [data-approve-rest]")).toBeNull();
-  expect(Array.from(l.querySelectorAll("[data-subject-state]")).map((s) => [s.getAttribute("data-subject-state"), s.textContent])).toEqual([["accepted", "Approved, applying"], ["accepted", "Approved, applying"]]);
-  expect(l.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 approved");
+  expect(Array.from(l.querySelectorAll("[data-subject-state]")).map((s) => [s.getAttribute("data-subject-state"), s.textContent])).toEqual([["accepted", "Accepted, applying"], ["accepted", "Accepted, applying"]]);
+  expect(l.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 accepted");
   React.act(() => useInboxStore.setState((s: any) => ({ orgProposalChanges: { ...s.orgProposalChanges, "c7-role": { ...s.orgProposalChanges["c7-role"], status: "applied", applied_at: Date.now() }, "c7-move": { ...s.orgProposalChanges["c7-move"], status: "applied", applied_at: Date.now() } } })));
   expect(Array.from(l.querySelectorAll("[data-subject-state]")).map((s) => [s.getAttribute("data-subject-state"), s.textContent])).toEqual([["applied", "Applied"], ["applied", "Applied"]]);
   React.act(() => landing.unmount());
 
   const root = mount(card("op-2"));
   const c = q("[data-card='op-2']");
-  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 approved");
+  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 accepted");
   expect(c.querySelector("[data-approve-rest], [data-send-answers], [data-proposal-reply], [data-staged]")).toBeNull();
   expect(c.querySelector("[data-subject-approve], [data-subject-reject], [data-subject-reply]")).toBeNull();
-  expect(c.querySelector("[data-proposal-outcome]")!.textContent).toBe("2 approved");
+  expect(c.querySelector("[data-proposal-outcome]")!.textContent).toBe("2 accepted");
   expect(subjects(c).map((s) => s.getAttribute("data-subject-status"))).toEqual(["applied", "applied"]);
   // Nothing to answer, so no line asks the reader to open a thread.
   expect(c.querySelector("[data-proposal-readonly-line]")).toBeNull();
   React.act(() => root.unmount());
 });
 
-test("a failed change keeps the card answerable: Retry, Reject and the note; staged, Retry says it runs again; with no composer the card is read only", () => {
+test("a failed change keeps the card answerable: Retry, Adjust with Reject inside, and the note; staged, Retry says it runs again; with no composer the card is read only", () => {
   const root = mount(inThread(card("op-3")));
   const c = q("[data-card='op-3']");
-  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 approved, 1 failed");
+  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 accepted, 1 failed");
   const meta = Array.from(c.querySelector("[data-proposal-meta]")!.children) as HTMLElement[];
-  expect(meta.map((m) => m.textContent?.trim())).toEqual(["1 approved, 1 failed", "fromHead of People"]);
+  expect(meta.map((m) => m.textContent?.trim())).toEqual(["1 accepted, 1 failed", "fromHead of People"]);
   const failed = () => c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
   expect(failed().getAttribute("data-subject-status")).toBe("failed");
   expect(failed().querySelector("[data-failed-note]")!.textContent).toBe("Failed: A role already answers to @platform");
   expect(failed().querySelector("[data-subject-approve]")!.textContent).toBe("Retry");
-  expect(failed().querySelector("[data-subject-reject]")).not.toBeNull();
+  expect(failed().querySelector("[data-subject-reject]")).toBeNull();
+  click(failed().querySelector("[data-subject-reply]")!);
+  expect(failed().querySelector("[data-subject-reply-field] [data-subject-reject]")).not.toBeNull();
+  key(failed().querySelector<HTMLElement>("[data-subject-reply-field] textarea")!, "Escape");
+  expect(batch()).toEqual([]);
   click(failed().querySelector("[data-subject-approve]")!);
   confirmOnline();
   expect(batch()).toEqual([["role:platform", "approve", "", [1], ["c3-role"], 1, "Head of Platform"]]);
@@ -325,8 +335,8 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   expect(alone.querySelector("[data-field]")).toBeNull();
   expect(alone.textContent).not.toMatch(/wakes|tokens|caps|limit/i);
   expect(alone.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 to decide");
-  // One card is the whole decision: its Approve is an outline like any other, the body has no totals line, and the foot adds no "Approve the rest".
-  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.style.background).toBe("");
+  // One card is the whole decision: its Accept is the filled green face like any other, the body has no totals line, and the foot adds no "Accept the rest".
+  expect(alone.querySelector<HTMLElement>("[data-subject-approve]")!.className).toContain("cc-btn-green");
   expect(alone.querySelector("[data-approve-rest], [data-proposal-totals], [data-subject-ordinal]")).toBeNull();
   click(alone.querySelector("[data-subject-approve]")!);
   expect(batch()).toEqual([["role:growth", "approve", "", [1], ["c4-limit"], 1, "Head of Growth"]]);
@@ -334,9 +344,9 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   const beside = q("[data-card='op-5']");
   expect(subjects(beside).map((s) => [s.getAttribute("data-subject"), s.getAttribute("data-change-ids")])).toEqual([["role:platform", "c5-role c5-limit"]]);
   expect(beside.textContent).not.toMatch(/wakes|tokens|caps|limit|safety net/i);
-  // A new role: its Approve opens the online review; Not yet stages nothing, the confirm stages it.
+  // A new role: its Accept opens the online review; Not yet stages nothing, the confirm stages it.
   click(beside.querySelector("[data-subject-approve]")!);
-  expect(q("[data-switch-review]").textContent).toContain("Approve and bring online");
+  expect(q("[data-switch-review]").textContent).toContain("Accept and bring online");
   click(q("[data-switch-cancel]"));
   expect(batch().length).toBe(1);
   click(beside.querySelector("[data-subject-approve]")!);
@@ -347,14 +357,25 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   clearBatch();
 });
 
-test("the letter stays in the author's conversation: neither the card nor its open frame draws it", () => {
+test("the summary heads the card: drawn whole in a card of its own, clamped to two lines in a tile; one entry beside it draws no Why row", () => {
   const root = mount(inThread(card("op-8")));
   const c = q("[data-card='op-8']");
   expect(c.querySelector("[data-proposal-letter], [data-letter-more]")).toBeNull();
-  expect(c.textContent).not.toContain("names the sessions this would move");
-  click(c.querySelector(".entity-card")!);
-  expect(c.querySelector(".entity-card-expand [data-proposal-letter]")).toBeNull();
+  const summary = c.querySelector<HTMLElement>("[data-proposal-summary]")!;
+  expect(summary.textContent).toContain("Platform work is spread over four people");
+  expect(summary.textContent).toContain("names the sessions this would move");
+  expect(summary.className).not.toContain("line-clamp-2");
+  // One entry and a summary: the summary says why, so the entry carries no Why row.
+  expect(c.querySelectorAll("[data-subject]").length).toBe(1);
+  expect(c.querySelector("[data-subject-why]")).toBeNull();
+  expect(c.textContent).not.toContain("Because c8-role.");
   React.act(() => root.unmount());
+  // A tile sharing a row: the summary clamped to two lines, and no entries.
+  const tile = mount(inThread(h("div", { "data-card": "op-8" }, h(EntityObjectCard, { refId: "op-8", count: 2 }))));
+  const t = q("[data-card='op-8']");
+  expect(t.querySelector("[data-proposal-summary]")!.className).toContain("line-clamp-2");
+  expect(t.querySelector("[data-subject]")).toBeNull();
+  React.act(() => tile.unmount());
 });
 
 test("in a message, op-N#seq alone on its line is the proposal's pill, opening the screen with the change in focus, and never a card", async () => {

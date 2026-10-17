@@ -9,7 +9,7 @@
 import { EXTERNAL_OBJECT_ID_RE, OBJECT_REF_SCAN_SOURCE, OBJECT_SHORT_ID_RE, type ModObjectKind } from "@codecast/shared/contracts/mods";
 import { activeWorkspaceKeyOf } from "../workspaceScope";
 
-type KindEntry = ModObjectKind & { mod: string; modTitle?: string };
+export type KindEntry = ModObjectKind & { mod: string; modTitle?: string };
 
 function state(): any {
   return (globalThis as any).__inboxStore?.getState?.() ?? null;

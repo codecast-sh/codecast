@@ -785,6 +785,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   let origFetch: typeof fetch;
   let calls: Array<{ route: string; body: any }>;
   let pinned: { state: string; status: string; result?: string | null };
+  let pinnedReads: Array<typeof pinned>;
   let workState: string;
   let inboxReads: Array<{ id: string; work_state: string; is_live: boolean }>;
   let gateReply: { status: string; gate_response: string | null };
@@ -798,6 +799,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     pinned = { state: "Grounded ct-9", status: "done" };
     workState = "needs_input";
     inboxReads = [];
+    pinnedReads = [];
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
@@ -808,7 +810,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
         const next = inboxReads.shift();
         return reply({ sessions: [next ?? { id: "conv_hand", work_state: workState, is_live: false }] });
       }
-      if (route === "/cli/sessions/state/get") return reply(pinned);
+      if (route === "/cli/sessions/state/get") return reply(pinnedReads.shift() ?? pinned);
       if (route === "/cli/workflow-runs/poll-gate") return reply(gateReply);
       return reply({ ok: true });
     }) as typeof fetch;
@@ -874,6 +876,38 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(4);
   }, 30000);
 
+  test("a hand that pinned dormant is not taken as settled until it pins its answer", async () => {
+    // ct-59998, 2026-10-16: the Implement hand committed its fix, started a
+    // check and an eval replay in the background and pinned dormant. Its row
+    // read needs_input, then not live, and the run routed on an empty handoff
+    // ("no outgoing edge from implement"). A dormant pin names a wake the hand
+    // waits on: the station waits for it within the node's timeout.
+    const dormant = { state: "Re-verifying on main; woken by the check and eval finishing", status: "dormant" };
+    const row = (work_state: string, is_live: boolean, agent_status: string) => ({ id: "conv_hand", work_state, is_live, agent_status, message_count: 57 });
+    inboxReads = [row("working", true, "working"), row("needs_input", true, "idle"), row("needs_input", true, "idle"), row("needs_input", false, "hibernated"), row("needs_input", false, "stopped")];
+    pinnedReads = [dormant, dormant];
+    pinned = { state: "Fixed and verified", status: "done", result: '{"handoff":"prove"}' };
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(6);
+    // Read only when the row would settle: the two dormant reads and the answer.
+    expect(calls.filter(c => c.route === "/cli/sessions/state/get").length).toBe(3);
+    expect(cap.logs.some(l => l.includes("jx7hand: pinned dormant"))).toBe(true);
+  }, 30000);
+
+  test("a dormant hand that is killed, or asks a person, settles", async () => {
+    const dormant = { state: "waiting on the replay", status: "dormant" };
+    pinned = dormant;
+    inboxReads = [{ id: "conv_hand", work_state: "idle", is_live: false, is_killed: true, message_count: 9 } as any];
+    await run();
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(1);
+    calls = [];
+    const asking = { id: "conv_hand", work_state: "needs_input", is_live: true, awaiting_input: true, message_count: 9 } as any;
+    inboxReads = [asking, asking];
+    await run();
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+  }, 30000);
+
   test("a working hand whose daemon goes quiet is not taken as settled", async () => {
     // The agentwatch Build station, 2026-10-14: the hand sat in one long tool
     // call while its daemon's loop froze for 199s. With no heartbeat and no
@@ -894,13 +928,13 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
-  test("a hand whose session holds no message and no result fails the station and is killed", async () => {
+  test("a hand whose session holds no message and no result fails the station, and its report ends the hand", async () => {
     // The agentwatch Propose step, 2026-10-12: the hand's transcript went to
     // another conversation, the watched one stayed empty, and the run moved on.
     pinned = { state: "", status: "" };
     inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 0 } as any];
     expect(await run()).toBe("failed");
-    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(handEnded("failed")).toBe(true);
     expect(calls.some(c => c.route === "/cli/workflow-runs/poll-gate")).toBe(false);
   }, 30000);
 
@@ -922,7 +956,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
       setSystemTime();
     }
     expect(reads).toBe(2);
-    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(handEnded("failed")).toBe(true);
     expect(cap.logs.some(l => l.includes("jx7hand could not start") && l.includes("cloud host preparation failed"))).toBe(true);
   }, 30000);
 
@@ -964,9 +998,16 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/workflow-runs/progress")).toEqual([]);
   }, 30000);
 
-  test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {
+  // The server stops a station's hand when the runner reports its node over
+  // (workflow_runs.stopStationHands): one owner, and a card that stays. The
+  // runner's own kill dismissed the hand from the inbox and never reached a
+  // hand that settled on a question, which held its worktree for hours.
+  const handEnded = (status: string) => calls.some(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "ground" && c.body.node_status === status && c.body.session_id === "jx7hand");
+
+  test("a station that declared done ends with its node's report, and the runner kills nothing itself", async () => {
     await run();
-    expect(calls.filter(c => c.route === "/cli/sessions/kill").map(c => c.body.session)).toEqual(["conv_hand"]);
+    expect(handEnded("completed")).toBe(true);
+    expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
   }, 30000);
 
   test("a gate waits past any clock: thousands of unanswered polls, then the person's answer routes it", async () => {
@@ -1061,10 +1102,20 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(second.prompt).toContain("# Human Instructions\nversion 3");
   }, 30000);
 
-  test("a station that ended on a question is left standing for the person", async () => {
+  test("a station that settled on a question ends with its node's report too", async () => {
     pinned = { state: "Which base should prove run on?", status: "working" };
+    workState = "needs_input";
     await run();
-    expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
+    expect(handEnded("completed")).toBe(true);
+  }, 30000);
+
+  test("a resumed run does not wait again on a hand that was stopped", async () => {
+    // A Ctrl-C ends the run and the server stops its hands; a later resume
+    // that reattached to the stopped hand read it as settled, with half a turn.
+    inboxReads = [{ id: "conv_left", work_state: "needs_input", is_live: true, is_killed: true, message_count: 9 } as any];
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    expect(outcome).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
   test("a station routes on its result even when the pinned text was cut short", async () => {

@@ -96,7 +96,8 @@ export type OffloadPlan = {
   deviceId: string;
   /** The source's sample the plan was built from: the base every "after the move" figure is computed against. */
   sourceSample: ResourcePoint;
-  incident: ResourceIncident;
+  /** Sustained pressure on the source, when there is any; a plan is offered either way. */
+  incident: ResourceIncident | null;
   generatedAt: number;
   destinations: OffloadDestination[];
   candidates: OffloadCandidate[];
@@ -159,4 +160,6 @@ export type ResourceMonitorProps = {
   actionsDisabledReason?: string;
   /** A standing banner naming the data as sample data (the preview sets it). */
   sampleNotice?: string;
+  /** A machine whose offload review opens on arrival (a notification's link). */
+  openOffload?: string;
 };

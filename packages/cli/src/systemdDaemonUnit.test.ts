@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autostartDisabledByEnv, daemonUnitFor, isTemplateInstance } from "./systemdDaemonUnit";
+import { autostartDisabledByEnv, daemonUnitFor, isTemplateInstance, supervisedBySystemdUnit } from "./systemdDaemonUnit";
 import { ownDaemonPids, type ProcRow } from "./processTable";
 
 const unit = (user: string, exec = "/usr/local/bin/cast _daemon") => `[Service]\nUser=${user}\nExecStart=${exec}\nRestart=always\n`;
@@ -39,4 +39,13 @@ test("ownDaemonPids: cast stop stops this user's daemons, never another person's
     { pid: 13, ppid: 1, uid: 1005, command: "/home/jbtest2/.local/bin/cast _daemon" },
   ] as ProcRow[];
   expect(ownDaemonPids(rows, 13, 1005)).toEqual([11]);
+});
+
+describe("supervisedBySystemdUnit", () => {
+  test("a daemon a unit started exits to restart; one started by hand beside no unit spawns its replacement", () => {
+    expect(supervisedBySystemdUnit({ INVOCATION_ID: "abc" }, () => "codecast-daemon.service")).toBe(true);
+    expect(supervisedBySystemdUnit({}, () => "codecast-daemon.service")).toBe(false);
+    // A terminal launched by a systemd user service carries INVOCATION_ID too: without a unit, nothing would bring it back.
+    expect(supervisedBySystemdUnit({ INVOCATION_ID: "abc" }, () => null)).toBe(false);
+  });
 });

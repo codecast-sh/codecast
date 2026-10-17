@@ -21,7 +21,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal } from "../shortcuts";
+import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
@@ -116,7 +116,7 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isIdleLandingStub, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -159,7 +159,7 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
@@ -3145,7 +3145,9 @@ const ConversationViewInner = (
   // Same Starting…/Ready rule the inbox row renders, so the two never disagree
   // (see lib/sessionLifecycle). The < 120_000 visibility gate keeps the affordance
   // off an old-but-still-empty session — past it, it's just a normal live session.
-  const isFreshSession = isNewEmptySession || isFreshFork;
+  // The fresh-launch landing blank starts nothing until its first send.
+  const idleLandingStub = useInboxStore((st) => isIdleLandingStub(st, conversation?._id));
+  const isFreshSession = (isNewEmptySession && !idleLandingStub) || isFreshFork;
   const sessionStartup = sessionStartupState({ isConnected: managedSession?.is_connected, ageMs: sessionAge });
   const isSessionStarting = isFreshSession && sessionStartup === "starting";
   const isSessionReady = isFreshSession && sessionStartup === "ready" && sessionAge < 120_000;
@@ -3966,7 +3968,7 @@ const ConversationViewInner = (
             ) : (
               <ConversationHeaderTitle
                 text={identityRow
-                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" titleClassName="!text-sol-text-muted" />
+                  ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
                   : truncatedTitle}
                 tooltip={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
@@ -4034,7 +4036,6 @@ const ConversationViewInner = (
               </span>
             )}
                 </>}
-                <ConversationAgeFacts startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} conversationId={conversation._id} />
         </>)}
         actions={conversation && (<>
 
@@ -4086,7 +4087,7 @@ const ConversationViewInner = (
                           ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
                           : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
                       }`}
-                      title={`Branch map: ${heading} (${isMac ? "⌘B" : "Ctrl+B"})`}
+                      title={withShortcut(`Branch map: ${heading}`, "conv.toggleTree")}
                     >
                       <Split className="w-3 h-3" />
                       {familyCount > 1 && (
@@ -4481,10 +4482,11 @@ const ConversationViewInner = (
                     )}
                       </>
                     )}
-                    {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
-                      <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
+                    <ConversationAgeMenuItems startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} />
+                    {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
+                      <>
                     {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
                       <DropdownMenuItem disabled>
                         <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
@@ -5005,7 +5007,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} sharedDraft={composerPresenceEnabled(conversation) && !onSendOverride && !newSessionPage} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
                 <HeaderModelControl variant="composer" conversationId={conversation._id} agentType={conversation.agent_type} model={conversation.model} effort={(conversation as any).effort} messageCount={conversation.message_count} canEdit open={sessionControlOpen} onOpenChange={setSessionControlOpen} />
               )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
