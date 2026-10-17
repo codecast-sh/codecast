@@ -312,6 +312,18 @@ recorded as skipped, grouping falls back to the finding's key, and a call
 node fails with the reason. The team settings show the month's spend against
 the cap, where it went, how many calls were skipped, and earlier months.
 
+A source can move its judges off the budget: `cast sources set <source>
+--judge-on subscription`. Its judge calls then run on the Claude Code login
+of the machine that hands the moment in (`cli/src/subscriptionCall.ts`: the
+same system prompt, user message and model, no tools, one turn, under a
+private config dir so no transcript reaches the inbox). The server builds
+each request as before and hands them back with the moment
+(`JudgeHandoff`); the daemon runs them and posts the replies to
+`/cli/moments/judged`, which records them through the same path an API reply
+takes (`moments.settleJudge`), with `backend: "subscription"` on the run.
+`cast line moments rejudge`, `cast line judges try` and the judge-fix A/B
+(`base`, `ab`) follow the source's setting, or `--on api|subscription`.
+
 ## LL11. Improving a judge
 
 LL4's "improve a judge", as built (`convex/judgeReview.ts`,
@@ -466,7 +478,8 @@ decision card (`convex/lineTrial.ts`).
 - **Nothing ships.** The trial graph has no push, merge or watch station, its
   card's answers end at nodes that record them, `orgLineMerge.check` refuses a
   trial run's merge whatever graph it runs, and the role sweep never starts a
-  trial problem (`cast line trial run <ct-N>`, at most three running).
+  trial problem (`cast line trial run <ct-N>`, at most ten running:
+  `TRIAL_RUNNING_CAP`).
 - **Every run proves against unfixed code.** The line names a task's
   worktree, branch and run directory after the graph and the task, so a
   second run on a problem would land on the first run's branch, fix and all,
@@ -487,7 +500,7 @@ decision card (`convex/lineTrial.ts`).
   `unmadeBefore`). The dispatcher picks such runs up before it starts any,
   and a pick-up spends no run of `max_runs`. Every rerun, from the page or
   `cast line trial rerun`, goes through the dispatcher's own check
-  (`trialRoom`): three running at most, the spend cap, and the run limit for
+  (`trialRoom`): ten running at most, the spend cap, and the run limit for
   a new run.
 - **A waiting run continues on current stations.** A runner holds the graph
   it parsed (every `@file` prompt inlined) and its own code for as long as its
@@ -550,3 +563,39 @@ A merge carries the folded problem's argued cause to the survivor as a note
 (its newest trial proposal's cause line and where it lives), and the folded
 problem's trial card reads closed, superseded by the survivor's newest card
 (`lineTrial.supersedeMerged`), never a live "Same rule as" sibling of it.
+
+## LL14. Measuring a station before it changes
+
+A station's prompt is changed on evidence, and the evidence is the station
+run again on past cases with and without the change, never a new run's yield.
+`cast line replay <graph> <station> [runs...]` (`cli/src/lineReplay.ts`), run
+from the directory the graph's runs start in, replays one station on runs this
+machine holds a checkpoint of, on two arms: the graph's files at a revision
+(`--base`, HEAD by default, or `disk`) and as they are on disk, or with edited
+copies laid over them (`--try <dir>`), so an edit is measured before any run
+reads it.
+
+- **The brief is the one the run would get now.** It is rendered from the
+  run's checkpoint as a resumed run renders it: the arm's graph and prompt
+  files, every `refresh` command station the run made run again in the arm's
+  tree (so `_shared.md` is read as that arm has it), then `stationBrief`.
+- **Nothing reaches the world.** Each replay runs through the dry-run harness
+  with `--read-only`: cast writes refused and logged, no connection but the
+  model's, no file written outside its run directory. A station that worked
+  in a worktree works in a clone of the run's branch as the run left it, made
+  inside that directory, so it can write and commit there. Records go under
+  `~/.local/share/codecast/line-replay/`, outside every repository, since a
+  brief can hold a customer's words.
+- **A case passes on what it asks.** A line's frozen cases sit beside its
+  graph (`<graph>/cases.json`, by station): a past run, the pinned fields that
+  pass (`expect`), or a yes/no question (`grade`) a model answers from the
+  replay's messages and commands, never told which arm it reads. Arms
+  alternate within each case.
+- **The verdict is a test.** Each arm's passes, misses, replays that did not
+  run, and dollars; a one-sided Fisher test of the edited arm against the
+  other. An edit lands when it separates and its controls hold.
+
+What a replay cannot see: Union's database and Union's own models (the
+sandbox refuses both, so a station that would measure says it could not), and
+codecast state that moved since the run (reads are live).
+

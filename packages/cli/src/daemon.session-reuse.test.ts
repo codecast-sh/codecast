@@ -84,6 +84,14 @@ const daemonSource = fs.readFileSync(
 );
 
 describe("double-start fix invariants", () => {
+  test("normal resumes retain the conversation stamp across daemon restarts", () => {
+    const start = daemonSource.indexOf("async function autoResumeSessionInner");
+    const end = daemonSource.indexOf("logDelivery(`Auto-resumed", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(daemonSource.slice(start, end)).toContain('setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId)');
+  });
+
   test("startFreshSessionForDelivery consults tmux before spawning fresh", () => {
     const start = daemonSource.indexOf("async function startFreshSessionForDelivery");
     expect(start).toBeGreaterThan(-1);
@@ -113,7 +121,7 @@ describe("double-start fix invariants", () => {
     // backend one: a cloud agent first, and the app-server when none owns it.
     expect(waitLoop).toMatch(/if \(await deliveryStep\([^)]*?,\s*tryBackendDelivery\)\) return true/);
     expect(waitLoop.indexOf("tryBackendDelivery")).toBeLessThan(
-      waitLoop.indexOf("startFreshSessionForDelivery"),
+      waitLoop.indexOf("deliverViaFreshStart()"),
     );
     const backendStart = daemonSource.indexOf("const tryBackendDelivery = async");
     expect(backendStart).toBeGreaterThan(-1);
@@ -206,7 +214,7 @@ describe("adopted panes keep their tmux creation time", () => {
 
   test("findLiveTmuxForConversation and warm restart read session_created", () => {
     const find = source.slice(source.indexOf("async function findLiveTmuxForConversation"));
-    expect(find.slice(0, 1500)).toContain("startedAt: await tmuxSessionCreatedAtMs(match)");
+    expect(find.slice(0, find.indexOf("async function recoverBlankCodexForDelivery"))).toContain("startedAt: await tmuxSessionCreatedAtMs(match)");
     const warm = source.slice(source.indexOf("const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);"));
     expect(warm.slice(0, 1200)).toContain("startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession)");
   });

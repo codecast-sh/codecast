@@ -7,8 +7,7 @@ import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { Switch } from "../ui/switch";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { isMac } from "../../shortcuts/registry";
+import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { ModLogList } from "./ModLogList";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { modHost, modNavigate, type ModRow } from "../../lib/mods/host";
@@ -256,7 +255,7 @@ function EmptyMods() {
           <pre className="mt-1.5 font-mono text-[12px] leading-relaxed text-sol-text">cast mod new my-mod{"\n"}cd my-mod && cast mod dev</pre>
         </div>
       </div>
-      <div className="mt-4 text-[12px] text-sol-text-dim">Mods open from the palette: <KeyCap>{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap>K</KeyCap>, then the mod's name.</div>
+      <div className="mt-4 text-[12px] text-sol-text-dim">Mods open from the palette: <MenuKeyCaps action="palette.toggle" className="inline-flex items-center gap-[2px] align-middle" />, then the mod's name.</div>
     </div>
   );
 }

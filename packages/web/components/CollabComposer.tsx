@@ -25,6 +25,10 @@ import { rosterIdentity } from "../hooks/useTeamRoster";
 import type { ChatMember } from "../lib/chatViews";
 import { AvatarImg } from "../lib/avatarCache";
 import type { ConversationData } from "./conversation/types";
+import type { ReactNode } from "react";
+import { useSharedDraft, useSharedDraftStatus, inSharedDraft, typingEditors } from "../hooks/useSharedDraft";
+import { SharedCarets } from "./SharedCarets";
+import { ConversationChat, useConversationChatPeople } from "./conversation/ConversationChat";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -38,12 +42,16 @@ function useComposerPresence(
   draftText: string,
   opts: { enabled: boolean; forceBroadcast: boolean }
 ): PresenceRow[] {
+  // In a shared draft everyone's box holds the same words, so the row carries
+  // my caret instead of a draft of my own.
+  const shared = useSharedDraftStatus(conversationId);
   // Where I am reading this transcript rides the same row, so the others can
   // draw my face in their scroll gutter (ReadingMarks).
   const anchor = useInboxStore((s) => (s.viewAnchor?.conversationId === conversationId ? s.viewAnchor : null));
   const present = useDocPresence({
     docId: `compose:${conversationId}`,
-    draftText,
+    draftText: shared.active ? "" : draftText,
+    cursor: shared.active ? shared.caret : null,
     anchor: anchor ? { message_id: anchor.messageId, offset: anchor.offset } : null,
     enabled: opts.enabled,
     forceBroadcast: opts.forceBroadcast,
@@ -90,11 +98,22 @@ function SendTogether({ candidates, mineEmpty, onSend }: { candidates: JointCand
   );
 }
 
-export function CollabPresenceBar({ present, showHere, boxed = false, joint }: { present: PresenceRow[]; showHere: boolean; boxed?: boolean; joint?: { candidates: JointCandidate[]; mineEmpty: boolean; onSend: () => void } }) {
+export function CollabPresenceBar({ present, showHere, boxed = false, joint, shared, chat }: {
+  present: PresenceRow[];
+  showHere: boolean;
+  boxed?: boolean;
+  joint?: { candidates: JointCandidate[]; mineEmpty: boolean; onSend: () => void };
+  /** My box is in the shared draft: who else is in it and who is typing now. */
+  shared?: { editors: Record<string, number> } | null;
+  /** The chat with the people on this conversation (ConversationChat), at the row's end. */
+  chat?: ReactNode;
+}) {
   const roster = useInboxStore((s) => rosterIdentity(s.teamMembers)) as ChatMember[];
-  const typing = typingRows(present);
+  const typing = shared ? [] : typingRows(present);
   const writer = typing[0];
-  const open = !!writer || (showHere && present.length > 0);
+  const coWriters = shared ? present.filter(inSharedDraft) : [];
+  const typists = shared ? present.filter((p) => typingEditors(shared.editors).includes(p.user_id)) : [];
+  const open = !!writer || coWriters.length > 0 || !!chat || (showHere && present.length > 0);
   const names = present.map((p) => p.user_name).join(", ");
   return (
     <div
@@ -104,19 +123,28 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint }: {
     >
       <div className="min-h-0 overflow-hidden">
         {open && (
-          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${!writer ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
-            {writer ? (
+          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${!writer || coWriters.length > 0 ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
+            {coWriters.length > 0 ? (
+              // One draft, several hands: who is in it, and who is typing now.
+              <span data-sv-shared-draft className="inline-flex items-center gap-2 min-w-0">
+                <PresenceFacepile present={coWriters} size={18} />
+                {typists.length > 0
+                  ? <TypingIndicator members={typists.map((p) => presenceMember(p, roster))} />
+                  : <span className="text-sol-cyan/80 font-medium">Shared draft</span>}
+              </span>
+            ) : writer ? (
               <>
                 <TypingIndicator members={typing.map((p) => presenceMember(p, roster))} />
                 <span className="italic truncate text-sol-text-dim min-w-0" title={writer.draft_text}>{writer.draft_text}</span>
                 {joint && joint.candidates.length > 0 && <SendTogether {...joint} />}
               </>
-            ) : (
+            ) : showHere && present.length > 0 ? (
               // Presence alone is faces, not a sentence: nothing to act on yet.
-              <span className="ml-auto" title={`${names} ${present.length > 1 ? "are" : "is"} here`}>
+              <span className={chat ? "" : "ml-auto"} title={`${names} ${present.length > 1 ? "are" : "is"} here`}>
                 <PresenceFacepile present={present} size={18} />
               </span>
-            )}
+            ) : null}
+            {chat && <span className="ml-auto shrink-0 inline-flex">{chat}</span>}
           </div>
         )}
       </div>
@@ -142,6 +170,8 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   const draft = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
   const me = useInboxStore((s) => personName(s.currentUser));
   const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
+  const shared = useSharedDraftStatus(conversationId);
+  const people = useConversationChatPeople(conversationId, present);
   const rootRef = useRef<HTMLDivElement>(null);
   const { candidates } = useJointComposer({ conversationId, present, me, draft, applyDraft: (rest) => onPopulate?.(rest) });
   // The composer's own submit sends it (lib/jointSend): arm, then submit the form.
@@ -151,7 +181,14 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   };
   return (
     <div ref={rootRef} className="mx-auto conv-col px-2 sm:px-4">
-      <CollabPresenceBar present={present} showHere={showHere} boxed joint={{ candidates, mineEmpty: !draft.trim(), onSend: sendTogether }} />
+      <CollabPresenceBar
+        present={present}
+        showHere={showHere}
+        boxed
+        joint={{ candidates, mineEmpty: !draft.trim(), onSend: sendTogether }}
+        shared={shared.active ? shared : null}
+        chat={people.length > 0 ? <ConversationChat conversationId={conversationId} people={people} /> : null}
+      />
     </div>
   );
 });
@@ -228,6 +265,8 @@ export const CollabComposer = memo(function CollabComposer({
   });
   const me = useInboxStore((s) => personName(s.currentUser));
   const { candidates, claimSent } = useJointComposer({ conversationId: conversation._id.toString(), present, me, draft: message, applyDraft: setMessage });
+  const shared = useSharedDraft({ conversationId: conversation._id.toString(), enabled: isAuthenticated, seed: false, text: message, setText: setMessage, inputRef: textareaRef });
+  const people = useConversationChatPeople(conversation._id.toString(), present);
 
   async function handleRequest() {
     if (busy) return;
@@ -316,7 +355,13 @@ export const CollabComposer = memo(function CollabComposer({
   return (
     <div className="bg-sol-bg">
       {isConvexId(conversation._id.toString()) && <SharedQueue conversationId={conversation._id.toString()} canSteerQueue={canSend} />}
-      <CollabPresenceBar present={present} showHere={!!conversation.share_token} joint={canSend ? { candidates, mineEmpty: !message.trim(), onSend: () => handleSend(true) } : undefined} />
+      <CollabPresenceBar
+        present={present}
+        showHere={!!conversation.share_token}
+        joint={canSend ? { candidates, mineEmpty: !message.trim(), onSend: () => handleSend(true) } : undefined}
+        shared={shared.active ? { editors: shared.editors } : null}
+        chat={people.length > 0 ? <ConversationChat conversationId={conversation._id.toString()} people={people} /> : null}
+      />
       <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
         <span className="shrink-0">{strip.icon}</span>
         <span className="truncate">{strip.text}</span>
@@ -331,17 +376,20 @@ export const CollabComposer = memo(function CollabComposer({
         className="mx-auto conv-col px-2 sm:px-4 pb-3 pt-1.5"
       >
         <div className={`flex items-end gap-2 border px-4 py-2 rounded-2xl bg-sol-bg-alt shadow-lg ${canSend ? "border-sol-cyan/30" : "border-sol-border/50"}`}>
-          <textarea
-            ref={textareaRef}
-            data-chat-input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={busy}
-            placeholder={canSend ? `Message ${owner}'s session…` : "Write together…"}
-            rows={1}
-            className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
-          />
+          <div className="grid flex-1 min-w-0">
+            <textarea
+              ref={textareaRef}
+              data-chat-input
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={busy}
+              placeholder={canSend ? `Message ${owner}'s session…` : "Write together…"}
+              rows={1}
+              className="[grid-area:1/1] w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
+            />
+            {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
+          </div>
 
           {/* Fork is always available — copy the session and continue as your own. */}
           {message.trim() && (

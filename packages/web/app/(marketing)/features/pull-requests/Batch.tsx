@@ -70,7 +70,7 @@ export function Batch() {
           {verdict === "approve"
             ? <>An approval needs no body. GitHub refuses an approval of your own pull request, and the refusal comes back in its own words.</>
             : <>{verdict === "comment" ? "A comment" : "A request for changes"} needs a summary.</>}
-          {" "}A verdict goes out under your GitHub account, never the app&apos;s, so it needs your account connected.
+          {" "}A verdict always goes out under your GitHub account, so it needs your account connected.
         </p>
       </div>
     </div>

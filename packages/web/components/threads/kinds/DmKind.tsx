@@ -1,10 +1,9 @@
 import { useCallback, useMemo } from "react";
 import { Users } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
-import { selectChannelReadMarker, type ChatAttachment, type ChatRailChannel } from "../../../store/chatSlice";
-import { useChannelMessages, useChannelMessagesSync } from "../../../hooks/useChatSync";
+import type { ChatAttachment, ChatRailChannel } from "../../../store/chatSlice";
+import { useChannelMessages, useChannelMessagesSync, useReadWhileSeen } from "../../../hooks/useChatSync";
 import { channelDisplayName, dmCounterpart, memberName } from "../../../lib/chatViews";
-import { holdChatFocus } from "../../../lib/chatFocus";
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
@@ -13,7 +12,6 @@ import { useThreadsPage } from "../threadsContext";
 import { EarlierButton } from "../readerFold";
 import { useReaderFold } from "../../../hooks/useReaderFold";
 
-import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The DM kind: a direct message room from the chat rail (a multi-person DM is
 // a DM too). The row is the rail row's story — who, and the last line; open,
 // the newest messages of the room and its composer, the channel page's read
@@ -64,22 +62,8 @@ export function DmExpanded({
   const newestId = messages.length ? messages[messages.length - 1].id : undefined;
   const fold = useReaderFold(messages, (m) => m.createdAt, frozenReadAt);
 
-  // The channel page's own rule: present with the room open = read. The
-  // marker is the newest message in the ROOM, replies included, so a badge a
-  // thread reply raised clears too. Re-marks as messages land (newestId
-  // moves). Never for a room the server refuses: the mark would only come
-  // back as "Channel not found", and the note below is what this row shows.
-  useWatchEffect(() => {
-    if (!seen || feed.loading || feed.unavailable) return;
-    const state = useInboxStore.getState();
-    const marker = selectChannelReadMarker(state as any, channelId);
-    state.markChannelRead(channelId, marker?._id);
-  }, [seen, channelId, newestId, feed.loading, feed.unavailable, channel.unreadCount]);
-
-  useWatchEffect(() => {
-    if (!seen) return;
-    return holdChatFocus({ channelId });
-  }, [seen, channelId]);
+  // The channel page's own rule: present with the row open = read.
+  useReadWhileSeen(channelId, seen, feed, `${newestId}|${channel.unreadCount}`);
 
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[]) => {

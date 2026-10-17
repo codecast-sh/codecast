@@ -242,7 +242,7 @@ import { defaultAgentType } from "../lib/defaultAgent";
 import { retryHostedStart } from "../lib/startHostedConversation";
 import { isHostedUi, laneOf, simpleModeAllowed } from "../components/simple/lanePaths";
 import { readLaneHint, writeLaneHint, type LaneHint } from "../components/simple/laneBoot";
-import type { SessionMapLayout } from "../components/sessionMap/sessionMapModel";
+import type { SessionMapLayout, SessionMapView } from "../components/sessionMap/sessionMapModel";
 import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
@@ -616,6 +616,10 @@ export type InboxSession = {
   // in the inbox (placeInboxRows' engaged-blank gate) and immune to the
   // orphaned-stub ghost sweep until the draft is sent or the row dismissed.
   _hasDraft?: boolean;
+  // Local-only marker on the deferred blank a fresh launch lands on. Until
+  // its first send it is the home screen's composer, not a session: it wears
+  // no "Starting…" state and takes no inbox row (isIdleLandingStub).
+  _landing?: boolean;
   // Last-known model id (e.g. "claude-opus-4-8"); conversations can switch
   // models mid-stream. Shown as an inbox badge when ui.show_model_badge is on.
   model?: string | null;
@@ -1585,6 +1589,11 @@ const sessionUnreadMaps = new WeakMap<
   WeakMap<Record<string, SessionReadItem>, WeakMap<Record<string, number>, Record<string, boolean>>>
 >();
 const sessionUnreadSignatures = new WeakMap<Record<string, boolean>, string>();
+let lastSessionUnreadSignature: string | undefined;
+// One row's verdict, kept while the row ref, its winning mark and its local
+// viewed time hold: a heartbeat hands back a new sessions map in which every
+// other row keeps its ref, so the rebuild re-judges only the rows that moved.
+const sessionUnreadByRow = new WeakMap<InboxSession, { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean }>();
 
 /** Which sessions are lit for this viewer, derived from the marks, the rows'
  *  own updated_at, and the local "last opened" record as the fallback for a
@@ -1607,11 +1616,14 @@ export function sessionUnreadMap(state: {
   for (const id in state.sessions) {
     const session = state.sessions[id];
     if (!session) continue;
-    if (isSessionUnread({
-      ...sessionActivityFacts(session),
-      mark: marks[id],
-      localViewedAt: state._lastViewedAt[id],
-    })) out[id] = true;
+    const mark = marks[id];
+    const viewed = state._lastViewedAt[id];
+    let verdict = sessionUnreadByRow.get(session);
+    if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
+      verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }) };
+      sessionUnreadByRow.set(session, verdict);
+    }
+    if (verdict.unread) out[id] = true;
   }
   byViewed.set(state._lastViewedAt, out);
   return out;
@@ -1646,7 +1658,14 @@ export function sessionUnreadWakeSig(state: {
   const unread = sessionUnreadMap(state);
   let signature = sessionUnreadSignatures.get(unread);
   if (signature === undefined) {
-    signature = Object.keys(unread).sort().join(",");
+    // In the sessions map's own order, which a rebuild keeps: sorting thousands
+    // of ids on every heartbeat cost more than the map. A reorder of the same
+    // set only wakes a subscriber once more.
+    signature = Object.keys(unread).join(",");
+    // An equal rebuild returns the previous string, so subscribers compare
+    // pointers, not every id (see makeCollectionSig).
+    if (signature === lastSessionUnreadSignature) signature = lastSessionUnreadSignature;
+    else lastSessionUnreadSignature = signature;
     sessionUnreadSignatures.set(unread, signature);
   }
   return signature;
@@ -1719,6 +1738,7 @@ export type DocDetail = DocItem & {
   _cachedAt?: number;
 };
 
+import type { KeyBindingOverride } from "@codecast/shared/contracts/keyBindings";
 export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 
@@ -1727,6 +1747,10 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // The person's own keyboard bindings over the defaults
+  // (@codecast/shared/contracts/keyBindings). Stamped: follows them to every
+  // device, and `cast shortcuts` writes the same key from any session.
+  key_bindings?: KeyBindingOverride[];
   // Which app this person lives in: "simple" is the hosted assistant's calm
   // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
   // the whole app. Stamped LWW, so a switch on one device follows the person.
@@ -1928,10 +1952,18 @@ export type ClientUI = {
   // The /org chart's "Expand all": every role and session card opened in
   // place. Stamped LWW like org_view.
   org_expand_all?: boolean;
+  // The /org chart's companion drawer (components/org/OrgPanel), closed by the
+  // person. Absent: open. A proposal or a session named in the address opens
+  // it whatever this says.
+  org_panel?: "closed";
   // The session map's arrangement (components/sessionMap): the piles the
   // person made, where each pile and loose card sits, and which piles are
   // folded. Stamped LWW: the desk is the same on every device.
   session_map?: SessionMapLayout;
+  // How the session map is sliced: grouping, sort, pile order and filters.
+  // Kept apart from the arrangement so a view change never enters its undo
+  // history. Stamped LWW like the arrangement.
+  session_map_view?: SessionMapView;
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -3944,7 +3976,8 @@ export function placeInboxRows(
   // blank wears the focused or draft_blank overlay, or has its create in
   // flight (the create_stub overlay's pending half).
   const isEngagedBlank = (s: InboxSession) =>
-    deps.pendingCreateIds.has(s._id) || overlaysAffecting(s._id, deps).some((o) => o === "focused" || o === "draft_blank");
+    deps.pendingCreateIds.has(s._id) || overlaysAffecting(s._id, deps).some((o) =>
+      (o === "focused" && !(s._landing && !isConvexId(s._id))) || o === "draft_blank");
   const holds = state.newSessionHolds ?? EMPTY_PLACEMENT_OBJ as Record<string, number>;
   const questions: InboxSession[] = [];
   const pinned: InboxSession[] = [];
@@ -5282,6 +5315,17 @@ function nextSessionPastRemoved(ordered: InboxSession[], currentId: string, remo
 // (cleanup.gcEmptyConversations) sweeps what reuse misses. The window stays
 // well inside the GC's 24h grace so a reused id can never be a row the sweep
 // is about to delete.
+// The fresh-launch landing blank before its first send: still a local stub
+// with no create in flight. Once the send materializes it, it is an ordinary
+// new session again.
+export function isIdleLandingStub(
+  state: { sessions: Record<string, InboxSession>; pendingSessionCreates: Record<string, unknown> },
+  id: string | null | undefined,
+): boolean {
+  if (!id || isConvexId(id) || state.pendingSessionCreates[id]) return false;
+  return !!state.sessions[id]?._landing;
+}
+
 export const BLANK_SESSION_REUSE_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 export function findReusableBlankSession(
@@ -5840,7 +5884,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // `resumeStubId` picks an existing never-created stub (a kept compose draft)
   // back up instead of seeding a new one; its row already carries the project,
   // agent and draft.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; landing?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
   // Ghost removal: hard-drop cached session rows nothing will re-deliver
   // (orphaned optimistic stubs). Plants the exclude pending entries that
   // authorize the IDB row delete and block re-adds.
@@ -7188,6 +7232,10 @@ function quantizePresence<T>(rec: T): T {
   }
   return out;
 }
+/** A roster push with its presence fields quantized (quantizePresence per row). */
+export function quantizePresenceList<T>(list: T): T {
+  return (Array.isArray(list) ? list.map(quantizePresence) : list) as T;
+}
 
 // Whether a store key has registered sync opts (store/syncReplication.ts uses
 // this to decide when a replicated value needs a shape-derived kind instead).
@@ -7423,7 +7471,7 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // carries their kind, row identity and altKey): an action's change to a row
   // or to membership holds over pushes until the server agrees. teamMembers
   // adds presence quantization on top.
-  teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list) },
+  teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: quantizePresenceList },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
   // Run feeds overlay with different session budgets: a bare node keeps the
@@ -11097,7 +11145,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // for normal sessions, the createQuickSession mutation when isolated/worktree
   // options are needed). The stub uses the same Math.random id scheme as
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => {
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; landing?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => {
     const store = get();
     // Only an INCLUDE label chip files new sessions — excluding a label means
     // "hide it", never "file new work there".
@@ -11150,6 +11198,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         started_at: now, updated_at: now, message_count: 0, status: "active",
         title: stubTitle(opts.agentType), messages: [],
         ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
+        ...(opts.landing ? { _landing: true } : {}),
       });
       // Also seed the inbox session row. The conversation page resolves a stub from
       // sessions[id] (local-first, before the server resolver loads), so without this
@@ -11163,6 +11212,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
         is_idle: true, has_pending: false, last_user_message: null,
         ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
+        ...(opts.landing ? { _landing: true } : {}),
       });
     }
     // Capture the focused bucket NOW: a session created while a bucket chip is

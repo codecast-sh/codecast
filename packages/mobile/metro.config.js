@@ -66,7 +66,7 @@ function singletonOrigin(moduleName) {
   return singletonOriginCache.get(name);
 }
 
-config.resolver.resolveRequest = (context, moduleName, platform) => {
+const resolveApp = (context, moduleName, platform) => {
   const origin = singletonOrigin(moduleName);
   if (origin) {
     return context.resolveRequest({ ...context, originModulePath: origin }, moduleName, platform);
@@ -88,6 +88,21 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     }
     throw e;
   }
+};
+
+// Store shots mode (lib/storeShots: App Store screenshots over fixture data)
+// enters the bundle only when Metro runs with EXPO_PUBLIC_STORE_SHOTS=1. Its
+// modules are required only behind that flag, but Metro collects a require
+// before the dead branch folds away, so without this every release would ship
+// the fixture world. The flag module itself always resolves.
+const STORE_SHOTS_DIR = path.join(projectRoot, 'lib', 'storeShots') + path.sep;
+const storeShotsOn = process.env.EXPO_PUBLIC_STORE_SHOTS === '1';
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const res = resolveApp(context, moduleName, platform);
+  if (!storeShotsOn && res.type === 'sourceFile' && res.filePath.startsWith(STORE_SHOTS_DIR) && path.basename(res.filePath) !== 'flag.ts') {
+    return { type: 'empty' };
+  }
+  return res;
 };
 
 module.exports = config;

@@ -2,20 +2,33 @@
 import { useMemo, useState, useRef } from "react";
 import { useDerivedSize } from "../hooks/useDerivedSize";
 import { createPortal } from "react-dom";
-import { useTheme } from "./ThemeProvider";
 
-// Solarized contribution-graph ramps. Shared by the team profile (authed) and
-// the public profile (anonymous) so the two pages render an identical graph.
-export const HEAT_COLORS_LIGHT = ["#eee8d5", "#c3dfa0", "#8fbc5c", "#5f9e2f", "#3d7a1a"];
-export const HEAT_COLORS_DARK = ["#073642", "#2d5016", "#3d7a1a", "#5f9e2f", "#8fbc5c"];
+/** A five-step intensity ramp of one theme accent, from the theme's own
+ *  variables so it follows light, dark and mod color themes alike: an empty
+ *  step that reads as a faint cell on any card, then the accent at rising
+ *  strength. Shared by the team profile and the public profile. */
+export function heatRamp(accent: string): string[] {
+  return [
+    "color-mix(in srgb, var(--sol-text) 7%, transparent)",
+    ...[30, 52, 76, 100].map((p) => `color-mix(in srgb, var(${accent}) ${p}%, transparent)`),
+  ];
+}
 
-export function heatColor(value: number, max: number, colors: string[]): string {
+export const HEAT_COLORS = heatRamp("--sol-green");
+
+/** Level cutoffs at the quartiles of the nonzero values, so the four steps
+ *  split real activity evenly instead of a few outlier cells setting a max
+ *  that pushes everything else into the first step. */
+export function heatLevels(values: Iterable<number>): number[] {
+  const nz = [...values].filter((v) => v > 0).sort((a, b) => a - b);
+  if (nz.length === 0) return [Infinity, Infinity, Infinity];
+  return [0.25, 0.5, 0.75].map((q) => nz[Math.min(nz.length - 1, Math.floor(q * nz.length))]);
+}
+
+export function heatColor(value: number, levels: number[], colors: string[]): string {
   if (value <= 0) return colors[0];
-  const r = value / max;
-  if (r < 0.15) return colors[1];
-  if (r < 0.4) return colors[2];
-  if (r < 0.7) return colors[3];
-  return colors[4];
+  const step = levels.findIndex((cut) => value < cut);
+  return colors[step === -1 ? 4 : step + 1];
 }
 
 export function useContainerWidth(initial = 800) {
@@ -38,12 +51,16 @@ export function HoverTip({ x, y, children }: { x: number; y: number; children: R
   );
 }
 
+/** "2,928h", or "4.5h" under ten hours. */
+export function fmtHours(h: number): string {
+  return h < 10 ? `${h.toFixed(1)}h` : `${Math.round(h).toLocaleString()}h`;
+}
+
 // A GitHub-style year-long contribution grid. `data` is [{date,hours,sessions}].
 // `label` lets each caller frame it ("Agent Activity" on the team page,
 // "Contribution activity" on the anonymous public page).
 export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[]; label?: string }) {
-  const { theme } = useTheme();
-  const colors = theme === "dark" ? HEAT_COLORS_DARK : HEAT_COLORS_LIGHT;
+  const colors = HEAT_COLORS;
   const { ref: containerRef, width: containerW } = useContainerWidth();
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
 
@@ -51,16 +68,14 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
   const gap = 2;
   const weeks = Math.max(20, Math.min(53, Math.floor((containerW - gap) / (13 + gap))));
 
-  const { grid, maxHours, totalHours, totalSessions, months } = useMemo(() => {
+  const { grid, levels, totalHours, totalSessions, months } = useMemo(() => {
     const map: Record<string, { hours: number; sessions: number }> = {};
-    let max = 0, totalH = 0, totalS = 0;
+    let totalH = 0, totalS = 0;
     for (const d of data) {
       map[d.date] = { hours: d.hours, sessions: d.sessions };
-      if (d.hours > max) max = d.hours;
       totalH += d.hours;
       totalS += d.sessions;
     }
-    if (max === 0) max = 1;
 
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const startDay = new Date(today);
@@ -92,7 +107,7 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
       monthLabels.push({ label: mn[d.getMonth()], col: w });
     }
 
-    return { grid: rows, maxHours: max, totalHours: totalH, totalSessions: totalS, months: monthLabels };
+    return { grid: rows, levels: heatLevels(data.map((d) => d.hours)), totalHours: totalH, totalSessions: totalS, months: monthLabels };
   }, [data, weeks]);
 
   // Exact cell size to fill the container width across the chosen number of weeks
@@ -103,15 +118,18 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
 
   return (
     <div className="mt-2 mb-1 w-full">
-      <div className="flex items-baseline justify-between mb-1">
-        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">{label}</span>
-        <span className="text-[9px] text-sol-base01/35 tabular-nums">{totalHours.toFixed(0)}h across {totalSessions} sessions</span>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-[11px] text-sol-text-muted uppercase tracking-wider font-semibold">{label}</span>
+        <span className="text-[11px] text-sol-text-muted tabular-nums">
+          <span className="text-sol-text font-semibold">{fmtHours(totalHours)}</span> across{" "}
+          <span className="text-sol-text font-semibold">{totalSessions.toLocaleString()}</span> sessions
+        </span>
       </div>
       <div ref={containerRef} className="w-full overflow-x-auto relative" onMouseLeave={() => setTooltip(null)}>
         {/* Month labels */}
         <div className="flex" style={{ width: svgW, height: 14 }}>
           {months.map((m, i) => (
-            <span key={i} className="text-[9px] text-sol-base01/30 select-none absolute" style={{ left: m.col * step }}>{m.label}</span>
+            <span key={i} className="text-[10px] text-sol-text-muted select-none absolute" style={{ left: m.col * step }}>{m.label}</span>
           ))}
         </div>
         {/* SVG grid */}
@@ -122,7 +140,7 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
               x={w * step} y={d * step}
               width={cellSize} height={cellSize}
               rx={2}
-              fill={heatColor(cell.hours, maxHours, colors)}
+              style={{ fill: heatColor(cell.hours, levels, colors) }}
               className="cursor-crosshair"
               onMouseEnter={(e) => {
                 const r = (e.target as SVGRectElement).getBoundingClientRect();
@@ -133,10 +151,10 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
           )))}
         </svg>
         {/* Legend */}
-        <div className="flex items-center gap-1 mt-1.5">
-          <span className="text-[8px] text-sol-base01/25">Less</span>
+        <div className="flex items-center justify-end gap-1 mt-2">
+          <span className="text-[10px] text-sol-text-muted mr-0.5">Less</span>
           {colors.map((c, i) => <div key={i} style={{ background: c, width: 10, height: 10, borderRadius: 2 }} />)}
-          <span className="text-[8px] text-sol-base01/25">More</span>
+          <span className="text-[10px] text-sol-text-muted ml-0.5">More</span>
         </div>
         {/* Tooltip */}
         {tooltip && <HoverTip x={tooltip.x} y={tooltip.y}>{tooltip.text}</HoverTip>}

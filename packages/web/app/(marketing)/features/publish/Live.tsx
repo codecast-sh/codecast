@@ -53,8 +53,8 @@ export function Live() {
     <Section
       id="watch"
       n="06"
-      title="Watch the page while the agent writes it."
-      lede={<>Ask the agent to keep the page live while it works and it republishes on every save. Open the link with <C>?live=1</C> and your tab reloads itself on each new version. You review a draft as it forms, at the URL you will send.</>}
+      title="Watch the page update while the agent writes it"
+      lede={<>Ask the agent to keep the page live while it works and it republishes on every save. Open the link with <C>?live=1</C> and your tab reloads itself on each new version, so you can review the draft at the same URL you will send.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-8 lg:gap-10 items-center">
         <div className="min-w-0">
@@ -81,7 +81,7 @@ export function Live() {
               The CLI watches the folder, so editors that save by replacing the file are caught too.
             </Note>
             <Note>
-              <strong style={{ color: SOL.base02 }}>No empty versions.</strong> The server hashes the content. A save that changes nothing comes back as{" "}
+              <strong style={{ color: SOL.base02 }}>Unchanged saves make no version.</strong> The server hashes the content. A save that changes nothing comes back as{" "}
               <C>unchanged</C> and the version number holds.
             </Note>
             <Note>
@@ -89,7 +89,7 @@ export function Live() {
               content only. Change gates later in Manage sharing.
             </Note>
             <Note>
-              <strong style={{ color: SOL.base02 }}>A folder works too.</strong> Watching a bundle is recursive: edit any stylesheet, script or chart inside it
+              <strong style={{ color: SOL.base02 }}>Folders are watched too.</strong> Watching a bundle is recursive: edit any stylesheet, script or chart inside it
               and the page republishes.
             </Note>
       </div>

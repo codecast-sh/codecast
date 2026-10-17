@@ -5,7 +5,7 @@ import { BLUE, C, Caption, HOST, LAPTOP, Note, Out, P$, Term, delay } from "./ki
 import { Shot } from "../kit";
 
 const STAGES: { name: string; what: string }[] = [
-  { name: "Fence", what: "No daemon delivers into it. Messages sent now wait, and ride the resume." },
+  { name: "Fence", what: "No daemon delivers into it. Messages sent now wait and are delivered when it resumes." },
   { name: "Wait", what: "A mid-turn session finishes its turn, up to --wait minutes (10 by default)." },
   { name: "Quiesce", what: "The owner stops the agent so the transcript on disk is final." },
   { name: "Transfer", what: "Worktree by git over SSH, gitignored files, the transcript with paths rewritten." },
