@@ -31,6 +31,18 @@ describe("rowSigExcluding", () => {
     expect(rowSigExcluding(null, deny)).toBe("none");
     expect(rowSigExcluding(undefined, deny)).toBe("none");
   });
+
+  it("reads each row once per denylist and recomputes for a new row ref", () => {
+    let reads = 0;
+    const row = { _id: "a", get title() { reads++; return "x"; } };
+    const first = rowSigExcluding(row, deny);
+    expect(rowSigExcluding(row, deny)).toBe(first);
+    expect(reads).toBe(1);
+    rowSigExcluding(row, new Set(["_id"]));
+    expect(reads).toBe(2);
+    expect(rowSigExcluding({ ...row }, deny)).toBe(first);
+    expect(reads).toBe(3);
+  });
 });
 
 describe("makeCollectionSig", () => {
@@ -75,8 +87,19 @@ describe("makeCollectionSig", () => {
 
   it("separates row projections so two rows cannot read as one", () => {
     const sig = makeCollectionSig<any>((row) => row.label);
-    expect(sig({ a: { label: "x" }, b: { label: "y" } })).toBe("x\ny");
-    expect(sig({ a: { label: "xy" } })).toBe("xy");
+    expect(sig({ a: { label: "x" }, b: { label: "y" } })).not.toBe(sig({ a: { label: "xy" } }));
+    expect(sig({ a: { label: "x" }, b: { label: "y" } })).not.toBe(sig({ a: { label: "y" }, b: { label: "x" } }));
+  });
+
+  it("is a short digest that ignores key order", () => {
+    const sig = makeCollectionSig<any>((row) => row.label);
+    const rows = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`k${i}`, { label: `row ${i} with a longish projection` }]));
+    const reversed = Object.fromEntries(Object.entries(rows).reverse());
+    expect(sig(rows).length).toBeLessThan(32);
+    expect(sig(reversed)).toBe(sig(rows));
+    expect(sig({ ...rows, k7: { label: "moved" } })).not.toBe(sig(rows));
+    const { k9: _gone, ...fewer } = rows;
+    expect(sig(fewer)).not.toBe(sig(rows));
   });
 });
 
@@ -96,11 +119,12 @@ describe("collection snapshot reuse", () => {
     });
     const after = { a: { label: "After" } };
     const sig = makeCollectionSig((row: { label: string }) => row.label);
-    expect(sig(before)).toBe("Before");
-    expect(sig(after)).toBe("After");
+    const beforeSig = sig(before);
+    const afterSig = sig(after);
+    expect(afterSig).not.toBe(beforeSig);
     enumerations = 0;
-    expect(sig(before)).toBe("Before");
-    expect(sig(after)).toBe("After");
+    expect(sig(before)).toBe(beforeSig);
+    expect(sig(after)).toBe(afterSig);
     expect(enumerations).toBe(0);
   });
 
@@ -109,10 +133,9 @@ describe("collection snapshot reuse", () => {
     const empty = {};
     const one = { a: { label: "A" } };
     const two = { ...one, b: { label: "B" } };
-    expect(sig(empty)).toBe("");
-    expect(sig(one)).toBe("A");
-    expect(sig(two)).toBe("A\nB");
-    expect(sig(one)).toBe("A");
-    expect(sig(empty)).toBe("");
+    const [e, o, t] = [sig(empty), sig(one), sig(two)];
+    expect(new Set([e, o, t]).size).toBe(3);
+    expect(sig({ a: { label: "A" } })).toBe(o);
+    expect(sig({})).toBe(e);
   });
 });
