@@ -7,9 +7,7 @@ import { ArrowUpRight, Check, ChevronDown, Archive, Focus, Layers, Pin, SquareSt
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { RoleFace } from "../org/RoleFace";
-import type { MapRole } from "./sessionMapModel";
-
-export const HAIRLINE = "color-mix(in srgb, var(--sol-border) 40%, transparent)";
+import { HAIRLINE, type MapRole } from "./sessionMapModel";
 
 export function ToolButton({ children, icon, onClick, disabled, primary, tip, ...rest }: { children?: ReactNode; icon: ReactNode; onClick: () => void; disabled?: boolean; primary?: boolean; tip?: string } & Record<`data-${string}`, boolean | string | undefined>) {
   return (
