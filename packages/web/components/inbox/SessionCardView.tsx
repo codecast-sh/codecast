@@ -409,7 +409,7 @@ export function SessionCardView({
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
               )}
               {session.has_pending && !session.is_unresponsive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" title="Message pending" />
               )}
               {/* Reuse the staleness-aware isLive so an aged-out subagent row
                   stops pulsing green, matching the main card and the bucket. */}
