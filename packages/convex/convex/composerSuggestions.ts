@@ -17,6 +17,10 @@ import { CHEAP_MODEL, parseJsonBlock, postMessages, replyText, type SurfaceReque
 
 const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_SUGGESTIONS = 3;
+// The model's confidence that the developer would send a pill. Below the
+// floor a pill is dropped; a third pill needs the higher bar.
+const MIN_CONFIDENCE = 0.5;
+const THIRD_PILL_CONFIDENCE = 0.7;
 // A pill may carry a full working prompt (a reusable multi-sentence
 // directive), not just a verdict — so the cap is "not a pasted wall", not
 // "fits on one line". The row truncates visually; the send carries it whole.
@@ -482,9 +486,10 @@ export function normalizeForMatch(text: string): string {
 
 // Output guards: press-send-ready strings only. Refusal/meta prose from the
 // model must never render as a pill. Selectivity lives here too: candidates
-// carry a model-reported confidence, anything under 0.7 is dropped, and the
-// row shows at most TWO pills — a third only when the model is near-certain
-// (an explicit multi-choice moment). Legacy bare strings score 0.75.
+// carry a model-reported confidence, anything under MIN_CONFIDENCE is
+// dropped, and the row shows at most TWO pills — a third only above
+// THIRD_PILL_CONFIDENCE (an explicit multi-choice moment). Legacy bare
+// strings score 0.6.
 // `bannedVerbatim` holds the user's own historical messages and mined
 // examples (normalized): a suggestion equal to one is a replayed quote, the
 // exact failure the pattern mining exists to prevent — drop it.
@@ -510,12 +515,12 @@ export function sanitizeSuggestions(
     if (bannedVerbatim?.has(key)) continue;
     seen.add(key);
     const rawConf = (item as any)?.confidence;
-    const conf = typeof rawConf === "number" && rawConf >= 0 && rawConf <= 1 ? rawConf : 0.75;
+    const conf = typeof rawConf === "number" && rawConf >= 0 && rawConf <= 1 ? rawConf : 0.6;
     scored.push({ text, conf });
   }
-  const kept = scored.filter((s) => s.conf >= 0.7).sort((a, b) => b.conf - a.conf);
+  const kept = scored.filter((s) => s.conf >= MIN_CONFIDENCE).sort((a, b) => b.conf - a.conf);
   const out = kept.slice(0, 2).map((s) => s.text);
-  if (kept.length > 2 && kept[2].conf >= 0.85 && out.length < MAX_SUGGESTIONS) {
+  if (kept.length > 2 && kept[2].conf >= THIRD_PILL_CONFIDENCE && out.length < MAX_SUGGESTIONS) {
     out.push(kept[2].text);
   }
   return out;
@@ -690,30 +695,30 @@ export function buildPrompt(
     .filter(Boolean)
     .join("\n");
 
-  return `You predict what a developer will type next into their coding-agent session. You see the session so far, plus a profile of this developer's HABITS — the things they recurrently ask for, learned across their history. Your job is to apply those habits to THIS conversation's specifics and produce the exact next message they would send — or nothing.
+  return `You predict what a developer will type next into their coding-agent session. You see the session so far, plus a profile of this developer's HABITS — the things they recurrently ask for, learned across their history. Your job is to apply those habits to THIS conversation's specifics and predict the message they will send next.
 
-Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment where each option is near-certain). "confidence" is your probability (0..1) that the developer would actually send this text or a trivial variant of it; omit anything below 0.7. No wrapper object, no markdown, no commentary. [] is the expected answer for most moments.
+Return ONLY a JSON array: [{"text": string, "confidence": number}] — 0 to 2 entries (a third only for an explicit multi-choice moment). "confidence" is your probability (0..1) that the developer would send this pill, as written or lightly edited, rather than type something else; omit anything below ${MIN_CONFIDENCE}. No wrapper object, no markdown, no commentary.
 
 The test for every suggestion: the developer reads it and thinks "I was just about to type that." You are predicting what THEY would type, not what would be sensible to do next — a reasonable engineering step they would never have asked for is a miss, however good it is.
 
-Calibrate against the base rate. Measured over real sessions, fewer than one next message in ten was predictable at all: the developer's reply usually brings something new — a fresh question, a reaction to one detail, a change of course, context from outside the session. A confidence of 0.7 claims this moment is one of the rare predictable ones. Most moments are not, and [] is the right answer for them.
+A wrong pill costs the developer a glance; a right one saves them typing the message. So when the session gives you a real basis for what they will say next, make your best prediction. Return [] when the reply depends on something the session does not show.
 
 Read the moment — the agent's final message decides everything:
 - The agent asked a direct question with a small answer space (yes or no, which of these, confirm this) → suggest the most likely answers, phrased the way this developer would phrase them. This is where predictable replies live.
-- The agent stopped to ask for a verdict — a plan awaiting go-ahead, a diff awaiting review — → suggest approval in this developer's usual words, or a pushback the session itself supports. A delivered artifact (a page, a deck, a writeup) is not this case: it draws edits, and which edit is theirs to choose.
-- The agent delivered a result and nothing is waiting on the developer → almost always []. Speak only when something specific in the session names the next step: a part of the original request still owed, a next step the agent asked to be told to take, or a standing reusable prompt this developer sends at exactly this point.
-- The agent asked the developer for something only they hold — a fact, a date, a file, a URL, a credential, a decision made with someone else — or asked them to act outside the session (sign in, click a link) → []. The reply carries information you do not have; an answer you would have to make up is a fabrication, not a prediction. Never turn the agent's instruction to the developer into the developer's message.
+- The agent stopped to ask for a verdict — a plan awaiting go-ahead, a diff awaiting review, a pending decision the session names with its options — → suggest approval in this developer's usual words, or a pushback the session itself supports. A delivered artifact (a page, a deck, a writeup) is not this case: it draws edits, and which edit is theirs to choose.
+- The agent delivered a result → predict the follow-up this developer sends after work like this: a part of the original request still owed, a next step the agent named, the check or summary they habitually ask for, or a reusable prompt they send at this point.
+- The agent asked the developer for something only they hold — a fact, a date, a file, a URL, a credential — or asked them to act outside the session (sign in, click a link) → []. The reply carries information you do not have; an answer you would have to make up is a fabrication, not a prediction. Never turn the agent's instruction to the developer into the developer's message.
 - The agent got something wrong — misread the request, went off course, or produced a result the session shows to be broken → []. The next message is a correction, and only the developer knows what it should say.
 - The agent is mid-task, or the reply needs knowledge only the developer has (their opinion, product intent, something outside the session) → [].
 
 The profile has two kinds of evidence, and they work differently:
-- HABITS are generalized tendencies, each with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats a habit's example is wrong by definition, because it is about some other conversation.
+- HABITS are generalized tendencies, each with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats a habit's example is wrong by definition, because it is about some other conversation. A habit predicts only at the kind of moment it shows up in; a habit you could attach to any moment says nothing about this one.
 - REUSABLE PROMPTS are standing instructions this developer deliberately sends again and again, in nearly the same words, whenever the moment fits — a quality bar, a way of working, an iteration loop. These you MAY suggest close to verbatim: keep their wording and force, and adapt only what the moment needs (name the actual feature, file, or task in front of them; drop a clause that does not apply). When the agent has just finished or proposed something and one of these prompts is what this developer typically sends next, it is the best suggestion you can make. Prefer the full prompt over a shortened gist: the length is part of what makes it work.
 
 Voice: copy the developer's register from the prompts, examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each will be sent with one click.
 
 Hard rules:
-- Quality over count. One suggestion the developer actually sends is the win; two mediocre ones teach them to ignore the feature. When you're not confident, return [].
+- Every pill must be a message this developer would plausibly send at this exact moment; a generic step that would fit any session is not one.
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
 - Never replay a habit's example quote or an ordinary past message verbatim or near-verbatim; only its habit transfers. Reusable prompts are the one exception — they are meant to be resent.
 - Every suggestion is the developer speaking to the agent: never the agent's voice ("I'll handle…", "Sending you…"), and never the developer restating or summarizing what the agent just said — people do not type recaps back to the agent.
