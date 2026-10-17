@@ -33,10 +33,10 @@ describe("proposalAsks", () => {
     expect(asks[4].state).toBe("open");
     expect(asks[4].verdictLine).toBe("2 of 4 changes answered");
     const flip = (status: string, seqs: number[]) => ({ ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => seqs.includes(c.seq) ? { ...c, status: status as any } : c) });
-    expect(proposalAsks(flip("applied", [7]))[0]).toMatchObject({ state: "accepted", verdictLine: "Approved", remaining: 0 });
+    expect(proposalAsks(flip("applied", [7]))[0]).toMatchObject({ state: "accepted", verdictLine: "Accepted", remaining: 0 });
     expect(proposalAsks(flip("skipped", [7]))[0]).toMatchObject({ state: "skipped", verdictLine: "Rejected" });
     // The rest ask already holds one skipped row: approving the others reads as approved with that one rejected.
-    expect(proposalAsks(flip("applied", [3, 4, 6]))[4]).toMatchObject({ state: "accepted", verdictLine: "Approved, 1 rejected" });
+    expect(proposalAsks(flip("applied", [3, 4, 6]))[4]).toMatchObject({ state: "accepted", verdictLine: "Accepted, 1 rejected" });
     expect(proposalAsks(flip("failed", [7]))[0]).toMatchObject({ state: "open", verdictLine: "1 change failed. Approve tries it again", failed: 1 });
   });
 

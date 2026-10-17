@@ -11,10 +11,8 @@ import { AgentCursorGlyph, C, Section, useStillMode } from "./parts";
 import "./computer.css";
 
 /**
- * /features/computer. The page reads like the tree cast computer prints: each
- * section heading is an indexed element (the indexes are sparse, as real ones
- * are), and the hero is a Mac desktop where an agent works in a background
- * window while the human keeps typing in front.
+ * /features/computer. The hero is a Mac desktop where an agent works in a
+ * background window while the human keeps typing in front.
  */
 export default function ComputerPage() {
   const still = useStillMode();
@@ -25,9 +23,7 @@ export default function ComputerPage() {
 
       <Section
         id="screen"
-        index={3}
-        role="group"
-        title="You keep your screen, your mouse and your keyboard."
+        title="The agent works in windows behind yours"
         lede={<>Every verb works on a background window. The agent&apos;s keys go to the app it is driving, never to the one you are typing in. No verb brings a window forward on its own.</>}
       >
         <div className="grid-cols-1 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center">
@@ -49,24 +45,20 @@ export default function ComputerPage() {
 
       <Section
         id="read"
-        index={7}
-        role="split group"
         tone="paper"
-        title="One window, read as an indexed tree."
+        title="How the agent reads a window"
         lede={<>An agent names an app and gets back one window as text: every element on its own line, with an index, a role, a name and the actions it advertises. In the conversation it shows as the step&apos;s output, with a picture of the window beside it once Screen Recording is granted. This is a real Finder tree, with the file names changed.</>}
       >
         <ReadingDemo>
-          <p><b style={{ color: SOL.base02 }}>Cheap to narrow.</b> <C>find &quot;Sign&quot;</C> prints only the matches and their ancestors. <C>--under 31</C> prints one subtree. Both take a <C>/regex/</C>.</p>
-          <p><b style={{ color: SOL.base02 }}>Sparse on purpose.</b> The tree drops noise, so indexes skip. An agent never counts its way to one; it reads the number off the line.</p>
-          <p><b style={{ color: SOL.base02 }}>Stale by design.</b> An index belongs to the tree it came from. A stale one fails as <C>element_not_found</C> instead of clicking whatever sits there now.</p>
+          <p><b style={{ color: SOL.base02 }}>Printing part of the tree.</b> <C>find &quot;Sign&quot;</C> prints only the matches and their ancestors. <C>--under 31</C> prints one subtree. Both take a <C>/regex/</C>.</p>
+          <p><b style={{ color: SOL.base02 }}>Gaps in the numbering.</b> The tree drops noise, so indexes skip. An agent never counts its way to one; it reads the number off the line.</p>
+          <p><b style={{ color: SOL.base02 }}>Old indexes fail.</b> An index belongs to the tree it came from. A stale one fails as <C>element_not_found</C> instead of clicking whatever sits there now.</p>
         </ReadingDemo>
       </Section>
 
       <Section
         id="changes"
-        index={12}
-        role="tab group"
-        title="Every action says what it changed."
+        title="What each action reports back"
         lede={<>An action prints one sentence saying what was attempted, by which route and whether it was verified, then the lines of the tree that moved. The agent gets the indexes for its next step without taking another snapshot, and finds out right away when an app ignored it.</>}
       >
         <OutcomesDemo />
@@ -74,10 +66,8 @@ export default function ComputerPage() {
 
       <Section
         id="setup"
-        index={18}
-        role="sheet"
         tone="paper"
-        title="Turn it on: two grants, once, to a helper that holds nothing else."
+        title="Grant the two macOS permissions"
         lede={<>macOS asks a person to grant Accessibility and Screen Recording by hand. Until then the agent cannot read a window, and says so. Codecast signs a small helper app and asks for both on its behalf, so neither Codecast nor your terminal holds them.</>}
       >
         <SetupPanel />
@@ -85,10 +75,8 @@ export default function ComputerPage() {
 
       <Section
         id="safety"
-        index={23}
-        role="group"
         tone="dark"
-        title="Built for a machine with your life on it."
+        title="Limits that protect your Mac"
         lede={<>Your Mac holds your mail, your bank and your passwords. These limits are enforced where they cannot be talked around, or written into the instructions every agent reads.</>}
       >
         <Guardrails />
@@ -96,10 +84,8 @@ export default function ComputerPage() {
 
       <Section
         id="batch"
-        index={29}
-        role="list"
-        title="Many steps, one process."
-        lede={<>This one is the agent&apos;s side, about speed. Each separate command pays a second or more to start the CLI. <C>cast computer do</C> runs a whole flow against one app over one helper connection. It stops at the first failing step and reports what ran and what never did; <C>--keep-going</C> carries on.</>}
+        title="Run several steps in one command"
+        lede={<>This section is about the agent&apos;s speed. Each separate command pays a second or more to start the CLI. <C>cast computer do</C> runs a whole flow against one app over one helper connection. It stops at the first failing step and reports what ran and what never did; <C>--keep-going</C> carries on.</>}
       >
         <BatchDemo />
         <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] items-start">
@@ -112,22 +98,18 @@ export default function ComputerPage() {
 
       <Section
         id="errors"
-        index={34}
-        role="outline"
         tone="paper"
-        title="Every failure names its way out."
-        lede={<>A failure carries a code and the recovery for it: in <C>--json</C> as <C>code</C> and <C>recovery</C>, printed under the message otherwise. The rule they share: change something before retrying, never rerun unchanged. These are the recoveries word for word.</>}
+        title="Error codes and their recoveries"
+        lede={<>A failure carries a code and the recovery for it: in <C>--json</C> as <C>code</C> and <C>recovery</C>, printed under the message otherwise. All of them say to change something before retrying and never to rerun a command unchanged. These are the recoveries word for word.</>}
       >
         <ErrorList />
       </Section>
 
       <Section
         id="reference"
-        index={40}
-        role="table"
         tone="dark"
         wide
-        title="For scripts and agents: every command."
+        title="Command reference"
         lede={<>Agents learn these from their instructions; you only need them to script it yourself. From <C>cast computer --help</C>. <C>cast computer help &lt;verb&gt;</C> prints one verb&apos;s flags from the binary about to run them, so an agent never works from a stale list.</>}
       >
         <Reference />
@@ -146,8 +128,8 @@ function Hero() {
       <div className="relative max-w-7xl mx-auto px-5 sm:px-8 pt-12 sm:pt-16 pb-16 sm:pb-24">
         <div className="grid-cols-1 grid gap-8 lg:gap-14 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] items-end">
           <h1 className="cx-in font-mono font-bold tracking-[-0.035em] text-[36px] sm:text-[54px] xl:text-[60px] leading-[1.03] [text-wrap:balance]" style={{ color: SOL.base03 }}>
-            <span className="block">Your agent uses the apps on your&nbsp;Mac.</span>
-            <span className="block mt-2" style={{ color: SOL.base01 }}>You keep&nbsp;typing.</span>
+            <span className="block">Your agent uses the apps on your&nbsp;Mac</span>
+            <span className="block mt-2" style={{ color: SOL.base01 }}>while you keep&nbsp;typing</span>
           </h1>
           <div>
             <p className="cx-in text-[17px] sm:text-[18px] leading-[1.65]" style={{ color: SOL.base00, animationDelay: "120ms" }}>
@@ -179,7 +161,6 @@ function UseCases() {
     <section className="relative" style={{ backgroundColor: SOL.base03 }}>
       <div className="max-w-7xl mx-auto px-5 sm:px-8 py-14 sm:py-16">
         <div className="flex items-baseline gap-3 font-mono">
-          <span className="text-[12px]" style={{ color: SOL.base01 }}><span style={{ color: SOL.magenta }}>1</span> list</span>
           <h2 className="font-bold text-[20px] sm:text-[22px]" style={{ color: SOL.base2 }}>What you can hand it</h2>
         </div>
         <div className="mt-8 grid grid-cols-1 gap-px rounded-2xl overflow-hidden md:grid-cols-2" style={{ backgroundColor: "#0b4a5a" }}>
@@ -210,8 +191,7 @@ function Limits() {
     <section style={{ backgroundColor: SOL.base3 }}>
       <div className="max-w-6xl mx-auto px-5 sm:px-8 py-20 sm:py-28">
         <h2 className="font-mono font-bold tracking-[-0.03em] text-[28px] sm:text-[38px] leading-[1.1]" style={{ color: SOL.base03 }}>
-          <span className="inline-block mr-3 align-[0.42em] text-[0.46em] font-normal tracking-normal" style={{ color: SOL.base1 }}><span style={{ color: SOL.magenta }}>47</span> group</span>
-          Limits, plainly.
+          Limits
         </h2>
         <dl className="mt-12 grid grid-cols-1 gap-x-12 gap-y-9 md:grid-cols-2">
           {LIMITS.map((l) => (
@@ -250,7 +230,7 @@ function Closing() {
         <div className="mt-20 grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center">
           <div>
             <h2 className="font-mono font-bold tracking-[-0.03em] text-[30px] sm:text-[40px] leading-[1.08]" style={{ color: SOL.base03 }}>
-              Install codecast. Grant two permissions. Hand it a window.
+              Get started with Computer
             </h2>
             <p className="mt-4 text-[16px] leading-[1.7] max-w-lg" style={{ color: SOL.base00 }}>
               Every agent you run through codecast already knows how. Switch on Computer in Agent features, grant the two permissions it asks for, then ask for the thing you would otherwise click through yourself.

@@ -1,7 +1,8 @@
 // /o/<prefix>-<n>: one mod object. The declaring mod draws the top of the page
 // when it hooks ui.render { object: prefix }; codecast draws the rest from the
 // kind's declaration: title, status, typed fields, body. Every edit is a store
-// action, so it shows at once and syncs behind.
+// action, so it shows at once and syncs behind. An external object is read-only:
+// the mod's page when it draws one, else its resolved status, fields and body.
 
 import { useMemo, useState } from "react";
 import { DynamicIcon } from "lucide-react/dynamic";
@@ -9,11 +10,11 @@ import { objectStatusIsDone, type ModSurface } from "@codecast/shared/contracts/
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { modHost, modNavigate } from "../../lib/mods/host";
-import { objectKind, objectsHref, statusTone } from "../../lib/mods/objects";
-import { useModHostVersion, useModRows, useObjectRow } from "../../lib/mods/useMods";
+import { objectKind, objectsHref, statusTone, type KindEntry } from "../../lib/mods/objects";
+import { useModHostVersion, useModRows, useObjectRow, type ObjectRow } from "../../lib/mods/useMods";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ModSurfaceView } from "./ModSurface";
-import { FieldEditor } from "./objectFields";
+import { FieldEditor, FieldValue, StatusBadge } from "./objectFields";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export function ObjectPage({ id }: { id: string }) {
@@ -55,7 +56,7 @@ export function ObjectPage({ id }: { id: string }) {
           {kind?.modTitle ? <span className="ml-auto">{kind.modTitle}</span> : null}
         </nav>
         <h1 className="text-[24px] font-semibold tracking-tight text-sol-text">{row.title}</h1>
-        {drawsPage && surface ? <div className="mt-5"><ModSurfaceView runtime={runtime} surface={surface} instance={row.short_id} /></div> : null}
+        {drawsPage && surface ? <div className="mt-5"><ModSurfaceView runtime={runtime} surface={surface} instance={row.short_id} /></div> : <ExternalRow row={row} kind={kind} />}
       </div>
     );
   }
@@ -123,5 +124,26 @@ export function ObjectPage({ id }: { id: string }) {
         <button onClick={() => { update(row._id, { archived: true }); if (kind) modNavigate(objectsHref(kind.prefix)); }} className="ml-auto hover:text-sol-red">Archive</button>
       </div>
     </div>
+  );
+}
+
+/** An external object whose mod draws no page: what its resolver answered, read-only. */
+function ExternalRow({ row, kind }: { row: ObjectRow; kind: KindEntry | undefined }) {
+  const filled = Object.entries(kind?.fields ?? {}).filter(([name]) => row.fields?.[name] != null && row.fields?.[name] !== "");
+  return (
+    <>
+      {row.status && kind ? <div className="mt-3"><StatusBadge kind={kind} status={row.status} /></div> : null}
+      {filled.length ? (
+        <dl className="mt-5 grid grid-cols-[140px_1fr] items-center gap-x-3 gap-y-1.5 rounded-xl border border-sol-border bg-sol-card px-4 py-3">
+          {filled.map(([name, f]) => (
+            <div key={name} className="contents">
+              <dt className="text-[12px] text-sol-text-dim">{f.label ?? name.replace(/_/g, " ")}</dt>
+              <dd className="min-w-0 text-[13px] text-sol-text"><FieldValue field={f} value={row.fields?.[name]} /></dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {row.body ? <div className="mt-5 text-[13.5px]"><MarkdownRenderer content={row.body} /></div> : null}
+    </>
   );
 }

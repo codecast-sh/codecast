@@ -1,6 +1,6 @@
 "use client";
 // The one place a staged answer is explained (org-staffing.md S39): a press
-// on Approve, Reject or Reply fires nothing, so the controls it replaces give
+// on Accept or Adjust fires nothing, so the controls it replaces give
 // way to a band that says what will happen when the composer sends, with Undo
 // at its end. The subject card, the group row and the foot all mount it.
 import React from "react";
@@ -12,21 +12,21 @@ import { LedgerWord, type SubjectAnswer } from "./ProposalSubjectCard";
 /** The band's words: the first word in the verdict's ink, the rest quiet. */
 export function stagedWords(answer: SubjectAnswer, retry = false): [string, string] {
   if (answer.verdict === "reject") return ["Rejected.", "Sent when you send."];
-  if (answer.verdict === "note") return ["Replied.", "Sent when you send."];
+  if (answer.verdict === "note") return ["Adjust.", "Your words go back when you send."];
   if (retry) return ["Retry.", "Runs again when you send."];
-  if (answer.leave_sessions) return ["Approved,", "and the sessions stay where they are. Applies when you send."];
-  return ["Approved.", "Applies when you send."];
+  if (answer.leave_sessions) return ["Accepted,", "and the sessions stay where they are. Applies when you send."];
+  return ["Accepted.", "Applies when you send."];
 }
 
 const WASH: Record<SubjectAnswer["verdict"], string> = {
-  approve: "color-mix(in srgb, var(--sol-violet) 8%, transparent)",
+  approve: "color-mix(in srgb, var(--sol-green) 9%, transparent)",
   reject: "color-mix(in srgb, var(--sol-red) 8%, transparent)",
   note: "color-mix(in srgb, var(--sol-border) 30%, transparent)",
 };
 /** The band's wash, for a field drawn joined under it. */
 export const stagedWash = (verdict: SubjectAnswer["verdict"]) => WASH[verdict];
 const INK: Record<SubjectAnswer["verdict"], string> = {
-  approve: "text-[color:var(--ink-violet)]",
+  approve: "text-[color:var(--ink-green)]",
   reject: "text-[color:var(--ink-red)]",
   note: "text-[color:var(--sol-text)]",
 };

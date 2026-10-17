@@ -43,13 +43,44 @@ export function stableRefId(o: object): number {
   return id;
 }
 
+// A signature function's interner: a rebuild whose content equals one of the
+// last few signatures returns that same string. Subscribers compare signatures
+// with Object.is, which for two distinct strings with equal content walks every
+// character, and a signature over thousands of rows is megabytes: compared once
+// per subscriber per store write for as long as the content holds. Interned,
+// the compare is a pointer check. Several are kept, not one, because the same
+// function also signs other collections in between (a filtered or projected
+// copy), which would evict a single remembered string.
+export function createInterner(size = 3): (signature: string) => string {
+  const recent = new Map<string, string>();
+  return (signature) => {
+    const seen = recent.get(signature);
+    if (seen !== undefined) return seen;
+    recent.set(signature, signature);
+    if (recent.size > size) recent.delete(recent.keys().next().value!);
+    return signature;
+  };
+}
+
 // Single-row signature: every own field except the denied (churn) ones. Object
 // values fold in via stableRefId so a nested change still flips the signature.
+// Memoized by the row ref and the denylist: every subscriber re-reads its row's
+// signature on every store write, and a row the write did not touch keeps its
+// ref, so a list of N cards rebuilds one row's string per write, not N.
+const rowSigs = new WeakMap<ReadonlySet<string>, WeakMap<object, string>>();
 export function rowSigExcluding(
   row: Record<string, any> | null | undefined,
   deny: ReadonlySet<string>,
 ): string {
   if (!row) return "none";
+  let byRow = rowSigs.get(deny);
+  if (!byRow) rowSigs.set(deny, (byRow = new WeakMap()));
+  let sig = byRow.get(row);
+  if (sig === undefined) byRow.set(row, (sig = rowSigUncached(row, deny)));
+  return sig;
+}
+
+function rowSigUncached(row: Record<string, any>, deny: ReadonlySet<string>): string {
   let sig = "";
   for (const k in row) {
     if (deny.has(k)) continue;
@@ -68,6 +99,7 @@ export function makeCollectionSig<T>(
 ): (collection: Record<string, T>) => string {
   const signatures = new WeakMap<Record<string, T>, string>();
   const projectedByRow = new WeakMap<object, string>();
+  const intern = createInterner();
   return (collection: Record<string, T>): string => {
     const cached = signatures.get(collection);
     if (cached !== undefined) return cached;
@@ -87,7 +119,7 @@ export function makeCollectionSig<T>(
     }
     // Newline-joined so two distinct collections can't concatenate into one
     // string; project() outputs never contain a newline.
-    const signature = parts.join("\n");
+    const signature = intern(parts.join("\n"));
     signatures.set(collection, signature);
     return signature;
   };

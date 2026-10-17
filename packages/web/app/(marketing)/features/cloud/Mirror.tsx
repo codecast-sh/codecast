@@ -10,7 +10,7 @@ const STAYED: { path: string; why: string }[] = [
 ];
 
 const RULES: { title: string; body: React.ReactNode }[] = [
-  { title: "Everything travels", body: <>Gitignored files too. What stays put: dependency and build folders, media, compiled programs, files over 100 MB, files a running process owns, nested repos.</> },
+  { title: "What travels and what stays", body: <>Gitignored files travel too. Dependency and build folders, media, compiled programs, files over 100 MB, files a running process owns and nested repos stay put.</> },
   { title: "Only the conflicting files hold", body: <>When both sides change the same lines, just those files pause, each side keeps its version, and you pick one. The rest keeps flowing.</> },
   { title: "Nothing lands mid-edit", body: <>A change applies only if its folder has not changed since it was read. Otherwise the sync retries a moment later.</> },
   { title: "The host still sleeps", body: <>The sync talks to the host only while the session works. An edit you make while it idles goes over once it is awake, and never wakes it.</> },

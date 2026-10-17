@@ -64,7 +64,7 @@ export function Report() {
     <Section
       id="report"
       tint
-      title="Every run says who acts next"
+      title="How a run reports back"
       lede={<>A run ends by filing a summary of what it found. The summary is what you read later, so it states the outcome. The run also says whether you have to read it at all.</>}
     >
       <div className="grid gap-10 lg:grid-cols-2 lg:items-center">
@@ -79,7 +79,7 @@ export function Report() {
           <Summary outcome={outcome} />
           <Body>
             {outcome === "clean"
-              ? <>Nobody needs to act. The run folds into the trigger&apos;s run history, where every firing links to the conversation it produced. A quiet trigger reads as quiet, not as broken.</>
+              ? <>Nobody needs to act. The run folds into the trigger&apos;s run history, where every firing links to the conversation it produced.</>
               : <>The run declares itself blocked and stays in the inbox until you have read it. If its session was stashed or killed, it is pulled back into the queue. A trigger whose runs start fresh also wakes the session that set it.</>}
           </Body>
         </div>
@@ -92,13 +92,13 @@ export function Report() {
         <div>
           <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>Agents arm their own follow-ups</h3>
           <Body className="mt-2">
-            Installing codecast adds a short section to your agent instructions (CLAUDE.md, AGENTS.md). It teaches agents when a trigger earns its place: an agent that pushes a fix sets its own &quot;check CI in 30m&quot;, and one that opens a PR watches for review comments. It also teaches restraint. A trigger needs a concrete reason, not a reflex.
+            Installing codecast adds a short section to your agent instructions (CLAUDE.md, AGENTS.md). It teaches agents when a trigger earns its place: an agent that pushes a fix sets its own &quot;check CI in 30m&quot;, and one that opens a PR watches for review comments. It also tells them to set a trigger only when there is a concrete reason for one.
           </Body>
         </div>
         <div>
-          <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>Every run knows its contract</h3>
+          <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>What a run is told when it fires</h3>
           <Body className="mt-2">
-            A fired run receives your prompt, its trigger ID, and how to file its summary. A run that ends without reporting is caught too: the session that set it is told, with a link to the run&apos;s transcript.
+            A fired run receives your prompt, its trigger ID, and how to file its summary. If a run ends without reporting, the session that set it is told, with a link to the run&apos;s transcript.
           </Body>
         </div>
       </div>

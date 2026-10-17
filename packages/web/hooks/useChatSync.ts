@@ -27,6 +27,7 @@ import {
   selectChatRail,
   selectChannelMessages,
   selectThreadReplies,
+  selectChannelReadMarker,
   teamChannelPushOpts,
   chatSendState,
   type ChatMessageRow,
@@ -59,6 +60,7 @@ import {
 } from "../lib/chatViews";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
+import { holdChatFocus } from "../lib/chatFocus";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { useSyncCollection } from "./useSyncCollection";
@@ -788,4 +790,27 @@ export function useEnsureChatMessage(messageId: string | undefined): void {
       })
       .catch(() => {});
   }, [convex, messageId, known]);
+}
+
+/**
+ * The chat page's read law for a room shown somewhere else (a Threads row,
+ * the dock on a conversation): while the reader has it on screen, the room is
+ * marked read and re-marked as `wake` moves (pass what changes when a message
+ * lands), and it counts as on screen for the toast rule. The marker is the
+ * newest message in the ROOM, replies included, so a badge a thread reply
+ * raised clears too. Never for a room the server refuses: the mark would only
+ * come back as "Channel not found".
+ */
+export function useReadWhileSeen(channelId: string | undefined, seen: boolean, feed: ChannelFeed, wake: unknown): void {
+  useWatchEffect(() => {
+    if (!channelId || !seen || feed.loading || feed.unavailable) return;
+    const state = useInboxStore.getState();
+    const marker = selectChannelReadMarker(state as any, channelId);
+    state.markChannelRead(channelId, marker?._id);
+  }, [seen, channelId, wake, feed.loading, feed.unavailable]);
+
+  useWatchEffect(() => {
+    if (!seen || !channelId) return;
+    return holdChatFocus({ channelId });
+  }, [seen, channelId]);
 }

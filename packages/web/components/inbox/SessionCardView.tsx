@@ -414,10 +414,7 @@ export function SessionCardView({
               {/* Reuse the staleness-aware isLive so an aged-out subagent row
                   stops pulsing green, matching the main card and the bucket. */}
               {isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && (
-                <span className="relative flex h-1.5 w-1.5" title="Live">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
-                </span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" title="Live" />
               )}
               {!isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Idle" />

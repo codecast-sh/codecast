@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { isConvexId, useInboxStore } from "../store/inboxStore";
+import { isConvexId, quantizePresenceList, useInboxStore } from "../store/inboxStore";
 import { useIsSyncHost } from "./useSyncRole";
 import { useSyncCollection } from "./useSyncCollection";
 import { settingsDataKey, TEAM_SCOPED_SETTINGS } from "../lib/settingsData";
@@ -34,10 +34,12 @@ export type SettingsDataName = keyof typeof queries;
 // active team. Replication carries them to followers, so a follower reading
 // one of these for the active team leaves the query to the host. Anything
 // else (an on-demand name, another team's copy) is a per-view read and
-// subscribes in whichever window asks for it.
+// subscribes in whichever window asks for it. Only what an always-mounted
+// surface reads belongs here: syncProjects re-pushes in a new order whenever
+// any of the person's conversations is written, a store write in every window
+// each time, so the settings page that reads it subscribes on its own.
 const HOST_FED: readonly SettingsDataName[] = [
   "directoryMappings",
-  "syncProjects",
   "accountProfiles",
   "connections",
   "teamMembers",
@@ -46,6 +48,13 @@ const HOST_FED: readonly SettingsDataName[] = [
   "agentBoxes",
 ];
 const HOST_FED_SET = new Set<SettingsDataName>(HOST_FED);
+
+// Applied to a push before the store's content compare. The roster re-pushes on
+// every teammate's daemon heartbeat; quantized like the store's own teamMembers
+// copy, a heartbeat that changes nothing shown is a no-op write.
+const NORMALIZE: Partial<Record<SettingsDataName, (value: unknown) => unknown>> = {
+  teamMembers: quantizePresenceList,
+};
 
 function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null) {
   const userId = useInboxStore((s) => s.currentUser?._id);
@@ -59,7 +68,7 @@ function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null
     ? "skip"
     : teamQuery ? { team_id: teamId }
       : name === "syncProjects" ? { limit: 100 } : {};
-  const select = useCallback((value: unknown) => [{ _id: key, value }], [key]);
+  const select = useCallback((value: unknown) => [{ _id: key, value: NORMALIZE[name]?.(value) ?? value }], [key, name]);
   const result = useSyncCollection("settingsData", queries[name], args as any, { select });
   return { key, error: result.error };
 }

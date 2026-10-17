@@ -171,7 +171,7 @@ export function Hero() {
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: Y }} />Decisions
             </Link>
             <h1 className="dq-in mt-5 font-mono font-bold text-[34px] sm:text-[46px] leading-[1.06] tracking-[-0.04em] [text-wrap:balance]" style={at(0.08, { color: SOL.base03 })}>
-              The calls only you can make, in one queue.
+              One queue for the decisions your agents need from you
             </h1>
             <p className="dq-in mt-6 text-[17px] sm:text-[18px] leading-8 max-w-xl" style={at(0.16, { color: SOL.base01 })}>
               When an agent hits a fork it cannot settle alone, it writes the question, the options and its reasoning into a card. The card waits in Questions, in the app's sidebar and on your phone. You clear the queue when you choose to, a key per answer, and each answer goes back to the session that asked.
