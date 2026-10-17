@@ -180,23 +180,39 @@ export const THREAD_STATE_RESULT_MAX_CHARS = 32_000;
  * when there is none, it does not parse, or it is past the result cap.
  */
 export function threadStateResult(text: string): string | null {
-  // A block closes at the first fence after which its body parses: the json's own strings may hold fences (a markdown
-  // proposal), and a report piped from a file without a final newline closes on the json's last line.
+  const last = lastJsonBlock(text);
+  return last && last.length <= THREAD_STATE_RESULT_MAX_CHARS ? last : null;
+}
+
+/**
+ * The body of the last fenced json block in `text` that parses, or null. A
+ * block closes at the first fence after which its body parses: the json's own
+ * strings may hold fences (a markdown proposal), and a report piped from a file
+ * without a final newline closes on the json's last line. A block that no fence
+ * closes runs to the end of the text, as an unclosed fence does in markdown.
+ */
+export function lastJsonBlock(text: string): string | null {
+  const parses = (body: string) => {
+    try {
+      JSON.parse(body);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let last: string | null = null;
   for (const open of text.matchAll(/```json[ \t]*\n/g)) {
     const from = open.index! + open[0].length;
-    for (let at = text.indexOf("```", from); at !== -1; at = text.indexOf("```", at + 3)) {
-      const body = text.slice(from, at).trim();
-      try {
-        JSON.parse(body);
-      } catch {
-        continue;
+    for (let at = text.indexOf("```", from); ; at = text.indexOf("```", at + 3)) {
+      const body = text.slice(from, at === -1 ? undefined : at).trim();
+      if (parses(body)) {
+        last = body;
+        break;
       }
-      last = body;
-      break;
+      if (at === -1) break;
     }
   }
-  return last && last.length <= THREAD_STATE_RESULT_MAX_CHARS ? last : null;
+  return last;
 }
 
 export function clearedThreadStateFields(): {

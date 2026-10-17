@@ -31,6 +31,32 @@ export function keysOwnedElsewhere(
   return !!t?.closest?.(OWNS_KEYS_SELECTOR) && !ownRoot?.contains(t);
 }
 
+// Where the person's last click or key press landed, as the event's path.
+// A key press on <body> is not a place: it is the press keyScopeHasFocus
+// is about to judge.
+let lastGesturePath: EventTarget[] = [];
+if (typeof document !== "undefined") {
+  document.addEventListener("pointerdown", (e) => { lastGesturePath = e.composedPath(); }, true);
+  document.addEventListener("keydown", (e) => { if (e.target !== document.body) lastGesturePath = e.composedPath(); }, true);
+}
+
+/**
+ * Focus is inside `root`, a surface whose keys are live only while it holds
+ * focus (a decision card). Focus also falls to <body> without the person
+ * going anywhere, when the control holding it goes away: a closed answer
+ * box, a copy through a hidden field, a button swapped for its open state.
+ * Then the surface keeps its keys, and takes focus back, as long as the
+ * person's last click or key press was inside it.
+ */
+export function keyScopeHasFocus(root: HTMLElement | null | undefined): boolean {
+  if (!root) return false;
+  const active = document.activeElement;
+  if (active && root.contains(active)) return true;
+  if ((active && active !== document.body) || !root.isConnected || !lastGesturePath.includes(root)) return false;
+  root.focus({ preventScroll: true });
+  return true;
+}
+
 /**
  * A page's window key listener leaves this key alone: focus is in a text
  * field, or in a region that owns its keys (keysOwnedElsewhere).
