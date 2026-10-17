@@ -124,12 +124,10 @@ export async function keychainReadAsync(args: string[], timeoutMs = KEYCHAIN_REA
 }
 
 /** Absolute path `name` resolves to on PATH (or on `pathEnv`), or null when it is not installed.
- *  Windows has no `which`, so there the PATH is walked here (findOnPath). */
+ *  The PATH is walked here rather than by spawning `which`: Windows has none, and
+ *  in the daemon each spawn held the event loop for over a second under load. */
 export function whichBin(name: string, pathEnv?: string): string | null {
-  if (process.platform === "win32") return findOnPath(name, pathEnv ?? process.env.PATH ?? process.env.Path ?? "");
-  const r = spawnSync("which", [name], { encoding: "utf-8", ...(pathEnv ? { env: { ...process.env, PATH: pathEnv } } : {}) });
-  const found = r.status === 0 ? r.stdout.trim() : "";
-  return found || null;
+  return findOnPath(name, pathEnv ?? process.env.PATH ?? process.env.Path ?? "");
 }
 
 /** `which` done by hand: the first directory on `pathEnv` holding `name`, as

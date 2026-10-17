@@ -47,7 +47,7 @@ const REFERENCE: { group: string; rows: Ref[] }[] = [
 
 export function Reference() {
   return (
-    <Section id="reference" title="For scripts and agents" lede={<>Agents set most triggers from inside a session with these commands, and they work from any shell. Everything here is in <C>cast trigger --help</C>. IDs take the short form (<C>tr-42</C>), the full id, or its last 8 characters.</>}>
+    <Section id="reference" title="Trigger commands for scripts and agents" lede={<>Agents set most triggers from inside a session with these commands, and they work from any shell. Everything here is in <C>cast trigger --help</C>. IDs take the short form (<C>tr-42</C>), the full id, or its last 8 characters.</>}>
       <div className="grid gap-6 lg:grid-cols-3">
         {REFERENCE.map((g) => (
           <div key={g.group} className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${SOL.base2}` }}>
@@ -78,7 +78,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "How exact is the schedule?",
-    a: <>The daemon polls for due triggers, so a run starts close to its time, not to the second. A repeating trigger stays on its cadence even when individual runs take a while.</>,
+    a: <>The daemon polls for due triggers, so a run starts close to its scheduled time. A repeating trigger stays on its cadence even when individual runs take a while.</>,
   },
   {
     q: "What does a run cost?",
@@ -86,7 +86,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Is read-only a sandbox?",
-    a: <>It removes write tools and blocks state-changing commands for a fresh run. It is a guard on what the agent may do, not an isolated machine. A run that lands in an existing conversation follows that conversation&apos;s rules instead.</>,
+    a: <>It removes write tools and blocks state-changing commands for a fresh run. It limits what the agent may do; the run is not isolated from the machine. A run that lands in an existing conversation follows that conversation&apos;s rules instead.</>,
   },
   {
     q: "Who can see my triggers?",
@@ -96,7 +96,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
 
 export function Limits() {
   return (
-    <Section id="limits" tint title="Honest limits" lede="What a trigger does not do, and what it depends on.">
+    <Section id="limits" tint title="Limits and requirements" lede="What a trigger does not do, and what it depends on.">
       <div className="grid gap-x-10 md:grid-cols-2">
         {LIMITS.map((l) => (
           <div key={l.q} className="py-5" style={{ borderTop: `1px solid ${SOL.base1}` }}>
@@ -114,7 +114,7 @@ const RELATED = ["pull-requests", "decisions", "agents", "cloud"];
 export function Related() {
   const items = featureDeepDives(RELATED);
   return (
-    <Section title="Works with">
+    <Section title="Related features">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {items.map((f) => (
           <Link
@@ -143,7 +143,7 @@ export function Cta() {
       />
       <div className="relative max-w-3xl mx-auto px-5 sm:px-6 text-center">
         <h2 className="font-mono text-[30px] sm:text-[42px] font-bold leading-[1.1] tracking-tight [text-wrap:balance]" style={{ color: SOL.base3 }}>
-          Arm one before you log off tonight
+          Get started with triggers
         </h2>
         <p className="mt-5 text-[17px] leading-8" style={{ color: SOL.base1 }}>
           Install codecast, open Triggers and set one for tomorrow morning, or ask the session you are in to check back on its own work.

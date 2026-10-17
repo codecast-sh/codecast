@@ -3,7 +3,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { KeyCap } from "../../components/KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { Search, Loader2, ExternalLink, Link as LinkIcon, Users, Clock, ArrowUpDown, MessageSquareText, Hash } from "lucide-react";
 import { toast } from "sonner";
@@ -510,7 +510,7 @@ export default function SearchPage() {
               </p>
               <p className="text-[11px] text-sol-text-dim/70">
                 Open this page from anywhere with{" "}
-                <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">K</KeyCap></span> then{" "}
+                <MenuKeyCaps action="palette.toggle" className="inline-flex items-center gap-0.5" /> then{" "}
                 <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </p>
               {/* The operators `cast search` reads too; the URL keeps the

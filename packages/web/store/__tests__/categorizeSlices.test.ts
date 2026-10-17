@@ -74,4 +74,19 @@ describe("placeSections top-level slices", () => {
     const { newSessions } = placeSections(sessions, new Set());
     expect(ids(newSessions)).toEqual(["draft"]);
   });
+
+  it("hides the focused fresh-launch landing blank until its first send materializes it", () => {
+    const sessions = {
+      land: mk("land", { message_count: 0, _landing: true }),
+      blank: mk("blank", { message_count: 0 }),
+    };
+    const stubIds = new Set(["land", "blank"]);
+    const viewingLanding = placeSections(sessions, new Set(), new Set(), { stubIds, currentSessionId: "land" });
+    expect(ids(viewingLanding.newSessions)).toEqual([]);
+    // A focused ordinary blank (Ctrl+N) still shows.
+    const viewingBlank = placeSections(sessions, new Set(), new Set(), { stubIds, currentSessionId: "blank" });
+    expect(ids(viewingBlank.newSessions)).toEqual(["blank"]);
+    const sent = placeSections(sessions, new Set(), new Set(), { stubIds, currentSessionId: "land", pendingCreateIds: new Set(["land"]) });
+    expect(ids(sent.newSessions)).toEqual(["land"]);
+  });
 });

@@ -216,12 +216,15 @@ export class Updater {
   }
 
   /** True when running from source (bun) rather than a compiled binary. An
-   *  update would overwrite the interpreter, so the updater refuses. */
+   *  update would overwrite the interpreter, so the updater refuses. Judged
+   *  by the executable's own file name: a path test matched "/home/ubuntu/",
+   *  and every release on an Ubuntu host refused its updates as dev mode. */
   isDevMode(): boolean {
-    const exe = this.cfg.execPath.toLowerCase();
+    const name = (this.cfg.execPath.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+    if (/^bun(-|$)/.test(name)) return true;
     const bin = this.cfg.binaryName.toLowerCase();
     const alias = this.cfg.aliasName?.toLowerCase();
-    return exe.includes("bun") || (!exe.includes(bin) && !(alias && exe.includes(`/${alias}`)));
+    return !name.includes(bin) && name !== alias;
   }
 
   /**

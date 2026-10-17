@@ -82,8 +82,8 @@ export function Video() {
       id="video"
       n="07"
       tone="sand"
-      title="Put a screen recording in the bundle. It plays like a film."
-      lede={<>Video and audio inside a published folder upload to media hosting and keep their relative paths, so <C>&lt;video src=&quot;demo.mp4&quot;&gt;</C> just works. A video with controls becomes the cast player, and several clips can play back to back as chapters of one film.</>}
+      title="Video and audio in a published folder"
+      lede={<>Video and audio inside a published folder upload to media hosting and keep their relative paths, so <C>&lt;video src=&quot;demo.mp4&quot;&gt;</C> plays without changes. A video with controls becomes the cast player, and several clips can play back to back as chapters of one film.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-10 items-start">
         <div className="min-w-0">
