@@ -51,7 +51,7 @@ import {
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
-import { REVIVABLE_STATUSES, REVIVE_MAX_PER_PASS, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
+import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -286,7 +286,7 @@ import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, trans
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
-import { hasSessionServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
+import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -14350,22 +14350,20 @@ async function resolveSessionCommandPane(
   return { tmuxTarget: tmuxTarget && validateTmuxTarget(tmuxTarget) ? tmuxTarget : null, proc };
 }
 
-async function findTmuxPaneForTty(tty: string): Promise<string | null> {
+async function findTmuxPaneForTty(tty: string, candidates: string[] = []): Promise<string | null> {
   if (!hasTmux()) return null;
-  try {
-    const { stdout } = await tmuxExec(["list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"]);
-    const normalizedTty = normalizeTty(tty);
-
-    for (const line of stdout.trim().split("\n")) {
-      const [paneTty, target] = line.split(" ");
-      if (paneTty === normalizedTty && target) {
-        return target;
+  const normalizedTty = normalizeTty(tty);
+  for (const candidate of [...new Set(candidates), undefined]) {
+    try {
+      const selector = candidate ? ["-t", candidate] : ["-a"];
+      const { stdout } = await tmuxExec(["list-panes", ...selector, "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"], candidate ? { timeout: 3000, killSignal: "SIGKILL" } : undefined);
+      for (const line of stdout.trim().split("\n")) {
+        const [paneTty, target] = line.split(" ");
+        if (paneTty === normalizedTty && target) return target;
       }
-    }
-    return null;
-  } catch {
-    return null;
+    } catch {}
   }
+  return null;
 }
 
 // `unnumbered`: the menu's rows carry no digits, so an answer must move the
@@ -15352,7 +15350,7 @@ export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: str
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
-  return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
+  return pane.slice(glyphAt + 1).split(/^(?:[─═]{3,}\s*$|\s*[╰└╚][─═]{3,}.*$)/m, 1)[0];
 }
 
 // Both checks read the whole capture: the caller sizes it to the payload. A
@@ -15487,7 +15485,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /[─━]{20,}/.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
@@ -18132,7 +18130,7 @@ export function tmuxComposerText(pane: string): string | null {
   const lines = pane.slice(glyphAt + 1).split("\n");
   const body = [lines[0]];
   for (const line of lines.slice(1)) {
-    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    if (!line.trim() || /^[─═]{3,}\s*$/.test(line)) break;
     body.push(line);
   }
   return body.join("\n");
@@ -24766,7 +24764,8 @@ export async function resolveLiveTmuxTarget(
   const resumedTmux = sessionServerSockets()
     .map(socket => socket.slice(socketPrefix.length))
     .filter(name => name.includes("-resume-") && name.endsWith(`-${resumeShortId(sessionId)}`));
-  for (const candidate of new Set([...resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? ""), ...resumedTmux])) {
+  const candidates = [...new Set([...resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? ""), ...resumedTmux])];
+  for (const candidate of candidates) {
     try {
       await tmuxExec(["has-session", "-t", candidate], { timeout: 3000, killSignal: "SIGKILL" });
       if (candidate === derivedTmux && !await matchesTmuxConversation(candidate, conversationId!, tmuxExec)) continue;
@@ -24797,7 +24796,7 @@ export async function resolveLiveTmuxTarget(
     // Reading it as dead sent a live session (jx77xjt, 2026-10-16, load 500)
     // down the auto-resume path, which starts a second agent beside it.
     if (verdict === null) logDelivery(`ps gave no answer for pid=${proc.pid}; keeping it as session ${sessionId.slice(0, 8)}'s agent`);
-    let pane = await findTmuxPaneForTty(proc.tty);
+    let pane = await findTmuxPaneForTty(proc.tty, [...(cachedTmux ? [cachedTmux] : []), ...candidates]);
     // A process can OUTLIVE the pane that launched it while still holding that
     // pane's tty. Kill the launch wrapper and the agent is reparented to init,
     // but its controlling terminal is unchanged, so the tty→pane map still points
@@ -29259,7 +29258,11 @@ async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promis
 //
 // With no process found, the age is the evidence: below the threshold nothing
 // has been established either way (`unverifiable`), past it this device's own
-// process table is the positive absence that `exited` requires.
+// process table is the positive absence that `exited` requires. A status
+// written before this machine booted needs no age: the boot ended its
+// process. Waiting out the threshold after a restart held every hand that
+// died with the machine for 30 minutes before the watchdog even looked
+// (ct-59998's Implement hand, 2026-10-16).
 //
 // `hasLiveAgentProcess` must come from a probe that COMPLETED — a probe that
 // threw answers nothing, and feeding its failure in here as `false` would let a
@@ -29272,8 +29275,11 @@ export function staleSessionLivenessVerdict(args: {
   hasLiveAgentProcess: boolean;
   idleStaleMs?: number;
   activeStaleMs?: number;
+  /** The status was written before this machine last booted. */
+  predatesBoot?: boolean;
 }): LivenessVerdict {
   if (args.hasLiveAgentProcess) return "live";
+  if (args.predatesBoot) return "exited";
   const idleStaleMs = args.idleStaleMs ?? 10 * 60 * 1000;
   const activeStaleMs = args.activeStaleMs ?? 30 * 60 * 1000;
   const threshold =
@@ -29289,6 +29295,7 @@ export function shouldMarkSessionCompleted(args: {
   hasLiveAgentProcess: boolean;
   idleStaleMs?: number;
   activeStaleMs?: number;
+  predatesBoot?: boolean;
 }): boolean {
   return authorizesTeardown(staleSessionLivenessVerdict(args));
 }
@@ -29308,6 +29315,7 @@ export function staleSessionVerdictFromProbe(
     ageMs: number;
     idleStaleMs?: number;
     activeStaleMs?: number;
+    predatesBoot?: boolean;
   },
   probeAgentProcess: () => Promise<unknown>,
 ): Promise<LivenessVerdict> {
@@ -29315,6 +29323,9 @@ export function staleSessionVerdictFromProbe(
     staleSessionLivenessVerdict({ ...args, hasLiveAgentProcess: !!(await probeAgentProcess()) }),
   );
 }
+
+// When this machine last booted. A status file older than this outlived its process.
+const MACHINE_BOOTED_AT = Date.now() - os.uptime() * 1000;
 
 const REVIVE_LEDGER_FILE = process.env.NODE_ENV === "test"
   ? path.join(process.env.TMPDIR || "/tmp", "codecast-test-revives.json")
@@ -29344,6 +29355,8 @@ async function reviveMidWorkSession(
     lifecycle,
     interruptedByUser: !!tail && transcriptTailEndsInterrupted(tail),
     limitParked: !!tail && jsonlTailEndsWithLimitBanner(tail),
+    // The process is gone, so every task its transcript still holds open died with it.
+    wakeDiedWithProcess: status === "dormant" && !!transcript && openBackgroundTasks(transcript.path, sessionId).length > 0,
     priorRevives: prior,
     now,
   });
@@ -29446,14 +29459,15 @@ function startWatchdog(
           // Cheap time gate first, so we only pay for a process lookup on
           // sessions that are actually stale by time.
           const threshold = (data.status === "idle" || data.status === "stopped") ? IDLE_STALE_MS : ACTIVE_STALE_MS;
-          if (ageMs < threshold) continue;
+          const predatesBoot = data.ts * 1000 < MACHINE_BOOTED_AT;
+          if (ageMs < threshold && !predatesBoot) continue;
           const convId = deps.conversationCache[sessionId];
           if (!convId) { await fs.promises.unlink(filePath).catch(() => {}); continue; }
           // Stale by time — but is the agent actually gone, or just idling for
           // the user? Only reap when the process table ANSWERED and nothing was
           // there; a probe that threw is carried as `unverifiable` (see predicate).
           const verdict = await staleSessionVerdictFromProbe(
-            { status: data.status, ageMs, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS },
+            { status: data.status, ageMs, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS, predatesBoot },
             () => findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch((err) => {
               // Logged where the failure is still legible, then rethrown so the
               // verdict carries it as `unverifiable` rather than as an absence.
@@ -29474,7 +29488,7 @@ function startWatchdog(
           // A process that died mid-work is brought back rather than closed
           // (midWorkRevive.ts). Deferred revives keep the status file, so the
           // next pass finds them again.
-          if (REVIVABLE_STATUSES.has(data.status ?? "")) {
+          if (REVIVE_CANDIDATE_STATUSES.has(data.status ?? "")) {
             const outcome = await reviveMidWorkSession(deps.syncService, sessionId, convId, data.status, ageMs, now, revivesThisPass);
             if (outcome === "revived") revivesThisPass++;
             if (outcome !== "declined") {
@@ -30211,9 +30225,20 @@ async function main(): Promise<void> {
   //   2. Fresh tmuxes tagged with @codecast_conversation_id → restore startedSessionTmux.
   //   3. Untagged legacy tmuxes → register anyway so user sees them in the sessions UI.
   // Every recovered tmux is registered with managed_sessions so the UI lists it.
-  if (hasTmux()) {
+  //
+  // It runs beside the rest of boot, not before it. Under load the probes took
+  // minutes (98s for 8 sessions on 2026-10-17), and delivery subscribed only
+  // after them: every restart was a delivery blackout. Delivery does not need
+  // these caches to be right, only faster: a session it meets uncached is
+  // found by its tmux name and its process, which is how every daemon whose
+  // scan failed delivered that day. So a delivery may reach a session first,
+  // and an entry it wrote is fresher than the scan's: the scan never
+  // overwrites one.
+  if (hasTmux()) void (async () => {
     try {
-      const sessions = (await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 })).stdout.trim().split("\n").filter(Boolean);
+      const listing = await listEveryServer(["list-sessions", "-F", "#{session_name}"], (argv) => _execFileAsync("tmux", argv, { timeout: 5000, killSignal: "SIGKILL", env: TMUX_ENV }));
+      if (listing.unanswered.length) log(`[WARM-RESTART] ${listing.unanswered.length} tmux server(s) did not answer the scan, so their sessions are not recovered here: ${listing.unanswered.join(", ")}`);
+      const sessions = listing.stdout.trim().split("\n").filter(Boolean);
       const ccSessions = sessions.filter(isManagedTmuxName);
       let recovered = 0;
       // Bounded-parallel, not sequential: each session costs a process-tree
@@ -30247,7 +30272,7 @@ async function main(): Promise<void> {
           }
 
           if (sessionId) {
-            resumeSessionCache.set(sessionId, recoveredTmuxSession);
+            if (!resumeSessionCache.has(sessionId)) resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
             clearHibernationPark(sessionId, convId || undefined);
             if (syncServiceRef) {
@@ -30262,7 +30287,7 @@ async function main(): Promise<void> {
             const agentType = (tmuxAgentType as StartedSessionInfo["agentType"] | null) || "claude";
             const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);
             if (cachedSessionId) {
-              resumeSessionCache.set(cachedSessionId, recoveredTmuxSession);
+              if (!resumeSessionCache.has(cachedSessionId)) resumeSessionCache.set(cachedSessionId, recoveredTmuxSession);
               if (syncServiceRef) {
                 registerManagedStartedSession(tmuxConvId, cachedSessionId, recoveredTmuxSession);
                 if (agentType === "codex") {
@@ -30272,12 +30297,16 @@ async function main(): Promise<void> {
               recovered++;
               return;
             }
-            startedSessionTmux.set(tmuxConvId, {
-              tmuxSession: recoveredTmuxSession,
-              projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
-              startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession),
-              agentType,
-            });
+            // The map is persisted: an entry from before this boot is what the
+            // scan corrects, one started since is a delivery's and is fresher.
+            if (!((startedSessionTmux.get(tmuxConvId)?.startedAt ?? 0) >= DAEMON_BOOTED_AT)) {
+              startedSessionTmux.set(tmuxConvId, {
+                tmuxSession: recoveredTmuxSession,
+                projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
+                startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession),
+                agentType,
+              });
+            }
             if (syncServiceRef) {
               syncServiceRef.registerManagedSession(recoveredTmuxSession, process.pid, recoveredTmuxSession, tmuxConvId as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(recoveredTmuxSession);
@@ -30311,7 +30340,7 @@ async function main(): Promise<void> {
     } catch (err) {
       log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
+  })();
 
   // Sync skills to user profile on startup (global + per-project). Every
   // read here is async: the sweep stats a path per segment of every project
