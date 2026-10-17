@@ -62,6 +62,7 @@ import { firstName, fmtCallLength } from "./calls/speakers";
 import { CallMomentFrame } from "./calls/CallMomentFrame";
 import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
+import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { replayFacts } from "./ops/opsModel";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
@@ -894,6 +895,9 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   if (type === "replay" && replayRefStart(parseReplayRef(rawId)) != null) {
     return <ReplayMomentEmbed rawId={rawId} entity={entity} served={served} href={href} />;
   }
+  // A decision reads as the card the queue draws: the question, who asked,
+  // the reasoning, and the answers right there (or the answer once settled).
+  if (type === "decision" && entity) return <div className="min-w-0" data-entity-card="decision"><DecisionCompactCard decision={entity} /></div>;
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast
   // knows is the text it was written as, not a "not available" card. One

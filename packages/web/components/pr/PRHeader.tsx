@@ -22,6 +22,7 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
+import { withShortcut } from "../../shortcuts";
 import {
   accentSoft,
   accentVar,
@@ -426,7 +427,7 @@ export function PRHeader({
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
-        <Figure label="Open comments" onClick={openComments > 0 ? onOpenComments : undefined} title="Go to the first open thread (n)">
+        <Figure label="Open comments" onClick={openComments > 0 ? onOpenComments : undefined} title={withShortcut("Go to the first open thread", "pr.nextThread")}>
           <span className={openComments > 0 ? "text-sol-yellow" : "text-sol-text-muted"}>
             <CircleDot className="w-3 h-3 inline mr-1 -mt-px" />
             {openComments}

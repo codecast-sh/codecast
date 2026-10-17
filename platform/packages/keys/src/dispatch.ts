@@ -113,13 +113,15 @@ export function createKeydownHandler<A extends string>(
   // field's own undo) belongs to the browser, and so do its repeats.
   const heldTaken = new Map<ShortcutDef<A>, boolean>();
   return (e: KeyboardEvent) => {
-    const modalOpen = hasOpenModal();
+    // Asked once, and only when a def matches: the check walks the whole
+    // document, and most keydowns are typing that matches no shortcut.
+    let modalOpen: boolean | undefined;
     const target = e.target as HTMLElement | null;
 
     for (const def of catalog.shortcuts) {
       if (!catalog.matchShortcut(e, def)) continue;
       if (def.when && !dispatcher.hasContext(def.when)) continue;
-      if (!shortcutAllowedAt(target, def, opts, modalOpen)) continue;
+      if (!shortcutAllowedAt(target, def, opts, (modalOpen ??= hasOpenModal()))) continue;
       if (def.noRepeat && e.repeat) {
         if (!heldTaken.get(def)) continue;
         e.preventDefault();

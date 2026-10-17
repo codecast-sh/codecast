@@ -9,6 +9,7 @@
 // which applies the access boundary; this hook is for everything else.
 import { useMemo } from "react";
 import { useTrackedStore } from "../store/inboxStore";
+import { createInterner } from "../store/wakeSig";
 
 export type CollectionRowsOpts<T> = {
   /** Which rows. Default: all. */
@@ -23,6 +24,21 @@ export type CollectionRowsOpts<T> = {
 // Cache the signature per (collection ref, where, sig) so the N components
 // reading the same slice don't each rescan on every store notification.
 const sigCache = new WeakMap<object, Map<unknown, Map<unknown, string>>>();
+// And each row's line per (where, sig), by row ref: a write to one row hands
+// back a new collection in which every other row keeps its ref, so the rescan
+// calls where and sig only for the rows that changed.
+// `intern` hands an equal rebuild back as the same string, so a subscriber's
+// Object.is is a pointer check rather than a compare of the whole slice
+// (createInterner).
+type SliceLines = { rows: WeakMap<object, { id: string; line: string }>; intern: (signature: string) => string };
+const rowLineCache = new Map<unknown, Map<unknown, SliceLines>>();
+function rowLines(where: unknown, sig: unknown): SliceLines {
+  let bySig = rowLineCache.get(where);
+  if (!bySig) { bySig = new Map(); rowLineCache.set(where, bySig); }
+  let lines = bySig.get(sig);
+  if (!lines) { lines = { rows: new WeakMap(), intern: createInterner() }; bySig.set(sig, lines); }
+  return lines;
+}
 
 function sliceSig<T>(
   collection: Record<string, T> | undefined,
@@ -36,12 +52,21 @@ function sliceSig<T>(
   if (!bySig) { bySig = new Map(); byWhere.set(where, bySig); }
   const hit = bySig.get(sig);
   if (hit !== undefined) return hit;
+  const lines = rowLines(where, sig);
   let out = "";
   for (const id in collection) {
     const row = collection[id];
-    if (!row || (where && !where(row))) continue;
-    out += sig ? `${id}|${sig(row)}\n` : `${id}\n`;
+    if (!row) continue;
+    const cacheable = typeof row === "object";
+    const hit = cacheable ? lines.rows.get(row as object) : undefined;
+    let line = hit?.id === id ? hit.line : undefined;
+    if (line === undefined) {
+      line = where && !where(row) ? "" : sig ? `${id}|${sig(row)}\n` : `${id}\n`;
+      if (cacheable) lines.rows.set(row as object, { id, line });
+    }
+    out += line;
   }
+  out = lines.intern(out);
   bySig.set(sig, out);
   return out;
 }

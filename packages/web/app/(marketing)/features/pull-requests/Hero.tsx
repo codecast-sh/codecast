@@ -40,7 +40,7 @@ export function Hero() {
             Pull requests in codecast
           </div>
           <h1 className="prx-rise mt-5 font-mono text-[34px] leading-[1.08] sm:text-[52px] lg:text-[60px] font-bold tracking-[-0.03em]" style={{ ...at(0.08), color: SOL.base03 }}>
-            The pull request wakes the agent that wrote it.
+            Pull requests that wake the session that opened them
           </h1>
           <p className="prx-rise mt-6 max-w-2xl text-[17px] sm:text-[19px] leading-[1.6]" style={{ ...at(0.16), color: SOL.base01 }}>
             Every pull request in codecast carries its checks, its review threads and the sessions that made it.
@@ -322,7 +322,7 @@ const BEATS: { at: number; text: string }[] = [
   { at: CLOCK.wake, text: "The shepherd wakes and pushes a fix" },
   { at: CLOCK.review, text: "A review arrives as one message" },
   { at: CLOCK.cleared, text: "Each thread answered, then resolved" },
-  { at: CLOCK.approved, text: "Approved. The merge is yours" },
+  { at: CLOCK.approved, text: "Approved, and the merge waits for you" },
 ];
 
 function Steps({ onReplay }: { onReplay: () => void }) {

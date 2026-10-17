@@ -149,6 +149,10 @@
         to { visibility: visible; opacity: 1; }
       }
       #root:not(:empty) ~ #boot-shell { opacity: 0; pointer-events: none; }
+      /* Hidden, the shell stays in the page; its bar must stop moving, or the
+         invisible animation runs on the main thread for the life of the app. */
+      #root:not(:empty) ~ #boot-shell .bar::after,
+      #boot-shell[data-hidden="true"] .bar::after { animation: none; }
 
       /* A hosted boot (<html data-lane> on /welcome, <html data-hosted-boot>
          on an app page for a device last seen in hosted mode, both set in

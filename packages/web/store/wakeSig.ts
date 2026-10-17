@@ -9,4 +9,4 @@
 // useConversationMessages (open conversation vs heartbeats). TIME-driven
 // transitions are not field changes — pair a signature with hooks/useCoarseNow,
 // never widen it back out to churny fields.
-export { stableRefId, rowSigExcluding, makeCollectionSig } from "@platform/engine";
+export { stableRefId, rowSigExcluding, makeCollectionSig, createInterner } from "@platform/engine";

@@ -12,7 +12,7 @@ import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealth
 import { useAppOffline } from "../hooks/useAppOffline";
 import { useInboxStore } from "../store/inboxStore";
 import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
-import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 import { useHooksReminderHidden } from "../lib/hooksReminder";
 
@@ -45,25 +45,27 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
       <StatusPanelSection>
         <p className="text-xs leading-snug text-sol-text-dim">{view.detail}</p>
       </StatusPanelSection>
-      <StatusPanelSection className="flex items-center gap-2">
-        <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-[11px] text-sol-text">{view.command}</code>
-        <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">{copied ? "Copied" : "Click to copy"}</span>
+      <StatusPanelSection className="p-0">
+        <button type="button" onClick={handleClick} className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sol-bg-alt/60">
+          <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-[11px] text-sol-text">{view.command}</code>
+          <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : "Copy"}</span>
+        </button>
       </StatusPanelSection>
     </div>
   );
 
   if (quiet) {
     return (
-      <ShortcutTooltip label={panel} panel align="end">
+      <HoverCard card={panel} side="bottom" align="end" className="w-[280px]" focusable>
         <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="h-6 w-6 rounded-full hover:text-current [&>svg]:h-3.5 [&>svg]:w-3.5">
           {copied ? <Check /> : <TriangleAlert />}
         </TopbarButton>
-      </ShortcutTooltip>
+      </HoverCard>
     );
   }
 
   return (
-    <ShortcutTooltip label={panel} panel align="end">
+    <HoverCard card={panel} side="bottom" align="end" className="w-[280px]" focusable>
       <TopbarChip
         data-daemon-pill="pill"
         aria-label={label}
@@ -75,7 +77,7 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
         {copied ? <Check className="h-2.5 w-2.5 shrink-0" /> : <StatusDot color={color} ping />}
         <span className="max-w-[112px] truncate">{view.short}</span>
       </TopbarChip>
-    </ShortcutTooltip>
+    </HoverCard>
   );
 }
 
@@ -168,7 +170,7 @@ export function SessionHooksOffChip({ conversationId }: { conversationId?: strin
     </div>
   );
   return (
-    <ShortcutTooltip label={panel} panel align="end">
+    <HoverCard card={panel} side="bottom" align="end" className="w-[280px]" focusable>
       <TopbarButton
         desktopOnly
         data-hooks-off
@@ -181,6 +183,6 @@ export function SessionHooksOffChip({ conversationId }: { conversationId?: strin
       >
         <Unplug />
       </TopbarButton>
-    </ShortcutTooltip>
+    </HoverCard>
   );
 }

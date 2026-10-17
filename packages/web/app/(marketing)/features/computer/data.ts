@@ -127,7 +127,7 @@ export const OUTCOMES: Outcome[] = [
     ],
     json: '"verification": { "state": "unverified", "reason": "accessibility_action_unasserted" }',
     title: "attempted: delivered, and here is the evidence",
-    body: "macOS cannot confirm that a press did what a button promises, so a click reads attempted. The diff under it is the proof: a popover with three new elements, and the indexes to use next.",
+    body: "macOS cannot confirm that a press did what a button promises, so a click reads attempted. The diff under it is the proof. It shows a popover with three new elements, and the indexes to use next.",
   },
   {
     key: "ignored",
@@ -139,7 +139,7 @@ export const OUTCOMES: Outcome[] = [
       { t: "bad", s: "No change in the window's tree. If the action should have changed something, it was probably ignored: try another element, `click --mouse`, or look at a screenshot." },
     ],
     json: '"changes": { "added": [], "removed": [], "focusChanged": false }',
-    title: "No change: said in the same breath",
+    title: "No change: reported in the same output",
     body: "An app that ignores a press is the usual way UI automation goes quietly wrong. Here the agent learns it from the action's own output, without a second snapshot, and gets told what to try next.",
   },
 ];

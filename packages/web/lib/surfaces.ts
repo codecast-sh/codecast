@@ -2,7 +2,8 @@
 // hooks for components, a getState reader for palette rows and shortcut
 // handlers, and <Surface> for a mount that is simply on or off.
 import { Fragment, createElement, useMemo, type ReactNode } from "react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../store/inboxStore";
+import { makeCollectionSig } from "../store/wakeSig";
 import { isHostedUi, simpleModeAllowed } from "../components/simple/lanePaths";
 import type { LaneHint } from "../components/simple/laneBoot";
 import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
@@ -67,13 +68,18 @@ export function useAssistantScope(): { only: boolean; hosted: boolean; setEveryt
  *  name a conversation (an approval, a queue item). Re-renders only when the
  *  set changes, never on a heartbeat. */
 export function useAssistantConversationIds(): ReadonlySet<string> {
-  const sig = useInboxStore((s) => {
-    let ids = "";
-    for (const id in s.sessions) if (inAssistantScope(s.sessions[id]?.agent_type)) ids += `${id},`;
+  const s = useTrackedStore([(st) => assistantIdsSig(st.sessions)]);
+  const sig = assistantIdsSig(s.sessions);
+  return useMemo(() => {
+    const ids = new Set<string>();
+    for (const id in s.sessions) if (inAssistantScope(s.sessions[id]?.agent_type)) ids.add(id);
     return ids;
-  });
-  return useMemo(() => new Set(sig.split(",").filter(Boolean)), [sig]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
 }
+// Memoized by the collection and per row: the selector runs on every store
+// write, and a walk of every session there costs each write the whole cache.
+const assistantIdsSig = makeCollectionSig<{ agent_type?: string }>((row) => (inAssistantScope(row?.agent_type) ? "1" : ""));
 
 function setAssistantScopeEverything(everything: boolean): void {
   useInboxStore.getState().updateClientUI({ hosted_inbox_everything: everything });
