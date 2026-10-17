@@ -39,7 +39,7 @@ export function History() {
           ))}
         </dl>
         <div className="space-y-4">
-          <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>Edits are versions, not overwrites</h3>
+          <h3 className="font-mono text-[18px] font-bold" style={{ color: SOL.base03 }}>Every edit is a saved version</h3>
           <Body>
             A trigger that runs for weeks gets tuned. Every edit, from the page or from an agent, writes a new version and keeps the old one, so you can always see what the prompt said when a given run fired.
           </Body>

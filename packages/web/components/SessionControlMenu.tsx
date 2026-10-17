@@ -3,8 +3,8 @@ import { useConvex } from "convex/react";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, ArrowRightLeft, ChevronRight, ChevronUp, MoveRight, Send, Split } from "lucide-react";
 import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, isCloudAgentBranch, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
-import { formatShortcutParts, getShortcutsForAction, useShortcuts } from "../shortcuts";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { useShortcuts } from "../shortcuts";
+import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
@@ -284,7 +284,6 @@ export function SessionControlPanel({
   // One of a cloud agent's attempts (a best-of-N launch, or a branch of one): switched in the branch map.
   const attempts = (model ? cloudAgentLaunch(agentType, model)?.attempts ?? 0 : 0) > 1 || isCloudAgentBranch(agentType, sessionId);
   const { dispatchAction } = useShortcuts();
-  const mapKey = getShortcutsForAction("conv.toggleTree")[0];
 
   const stateLine = cloudNote
     ?? (!controllable
@@ -378,7 +377,7 @@ export function SessionControlPanel({
               <span className="text-xs text-sol-text">Switch attempt</span>
               <span className="truncate text-[10px] text-sol-text-dim">Each attempt is a branch: open the branch map</span>
             </span>
-            {mapKey && <span className="ml-auto flex shrink-0 gap-0.5">{formatShortcutParts(mapKey).map((k) => <KeyCap key={k} size="xs">{k}</KeyCap>)}</span>}
+            <MenuKeyCaps action="conv.toggleTree" className="ml-auto flex shrink-0 gap-0.5" />
           </DropdownMenuItem>
         </div>
       )}

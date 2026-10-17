@@ -110,7 +110,7 @@ export function Hero() {
             className="pb-anim pb-rise mt-6 font-mono font-bold text-[34px] sm:text-[44px] xl:text-[48px] leading-[1.06] tracking-[-0.045em] [text-wrap:balance]"
             style={delay(0.08, { color: SOL.base03 })}
           >
-            Your agent&apos;s work, at a link that stays current.
+            Publish your agent&apos;s work at a link that stays current
           </h1>
           <p className="pb-anim pb-rise mt-6 text-[18px] sm:text-[19px] leading-8 max-w-xl" style={delay(0.16, { color: SOL.base01 })}>
             When an agent makes a report, a dashboard or a mockup, it publishes it as a page at{" "}
@@ -123,7 +123,7 @@ export function Hero() {
               See it in a conversation
             </a>
             <a href="#reference" className="font-mono text-[13px] underline underline-offset-4 decoration-1" style={{ color: SOL.base01, textDecorationColor: "rgba(42,161,152,.6)" }}>
-              For scripts: every command
+              Command reference
             </a>
           </div>
         </div>

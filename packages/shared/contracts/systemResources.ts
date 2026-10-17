@@ -108,3 +108,19 @@ export function sustainedResourcePressure(points: ResourcePoint[], now: number):
   }
   return incident;
 }
+
+/** Bytes in binary units, the way every resource surface shows them. */
+export function fmtBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes)) return "n/a";
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 100) return `${gb.toFixed(0)} GB`;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  const mb = bytes / 1024 ** 2;
+  return mb >= 1 ? `${mb.toFixed(0)} MB` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/** Process CPU, where one core is 100%. */
+export function fmtCpu(cpu: number | undefined): string {
+  if (cpu === undefined || !Number.isFinite(cpu)) return "n/a";
+  return cpu >= 100 ? `${(cpu / 100).toFixed(1)} cores` : `${cpu.toFixed(cpu < 10 ? 1 : 0)}%`;
+}

@@ -66,7 +66,7 @@ export function SearchLayer() {
     <Layer
       n="01"
       id="search"
-      title={<>Search the work, not just the words</>}
+      title={<>Search sessions by the files, commits and pull requests they touched</>}
       lede={
         <>
           <p>
@@ -88,7 +88,7 @@ export function SearchLayer() {
       />
       <div className="grid sm:grid-cols-2 gap-3 mb-10">
         <Flag f="Everyone · Only mine" d="Your team's shared sessions, or just your own." />
-        <Flag f="Everything · My prompts" d="Search only what people typed: the instructions and corrections, not the agents' replies." />
+        <Flag f="Everything · My prompts" d="Search only what people typed, the instructions and corrections, and skip the agents' replies." />
         <Flag f="All time · 7d · 30d · 90d" d="How far back to look." />
         <Flag f="Recent · Relevant" d="Newest first, or best match first. Keyword and meaning-based search both run either way." />
       </div>

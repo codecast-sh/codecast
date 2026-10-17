@@ -25,6 +25,8 @@ import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPicke
 import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
+import { RecentScreenshots } from '@/components/session/RecentScreenshots';
+import { checkoutMatches, displayPath, expandHome, newFolderPath } from '@/lib/folderSearch';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
@@ -103,11 +105,6 @@ type StableModePick = (typeof STABLE_MODES)[number]["key"];
 // listDevices reports each machine's model inventory; the shared mobile Device
 // shape (DevicesSection) predates the field.
 type MachineDevice = Device & { model_inventory?: DeviceModelInventory };
-
-// Display-only "~" collapse for the folder browser. web/lib/utils' inferHomeDir
-// sits beside window/document helpers, so the one-line version lives here
-// rather than dragging that module into the Hermes bundle.
-const displayPath = (p: string) => p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?=\/|$)/, "~");
 
 // The sheet has already closed and the stub is on screen by the time a create
 // can fail, so a failure is raised over whatever is showing. A parked create is
@@ -417,19 +414,31 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // The folder chips, web's ProjectSwitcher on a phone: the picked folder
   // first so it is always in view, then the recents. A query narrows them
   // (rows match on the ~-collapsed spelling too, and a name that starts with
-  // the query ranks first); a typed path no chip names becomes an "open" chip.
+  // the query ranks first), then adds the machine's checkouts no session ran
+  // in yet; a typed path no chip names becomes an "open" chip, and a name
+  // nothing matches exactly becomes a "create" chip (the daemon makes it).
   const folderName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
   const query = folderQuery.trim().toLowerCase();
+  const machineRoots = useMemo(
+    () => devices.find((d) => d.device_id === selectedDeviceId)?.local_project_roots ?? [],
+    [devices, selectedDeviceId],
+  );
   const folderChips = useMemo(() => {
     type Chip = { path: string; label: string; custom?: boolean; dim?: boolean };
     const typedPath = folderQuery.trim();
     if (query) {
+      const recentPaths = recentProjects.map((p) => p.path);
       const chips: Chip[] = recentProjects
         .filter((p) => p.path.toLowerCase().includes(query) || displayPath(p.path).toLowerCase().includes(query))
         .sort((x, y) => Number(!folderName(x.path).toLowerCase().startsWith(query)) - Number(!folderName(y.path).toLowerCase().startsWith(query)))
         .map((p) => ({ path: p.path, label: folderName(p.path), dim: p.suggested }));
-      if (/^[~/]/.test(typedPath) && !recentProjects.some((p) => p.path === typedPath || displayPath(p.path) === typedPath)) {
-        chips.unshift({ path: typedPath, label: `open ${typedPath}`, custom: true });
+      for (const root of checkoutMatches(machineRoots, query, new Set(recentPaths))) chips.push({ path: root, label: folderName(root) });
+      if (/^[~/]/.test(typedPath)) {
+        const full = expandHome(typedPath, [...machineRoots, ...recentPaths]);
+        if (!chips.some((c) => c.path === full)) chips.unshift({ path: full, label: `open ${displayPath(full)}`, custom: true });
+      } else if (!chips.some((c) => folderName(c.path).toLowerCase() === query)) {
+        const created = newFolderPath(typedPath, machineRoots, recentPaths);
+        if (created) chips.push({ path: created, label: `create ${displayPath(created)}`, custom: true });
       }
       return chips;
     }
@@ -438,7 +447,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
       .filter((p) => p.path !== current)
       .map((p) => ({ path: p.path, label: folderName(p.path), dim: p.suggested }));
     return current ? [{ path: current, label: folderName(current) }, ...rest] : rest;
-  }, [recentProjects, query, folderQuery, projectPath]);
+  }, [recentProjects, machineRoots, query, folderQuery, projectPath]);
   const pickFolder = (path: string) => {
     setProjectPath(path);
     setFolderQuery("");
@@ -534,6 +543,10 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               onSend={handleSubmit}
               cardStyle={modalStyles.promptCard}
               inputStyle={modalStyles.promptInput}
+            />
+            <RecentScreenshots
+              attachedUris={images.selectedImages.map((img) => img.uri)}
+              onAttach={(shot) => images.attachImages([shot])}
             />
           </RNView>
           {/* The viewer's pinned agents (users.pinned_agents, registry order)

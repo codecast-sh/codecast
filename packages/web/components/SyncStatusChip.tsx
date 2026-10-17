@@ -7,7 +7,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
 import { connectionChipCopy, useAppOffline } from "../hooks/useAppOffline";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 
 // A healthy cold-open sync settles in a few seconds, and a catch-up after
@@ -209,27 +209,26 @@ export function SyncStatusChip() {
         ? "var(--sol-cyan)"
         : "var(--sol-green)";
   return (
-    <TooltipProvider delayDuration={150}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="relative hidden md:flex h-6 w-5 flex-shrink-0 items-center justify-center rounded-full cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60"
-            aria-label={`Sync status: ${connection?.label ?? daemonIssue?.label ?? (!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing")}`}
-          >
-            <StatusDot
-              color={color}
-              ping={active}
-              pingDuration="1s"
-              dotStyle={{ opacity: active ? 1 : 0.85, transition: "background-color 300ms, opacity 300ms" }}
-            />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" sideOffset={6} collisionPadding={8} className="w-[280px] max-w-[calc(100vw-16px)] overflow-hidden border bg-popover p-0 text-popover-foreground shadow-md">
-          {mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} daemonIssue={daemonIssue} connection={connection} />}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <HoverCard
+      side="bottom"
+      align="end"
+      className="w-[280px]"
+      focusable
+      card={mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} daemonIssue={daemonIssue} connection={connection} />}
+    >
+      <button
+        type="button"
+        className="relative hidden md:flex h-6 w-5 flex-shrink-0 items-center justify-center rounded-full cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60"
+        aria-label={`Sync status: ${connection?.label ?? daemonIssue?.label ?? (!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing")}`}
+      >
+        <StatusDot
+          color={color}
+          ping={active}
+          pingDuration="1s"
+          dotStyle={{ opacity: active ? 1 : 0.85, transition: "background-color 300ms, opacity 300ms" }}
+        />
+      </button>
+    </HoverCard>
   );
 }
 

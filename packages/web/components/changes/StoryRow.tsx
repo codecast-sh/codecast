@@ -1,5 +1,5 @@
-// One story on the timeline: a kind glyph, the headline with its size in a
-// fixed column at the right, and the dek under it. The size is one muted
+// One story on the timeline: a kind glyph, the headline with its size and the
+// faces of the people behind it in fixed columns at the right, and the dek under it. The size is one muted
 // number, lines added, so a column of rows reads as text, not a chart. The
 // whole row is the accordion trigger: a click anywhere on it opens the story
 // under it, where its body, its why, its worded risks and its evidence live.
@@ -9,7 +9,7 @@ import { memo } from "react";
 import type { StoryRow as Story } from "../../hooks/useSyncChanges";
 import { ink } from "./areaColor";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { FadeText, KindGlyph, RiskSrText } from "./StoryParts";
+import { FadeText, KindGlyph, People, RiskSrText } from "./StoryParts";
 import { useStoryAttrs, useStoryCtx } from "./storyContext";
 
 export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
@@ -44,6 +44,10 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
               >
                 {/* A story that only removed lines says so instead of standing blank. */}
                 {story.insertions > 0 ? `+${story.insertions.toLocaleString()}` : story.deletions > 0 ? `-${story.deletions.toLocaleString()}` : ""}
+              </span>
+              {/* Who made it, in a fixed column so faces line up down the block; the open story's byline names them. */}
+              <span className="flex w-[3rem] shrink-0 justify-start self-center pl-2.5 group-data-[state=open]:invisible">
+                <People story={story} size={16} max={3} />
               </span>
             </span>
             {(pending || story.dek) && (
