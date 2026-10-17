@@ -18,7 +18,7 @@
  *     allocatePorts uses) and pass it explicitly.
  */
 
-import { spawn, spawnSync } from "../proc.js";
+import { spawn, whichBin } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -90,12 +90,8 @@ export function findChromeBinary(): string | null {
     }
   }
   for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
-    try {
-      const found = spawnSync("which", [name], { encoding: "utf-8" }).stdout?.trim();
-      if (found) return found;
-    } catch {
-      /* ignore */
-    }
+    const found = whichBin(name);
+    if (found) return found;
   }
   return null;
 }

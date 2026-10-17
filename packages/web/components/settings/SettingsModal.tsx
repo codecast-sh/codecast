@@ -3,7 +3,7 @@ import { integrationsLedeFor, useConnectAvailable } from "../simple/assistantPro
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -19,6 +19,7 @@ import ProfilePanel from "../../app/settings/profile/page";
 import AccountsPanel from "../../app/settings/accounts/page";
 import NotificationsPanel from "../../app/settings/notifications/page";
 import SoundsPanel from "../../app/settings/sounds/page";
+import KeyboardPanel from "../../app/settings/keyboard/page";
 import CallsPanel from "../../app/settings/calls/page";
 import TeamPanel from "../../app/settings/team/page";
 import SyncPanel from "../../app/settings/sync/page";
@@ -43,6 +44,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "plan": PlanPanel,
   "notifications": NotificationsPanel,
   "sounds": SoundsPanel,
+  "keyboard": KeyboardPanel,
   "calls": CallsPanel,
   "team": TeamPanel,
   "sync": SyncPanel,
@@ -95,6 +97,7 @@ const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
       { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", assistantOnly: true, keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", hostedDesc: "What this device says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
+      { id: "keyboard", label: "Keyboard", icon: Keyboard, desc: "Every shortcut, and the keys you'd rather press", keywords: "shortcuts keys hotkeys keybindings rebind chords customize" },
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", hostedNeedsTeam: true, keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
       { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", hostedDesc: "How you sign in, and closing your account", keywords: "github oauth email login delete danger" },
       { id: "apps", label: "Apps", icon: MonitorSmartphone, desc: "Codecast on your Mac, your iPhone and in Chrome", keywords: "desktop mac macos download dmg ios iphone ipad app store mobile phone push chrome extension install" },

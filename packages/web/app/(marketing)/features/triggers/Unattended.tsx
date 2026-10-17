@@ -45,41 +45,41 @@ function ParkStrip() {
         <span className="absolute whitespace-nowrap" style={{ left: "70%", transform: "translateX(-100%)", paddingRight: 6 }}>window resets 03:10</span>
       </div>
       <p className="mt-3 text-[12.5px] leading-5" style={{ color: SOL.base0 }}>
-        No retry spent, no context lost. If the machine has a saved account with room and switching is on, the run can move there instead of waiting.
+        The run spends no retry and keeps its context. If the machine has a saved account with room and switching is on, the run can move there instead of waiting.
       </p>
     </div>
   );
 }
 
-const GUARDS: { flag: ReactNode; title: string; body: ReactNode; aside?: ReactNode }[] = [
+const GUARDS: { title: string; body: ReactNode; aside?: ReactNode }[] = [
   {
-    flag: "usage limits", title: "A limit is a pause",
+    title: "Usage limits pause a run",
     body: <>A run that hits a usage limit parks and resumes its own session when the window resets. It keeps its context and spends none of its retries.</>,
     aside: <ParkStrip />,
   },
   {
-    flag: "read-only", title: "Runs that only look",
-    body: <>With <b>read-only</b> ticked in the form, a fresh run gets its write tools removed and state-changing commands blocked. Right for watchers that should look and report, never touch. A run that injects into an existing session inherits that session&apos;s rules instead.</>,
+    title: "Read-only runs",
+    body: <>With <b>read-only</b> ticked in the form, a fresh run gets its write tools removed and state-changing commands blocked. Use it for watchers that should only read and report. A run that injects into an existing session inherits that session&apos;s rules instead.</>,
   },
   {
-    flag: "time limit", title: "A hard stop",
+    title: "A time limit on every run",
     body: <>Every run has a kill cap, 10 minutes by default. An agent setting a trigger that waits or retries raises it past that window.</>,
   },
   {
-    flag: "retries", title: "Failure is visible",
+    title: "Retries and failed runs",
     body: <>A failed run is retried after a short backoff, three attempts in all, then the trigger is marked failed. A failed run stays in the inbox while its retry runs, one click from the transcript that shows what went wrong.</>,
   },
   {
-    flag: "cadence", title: "No drift, no pile-up",
-    body: <>A repeating trigger re-arms on its slot, counted from when it was due, not when the run finished. A run that outlasts its interval skips the slots it missed instead of firing them all at once.</>,
+    title: "Repeating triggers keep their cadence",
+    body: <>A repeating trigger re-arms on its slot, counted from when it was due, so a long run does not push the next one later. A run that outlasts its interval skips the slots it missed instead of firing them all at once.</>,
   },
   {
-    flag: "lease", title: "Each firing runs once",
+    title: "A lease makes each firing run once",
     body: <>The daemon claims a due firing with a lease before it starts, so a second machine or a second daemon never runs the same firing twice.</>,
   },
   {
-    flag: "kill / restore", title: "Cleanup is symmetric",
-    body: <>Killing a session cancels the triggers bound to it. Restoring the session re-arms them. Nothing keeps firing into a thread you closed.</>,
+    title: "Killing a session cancels its triggers",
+    body: <>Killing a session cancels the triggers bound to it. Restoring the session re-arms them.</>,
   },
 ];
 
@@ -87,15 +87,14 @@ export function Unattended() {
   return (
     <Section
       id="unattended"
-      title="Built to be left alone"
-      lede="Nobody is watching when most triggers fire. These are the rules that make that safe."
+      title="Safeguards for runs nobody is watching"
+      lede="Most triggers fire when nobody is watching. These rules decide what a run may do and what happens when it goes wrong."
     >
       <div className="grid gap-x-10 gap-y-0 md:grid-cols-2">
         {GUARDS.map((g, i) => (
           <div key={g.title} className={`py-6 ${g.aside ? "md:col-span-2 md:grid md:grid-cols-2 md:gap-x-10 md:items-center" : ""}`} style={{ borderTop: `1px solid ${SOL.base2}` }}>
             <div>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-mono text-[13px] font-semibold rounded px-1.5 py-0.5" style={{ color: SOL.orange, backgroundColor: `color-mix(in srgb, ${SOL.orange} 10%, transparent)` }}>{g.flag}</span>
               <h3 className="text-[17px] font-semibold" style={{ color: SOL.base03 }}>{g.title}</h3>
               <span className="ml-auto font-mono text-[11px]" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
             </div>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { AppLoader } from "./AppLoader";
 import { useInboxStore } from "../store/inboxStore";
@@ -8,7 +8,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
 import { Target } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { HoverCard } from "./ui/HoverCard";
 import { taskVisual } from "./TaskStatusBadge";
 
 const api = _api as any;
@@ -95,48 +95,16 @@ export function PlanBadge({
   plan: { _id: string; short_id: string; title: string; status?: string };
   className?: string;
 }) {
-  const [hoverOpen, setHoverOpen] = useState(false);
-  const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
   const router = useRouter();
-
-  const handleMouseEnter = useCallback(() => {
-    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 300);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    hoverTimeout.current = setTimeout(() => setHoverOpen(false), 200);
-  }, []);
-
-  const handleClick = useCallback(() => {
-    setHoverOpen(false);
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    router.push(`/plans/${plan._id}`);
-  }, [router, plan._id]);
-
   return (
-    <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
-      <PopoverTrigger asChild>
-        <button
-          onClick={handleClick}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
-        >
-          <Target className="w-2.5 h-2.5 flex-shrink-0" />
-          <span className="truncate">{plan.title}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-72 bg-sol-bg border-sol-border shadow-xl p-3"
-        side="bottom"
-        align="start"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onOpenAutoFocus={(e) => e.preventDefault()}
+    <HoverCard side="bottom" className="w-72" card={<div className="p-3"><PlanHoverContent planId={plan._id as Id<"plans">} /></div>}>
+      <button
+        onClick={() => router.push(`/plans/${plan._id}`)}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
       >
-        <PlanHoverContent planId={plan._id as Id<"plans">} />
-      </PopoverContent>
-    </Popover>
+        <Target className="w-2.5 h-2.5 flex-shrink-0" />
+        <span className="truncate">{plan.title}</span>
+      </button>
+    </HoverCard>
   );
 }

@@ -47,7 +47,7 @@ export function Doors() {
         </div>
         <p className="mt-4 text-[13px] leading-snug" style={{ color: SOL.base01 }}>
           The inbound webhook is its only writer. Nothing you do here writes the row; GitHub answers every act with a webhook,
-          and that updates it. The two sides cannot disagree.
+          and that webhook updates it, so the row always matches GitHub.
         </p>
       </div>
 
@@ -118,11 +118,11 @@ export function Linked() {
           ))}
         </ul>
         <div className="px-4 sm:px-5 py-3 text-[11px] leading-relaxed" style={{ color: SOL.base1 }}>
-          The <C>Codecast-Session</C> trailer in each commit message reads as the session&apos;s pill, not a URL.
+          The <C>Codecast-Session</C> trailer in each commit message shows as the session&apos;s pill.
         </div>
       </Frame>
       <p className="text-[14px] leading-relaxed" style={{ color: SOL.base00 }}>
-        It works from the other side too: search finds every session behind a pull request, and blame names the session that wrote each line.
+        Going the other way, search finds every session behind a pull request, and blame names the session that wrote each line.
       </p>
       </div>
 
@@ -133,7 +133,7 @@ export function Linked() {
         </LinkWay>
         <LinkWay n="2" title="A trailer on every agent commit">
           A Claude Code hook adds <C>Codecast-Session: &lt;link&gt;</C> to each <C>git commit</C> an agent runs, only for sessions
-          your team can see. The trailer is the session&apos;s own word, so it beats every guess. Off with{" "}
+          your team can see. The trailer comes from the session itself, so codecast trusts it over any link it infers. Off with{" "}
           <C>cast config session_trailer false</C> or <C>git config codecast.sessionTrailer false</C>.
         </LinkWay>
         <LinkWay n="3" title="Task ids in the text">
@@ -182,7 +182,7 @@ export function Switchboard() {
             20 seconds, up to 5 times, and collects the reasons as they pile up.
           </p>
           <p>
-            <b style={{ color: SOL.base02 }}>The worst news leads.</b> When several reasons wait, the briefing opens with the most urgent:
+            <b style={{ color: SOL.base02 }}>The most urgent reason leads.</b> When several reasons wait, the briefing opens with the most urgent:
           </p>
           <ol className="flex flex-wrap items-center gap-1.5 font-mono text-[11.5px]">
             {SEVERITY.slice(0, 3).map(([key], i) => (

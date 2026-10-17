@@ -3,7 +3,8 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
-import { KeyboardShortcutsPanel } from "../KeyboardShortcutsHelp";
+import { KeyboardShortcutsPanel, MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { setKeyBindings } from "../../shortcuts/registry";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
@@ -48,5 +49,22 @@ test("closed content waits for first open and survives close/reopen", async () =
   } finally {
     await act(() => root.unmount());
     useInboxStore.setState({ shortcutsPanelOpen: initial });
+  }
+});
+
+test("an on-screen hint follows a rebinding without remounting", async () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const caps = () => [...container.querySelectorAll("kbd")].map((k) => k.textContent).join(" ");
+  try {
+    await act(() => root.render(<MenuKeyCaps action="list.search" />));
+    expect(caps()).toBe("/");
+    await act(() => setKeyBindings([{ action: "list.search", keys: ["f"] }]));
+    expect(caps()).toBe("F");
+    await act(() => setKeyBindings([{ action: "list.search", keys: [] }]));
+    expect(caps()).toBe("");
+  } finally {
+    setKeyBindings([]);
+    await act(() => root.unmount());
   }
 });

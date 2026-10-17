@@ -133,7 +133,7 @@ export function Gates() {
     <Section
       id="gates"
       n="04"
-      title="Decide who can read it, for how long, and who can change it."
+      title="Who can read a page, for how long, and who can edit it"
       lede={<>Open <strong>Manage sharing</strong> from the page&apos;s ⋯ menu (or <strong>Manage</strong> on its card in Pages) to set a password, an email gate, an expiry, comments, the session link and who can edit. A change leaves the content and version alone and only changes who gets in. An agent can set the same gates when it publishes; each one&apos;s flag is beside its name.</>}
     >
       <GateBoard />
