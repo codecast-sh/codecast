@@ -23,7 +23,7 @@ export function Hero() {
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-end">
           <div>
             <h1 className="tg-rise font-mono font-bold text-[34px] sm:text-[46px] lg:text-[54px] leading-[1.06] tracking-[-0.035em] [text-wrap:balance]" style={{ color: SOL.base03 }}>
-              The work keeps going after you close the laptop
+              Triggers run agent sessions on a schedule or an event
             </h1>
             <p className="tg-rise mt-6 max-w-2xl text-[17px] sm:text-[19px] leading-8" style={{ color: SOL.base00, animationDelay: "0.12s" }}>
               A trigger is a prompt with a clock or an event attached. When it fires, codecast runs a real agent session:

@@ -49,7 +49,7 @@ export function Precheck() {
   return (
     <Section
       id="precheck"
-      title="A gate that costs nothing when the answer is no"
+      title="Prechecks skip runs that have nothing to do"
       lede={<>Most repeating jobs ask a question whose usual answer is no. Has main moved? Is the queue empty? Without a gate, a whole agent run is spent finding out. A precheck asks with a shell command first.</>}
     >
       <div className="rounded-2xl p-5 sm:p-6" style={{ backgroundColor: "#fffbf0", border: `1px solid ${SOL.base2}` }}>
@@ -69,10 +69,10 @@ export function Precheck() {
       <div className="mt-10 grid gap-x-10 gap-y-6 lg:grid-cols-2">
         <div className="space-y-4">
           <Body>
-            The command runs in the project directory before each scheduled or repeating firing. Exit 0 runs the trigger. Any other exit, or 60 seconds without an answer, records a skipped run and re-arms on the normal cadence. A skip is not a failure, so it never uses up a retry.
+            The command runs in the project directory before each scheduled or repeating firing. Exit 0 runs the trigger. Any other exit, or 60 seconds without an answer, records a skipped run and re-arms on the normal cadence. A skip doesn&apos;t count as a failure, so it never uses up a retry.
           </Body>
           <Body>
-            The trigger&apos;s page shows the precheck in its own panel with when it last skipped, and every skip sits in the run history as a <b>skipped</b> row, so a quiet trigger reads as gated rather than broken. Event triggers and <b>Run now</b> bypass it.
+            The trigger&apos;s page shows the precheck in its own panel with when it last skipped, and every skip sits in the run history as a <b>skipped</b> row, so you can tell a gated trigger from a broken one. Event triggers and <b>Run now</b> bypass it.
           </Body>
         </div>
         <div className="space-y-3">
