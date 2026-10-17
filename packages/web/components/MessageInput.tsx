@@ -48,6 +48,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, type OptimisticImage } from "../store/inboxStore";
+import { useChangedState } from "../hooks/useChangedState";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
@@ -1257,7 +1258,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [composeMode, setMessage]);
 
-  const [isMultiline, setIsMultiline] = useState(false);
+  // Measured after every keystroke (the Safari height fallback, the resize
+  // observer): set only on a change.
+  const [isMultiline, setIsMultiline] = useChangedState(false);
   useWatchEffect(() => {
     const el = textareaRef.current;
     if (!FIELD_SIZING_SUPPORTED || !el) return;
@@ -1280,7 +1283,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // (an unparsed font, say) only leaves the text wrapping beside the controls
   // as before; it can never oscillate.
   const controlsRowRef = useRef<HTMLDivElement>(null);
-  const [fitsBesideControls, setFitsBesideControls] = useState(true);
+  // Measured from a layout effect after every keystroke: set only on a change.
+  const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const measureFitsBesideControls = useCallback(() => {
     const ta = textareaRef.current;

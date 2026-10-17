@@ -31,8 +31,8 @@ export function graphForDaemonRun(
   deviceId?: string,
   resume = false,
 ): WorkflowGraph | null {
-  const origin = (run.fresh_branch || resume) && deviceId && wf?.origin?.device_id === deviceId ? path.join(wf.origin.root, wf.origin.file) : null;
-  if (origin && fs.existsSync(origin)) {
+  const origin = daemonGraphFile(run, wf, deviceId, resume);
+  if (origin) {
     const graph = parseWorkflowFile(origin);
     if (run.goal_override) graph.goal = run.goal_override;
     if (run.fresh_branch || !run.current_node_id || graph.nodes.has(run.current_node_id)) return graph;
@@ -64,6 +64,41 @@ export function graphForDaemonRun(
   const graph = parseWorkflowSource(resolved.source, resolved.dir);
   if (run.goal_override) graph.goal = run.goal_override;
   return graph;
+}
+
+type DaemonRow = Parameters<typeof graphForDaemonRun>[1];
+
+/** The graph file on this machine a run reads its stations from (its row's origin): a server-queued trial run, or a resume. */
+export function daemonGraphFile(run: { fresh_branch?: boolean | null }, wf: DaemonRow, deviceId: string | undefined, resume: boolean): string | null {
+  if (!(run.fresh_branch || resume) || !deviceId || wf?.origin?.device_id !== deviceId) return null;
+  const file = path.join(wf.origin.root, wf.origin.file);
+  return fs.existsSync(file) ? file : null;
+}
+
+/**
+ * Publish the graph file a daemon run reads, the way `cast workflow run
+ * <file>` publishes before it starts, so the line's published version is
+ * the stations its runs execute: a waiting decision is then judged against
+ * the line as it runs now (line-versions.md LV1), and a restarted runner
+ * leaves its decision current. The file's own goal goes out, never one
+ * run's. An unchanged graph saves no version (workflows.recordGraphVersion).
+ */
+export async function publishDaemonGraph(file: string, wf: DaemonRow, deviceId: string, post: (route: string, body: Record<string, unknown>) => Promise<unknown>): Promise<void> {
+  const graph = parseWorkflowFile(file);
+  const { graphOrigin } = await import("../lineGraphEdit.js");
+  const origin = graphOrigin(file, graph, deviceId);
+  if (!origin) return;
+  const { graphToPushPayload } = await import("./runner.js");
+  const { nodes, edges, stack } = graphToPushPayload(graph);
+  await post("/cli/workflows/upsert", {
+    name: wf?.name ?? graph.name,
+    slug: wf?.slug ?? graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    goal: graph.goal,
+    source: fs.readFileSync(file, "utf-8"),
+    nodes, edges, stack,
+    model_stylesheet: graph.model_stylesheet,
+    origin,
+  });
 }
 
 function stackFromSource(source: string | undefined): string | undefined {
