@@ -12,6 +12,19 @@ The whole API, every event and every element is typed in `codecast-mod.d.ts`,
 which `cast mod new` writes beside the code: read it before writing, it is the
 reference.
 
+## When someone asks what mods can do
+
+They want to know what they could have, not how the SDK works. Answer with
+what codecast could look like and do for them: their own color theme for the
+whole app, the things they track (customers, bugs, deals) as objects with ids
+that turn into live references, a pane or sidebar section over their work,
+richer blocks in agents' replies, something that watches their machine. Tie
+each to their own work where you can, and offer to build one with them now.
+Leave manifests, grants and the build loop for once they pick something.
+
+Before telling someone a mod cannot do something, try it: scaffold, push and
+look. A guess from the reference is not an answer.
+
 ## The loop: build it with the person watching
 
 ```bash
@@ -76,6 +89,18 @@ it is right.
   that make a useful preview: the hover card shows the first few filled ones.
   Read them with `$.data.list("objects", { where: { prefix } })` and write with
   `$.objects`.
+- When the things live in another system (a CRM's contacts, a product's
+  emails, calls or orders), declare the kind `external: true` and answer
+  `object.resolve` live from that system: its own id becomes the reference and
+  nothing is copied into codecast.
+- An object's page is where a person opens the thing itself, so show it
+  whole: an email's headers and body, a call's summary and transcript, a
+  ticket's description and thread. That holds for every kind the mod
+  declares, not only the few that get a rich view; a page of fields alone is
+  a hover card, not a page. When the product has no reader that returns the
+  full thing, look for one it already exposes, then add one. Show a link or a
+  value when there is one and nothing when there is not, never a label about
+  what is missing.
 - `AGENTS.md` beside the manifest is the mod's surface for agents, the way a
   pane is its surface for people: every session the mod applies to starts
   with it (a team's mod in that team's projects, a personal mod everywhere),
