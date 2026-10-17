@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "../proc.js";
+import { spawn, spawnSync, whichBin, type ChildProcess } from "../proc.js";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { tmuxRun } from "../tmux.js";
@@ -259,8 +259,7 @@ function logPath(sessionName: string): string {
 }
 
 function whichSync(cmd: string): boolean {
-  const r = spawnSync("which", [cmd], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-  return r.status === 0;
+  return whichBin(cmd) !== null;
 }
 
 function readLogTail(path: string, lines: number): string {

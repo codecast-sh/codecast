@@ -31,7 +31,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync } from "../proc.js";
+import { spawn, spawnSync, whichBin } from "../proc.js";
 import { narrated } from "./narrate.js";
 import { browserHome } from "./profile.js";
 import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
@@ -62,8 +62,8 @@ export function findEngine(): string | null {
   const candidates: string[] = [];
   if (process.env.CAST_BROWSER_ENGINE) candidates.push(process.env.CAST_BROWSER_ENGINE);
 
-  const onPath = spawnSync("which", [ENGINE_PACKAGE], { encoding: "utf-8" });
-  if (onPath.status === 0 && onPath.stdout.trim()) candidates.push(onPath.stdout.trim());
+  const onPath = whichBin(ENGINE_PACKAGE);
+  if (onPath) candidates.push(onPath);
 
   // Relative to this module, for a source or npm install.
   try {
