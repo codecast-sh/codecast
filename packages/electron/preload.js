@@ -189,6 +189,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     ipcRenderer.on("app-edit-command", handler);
     return () => ipcRenderer.removeListener("app-edit-command", handler);
   },
+  // The person's key bindings for the chords the menu bar repeats (menuKeys.js).
+  setMenuKeys: (keys) => ipcRenderer.send("set-menu-keys", keys ?? null),
   getMeetingDetect: () => ipcRenderer.invoke("get-meeting-detect"),
   setMeetingDetect: (patch) => ipcRenderer.invoke("set-meeting-detect", patch ?? {}),
   // The meeting-offer window: the record-this-meeting card as a small

@@ -25,6 +25,26 @@ describe("delivery into a session that can never resume", () => {
     expect(deliver.slice(guard, guard + 300)).toContain("throw new UndeliverableMessageError(");
   });
 
+  // jx79axm (2026-10-16): the machine rebooted while a fresh session's first
+  // message was still being typed, so its agent died with no transcript. Every
+  // retry then resumed the linked id, found nothing to rebuild, and gave up.
+  test("a reconstitution that finds nothing resumable records the conversation", () => {
+    const resume = functionBlock(source, "autoResumeSessionInner").text;
+    const skip = resume.indexOf("Reconstitution skipped for");
+    expect(skip).toBeGreaterThan(-1);
+    expect(resume.slice(skip, skip + 300)).toContain("unresumableConversations.add(conversationId)");
+  });
+
+  test("a session that never started is started fresh instead of failing every retry", () => {
+    const deliver = functionBlock(source, "deliverMessageIntoSession").text;
+    const cancel = deliver.indexOf("fatal && unresumableConversations.has(conversationId)");
+    const fresh = deliver.indexOf("unresumableConversations.has(conversationId) && !findSessionFile(sessionId)");
+    const exhausted = deliver.indexOf("DELIVERY FAILED: all methods exhausted");
+    expect(fresh).toBeGreaterThan(cancel);
+    expect(fresh).toBeLessThan(exhausted);
+    expect(deliver.slice(fresh, fresh + 400)).toContain("await deliverViaFreshStart()");
+  });
+
   test("the delivery loop cancels an UndeliverableMessageError rather than retrying it", () => {
     const branch = source.indexOf("err instanceof UndeliverableMessageError");
     expect(branch).toBeGreaterThan(-1);

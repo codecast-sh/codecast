@@ -17,6 +17,8 @@
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./contracts/__fixtures__/teamWorldGen": "./contracts/__fixtures__/teamWorldGen.ts",
     "./contracts/levenshtein": "./contracts/levenshtein.ts",
+    "./contracts/shortcutCatalog": "./contracts/shortcutCatalog.ts",
+    "./contracts/keyBindings": "./contracts/keyBindings.ts",
     "./contracts/inboxSplit": "./contracts/inboxSplit.ts",
     "./contracts/plainText": "./contracts/plainText.ts",
     "./contracts/commitDiffs": "./contracts/commitDiffs.ts",

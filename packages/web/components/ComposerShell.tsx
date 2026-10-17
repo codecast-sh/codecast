@@ -66,7 +66,7 @@ export function ComposerShell({
   return (
     <div ref={rootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline || hero ? "" : "sticky bottom-0"} ${lightboxOpen ? "z-[10002]" : "z-10"}`}>
       {!lightboxOpen && !inline && !hero && <ComposerFade />}
-      <div className={`${inline || hero ? "" : bare ? "pb-4" : "pb-3"} pointer-events-auto ${!lightboxOpen && !inline ? "bg-sol-bg" : ""}`}>
+      <div className={`${inline || hero ? "" : bare ? "pb-4" : "pb-3"} pointer-events-auto ${!lightboxOpen && !inline && !hero ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {before}
           {/* The composer's status line: always one row tall, so focusing the

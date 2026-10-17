@@ -26,6 +26,7 @@ import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { matchesAction } from "../shortcuts";
 import { useSurface } from "../lib/surfaces";
 import { useFollowSurface } from "../hooks/useFollowSurface";
 
@@ -220,15 +221,17 @@ export function ConversationDiffLayout({
 
     if (isInput || !diffShown) return;
 
+    if (matchesAction(e, "diff.prevChange")) {
+      e.preventDefault();
+      prevChange();
+      return;
+    }
+    if (matchesAction(e, "diff.nextChange")) {
+      e.preventDefault();
+      nextChange();
+      return;
+    }
     switch (e.key) {
-      case "[":
-        e.preventDefault();
-        prevChange();
-        break;
-      case "]":
-        e.preventDefault();
-        nextChange();
-        break;
       case "c":
         if (e.metaKey || e.ctrlKey) return;
         e.preventDefault();

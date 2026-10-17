@@ -124,6 +124,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_added: ["channel invite", "channel invites"],
   chat_post: ["channel message", "channel messages"],
   daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
+  machine_overloaded: ["overloaded machine", "overloaded machines"],
   goal_stall: ["stalled focus item", "stalled focus items"],
   device_shared: ["shared machine", "shared machines"],
   card_waiting: ["change card waiting", "change cards waiting"],
