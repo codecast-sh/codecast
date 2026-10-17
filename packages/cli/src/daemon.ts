@@ -15487,7 +15487,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /[─━]{20,}/.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
