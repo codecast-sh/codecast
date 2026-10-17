@@ -3,7 +3,7 @@ import { snapshotProcessTable, snapshotProcessTableAsync, tmuxServerRows, type P
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
-import { startLaunchdJob, stopLaunchdJob } from "./launchdJob.js";
+import { startLaunchdJob, startLaunchdJobAsync, stopLaunchdJob } from "./launchdJob.js";
 import { tmuxSessionEnvUpdates } from "./processEnv.js";
 import { joinListings, ownServerSession, routeTmuxArgs, runRouted, runRoutedSync, sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
 
@@ -265,7 +265,7 @@ export async function startSessionServer(session: string, args: string[], env: T
     }
   }
   fs.rmSync(plan.logPath, { force: true });
-  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env, exportLabel: false })) {
+  if (!await startLaunchdJobAsync({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env, exportLabel: false })) {
     await exec([...L, ...withoutGlobals(args)]);
     await carrySessionIds(L, exec);
     return;

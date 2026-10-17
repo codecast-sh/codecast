@@ -24,7 +24,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "../proc.js";
+import { execFileAsync, spawnSync } from "../proc.js";
 import { PROVIDER_KEYS, type AgentClientId } from "@codecast/shared/contracts";
 import { MIRROR_EXCLUDED_ENV_VARS } from "../agentEnv.js";
 import { agentSpawnPath } from "../agentSpawnPath.js";
@@ -241,22 +241,58 @@ function platformPath(darwin: string, other: string) {
 }
 
 // The daemon reads the gh login every minute to notice a change, and
-// `gh auth token` is a synchronous spawn: on a loaded machine it held the event
-// loop for 1 to 15 seconds each time (2026-10-09). A login change rewrites
-// hosts.yml, so the token is reused while that file is unchanged, and asked
-// again after GH_TOKEN_TTL_MS to catch a re-login that left the file as it was.
+// `gh auth token` held the event loop for 1 to 15 seconds each time on a
+// loaded machine (2026-10-09). A login change rewrites hosts.yml, so the token
+// is reused while that file is unchanged, and asked again after
+// GH_TOKEN_TTL_MS to catch a re-login that left the file as it was. A failed
+// or timed out ask is remembered for GH_TOKEN_RETRY_MS: forgetting it made
+// every tick ask again and freeze the daemon for the full timeout once a
+// minute (2026-10-17). The daemon fills the cache with primeGhToken, off the
+// loop, so its own reads never spawn.
 const GH_TOKEN_TTL_MS = 30 * 60_000;
+const GH_TOKEN_RETRY_MS = 10 * 60_000;
+const GH_TOKEN_ARGS = ["auth", "token", "--hostname", "github.com"];
 let ghTokenCache: { dir: string; hosts: string; token: string; at: number } | null = null;
 
-function ghKeychainToken(dir: string, hosts: string, env: NodeJS.ProcessEnv, now: number): string {
+const ghTokenOptions = (env: NodeJS.ProcessEnv) => ({ encoding: "utf-8" as const, timeout: 10_000, env: { ...env, PATH: agentSpawnPath() } });
+
+const ghConfigDir = (home: string, env: NodeJS.ProcessEnv) => env.GH_CONFIG_DIR || path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "gh");
+
+/** hosts.yml and its folder, or null when gh is not logged in here. */
+function ghHosts(home: string, env: NodeJS.ProcessEnv): { dir: string; hosts: string } | null {
+  const dir = ghConfigDir(home, env);
+  try { return { dir, hosts: fs.readFileSync(path.join(dir, "hosts.yml"), "utf-8") }; } catch { return null; }
+}
+
+const ghTokenInline = (hosts: string) => /^\s+oauth_token:\s*\S/m.test(hosts);
+
+/** The remembered answer ("" for a failed ask) while it is still good, else undefined. */
+function cachedGhToken(dir: string, hosts: string, now: number): string | undefined {
   const c = ghTokenCache;
-  if (c && c.dir === dir && c.hosts === hosts && now - c.at < GH_TOKEN_TTL_MS) return c.token;
-  const r = spawnSync("gh", ["auth", "token", "--hostname", "github.com"], {
-    encoding: "utf-8", timeout: 10_000, env: { ...env, PATH: agentSpawnPath() },
-  });
-  const token = r.status === 0 ? (r.stdout ?? "").trim() : "";
-  ghTokenCache = token ? { dir, hosts, token, at: now } : null;
+  if (!c || c.dir !== dir || c.hosts !== hosts) return undefined;
+  return now - c.at < (c.token ? GH_TOKEN_TTL_MS : GH_TOKEN_RETRY_MS) ? c.token : undefined;
+}
+
+function rememberGhToken(dir: string, hosts: string, stdout: string | undefined, now: number): string {
+  const token = (stdout ?? "").trim();
+  ghTokenCache = { dir, hosts, token, at: now };
   return token;
+}
+
+function ghKeychainToken(dir: string, hosts: string, env: NodeJS.ProcessEnv, now: number): string {
+  const cached = cachedGhToken(dir, hosts, now);
+  if (cached !== undefined) return cached;
+  const r = spawnSync("gh", GH_TOKEN_ARGS, ghTokenOptions(env));
+  return rememberGhToken(dir, hosts, r.status === 0 ? r.stdout : "", now);
+}
+
+/** Ask gh for the keychain token without holding the event loop, so the next readGhLogin answers from the cache. */
+export async function primeGhToken(home: string, env: NodeJS.ProcessEnv = process.env, now = Date.now()): Promise<void> {
+  const found = ghHosts(home, env);
+  if (!found || ghTokenInline(found.hosts) || cachedGhToken(found.dir, found.hosts, now) !== undefined) return;
+  let stdout = "";
+  try { stdout = (await execFileAsync("gh", GH_TOKEN_ARGS, ghTokenOptions(env))).stdout; } catch {}
+  rememberGhToken(found.dir, found.hosts, stdout, now);
 }
 
 /**
@@ -266,10 +302,10 @@ function ghKeychainToken(dir: string, hosts: string, env: NodeJS.ProcessEnv, now
  * no keyring is present (the host has none).
  */
 export function readGhLogin(home: string, env: NodeJS.ProcessEnv, now = Date.now()): string | null {
-  const dir = env.GH_CONFIG_DIR || path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "gh");
-  let hosts = "";
-  try { hosts = fs.readFileSync(path.join(dir, "hosts.yml"), "utf-8"); } catch { return null; }
-  if (/^\s+oauth_token:\s*\S/m.test(hosts)) return hosts;
+  const found = ghHosts(home, env);
+  if (!found) return null;
+  const { dir, hosts } = found;
+  if (ghTokenInline(hosts)) return hosts;
   const token = ghKeychainToken(dir, hosts, env, now);
   if (!token) return null;
   const user = /^github\.com:[\s\S]*?^\s+user:\s*(\S+)/m.exec(hosts)?.[1];
@@ -287,7 +323,7 @@ export function readGhLogin(home: string, env: NodeJS.ProcessEnv, now = Date.now
 const homeFile = (rel: string) => (home: string) => path.join(home, rel);
 
 export const TOOL_AUTH_SOURCES: readonly AgentAuthSource[] = [
-  { id: "gh", localPath: (h, e) => path.join(e.GH_CONFIG_DIR || path.join(e.XDG_CONFIG_HOME || path.join(h, ".config"), "gh"), "hosts.yml"), remotePath: "~/.config/gh/hosts.yml", gate: presentLogin, read: readGhLogin },
+  { id: "gh", localPath: (h, e) => path.join(ghConfigDir(h, e), "hosts.yml"), remotePath: "~/.config/gh/hosts.yml", gate: presentLogin, read: readGhLogin },
   { id: "cloudflare", localPath: platformPath("Library/Preferences/cloudflare/config/default.json", ".config/cloudflare/config/default.json"), remotePath: "~/.config/cloudflare/config/default.json", gate: liveOAuthLogin("expiration_time") },
   { id: "wrangler", localPath: (h, e) => fs.existsSync(path.join(h, ".wrangler/config/default.toml")) ? path.join(h, ".wrangler/config/default.toml") : platformPath("Library/Preferences/.wrangler/config/default.toml", ".config/.wrangler/config/default.toml")(h), remotePath: "~/.wrangler/config/default.toml", gate: liveOAuthLogin("expiration_time", "toml") },
   { id: "convex", localPath: homeFile(".convex/config.json"), remotePath: "~/.convex/config.json", gate: presentLogin },

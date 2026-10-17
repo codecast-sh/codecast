@@ -40,6 +40,9 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // already means to a reader. Riding that key keeps the alert under a mute
   // switch that exists rather than inventing one with no settings row.
   daemon_overloaded: "session_error",
+  // An overloaded laptop slows every agent on it: the same news to a reader
+  // as a session error, under the switch that already exists.
+  machine_overloaded: "session_error",
   // The digest says the same thing its members say, so it rides the same
   // switch: muting "session idle" mutes the fold-up too.
   sessions_need_input: "session_idle",

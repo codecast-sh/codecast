@@ -111,6 +111,37 @@ describe("one daemon pass", () => {
     expect(fs.existsSync(path.join(shadowDir(), "product-app", "mo-boom.json"))).toBe(false);
   }, 60_000);
 
+  test("judging handed back to this machine runs here and its replies go to /cli/moments/judged", async () => {
+    const posts: Array<{ route: string; body: any }> = [];
+    const asked: any[] = [];
+    const request = { model: "claude-sonnet-5-5", max_tokens: 16000, system: "Judge it.", prompt: "<moment>...</moment>", output: "json" as const };
+    const record = { kind: "conversation", subject: "t_81", blocks: [], refs: [] };
+    await tickMoments({
+      deviceId: "dev-1",
+      post: async (route, body) => {
+        posts.push({ route, body });
+        if (route === "/cli/moments/claim") return [claim("t_81", "codecast")];
+        if (route === "/cli/moments/complete") return { moment: body.moment, status: "ready", judged: [], judge_here: { moment: body.moment, clock: 5, record, lines: ["ex-1"], requests: [{ judge: "comms", request }, { judge: "tone", request }] } };
+        return { moment: body.moment, judged: [{ judge: "comms", status: "ok", findings: 0, filed: 0, cost_usd: 0 }] };
+      },
+      judgeCall: async (spec) => {
+        asked.push(spec);
+        return asked.length === 1
+          ? { ok: true, text: '{"deviations": []}', usage: { input_tokens: 9, output_tokens: 3 }, cost_usd: 0, model: spec.model, stop_reason: "end_turn" }
+          : { ok: false, reason: "failed", error: "the answer held no JSON", cost_usd: 0, model: spec.model };
+      },
+    });
+    expect(asked).toEqual([request, request]);
+    const judged = posts.find((p) => p.route === "/cli/moments/judged")!;
+    expect(judged.body).toEqual({
+      device_id: "dev-1", moment: "mo-t_81", clock: 5, lines: ["ex-1"], record: JSON.stringify(record),
+      results: [
+        { judge: "comms", result: { ok: true, text: '{"deviations": []}', input_tokens: 9, output_tokens: 3, stop_reason: "end_turn" } },
+        { judge: "tone", result: { ok: false, error: "the answer held no JSON" } },
+      ],
+    });
+  }, 60_000);
+
   test("host bodies past 30 days are pruned", () => {
     const kept = path.join(shadowDir(), "product-app", "mo-t_81.json");
     const old = (Date.now() - 31 * 24 * 60 * 60_000) / 1000;

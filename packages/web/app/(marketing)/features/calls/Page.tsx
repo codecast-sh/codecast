@@ -38,7 +38,7 @@ const REFERENCE: { cmd: string; does: string }[] = [
 const FAQ: { q: string; a: ReactNode }[] = [
   {
     q: "How does it know who said what?",
-    a: <>It never guesses. One client in the room is the scribe, and it sends each person&apos;s audio track to speech recognition on its own connection. A track belongs to one participant, so every segment is stamped with that participant. There is no diarization step to get wrong.</>,
+    a: <>From the audio tracks. One client in the room is the scribe, and it sends each person&apos;s audio track to speech recognition on its own connection. A track belongs to one participant, so every segment is stamped with that participant, with no diarization step.</>,
   },
   {
     q: "Is every huddle transcribed?",
@@ -46,7 +46,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Who can read a call?",
-    a: <>You can read a call you took part in, and a call whose room you may enter: the people a DM is between, the members of a channel, the people who can open a session. Guests see and hear the call they were let into, and nothing else: not the team, its sessions or the transcript.</>,
+    a: <>You can read a call you took part in, and a call whose room you may enter: the people a DM is between, the members of a channel, the people who can open a session. Guests see and hear only the call they were let into. They cannot see the team, its sessions or the transcript.</>,
   },
   {
     q: "Does the agent get the whole transcript dumped into its context?",
@@ -86,9 +86,9 @@ export default function CallsPage() {
                 Features / Calls
               </Link>
               <h1 className="cc-rise mt-5 font-mono text-[27px] min-[400px]:text-[30px] sm:text-[44px] lg:text-[56px] font-bold leading-[1.05] tracking-tight [text-wrap:balance]" style={{ color: SOL.base03, "--d": "0.08s" } as CSSProperties}>
-                Decide it out loud.
+                Team huddles, transcribed by speaker,
                 <br />
-                <span style={{ color: SOL.magenta }}>The agents can quote&nbsp;you.</span>
+                <span style={{ color: SOL.magenta }}>that your agents can read and&nbsp;quote</span>
               </h1>
             </div>
             <div>
@@ -117,12 +117,12 @@ export default function CallsPage() {
       <Section
         id="speakers"
         n="01"
-        title="Every line knows who said it"
+        title="Each speaker transcribed from their own audio track"
         tone="paper"
         lede={
           <>
-            <p>Most meeting tools record one mixed stream and guess the speakers afterwards. Codecast never mixes. The scribe, one client in the room, holds each person&apos;s audio track and streams it to speech recognition on its own connection.</p>
-            <p>A track belongs to one person, so the attribution is structural. If the scribe&apos;s laptop closes, another client in the room adopts the same run, and the old one lets go so no word lands twice.</p>
+            <p>Most meeting tools record one mixed stream and guess the speakers afterwards. In Codecast the scribe, one client in the room, holds each person&apos;s audio track separately and streams it to speech recognition on its own connection.</p>
+            <p>A track belongs to one person, so every line carries its speaker without any guessing. If the scribe&apos;s laptop closes, another client in the room adopts the same run, and the old one lets go so no word lands twice.</p>
           </>
         }
       >
@@ -132,7 +132,7 @@ export default function CallsPage() {
       <Section
         id="digest"
         n="02"
-        title="The digest lands where the huddle was held"
+        title="Where the digest goes when a huddle ends"
         lede={
           <>
             <p>Every finished huddle with any words leaves one digest: the title, the length, the speakers, the summary and the action items. Where it goes depends on the room.</p>
@@ -149,7 +149,7 @@ export default function CallsPage() {
       <Section
         id="read"
         n="03"
-        title="Every call has a page, and your agents can quote it"
+        title="Reading a call, and agents citing it"
         tone="paper"
         lede={
           <>
@@ -174,7 +174,7 @@ export default function CallsPage() {
       <Section
         id="tasks"
         n="04"
-        title="Action items become tasks that quote the call"
+        title="Turning action items into tasks"
         lede={
           <>
             <p>The generated action items are a draft. Ask an agent to turn them into tasks and it reads the summary, checks every item against the transcript (who committed, to what, by when, and whether anyone pushed back later), drops what was only floated and adds what the summary missed.</p>
@@ -191,7 +191,7 @@ export default function CallsPage() {
       <Section
         id="agents"
         n="05"
-        title="Bring a session into the room"
+        title="Adding an agent session to a huddle"
         tone="paper"
         lede={
           <>
@@ -214,7 +214,7 @@ export default function CallsPage() {
       <Section
         id="video"
         n="06"
-        title="What was on screen when they said that"
+        title="Recording video and screen shares"
         lede={
           <>
             <p>Press <b>Record this huddle</b> and the huddle is filmed on the LiveKit server, with a red REC mark everywhere the call shows and a notice for everyone, guests included. Anyone in the call can stop it. Screen shares are kept as their own full resolution files, so code on a shared screen stays legible.</p>
@@ -253,14 +253,14 @@ export default function CallsPage() {
 
       {/* Safety and limits */}
       <section className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-24">
-        <h2 className="font-mono text-[26px] sm:text-[32px] font-bold leading-[1.15] tracking-tight" style={{ color: SOL.base03 }}>The rules the room keeps</h2>
+        <h2 className="font-mono text-[26px] sm:text-[32px] font-bold leading-[1.15] tracking-tight" style={{ color: SOL.base03 }}>Room access, recording and privacy</h2>
         <div className="mt-8 grid gap-x-10 gap-y-7 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            ["Seats are leases", "A client heartbeats every 15 seconds and a seat older than 45 is ignored, so a closed laptop leaves the room on its own. Everyone joins muted."],
+            ["Seats expire without a heartbeat", "A client heartbeats every 15 seconds and a seat older than 45 is ignored, so a closed laptop leaves the room on its own. Everyone joins muted."],
             ["Rooms can lock", "An occupied room admits teammates the way a meeting room does. Lock it and a teammate has to knock; anyone inside rings them in."],
             ["Guests come in on a link", "No account needed. They wait at the door until someone admits them, are told up front when the call is transcribed or recorded, and are marked as a guest on every tile and line."],
-            ["Recording is never silent", "Only a press of Record starts it. Everyone is told, a beep sounds, and it stops when no teammate is left. The video is readable by whoever may open the room's calls."],
-            ["Private calls stay private", "A frame of a private call goes to a scratch directory cleared after a day. --share makes a public image only when you ask, and deleting the recording deletes it."],
+            ["Everyone is told when recording starts", "Only a press of Record starts it. Everyone is told, a beep sounds, and it stops when no teammate is left. The video is readable by whoever may open the room's calls."],
+            ["Frames of private calls are temporary", "A frame of a private call goes to a scratch directory cleared after a day. --share makes a public image only when you ask, and deleting the recording deletes it."],
             ["The server checks every mutation", "Room rules are enforced in every call mutation and when a media token is minted, because the media server trusts that token."],
           ].map(([t, b]) => (
             <div key={t} className="pl-4" style={{ borderLeft: `2px solid rgba(211,54,130,0.35)` }}>
@@ -274,7 +274,7 @@ export default function CallsPage() {
       {/* Command reference */}
       <section style={{ backgroundColor: SOL.base03 }}>
         <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-20">
-          <h2 className="font-mono text-[26px] sm:text-[32px] font-bold tracking-tight" style={{ color: SOL.base3 }}>For scripts and agents</h2>
+          <h2 className="font-mono text-[26px] sm:text-[32px] font-bold tracking-tight" style={{ color: SOL.base3 }}>Commands for scripts and agents</h2>
           <p className="mt-2 text-[15px]" style={{ color: SOL.base0 }}>
             Agents read calls through these commands, and you can script them too. <span className="font-mono">&lt;id&gt;</span> is a short id like cl-42, a full id, or a unique prefix. Every read takes <span className="font-mono">--json</span>.
           </p>
@@ -308,7 +308,7 @@ export default function CallsPage() {
       {/* Related and CTA */}
       <section style={{ backgroundColor: SOL.base2 + "80" }}>
         <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-20">
-          <h2 className="font-mono text-[22px] font-bold" style={{ color: SOL.base03 }}>Works with</h2>
+          <h2 className="font-mono text-[22px] font-bold" style={{ color: SOL.base03 }}>Related features</h2>
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {featureDeepDives(RELATED).map((f) => {
               return (
@@ -322,7 +322,7 @@ export default function CallsPage() {
 
           <div className="mt-16 grid gap-8 lg:grid-cols-[1fr_1fr] lg:items-center">
             <div>
-              <h2 className="font-mono text-[28px] sm:text-[34px] font-bold leading-tight tracking-tight" style={{ color: SOL.base03 }}>Start a huddle. Read it from any session.</h2>
+              <h2 className="font-mono text-[28px] sm:text-[34px] font-bold leading-tight tracking-tight" style={{ color: SOL.base03 }}>Get started with calls</h2>
               <p className="mt-3 text-[16px] leading-[1.65]" style={{ color: SOL.base01 }}>
                 Install codecast, then have a team admin switch on <b>Calls</b> under Settings, Team, Features. The agents on every member&apos;s computer learn to read the team&apos;s calls.
               </p>

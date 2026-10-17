@@ -37,7 +37,7 @@ type Notification = {
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine";
   entity_id?: string;
   chat_message_id?: string;
   link?: string;
@@ -101,6 +101,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "chat_here": return { name: "bullhorn", color: Theme.orange };
     case "chat_post": return { name: "hashtag", color: Theme.cyan };
     case "daemon_overloaded": return { name: "hourglass-half", color: Theme.orange };
+    case "machine_overloaded": return { name: "tachometer", color: Theme.red };
     case "card_waiting": return { name: "question-circle", color: Theme.orange };
     case "change_shipped": return { name: "rocket", color: Theme.green };
     case "cause_reopened": return { name: "undo", color: Theme.red };
@@ -302,6 +303,11 @@ export default function NotificationsScreen() {
     // matches where the same notification lands on web.
     if (notification.entity_type === "device") {
       void openLink(`${CODECAST_BASE_URL}/settings/devices`);
+      return;
+    }
+    // An overloaded machine opens its offload review on the web, where load can be moved off.
+    if (notification.entity_type === "machine" && notification.entity_id) {
+      void openLink(`${CODECAST_BASE_URL}/resources?offload=${encodeURIComponent(notification.entity_id)}`);
       return;
     }
     if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {

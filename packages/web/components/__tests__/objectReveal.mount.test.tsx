@@ -23,7 +23,7 @@ mock.module("../RoutePane", () => ({
 
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { declareViewNav } from "../../store/viewNav";
-import { RevealAncestryCtx, useRevealRef } from "../../lib/revealHost";
+import { RevealAncestryCtx, RevealInPlaceCtx, useRevealRef } from "../../lib/revealHost";
 import { RevealHost } from "../ObjectReveal";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -123,3 +123,22 @@ test("a band never shows a conversation it is already inside", async () => {
     await m.unmount();
   }
 }, { timeout: 30_000 });
+
+// A surface that opens some addresses itself (the org page's drawer opens a
+// proposal) takes a reference to one of them: no band under the line, which
+// would draw the whole surface again inside itself. Anything else still bands.
+test("a reference the surface opens in place goes there, never into a band", async () => {
+  const opened: string[] = [];
+  const inPlace = { claims: (href: string) => href.startsWith("/org?proposal="), isOpen: () => false, toggle: (href: string) => { opened.push(href); } };
+  const { container, click, unmount } = await mount(
+    <RevealInPlaceCtx.Provider value={inPlace}>
+      <RevealHost persistKey="drawer">
+        <p><Pill href="/org?proposal=op-75" /></p>
+      </RevealHost>
+    </RevealInPlaceCtx.Provider>,
+  );
+  await click("[data-pill]");
+  expect(opened).toEqual(["/org?proposal=op-75"]);
+  expect(container.querySelector("[data-route-pane]")).toBeNull();
+  await unmount();
+});

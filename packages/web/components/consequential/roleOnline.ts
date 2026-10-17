@@ -26,7 +26,7 @@ export function roleOnlineLedger(r: { handle: string; name: string; host: string
 
 /** Approving new roles: each starts its standing session on the approver's machine. One role reads as bringing it online. */
 export function newRolesLedger(roles: { handle: string; name: string; startsOnItsOwn: boolean; sessionsPerDay: number }[], host: string): SwitchLedger {
-  if (roles.length === 1) return { ...roleOnlineLedger({ ...roles[0], host }), confirm: "Approve and bring online", keep: "Not yet" };
+  if (roles.length === 1) return { ...roleOnlineLedger({ ...roles[0], host }), confirm: "Accept and bring online", keep: "Not yet" };
   const unasked = roles.filter((r) => r.startsOnItsOwn).reduce((n, r) => n + r.sessionsPerDay, 0);
   return {
     name: `Bring ${roles.length} roles online`,
@@ -38,7 +38,7 @@ export function newRolesLedger(roles: { handle: string; name: string; startsOnIt
     ],
     rows: [{ k: "Runs on", v: `${host}'s machine` }],
     stop: "Pause or retire",
-    confirm: "Approve and bring online",
+    confirm: "Accept and bring online",
     keep: "Not yet",
   };
 }
@@ -70,4 +70,47 @@ export function ledgerLines(l: SwitchLedger): string[] {
     ...l.rows.map((r) => `${r.k}: ${r.v}`),
     ...(l.stop ? [`To stop: ${l.stop}`] : []),
   ];
+}
+
+/** Hiring the Head of People: its standing session starts (or the workspace's
+ *  standing agent takes the seat), and its first company review runs at once,
+ *  then weekly, each ending in proposals the person decides. */
+export function hireHeadLedger(r: { workspace: string; host: string; seats: string | null }): SwitchLedger {
+  return {
+    name: "Hire the Head of People",
+    subject: r.workspace,
+    shift: null,
+    figures: [
+      r.seats ? { value: "0", label: "new sessions" } : { value: "1", label: "session now", tone: "warn" },
+      { value: "1", label: "review now", tone: "warn" },
+    ],
+    rows: [
+      r.seats ? { k: "Seat", v: `${r.seats}, kept as it is` } : { k: "Runs on", v: `${r.host}'s machine` },
+      { k: "Reviews", v: "Now, then weekly", tone: "warn" },
+      { k: "Changes", v: "Only what you approve", tone: "ok" },
+    ],
+    stop: "Pause or retire",
+    confirm: "Hire and start",
+    keep: "Not now",
+  };
+}
+
+/** Hiring an Executive Assistant: its standing session starts on the hirer's machine and checks in daily. */
+export function hireAssistantLedger(r: { name: string; reach: string; host: string }): SwitchLedger {
+  return {
+    name: `Hire ${r.name}`,
+    subject: r.reach,
+    shift: null,
+    figures: [
+      { value: "1", label: "session now", tone: "warn" },
+      { value: "1", label: "check a day", tone: "warn" },
+    ],
+    rows: [
+      { k: "Runs on", v: `${r.host}'s machine` },
+      { k: "Reach", v: r.reach },
+    ],
+    stop: "Pause or retire",
+    confirm: "Hire and start",
+    keep: "Not now",
+  };
 }

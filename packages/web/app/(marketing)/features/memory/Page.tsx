@@ -54,9 +54,9 @@ function Hero() {
             Team memory
           </a>
           <h1 className="mm-anim mm-rise font-mono font-bold tracking-tight leading-[1.08] text-[34px] sm:text-[46px] lg:text-[50px] mb-6" style={{ color: SOL.base03, "--d": ".05s" } as CSSProperties}>
-            Every line of code sits on the conversation that{" "}
+            Every line of code, linked to the conversation that{" "}
             <span className="relative whitespace-nowrap">
-              <span className="relative z-10">wrote it.</span>
+              <span className="relative z-10">wrote it</span>
               <span aria-hidden className="absolute left-0 right-0 bottom-[.08em] h-[.32em] -z-0" style={{ backgroundColor: `color-mix(in srgb, ${VIOLET} 28%, transparent)` }} />
             </span>
           </h1>

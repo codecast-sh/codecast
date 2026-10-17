@@ -53,7 +53,7 @@ function Hero() {
             {SPAWN_BACKENDS.map((a) => <AgentTag key={a} agent={a} size="xs" />)}
           </div>
           <h1 className="mt-6 font-mono text-[34px] font-bold leading-[1.08] tracking-[-0.03em] sm:text-[48px] [text-wrap:balance]" style={{ color: SOL.base03 }}>
-            One thread you steer. As many agents as the work needs.
+            Run and steer other agents from one conversation
           </h1>
           <p className="mt-6 max-w-xl text-[17.5px] leading-[1.7]" style={{ color: SOL.base00 }}>
             Hand a piece to a worker on any backend and get woken when it settles. Branch a conversation to try two approaches at once.
@@ -104,10 +104,10 @@ function ChooserSection() {
   return (
     <section id="which" className="scroll-mt-20 pt-20 sm:pt-28">
       <h2 className="max-w-3xl font-mono text-[26px] font-bold leading-[1.15] tracking-[-0.02em] sm:text-[34px] [text-wrap:balance]" style={{ color: SOL.base03 }}>
-        Six ways to start another agent. One question picks between them: who reads the result?
+        Six ways to start another agent, and how to choose by who reads the result
       </h2>
       <p className="mt-4 max-w-2xl text-[16.5px] leading-[1.7]" style={{ color: SOL.base00 }}>
-        Parallelism, a fresh context, a different model or a worktree do not decide it. Ownership does. Work you delegate and report on is a worker.
+        The choice comes down to who owns the result; parallelism, a fresh context, a different model or a worktree don't change it. Work you delegate and report on is a worker.
         A thread a person will steer on their own is a fork or a plain spawn. Your agents follow the same rule, because it is written into the instructions codecast installs, so asking in plain words picks the right one.
       </p>
       <div className="mt-10">
@@ -144,7 +144,7 @@ function Workers() {
     <RailSection
       id="workers"
       shape="worker"
-      title={<>Workers: delegate a piece, get woken when it settles</>}
+      title={<>Workers take a piece of the task and report back when they settle</>}
       lede={<>
         Ask your agent to delegate a piece, and it starts a worker: a fresh session under yours, on whichever backend suits the job, knowing only the brief it was given.
         In the inbox a worker sits under its parent as a <b>Subagent</b> row instead of a card of its own. When it finishes, blocks, stops or waits on a
@@ -168,7 +168,7 @@ function Workers() {
             </ForScripts>
           </div>}
         facts={<>
-              <Fact label="Siblings settle as one turn">Workers that finish together reach the parent as one message, not five. Each shows as a live session row with what it settled on.</Fact>
+              <Fact label="Siblings settle as one turn">Workers that finish together reach the parent as one message instead of one each. Each shows as a live session row with what it settled on.</Fact>
               <Fact label="Any backend">A worker can run on {SPAWN_BACKENDS.join(", ")}, with its own model and effort, or as a saved agent definition. Name it in the request.</Fact>
               <Fact label="Show or hide them">The fork button at the top of the session list shows or hides subagent sessions. The parent&apos;s overflow menu lists its <b>Subagents</b> with a link to each.</Fact>
               <Fact label="Where it runs">Another repo, a worktree of its own, another machine, or your cloud host. Say which in the request.</Fact>
@@ -184,22 +184,22 @@ function Manage() {
       id="manage"
       shape="room"
       color={SOL.cyan}
-      title={<>Watch the fleet without paging through it</>}
+      title={<>See which sessions wait on you, and ask one what it concluded</>}
       lede={<>
-        Every session has a work state, and the state answers one question: who acts next. The inbox shows it on every row, so you can tell at a glance which
+        Every session has a work state, and the state says who acts next. The inbox shows it on every row, so you can tell at a glance which
         sessions wait on you and which are still working. To learn what a long session concluded, press <b>A</b> in it and ask: <b>Ask this session</b> answers
         from its transcript and cites the messages, instead of you reading all of it.
       </>}
     >
       <Two
-        left={<ForScripts note="An agent that started workers watches them without polling: nothing prints until a state changes."><WatchTerm /></ForScripts>}
+        left={<ForScripts note="An agent that started workers watches them without polling. Nothing prints until a state changes."><WatchTerm /></ForScripts>}
         right={<div className="grid grid-cols-1 gap-7">
             <div className="rounded-xl p-5" style={{ backgroundColor: "#fffdf6", border: `1px solid ${SOL.base2}` }}>
               <StatesLegend />
             </div>
           </div>}
         facts={<>
-              <Fact label="Reading is free" color={SOL.cyan}>Opening a session, asking it a question or reading its changes costs it nothing. A message costs it a turn.</Fact>
+              <Fact label="Reading costs a session nothing" color={SOL.cyan}>Opening a session, asking it a question or reading its changes costs it nothing. A message costs it a turn.</Fact>
               <Fact label="Ask is in the CLI too" color={SOL.cyan}>Agents ask other sessions the same way, with <C>cast read &lt;id&gt; --ask</C>, before they message them.</Fact>
         </>}
       />
@@ -213,7 +213,7 @@ function Fork() {
       id="fork"
       shape="fork"
       color={AGENT_COLOR.claude}
-      title={<>Fork: one conversation, several directions, all with the history</>}
+      title={<>Forks branch a conversation, history included</>}
       lede={<>
         Right-click a message and choose <b>Fork from here</b> to branch the conversation at that point, or pick <b>Fork as</b> in the model menu to branch onto another agent.
         Each branch keeps everything up to the fork point and heads off as its own live session in the inbox, marked <b>Fork</b>. Ask your agent to fork several ways and
@@ -248,7 +248,7 @@ function Switch() {
     <RailSection
       id="switch"
       shape="switch"
-      title={<>Switch: same session, another agent or model</>}
+      title={<>Switch a session to another agent or model</>}
       lede={<>
         Open the model menu at the top of the conversation and pick <b>Switch agent</b>. The conversation and its id stay; who is answering changes, and a
         <b> now using</b> divider lands in the thread where it did. The same menu changes the model and effort in place. Use it for a second opinion from a different model, or when one backend is better at the next step.
@@ -283,7 +283,7 @@ function Handoff() {
     <RailSection
       id="handoff"
       shape="handoff"
-      title={<>Handoff: end here, start fresh with a brief</>}
+      title={<>Hand off to a new session that starts from a brief</>}
       lede={<>
         A long thread gets heavy. <b>Hand off to</b> in the model menu has the server write a brief of this session, starts a new one from it on the agent you pick, in the same
         directory, links the two, binds the new one to the same task or plan, and pins this one done.
@@ -304,7 +304,7 @@ function Handoff() {
             </ForScripts>
           </div>}
         facts={<>
-              <Fact label="Switch or handoff?">Switch keeps every message. Handoff keeps the conclusions. Pick handoff when the history is more noise than help.</Fact>
+              <Fact label="Switch or handoff?">Switch keeps every message, and handoff keeps only the conclusions. Pick handoff when the history is more noise than help.</Fact>
               <Fact label="A brief with a steer">The handoff step has a <b>Direction</b> box for a line to the new session, like &ldquo;finish the tests first&rdquo;. From the CLI, <C>--dry-run</C> prints the brief without starting anything.</Fact>
         </>}
       />
@@ -317,9 +317,9 @@ function Exec() {
     <RailSection
       id="exec"
       shape="exec"
-      title={<>Exec: one answer, inside a script</>}
+      title={<>Get one answer inside a script with exec</>}
       lede={<>
-        This one is CLI-only on purpose. <C>cast exec</C> is print mode for every harness codecast launches. It runs a prompt, prints the result and exits. The process is the session:
+        This one is CLI-only on purpose. <C>cast exec</C> is print mode for every harness codecast launches. It runs a prompt, prints the result and exits. The process is the session, so
         stdout is the answer, the exit code is the agent&apos;s, and nothing lands in the inbox. The same flags map onto each client&apos;s own headless form.
       </>}
     >
@@ -344,7 +344,7 @@ function Messaging() {
       id="messaging"
       shape="send"
       color={SOL.cyan}
-      title={<>Sessions talk to each other, and every message costs a turn</>}
+      title={<>Send messages between sessions</>}
       lede={<>
         Agents message each other. A message arrives in the other session as a new turn marked <b>Message from</b> and the sender, so you see in both threads who said what.
         It reaches any session you can see, your own or a teammate&apos;s shared one. If the target is offline the message queues until its machine comes back.
@@ -356,7 +356,7 @@ function Messaging() {
         <div className="grid grid-cols-1 gap-6">
           <Fact label="Stale sessions are held" color={SOL.cyan}>A session idle past its hour of prompt cache, or one that was killed, is not woken by default. The send stops and names the cost. Reporting back to the session that started you always goes through.</Fact>
           <Fact label="What earns a message" color={SOL.cyan}>Changing the recipient&apos;s next action, answering its question, preventing a real conflict, or delivering finished work. Progress notes stay in your own thread.</Fact>
-          <Fact label="No acknowledgments" color={SOL.cyan}>An inbound message that asks nothing needs no reply. Agents are told never to acknowledge an acknowledgment.</Fact>
+          <Fact label="No acknowledgments" color={SOL.cyan}>An inbound message that asks nothing needs no reply. Agents are told not to send replies that only acknowledge.</Fact>
         </div>
       </div>
     </RailSection>
@@ -368,10 +368,10 @@ function Isolation() {
     <RailSection
       id="isolation"
       shape="worktree"
-      title={<>Worktrees and labels keep a fan-out tidy</>}
+      title={<>Worktrees and labels for parallel workers</>}
       lede={<>
         Several agents in one checkout step on each other. Ask for workers in their own worktrees and each gets a git worktree with gitignored files like <C>.env</C> copied,
-        the project&apos;s setup commands run and its own ports. Labels file sessions under a name: they show as chips above the session list.
+        the project&apos;s setup commands run and its own ports. Labels file sessions under a name, and they show as chips above the session list.
         Agents and the CLI create worktrees; the repo view&apos;s <b>Worktrees</b> tab lists them, with <b>Compare</b> to see one&apos;s changes.
       </>}
     >
@@ -390,7 +390,7 @@ function Isolation() {
             </ForScripts>
           </div>}
         facts={<>
-              <Fact label="Labels nest nothing">A label groups sessions. It does not make one a worker; only delegating does.</Fact>
+              <Fact label="A label does not make a worker">A label groups sessions. It does not make one a worker; only delegating does.</Fact>
               <Fact label="Personal">A session carries at most one label. Labels are yours; teammates never see them.</Fact>
         </>}
       />
@@ -448,7 +448,7 @@ const LIMITS: [string, ReactNode][] = [
 function Limits() {
   return (
     <section className="pt-24 sm:pt-32">
-      <h2 className="font-mono text-[26px] font-bold tracking-[-0.02em] sm:text-[34px]" style={{ color: SOL.base03 }}>Honest limits</h2>
+      <h2 className="font-mono text-[26px] font-bold tracking-[-0.02em] sm:text-[34px]" style={{ color: SOL.base03 }}>Limits and common questions</h2>
       <div className="mt-8 grid grid-cols-1 gap-x-10 gap-y-8 md:grid-cols-2">
         {LIMITS.map(([q, a]) => (
           <div key={q}>
@@ -466,7 +466,7 @@ const RELATED = ["cloud", "triggers", "memory", "decisions"];
 function Related() {
   return (
     <section className="pt-24 sm:pt-32">
-      <h2 className="font-mono text-[22px] font-bold tracking-[-0.02em] sm:text-[26px]" style={{ color: SOL.base03 }}>Works with</h2>
+      <h2 className="font-mono text-[22px] font-bold tracking-[-0.02em] sm:text-[26px]" style={{ color: SOL.base03 }}>Related features</h2>
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {featureDeepDives(RELATED).map((f) => {
           return (
@@ -487,7 +487,7 @@ function Closing() {
       <div className="mx-auto grid grid-cols-1 max-w-6xl gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-2 lg:items-center">
         <div>
           <h2 className="font-mono text-[28px] font-bold leading-[1.15] tracking-[-0.02em] sm:text-[36px]" style={{ color: SOL.base3 }}>
-            Start with one worker.
+            Get started with workers
           </h2>
           <p className="mt-4 max-w-md text-[16px] leading-[1.7]" style={{ color: SOL.base1 }}>
             Install codecast, then ask your agent to hand a piece of its task to a Codex worker. It already knows how, and the worker shows up under its session.
