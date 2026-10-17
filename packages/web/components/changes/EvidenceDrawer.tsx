@@ -26,7 +26,7 @@ import { CommitLinks } from "../repo/CommitLinks";
 import { ImageGalleryProvider } from "../ImageGallery";
 import { MarkdownImageSize } from "../../lib/markdownImageSize";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
+import { AreaTag, Byline, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
 import { plural } from "./format";
 import { useAreaColors } from "./storyContext";
@@ -184,7 +184,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
     <div className="mt-2 space-y-3 pb-1">
       {/* The byline: who, when, where the reason came from, and the release it shipped in. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-sol-border/25 pb-3">
-        <People story={story} />
+        <Byline story={story} />
         <span className="font-mono text-[11px] text-sol-text/55">{clockOf(story.last_at)}</span>
         <Provenance story={story} />
         <ReleaseTag story={story} />
