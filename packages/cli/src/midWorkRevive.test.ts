@@ -5,7 +5,7 @@ import path from "node:path";
 import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import {
   REVIVE_BUDGET, REVIVE_BUDGET_WINDOW_MS, REVIVE_MAX_AGE_MS, UNFINISHED_STATUS_FILE_TTL_MS,
-  lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired, type ReviveFacts,
+  isStationHandOpening, lastSignOfLifeMs, midWorkReviveDecision, stationHandsFirst, priorRevives, recordRevive, reviveClientId, statusFileExpired, type ReviveFacts,
 } from "./midWorkRevive.js";
 
 const NOW = Date.parse("2026-10-05T05:01:05Z");
@@ -38,6 +38,18 @@ describe("midWorkReviveDecision", () => {
     for (const status of ["idle", "stopped", "permission_blocked", "dormant", undefined]) {
       expect(midWorkReviveDecision(facts({ status }))).toEqual({ revive: false, reason: "turn-finished" });
     }
+  });
+
+  // ct-59998's Implement hand, 2026-10-16: it pinned dormant on a background
+  // check and a Monitor, the machine restarted, and nothing was left to wake it.
+  test("revives a dormant session whose wake was its own background work", () => {
+    expect(midWorkReviveDecision(facts({ status: "dormant", wakeDiedWithProcess: true }))).toEqual({ revive: true });
+    expect(midWorkReviveDecision(facts({ status: "dormant", wakeDiedWithProcess: false }))).toEqual({ revive: false, reason: "turn-finished" });
+    expect(midWorkReviveDecision(facts({ status: "idle", wakeDiedWithProcess: true }))).toEqual({ revive: false, reason: "turn-finished" });
+  });
+
+  test("keeps a dormant session's status file as long as an unfinished one's", () => {
+    expect(statusFileExpired("dormant", NOW - 2 * 60 * MIN, NOW, 60 * MIN)).toBe(false);
   });
 
   test("does not wake work that died long ago", () => {
@@ -165,5 +177,22 @@ describe("lastSignOfLifeMs", () => {
     expect(midWorkReviveDecision(facts({ ageMs: statusAge })).revive).toBe(false);
     const ageMs = Math.min(statusAge, NOW - await lastSignOfLifeMs(transcript));
     expect(midWorkReviveDecision(facts({ ageMs }))).toEqual({ revive: true });
+  });
+});
+
+describe("station hands first", () => {
+  const brief = 'You are running unattended: the "Implement" step of workflow line (run th7fvy67e9e93r2zsy8dtwek758gd316) started this session';
+  test("knows a station hand by its brief, as written and as transcript JSON", () => {
+    expect(isStationHandOpening(brief)).toBe(true);
+    expect(isStationHandOpening(JSON.stringify({ message: { content: brief } }))).toBe(true);
+    // A try or an eval renders the station with no run behind it.
+    expect(isStationHandOpening('the "Implement" step of workflow line started this session')).toBe(false);
+    expect(isStationHandOpening("fix the flaky test")).toBe(false);
+  });
+
+  // ct-59998's hand, 2026-10-16: deferred behind other sessions at 07:18 and
+  // 07:22 while its run was waiting on it.
+  test("orders station hands ahead of everything else, each group as it was", () => {
+    expect(stationHandsFirst(["a", "S1", "b", "S2"], (x) => x.startsWith("S"))).toEqual(["S1", "S2", "a", "b"]);
   });
 });
