@@ -3,7 +3,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { resourceSnapshot } from "./machineResourcesSchema";
-import { RESOURCE_HISTORY_LIMIT, RESOURCE_PROCESS_LIMIT, type MachineResourceSnapshot } from "@codecast/shared/contracts";
+import { RESOURCE_HISTORY_LIMIT, RESOURCE_PROCESS_LIMIT, sustainedResourcePressure, type MachineResourceSnapshot, type ResourceIncident, type ResourcePoint } from "@codecast/shared/contracts";
+import { emitNotification } from "./notificationRouter";
+import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -27,9 +29,92 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < 15_000)) return { accepted: false };
   const history = [...(existing?.history ?? []).filter(p => now - p.at <= 2 * 3600_000), snapshot.sample].slice(-RESOURCE_HISTORY_LIMIT);
   const data = { user_id: userId, device_id: snapshot.deviceId, received_at: now, snapshot, history };
-  if (existing) await ctx.db.patch(existing._id, data);
-  else await ctx.db.insert("machine_resources", data);
+  const incident = device.is_remote ? null : sustainedResourcePressure(history, now);
+  const alert = overloadAlertDue(incident, existing?.overload_alert, now);
+  const stamp = alert ? { overload_alert: { since: alert.since, level: alert.level, at: now } } : {};
+  if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp });
+  else await ctx.db.insert("machine_resources", { ...data, ...stamp });
+  if (alert) await notifyOverload(ctx, userId, device, snapshot, alert, now);
   return { accepted: true };
+}
+
+/** A fresh incident after this long rings again; an escalation to critical always does. */
+export const OVERLOAD_REALERT_MS = 30 * 60_000;
+
+/**
+ * Whether this sample should announce the incident: once when it starts (the
+ * sample that confirmed it, so the alert is as timely as the incident itself),
+ * once more if it turns critical, and a new incident only after a quiet spell,
+ * so a laptop hovering at the bar does not ring every few minutes.
+ */
+export function overloadAlertDue(
+  incident: ResourceIncident | null,
+  last: { since: number; level: "elevated" | "critical"; at: number } | undefined,
+  now: number,
+): ResourceIncident | null {
+  if (!incident) return null;
+  const escalated = incident.level === "critical" && last?.level !== "critical";
+  if (!last) return incident;
+  if (last.since === incident.since) return escalated ? incident : null;
+  return escalated || now - last.at >= OVERLOAD_REALERT_MS ? incident : null;
+}
+
+const cores = (cpu: number) => `${(cpu / 100).toFixed(cpu >= 1000 ? 0 : 1)} cores`;
+const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(bytes >= 1e10 ? 0 : 1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+
+/** The notification's words: what is wrong, how bad, and which sessions are behind it. */
+export function overloadMessage(input: {
+  machine: string; incident: ResourceIncident; sample: ResourcePoint; now: number;
+  top: Array<{ title: string; cpu: number; rss: number }>;
+}): { message: string; subtitle: string; body: string } {
+  const { machine, incident, sample, now, top } = input;
+  const minutes = Math.max(1, Math.round((now - incident.since) / 60_000));
+  const used = Math.max(0, sample.memoryTotal - sample.memoryAvailable);
+  const vitals = [
+    sample.cpuPercent !== undefined ? `CPU ${Math.round(sample.cpuPercent)}%` : undefined,
+    `memory ${gb(used)} of ${gb(sample.memoryTotal)}`,
+    sample.pressure === "elevated" || sample.pressure === "critical" ? `${sample.pressure} pressure` : undefined,
+  ].filter(Boolean).join(", ");
+  const heaviest = top.map((t) => `${t.title} (${cores(t.cpu)}, ${gb(t.rss)})`).join("; ");
+  const reason = `${incident.reason} for ${minutes} min`;
+  const body = `${vitals.charAt(0).toUpperCase()}${vitals.slice(1)}.${heaviest ? ` Heaviest: ${heaviest}.` : ""}`;
+  return {
+    message: `${machine} is overloaded. ${reason}. ${body} Open it to move load to the cloud.`,
+    subtitle: reason,
+    body,
+  };
+}
+
+/** The three sessions using the machine most, by CPU then memory, from processes each owns alone. */
+async function heaviestSessions(ctx: MutationCtx, snapshot: MachineResourceSnapshot) {
+  const bySession = new Map<string, { cpu: number; rss: number }>();
+  for (const p of snapshot.processes) {
+    if (!p.sessionId) continue;
+    const u = bySession.get(p.sessionId) ?? { cpu: 0, rss: 0 };
+    u.cpu += p.cpu; u.rss += p.rss;
+    bySession.set(p.sessionId, u);
+  }
+  const ranked = [...bySession].sort((a, b) => b[1].cpu - a[1].cpu || b[1].rss - a[1].rss).slice(0, 3);
+  return Promise.all(ranked.map(async ([sessionId, u]) => {
+    const managed = await ctx.db.query("managed_sessions").withIndex("by_session_id", q => q.eq("session_id", sessionId)).first();
+    const conv = managed?.conversation_id ? await ctx.db.get(managed.conversation_id) : null;
+    return { title: conv?.title?.trim() || `Session ${sessionId.slice(0, 7)}`, ...u };
+  }));
+}
+
+async function notifyOverload(ctx: MutationCtx, userId: Id<"users">, device: Doc<"devices">, snapshot: MachineResourceSnapshot, incident: ResourceIncident, now: number) {
+  const machine = device.label || device.hostname || "Your laptop";
+  const words = overloadMessage({ machine, incident, sample: snapshot.sample, now, top: await heaviestSessions(ctx, snapshot) });
+  await emitNotification(ctx, {
+    event_type: "machine_overloaded",
+    entity_type: "machine",
+    entity_id: device.device_id,
+    direct_recipient_id: userId,
+    actor_name: machine,
+    message: words.message,
+    push_subtitle: words.subtitle,
+    push_body: words.body,
+  });
 }
 
 export const report = mutation({

@@ -261,6 +261,12 @@
   align-items: flex-end;
 }
 .fc-msg {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 12px;
   position: relative;
   display: flex;
   align-items: flex-end;
@@ -268,6 +274,13 @@
   max-width: 88%;
   font-size: 12px;
   line-height: 1.5;
+}
+.fc-msg:hover .fc-text {
+  box-shadow: inset 0 0 0 1px var(--sol-border);
+}
+.fc-msg:focus-visible {
+  outline: 2px solid var(--sol-blue);
+  outline-offset: 3px;
 }
 .fc-row[data-me] .fc-msg {
   flex-direction: row-reverse;

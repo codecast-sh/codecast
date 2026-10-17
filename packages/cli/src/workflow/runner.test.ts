@@ -894,13 +894,13 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
-  test("a hand whose session holds no message and no result fails the station and is killed", async () => {
+  test("a hand whose session holds no message and no result fails the station, and its report ends the hand", async () => {
     // The agentwatch Propose step, 2026-10-12: the hand's transcript went to
     // another conversation, the watched one stayed empty, and the run moved on.
     pinned = { state: "", status: "" };
     inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 0 } as any];
     expect(await run()).toBe("failed");
-    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(handEnded("failed")).toBe(true);
     expect(calls.some(c => c.route === "/cli/workflow-runs/poll-gate")).toBe(false);
   }, 30000);
 
@@ -922,7 +922,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
       setSystemTime();
     }
     expect(reads).toBe(2);
-    expect(calls.some(c => c.route === "/cli/sessions/kill" && c.body.session === "conv_hand")).toBe(true);
+    expect(handEnded("failed")).toBe(true);
     expect(cap.logs.some(l => l.includes("jx7hand could not start") && l.includes("cloud host preparation failed"))).toBe(true);
   }, 30000);
 
@@ -964,9 +964,16 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/workflow-runs/progress")).toEqual([]);
   }, 30000);
 
-  test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {
+  // The server stops a station's hand when the runner reports its node over
+  // (workflow_runs.stopStationHands): one owner, and a card that stays. The
+  // runner's own kill dismissed the hand from the inbox and never reached a
+  // hand that settled on a question, which held its worktree for hours.
+  const handEnded = (status: string) => calls.some(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "ground" && c.body.node_status === status && c.body.session_id === "jx7hand");
+
+  test("a station that declared done ends with its node's report, and the runner kills nothing itself", async () => {
     await run();
-    expect(calls.filter(c => c.route === "/cli/sessions/kill").map(c => c.body.session)).toEqual(["conv_hand"]);
+    expect(handEnded("completed")).toBe(true);
+    expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
   }, 30000);
 
   test("a gate waits past any clock: thousands of unanswered polls, then the person's answer routes it", async () => {
@@ -1061,10 +1068,20 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(second.prompt).toContain("# Human Instructions\nversion 3");
   }, 30000);
 
-  test("a station that ended on a question is left standing for the person", async () => {
+  test("a station that settled on a question ends with its node's report too", async () => {
     pinned = { state: "Which base should prove run on?", status: "working" };
+    workState = "needs_input";
     await run();
-    expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
+    expect(handEnded("completed")).toBe(true);
+  }, 30000);
+
+  test("a resumed run does not wait again on a hand that was stopped", async () => {
+    // A Ctrl-C ends the run and the server stops its hands; a later resume
+    // that reattached to the stopped hand read it as settled, with half a turn.
+    inboxReads = [{ id: "conv_left", work_state: "needs_input", is_live: true, is_killed: true, message_count: 9 } as any];
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    expect(outcome).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
   test("a station routes on its result even when the pinned text was cut short", async () => {

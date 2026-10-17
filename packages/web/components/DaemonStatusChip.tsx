@@ -55,7 +55,7 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
   if (quiet) {
     return (
       <ShortcutTooltip label={panel} panel align="end">
-        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="h-6 w-6 rounded-full hover:text-current [&>svg]:h-3.5 [&>svg]:w-3.5">
+        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="h-6 w-6 hover:text-current [&>svg]:h-3.5 [&>svg]:w-3.5">
           {copied ? <Check /> : <TriangleAlert />}
         </TopbarButton>
       </ShortcutTooltip>

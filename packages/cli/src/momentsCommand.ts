@@ -13,7 +13,7 @@ import path from "node:path";
 import type { Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { JUDGES_DIR, MOMENTS_DIR, fileVersion, noteHostRoot, shadowDir, tickMoments } from "./momentsHost.js";
+import { JUDGES_DIR, MOMENTS_DIR, fileVersion, judgeHere, noteHostRoot, shadowDir, tickMoments } from "./momentsHost.js";
 import { MOMENT_KIND, durationWords, parseExtractorHeader } from "@codecast/shared/contracts/moments";
 import { parseJudgeSpec } from "@codecast/shared/contracts/judges";
 import { budgetWords, type BudgetSummary } from "@codecast/shared/contracts/modelCall";
@@ -186,6 +186,13 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
       for (let i = 0; i < refs.length; i += 2) {
         const batch = await apiPost(deps, "/cli/moments/rejudge", { ...(await scope()), moments: refs.slice(i, i + 2), ...(lines ? { lines } : {}) }, { exitOnError: false }).catch((e: Error) =>
           refs.slice(i, i + 2).map((moment) => ({ moment, error: `no answer in time, may still be judged: ${e.message.slice(0, 80)}` })));
+        // A source that judges on subscription hands its judging back to this machine.
+        for (const r of batch) {
+          if (!r.judge_here) continue;
+          const here = await judgeHere(r.judge_here, (route, body) => apiPost(deps, route, body, { exitOnError: false }), await scope()).catch((e: Error) => [{ judge: "*", status: "failed", findings: 0, filed: 0, reason: e.message.slice(0, 200), cost_usd: 0 }]);
+          r.judged = [...(r.judged ?? []), ...here];
+          delete r.judge_here;
+        }
         all.push(...batch);
         if (!options.json) for (const r of batch) console.log(r.error ? `${r.moment}  ${fmt.warning(r.error)}` : `${r.moment}  ${(r.judged ?? []).map((j: any) => `${j.judge} ${j.status}: ${j.findings} found, ${j.filed} filed, $${j.cost_usd.toFixed(4)}${j.reason ? ` (${j.reason})` : ""}`).join("; ") || "no judges"}`);
       }

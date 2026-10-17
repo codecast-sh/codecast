@@ -25,7 +25,10 @@ export const ENTITY_TYPE = v.union(
   v.literal("org_role"),
   // A team, for a join request found by work email (teamDiscovery.ts).
   // Direct recipients only.
-  v.literal("team")
+  v.literal("team"),
+  // A machine by its daemon device id, for the overload alert: it opens that
+  // machine's offload review on Resources. Direct recipients only.
+  v.literal("machine")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -59,6 +62,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("chat_post"),
   // The daemon on one machine spent more than its budget frozen in the last hour.
   v.literal("daemon_overloaded"),
+  // A laptop has been under sustained CPU or memory pressure (machineResources).
+  v.literal("machine_overloaded"),
   // A role tells a person who reports to it that a high priority goal has
   // stalled (org-roles-run-work.md R6): one line, once a day at most.
   v.literal("goal_stall"),
