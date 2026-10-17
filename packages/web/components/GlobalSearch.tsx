@@ -239,7 +239,7 @@ export function GlobalSearch() {
     // z-[240]: above every page surface and z-[200] overlay, but BELOW the
     // dropdown-menu portal layer (z-[250]) so the right-click context menu on
     // result rows paints over this panel. CommandPalette (9999) still wins.
-    <div ref={rootRef} className="relative w-full min-w-0 z-[240] flex justify-center">
+    <div ref={rootRef} className={`relative flex-1 min-w-0 z-[240] flex justify-center ${isExpanded ? "max-w-[680px]" : "max-w-[230px]"}`}>
       {/* Slot too tight for a usable field: it folds into this one button;
           clicking it expands the field as a fixed overlay centered over the
           header (.tb-search-overlay in globals.css). */}

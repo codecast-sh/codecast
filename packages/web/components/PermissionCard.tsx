@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { matchesAction } from "../shortcuts";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { allowAllLedger } from "./consequential/ledgers";
 import { useInboxStore } from "../store/inboxStore";
@@ -154,12 +155,12 @@ export function PermissionStack({
     if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
     if (pending.length === 0) return;
 
-    if (e.key === "y" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (matchesAction(e, "permission.approve")) {
       e.preventDefault();
       if (pending.length === 1) handleApprove(pending[0]._id);
       else handleApproveAll();
     }
-    if (e.key === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (matchesAction(e, "permission.deny")) {
       e.preventDefault();
       if (pending.length === 1) handleDeny(pending[0]._id);
       else handleDenyAll();
@@ -277,7 +278,7 @@ export function PermissionStackView<PId extends string>({
             </button>
           </div>
           <span className="text-[9px] text-sol-text-dim flex-shrink-0 hidden sm:flex items-center gap-1">
-            <KeyCap size="xs">y</KeyCap>/<KeyCap size="xs">n</KeyCap>
+            <MenuKeyCaps action="permission.approve" className="contents" />/<MenuKeyCaps action="permission.deny" className="contents" />
           </span>
         </div>
         {preview && isLong && (
@@ -356,11 +357,11 @@ export function PermissionStackView<PId extends string>({
 
       <div className="flex items-center justify-center gap-3 py-0.5 border-t border-sol-yellow/8">
         <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
-          <KeyCap size="xs">y</KeyCap>
+          <MenuKeyCaps action="permission.approve" className="contents" />
           approve all
         </span>
         <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
-          <KeyCap size="xs">n</KeyCap>
+          <MenuKeyCaps action="permission.deny" className="contents" />
           deny all
         </span>
       </div>
