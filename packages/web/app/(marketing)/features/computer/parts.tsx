@@ -7,15 +7,9 @@ import { C } from "../kit";
 
 export { useStillMode } from "../kit";
 
-/**
- * A section whose heading reads like a line of the tree cast computer prints:
- * a dim index and role, then the name. The page is the window, each section an
- * element in it.
- */
-export function Section({ id, index, role, title, lede, children, tone = "light", wide = false }: {
+/** One page section: a heading, an optional lede, then its content. */
+export function Section({ id, title, lede, children, tone = "light", wide = false }: {
   id: string;
-  index: number;
-  role: string;
   title: ReactNode;
   lede?: ReactNode;
   children: ReactNode;
@@ -29,9 +23,6 @@ export function Section({ id, index, role, title, lede, children, tone = "light"
     <section id={id} className="cx-section relative scroll-mt-20" style={{ backgroundColor: bg }}>
       <div className={`${wide ? "max-w-7xl" : "max-w-6xl"} mx-auto px-5 sm:px-8 py-20 sm:py-28`}>
         <h2 className="font-mono font-bold tracking-[-0.03em] text-[28px] sm:text-[38px] leading-[1.1] max-w-4xl [text-wrap:balance]" style={{ color: ink }}>
-          <span className="cx-treeidx inline-block mr-3 align-[0.42em] text-[0.46em] font-normal tracking-normal" style={{ color: tone === "dark" ? SOL.base01 : SOL.base1 }}>
-            <span style={{ color: SOL.magenta }}>{index}</span> {role}
-          </span>
           {title}
         </h2>
         {lede && <p className="mt-5 max-w-2xl text-[17px] leading-[1.7]" style={{ color: sub }}>{lede}</p>}
