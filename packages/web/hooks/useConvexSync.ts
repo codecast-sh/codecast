@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useServerIdentityLost } from "./useServerAuthSettled";
+import { msUntilInputQuiet } from "../lib/inputQuiet";
+
+// A pause in the keys this long reads as "not typing", and a coalesced flush
+// never waits more than TYPING_MAX_DEFER_MS past its window for one.
+const TYPING_QUIET_MS = 400;
+const TYPING_MAX_DEFER_MS = 1500;
 
 /**
  * Apply a Convex live-query result to local state whenever it changes.
@@ -16,7 +22,8 @@ import { useServerIdentityLost } from "./useServerAuthSettled";
  *
  * Trailing-batch semantics: the first push schedules a flush `coalesceMs` later;
  * further pushes within that window update the pending value but don't reschedule,
- * so the window collapses into one apply with the newest data.
+ * so the window collapses into one apply with the newest data. While the person
+ * is typing, the flush waits for a pause in the keys (at most 1.5s more).
  *
  * Nothing is applied while the server has lost an identity it had confirmed
  * (useServerIdentityLost): the push was computed for an anonymous caller, so
@@ -52,14 +59,23 @@ export function useConvexSync<T>(
       sync(data);
       return;
     }
-    // Coalescing path: collapse a burst into one trailing apply.
+    // Coalescing path: collapse a burst into one trailing apply. A coalesced
+    // feed is background bulk (the inbox), so while the person is typing the
+    // flush waits for a pause in the keys, never longer than TYPING_MAX_DEFER_MS.
     latestRef.current = data;
     if (timerRef.current) return; // flush already scheduled; it will use latestRef
-    timerRef.current = setTimeout(() => {
+    const deadline = Date.now() + coalesceMs + TYPING_MAX_DEFER_MS;
+    const flush = () => {
+      const wait = msUntilInputQuiet(TYPING_QUIET_MS);
+      if (wait > 0 && Date.now() + wait <= deadline) {
+        timerRef.current = setTimeout(flush, wait);
+        return;
+      }
       timerRef.current = null;
       const latest = latestRef.current;
       if (latest !== undefined && !refused(latest)) syncRef.current(latest);
-    }, coalesceMs);
+    };
+    timerRef.current = setTimeout(flush, coalesceMs);
   }, [data, sync, coalesceMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // eslint-disable-next-line no-restricted-syntax

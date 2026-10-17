@@ -40,6 +40,19 @@ describe("tmuxWatchablePrefix", () => {
 });
 
 describe("awaitTmuxComposerPayload", () => {
+  test("a typed report tail retains its embedded divider", async () => {
+    const tail = `last result\n${"─".repeat(40)}\ncheck: prompt fidelity\n</task-comment>`;
+    const payload = `Earlier report lines\n${tail}`;
+    const screen = BOX(tail.replaceAll("\n", "\n  "));
+    expect(tmuxComposerText(screen)).toContain("check: prompt fidelity");
+    expect(await awaitTmuxComposerPayload("t:0.0", payload, {
+      typed: true,
+      budgetMs: 1000,
+      exec: async () => ({ stdout: screen, stderr: "" }),
+      rePaste: async () => { throw new Error("must not duplicate the report"); },
+    })).toBe("matched");
+  });
+
   test.each([false, true])("Codex collapsed paste excludes its footer before faint text is removed (styled=%s)", async styled => {
     const footer = styled
       ? "  \x1b[38;2;246;226;183mgpt-6-astra xhigh\x1b[2m · \x1b[0m\x1b[38;2;171;223;167m~/src/codecast\x1b[2m · \x1b[0mFix Jordan switch state"

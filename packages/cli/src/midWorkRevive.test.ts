@@ -40,6 +40,18 @@ describe("midWorkReviveDecision", () => {
     }
   });
 
+  // ct-59998's Implement hand, 2026-10-16: it pinned dormant on a background
+  // check and a Monitor, the machine restarted, and nothing was left to wake it.
+  test("revives a dormant session whose wake was its own background work", () => {
+    expect(midWorkReviveDecision(facts({ status: "dormant", wakeDiedWithProcess: true }))).toEqual({ revive: true });
+    expect(midWorkReviveDecision(facts({ status: "dormant", wakeDiedWithProcess: false }))).toEqual({ revive: false, reason: "turn-finished" });
+    expect(midWorkReviveDecision(facts({ status: "idle", wakeDiedWithProcess: true }))).toEqual({ revive: false, reason: "turn-finished" });
+  });
+
+  test("keeps a dormant session's status file as long as an unfinished one's", () => {
+    expect(statusFileExpired("dormant", NOW - 2 * 60 * MIN, NOW, 60 * MIN)).toBe(false);
+  });
+
   test("does not wake work that died long ago", () => {
     expect(midWorkReviveDecision(facts({ ageMs: REVIVE_MAX_AGE_MS + 1 }))).toEqual({ revive: false, reason: "too-old" });
   });
