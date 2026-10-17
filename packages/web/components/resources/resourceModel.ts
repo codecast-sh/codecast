@@ -12,6 +12,8 @@ import {
 } from "@codecast/shared/contracts";
 import type { ResourceMachine, ResourceSession } from "./types";
 
+export { fmtBytes, fmtCpu } from "@codecast/shared/contracts";
+
 export const KINDS: ResourceKind[] = ["agent", "tool", "browser", "simulator", "app", "system"];
 export const KIND_LABEL: Record<ResourceKind, string> = {
   agent: "Agents",
@@ -115,6 +117,16 @@ export function freshness(m: ResourceMachine, now: number): Freshness {
 
 export const memoryUsed = (p: ResourcePoint) => Math.max(0, p.memoryTotal - p.memoryAvailable);
 export const memoryUsedPct = (p: ResourcePoint) => (p.memoryTotal > 0 ? (memoryUsed(p) / p.memoryTotal) * 100 : undefined);
+
+/**
+ * How loaded a machine is right now, 0 to 100: its busiest of CPU and memory
+ * in use, raised to the operating system's own verdict when that is worse
+ * (elevated memory pressure reads at least 80, critical at least 95).
+ */
+export function loadPercent(p: ResourcePoint): number {
+  const floor = p.pressure === "critical" ? 95 : p.pressure === "elevated" ? 80 : 0;
+  return Math.min(100, Math.max(floor, p.cpuPercent ?? 0, memoryUsedPct(p) ?? 0));
+}
 export const loadPerCore = (p: ResourcePoint) => p.load1 / Math.max(1, p.logicalCpus);
 
 // ---- grouping ----
@@ -273,21 +285,6 @@ export function outsideLabel(detached: ResourceProcess["detached"]): string | un
 export function namedStops(ps: Array<{ label: string; detached?: ResourceProcess["detached"] }>, max = 4): string {
   const shown = ps.slice(0, max).map((p) => (outsideLabel(p.detached) ? `${p.label} (${outsideLabel(p.detached)})` : p.label));
   return `${shown.join(", ")}${ps.length > max ? `, +${ps.length - max} more` : ""}`;
-}
-
-export function fmtBytes(bytes: number | undefined): string {
-  if (bytes === undefined || !Number.isFinite(bytes)) return "n/a";
-  const gb = bytes / 1024 ** 3;
-  if (gb >= 100) return `${gb.toFixed(0)} GB`;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / 1024 ** 2;
-  return mb >= 1 ? `${mb.toFixed(0)} MB` : `${Math.round(bytes / 1024)} KB`;
-}
-
-/** Process CPU, where one core is 100%. */
-export function fmtCpu(cpu: number | undefined): string {
-  if (cpu === undefined || !Number.isFinite(cpu)) return "n/a";
-  return cpu >= 100 ? `${(cpu / 100).toFixed(1)} cores` : `${cpu.toFixed(cpu < 10 ? 1 : 0)}%`;
 }
 
 export function fmtRate(bps: number | undefined): string {

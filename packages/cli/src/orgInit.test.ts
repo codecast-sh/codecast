@@ -94,12 +94,19 @@ describe("runAnalyzer", () => {
   // The weekly routine's ordinary Monday: last week's proposal is still open,
   // and the reference says so as a fact.
   test("a review with an open proposal states it and never tells the reviewer to withdraw", async () => {
-    const { deps: d } = fake([{ short_id: "op-7", title: "Company review: Acme", mode: "review", status: "open", counts: { decided: 1, total: 6 } }]);
+    const day = 86_400_000;
+    const { deps: d } = fake([
+      { short_id: "op-9", title: "Give the eval suite a lead", mode: "review", status: "open", created_at: Date.now() - 2 * day, counts: { decided: 0, total: 1 } },
+      { short_id: "op-7", title: "Company review: Acme", mode: "review", status: "open", created_at: Date.now() - 9 * day, counts: { decided: 1, total: 6 } },
+      { short_id: "op-8", title: "Growth ask", mode: "request", status: "open", created_at: Date.now() - day, counts: { decided: 0, total: 1 } },
+    ]);
     const cap = capture();
     try { await runAnalyzer(d, "review", {}); } finally { cap.restore(); }
     const p = cap.said();
     expect(p).toContain("You are the Head of People for Acme.");
-    expect(p).toContain('Still open: op-7 "Company review: Acme", 1 of 6 changes decided.');
+    // Every open proposal of its own, oldest first, with its age; another author's request is not its to keep.
+    expect(p).toContain('Still open:\n- op-7 "Company review: Acme", 1 of 6 changes decided, posted 9 days ago.\n- op-9 "Give the eval suite a lead", 0 of 1 changes decided, posted 2 days ago.');
+    expect(p).not.toContain("op-8");
     expect(p).not.toContain("--withdraw");
   });
   test("with no open proposal it prints the prompt", async () => {

@@ -3,6 +3,10 @@ import {
   buildPiles,
   createPile,
   customPileId,
+  groupPileId,
+  setFolded,
+  freeSpot,
+  newPileSize,
   defaultPositions,
   dissolvePile,
   makeLoose,
@@ -84,4 +88,65 @@ test("repoOf names the remote's repo, else the checkout folder", () => {
   expect(repoOf({ git_remote_url: "git@github.com:ashot/codecast.git", project_path: "/x/y" })).toBe("codecast");
   expect(repoOf({ project_path: "/Users/a/src/mail/" })).toBe("mail");
   expect(repoOf({})).toBe("Elsewhere");
+});
+
+describe("views", () => {
+  const now = 10 * 86_400_000;
+  const list = [
+    s("a", { state: "done", updated_at: now - 1000, model: "opus", messages: 3 }),
+    s("b", { state: "needs_input", updated_at: now - 3 * 86_400_000, model: "opus", messages: 9 }),
+    s("c", { state: "working", updated_at: now - 40 * 86_400_000, roleId: "lead" }),
+  ];
+  const ids = (p: { active: MapSession[]; settled: MapSession[] }) => [...p.active, ...p.settled].map((x) => x.id);
+
+  test("grouping by state keeps done sessions as cards and ranks piles in urgency order", () => {
+    const { piles } = buildPiles(list, roles, {}, { group: "state" }, now);
+    const done = piles.find((p) => p.id === groupPileId("state", "done"))!;
+    expect(done.active.map((x) => x.id)).toEqual(["a"]);
+    expect(done.settled).toEqual([]);
+    expect(piles.find((p) => p.id === groupPileId("state", "needs_input"))!.rank).toBeLessThan(done.rank);
+    // Outside the org grouping, roles draw no piles of their own.
+    expect(piles.some((p) => p.kind === "role")).toBe(false);
+  });
+
+  test("grouping by last activity buckets by day, model groups name the missing value", () => {
+    const day = buildPiles(list, roles, {}, { group: "day" }, now).piles;
+    expect(day.map((p) => [p.title, ids(p)])).toEqual(expect.arrayContaining([["Today", ["a"]], ["This week", ["b"]], ["Older", ["c"]]]));
+    const model = buildPiles(list, roles, {}, { group: "model" }, now).piles;
+    expect(model.find((p) => p.title === "No model")!.active.map((x) => x.id)).toEqual(["c"]);
+  });
+
+  test("a pile the person made holds its sessions under every grouping", () => {
+    const layout: SessionMapLayout = { piles: { k: { title: "Mine", ids: ["b"] } } };
+    for (const group of ["org", "state", "model"] as const) {
+      const { piles } = buildPiles(list, roles, layout, { group }, now);
+      expect(ids(piles.find((p) => p.id === customPileId("k"))!)).toEqual(["b"]);
+    }
+  });
+
+  test("sorting orders the cards inside a pile", () => {
+    const one = list.map((x) => ({ ...x, roleId: null, state: "working" as const }));
+    const pile = (sort: "recent" | "oldest" | "messages") => ids(buildPiles(one, [], {}, { group: "repo", sort }, now).piles[0]);
+    expect(pile("recent")).toEqual(["a", "b", "c"]);
+    expect(pile("oldest")).toEqual(["c", "b", "a"]);
+    expect(pile("messages")[0]).toBe("b");
+  });
+
+  test("stacking makes a folded pile; folding many at once is one edit", () => {
+    const l = createPile({}, "Deck", ["a", "b"], { x: 0, y: 0 }, "k", true);
+    expect(l.folded).toEqual([customPileId("k")]);
+    const spread = setFolded(l, [customPileId("k")], false);
+    expect(spread.folded).toEqual([]);
+    expect(setFolded(spread, ["x", "y"], true).folded).toEqual(["x", "y"]);
+  });
+});
+
+test("a new pile lands in the nearest open spot, never on another pile", () => {
+  const taken = [{ x: 0, y: 0, w: 1000, h: 800 }];
+  const size = newPileSize(2, false);
+  const at = freeSpot(taken, size, { x: 100, y: 100 });
+  const overlaps = at.x < 1000 && at.x + size.w > 0 && at.y < 800 && at.y + size.h > 0;
+  expect(overlaps).toBe(false);
+  expect(freeSpot([], size, { x: 5, y: 7 })).toEqual({ x: 5, y: 7 });
+  expect(newPileSize(5, true)).toEqual(newPileSize(1, true));
 });

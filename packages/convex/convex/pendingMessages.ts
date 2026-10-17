@@ -953,9 +953,9 @@ export async function performSessionSend(
       : formatSessionMessage(fromShortId, body, { name: fromName }),
     image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
-    // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
-    // never-drop semantics (your own busy session will get it when it's idle).
-    from_conversation_id: isCrossUser ? fromConversationId : undefined,
+    // The failure-feedback channel: the stuck-message cron tells this session when the send sits
+    // undelivered (planStuckSendNotify decides which waits are worth saying).
+    from_conversation_id: fromConversationId,
     // No sender session means a person typed this (a link collaborator's
     // composer, a detached `cast send`). A raw send is the model/effort
     // picker's slash command, a gesture rather than a message.
@@ -1874,19 +1874,21 @@ async function liveAndReadyConversationIds(
   return { ready, live };
 }
 
-// How long a cross-user (team) message may sit undelivered before we tell the sending session.
+// How long a session's message may sit undelivered before we tell the sending session.
 // Comfortably past the heartbeat window (90s) so a brief daemon reconnect doesn't read as "offline".
-export const CROSS_USER_NOTIFY_DEADLINE_MS = 3 * 60_000;
+export const STUCK_SEND_NOTIFY_DEADLINE_MS = 3 * 60_000;
 
-export type TargetReach = "live" | "offline" | "gone";
-export type CrossUserNotify = { kind: "skip" } | { kind: "notify"; reach: TargetReach };
+// busy: live and mid-turn. stuck: live and idle, yet the message is still not in.
+export type TargetReach = "busy" | "stuck" | "offline" | "gone";
+export type StuckSendNotify = { kind: "skip" } | { kind: "notify"; reach: TargetReach };
 
-// Pure decision: should the sender be told this cross-user message is stuck? Fires at most once
+// Pure decision: should the sending session be told its message is stuck? Fires at most once
 // (gated on sender_notified_at). The message itself is kept unless its target session no longer
 // exists: a busy session takes it when idle, and an offline one (its machine asleep or its daemon
-// down) takes it when that daemon returns. Self-sends (from == owner) and rows with no sender
+// down) takes it when that daemon returns. Waiting on a busy session of the sender's own is the
+// ordinary case and is not said; a teammate's sender hears every reason. Rows with no sender
 // session are never notified.
-export function planCrossUserNotify(
+export function planStuckSendNotify(
   msg: {
     status: string;
     created_at: number;
@@ -1897,19 +1899,19 @@ export function planCrossUserNotify(
   },
   reach: TargetReach,
   now: number
-): CrossUserNotify {
+): StuckSendNotify {
   if (msg.status === "delivered" || msg.status === "cancelled") return { kind: "skip" };
   if (!msg.from_conversation_id) return { kind: "skip" }; // no sender session to notify
   if (msg.sender_notified_at) return { kind: "skip" }; // already told them once
   if (!msg.owner_user_id) return { kind: "skip" }; // legacy/unknown owner
-  if (msg.from_user_id.toString() === msg.owner_user_id.toString()) return { kind: "skip" }; // self-send
-  if (now - msg.created_at < CROSS_USER_NOTIFY_DEADLINE_MS) return { kind: "skip" };
+  if (now - msg.created_at < STUCK_SEND_NOTIFY_DEADLINE_MS) return { kind: "skip" };
+  if (reach === "busy" && msg.from_user_id.toString() === msg.owner_user_id.toString()) return { kind: "skip" };
   return { kind: "notify", reach };
 }
 
 // Deliver a delay receipt back into the sender's own session and mark the original so we don't
 // notify again. Only a target that no longer exists cancels the original.
-async function notifyStuckCrossUserSend(
+async function notifyStuckSend(
   ctx: { db: any },
   msg: any,
   reach: TargetReach
@@ -1929,6 +1931,8 @@ async function notifyStuckCrossUserSend(
     ? `Your message to session ${targetLabel} could not be delivered — that session no longer exists, so the message was dropped.\n\n> ${preview}`
     : reach === "offline"
     ? `Your message to session ${targetLabel} hasn't been delivered yet — it has no live daemon right now (its machine may be asleep or offline). It stays queued and is delivered when that daemon comes back; no action needed unless it is urgent.\n\n> ${preview}`
+    : reach === "stuck"
+    ? `Your message to session ${targetLabel} hasn't been delivered yet. The session is idle, but its machine has not managed to put the message in front of it, and it keeps retrying. If it is urgent, check that machine's load or its daemon.\n\n> ${preview}`
     : `Your message to session ${targetLabel} hasn't been delivered yet — the session is busy. It stays queued and will be delivered automatically the moment the session goes idle; no action needed.\n\n> ${preview}`;
 
   // The receipt goes into the sender's OWN conversation, so from_user == owner == the sender:
@@ -2030,15 +2034,17 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         }
         continue;
       }
-      // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
-      // past the deadline tells the sender why (busy, offline, or gone). planCrossUserNotify
-      // no-ops on self-sends and already-notified rows.
-      const reach: TargetReach = gone.has(conversationId) ? "gone" : live.has(conversationId) ? "live" : "offline";
-      const crossUserNotify = planCrossUserNotify(msg, reach, now);
-      if (crossUserNotify.kind === "notify") {
-        await notifyStuckCrossUserSend(ctx, msg, crossUserNotify.reach);
+      // Sender feedback runs regardless of the target's readiness: a message stuck past the
+      // deadline tells its sending session why. planStuckSendNotify no-ops on already-notified
+      // rows and on the sender's own busy session.
+      const reach: TargetReach = gone.has(conversationId) ? "gone"
+        : live.has(conversationId) ? (ready.has(conversationId) ? "stuck" : "busy")
+        : "offline";
+      const senderNotify = planStuckSendNotify(msg, reach, now);
+      if (senderNotify.kind === "notify") {
+        await notifyStuckSend(ctx, msg, senderNotify.reach);
         notified++;
-        if (crossUserNotify.reach === "gone") continue; // cancelled — nothing more to do with this row
+        if (senderNotify.reach === "gone") continue; // cancelled — nothing more to do with this row
       }
       // A dialog hold describes a pane: the screen the daemon read on it. Once no daemon is
       // serving the session there is no pane, and the card would go on saying "waiting for a
@@ -2133,7 +2139,7 @@ export const auditStrandedMessages = internalQuery({
     for (const status of NON_TERMINAL_STATUSES) {
       const rows = await ctx.db
         .query("pending_messages")
-        .filter((q) => q.eq(q.field("status"), status))
+        .withIndex("by_status", (q) => q.eq("status", status))
         .collect();
       byStatus[status] = rows.length;
       for (const r of rows) {

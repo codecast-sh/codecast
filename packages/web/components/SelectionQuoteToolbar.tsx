@@ -11,7 +11,7 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveQuoteSelection, quoteSelectionIntoReply, type QuoteSelection } from "../lib/quoteSelection";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { FilePathContext, filePathHref, filePathMention } from "../lib/filePathLinks";
 import { openFiles } from "../lib/filesPane";
 
@@ -96,7 +96,7 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
     >
       <button type="button" className="cc-sel-btn" onClick={doQuote}>
         ❝ Quote into reply
-        <KeyCap size="xs">R</KeyCap>
+        <MenuKeyCaps action="conv.review" className="contents" />
       </button>
       {asPath && (
         <button type="button" className="cc-sel-btn" onClick={doOpenFile} title={`Open ${asPath.path} in Files`}>

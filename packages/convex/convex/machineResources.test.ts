@@ -4,7 +4,7 @@ import schema from "./schema";
 import { makeFunctionReference } from "convex/server";
 const listMine = makeFunctionReference<"query">("machineResources:listMine");
 import { hashToken } from "./apiTokens";
-import { storeResourceSnapshot } from "./machineResources";
+import { OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot } from "./machineResources";
 import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 
 const modules = {
@@ -73,4 +73,49 @@ test("daemon bearer report reaches the authenticated dashboard and rejects inval
   await expect(t.mutation(report, { api_token: "invalid", snapshot: sample(now) })).rejects.toThrow("Authentication");
   expect(await t.mutation(report, { api_token: token, snapshot: sample(now) })).toEqual({ accepted: true });
   expect((await t.withIdentity({ subject: user }).query(listMine, {}))[0].snapshot).toEqual(sample(now));
+});
+
+test("an overload incident rings once when it starts, again only when it turns critical or after a quiet spell", () => {
+  const now = 10 * 3600_000;
+  const elevated = { level: "elevated" as const, since: now - 3 * 60_000, reason: "CPU use has stayed above 90%" };
+  expect(overloadAlertDue(null, undefined, now)).toBeNull();
+  expect(overloadAlertDue(elevated, undefined, now)).toEqual(elevated);
+  const rang = { since: elevated.since, level: "elevated" as const, at: now };
+  expect(overloadAlertDue(elevated, rang, now + 60_000)).toBeNull();
+  expect(overloadAlertDue({ ...elevated, level: "critical" }, rang, now + 60_000)?.level).toBe("critical");
+  const next = { ...elevated, since: now + 5 * 60_000 };
+  expect(overloadAlertDue(next, rang, now + 8 * 60_000)).toBeNull();
+  expect(overloadAlertDue(next, rang, now + OVERLOAD_REALERT_MS)).toEqual(next);
+});
+
+test("the overload message names the cause, the vitals and the heaviest sessions", () => {
+  const now = 10 * 3600_000;
+  const words = overloadMessage({
+    machine: "MacBook-Pro-182",
+    incident: { level: "elevated", since: now - 4 * 60_000, reason: "CPU use has stayed above 90%" },
+    sample: { at: now, cpuPercent: 96, memoryTotal: 128 * 2 ** 30, memoryAvailable: 34.5 * 2 ** 30, memoryAvailableIsEstimate: true, pressure: "normal", load1: 110, logicalCpus: 16 },
+    top: [{ title: "Agent feedback controls", cpu: 860, rss: 1.1 * 2 ** 30 }, { title: "Website warm cards", cpu: 40, rss: 684 * 2 ** 20 }],
+    now,
+  });
+  expect(words.message).toBe("MacBook-Pro-182 is overloaded. CPU use has stayed above 90% for 4 min. CPU 96%, memory 93.5 GB of 128 GB. Heaviest: Agent feedback controls (8.6 cores, 1.1 GB); Website warm cards (40%, 684 MB). Open it to move load to the cloud.");
+  expect(words.subtitle).toBe("CPU use has stayed above 90% for 4 min");
+});
+
+test("a laptop's sustained overload rings once from the sample that confirms it", async () => {
+  const t = convexTest(schema, modules);
+  const start = Date.now() - 10 * 60_000;
+  const user = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", { name: "Owner" });
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "macOS - MacBook-Pro-182", platform: "darwin", last_seen: start });
+    return id;
+  });
+  const hot = (at: number): MachineResourceSnapshot => ({ ...sample(at), sample: { ...sample(at).sample, cpuPercent: 97 } });
+  for (let i = 0; i <= 10; i++) {
+    const at = start + i * 30_000;
+    await t.run(ctx => storeResourceSnapshot(ctx, user, hot(at), at));
+  }
+  const rows = await t.run(ctx => ctx.db.query("notifications").collect());
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ type: "machine_overloaded", entity_type: "machine", entity_id: "mac" });
+  expect(rows[0].message).toStartWith("MacBook-Pro-182 is overloaded. CPU use has stayed above 90%");
 });

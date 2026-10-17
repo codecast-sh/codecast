@@ -1095,9 +1095,9 @@ describe("a person's answers as the message the agent reads (proposalReplyText)"
 
   test("the words a surface shows per verdict", () => {
     expect(ORG_REPLY_WORDS).toEqual({
-      approve: { act: "Approve", done: "Approved" },
+      approve: { act: "Accept", done: "Accepted" },
       reject: { act: "Reject", done: "Rejected" },
-      note: { act: "Reply", done: "Noted" },
+      note: { act: "Adjust", done: "Noted" },
     });
   });
 

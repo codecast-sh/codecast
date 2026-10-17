@@ -85,6 +85,29 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     setMessage(m => dropImagePlaceholder(m, index + 1));
   };
 
+  // Adds local image files to the turn: each gets an `[Image N]` token in
+  // attach order (the order the agent receives them) and starts uploading.
+  const attachImages = (picked: Array<{ uri: string; mime: string }>) => {
+    for (const { uri, mime } of picked) {
+      if (selectedImagesRef.current.some(img => img.uri === uri)) continue;
+      // Ref-first so a multi-pick batch numbers sequentially: the state
+      // updates are async, so `selectedImages` is still the old array here.
+      selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, uploading: true }];
+      setSelectedImages(selectedImagesRef.current);
+      setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
+      // Registered in pendingImageUploads under the uri, so a send pressed
+      // before the bytes land still finds the upload (dispatchComposerSend).
+      startUpload(convex, { uri, mime }).then(storageId => {
+        if (storageId) {
+          setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
+          return;
+        }
+        removeImage(uri);
+        Alert.alert('Upload failed', 'Could not upload image');
+      });
+    }
+  };
+
   const pickImage = async () => {
     if (!ImagePicker) {
       Alert.alert('Not available', 'Image uploads require a development build with expo-image-picker.');
@@ -102,27 +125,7 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
         quality: 0.8,
       });
       if (!result.canceled && result.assets) {
-        for (const asset of result.assets) {
-          const uri = asset.uri;
-          const mime = asset.mimeType ?? 'image/jpeg';
-          // Ref-first so a multi-pick batch numbers sequentially: the state
-          // updates are async, so `selectedImages` is still the old array here.
-          selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, uploading: true }];
-          setSelectedImages(selectedImagesRef.current);
-          // Token numbers follow attach order, which is the order the agent
-          // receives the images in — so `[Image 2]` is a real reference.
-          setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
-          // Registered in pendingImageUploads under the uri, so a send pressed
-          // before the bytes land still finds the upload (dispatchComposerSend).
-          startUpload(convex, { uri, mime }).then(storageId => {
-            if (storageId) {
-              setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
-              return;
-            }
-            removeImage(uri);
-            Alert.alert('Upload failed', 'Could not upload image');
-          });
-        }
+        attachImages(result.assets.map(a => ({ uri: a.uri, mime: a.mimeType ?? 'image/jpeg' })));
       }
     } catch (err) {
       console.error('Image picker error:', err);
@@ -135,7 +138,7 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     ? { media_type: img.mime, storage_id: img.storageId }
     : { media_type: img.mime, preview_url: img.uri, uploading: true });
 
-  return { selectedImages, pickImage, removeImage, optimisticImages, clearImages: () => setSelectedImages([]) };
+  return { selectedImages, pickImage, attachImages, removeImage, optimisticImages, clearImages: () => setSelectedImages([]) };
 }
 
 export type ComposerStatus = { color: string; dot?: string; label: string };

@@ -39,9 +39,6 @@ import { getLabelColor } from "../../lib/labelColors";
 import { browseProjectOrder, frequentProjectChips } from "../../lib/recentProjectPaths";
 import { ChevronDown, Search } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { sessionWorkState } from "../../store/inboxStore";
-import { ORG_STATE_META } from "../org/orgMeta";
-import { formatTimeAgo } from "../../lib/messageNavigator";
 import { deviceDisplayName } from "../DeviceBadge";
 import { useHostLoads } from "../../hooks/useHostLoads";
 import { MachineChips } from "../MachineChips";
@@ -105,7 +102,7 @@ function restorePickerFocus(prev: HTMLElement | null) {
   document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
 }
 
-export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline = false, modeSlot, recentsSlot }: {
+export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline = false, modeSlot }: {
   conversation: ConversationData;
   handleRef?: React.MutableRefObject<PickerHandle | null>;
   // The new-session page's question over the chips ("What should we build in
@@ -115,9 +112,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // chips. Provided → portaled into the host's slot (the composer foot on the
   // new-session page), and the meta row goes.
   modeSlot?: HTMLElement | null;
-  // Where this project's recent sessions list renders (the new-session page,
-  // under the composer). Omitted → no list.
-  recentsSlot?: HTMLElement | null;
   // Where the machine picker renders. Omitted → inline above the folder chips
   // (the standalone non-owner surface). Provided → portaled into the host's
   // slot (NewSessionView puts it on the Context line); null while the slot
@@ -694,10 +688,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   return (
     <div className="flex flex-col items-center gap-3">
       {modeSlot && createPortal(<SessionPlacementMenu {...modeProps} onPick={pickPlacement} />, modeSlot)}
-      {recentsSlot && createPortal(
-        <ProjectRecentSessions projectPath={currentPath} excludeId={storeSession?._id || conversation._id} />,
-        recentsSlot,
-      )}
       {headline && (
         <h1 className="mb-1 text-center text-xl sm:text-2xl font-medium tracking-tight text-sol-text">
           {currentPath ? <>
@@ -1251,47 +1241,6 @@ export function NewSessionFoot({ slotRef, dropRef }: {
   );
 }
 
-/** This project's latest sessions under the new-session composer, each with
- *  who acts next, so a person continues one instead of starting a duplicate.
- *  The store holds the rows; the signature string keeps a heartbeat elsewhere
- *  from re-rendering the list. */
-function ProjectRecentSessions({ projectPath, excludeId }: { projectPath: string | undefined; excludeId: string }) {
-  const name = projectPath ? repoName(projectPath) : null;
-  const sig = useInboxStore((s) => {
-    if (!name) return "";
-    const rows: string[] = [];
-    const picked = Object.values(s.sessions)
-      .filter((r) => r._id !== excludeId && !r.is_subagent && (r.message_count ?? 0) > 0 && (r.short_title || r.title)
-        && [r.git_root, r.project_path].some((p) => p && repoName(p) === name))
-      .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(0, 5);
-    for (const r of picked) rows.push([r._id, sessionWorkState(r), r.updated_at, r.short_title || r.title].join("\u0001"));
-    return rows.join("\u0002");
-  });
-  const rows = useMemo(() => (sig ? sig.split("\u0002").map((line) => {
-    const [id, state, at, title] = line.split("\u0001");
-    return { id, state: state as keyof typeof ORG_STATE_META, at: Number(at), title };
-  }) : []), [sig]);
-  if (!name || rows.length === 0) return null;
-  return (
-    <div className="mx-auto conv-col px-2 sm:px-4">
-      <div className="px-3 pb-1.5 text-[11px] text-sol-text-dim">Recent in {name}</div>
-      {rows.map((r) => (
-        <button
-          key={r.id}
-          type="button"
-          onClick={() => useInboxStore.getState().navigateToSession(r.id, "gesture")}
-          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-left text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors"
-        >
-          <span className="flex-1 min-w-0 truncate">{r.title}</span>
-          <span className={`shrink-0 px-1.5 py-px rounded-full border text-[10px] ${ORG_STATE_META[r.state]?.chip ?? ""}`}>{ORG_STATE_META[r.state]?.label ?? r.state}</span>
-          <span className="shrink-0 w-8 text-right tabular-nums text-[10px] text-sol-text-dim">{formatTimeAgo(r.at)}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /** The hosted assistant's intro (AssistantIntro), in place of the developer
  *  pickers. The composer this sits over (ConversationView and ComposeView
  *  both bridge it) takes a starter's request. */
@@ -1305,11 +1254,10 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   agentControls?: NewSessionAgentControls;
   // The new-session page (ConversationView): the host's composer foot and the
   // space under the composer. Given, the launch pickers render in the foot
-  // and the context line and this project's sessions below; null while a slot
-  // element hasn't mounted yet. Omitted (the compose popup), everything
-  // renders here above the host's input. `recents: false` (the compose popup)
-  // leaves out this project's sessions.
-  slots?: { foot: HTMLElement | null; below: HTMLElement | null; recents?: boolean };
+  // and the context line below; null while a slot element hasn't mounted
+  // yet. Omitted (the compose popup), everything renders here above the
+  // host's input.
+  slots?: { foot: HTMLElement | null; below: HTMLElement | null };
   // The new-session page's recipient (ComposeRolePicker): picked, the request
   // goes to that role's standing session, which chooses project and agent, so
   // the launch pickers step aside.
@@ -1341,7 +1289,6 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
   // Sub-slots inside the host's slots, so the pieces land in a fixed order.
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
-  const [recentsSlot, setRecentsSlot] = useState<HTMLElement | null>(null);
   useMountEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       // altChordDirection also releases ⌥←/⌥→ from a text caret (word jump).
@@ -1415,7 +1362,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
         {role?.picked ? null : <>
         {hosted ? <HostedComposeIntro /> : (
           <ErrorBoundary name="ProjectSwitcher" level="inline">
-            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} headline modeSlot={modeSlot} recentsSlot={recentsSlot} />
+            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} headline modeSlot={modeSlot} />
           </ErrorBoundary>
         )}
         {slots.foot && createPortal(
@@ -1438,7 +1385,6 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
                 <NewSessionBucketPill conversation={conversation} />
               </div>
             </div>
-            {slots.recents !== false && <div ref={setRecentsSlot} className="mt-6" />}
           </>,
           slots.below,
         )}
