@@ -9,7 +9,7 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, rerunFromMainCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -686,6 +686,23 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     const forced = carded(w, "forced", 7, { read: ids("forced", 0), covers: [] });
     expect(await rerunCore(w.ctx, HOST, "ct-forced", NOW, true, "card_write", "card_write", "shared")).toMatchObject({ resumed_at: "card_write" });
     expect(forced.card().reopened_at).toBeUndefined();
+  });
+
+  test("--fresh starts a problem again from main wherever its run stands: the run ends, its card closes with the fix set aside, and a fresh-branch run of the same graph is queued (ct-59945: picked up at investigate, the old fix stayed on its branch and Prove refused it)", async () => {
+    const w = world(1000);
+    const old = carded(w, "old", 3, { read: ids("old", 0, 1, 2), covers: ids("old", 0, 1, 2) });
+    // Picked up at investigate earlier: now working, on its old branch.
+    Object.assign(old.run(), { status: "running", current_node_id: "prove", gate_node_id: undefined });
+    const r = await rerunFromMainCore(w.ctx, HOST, "ct-old", NOW);
+    expect(r).toMatchObject({ task: "ct-old", resumed_at: null, set_aside: "workflow_runs_old" });
+    expect(old.run()).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was started again from main" });
+    expect(old.card()).toMatchObject({ status: "closed", reopened_at: NOW });
+    const next = w.tables.workflow_runs.find((x: any) => x._id === r.run_id);
+    expect(next).toMatchObject({ fresh_branch: true, workflow_name: old.run().workflow_name });
+    expect(w.tables.task_comments.at(-1).text).toContain("Started again from main");
+    // A closed problem is not started again.
+    old.task().status = "dropped";
+    await expect(rerunFromMainCore(w.ctx, HOST, "ct-old", NOW)).rejects.toThrow("a closed problem is not run again");
   });
 
   test("Drop at the card does what the problem's findings call for: with findings left it stays open and due a run from main, with none it closes (tc-66 left 7 live findings in review with no run; tc-67, tc-70 held none)", async () => {

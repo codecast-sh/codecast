@@ -1,9 +1,8 @@
 "use client";
 import { useMemo, useState, useRef } from "react";
 import { Activity, ChevronLeft, ChevronRight, Clock, Coins, DollarSign, LayoutGrid, MessageSquare, Send, Type, X } from "lucide-react";
-import { useTheme } from "./ThemeProvider";
 import { SegmentedToggle } from "./SegmentedToggle";
-import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
+import { heatRamp, heatColor, heatLevels, fmtHours, useContainerWidth, HoverTip } from "./ActivityHeatmap";
 import { BrushRect as DayBrushRect, useDayBrush } from "@platform/evals/react";
 import { MONTHS, timeAxisLabels } from "@platform/evals/client";
 
@@ -46,61 +45,50 @@ export function fmtDayLabel(dateStr: string): string {
   return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
 }
 
-const CYAN_COLORS_LIGHT = ["#eee8d5", "#bfe0d8", "#7fcabb", "#3fae9c", "#1d8a7a"];
-const CYAN_COLORS_DARK = ["#073642", "#0e4a50", "#15655f", "#1e857a", "#2aa198"];
+// Each metric draws in one theme accent: the line in the accent itself, the
+// grid in a ramp of it (heatRamp), so every theme keeps them legible.
+const metricColors = (accent: string) => ({ line: `var(${accent})`, ramp: heatRamp(accent) });
 
 const METRIC_CFG = {
   hours: {
     label: "Hours",
     heading: "Hours per day",
-    line: "#859900",
-    light: HEAT_COLORS_LIGHT,
-    dark: HEAT_COLORS_DARK,
-    fmtVal: (v: number) => `${v.toFixed(1)}h`,
+    ...metricColors("--sol-green"),
+    fmtVal: fmtHours,
     fmtAxis: (v: number) => `${Math.round(v)}h`,
   },
   msgs: {
     label: "Messages",
     heading: "Messages per day",
-    line: "#2aa198",
-    light: CYAN_COLORS_LIGHT,
-    dark: CYAN_COLORS_DARK,
+    ...metricColors("--sol-cyan"),
     fmtVal: (v: number) => `${fmtK(Math.round(v))} msgs`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
   sends: {
     label: "Typed",
     heading: "Messages typed per day",
-    line: "#268bd2",
-    light: ["#eee8d5", "#c3d9e8", "#8cbcdd", "#4d9cd4", "#268bd2"] as string[],
-    dark: ["#073642", "#0d4a63", "#15618a", "#1d78b1", "#268bd2"] as string[],
+    ...metricColors("--sol-blue"),
     fmtVal: (v: number) => `${fmtK(Math.round(v))} typed`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
   words: {
     label: "Words",
     heading: "Words typed per day",
-    line: "#6c71c4",
-    light: ["#eee8d5", "#d6d3e6", "#b3b0dc", "#8f8fd0", "#6c71c4"] as string[],
-    dark: ["#073642", "#1f3f63", "#374f84", "#5160a4", "#6c71c4"] as string[],
+    ...metricColors("--sol-violet"),
     fmtVal: (v: number) => `${fmtK(Math.round(v))} words`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
   tokens: {
     label: "Tokens",
     heading: "Tokens per day",
-    line: "#2aa198",
-    light: CYAN_COLORS_LIGHT,
-    dark: CYAN_COLORS_DARK,
+    ...metricColors("--sol-cyan"),
     fmtVal: (v: number) => `${fmtK(Math.round(v))} tokens`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
   spend: {
     label: "Spend",
     heading: "Spend per day, at API list price",
-    line: "#b58900",
-    light: ["#eee8d5", "#e8dcae", "#dcc679", "#c9a83d", "#b58900"] as string[],
-    dark: ["#073642", "#2b4a3a", "#4f5e2a", "#82721a", "#b58900"] as string[],
+    ...metricColors("--sol-yellow"),
     fmtVal: fmtUsd,
     fmtAxis: fmtUsd,
   },
@@ -319,8 +307,10 @@ export function TimelineCharts({
   return (
     <div className="mt-2">
       <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <span className="text-[9px] text-sol-text-muted/45 uppercase tracking-widest font-bold">{cfg.heading}</span>
-        <span className="text-[9px] text-sol-text-muted/40 tabular-nums">{cfg.fmtVal(total)} · {sliced.length} days</span>
+        <span className="text-[11px] text-sol-text-muted uppercase tracking-wider font-semibold">{cfg.heading}</span>
+        <span className="text-[11px] text-sol-text-muted tabular-nums">
+          <span className="text-sol-text font-semibold">{cfg.fmtVal(total)}</span> · {sliced.length} days
+        </span>
         <div className="ml-auto flex items-center gap-1.5 scale-[0.82] origin-right">
           <SegmentedToggle
             value={view}
@@ -354,9 +344,7 @@ export function TimelineCharts({
 
 /* Hour-of-day density: one column per day, one row per hour, intensity = metric. */
 function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMetric }) {
-  const { theme } = useTheme();
-  const cfg = METRIC_CFG[metric];
-  const colors = theme === "dark" ? cfg.dark : cfg.light;
+  const colors = METRIC_CFG[metric].ramp;
   const { ref, width } = useContainerWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<{ di: number; hr: number; x: number; y: number } | null>(null);
@@ -368,11 +356,7 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
   const chartH = padTop + plotH + padBottom;
   const cellW = plotW / Math.max(rows.length, 1);
 
-  const max = useMemo(() => {
-    let m = 0;
-    for (const r of rows) for (const v of metricHours(r, metric)) if (v > m) m = v;
-    return m || 1;
-  }, [rows, metric]);
+  const levels = useMemo(() => heatLevels(rows.flatMap((r) => metricHours(r, metric))), [rows, metric]);
 
   // Cells are memoized so hover-state changes don't rebuild thousands of rects.
   const cells = useMemo(
@@ -386,12 +370,12 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
             width={Math.max(cellW - 0.5, 0.5)}
             height={cellH - 0.75}
             rx={1}
-            fill={heatColor(v, max, colors)}
+            style={{ fill: heatColor(v, levels, colors) }}
           />
         ) : null
       )
     ),
-    [rows, metric, max, colors, cellW]
+    [rows, metric, levels, colors, cellW]
   );
 
   const xLabels = useMemo(() => timeAxisLabels(rows.map((r) => r.date), (i) => padLeft + i * cellW), [rows, cellW]);
@@ -416,18 +400,18 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
         }}
       >
         {/* level-0 backdrop so inactive hours read as empty cells */}
-        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill={colors[0]} opacity={0.35} rx={2} />
+        <rect x={padLeft} y={padTop} width={plotW} height={plotH} style={{ fill: colors[0] }} rx={2} />
         {/* hour-of-day guides + labels */}
         {[0, 6, 12, 18].map((h) => (
           <g key={h}>
-            <text x={padLeft - 4} y={padTop + h * cellH + cellH + 1} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{hourLabel(h)}</text>
-            {h > 0 && <line x1={padLeft} x2={padLeft + plotW} y1={padTop + h * cellH - 0.5} y2={padTop + h * cellH - 0.5} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray="2,3" />}
+            <text x={padLeft - 4} y={padTop + h * cellH + cellH + 1} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 8 }}>{hourLabel(h)}</text>
+            {h > 0 && <line x1={padLeft} x2={padLeft + plotW} y1={padTop + h * cellH - 0.5} y2={padTop + h * cellH - 0.5} stroke="currentColor" className="text-sol-border/40" strokeWidth={0.5} strokeDasharray="2,3" />}
           </g>
         ))}
         {cells}
         {/* x labels */}
         {xLabels.map((l, i) => (
-          <text key={i} x={l.x} y={chartH - 4} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{l.label}</text>
+          <text key={i} x={l.x} y={chartH - 4} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 9 }}>{l.label}</text>
         ))}
         {/* hovered cell outline */}
         {hover && (
@@ -533,34 +517,34 @@ function TimelineChart({
           const y = toY(v);
           return (
             <g key={i}>
-              <line x1={padLeft} x2={containerW - padRight} y1={y} y2={y} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={i === 0 ? "none" : "2,3"} />
-              <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{cfg.fmtAxis(v)}</text>
+              <line x1={padLeft} x2={containerW - padRight} y1={y} y2={y} stroke="currentColor" className="text-sol-border/40" strokeWidth={0.5} strokeDasharray={i === 0 ? "none" : "2,3"} />
+              <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 8 }}>{cfg.fmtAxis(v)}</text>
             </g>
           );
         })}
         {/* X labels */}
         {xLabels.map((m, i) => (
-          <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{m.label}</text>
+          <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 9 }}>{m.label}</text>
         ))}
         {/* Area fill */}
-        <path d={areaPath} fill={cfg.line} opacity={0.12} />
+        <path d={areaPath} style={{ fill: cfg.line }} opacity={0.14} />
         {/* Line */}
-        <path d={linePath} fill="none" stroke={cfg.line} strokeWidth={1.5} opacity={0.7} />
+        <path d={linePath} fill="none" style={{ stroke: cfg.line }} strokeWidth={1.5} />
         {/* Markers on active days (day granularity only — too dense hourly) */}
         {!hourly && points.map((d, i) => d.sessions > 0 ? (
           <circle
             key={i}
             cx={toX(i)} cy={toY(d.value)}
             r={d.sessions > 10 ? 3 : d.sessions > 3 ? 2.5 : 2}
-            fill={cfg.line}
-            opacity={hovered?.idx === i ? 1 : 0.6}
+            style={{ fill: cfg.line }}
+            opacity={hovered?.idx === i ? 1 : 0.75}
           />
         ) : null)}
         {/* Hover vertical line + point */}
         {hovered && hp && (
           <>
-            <line x1={toX(hovered.idx)} x2={toX(hovered.idx)} y1={padTop} y2={padTop + plotH} stroke={cfg.line} strokeWidth={0.5} opacity={0.4} strokeDasharray="3,3" />
-            <circle cx={toX(hovered.idx)} cy={toY(hp.value)} r={2.5} fill={cfg.line} />
+            <line x1={toX(hovered.idx)} x2={toX(hovered.idx)} y1={padTop} y2={padTop + plotH} style={{ stroke: cfg.line }} strokeWidth={0.5} opacity={0.5} strokeDasharray="3,3" />
+            <circle cx={toX(hovered.idx)} cy={toY(hp.value)} r={3} style={{ fill: cfg.line }} />
           </>
         )}
       </svg>

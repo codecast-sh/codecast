@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { git, gitTry } from "../wipSnapshot.js";
-import { execFileSync, spawnSync } from "../proc.js";
+import { execFileAsync } from "../proc.js";
 
 const NULL_SHA = "0000000000000000000000000000000000000000";
 const GITLINK = "160000";
@@ -111,8 +111,13 @@ export async function worktreeBlobs(root: string, paths: string[]): Promise<Map<
   return result;
 }
 
+// The daemon levels every shared checkout once a minute, so each git call here
+// is async: a sync cat-file or merge-file per changed path froze its loop for
+// 1 to 4 seconds apiece under load (2026-10-17).
+const BLOB_MAX_BUFFER = 256 * 1024 * 1024;
+
 async function blobContent(cwd: string, sha: string): Promise<Buffer> {
-  return execFileSync("git", ["-C", cwd, "cat-file", "blob", sha], { maxBuffer: 256 * 1024 * 1024 });
+  return (await execFileAsync("git", ["-C", cwd, "cat-file", "blob", sha], { encoding: "buffer", maxBuffer: BLOB_MAX_BUFFER })).stdout;
 }
 
 /** Three-way merge of one file's text; null when it conflicts. */
@@ -125,8 +130,8 @@ async function mergeFile(cwd: string, base: string, current: Buffer, other: stri
     fs.writeFileSync(cur, current);
     fs.writeFileSync(bas, await blobContent(cwd, base));
     fs.writeFileSync(oth, await blobContent(cwd, other));
-    const r = spawnSync("git", ["merge-file", "-p", cur, bas, oth], { maxBuffer: 256 * 1024 * 1024 });
-    return r.status === 0 ? r.stdout : null;
+    // merge-file exits with the conflict count, so any failure means "conflicts".
+    return (await execFileAsync("git", ["merge-file", "-p", cur, bas, oth], { encoding: "buffer", maxBuffer: BLOB_MAX_BUFFER }).catch(() => null))?.stdout ?? null;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

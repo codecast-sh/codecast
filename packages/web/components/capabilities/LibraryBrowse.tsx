@@ -4,7 +4,7 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ArrowUpDown, MonitorSmartphone, Search, Store, X } from "lucide-react";
 import { FilterDropdown } from "../FilterDropdown";
 import { SegmentedToggle, type SegmentedItem } from "../SegmentedToggle";
-import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { MenuKeyCaps, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useShortcutAction, useShortcutContext } from "../../shortcuts";
 import { useTabActive } from "../../hooks/usePagePresence";
 import {
@@ -266,7 +266,7 @@ export function LibraryBrowse({
                 <X className="w-3.5 h-3.5" />
               </button>
             ) : (
-              <KeyCap size="xs">/</KeyCap>
+              <MenuKeyCaps action="list.search" className="contents" />
             )}
           </span>
         </div>
@@ -327,10 +327,10 @@ export function LibraryBrowse({
             Clear
           </button>
         )}
-        <ShortcutTooltip label="Move" action="list.down" hint="and k for up" side="bottom">
+        <ShortcutTooltip label="Move" action="list.down" hint={<span className="inline-flex items-center gap-1">and <MenuKeyCaps action="list.up" className="contents" /> for up</span>} side="bottom">
           <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim cursor-default">
-            <KeyCap size="xs">j</KeyCap>
-            <KeyCap size="xs">k</KeyCap>
+            <MenuKeyCaps action="list.down" className="contents" />
+            <MenuKeyCaps action="list.up" className="contents" />
           </span>
         </ShortcutTooltip>
       </div>

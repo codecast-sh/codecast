@@ -324,3 +324,27 @@ test("the fold only hides at rest", async () => {
   for (const kept of ["[data-cc-conv-status]", "[data-cc-conv-actions]", "input"]) expect(rest.sel.includes(kept)).toBe(true);
   expect(rules.some((x) => x.sel.includes("[data-cc-conv-actions] > :not([data-cc-keep])"))).toBe(true);
 });
+
+test("a seat of another workspace than the active one holds the org to its own and opens as the role page", async () => {
+  const FOREIGN = "foreign00000000000000000000000000";
+  const other = { _id: "role-other", name: "Market Growth lead", handle: "market-growth", avatar: null };
+  await mount("", { [FOREIGN]: row(FOREIGN, { standing_role_id: other._id, role: other, team_id: "team-b" }) });
+  await act(async () => useInboxStore.setState((s: any) => ({
+    currentUser: { _id: "me" },
+    clientState: { ...s.clientState, ui: { ...s.clientState.ui, active_team_id: "team-a" } },
+    orgTree: { workspace: { kind: "team", id: "team-a" }, roles: [{ _id: ROLE, short_id: "or-10", name: "Head of People", handle: "head-of-people", status: "active" }] },
+  }) as any));
+  await act(async () => { const s = useInboxStore.getState(); s.navigateToSession(FOREIGN); s.setShowMySessions(false); });
+  // The held tree is the active workspace's: the pane waits for the seat's own, never flashing the plain session.
+  expect(useInboxStore.getState().orgScope).toBe("team:team-b");
+  expect(q("[data-placeholder]")?.getAttribute("data-placeholder")).toBe(FOREIGN);
+  expect(q("[data-layout]")).toBeNull();
+
+  await go(() => useInboxStore.setState({ orgTree: { workspace: { kind: "team", id: "team-b" }, roles: [{ ...other, short_id: "or-20", status: "active" }] } } as any));
+  expect(q("[data-scope-page]")?.getAttribute("data-scope-page")).toBe(other._id);
+  expect(q("[data-layout]")?.getAttribute("data-layout")).toBe(FOREIGN);
+
+  // Leaving the seat gives the window's org back to the active workspace.
+  await open(HAND);
+  expect(useInboxStore.getState().orgScope).toBeNull();
+}, 600_000);
