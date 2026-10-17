@@ -1,6 +1,6 @@
 import { useTrackedStore } from "../store/inboxStore";
 import type { ChatSlackLinkRow } from "../store/chatSlice";
-import { slackLinksSig } from "./useChatSync";
+import { slackLinksSig } from "../store/chatWakeSigs";
 import "../components/chat/chat.css";
 import { slackLinkForChannel } from "../lib/slackChannelLink";
 
