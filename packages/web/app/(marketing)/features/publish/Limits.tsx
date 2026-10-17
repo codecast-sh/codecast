@@ -20,7 +20,7 @@ const LIMITS: { q: string; a: ReactNode }[] = [
 
 export function Limits() {
   return (
-    <Section id="limits" n="09" tone="sand" title="Limits, plainly." lede="What it will not do, and what to expect at the edges.">
+    <Section id="limits" n="09" tone="sand" title="Limits and edge cases" lede="What it will not do, and what to expect at the edges.">
       <div className="grid md:grid-cols-2 gap-x-12 gap-y-9">
         {LIMITS.map((l) => (
           <div key={l.q}>
@@ -44,10 +44,10 @@ export function Closing() {
         <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-12 items-center">
           <div>
             <h2 className="font-mono font-bold text-[28px] sm:text-[38px] leading-[1.12] tracking-[-0.035em] [text-wrap:balance]" style={{ color: SOL.base3 }}>
-              Install codecast, then ask your agent to publish what it made.
+              Get started with publishing
             </h2>
             <p className="mt-5 text-[17px] leading-8 max-w-lg" style={{ color: SOL.base1 }}>
-              Agents running under codecast already know the command. The next report it writes can be a link you send, not a file you dig out of a transcript.
+              Install codecast, then ask your agent to publish what it made. Agents running under codecast already know the command, so the next report one writes can be a link you send.
             </p>
           </div>
           <div className="min-w-0">

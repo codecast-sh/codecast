@@ -11,11 +11,11 @@ export function DecisionsLayer() {
       n="06"
       id="decisions"
       tint
-      title={<>Decisions, written down where agents look</>}
+      title={<>A log of team decisions and their reasons</>}
       lede={
         <>
           <p>
-            Some conclusions should not depend on anyone finding the right session. The decisions log records one with its reason, tags and project, and names the session that settled it, so the next reader can open the whole argument.
+            The decisions log records a conclusion with its reason, tags and project, so nobody has to find the right session to learn it. Each entry names the session that settled it, so the next reader can open the whole argument.
           </p>
           <p>
             The log lives in the CLI today, with no screen in the app: agents record a decision when a session settles one, and read the log before relitigating a choice the team already made. Ask your agent what was decided about something and it reads it for you.
@@ -77,11 +77,11 @@ export function TeachLayer() {
       n="07"
       id="teach"
       wide
-      title={<>How your agents learn to use it</>}
+      title={<>How agents learn to use memory</>}
       lede={
         <>
           <p>
-            Everything above works for you in the app. It helps your agents only if they use it too. The installer asks one question, <em>Enable agent memory?</em>, defaulting to yes, and writes a <C>## Memory</C> section into the instruction file of each agent on the machine: <C>~/.claude/CLAUDE.md</C>, <C>~/.codex/AGENTS.md</C>, a Cursor rule, and so on.
+            Everything above works for you in the app, and your agents get it only if they know to use it. The installer asks one question, <em>Enable agent memory?</em>, defaulting to yes, and writes a <C>## Memory</C> section into the instruction file of each agent on the machine: <C>~/.claude/CLAUDE.md</C>, <C>~/.codex/AGENTS.md</C>, a Cursor rule, and so on.
           </p>
           <p>
             The section is a command reference with one instruction: search past conversations liberally, when starting a task, when debugging, and when the user refers to earlier work. Nothing runs on its own; the agent decides when to call it. When codecast updates and the section&apos;s text changed, it is rewritten in place.
@@ -127,7 +127,7 @@ cast blame <file>`}
           </div>
         </Stage>
       </div>
-      <h3 className="font-mono text-[17px] font-bold mt-14 mb-2" style={{ color: SOL.base03 }}>Know what is in flight before the first message</h3>
+      <h3 className="font-mono text-[17px] font-bold mt-14 mb-2" style={{ color: SOL.base03 }}>Recent team sessions at the start of every new session</h3>
       <p className="text-[15.5px] leading-7 mb-5 max-w-3xl" style={{ color: SOL.base01 }}>Turn on <C>cast stable team</C> and every new session starts with a snapshot of the team&apos;s recent sessions in this project.</p>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-start">
         <Pane label="the top of a new session, with cast stable team on">
@@ -145,7 +145,7 @@ cast blame <file>`}
           <Note label="cast stable team">The team&apos;s last 14 days, up to 15 sessions, in this project. <C>-g</C> for every project. A CLI setting, like the rest of this section.</Note>
           <Note label="cast stable solo" color={SOL.cyan}>Only your own last 7 days, up to 10 sessions. <C>cast stable off</C> stops it.</Note>
           <p className="text-[13.5px] leading-6 px-1" style={{ color: SOL.base01 }}>
-            Injected at session start for Claude Code, Codex, Cursor and OpenCode. It is a snapshot: the agent is told to check <C>cast diff</C> and <C>cast read</C> before crediting work to a session. Skipped memory at install? <C>cast memory</C> turns it on later.
+            Injected at session start for Claude Code, Codex, Cursor and OpenCode. It is a snapshot, so the agent is told to check <C>cast diff</C> and <C>cast read</C> before crediting work to a session. Skipped memory at install? <C>cast memory</C> turns it on later.
           </p>
         </div>
       </div>

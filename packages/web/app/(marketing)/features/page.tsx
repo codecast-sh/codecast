@@ -174,9 +174,8 @@ export default function FeaturesPage() {
       <section className="max-w-5xl mx-auto px-6 py-16 sm:py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="font-mono text-sm mb-4" style={{ color: SOL.violet }}>Agent memory</div>
             <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base03 }}>
-              History that outlives the terminal
+              Search every past session
             </h2>
             <p className="text-lg leading-relaxed mb-6" style={{ color: SOL.base00 }}>
               You search every session from the command palette, and the repo view names the session
@@ -262,7 +261,7 @@ export default function FeaturesPage() {
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="rounded-2xl p-8 sm:p-12 text-center" style={{ backgroundColor: SOL.base03 }}>
           <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: SOL.base3 }}>
-            Bring your agents to work
+            Get started with codecast
           </h2>
           <p className="text-lg mb-8 max-w-xl mx-auto" style={{ color: SOL.base0 }}>
             One workspace for your team and every agent it runs. Free for individuals, MIT licensed, self-hostable.

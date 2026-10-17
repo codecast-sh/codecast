@@ -8,6 +8,7 @@ import { identityRowOf } from "../lib/sessionIdentity";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
+import { useCreateKinds, type CreateEnv, type CreateKind } from "../hooks/useCreateKinds";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { pagePath, palettePages } from "../lib/navPages";
@@ -1713,6 +1714,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
   const hostedMode = useHostedMode();
   const modeWords = useModeWords();
+  const createKinds = useCreateKinds();
   const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
   // The conversation already open is the palette's own context row, so it
   // never repeats as a recent place.
@@ -2671,92 +2673,27 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // The palette's ways to make something new. "new" or "create" in hosted
   // mode puts them first (createLeads), so the word reaches New conversation
   // before a tab command.
+  const createEnv: CreateEnv = {
+    compose: (dock) => startCompose("", dock),
+    openModal: (kind) => { closePalette(); openCreateModal(kind); },
+    navigate,
+  };
+  const createItem = (k: CreateKind) => (
+    <CommandPrimitive.Item
+      key={`create-${k.id}`}
+      value={paletteValue(k.label, k.keywords)}
+      onSelect={() => k.run(createEnv)}
+      className={itemClass}
+    >
+      <k.icon className={`w-4 h-4 flex-shrink-0 ${k.tone}`} />
+      <span className="truncate flex-1">{k.label}</span>
+      {k.shortcut && <MenuKeyCaps action={k.shortcut} />}
+    </CommandPrimitive.Item>
+  );
   const createGroup = (
         <CommandPrimitive.Group heading="Create" className={groupClass}>
-          <CommandPrimitive.Item
-            key="create-session"
-            value={paletteValue(modeWords.newConversation, "session conversation start agent compose run ask")}
-            onSelect={() => startCompose("")}
-            className={itemClass}
-          >
-            <MessageSquare className={`w-4 h-4 flex-shrink-0 ${hostedMode ? "text-sol-text-dim" : "text-sol-cyan"}`} />
-            <span className="truncate flex-1">{modeWords.newConversation}</span>
-            <MenuKeyCaps action="session.compose" />
-          </CommandPrimitive.Item>
-          {/* The docked composer is fleet machinery (actions.fleet). */}
-          {!standalone && surfaceMode.shows("actions.fleet") && (
-          <CommandPrimitive.Item
-            key="create-session-docked"
-            value={paletteValue(`${modeWords.newConversation} (docked)`, "session conversation docked small composer minimize corner")}
-            onSelect={() => startCompose("", true)}
-            className={itemClass}
-          >
-            <PanelBottom className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-            <span className="truncate flex-1">{modeWords.newConversation} (docked)</span>
-            <MenuKeyCaps action="session.composeDock" />
-          </CommandPrimitive.Item>
-          )}
-          <CommandPrimitive.Item
-            key="create-task"
-            value={paletteValue(modeWords.newTask, "create todo to-do task add")}
-            onSelect={() => { closePalette(); openCreateModal('task'); }}
-            className={itemClass}
-          >
-            <ListTodo className={`w-4 h-4 flex-shrink-0 ${hostedMode ? "text-sol-text-dim" : "text-sol-cyan"}`} />
-            <span className="truncate flex-1">{modeWords.newTask}</span>
-          </CommandPrimitive.Item>
-          {/* A plan is a company's page (pages.company), with no hosted page to land on. */}
-          {surfaceMode.shows("pages.company") && (
-          <CommandPrimitive.Item
-            key="create-plan"
-            value={paletteValue("New plan", "create project")}
-            onSelect={() => { closePalette(); openCreateModal('plan'); }}
-            className={itemClass}
-          >
-            <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
-            <span className="truncate flex-1">New plan</span>
-          </CommandPrimitive.Item>
-          )}
-          <CommandPrimitive.Item
-            key="create-doc"
-            value={paletteValue(modeWords.newDoc, "create note doc document write")}
-            onSelect={() => { closePalette(); openCreateModal('doc'); }}
-            className={itemClass}
-          >
-            <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
-            <span className="truncate flex-1">{modeWords.newDoc}</span>
-          </CommandPrimitive.Item>
-          {chatOn && (
-            <CommandPrimitive.Item
-              key="create-channel"
-              value={paletteValue("New channel", "create chat room")}
-              onSelect={() => { closePalette(); openCreateModal('chat'); }}
-              className={itemClass}
-            >
-              <Hash className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-              <span className="truncate flex-1">New channel</span>
-            </CommandPrimitive.Item>
-          )}
-          {callsOn && (
-            <CommandPrimitive.Item
-              key="create-huddle"
-              value={paletteValue("Start huddle", "new call ring people group voice")}
-              onSelect={() => { closePalette(); openCreateModal('huddle'); }}
-              className={itemClass}
-            >
-              <Headphones className="w-4 h-4 text-sol-violet flex-shrink-0" />
-              <span className="truncate flex-1">{hostedMode ? "Start a call" : "Start huddle"}</span>
-            </CommandPrimitive.Item>
-          )}
-          <CommandPrimitive.Item
-            key="create-trigger"
-            value={paletteValue(modeWords.newTrigger, "create trigger routine schedule cron automation reminder recurring")}
-            onSelect={() => navigate("/triggers?new=1")}
-            className={itemClass}
-          >
-            <Clock className="w-4 h-4 text-sol-violet flex-shrink-0" />
-            <span className="truncate flex-1">{modeWords.newTrigger}</span>
-          </CommandPrimitive.Item>
+          {/* The docked composer has no dock to open in the standalone window. */}
+          {createKinds.filter((k) => !(standalone && k.variant)).map(createItem)}
         </CommandPrimitive.Group>
   );
 
@@ -3040,15 +2977,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             conversation's actions behind one row. */}
         {quietRoot && (createOpen ? createGroup : (
           <CommandPrimitive.Group heading="Create" className={groupClass}>
-            <CommandPrimitive.Item
-              value={paletteValue(modeWords.newConversation, "session conversation start agent compose run ask")}
-              onSelect={() => startCompose("")}
-              className={itemClass}
-            >
-              <MessageSquare className={`w-4 h-4 flex-shrink-0 ${hostedMode ? "text-sol-text-dim" : "text-sol-cyan"}`} />
-              <span className="truncate flex-1">{modeWords.newConversation}</span>
-              <MenuKeyCaps action="session.compose" />
-            </CommandPrimitive.Item>
+            {createKinds.slice(0, 1).map(createItem)}
             <CommandPrimitive.Item
               value={paletteValue("New to-do, note or routine", "create more")}
               onSelect={() => setCreateOpen(true)}

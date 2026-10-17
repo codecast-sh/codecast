@@ -6,8 +6,8 @@ import {
   markPendingDelivered,
   updatePendingMessageStatusForDaemon,
   healAndNotifyStuckMessages,
-  planCrossUserNotify,
-  CROSS_USER_NOTIFY_DEADLINE_MS,
+  planStuckSendNotify,
+  STUCK_SEND_NOTIFY_DEADLINE_MS,
   DEAD_SESSION_REVIVE_WINDOW_MS,
   planDeadSessionRevive,
 } from "./pendingMessages";
@@ -361,7 +361,7 @@ describe("team send — authorization", () => {
     expect(tables.conversations.find((c) => c._id === "convBotRun")!.owner_user_id).toBe("uAlice");
   });
 
-  test("a self-send (Bob → his own session) sets no failure channel and keeps owner == sender", async () => {
+  test("a self-send (Bob → his own session) records its sender and keeps owner == sender", async () => {
     const { ctx, db, tables } = world({ now: 1_000_000_000_000 });
     const res = await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", from: "jxbob01", body: "note to self" });
     expect(res.cross_user).toBe(false);
@@ -370,7 +370,7 @@ describe("team send — authorization", () => {
     const row = tables.pending_messages[0];
     expect(row.owner_user_id).toBe("uBob");
     expect(row.from_user_id).toBe("uBob");
-    expect(row.from_conversation_id).toBeUndefined(); // self-sends keep pure never-drop semantics
+    expect(row.from_conversation_id).toBe("convBob"); // the channel that reports a stuck wait back
   });
 });
 
@@ -543,7 +543,7 @@ describe("remote not responding — feedback to the sending session", () => {
     const { ctx, tables } = world({ now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "urgent" });
     const msg = tables.pending_messages[0];
-    msg.created_at = now - CROSS_USER_NOTIFY_DEADLINE_MS - 60_000;
+    msg.created_at = now - STUCK_SEND_NOTIFY_DEADLINE_MS - 60_000;
     tables.conversations = tables.conversations.filter((row) => row._id !== "convBob");
 
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, notified: 1 });
@@ -557,7 +557,7 @@ describe("remote not responding — feedback to the sending session", () => {
     const { ctx, tables } = world({ bobLive: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "urgent" });
     const msg = tables.pending_messages[0];
-    msg.created_at = now - (CROSS_USER_NOTIFY_DEADLINE_MS + 60_000);
+    msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
     const summary = await healAndNotifyStuckMessages(ctx as any, now);
     expect(summary.notified).toBe(1);
@@ -589,7 +589,7 @@ describe("remote not responding — feedback to the sending session", () => {
     const { ctx, db, tables } = world({ bobLive: true, bobIdle: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "later" });
     const msg = tables.pending_messages[0];
-    msg.created_at = now - (CROSS_USER_NOTIFY_DEADLINE_MS + 60_000);
+    msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
     const summary = await healAndNotifyStuckMessages(ctx as any, now);
     expect(summary.notified).toBe(1);
@@ -605,7 +605,7 @@ describe("remote not responding — feedback to the sending session", () => {
     const now = 1_000_000_000_000;
     const { ctx, db, tables } = world({ bobLive: true, bobIdle: false, now });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "later" });
-    tables.pending_messages[0].created_at = now - (CROSS_USER_NOTIFY_DEADLINE_MS + 60_000);
+    tables.pending_messages[0].created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
 
     const first = await healAndNotifyStuckMessages(ctx as any, now);
     const second = await healAndNotifyStuckMessages(ctx as any, now + 60_000);
@@ -628,39 +628,74 @@ describe("remote not responding — feedback to the sending session", () => {
   });
 });
 
-describe("planCrossUserNotify — pure decision", () => {
+describe("a session's own agents: the sender hears only a stuck wait", () => {
+  // An orchestrator's workers reported into it and sat undelivered for an hour
+  // while the senders read "sent" (jx77xjt, 2026-10-16).
+  test("idle live target past the deadline: the sending session is told, message KEPT", async () => {
+    const now = 1_000_000_000_000;
+    const { ctx, tables } = world({ bobLive: true, bobIdle: true, now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", from: "jxbobpv", body: "plan is ready" });
+    const msg = tables.pending_messages[0];
+    expect(msg.from_conversation_id).toBe("convBobPriv");
+    msg.created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
+
+    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(1);
+    expect(msg.status).not.toBe("cancelled");
+    const receipt = tables.pending_messages.find((m) => m.conversation_id === "convBobPriv");
+    expect(receipt!.content).toContain("hasn't been delivered yet");
+    expect(receipt!.content).toContain("idle");
+    expect(receipt!.content).toContain("jxbob01");
+  });
+
+  test("busy target: nothing is said", async () => {
+    const now = 1_000_000_000_000;
+    const { ctx, tables } = world({ bobLive: true, bobIdle: false, now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", from: "jxbobpv", body: "plan is ready" });
+    tables.pending_messages[0].created_at = now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 60_000);
+
+    expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(0);
+    expect(tables.pending_messages.filter((m) => m.conversation_id === "convBobPriv")).toHaveLength(0);
+  });
+});
+
+describe("planStuckSendNotify — pure decision", () => {
   const now = 5_000_000;
   const base = {
     status: "pending",
-    created_at: now - (CROSS_USER_NOTIFY_DEADLINE_MS + 1),
+    created_at: now - (STUCK_SEND_NOTIFY_DEADLINE_MS + 1),
     from_conversation_id: "convAlice" as any,
     from_user_id: "uAlice" as any,
     owner_user_id: "uBob" as any,
   };
 
   test("offline target → notify, message kept", () => {
-    expect(planCrossUserNotify(base, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
+    expect(planStuckSendNotify(base, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
   });
-  test("busy (live) target → notify", () => {
-    expect(planCrossUserNotify(base, "live", now)).toEqual({ kind: "notify", reach: "live" });
+  test("busy teammate target → notify", () => {
+    expect(planStuckSendNotify(base, "busy", now)).toEqual({ kind: "notify", reach: "busy" });
   });
-  test("self-send (from == owner) → skip", () => {
-    expect(planCrossUserNotify({ ...base, owner_user_id: "uAlice" as any }, "offline", now).kind).toBe("skip");
+  test("own busy session → skip: it takes the message when its turn ends", () => {
+    expect(planStuckSendNotify({ ...base, owner_user_id: "uAlice" as any }, "busy", now).kind).toBe("skip");
+  });
+  test("own session idle or offline with the message still out → notify", () => {
+    const own = { ...base, owner_user_id: "uAlice" as any };
+    expect(planStuckSendNotify(own, "stuck", now)).toEqual({ kind: "notify", reach: "stuck" });
+    expect(planStuckSendNotify(own, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
   });
   test("no sender conversation → skip", () => {
-    expect(planCrossUserNotify({ ...base, from_conversation_id: undefined }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, from_conversation_id: undefined }, "offline", now).kind).toBe("skip");
   });
   test("already notified → skip", () => {
-    expect(planCrossUserNotify({ ...base, sender_notified_at: now - 1 } as any, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, sender_notified_at: now - 1 } as any, "offline", now).kind).toBe("skip");
   });
   test("before deadline → skip", () => {
-    expect(planCrossUserNotify({ ...base, created_at: now - 1_000 }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, created_at: now - 1_000 }, "offline", now).kind).toBe("skip");
   });
   test("terminal (delivered) → skip", () => {
-    expect(planCrossUserNotify({ ...base, status: "delivered" }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, status: "delivered" }, "offline", now).kind).toBe("skip");
   });
   test("legacy row without owner_user_id → skip", () => {
-    expect(planCrossUserNotify({ ...base, owner_user_id: undefined }, "offline", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, owner_user_id: undefined }, "offline", now).kind).toBe("skip");
   });
 });
 

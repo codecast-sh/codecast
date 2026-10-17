@@ -76,6 +76,18 @@ it is right.
   that make a useful preview: the hover card shows the first few filled ones.
   Read them with `$.data.list("objects", { where: { prefix } })` and write with
   `$.objects`.
+- When the things live in another system (a CRM's contacts, a product's
+  emails, calls or orders), declare the kind `external: true` and answer
+  `object.resolve` live from that system: its own id becomes the reference and
+  nothing is copied into codecast.
+- An object's page is where a person opens the thing itself, so show it
+  whole: an email's headers and body, a call's summary and transcript, a
+  ticket's description and thread. That holds for every kind the mod
+  declares, not only the few that get a rich view; a page of fields alone is
+  a hover card, not a page. When the product has no reader that returns the
+  full thing, look for one it already exposes, then add one. Show a link or a
+  value when there is one and nothing when there is not, never a label about
+  what is missing.
 - `AGENTS.md` beside the manifest is the mod's surface for agents, the way a
   pane is its surface for people: every session the mod applies to starts
   with it (a team's mod in that team's projects, a personal mod everywhere),
