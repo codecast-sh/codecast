@@ -17,7 +17,7 @@ import {
   DropdownMenuPortal,
 } from "./dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { getShortcutsForAction, formatShortcutParts } from "../../shortcuts";
+import { useShortcutParts } from "../../shortcuts";
 import type { ShortcutAction } from "../../shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -163,11 +163,11 @@ const ITEM = cn(
 const DANGER = cn("text-sol-red/90 focus:bg-sol-red/10 focus:text-sol-red");
 
 function ShortcutHint({ action }: { action: ShortcutAction }) {
-  const def = getShortcutsForAction(action)[0];
-  if (!def) return null;
+  const parts = useShortcutParts(action);
+  if (!parts) return null;
   return (
     <span className="ml-auto pl-4 flex items-center gap-[3px]">
-      {formatShortcutParts(def).map((part, i) => (
+      {parts.map((part, i) => (
         <KeyCap key={i} size="xs">{part}</KeyCap>
       ))}
     </span>

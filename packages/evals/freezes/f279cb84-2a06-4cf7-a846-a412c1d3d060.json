@@ -1,0 +1,26 @@
+{
+  "name": "role-wake inbox-look-stale",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:inbox-look-stale"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:inbox-look-stale",
+    "title": "role-wake inbox-look-stale"
+  },
+  "asOf": "2026-10-14T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/inbox-look-stale.json"
+  },
+  "judge": "keeps its own open filings proposals current rather than posting another: it names a revise of op-41 or op-44 (or a propose that supersedes one) that drops the stale jx7g003 filing, drops one of the two jx7b002 filings, and adds the two new work sessions (jx7g002 to @growth or ct-111, jx7b003 to ct-212 or @billing); it leaves Mara's three own sessions where they are; around the commands the message is short and glanceable, a few lines, with no case argued and nothing asked of Mara; the commands it names in place of running them (this is a dry run) do not count against its length",
+  "notes": null,
+  "tags": [],
+  "id": "f279cb84-2a06-4cf7-a846-a412c1d3d060",
+  "createdAt": "2026-10-16T20:41:31.619Z"
+}

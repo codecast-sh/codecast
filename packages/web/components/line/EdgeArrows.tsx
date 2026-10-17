@@ -13,7 +13,7 @@ export function EdgeArrows({ scroller, onMove, edges, label, step = 0.7, waiting
   scroller?: RefObject<HTMLElement | null>;
   /** Moves the view itself when it is not a scroller (the graph pans): -1 back, 1 on, by `step` of the width. */
   onMove?: (dir: -1 | 1, step: number) => void;
-  edges: ScrollEdges;
+  edges: Pick<ScrollEdges, "left" | "right">;
   /** What the row holds, for the buttons' names: "the line", "projects". */
   label: string;
   /** How far one press moves, as a share of the visible width. */
