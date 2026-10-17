@@ -1572,11 +1572,17 @@ const NEW_APPROACH_REPORT_MAX = 3000;
  * rerun is the same run from main; the ask and the station's report land on the problem as a note, so the record says
  * why the next run exists, and the run's own $cause_history carries the report (lineWorkspace.causeHistoryForTask).
  */
-export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now = Date.now(), reask = false, at?: string, asker?: string, entry?: string, newApproach = false) {
+/** A trial problem by its id or short id, with its project, for a person who can reach that project. */
+async function trialProblemOf(ctx: Ctx, userId: Id<"users">, ref: string): Promise<{ task: Doc<"tasks">; project: Doc<"projects"> }> {
   const id = ctx.db.normalizeId("tasks", ref);
   const task: Doc<"tasks"> | null = id ? await ctx.db.get(id) : await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   const project = await trialProjectOf(ctx, task);
   if (!task || !project || !(await canAccessProject(ctx, userId, project))) throw new Error(`${ref} is not a problem in a trial project`);
+  return { task, project };
+}
+
+export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now = Date.now(), reask = false, at?: string, asker?: string, entry?: string, newApproach = false) {
+  const { task, project } = await trialProblemOf(ctx, userId, ref);
   if (isTerminalTaskStatus(task.status)) throw new Error(`${task.short_id} is ${task.status}: a closed problem is not run again`);
   const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
   // A run waiting at a card asked again on the stations as they are now (the CLI stops its runner first): its card closes, a new one is asked.
@@ -1629,14 +1635,37 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
 }
 
 /**
+ * A problem started again from main on its line as it is now (`cast line trial rerun <ct-N> --fresh`), wherever its
+ * run stands: working, waiting at a card, failed. The run ends, its fix is set aside on its branch and its waiting
+ * cards close (reopenProblem), and a run of the route's graph is queued on the same machine, from origin/main
+ * (queueTrialRun). For a run made on stations that have since changed: picked up where it stood, it builds on the
+ * fix the old stations made (ct-59945: Prove refused a branch 330 commits behind main that held the old fix). The
+ * CLI stops the run's runner first.
+ */
+export async function rerunFromMainCore(ctx: Ctx, userId: Id<"users">, ref: string, now = Date.now()) {
+  const { task, project } = await trialProblemOf(ctx, userId, ref);
+  if (isTerminalTaskStatus(task.status)) throw new Error(`${task.short_id} is ${task.status}: a closed problem is not run again`);
+  const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+  const from = run?.runner_device ? run : (await dueProblems(ctx, project)).like[routeOf(task)];
+  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast line trial run ${task.short_id}`);
+  // Ended before the room is counted, so the run it replaces holds no place; a refusal below rolls this back.
+  if (run && isLiveRunStatus(run.status)) await cancelCore(ctx as any, run, now, "Stopped: the problem was started again from main");
+  const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [from.runner_device]), true);
+  if (refused) throw new Error(refused);
+  const cards: Doc<"trial_cards">[] = run ? await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect() : [];
+  for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
+  const card = cards.filter((c) => c.kind === "card").sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+  await reopenProblem(ctx, userId, task, run, card, `Started again from main on the line as it is now${card ? ` (${card.short_id} closed)` : ""}. The earlier run's fix is set aside on its branch.`, now);
+  const run_id = await queueTrialRun(ctx, userId, (await ctx.db.get(task._id))!, from, from.runner_device, now);
+  return { task: task.short_id, run_id, resumed_at: null as string | null, set_aside: run?._id ?? null };
+}
+
+/**
  * Close a problem whose run stopped (a failure station, the problem still open) because a person judged it not worth
  * another run: it closes as dropped and its findings retire with it, as a drop with nothing left does.
  */
 export async function closeStoppedCore(ctx: Ctx, userId: Id<"users">, ref: string, now = Date.now()) {
-  const id = ctx.db.normalizeId("tasks", ref);
-  const task: Doc<"tasks"> | null = id ? await ctx.db.get(id) : await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-  const project = await trialProjectOf(ctx, task);
-  if (!task || !project || !(await canAccessProject(ctx, userId, project))) throw new Error(`${ref} is not a problem in a trial project`);
+  const { task } = await trialProblemOf(ctx, userId, ref);
   if (isTerminalTaskStatus(task.status)) return { task: task.short_id, status: task.status, retired: 0 };
   const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
   const stop = run ? stopOf(run, task.status) : null;
@@ -1673,9 +1702,11 @@ export const rerun = mutation({
 export const rerunForCli = mutation({
   // With reask. `at`: the station the caller chose to pick the run up at (always taken). `asker`: the station the gate names as
   // its asker, which asks it again. `entry`: the graph's first station, where a run sent back to work on changed findings starts (reaskRoute).
-  args: { ...scopeArgs, task: v.string(), reask: v.optional(v.boolean()), at: v.optional(v.string()), asker: v.optional(v.string()), entry: v.optional(v.string()) },
+  // `fresh`: start the problem again from main, wherever its run stands (rerunFromMainCore).
+  args: { ...scopeArgs, task: v.string(), reask: v.optional(v.boolean()), at: v.optional(v.string()), asker: v.optional(v.string()), entry: v.optional(v.string()), fresh: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { userId } = await scopeOf(ctx, args);
+    if (args.fresh) return rerunFromMainCore(ctx, userId, args.task);
     return rerunCore(ctx, userId, args.task, Date.now(), !!args.reask, args.at, args.asker, args.entry);
   },
 });

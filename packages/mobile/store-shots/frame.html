@@ -1,0 +1,139 @@
+<!doctype html>
+<!--
+  One App Store screenshot: a caption over the real app's screen. The page is
+  laid out in CSS pixels at half the store size and captured at 2x by
+  render.ts, so iPhone 6.9" (1320x2868) is a 660x1434 page and iPad 13"
+  (2064x2752) is 1032x1376. ?shot=<name>&device=iphone|ipad picks the entry.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  @font-face { font-family: "JBM"; src: url("../assets/fonts/JetBrainsMono-Regular.ttf"); font-weight: 400; }
+  @font-face { font-family: "JBM"; src: url("../assets/fonts/JetBrainsMono-Medium.ttf"); font-weight: 500; }
+  @font-face { font-family: "JBM"; src: url("../assets/fonts/JetBrainsMono-Bold.ttf"); font-weight: 700; }
+
+  :root {
+    --base03: #002b36; --base02: #073642; --base01: #586e75; --base00: #657b83;
+    --base1: #93a1a1; --base2: #eee8d5; --base3: #fdf6e3;
+    --yellow: #b58900; --orange: #cb4b16; --red: #dc322f; --magenta: #d33682;
+    --violet: #6c71c4; --blue: #268bd2; --cyan: #2aa198; --green: #859900;
+    --accent: var(--blue);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: var(--w); height: var(--h); overflow: hidden; }
+  body {
+    font-family: "JBM", monospace;
+    color: var(--base02);
+    background: var(--base3);
+    position: relative;
+  }
+
+  /* Depth: a fine terminal grid that fades out toward the phone, and one wash of the shot's accent. */
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, color-mix(in srgb, var(--base01) 9%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--base01) 9%, transparent) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: linear-gradient(to bottom, black 0%, black 30%, transparent 62%);
+  }
+  .wash {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(120% 55% at 100% 62%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+      radial-gradient(90% 40% at 0% 100%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%);
+  }
+
+  .caption { position: absolute; left: var(--pad); right: var(--pad); top: var(--top); }
+  h1 {
+    font-weight: 700;
+    font-size: var(--h1);
+    line-height: 1.08;
+    letter-spacing: -0.045em;
+    color: var(--base03);
+    text-wrap: balance;
+  }
+  /* The one word that carries the shot: set on a solid block of the accent, like a selection in an editor. */
+  h1 mark {
+    color: var(--base3);
+    background: var(--accent);
+    padding: 0 0.14em;
+    margin: 0 -0.02em;
+    border-radius: 0.08em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  .sub {
+    margin-top: 0.85em;
+    font-size: var(--sub);
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--base01);
+    letter-spacing: -0.01em;
+    max-width: 36ch;
+    text-wrap: pretty;
+  }
+
+  /* The device: the real screen in a dark bezel, large, bleeding off the bottom edge. */
+  .device {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%) rotate(var(--tilt, 0deg));
+    top: var(--device-top);
+    width: var(--device-w);
+    padding: var(--bezel);
+    border-radius: var(--radius);
+    background: var(--base03);
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, var(--base1) 60%, transparent) inset,
+      0 40px 80px -20px color-mix(in srgb, var(--base03) 45%, transparent),
+      0 12px 30px -10px color-mix(in srgb, var(--base03) 35%, transparent);
+  }
+  .device img {
+    display: block;
+    width: 100%;
+    border-radius: calc(var(--radius) - var(--bezel));
+  }
+
+  body.iphone {
+    --w: 660px; --h: 1434px;
+    --pad: 44px; --top: 64px;
+    --h1: 52px; --sub: 19px;
+    --device-top: 300px; --device-w: 560px; --bezel: 13px; --radius: 78px;
+  }
+  body.ipad {
+    --w: 1032px; --h: 1376px;
+    --pad: 80px; --top: 70px;
+    --h1: 56px; --sub: 21px;
+    --device-top: 330px; --device-w: 860px; --bezel: 18px; --radius: 44px;
+  }
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+  <div class="wash"></div>
+  <div class="caption">
+    <h1 id="h1"></h1>
+    <p class="sub" id="sub"></p>
+  </div>
+  <div class="device"><img id="screen" alt="" /></div>
+<script type="module">
+  import { SHOTS } from "./shots.js";
+  const q = new URLSearchParams(location.search);
+  const device = q.get("device") === "ipad" ? "ipad" : "iphone";
+  const shot = SHOTS[q.get("shot")] ?? Object.values(SHOTS)[0];
+  document.body.className = device;
+  document.documentElement.style.setProperty("--accent", `var(--${shot.accent})`);
+  // `[word]` in a headline marks the word set on the accent block.
+  document.getElementById("h1").innerHTML = shot.title.replace(/\[([^\]]+)\]/g, "<mark>$1</mark>");
+  document.getElementById("sub").textContent = shot.sub ?? "";
+  const img = document.getElementById("screen");
+  img.src = `raw/${device}-${(device === "ipad" && shot.ipad) || shot.screen}.png`;
+  img.onerror = () => { img.onerror = null; img.src = "raw/placeholder.png"; };
+  await document.fonts.ready;
+  await new Promise((r) => (img.complete ? r() : img.addEventListener("load", r, { once: true })));
+  document.body.dataset.ready = "1";
+</script>
+</body>
+</html>

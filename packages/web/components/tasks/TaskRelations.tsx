@@ -29,7 +29,8 @@ import { workspaceKeyOfRow } from "../../lib/workspaceScope";
 import { setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undo/labels";
 import { withoutUndo } from "../../store/undoStack";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import type { ShortcutAction } from "../../shortcuts";
 
 // Every line is one 20px box, the label's included, so the label sits level
 // with the first pill and a one-line row keeps the static rows' 28px.
@@ -174,12 +175,12 @@ function TaskLinks({ refs, isClosed, onRemove, removeLabel }: { refs: string[]; 
 }
 
 /** The quiet add control closing a row, with its palette key (if it has one) on hover. */
-function AddButton({ label, hotkey, plus, onClick }: { label: string; hotkey?: string; plus: boolean; onClick: () => void }) {
+function AddButton({ label, hotkey, plus, onClick }: { label: string; hotkey?: ShortcutAction; plus: boolean; onClick: () => void }) {
   return (
     <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors w-fit">
       {plus && <Plus className="w-3 h-3" />}
       {label}
-      {hotkey && <span className="opacity-0 group-hover/add:opacity-100 group-focus-visible/add:opacity-100 transition-opacity"><KeyCap size="xs">{hotkey}</KeyCap></span>}
+      {hotkey && <span className="opacity-0 group-hover/add:opacity-100 group-focus-visible/add:opacity-100 transition-opacity"><MenuKeyCaps action={hotkey} className="contents" /></span>}
     </button>
   );
 }
@@ -227,7 +228,7 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
             <WaitLine key={line.key} wait={line.wait} now={now} status={task.status} onRemove={() => store().removeWait(id, line.wait.id)} />
           ),
         )}
-        <AddButton label="Add blocker…" hotkey="b" plus={lines.length > 0} onClick={() => onAdd("blocker")} />
+        <AddButton label="Add blocker…" hotkey="task.blocker" plus={lines.length > 0} onClick={() => onAdd("blocker")} />
       </RelationRow>
       {!!task.blocks?.length && (
         <RelationRow label="Blocks">
@@ -247,7 +248,7 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
       {!!task.related?.length && (
         <RelationRow label="Related">
           <TaskLinks refs={task.related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
-          <AddButton label="Link related…" hotkey="k" plus onClick={() => onAdd("related")} />
+          <AddButton label="Link related…" hotkey="task.related" plus onClick={() => onAdd("related")} />
         </RelationRow>
       )}
       {parent && (
@@ -258,8 +259,8 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
       {(!task.related?.length || !parent) && (
         <RelationRow label="">
           <div className="flex items-center gap-4">
-            {!task.related?.length && <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />}
-            {!parent && <AddButton label="Set parent…" hotkey="t" plus={false} onClick={() => onAdd("parent")} />}
+            {!task.related?.length && <AddButton label="Link related…" hotkey="task.related" plus={false} onClick={() => onAdd("related")} />}
+            {!parent && <AddButton label="Set parent…" hotkey="task.parent" plus={false} onClick={() => onAdd("parent")} />}
           </div>
         </RelationRow>
       )}
