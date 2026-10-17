@@ -55,7 +55,7 @@ export function AskLayer() {
       n="02"
       id="ask"
       tint
-      title={<>Ask a session a question. It cites its lines.</>}
+      title={<>Ask one session a question and get an answer with citations</>}
       lede={
         <>
           <p>
@@ -110,7 +110,7 @@ export function ContextLayer() {
     <Layer
       n="03"
       id="context"
-      title={<>Start from what the team already knows</>}
+      title={<>Find earlier sessions before an agent starts a task</>}
       lede={
         <>
           <p>
