@@ -8,7 +8,7 @@
 // Pure: no node or convex imports. The CLI, the browser SDK and the Convex
 // runtime all load it, which is why the key helpers use globalThis.crypto.
 import type { SignalKind } from "./signalFingerprint";
-import { MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
+import { JUDGE_BACKENDS, MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
 
 // ── Sources ──
 
@@ -38,7 +38,7 @@ export const POSTHOG_PROJECT_ID = /^\d{1,12}$/;
  * server's check both come from this list.
  */
 export interface SourceConfigField {
-  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins" | "moment_storage" | "moment_retention";
+  key: "org" | "projects" | "project_id" | "environments" | "allowed_origins" | "moment_storage" | "moment_retention" | "judge_on";
   flag: string;
   list: boolean;
   providers: readonly SourceProvider[];
@@ -59,6 +59,7 @@ export const SOURCE_CONFIG_FIELDS: readonly SourceConfigField[] = [
   // body stays on the extractor's host unless a person chooses codecast.
   { key: "moment_storage", flag: "moment-storage", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "Where moment bodies are kept: host (the default) or codecast", pattern: new RegExp(`^(${MOMENT_STORAGES.join("|")})$`), what: `one of ${MOMENT_STORAGES.join(", ")}` },
   { key: "moment_retention", flag: "moment-retention", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "How long codecast-stored bodies are kept: 30d (the default) or keep", pattern: new RegExp(`^(${MOMENT_RETENTIONS.join("|")})$`), what: `one of ${MOMENT_RETENTIONS.join(", ")}` },
+  { key: "judge_on", flag: "judge-on", list: false, providers: KEYED_SOURCE_PROVIDERS, help: "Where its judges make model calls: api (the default, on the team's model budget) or subscription (the Claude Code login of the machine that extracts)", pattern: new RegExp(`^(${JUDGE_BACKENDS.join("|")})$`), what: `one of ${JUDGE_BACKENDS.join(", ")}` },
 ];
 
 /**

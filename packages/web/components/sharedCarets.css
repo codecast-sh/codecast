@@ -1,0 +1,66 @@
+/* Other people's carets over a shared composer draft (SharedCarets.tsx). */
+.sd-carets {
+  position: relative;
+  pointer-events: none;
+  min-width: 0;
+  /* Clip to the field like the textarea's own scroll does, but leave room
+     above the first line for a name flag. */
+  clip-path: inset(-18px -60px 0 -4px);
+}
+
+.sd-carets-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.sd-caret {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1lh;
+  vertical-align: top;
+}
+
+.sd-caret::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0.15lh;
+  bottom: 0.1lh;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--sd-color);
+}
+
+.sd-caret-flag {
+  position: absolute;
+  left: -1px;
+  bottom: calc(100% - 0.2lh);
+  padding: 0 4px;
+  border-radius: 3px 3px 3px 0;
+  background: var(--sd-color);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+
+.sd-caret[data-typing] .sd-caret-flag {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-caret-flag {
+    transition: none;
+  }
+}

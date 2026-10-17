@@ -36,14 +36,10 @@ export function useStepClock(durations: number[], still: boolean, playing = true
 }
 
 /**
- * A page section. The heading carries a tab-shaped marker on its left: a
- * rounded chip in the section's color, like a Chrome tab group label, so the
- * page reads as a strip of groups you are walking through.
+ * A page section: heading, optional lede, then its content.
  */
-export function Section({ id, label, color = CAST_RED, title, lede, children, tone = "paper", wide = false }: {
+export function Section({ id, title, lede, children, tone = "paper", wide = false }: {
   id: string;
-  label: string;
-  color?: string;
   title: ReactNode;
   lede?: ReactNode;
   children: ReactNode;
@@ -56,8 +52,7 @@ export function Section({ id, label, color = CAST_RED, title, lede, children, to
   return (
     <section id={id} className="bx-section relative scroll-mt-20" style={{ backgroundColor: bg }}>
       <div className={`${wide ? "max-w-7xl" : "max-w-6xl"} mx-auto px-5 sm:px-8 py-16 sm:py-24`}>
-        <GroupChip label={label} color={color} />
-        <h2 className="mt-5 font-mono font-bold tracking-[-0.03em] text-[27px] sm:text-[36px] leading-[1.12] max-w-4xl [text-wrap:balance]" style={{ color: ink }}>
+        <h2 className="font-mono font-bold tracking-[-0.03em] text-[27px] sm:text-[36px] leading-[1.12] max-w-4xl [text-wrap:balance]" style={{ color: ink }}>
           {title}
         </h2>
         {lede && <p className="mt-4 text-[16.5px] sm:text-[17px] leading-8 max-w-2xl" style={{ color: sub }}>{lede}</p>}

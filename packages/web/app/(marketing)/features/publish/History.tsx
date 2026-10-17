@@ -100,8 +100,8 @@ export function History() {
     <Section
       id="history"
       n="02"
-      title="Every version stays. Compare any two. Restore without losing one."
-      lede={<>Each publish is a numbered version. The link always serves the newest. The version chip in the page&apos;s bar opens its history: every older version keeps its own address, a line-by-line diff against the current one, and a way back.</>}
+      title="Version history, diffs and restore"
+      lede={<>Each publish is a numbered version. The link always serves the newest. The version chip in the page&apos;s bar opens its history, where every older version has its own address, a line-by-line diff against the current one, and a restore option.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 lg:gap-12">
         <div className="min-w-0">
@@ -129,7 +129,7 @@ export function History() {
         <div className="min-w-0">
           <DiffView />
           <Caption>
-            <span className="font-semibold" style={{ color: SOL.base01 }}>…/{SLUG}?diff=2..3</span>. Markdown pages diff their markdown, so an edited sentence is one red line and one green line, not a wall of changed HTML. Long unchanged runs fold behind an expander.
+            <span className="font-semibold" style={{ color: SOL.base01 }}>…/{SLUG}?diff=2..3</span>. Markdown pages diff their markdown, so an edited sentence shows as one red line and one green line. Long unchanged runs fold behind an expander.
           </Caption>
           <p className="mt-8 text-[15px] leading-7" style={{ color: SOL.base01 }}>
             A rollback never rewrites history. It publishes the old content as the next version, so the version you rolled away from is still there if you

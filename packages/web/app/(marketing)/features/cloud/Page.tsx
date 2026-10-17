@@ -113,7 +113,7 @@ function Hero() {
       <div className="max-w-6xl mx-auto px-5 sm:px-8 pt-14 sm:pt-20 pb-6 lg:pb-10 grid lg:grid-cols-[1.45fr_1fr] gap-x-14 gap-y-10 items-end">
         <div className="lg:col-span-2">
           <h1 className="cl-anim cl-rise font-mono font-bold text-[34px] sm:text-[48px] lg:text-[54px] leading-[1.04] tracking-[-0.045em] [text-wrap:balance] max-w-5xl" style={{ color: SOL.base03 }}>
-            Start it on your laptop. Let it run on your own cloud box.
+            Run sessions on your own cloud host, started from your laptop
           </h1>
         </div>
         <div>
@@ -156,7 +156,7 @@ export default function CloudPage() {
       <Section
         id="spawn"
         route="out"
-        title="It starts from what is on your screen, not from main"
+        title="A cloud session starts from your current checkout"
         lede={<>Your branch, your unpushed commits and your uncommitted, untracked and gitignored files all travel. Dependency and build folders are rebuilt on the host. The laptop takes the snapshot with a temporary index, so nothing in your checkout moves.</>}
       >
         <SpawnSection />
@@ -166,8 +166,8 @@ export default function CloudPage() {
         id="manifest"
         tone="night"
         route="out"
-        title="The host is set up like your laptop, minus the secrets it should not hold"
-        lede={<>Before a session starts, the host gets your agent config, shell, logins and CLIs. Each kind of thing travels its own way and stops at a line you can read.</>}
+        title="What the host gets from your laptop, and what it never gets"
+        lede={<>Before a session starts, the host gets your agent config, shell, logins and CLIs. Each kind travels its own way, and the table says where each one stops.</>}
       >
         <ManifestSection />
       </Section>
@@ -185,7 +185,7 @@ export default function CloudPage() {
         id="migrate"
         tone="sand"
         route="both"
-        title="Move twenty sessions before you close the lid"
+        title="Move sessions between laptop and host in batches"
         lede={<>Settings, Migration moves sessions between laptop and host as one batch: pick a destination, tick the sessions, press Move. A session in the middle of a turn finishes it first, and messages sent while it moves are held and delivered on the other side.</>}
       >
         <MigrateSection />
@@ -194,7 +194,7 @@ export default function CloudPage() {
       <Section
         id="host-setup"
         route="host"
-        title="Whatever else the repo needs, declared once"
+        title="Declare the packages and services a repo needs on the host"
         lede={<>A database, a service, a seed script: the <C>[host]</C> table in <C>.codecast/workspace.toml</C> holds it, and every host applies it before any worktree exists.</>}
       >
         <HostSetupSection />
@@ -204,7 +204,7 @@ export default function CloudPage() {
         id="browser"
         tone="night"
         route="back"
-        title="A browser on a machine with no screen of yours"
+        title="Browsing and sign-ins on the host"
         lede={<>Agents on the host verify UI and read behind sign-ins in the host&apos;s own Chrome, borrowing logins from your laptop one site at a time.</>}
       >
         <BrowserSection />
@@ -213,13 +213,13 @@ export default function CloudPage() {
       <Section
         id="sleep"
         route="host"
-        title="It sleeps when nothing is happening"
+        title="When a host sleeps and wakes"
         lede={<>A host costs money while it runs, so it looks for real work before it stops and wakes when work is queued for it.</>}
       >
         <SleepSection />
       </Section>
 
-      <Section id="reference" tone="sand" route="both" title="For scripts and agents" lede={<>Everything above also has a command, which is what agents run and what you script. Registering a host is only a command today, built for you by Add a cloud machine. <C>cast &lt;command&gt; --help</C> has the full flags.</>}>
+      <Section id="reference" tone="sand" route="both" title="Commands for scripts and agents" lede={<>Everything above also has a command, which is what agents run and what you script. Registering a host is only a command today, built for you by Add a cloud machine. <C>cast &lt;command&gt; --help</C> has the full flags.</>}>
         <div className="rounded-xl border overflow-hidden" style={{ borderColor: "#e3dcc6", backgroundColor: SOL.base3 }}>
           {REFERENCE.map((g, gi) => (
             <div key={g.group}>
@@ -237,7 +237,7 @@ export default function CloudPage() {
         </div>
       </Section>
 
-      <Section id="limits" route="host" title="What it needs, and where it stops" lede={<>The honest version, so nothing surprises you on the first run.</>}>
+      <Section id="limits" route="host" title="Requirements and limits" lede={<>What a host needs, what it costs, and what it cannot do yet.</>}>
         <div className="grid md:grid-cols-2 gap-x-10 gap-y-8">
           {LIMITS.map((l) => (
             <div key={l.q}>
@@ -265,10 +265,10 @@ export default function CloudPage() {
       <section id="install" className="cl-night scroll-mt-20">
         <div className="max-w-3xl mx-auto px-5 sm:px-8 py-20 sm:py-24">
           <h2 className="font-mono font-bold text-[28px] sm:text-[38px] leading-[1.12] tracking-[-0.03em]" style={{ color: SOL.base2 }}>
-            Install on the laptop. Add a host when you want one.
+            Install codecast, then add a host
           </h2>
           <p className="mt-4 text-[17px] leading-8" style={{ color: SOL.base1 }}>
-            Codecast runs on your laptop first. When you are ready for a host, open Settings, Devices, Add a cloud machine: it builds the one command that sets the host up, and you run it on your laptop.
+            Codecast runs on your laptop first. When you are ready for a host, open Settings, Devices, Add a cloud machine. It builds the one command that sets the host up, and you run it on your laptop.
           </p>
           <div className="mt-8 font-mono text-[12px] mb-2" style={{ color: SOL.base01 }}>1 · on your laptop</div>
           <InstallTabs location="feature-cloud" />

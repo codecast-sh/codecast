@@ -28,6 +28,8 @@ export type PresenceRow = {
   user_color: string;
   user_image?: string;
   draft_text?: string;
+  /** compose: rows only. Their caret in the shared draft; present only while their box is in it. */
+  cursor_pos?: number;
   /** compose: rows only. Whether this person may send into the session; false makes their draft a suggestion. */
   can_send?: boolean;
   /** compose: rows only. Where this person is reading the transcript. */
@@ -53,10 +55,12 @@ export function useDocPresence(opts: {
   draftText?: string;
   /** Where this person is reading, sent with the draft (at most twice a second). */
   anchor?: PresenceAnchor | null;
+  /** My caret in the shared draft (hooks/useSharedDraft); null when my box is not in one. */
+  cursor?: number | null;
   enabled: boolean;
   forceBroadcast: boolean;
 }): PresenceRow[] {
-  const { docId, draftText = "", anchor = null, enabled, forceBroadcast } = opts;
+  const { docId, draftText = "", anchor = null, cursor = null, enabled, forceBroadcast } = opts;
   const update = useMutation(api.docSync.updatePresence);
   const remove = useMutation(api.docSync.removePresence);
   const present = usePresenceRows(docId, enabled);
@@ -66,7 +70,9 @@ export function useDocPresence(opts: {
   draftRef.current = draftText;
   const anchorRef = useRef(anchor);
   anchorRef.current = anchor;
-  const push = () => update({ doc_id: docId, draft_text: draftRef.current, anchor: anchorRef.current ?? undefined }).catch(() => {});
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+  const push = () => update({ doc_id: docId, draft_text: draftRef.current, anchor: anchorRef.current ?? undefined, cursor_pos: cursorRef.current ?? undefined }).catch(() => {});
 
   // Heartbeat while broadcasting (keeps the row inside the 30s stale window),
   // and clear it on exit so the other side sees us leave promptly.
@@ -85,7 +91,7 @@ export function useDocPresence(opts: {
     if (!broadcast) return;
     const t = setTimeout(push, 250);
     return () => clearTimeout(t);
-  }, [draftText, broadcast, docId, update]);
+  }, [draftText, cursor, broadcast, docId, update]);
   const anchorPushedAt = useRef(0);
   useWatchEffect(() => {
     if (!broadcast || !anchorKey) return;

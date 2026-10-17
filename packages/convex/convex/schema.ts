@@ -4235,6 +4235,9 @@ export default defineSchema({
       // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
       // the whole machine is late, not one conversation.
       v.literal("daemon_overloaded"),
+      // A laptop under sustained CPU or memory pressure, announced from the
+      // sample that confirmed it (machineResources.storeResourceSnapshot).
+      v.literal("machine_overloaded"),
       // A role telling a person who reports to it that a high priority goal
       // has stalled (org-roles-run-work.md R6); one a day at most.
       v.literal("goal_stall"),
@@ -4283,7 +4286,9 @@ export default defineSchema({
       // where the person reads their goals with what moved and what stalled.
       v.literal("org_role"),
       // A team: a join request or approval opens its settings.
-      v.literal("team")
+      v.literal("team"),
+      // A machine by daemon device id: the overload alert opens its offload review.
+      v.literal("machine")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -7998,7 +8003,9 @@ export default defineSchema({
       // role. Present for the same reason: one shape.
       v.literal("org_role"),
       // A team, for join requests. Direct recipients only. Same reason.
-      v.literal("team")
+      v.literal("team"),
+      // A machine, for the overload alert. Direct recipients only. Same reason.
+      v.literal("machine")
     ),
     entity_id: v.string(),
     reason: v.union(

@@ -20,7 +20,7 @@ export function BlameLayer() {
       id="blame"
       tint
       wide
-      title={<>Blame that names the session, not just the committer</>}
+      title={<>Blame that names the session behind each line</>}
       lede={
         <>
           <p>
@@ -127,11 +127,11 @@ export function ImpactLayer() {
     <Layer
       n="05"
       id="impact"
-      title={<>What a session actually changed</>}
+      title={<>What a session changed</>}
       lede={
         <>
           <p>
-            A session&apos;s state tells you who is paying attention to it now, not what it did. Before you credit a change to a session, or message it about its work, read the evidence.
+            A session&apos;s state only tells you who is paying attention to it now. Before you credit a change to a session, or message it about its work, read the evidence.
           </p>
           <p>
             In a session, <b>Show git diff</b> in the overflow menu (<KeyCap size="xs">d</KeyCap>) opens its changes beside the conversation. Agents check the same evidence from the CLI before they credit or message a session: <C>cast diff</C> lists the files it changed, the commits it made and the tools it used, and <C>cast summary</C> gives its goal, approach, outcome and files. <C>cast diff --today</C> and <C>--week</C> roll up every session from the day or the week.
