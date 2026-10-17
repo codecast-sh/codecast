@@ -17,8 +17,10 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       "The text is injected into the target session as a new turn, attributed to\n" +
       "this session so the recipient (and the dashboard) can see who sent it. You\n" +
       "can message any session you can see in the feed (your own, or one shared\n" +
-      "with a team you're in). If the target session is offline, the message is\n" +
-      "queued and the cron tells your session if it can't be delivered.\n\n" +
+      "with a team you're in). A message that has not reached the target after a\n" +
+      "few minutes stays queued, and your session is told why: the target is\n" +
+      "offline, or idle while its machine fails to deliver. Waiting on a busy\n" +
+      "session of your own is not reported; it takes the message when its turn ends.\n\n" +
       "A session that was killed, or has not run for longer than its prompt\n" +
       "cache lasts (one hour), is not woken by default: waking it rebuilds its\n" +
       "whole context before it reads the message. The send stops and says what\n" +

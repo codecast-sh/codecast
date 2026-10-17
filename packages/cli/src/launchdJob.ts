@@ -11,7 +11,7 @@
  */
 
 import * as fs from "node:fs";
-import { spawn, spawnSync } from "./proc.js";
+import { execFileAsync, spawn, spawnSync } from "./proc.js";
 
 /** The environment a launchd job keeps: where cast's state lives and how to find tools, no credentials. */
 const JOB_ENV = /^(HOME|PATH|USER|LOGNAME|SHELL|TMPDIR|LANG|LC_[A-Z]+|CODECAST_[A-Z0-9_]+|CAST_[A-Z0-9_]+|BUN_[A-Z0-9_]+)$/;
@@ -65,11 +65,42 @@ ${vars}
  * (not macOS, no GUI domain over SSH, a launchctl failure); the caller falls
  * back to a detached child.
  */
-export function startLaunchdJob(job: { label: string; argv: string[]; plistPath: string; logPath: string; env?: Record<string, string | undefined>; exportLabel?: boolean }): boolean {
-  if (process.platform !== "darwin") return false;
+export function startLaunchdJob(job: LaunchdJob): boolean {
+  const steps = prepareLaunchdJob(job);
+  if (!steps) return false;
+  for (let step = steps.next(); ; ) {
+    if (step.done) return step.value;
+    const r = spawnSync("/bin/launchctl", step.value, { encoding: "utf8", timeout: LAUNCHCTL_TIMEOUT_MS });
+    step = steps.next({ status: r.status, stdout: r.stdout ?? "" });
+  }
+}
+
+/** startLaunchdJob without holding the event loop: the daemon starts one per agent session, and each launchctl call takes seconds under load. */
+export async function startLaunchdJobAsync(job: LaunchdJob): Promise<boolean> {
+  const steps = prepareLaunchdJob(job);
+  if (!steps) return false;
+  for (let step = steps.next(); ; ) {
+    if (step.done) return step.value;
+    let result: LaunchctlResult;
+    try {
+      result = { status: 0, stdout: (await execFileAsync("/bin/launchctl", step.value, { encoding: "utf8", timeout: LAUNCHCTL_TIMEOUT_MS })).stdout };
+    } catch (err) {
+      const e = err as { code?: unknown; stdout?: string };
+      result = { status: typeof e.code === "number" ? e.code : null, stdout: e.stdout ?? "" };
+    }
+    step = steps.next(result);
+  }
+}
+
+type LaunchdJob = { label: string; argv: string[]; plistPath: string; logPath: string; env?: Record<string, string | undefined>; exportLabel?: boolean };
+type LaunchctlResult = { status: number | null; stdout: string };
+const LAUNCHCTL_TIMEOUT_MS = 10_000;
+
+/** Write the plist and return the launchctl calls that start the job, each yielding the next call's arguments; null when launchd cannot take it. */
+function prepareLaunchdJob(job: LaunchdJob): Generator<string[], boolean, LaunchctlResult> | null {
+  if (process.platform !== "darwin") return null;
   const uid = process.getuid?.();
-  if (uid === undefined) return false;
-  const service = `gui/${uid}/${job.label}`;
+  if (uid === undefined) return null;
   // A job that hands its environment on to work of its own (a tmux server to
   // its panes) does not export its label: every process under it would read
   // itself as that job.
@@ -78,15 +109,19 @@ export function startLaunchdJob(job: { label: string; argv: string[]; plistPath:
   try {
     fs.writeFileSync(job.plistPath, launchdJobPlistXml(job.label, job.argv, env, job.logPath), { mode: 0o600 });
   } catch {
-    return false;
+    return null;
   }
-  const launchctl = (...a: string[]) => spawnSync("/bin/launchctl", a, { encoding: "utf8", timeout: 10_000 }).status === 0;
-  const running = spawnSync("/bin/launchctl", ["print", service], { encoding: "utf8", timeout: 10_000 });
+  return launchctlStartSteps(`gui/${uid}`, `gui/${uid}/${job.label}`, job.plistPath);
+}
+
+function* launchctlStartSteps(domain: string, service: string, plistPath: string): Generator<string[], boolean, LaunchctlResult> {
+  const running = yield ["print", service];
   if (running.status === 0) {
     if (/\bstate = running\b/.test(running.stdout)) return true;
-    launchctl("bootout", service);
+    yield ["bootout", service];
   }
-  return launchctl("bootstrap", `gui/${uid}`, job.plistPath) || launchctl("kickstart", service);
+  if ((yield ["bootstrap", domain, plistPath]).status === 0) return true;
+  return (yield ["kickstart", service]).status === 0;
 }
 
 /** Unload the job `label` without waiting. A process it started that left the job's process group keeps running. */

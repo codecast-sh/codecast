@@ -257,6 +257,25 @@ Short ids render as live pills wherever codecast shows prose.`,
     load: () => import("./objCommand.js").then((m) => m.registerObjCommand),
   },
   {
+    token: "shortcuts",
+    aliases: ["hotkeys"],
+    args: ["[query]"],
+    hasOptions: true,
+    description: `Keyboard shortcuts: see and rebind the person's codecast shortcuts; every open window follows at once
+
+  cast shortcuts [query] [--changed] [--json]     every action, its chords, * where rebound
+  cast shortcuts find <chord>                     which actions a chord fires
+  cast shortcuts set <action> <chord...>          replace an action's chords
+  cast shortcuts add <action> <chord>             add one, keeping the others
+  cast shortcuts unbind <action> | reset <action> | reset --all
+
+An action is its id (session.next) or words from its name ("next session").
+Chords read the way people write them: ctrl+j, cmd+shift+k, alt+enter, ?.
+cmd means ⌘ on a Mac and Ctrl elsewhere. A chord another action holds is
+refused unless --steal (take it) or --keep-both (yours fires first).`,
+    load: () => import("./shortcutsCommand.js").then((m) => m.registerShortcutsCommand),
+  },
+  {
     token: "goals",
     hasOptions: true,
     description: `Goals: the workspace's active initiatives with their metrics, project charters and principles, as one document
@@ -397,6 +416,7 @@ Subcommands:
   cast sources show|pause|resume|rm|test <source>
   cast sources set <source> --moment-storage host|codecast   Change one setting, keep the rest
   cast sources set <source> --moment-retention 30d|keep     How long codecast keeps moment bodies
+  cast sources set <source> --judge-on api|subscription     Where its judges make model calls
   cast sources key rotate <source>
 
 add and key rotate record the source in the checkout's codecast.json (--write
