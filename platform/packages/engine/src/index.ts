@@ -64,7 +64,7 @@ export { createKVCache, type KVStore } from "./kvCache";
 export { diffCollection, type CollectionDiff } from "./idbCollectionDiff";
 export { partitionCacheRetention, type CacheRetentionPolicy } from "./cacheRetention";
 
-export { stableRefId, rowSigExcluding, makeCollectionSig } from "./wakeSig";
+export { stableRefId, rowSigExcluding, makeCollectionSig, createInterner } from "./wakeSig";
 
 export {
   pushUndo,

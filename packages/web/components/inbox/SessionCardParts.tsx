@@ -208,8 +208,10 @@ export function CardStatusSignals({
               </span>
             )}
             {(hosted ? isWorking || isPendingWorking : (isWorking || isLive) && !isPendingWorking) && !isRowRestarting && !showBlockedBadge && (
+              // A solid dot, no ping halo: a card is one of many, and one running
+              // halo per working agent makes the browser re-layer the page on
+              // every frame, keystrokes included.
               <span data-sv-working-dot className="relative flex h-2 w-2" title="Working">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
               </span>
             )}
