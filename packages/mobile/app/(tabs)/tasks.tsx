@@ -5,6 +5,7 @@ import {
   useRef } from "react";
 import {
   StyleSheet,
+  FlatList,
   ScrollView,
   RefreshControl,
   TouchableOpacity,
@@ -200,6 +201,13 @@ function CreateTaskModal({
     </Modal>
   );
 }
+
+type TaskListItem =
+  | { kind: "header"; key: string; icon: React.ComponentProps<typeof FontAwesome>["name"]; color: string; label: string; count: number }
+  | { kind: "task"; key: string; task: TaskItem }
+  | { kind: "doneToggle"; key: string };
+
+const taskItemKey = (item: TaskListItem) => item.key;
 
 export default function TasksScreen() {
   const Theme = useTheme();
@@ -530,10 +538,23 @@ export default function TasksScreen() {
     debounceRef.current = setTimeout(() => setSearchQuery(text.trim()), 200);
   }, []);
 
-  const renderTaskGroup = useCallback(
-    (groupKey: string) => {
+  const taskGroupOrder = useMemo(() => {
+    if (groupBy === "status") return [...ACTIVE_STATUSES, "backlog"];
+    if (groupBy === "priority") return ["urgent", "high", "medium", "low", "none"];
+    return Object.keys(groupedTasks).sort((a, b) => {
+      if (a === "Unassigned" || a === "No Plan") return 1;
+      if (b === "Unassigned" || b === "No Plan") return -1;
+      return a.localeCompare(b);
+    });
+  }, [groupBy, groupedTasks]);
+
+  // One group's heading and rows as list items: the Tasks segment can hold
+  // over a thousand tasks, so it renders through a virtualized list that
+  // mounts only what is near the screen.
+  const taskGroupItems = useCallback(
+    (groupKey: string): TaskListItem[] => {
       const items = groupedTasks[groupKey];
-      if (!items?.length) return null;
+      if (!items?.length) return [];
       let icon: React.ComponentProps<typeof FontAwesome>["name"] = "circle-o";
       let color = Theme.textMuted0;
       let label = groupKey;
@@ -552,59 +573,83 @@ export default function TasksScreen() {
         color = groupKey === "No Plan" ? Theme.textMuted0 : Theme.cyan;
         label = groupKey;
       }
-      return (
-        <RNView key={groupKey}>
-          {hosted ? (
-            // Hosted headings are the inbox's: sentence case in quiet ink
-            // with the count beside them, no status icon or colour.
-            <RNView style={styles.hostedSectionHeader}>
-              <RNText style={styles.hostedSectionTitle}>{sentenceCase(label.toLowerCase())}</RNText>
-              <RNText style={styles.hostedSectionCount}>{items.length}</RNText>
-            </RNView>
-          ) : (
-          <RNView style={styles.sectionHeader}>
-            <FontAwesome name={icon} size={11} color={color} />
-            <RNText style={[styles.sectionTitle, { color }]}>
-              {label} ({items.length})
-            </RNText>
-          </RNView>
-          )}
-          {items.map((t) => {
-            const nest = viewNesting.get(t._id);
-            const total = familyIndex.descendants.get(t._id) ?? 0;
-            // Floated subtask: parent_id set but the tree kept it at depth 0
-            // (parent filtered out), so name the parent.
-            const parent = t.parent_id && (nest?.depth ?? 0) === 0
-              ? (tasks[String(t.parent_id)] as TaskItem | undefined)
-              : undefined;
-            return (
-              <TaskItemRow
-                key={t._id}
-                task={t}
-                onPress={() => router.push(`/task/${t.short_id}` as any)}
-                onLongPress={() => showTaskActions(t, updateTask)}
-                indent={nest?.indent ?? 0}
-                progress={familyIndex.progress.get(t._id)}
-                hiddenDescendantCount={Math.max(0, total - (nest?.visibleDescendants ?? 0))}
-                parentChip={parent ? { short_id: parent.short_id } : null}
-              />
-            );
-          })}
-        </RNView>
-      );
+      return [
+        { kind: "header", key: `h:${groupKey}`, icon, color, label, count: items.length },
+        ...items.map((t): TaskListItem => ({ kind: "task", key: t._id, task: t })),
+      ];
     },
-    [groupedTasks, groupBy, router, updateTask, viewNesting, familyIndex, tasks, hosted],
+    [groupedTasks, groupBy],
   );
 
-  const taskGroupOrder = useMemo(() => {
-    if (groupBy === "status") return [...ACTIVE_STATUSES, "backlog"];
-    if (groupBy === "priority") return ["urgent", "high", "medium", "low", "none"];
-    return Object.keys(groupedTasks).sort((a, b) => {
-      if (a === "Unassigned" || a === "No Plan") return 1;
-      if (b === "Unassigned" || b === "No Plan") return -1;
-      return a.localeCompare(b);
-    });
-  }, [groupBy, groupedTasks]);
+  const taskListItems = useMemo((): TaskListItem[] => {
+    const out = taskGroupOrder.flatMap(taskGroupItems);
+    if (groupBy === "status" && TERMINAL_STATUSES.some((s) => groupedTasks[s]?.length)) {
+      out.push({ kind: "doneToggle", key: "doneToggle" });
+      if (showDone) out.push(...TERMINAL_STATUSES.flatMap(taskGroupItems));
+    }
+    return out;
+  }, [taskGroupOrder, taskGroupItems, groupBy, groupedTasks, showDone]);
+
+  const renderTaskListItem = useCallback(
+    ({ item }: { item: TaskListItem }) => {
+      if (item.kind === "header") {
+        return hosted ? (
+          // Hosted headings are the inbox's: sentence case in quiet ink
+          // with the count beside them, no status icon or colour.
+          <RNView style={styles.hostedSectionHeader}>
+            <RNText style={styles.hostedSectionTitle}>{sentenceCase(item.label.toLowerCase())}</RNText>
+            <RNText style={styles.hostedSectionCount}>{item.count}</RNText>
+          </RNView>
+        ) : (
+          <RNView style={styles.sectionHeader}>
+            <FontAwesome name={item.icon} size={11} color={item.color} />
+            <RNText style={[styles.sectionTitle, { color: item.color }]}>
+              {item.label} ({item.count})
+            </RNText>
+          </RNView>
+        );
+      }
+      if (item.kind === "doneToggle") {
+        return (
+          <TouchableOpacity
+            style={styles.doneToggle}
+            onPress={() => setShowDone((v) => !v)}
+            activeOpacity={0.7}
+          >
+            <FontAwesome
+              name={showDone ? "chevron-up" : "chevron-down"}
+              size={11}
+              color={Theme.textMuted0}
+            />
+            <RNText style={styles.doneToggleText}>
+              {showDone ? "Hide completed" : "Show completed"}
+            </RNText>
+          </TouchableOpacity>
+        );
+      }
+      const t = item.task;
+      const nest = viewNesting.get(t._id);
+      const total = familyIndex.descendants.get(t._id) ?? 0;
+      // Floated subtask: parent_id set but the tree kept it at depth 0
+      // (parent filtered out), so name the parent.
+      const parent = t.parent_id && (nest?.depth ?? 0) === 0
+        ? (tasks[String(t.parent_id)] as TaskItem | undefined)
+        : undefined;
+      return (
+        <TaskItemRow
+          task={t}
+          onPress={() => router.push(`/task/${t.short_id}` as any)}
+          onLongPress={() => showTaskActions(t, updateTask)}
+          indent={nest?.indent ?? 0}
+          progress={familyIndex.progress.get(t._id)}
+          hiddenDescendantCount={Math.max(0, total - (nest?.visibleDescendants ?? 0))}
+          parentChip={parent ? { short_id: parent.short_id } : null}
+        />
+      );
+    },
+    [router, updateTask, viewNesting, familyIndex, tasks, hosted, showDone],
+  );
+
 
   const renderPlanSection = useCallback(
     (status: string) => {
@@ -783,6 +828,33 @@ export default function TasksScreen() {
         </RNView>
       )}
 
+      {segment === "tasks" && filteredTasks.length > 0 ? (
+        <FlatList
+          data={taskListItems}
+          keyExtractor={taskItemKey}
+          renderItem={renderTaskListItem}
+          initialNumToRender={16}
+          maxToRenderPerBatch={16}
+          windowSize={9}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
+          }
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            // Only finished to-dos: hosted mode says the list is clear
+            // above the fold that holds them, rather than a bare toggle.
+            hosted && activeTaskCount === 0 && !searchQuery ? (
+              <RNView style={styles.emptyState}>
+                <RNText style={styles.emptyText}>{words.noActive}</RNText>
+                <RNText style={styles.emptySubtext}>{HOSTED_TODOS_HINT}</RNText>
+              </RNView>
+            ) : null
+          }
+          ListFooterComponent={<RNView style={{ height: 80 }} />}
+        />
+      ) : (
       <ScrollView
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
@@ -804,39 +876,7 @@ export default function TasksScreen() {
                   {searchQuery || sourceFilter ? "Try a different filter" : hosted ? HOSTED_TODOS_HINT : "Create a task to get started"}
                 </RNText>
               </RNView>
-            ) : (
-              <>
-                {/* Only finished to-dos: hosted mode says the list is clear
-                    above the fold that holds them, rather than a bare toggle. */}
-                {hosted && activeTaskCount === 0 && !searchQuery ? (
-                  <RNView style={styles.emptyState}>
-                    <RNText style={styles.emptyText}>{words.noActive}</RNText>
-                    <RNText style={styles.emptySubtext}>{HOSTED_TODOS_HINT}</RNText>
-                  </RNView>
-                ) : null}
-                {taskGroupOrder.map((key) => renderTaskGroup(key))}
-
-                {groupBy === "status" && TERMINAL_STATUSES.some((s) => groupedTasks[s]?.length) && (
-                  <>
-                    <TouchableOpacity
-                      style={styles.doneToggle}
-                      onPress={() => setShowDone((v) => !v)}
-                      activeOpacity={0.7}
-                    >
-                      <FontAwesome
-                        name={showDone ? "chevron-up" : "chevron-down"}
-                        size={11}
-                        color={Theme.textMuted0}
-                      />
-                      <RNText style={styles.doneToggleText}>
-                        {showDone ? "Hide completed" : "Show completed"}
-                      </RNText>
-                    </TouchableOpacity>
-                    {showDone && TERMINAL_STATUSES.map((s) => renderTaskGroup(s))}
-                  </>
-                )}
-              </>
-            )}
+            ) : null}
           </>
         ) : segment === "plans" ? (
           <>
@@ -881,6 +921,7 @@ export default function TasksScreen() {
         )}
         <RNView style={{ height: 80 }} />
       </ScrollView>
+      )}
 
       {segment === "tasks" && (
         <>

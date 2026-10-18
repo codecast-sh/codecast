@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
 import { Tabs, usePathname } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
@@ -16,6 +17,7 @@ import {
 } from '@codecast/shared/render/mobileTabsStyle';
 
 export default function TabLayout() {
+  if (PERF_PROBE) probeRender('TabLayout');
   const Theme = useTheme();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);
@@ -26,8 +28,9 @@ export default function TabLayout() {
   const onInbox = usePathname() === '/inbox';
   const drawerOpen = useInboxDrawerOpen();
 
-  return (
-    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={<InboxDrawer />}>
+  // The tabs are memoized on what they read: the pathname changes on every
+  // tab press, and rebuilding the navigator then re-rendered every tab.
+  const tabs = useMemo(() => (
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Theme.text,
@@ -123,6 +126,13 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+  ), [Theme, labelFace, titleFace, hosted, words, unreadCount, chatMentions, anyLive, chatHidden]);
+
+  return (
+    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>
+      {tabs}
     </SlideOutDrawer>
   );
 }
+
+const drawerPanel = <InboxDrawer />;
