@@ -34,6 +34,7 @@ import {
   parseUnwrappedSessionReport,
   CHAT_WAKE_HEADER,
 } from "@codecast/shared/contracts";
+import { LRUCache } from "../lib/lruCache";
 export type { HuddleSummaryTag } from "@codecast/shared/contracts";
 
 export {
@@ -480,8 +481,20 @@ export function extractSkillInfo(content: string): { name: string; path: string;
   return { name, path: shortPath, preview };
 }
 
+// Pure in the text, and asked for every inbox row and every prompt in a
+// conversation on each render, so answers are cached by content.
+const cleanCache = new LRUCache<string, string | null>(4000);
+
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  const hit = cleanCache.get(raw);
+  if (hit !== undefined) return hit;
+  const out = cleanUserMessageUncached(raw);
+  cleanCache.set(raw, out);
+  return out;
+}
+
+function cleanUserMessageUncached(raw: string): string | null {
   raw = stripPastedContent(raw);
   if (raw.trimStart().startsWith("<turn_aborted>")) return null;
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the

@@ -21,7 +21,7 @@ mock.module("next/navigation", () => ({ ...navigation, useSearchParams: () => ne
 const shortcuts = await import("../../../shortcuts");
 mock.module("../../../shortcuts", () => ({ ...shortcuts, useShortcutContext: () => {} }));
 const convexReact = await import("convex/react");
-mock.module("convex/react", () => ({ ...convexReact, useMutation: () => async () => {}, useQuery: () => undefined }));
+mock.module("convex/react", () => ({ ...convexReact, useMutation: () => async () => {}, useQuery: () => undefined, useQueries: () => ({}) }));
 mock.module("../../../hooks/useConversationMessages", () => ({ useConversationMessages: (id: string) => {
   messageSubscriptions.add(id);
   return { conversation: { _id: id, messages: [], is_own: false } };
