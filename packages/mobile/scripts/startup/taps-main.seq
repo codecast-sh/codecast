@@ -1,0 +1,14 @@
+# The core interactions, in points on an iPhone 17 Pro (402x874), from a cold
+# inbox: open a conversation, its panel, a pick from the panel, the panel again,
+# out to the inbox tab, every tab, and a second conversation.
+t 201 418    # inbox row -> conversation
+t 23 82      # menu -> panel
+t 170 600    # panel row -> conversation swapped in place
+t 23 82      # menu -> panel
+t 50 86      # panel title -> inbox tab
+t 200 820    # tasks
+t 281 820    # alerts
+t 120 820    # chat
+t 361 820    # settings
+t 40 820     # inbox
+t 201 330    # inbox row -> conversation
