@@ -80,8 +80,9 @@ import { answerNote, conversationTitle } from '@codecast/web/components/simple/l
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { MarkdownContent, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -2301,6 +2302,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
+  if (PERF_PROBE) probeRender('MessageBubble');
   const Theme = useTheme();
   // Hosted voices are the family look's; developer mode draws a hosted
   // conversation as it draws any other.
@@ -3152,6 +3154,7 @@ const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
  *  conversation. `boardHref` adds the header's way to the board of a scope; a
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
+  if (PERF_PROBE) probeRender('SessionScreen');
   const Theme = useTheme();
   // Hosted mode hides a local session's model and branch chips (lib/surfaces,
   // the registry the web's header reads), and speaks in its words.

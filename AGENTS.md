@@ -192,6 +192,22 @@ __navLog()                                  // audit trail of every view change 
 
 Raw `setState` writes to `currentSessionId`/`pendingNavigateId` are reverted by the view-motion guard (`store/viewNav.ts`): every change of the visible conversation must declare a source, and machine-initiated sources can't move the view mid-session. If a "random session jump" is ever reported, read `__navLog()` first — it names the writer.
 
+## Typing budget
+
+Typing in the composer stays as cheap as typing in a bare text field, with the
+cache a busy account holds (thousands of sessions). `packages/web/scripts/typing-guard.sh`
+holds the budget and runs before every ship that touches web, shared or platform
+code (`.codecast/workspace.toml`) and in CI: a keystroke into a box with text
+commits React once, writes nothing to the store and changes no DOM outside the
+textarea; no store subscription compares a long string (a wake signature is a
+digest: `makeCollectionSig`, never the rows spelled out); a write nothing reads
+re-renders nothing; list rows run no infinite animation (one pulsing dot per
+running agent re-layers the page every frame); transcript rows are not
+compositor layers; a typed key that matches no shortcut never queries the DOM.
+Background bulk work (a coalesced inbox apply, a coarse clock tick) waits for a
+pause in typing through `lib/inputQuiet.ts`. When the guard fails, fix the cost
+it names; never loosen the budget to get past it.
+
 ## Prompt evals (`evals`)
 
 `./evals` replays the prod prompts in this tree against frozen codecast

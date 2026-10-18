@@ -10,7 +10,8 @@ import type { OrgChangeStatus, OrgReplyVerdict } from "@codecast/shared/contract
 import { cn } from "../../lib/utils";
 import { useOrgHover } from "./proposalContexts";
 import type { RecordGroupCard, RecordRow } from "./proposalSubjects";
-import { AnswerControls, AT, FailNote, LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerWord, LedgerYou, RecordPill, recordRef, Sentence, StatusTo, SLOT, StateWord, useAnswerField, useFocusScroll, type LedgerLayout, type SubjectAnswer } from "./ProposalSubjectCard";
+import { AnswerControls, AT, FailNote, LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerWord, LedgerYou, RecordPill, recordRef, Sentence, SLOT, StateWord, useAnswerField, useFocusScroll, type LedgerLayout, type SubjectAnswer } from "./ProposalSubjectCard";
+import { StatusTo } from "./ChangeChips";
 import { StagedBand, stagedWash } from "./StagedBand";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
