@@ -19,7 +19,7 @@ import { SlackPeopleDialog } from "../chat/SlackPeopleDialog";
 import { SlackDmSwitch } from "../chat/SlackDmSwitch";
 import { UserRound } from "lucide-react";
 import { QuietButton } from "./parts";
-import { slackLinksSig } from "../../hooks/useChatSync";
+import { slackLinksSig } from "../../store/chatWakeSigs";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
 
 export function SlackMirrorsSummary() {

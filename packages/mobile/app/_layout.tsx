@@ -27,6 +27,7 @@ import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
 import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
+import { PERF_PROBE, probeRender, probeTouchEnd, setProbeRoute } from '@/lib/perfProbe';
 import * as Font from 'expo-font';
 import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
@@ -113,13 +114,6 @@ function RootLayout() {
     initAnalytics();
   }, []);
 
-  // Screen views for every route change. Declared after initAnalytics so the
-  // mount-time firing sees an initialized client (effects run top-down).
-  const pathname = usePathname();
-  useEffect(() => {
-    if (pathname) trackScreen(pathname);
-  }, [pathname]);
-
   useEffect(() => {
     if (error) throw error;
   }, [error]);
@@ -200,7 +194,24 @@ function RootLayout() {
     return null;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <>
+      <RouteTracker />
+      <RootLayoutNav />
+    </>
+  );
+}
+
+// Screen views for every route change, in a leaf of its own: a pathname read
+// in RootLayout re-rendered the whole app shell on every navigation. A screen
+// tracked before initAnalytics runs is queued until it does.
+function RouteTracker() {
+  const pathname = usePathname();
+  useEffect(() => {
+    if (pathname) trackScreen(pathname);
+    if (PERF_PROBE) setProbeRoute(pathname);
+  }, [pathname]);
+  return null;
 }
 
 export default wrapRoot(RootLayout);
@@ -257,6 +268,7 @@ function useLookFromMode(): Look {
 }
 
 function RootLayoutNav() {
+  if (PERF_PROBE) probeRender('RootLayoutNav');
   useLookFromMode();
   const scheme = useActiveScheme();
   const look = useActiveLook();
@@ -266,7 +278,7 @@ function RootLayoutNav() {
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onTouchEndCapture={PERF_PROBE ? probeTouchEnd : undefined}>
       <ConvexProvider client={convex}>
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
