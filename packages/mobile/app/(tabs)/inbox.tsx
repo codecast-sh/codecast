@@ -1,8 +1,9 @@
 import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, Alert, ScrollView, Platform, ActionSheetIOS } from 'react-native';
+import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
@@ -149,6 +150,9 @@ export default function InboxScreen() {
   return <InboxView />;
 }
 
+// Rows that fill a phone screen with some to spare, mounted with the list.
+const FIRST_PAINT_ROWS = 14;
+
 /** The inbox list. The tab shows it whole; a conversation's slide-out panel
  *  shows it as `panel`, where a row opens in place of the conversation
  *  (`onOpenSession`) and `currentId`'s row is marked as the one on screen. */
@@ -159,6 +163,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   /** The panel's title leaves for the inbox tab. */
   onExit?: () => void;
 } = {}) {
+  if (PERF_PROBE) probeRender('InboxView');
   const Theme = useTheme();
   // Both list memos below bake palette values into React nodes.
   const scheme = useActiveScheme();
@@ -447,6 +452,23 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     [unreadSig],
   );
 
+  // Mounting every row at once (the inbox's first paint, a conversation's
+  // panel opening) held the screen for a second or more on a long inbox. The
+  // first screenful mounts with the list and the rest in a transition right
+  // after, which a tap interrupts. listData hands each section what is left.
+  const [rowBudget, setRowBudget] = useState(FIRST_PAINT_ROWS);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => startTransition(() => setRowBudget(Infinity)));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const rowsLeft = useRef(Infinity);
+
+  // A row's times read in minutes ("2m ago"), so rows re-render once a
+  // minute; placement itself re-runs on the finer clock.
+  const rowMinute = Math.floor(coarseNow / 60_000);
+
+  const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
+
   const renderSessionItem = useCallback((s: InboxSession, titleSuffix?: string) => (
     <SwipeableSessionItem
       key={s._id}
@@ -454,15 +476,16 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
       selected={currentId === s._id}
-      onPress={() => openSession(s._id)}
-      onDismiss={() => handleStash(s._id)}
-      onLongPress={() => handleSessionLongPress(s)}
+      onPress={openSession}
+      onDismiss={handleStash}
+      onLongPress={handleSessionLongPress as (session: SessionData) => void}
       awaiting={questionIds.has(s._id)}
       asked={askedByConv.get(String(s._id))}
       roleSessions={roleSessionsByLead.get(s._id)}
-      onOpenRole={s.role?.short_id ? () => router.push(`/org/${s.role!.short_id}`) : undefined}
+      onOpenRole={openRole}
+      clock={rowMinute}
     />
-  ), [router, openSession, currentId, handleStash, handleSessionLongPress, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
+  ), [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -476,7 +499,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     const key = collapseKey ?? label;
     // A hosted section that never folds (New) ignores a stored fold.
     const collapsed = !hosted?.fixed && !!collapsedSections?.[key];
-    const rows = collapsed ? null : items.map((row) => renderSessionItem(row, hosted?.suffixes?.get(String(row._id))));
+    const shown = collapsed ? [] : items.slice(0, Math.max(0, rowsLeft.current));
+    rowsLeft.current -= shown.length;
+    const rows = collapsed ? null : shown.map((row) => renderSessionItem(row, hosted?.suffixes?.get(String(row._id))));
     // One heading for every lens, in the hosted rail's terms: sentence case
     // in the interface face, muted ink, the count beside it, and a dot that
     // carries the section's colour (hosted mode spends it only on what waits
@@ -545,6 +570,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const statusWorking = filteredWorking;
 
   const listData = useMemo(() => {
+    rowsLeft.current = rowBudget;
     const sections: React.ReactNode[] = [];
     if (Object.keys(sessions).length === 0) {
       // Skeletons only for a genuinely cold cache: hydration has landed with
@@ -674,7 +700,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection(words.sectionDormant, statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words, hostedOnly, awaitingSig, stopsSig, pendingSendSig, unreadByConv, coarseNow]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words, hostedOnly, awaitingSig, stopsSig, pendingSendSig, unreadByConv, coarseNow, rowBudget]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

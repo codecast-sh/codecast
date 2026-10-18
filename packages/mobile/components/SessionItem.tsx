@@ -1,6 +1,7 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, PanResponder, Image, Pressable } from 'react-native';
+import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
-import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
@@ -68,7 +69,7 @@ export type SessionData = {
   // Unacknowledged handoff: a teammate assigned this session to the current
   // user (see listInboxSessions enrichment). "Got it" acks it in place.
   assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
-  role?: { handle: string; name: string } | null;
+  role?: { handle: string; name: string; short_id?: string } | null;
 };
 
 export * from '@/components/sessionFormat';
@@ -119,6 +120,7 @@ function HostedRowDot({ working, unread }: { working: boolean; unread: boolean }
 }
 
 export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; titleSuffix?: string }) {
+  if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   // Hosted mode hides project chips (lib/surfaces gitChips).
   const gitChips = useSurface('gitChips');
@@ -319,16 +321,24 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   );
 }
 
-export function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: {
+// Memoized: the inbox holds every row at once, so a store write re-renders
+// only the rows whose props changed. The callbacks take the row's id (or the
+// row) so the list passes the same functions to every row.
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix }: {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
   selected?: boolean;
-  onPress: () => void;
-  onDismiss: () => void;
-  onLongPress?: () => void;
+  onPress: (conversationId: string) => void;
+  onDismiss: (conversationId: string) => void;
+  onLongPress?: (session: SessionData) => void;
   roleSessions?: number;
-  onOpenRole?: () => void;
+  /** Opens the role the row belongs to, by its short id. */
+  onOpenRole?: (roleShortId: string) => void;
+  /** A clock tick (the list passes the minute). Unread here: a new value
+   *  re-renders the row, which reads its relative time and staleness at
+   *  render. */
+  clock?: number;
   /** The row has an open question for the person. */
   awaiting?: boolean;
   /** The open question a waiting row asks, shown as its quiet line. */
@@ -342,8 +352,13 @@ export function SwipeableSessionItem({ session, isUnread, selected, onPress, onD
   const didSwipe = useRef(false);
 
   // Keep the latest action callbacks reachable from the once-created responder.
-  const cb = useRef({ onDismiss });
-  cb.current = { onDismiss };
+  const id = session._id;
+  const cb = useRef({ onDismiss: () => onDismiss(id) });
+  cb.current = { onDismiss: () => onDismiss(id) };
+  const press = useCallback(() => { if (!didSwipe.current) onPress(id); }, [onPress, id]);
+  const longPress = useMemo(() => (onLongPress ? () => onLongPress(session) : undefined), [onLongPress, session]);
+  const roleShortId = session.role?.short_id;
+  const openRole = useMemo(() => (onOpenRole && roleShortId ? () => onOpenRole(roleShortId) : undefined), [onOpenRole, roleShortId]);
 
   const springBack = useCallback((after?: () => void) => {
     RNAnimated.spring(translateX, {
@@ -439,7 +454,7 @@ export function SwipeableSessionItem({ session, isUnread, selected, onPress, onD
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onLongPress={onLongPress} />
+      <SessionItem session={session} selected={selected} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );
@@ -455,7 +470,11 @@ export function SwipeableSessionItem({ session, isUnread, selected, onPress, onD
       ) : card}
     </RNView>
   );
-}
+}, (a: any, b: any) => {
+  let same = true;
+  for (const k in b) if (a[k] !== b[k]) { same = false; if (PERF_PROBE) probeRender('chg:' + k); }
+  return same;
+});
 
 export const styles = themedStyles((Theme) => StyleSheet.create({
   swipeContainer: {
