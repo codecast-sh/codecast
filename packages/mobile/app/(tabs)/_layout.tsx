@@ -1,4 +1,5 @@
 import React from 'react';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
 import { Tabs, usePathname } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
@@ -16,6 +17,7 @@ import {
 } from '@codecast/shared/render/mobileTabsStyle';
 
 export default function TabLayout() {
+  if (PERF_PROBE) probeRender('TabLayout');
   const Theme = useTheme();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);

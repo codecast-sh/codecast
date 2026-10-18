@@ -91,6 +91,25 @@ describe("makeCollectionSig", () => {
     expect(sig({ a: { label: "x" }, b: { label: "y" } })).not.toBe(sig({ a: { label: "y" }, b: { label: "x" } }));
   });
 
+  it("projects a set's members once, not on every rebuild", () => {
+    let projections = 0;
+    const sig = makeCollectionSig<boolean>(() => { projections++; return ""; });
+    const set = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, true]));
+    const first = sig(set);
+    expect(projections).toBe(100);
+    expect(sig({ ...set })).toBe(first);
+    expect(projections).toBe(100);
+    expect(sig({ ...set, k100: true })).not.toBe(first);
+    expect(projections).toBe(101);
+  });
+
+  it("leaves out a row whose projection is null", () => {
+    const sig = makeCollectionSig<any>((row) => (row.keep ? row.label : null));
+    const base = sig({ a: { keep: true, label: "x" } });
+    expect(sig({ a: { keep: true, label: "x" }, b: { keep: false, label: "y" } })).toBe(base);
+    expect(sig({ a: { keep: true, label: "x" }, b: { keep: true, label: "y" } })).not.toBe(base);
+  });
+
   it("is a short digest that ignores key order", () => {
     const sig = makeCollectionSig<any>((row) => row.label);
     const rows = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`k${i}`, { label: `row ${i} with a longish projection` }]));

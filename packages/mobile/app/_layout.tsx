@@ -27,6 +27,7 @@ import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
 import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
+import { PERF_PROBE, probeTouchEnd, setProbeRoute } from '@/lib/perfProbe';
 import * as Font from 'expo-font';
 import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
@@ -118,6 +119,7 @@ function RootLayout() {
   const pathname = usePathname();
   useEffect(() => {
     if (pathname) trackScreen(pathname);
+    if (PERF_PROBE) setProbeRoute(pathname);
   }, [pathname]);
 
   useEffect(() => {
@@ -257,6 +259,7 @@ function useLookFromMode(): Look {
 }
 
 function RootLayoutNav() {
+  if (PERF_PROBE) probeRender('RootLayoutNav');
   useLookFromMode();
   const scheme = useActiveScheme();
   const look = useActiveLook();
@@ -266,7 +269,7 @@ function RootLayoutNav() {
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onTouchEndCapture={PERF_PROBE ? probeTouchEnd : undefined}>
       <ConvexProvider client={convex}>
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
