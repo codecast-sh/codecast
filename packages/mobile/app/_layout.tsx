@@ -27,6 +27,7 @@ import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
 import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
+import { PERF_PROBE, probeRender, probeTouchEnd, setProbeRoute } from '@/lib/perfProbe';
 import * as Font from 'expo-font';
 import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
@@ -35,6 +36,7 @@ import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 // A task write the server refuses (createTaskAndAdopt drops its stub) says so,
 // as web's toast does.
 setTaskErrorReporter((msg) => Alert.alert('Task', msg));
+bootMark('layout-module');
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
 
@@ -94,6 +96,8 @@ export const unstable_settings = {
 SplashScreen.preventAutoHideAsync();
 
 function RootLayout() {
+  const firstRender = useRef(true);
+  if (firstRender.current) { firstRender.current = false; bootMark('root-render'); }
   const [loaded, error] = useFonts({
     // First paint only needs Regular (body), SemiBold (Inbox title), and the
     // icon font the list uses. Medium/Bold/Italic load after splash hide.
@@ -112,13 +116,6 @@ function RootLayout() {
   useEffect(() => {
     initAnalytics();
   }, []);
-
-  // Screen views for every route change. Declared after initAnalytics so the
-  // mount-time firing sees an initialized client (effects run top-down).
-  const pathname = usePathname();
-  useEffect(() => {
-    if (pathname) trackScreen(pathname);
-  }, [pathname]);
 
   useEffect(() => {
     if (error) throw error;
@@ -200,7 +197,24 @@ function RootLayout() {
     return null;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <>
+      <RouteTracker />
+      <RootLayoutNav />
+    </>
+  );
+}
+
+// Screen views for every route change, in a leaf of its own: a pathname read
+// in RootLayout re-rendered the whole app shell on every navigation. A screen
+// tracked before initAnalytics runs is queued until it does.
+function RouteTracker() {
+  const pathname = usePathname();
+  useEffect(() => {
+    if (pathname) trackScreen(pathname);
+    if (PERF_PROBE) setProbeRoute(pathname);
+  }, [pathname]);
+  return null;
 }
 
 export default wrapRoot(RootLayout);
@@ -257,6 +271,7 @@ function useLookFromMode(): Look {
 }
 
 function RootLayoutNav() {
+  if (PERF_PROBE) probeRender('RootLayoutNav');
   useLookFromMode();
   const scheme = useActiveScheme();
   const look = useActiveLook();
@@ -266,7 +281,7 @@ function RootLayoutNav() {
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onTouchEndCapture={PERF_PROBE ? probeTouchEnd : undefined}>
       <ConvexProvider client={convex}>
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
@@ -284,16 +299,15 @@ function RootLayoutNav() {
                       header is off from the first frame. reveal=1 is a session
                       the new session sheet just started: pushed with no
                       transition under the sheet, so it is already there when
-                      the sheet slides away. swap=1 is a conversation picked
-                      from another's inbox panel, replacing it in place. */}
+                      the sheet slides away. */}
                   <Stack.Screen
                     name="session/[id]"
                     options={({ route }) => ({
                       title: 'Conversation',
                       headerShown: false,
                       animation: (() => {
-                        const p = route.params as { reveal?: string; swap?: string } | undefined;
-                        return p?.reveal || p?.swap ? 'none' : 'default';
+                        const p = route.params as { reveal?: string } | undefined;
+                        return p?.reveal ? 'none' : 'default';
                       })(),
                       // A rightward drag on a conversation uncovers the inbox
                       // behind it (components/inbox/ConversationSlideOut), so

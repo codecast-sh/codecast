@@ -10,7 +10,7 @@ import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from '
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -80,8 +80,10 @@ import { answerNote, conversationTitle } from '@codecast/web/components/simple/l
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { MarkdownContent, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
+import { useShallowStable } from '@/hooks/useShallowStable';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -2279,6 +2281,40 @@ function ToolRunRow({ run, expanded, onToggle }: { run: ToolRun; expanded: boole
   );
 }
 
+// A transcript row's message as the list shows it, cached per message so a
+// screen render hands each bubble the same object and the memo below holds.
+const displayCache = new WeakMap<Message, Message>();
+function displayMessage(item: Message): Message {
+  if (!item.content) return item;
+  let out = displayCache.get(item);
+  if (!out) {
+    out = { ...item, content: stripPastedContent(item.content) };
+    displayCache.set(item, out);
+  }
+  return out;
+}
+const directCache = new WeakMap<Message, Message>();
+function directMessage(item: Message, body: string): Message {
+  let out = directCache.get(item);
+  if (!out || out.content !== body) {
+    out = { ...item, content: body };
+    directCache.set(item, out);
+  }
+  return out;
+}
+
+// The conversation screen re-renders on every store write it reads, and each
+// bubble parses and lays out its markdown, so a bubble renders again only when
+// one of its own props changes. toolRun is rebuilt inline per render and is
+// compared by what it carries.
+const MemoMessageBubble = memo(MessageBubble, (a, b) => {
+  for (const k in b) {
+    if (k !== 'toolRun' && (a as any)[k] !== (b as any)[k]) { if (PERF_PROBE) probeRender('mb:' + k); return false; }
+  }
+  const x = a.toolRun, y = b.toolRun;
+  return x === y || (!!x && !!y && x.run === y.run && x.expanded === y.expanded && x.justOpened === y.justOpened);
+});
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun }: {
   message: Message;
   /** Someone other than the session's owner who sent this turn, named above the bubble. */
@@ -2301,6 +2337,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
+  if (PERF_PROBE) probeRender('MessageBubble');
+  useState(() => { if (PERF_PROBE) probeRender('mb:mount'); });
   const Theme = useTheme();
   // Hosted voices are the family look's; developer mode draws a hosted
   // conversation as it draws any other.
@@ -3140,7 +3178,10 @@ export default function SessionDetailScreen() {
   }
   return (
     <ConversationSlideOut id={id}>
-      <SessionScreen id={id} message={message} focus={focus} />
+      {/* Keyed: a pick in the panel changes the id in place, and the
+          conversation's own state (scroll, sticky prompt, drafts) starts
+          over with it. */}
+      <SessionScreen key={id} id={id} message={message} focus={focus} />
     </ConversationSlideOut>
   );
 }
@@ -3152,6 +3193,7 @@ const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
  *  conversation. `boardHref` adds the header's way to the board of a scope; a
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
+  if (PERF_PROBE) probeRender('SessionScreen');
   const Theme = useTheme();
   // Hosted mode hides a local session's model and branch chips (lib/surfaces,
   // the registry the web's header reads), and speaks in its words.
@@ -3510,7 +3552,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return map;
   }, [conversation?.fork_children]);
 
-  const taskSubjectMap = useMemo(() => {
+  // Off the conversation doc, which is a new object on every heartbeat.
+  const childConversationMap = useShallowStable(conversation?.child_conversation_map);
+  const taskSubjectMap = useShallowStable(useMemo(() => {
     const createInputs: Record<string, string> = {};
     const idMap: Record<string, string> = {};
     for (const msg of allMessages) {
@@ -3534,9 +3578,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return idMap;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalToolResultMap = useMemo(() => {
+  const globalToolResultMap = useShallowStable(useMemo(() => {
     const map: Record<string, ToolResult> = {};
     for (const msg of allMessages) {
       if (msg.role === 'user' && msg.tool_results) {
@@ -3546,9 +3590,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalImageMap = useMemo(() => {
+  const globalImageMap = useShallowStable(useMemo(() => {
     const map: Record<string, ImageData> = {};
     for (const msg of allMessages) {
       if (msg.images) {
@@ -3560,7 +3604,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
   // Every image in the session, in transcript order — attachments, tool
   // screenshots AND trusted markdown images in prose (same scan as the web
@@ -3607,26 +3651,33 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // Read through a ref so every bubble keeps one handler as images arrive.
+  const allSessionImagesRef = useRef(allSessionImages);
+  allSessionImagesRef.current = allSessionImages;
   const openGallery = useCallback((image: ImageData) => {
     const key = imageKeyOf(image);
-    const idx = key ? allSessionImages.findIndex(img => imageKeyOf(img) === key) : -1;
+    const idx = key ? allSessionImagesRef.current.findIndex(img => imageKeyOf(img) === key) : -1;
     setGalleryIndex(Math.max(0, idx));
     setGalleryVisible(true);
-  }, [allSessionImages]);
+  }, []);
 
   // Local-first fork, the same store path as web: the stub opens already
   // holding the parent's messages up to the fork point, and the screen moves
   // to the real id when the server create lands (the stub URL self-heal below).
+  // Read through a ref: the conversation object changes on every heartbeat,
+  // and this handler is a prop of every (memoized) bubble.
+  const forkInputs = useRef({ conversation, hasMoreAbove });
+  forkInputs.current = { conversation, hasMoreAbove };
   const handleForkFromMessage = useCallback((messageUuid: string) => {
     if (!id) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const fork = beginLocalFork(conversation as any, messageUuid, {
+    const fork = beginLocalFork(forkInputs.current.conversation as any, messageUuid, {
       currentUser: useInboxStore.getState().currentUser,
-      hasMoreAbove,
+      hasMoreAbove: forkInputs.current.hasMoreAbove,
       onError: (message) => Alert.alert('Fork failed', message),
     });
     if (fork) router.push(`/session/${fork.forkSessionId}`);
-  }, [id, conversation, hasMoreAbove, router]);
+  }, [id, router]);
 
   const handleCopyAll = useCallback(async () => {
     if (!allMessages.length) return;
@@ -4451,7 +4502,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   // One transcript row, as the list draws it; null for rows that never show.
   const renderRow = (item: Message, index: number): ReactNode => {
-    if (item.content) item = { ...item, content: stripPastedContent(item.content) };
+    item = displayMessage(item);
     // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
     const originalIndex = invertedMessages.length - 1 - index;
     let prevNonToolResult: Message | null = null;
@@ -4661,8 +4712,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             />
           </Pressable>
         )}
-        <MessageBubble
-          message={directUser ? { ...item, content: directUser.body } : item}
+        <MemoMessageBubble
+          message={directUser ? directMessage(item, directUser.body) : item}
           agentType={conversation.agent_type}
           model={conversation.model}
           showHeader={showHeader}
@@ -4677,7 +4728,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           sender={directUser?.from}
           showToast={showToast}
           collapsed={collapsed}
-          childConversationMap={conversation.child_conversation_map}
+          childConversationMap={childConversationMap}
           bookmarkedSet={bookmarkedSet}
           toolRun={run ? { run, expanded: openRuns.has(run.head) || (!!highlightedMessageId && run.members.includes(highlightedMessageId)), justOpened: Date.now() - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS, onToggle: () => toggleRun(run.head) } : undefined}
       />
@@ -4969,9 +5020,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           data={invertedMessages}
           inverted={true}
           removeClippedSubviews={false}
-          windowSize={21}
-          initialNumToRender={50}
-          maxToRenderPerBatch={50}
+          // The first frame holds a screenful of bubbles (each one parses
+          // and lays out markdown); later batches keep five screens ready on
+          // either side, which a fling does not outrun.
+          windowSize={11}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
           updateCellsBatchingPeriod={50}
           onLayout={(e) => {
             flatListLayoutHeightRef.current = e.nativeEvent.layout.height;

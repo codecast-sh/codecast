@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "./proc.js";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "./ccKeychain.js";
 import { accountTokenFilePath, fleetStoreDir, fleetStoreEnabled } from "./ccAccounts.js";
 import { stableClaudeBinary, resolveClaudeInstall } from "./stableClaudeBinary.js";

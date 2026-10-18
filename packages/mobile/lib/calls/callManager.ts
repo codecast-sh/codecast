@@ -14,10 +14,10 @@
 // - Camera flip and speakerphone toggle are first-class (phone ergonomics).
 import { Room, RoomEvent, Track, ConnectionState } from "livekit-client";
 import type { Participant, RemoteParticipant, LocalParticipant } from "livekit-client";
-import { livekit, ensureLivekitGlobals, callsNativeAvailable } from "./livekitNative";
+import { getLivekit, ensureLivekitGlobals, callsNativeAvailable } from "./livekitNative";
 
 // AudioSession from the guarded native module (null on a binary that lacks it).
-const AudioSession = livekit?.AudioSession ?? null;
+const audioSession = () => getLivekit()?.AudioSession ?? null;
 export { callsNativeAvailable };
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
@@ -177,7 +177,7 @@ async function teardownMedia() {
   // now — a trailing stop here would kill the NEW call's audio.
   if (gen === callGen && !callKitOwnsAudio) {
     try {
-      await AudioSession?.stopAudioSession();
+      await audioSession()?.stopAudioSession();
     } catch {}
   }
   callKitOwnsAudio = false;
@@ -245,7 +245,7 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
     if (superseded()) return;
     if (!opts.callKitManaged) {
-      await AudioSession!.startAudioSession();
+      await audioSession()!.startAudioSession();
       if (superseded()) return;
     }
     callKitOwnsAudio = !!opts.callKitManaged;
@@ -391,6 +391,7 @@ export async function flipCamera(): Promise<void> {
 // comes first because a category/mode change clears any existing output
 // override, then the explicit override on top.
 async function applyAudioRoute(speakerOn: boolean): Promise<void> {
+  const AudioSession = audioSession();
   if (!AudioSession) return;
   try {
     await AudioSession.setAppleAudioConfiguration({
