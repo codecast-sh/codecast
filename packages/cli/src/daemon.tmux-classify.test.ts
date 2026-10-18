@@ -1144,6 +1144,14 @@ describe("a composer box taller than the live tail", () => {
     expect(classifyTmuxLiveState(region)).toBe("idle");
   });
 
+  test("a report divider inside the draft is not a composer boundary", () => {
+    const screen = pane(["  ⏵⏵ bypass permissions on (shift+tab to cycle)"])
+      .replace("  </session-message>", `  ${"─".repeat(40)}\n  check: prompt fidelity\n  </session-message>`);
+    const region = extractTmuxLiveRegion(screen);
+    expect(region).toContain("❯ <session-message");
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
   test("a dialog under a lone rule is still read as that dialog", () => {
     const region = extractTmuxLiveRegion(pane([" Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend"]));
     expect(region).not.toContain("<session-message");

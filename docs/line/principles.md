@@ -40,7 +40,7 @@ When a result keeps needing manual intervention or a workaround, change the syst
 
 Why: manual one-offs, silent spinners and fragile daemons push ongoing work and support back onto the owner.
 
-Evidence: 21 corrections across 16 sessions [PR-code-2]: codecast/738de269, codecast/6d66a45e, codecast/0f33215d, codecast/204dc98c, codecast/c8c6771d, codecast/616fbff1, codecast/jx7162g, codecast/jx79098, codecast/jx7e9av, codecast/b7e8002b, codecast/jx73zke, codecast/c3f8856c, codecast/91cd1654, union-mobile-outreach/281e2ac7, bookmark/67e9d943, aurora/fc51b6ab.
+Evidence: 29 corrections across 23 sessions [PR-code-2]: codecast/738de269, codecast/6d66a45e, codecast/0f33215d, codecast/204dc98c, codecast/c8c6771d, codecast/616fbff1, codecast/jx7162g, codecast/jx79098, codecast/jx7e9av, codecast/b7e8002b, codecast/jx73zke, codecast/c3f8856c, codecast/91cd1654, union-mobile-outreach/281e2ac7, bookmark/67e9d943, aurora/fc51b6ab, codecast/e6d9c003, codecast/0c1345c3, codecast/c35bef55, codecast/6fee4a65, codecast/ad386d76, codecast/ca17cd9c, codecast/a52e0a86.
 
 ### CC-code-2 Cut load at its source
 
@@ -84,7 +84,7 @@ Before changing or rebuilding something, list everything the current version doe
 
 Why: redesigns silently dropped features the owner relied on, and a broken tool that used to work is a release blocker.
 
-Evidence: 10 corrections across 8 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211, codecast/0f83ee96, codecast/1ee27c51, codecast/378a9c20.
+Evidence: 14 corrections across 11 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211, codecast/0f83ee96, codecast/1ee27c51, codecast/378a9c20, codecast/fb8e21ef, codecast/c6f40e40, codecast/3f51d2f8.
 
 ### CC-verify-2 A prompt change is proven on frozen moments
 
@@ -110,7 +110,7 @@ Interactions never leave the user guessing or surprise them. Every action gets i
 
 Why: hidden actions, jumping layouts, silent states and unexpected view switches made features feel broken even when they worked.
 
-Evidence: 32 corrections across 24 sessions: codecast/5cd65a63, codecast/8a5da82a, codecast/356f3371, codecast/2622f9a4, codecast/f388ef97, codecast/d78076a5, codecast/7603dece, codecast/bae26244, codecast/357dc99a, codecast/d0e1b2a5, codecast/d1b0172a, codecast/fcfb7767, codecast/6b76b81e, codecast/57e10167, codecast/3d3a114d, codecast/ba3755d7, codecast/23b202ab, codecast/26856fb1, codecast/377c6024, codecast/9924c5e6, codecast/03d88c38, codecast/2912b750, union-mobile/96cc4996, union-mobile-outreach/afd41522.
+Evidence: 40 corrections across 32 sessions: codecast/5cd65a63, codecast/8a5da82a, codecast/356f3371, codecast/2622f9a4, codecast/f388ef97, codecast/d78076a5, codecast/7603dece, codecast/bae26244, codecast/357dc99a, codecast/d0e1b2a5, codecast/d1b0172a, codecast/fcfb7767, codecast/6b76b81e, codecast/57e10167, codecast/3d3a114d, codecast/ba3755d7, codecast/23b202ab, codecast/26856fb1, codecast/377c6024, codecast/9924c5e6, codecast/03d88c38, codecast/2912b750, union-mobile/96cc4996, union-mobile-outreach/afd41522, codecast/904f00f7, codecast/81cae024, codecast/9e5d1eb5, codecast/665f4c2a, codecast/ca4d8feb, codecast/edddcb88, codecast/8d8ff33a, codecast/0cc88547.
 
 ### CC-design-2 One scroller, content first
 
@@ -126,7 +126,7 @@ Codecast speaks one visual language: JetBrains Mono everywhere, mobile included 
 
 Why: too many font styles, weights and loud colors made surfaces read as uncohesive, and each surface that bypassed the shared fonts, tokens or components needed its own fix.
 
-Evidence [PR-design-2, PR-design-4]: 18 of the 30 sessions behind PR-design-2 and 11 of the 17 behind PR-design-4 are codecast's, among them codecast/357dc99a, codecast/377c6024, codecast/c26c9845, codecast/be5f2068, codecast/58d03e78, codecast/9a39ebc7. Recorded in CLAUDE.md (UI conventions).
+Evidence [PR-design-2, PR-design-4]: 29 of the 41 sessions behind PR-design-2 and 20 of the 26 behind PR-design-4 are codecast's, among them codecast/357dc99a, codecast/377c6024, codecast/c26c9845, codecast/be5f2068, codecast/58d03e78, codecast/9a39ebc7, codecast/0cc88547, codecast/2c03068a, codecast/04126458, codecast/1701d953. Recorded in CLAUDE.md (UI conventions).
 
 ## Product
 
@@ -146,7 +146,7 @@ Keep the human's attention for what only they can do. Work an agent delegates or
 
 Why: every row in the needs-input queue costs attention, and inbox noise and needless wakes buried the few asks that mattered and wasted tokens.
 
-Evidence: 30 corrections across 23 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c, codecast/10c015f6, codecast/378a9c20.
+Evidence: 34 corrections across 27 sessions: codecast/75340f90, codecast/eb7cdbed, codecast/ac950a1e, codecast/2622f9a4, codecast/b8189b1a, codecast/fb8e21ef, codecast/jx7csbd, codecast/jx76e8h, codecast/jx7bs90, codecast/jx7as3d, codecast/700edf11, codecast/jx7er8q, codecast/7064c786, codecast/c397f70d, codecast/ab9f99a3, codecast/jx72nyf, codecast/jx7ey9r, union-mobile/bb47b784, -Users-ashot-src/c71b7cc8, -Users-ashot-src/421e971d, union-mobile-outreach-backend/d98a708c, codecast/10c015f6, codecast/378a9c20, codecast/88b135ad, codecast/32ae8b13, codecast/0f3d4676, codecast/7bf7bf94.
 
 ### CC-agents-2 A decision card carries its own context
 
@@ -154,7 +154,7 @@ Before a direction that is costly to undo (a schema, a protocol, a migration), t
 
 Why: cards with bare ids and buried asks could not be decided without opening the session, which defeats the queue, and directions nobody examined wasted the build.
 
-Evidence [PR-agents-3]: codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e.
+Evidence [PR-agents-3]: codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e, codecast/378a9c20.
 
 ### CC-agents-3 Strongest model decides, briefed in full
 
@@ -171,3 +171,11 @@ Recurring agent work lives in triggers, never in a hidden loop, so a person can 
 Why: hidden, stale or overlapping loops wasted capacity and attention; one cleanup found 51 triggers.
 
 Evidence: 6 corrections across 6 sessions: codecast/d2892238, codecast/jx75tcn, codecast/jx7csbd, codecast/fb8e21ef, codecast/ffa3b13c, -Users-ashot-src/c71b7cc8.
+
+### CC-agents-5 Agent runs spend quota before money
+
+Agent sessions, evals, judges and trial runs use the owner's subscription logins by default, so they cost quota rather than money. A metered API key is for what a subscription cannot serve, and only billed spend counts as money: budgets, caps and cost reports keep dollars and quota apart, and a question about spending names the dollars that would actually be billed.
+
+Why: runs routed to metered keys turned covered work into bills, and caps that added quota to dollars stopped runs that cost nothing and asked the owner to approve spend that need not exist.
+
+Evidence: 4 corrections across 2 sessions: codecast/378a9c20, codecast/1f6146fa.

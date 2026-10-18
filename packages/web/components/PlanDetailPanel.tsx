@@ -257,7 +257,7 @@ function PlanSessionCard({ session: s }: { session: any }) {
         </span>
         {isActive && (
           <span className="flex items-center gap-0.5 shrink-0">
-            <LivePulseDot className="w-1.5 h-1.5" />
+            <LivePulseDot className="w-1.5 h-1.5" still />
             <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
           </span>
         )}
@@ -369,7 +369,7 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
           </span>
           {s.is_active && (
             <span className="flex items-center gap-0.5 flex-shrink-0">
-              <LivePulseDot className="w-1.5 h-1.5" />
+              <LivePulseDot className="w-1.5 h-1.5" still />
               <span className="text-[8px] text-sol-green/60 font-medium uppercase">live</span>
             </span>
           )}
