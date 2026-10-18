@@ -324,7 +324,7 @@ describe("a ruling binds its message", () => {
     });
     const ruled = await s.t.query((internal as any).judgeRetire.rulings, { workspace: `user:${s.user}`, scopes: ["evidence:contacts/c-1:ex-3:"] });
     expect(ruled).toEqual([{ key: KEY, short_id: "sg-300", expectation: "ex-3", quote: "Sefi, the slot passed without a booking. Sorry about that.", ruling: "" }]);
-    // The person's whole scope reads the ruling under any line, so a judge reading that email against another line is shown it (moments.rulingsOn).
+    // The person's whole scope reads the ruling under any line, so a judge reading that email against another line is shown it (momentJudging.rulingsOn).
     const anyLine = await s.t.query((internal as any).judgeRetire.rulings, { workspace: `user:${s.user}`, scopes: ["evidence:contacts/c-1:"] });
     expect(anyLine.map((r: any) => r.short_id)).toEqual(["sg-300"]);
     const r = await s.t.mutation((internal as any).judgeRetire.retireRuled, { workspace: `user:${s.user}`, bound: [{ key: "evidence:contacts/c-1:ex-3:bbbbbbbb", ruling: "sg-300" }], actor: s.user });
