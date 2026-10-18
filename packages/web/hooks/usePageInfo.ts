@@ -21,6 +21,8 @@ export type PageInfo = {
   title?: string;
   version?: number;
   kind?: string;
+  /** `cast publish` stored a capture (pageThumbUrl); never set on a gated page, whose capture is not served. */
+  thumb?: boolean;
   /** The gate tokens the serve route reads, for a gated page this viewer may open. */
   k?: string | null;
   e?: string | null;
