@@ -13,20 +13,14 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, chipText, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { mixColor } from '@/lib/solColor';
-import { optionalNative } from '@/lib/optionalNative';
 import { NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
 import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
-import { startUpload, forgetUpload } from '@/components/chat/chatUpload';
+import { startUpload, forgetUpload, chooseAndPickImages } from '@/components/chat/chatUpload';
 import type { useComposerField } from '@/lib/composerField';
-
-const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
-  'ExponentImagePicker',
-  () => require('expo-image-picker'),
-);
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -109,27 +103,8 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
   };
 
   const pickImage = async () => {
-    if (!ImagePicker) {
-      Alert.alert('Not available', 'Image uploads require a development build with expo-image-picker.');
-      return;
-    }
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant photo library access to attach images');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets) {
-        attachImages(result.assets.map(a => ({ uri: a.uri, mime: a.mimeType ?? 'image/jpeg' })));
-      }
-    } catch (err) {
-      console.error('Image picker error:', err);
-    }
+    const picked = await chooseAndPickImages();
+    if (picked.length) attachImages(picked);
   };
 
   /** The picked images as the send carries them: uploaded ones by storage id,

@@ -28,7 +28,7 @@ import { SlackLogo } from "../SlackLogo";
 import { openExternalUrl } from "../../lib/desktop";
 import { useTrackedStore } from "../../store/inboxStore";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
-import { slackLinksSig } from "../../hooks/useChatSync";
+import { slackLinksSig } from "../../store/chatWakeSigs";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { DirectionPicker, type SlackChannelOption } from "./SlackSyncDialog";
 import { SlackPeopleDialog } from "./SlackPeopleDialog";
