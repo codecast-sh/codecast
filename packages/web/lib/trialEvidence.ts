@@ -1,5 +1,5 @@
 // A trial card read against its problem's evidence now (convex
-// lineTrial.problemEvidence), not the count frozen when the card was built.
+// lib/problemEvidence.problemEvidence), not the count frozen when the card was built.
 // When a re-judge or a merge leaves the problem with no findings, nothing is
 // behind the change: the card says so and recommends Drop, naming where the
 // evidence went. /trial's list and pane and the problem page read it here.
