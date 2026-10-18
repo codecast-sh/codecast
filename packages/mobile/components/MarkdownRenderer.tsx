@@ -6,6 +6,7 @@ import {
   View as RNView,
   Image as RNImage,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { Text as RNText } from '@/components/Themed';
@@ -20,7 +21,9 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { EntityPill, isEntityId } from './EntityPill';
-import { SearchHighlightContext, markInlineNodes } from './search/highlight';
+import { SearchHighlightContext, markedRuns } from './search/highlight';
+import { parseMarkdown, plainText, planTable } from '@/lib/markdown';
+import type { Nodes, Paragraph, Image, List, Table } from 'mdast';
 import { parseEntityUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
@@ -147,139 +150,139 @@ export function HighlightedCodeText({ content, style }: { content: string; style
 // that never existed).
 const MENTION_ENTITY_RE = new RegExp(`^(.*?)\\s*\\b(${MENTION_ID_SOURCE})$`, 'i');
 
-export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false, knownMentionHandles?: Set<string>): React.ReactNode[] {
-  const result: React.ReactNode[] = [];
-  const pattern = new RegExp(
-    '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
-    + `|(${URL_SOURCE})|@\\[([^\\]]+)\\]|@(\\w+)`
-    // Bounded as the shared scanner is, so "5-in-1" stays prose.
-    + `|${BARE_ID_BEFORE}(${BARE_ID_SOURCE})${BARE_ID_AFTER}`
-    // A backslash escape (CommonMark): `\.` or `\*` is the character itself.
-    // Last, so no group number above moves; matched by its leading backslash.
-    + '|\\\\[!-/:-@\\[-`{-~])',
-    'g',
-  );
-  let lastIndex = 0;
-  let match;
-  let key = 0;
+// What one markdown body renders under: the text style of the current run (a
+// quote adds italics, a checked task strikes through), who wrote it, and the
+// active search's words.
+type MdCtx = {
+  baseStyle: any;
+  isUser: boolean;
+  knownMentionHandles?: Set<string>;
+  found?: string;
+  selectable: boolean;
+  plainTextFences: boolean;
+  listDepth: number;
+};
 
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      result.push(<RNText key={`${keyPrefix}t${key++}`}>{text.slice(lastIndex, match.index)}</RNText>);
-    }
+// The references a writer did not mark up, inside a run of plain text: bare
+// URLs, @mentions and entity ids. Emphasis, code and links come from the
+// parser (lib/markdown), so this never reads markdown syntax itself.
+const TEXT_REF_SOURCE =
+  `(${URL_SOURCE})|@\\[([^\\]]+)\\]|@(\\w+)`
+  // Bounded as the shared scanner is, so "5-in-1" stays prose.
+  + `|${BARE_ID_BEFORE}(${BARE_ID_SOURCE})${BARE_ID_AFTER}`;
 
-    if (match[0].startsWith('\\')) {
-      result.push(<RNText key={`${keyPrefix}x${key++}`}>{match[0].slice(1)}</RNText>);
-    } else if (match[0].startsWith('`')) {
-      const code = match[0].slice(1, -1);
-      // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
-      // (web's EntityAwareCode does the same). The fallback keeps a non-entity
-      // Convex-shaped string (message id, hash) rendered as inline code.
-      if (isEntityId(code)) {
-        result.push(
-          <EntityPill
-            key={`${keyPrefix}c${key++}`}
-            shortId={code}
-            fallback={<RNText style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>}
-          />
-        );
-      } else {
-        result.push(
-          <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
-        );
-      }
-    } else if (match[2] !== undefined) {
-      result.push(
-        <RNText key={`${keyPrefix}b${key++}`} style={{ fontWeight: '700' }}>{match[2]}</RNText>
-      );
-    } else if (match[3] !== undefined) {
-      result.push(
-        <RNText key={`${keyPrefix}i${key++}`} style={{ fontStyle: 'italic' }}>{match[3]}</RNText>
-      );
-    } else if (match[4] !== undefined) {
-      result.push(
-        <RNText key={`${keyPrefix}s${key++}`} style={{ textDecorationLine: 'line-through', color: Theme.textMuted0 }}>{match[4]}</RNText>
-      );
-    } else if (match[5] && match[6]) {
-      const url = match[6];
-      // A codecast object URL becomes a rich in-app pill, not an external link
-      // (web's EntityAwareLink parity).
-      const entityRef = parseEntityUrl(url);
-      if (entityRef) {
-        result.push(<EntityPill key={`${keyPrefix}l${key++}`} type={entityRef.type} id={entityRef.id} />);
-      } else {
-        result.push(<LinkText key={`${keyPrefix}l${key++}`} url={url} label={match[5]} isUser={isUser} />);
-      }
-    } else if (match[7]) {
+function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const plain = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  const re = new RegExp(TEXT_REF_SOURCE, 'g');
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) plain(text.slice(last, m.index));
+    const k = `${kp}r${m.index}`;
+    if (m[1]) {
       // Bare URL. Sentence punctuation glued to the end is prose, so it is
       // pushed back as plain text instead of ending up inside the target.
-      const raw = match[7];
-      const url = trimUrlTail(raw);
+      const url = trimUrlTail(m[1]);
       const entityRef = parseEntityUrl(url);
-      if (entityRef) {
-        result.push(<EntityPill key={`${keyPrefix}u${key++}`} type={entityRef.type} id={entityRef.id} />);
-      } else {
-        result.push(<LinkText key={`${keyPrefix}u${key++}`} url={url} isUser={isUser} />);
-      }
-      const tail = raw.slice(url.length);
-      if (tail) result.push(<RNText key={`${keyPrefix}up${key++}`}>{tail}</RNText>);
-    } else if (match[8]) {
+      out.push(entityRef
+        ? <EntityPill key={k} type={entityRef.type} id={entityRef.id} />
+        : <LinkText key={k} url={url} isUser={ctx.isUser} />);
+      const tail = m[1].slice(url.length);
+      if (tail) plain(tail);
+    } else if (m[2]) {
       // @[Bracket mention] syntax — a trailing entity id ("@[Title jx7c6zk]")
       // renders as that object's pill; a plain name stays a mention chip.
-      const name = match[8];
+      const name = m[2];
       const em = name.match(MENTION_ENTITY_RE);
       if (em && em[2]) {
         const entityId = em[2];
         // If the id resolves to nothing, fall back to the mention chip so
         // "@[Title <staleId>]" still reads as a mention, not a bare id.
         const chip = <RNText style={mdStyles.mentionPill}>@{em[1] || name}</RNText>;
-        result.push(
-          entityId.toLowerCase().startsWith('doc:')
-            ? <EntityPill key={`${keyPrefix}m${key++}`} type="doc" id={entityId.slice(4)} />
-            : <EntityPill key={`${keyPrefix}m${key++}`} shortId={entityId} fallback={chip} />
-        );
+        out.push(entityId.toLowerCase().startsWith('doc:')
+          ? <EntityPill key={k} type="doc" id={entityId.slice(4)} />
+          : <EntityPill key={k} shortId={entityId} fallback={chip} />);
       } else {
-        result.push(
-          <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{name}</RNText>
-        );
+        out.push(<RNText key={k} style={mdStyles.mentionPill}>@{name}</RNText>);
       }
-    } else if (match[9]) {
+    } else if (m[3]) {
       // @word mention. When the caller supplies the resolvable-handle set
       // (chat does — the same vocabulary the server notifies on), an unknown
       // @word stays plain text: a chip that lights up but notifies nobody is
       // worse than no chip. Callers that pass nothing keep the liberal
-      // highlight (session transcripts, where @words are prose).
-      const word = match[9];
-      if (!isMentionStart(text, match.index)) {
-        // An address, not a mention: the "@github" in a git remote.
-        result.push(<RNText key={`${keyPrefix}m${key++}`}>@{word}</RNText>);
-      } else if (knownMentionHandles && !knownMentionHandles.has(word.toLowerCase())) {
-        result.push(<RNText key={`${keyPrefix}m${key++}`}>@{word}</RNText>);
+      // highlight (session transcripts, where @words are prose). An address
+      // (the "@github" in a git remote) is never a mention.
+      const word = m[3];
+      if (!isMentionStart(text, m.index) || (ctx.knownMentionHandles && !ctx.knownMentionHandles.has(word.toLowerCase()))) {
+        plain(`@${word}`);
       } else {
-        result.push(
-          <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{word}</RNText>
-        );
+        out.push(<RNText key={k} style={mdStyles.mentionPill}>@{word}</RNText>);
       }
-    } else if (match[10]) {
+    } else if (m[4]) {
       // Entity ID (jx… session, ct-/pl- task/plan, doc reference)
-      const id = match[10];
-      result.push(
-        id.toLowerCase().startsWith('doc:')
-          ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id.slice(4)} />
-          : id.toLowerCase().startsWith('doc-')
-            ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id} />
-            : <EntityPill key={`${keyPrefix}e${key++}`} shortId={id} />
-      );
+      const id = m[4];
+      const lower = id.toLowerCase();
+      out.push(lower.startsWith('doc:')
+        ? <EntityPill key={k} type="doc" id={id.slice(4)} />
+        : lower.startsWith('doc-')
+          ? <EntityPill key={k} type="doc" id={id} />
+          : <EntityPill key={k} shortId={id} />);
     }
-
-    lastIndex = match.index + match[0].length;
+    last = m.index + m[0].length;
   }
+  if (last < text.length) plain(text.slice(last));
+  return out;
+}
 
-  if (lastIndex < text.length) {
-    result.push(<RNText key={`${keyPrefix}t${key++}`}>{text.slice(lastIndex)}</RNText>);
+const BR_RE = /^<br\s*\/?>$/i;
+
+function renderInline(nodes: readonly Nodes[], ctx: MdCtx, kp: string): React.ReactNode[] {
+  return nodes.map((n, i) => renderInlineNode(n, ctx, `${kp}.${i}`));
+}
+
+function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
+  switch (node.type) {
+    case 'text':
+      return <React.Fragment key={k}>{renderTextRefs(replaceShortcodes(node.value), ctx, k)}</React.Fragment>;
+    case 'strong':
+      return <RNText key={k} style={{ fontWeight: '700' }}>{renderInline(node.children, ctx, k)}</RNText>;
+    case 'emphasis':
+      return <RNText key={k} style={{ fontStyle: 'italic' }}>{renderInline(node.children, ctx, k)}</RNText>;
+    case 'delete':
+      return <RNText key={k} style={{ textDecorationLine: 'line-through', color: Theme.textMuted0 }}>{renderInline(node.children, ctx, k)}</RNText>;
+    case 'break':
+      return '\n';
+    case 'inlineCode': {
+      const style = ctx.isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode;
+      // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
+      // (web's EntityAwareCode does the same). The fallback keeps a non-entity
+      // Convex-shaped string (message id, hash) rendered as inline code.
+      if (isEntityId(node.value)) {
+        return <EntityPill key={k} shortId={node.value} fallback={<RNText style={style}>{node.value}</RNText>} />;
+      }
+      return <RNText key={k} style={style}>{markedRuns(node.value, ctx.found, `${k}h`)}</RNText>;
+    }
+    case 'link': {
+      // A codecast object URL becomes a rich in-app pill, not an external link
+      // (web's EntityAwareLink parity).
+      const entityRef = parseEntityUrl(node.url);
+      if (entityRef) return <EntityPill key={k} type={entityRef.type} id={entityRef.id} />;
+      // An autolink (<https://…>) reads as its shortened URL.
+      const label = plainText(node) === node.url ? undefined : renderInline(node.children, ctx, k);
+      return <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
+    }
+    case 'image':
+      // Inline among text, or from a source that is not ours: a link, never an
+      // auto-fetch. Trusted image-only paragraphs draw as images (renderBlock).
+      return <LinkText key={k} url={node.url} label={node.alt || node.url} isUser={ctx.isUser} />;
+    case 'html':
+      // Mobile shows a literal tag rather than dropping the words around it.
+      return BR_RE.test(node.value.trim()) ? '\n' : node.value;
+    default:
+      if ('children' in node) return <React.Fragment key={k}>{renderInline(node.children as Nodes[], ctx, k)}</React.Fragment>;
+      return 'value' in node && typeof node.value === 'string' ? node.value : null;
   }
-
-  return result;
 }
 
 export function CodeBlockFullscreen({ content, language, visible, onClose }: { content: string; language: string; visible: boolean; onClose: () => void }) {
@@ -376,27 +379,6 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
-// Markdown images on their own line(s): ![alt](src), one or several per line.
-// Web renders these inline for trusted srcs (storage-origin `cast image`
-// uploads, pasted transcript images) with the alt as a caption, side by side
-// when adjacent; mobile parity here. Untrusted srcs fall through to the
-// paragraph path, where the [alt](url) portion renders as a tappable link —
-// never an auto-fetch.
-const IMAGE_TOKEN_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
-
-// The line's images, or null unless the line is images-only and every src is
-// trusted (mixed lines keep paragraph semantics).
-function parseTrustedImageLine(l: string): { alt: string; src: string }[] | null {
-  if (!l.startsWith('![')) return null;
-  const re = new RegExp(IMAGE_TOKEN_RE.source, 'g');
-  const imgs: { alt: string; src: string }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(l)) !== null) imgs.push({ alt: m[1], src: m[2] });
-  if (imgs.length === 0) return null;
-  if (l.replace(new RegExp(IMAGE_TOKEN_RE.source, 'g'), '').trim() !== '') return null;
-  return imgs.every((img) => isTrustedImageSrc(img.src)) ? imgs : null;
-}
-
 function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: boolean }) {
   const Theme = useTheme();
   const [full, setFull] = useState(false);
@@ -424,252 +406,226 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
   );
 }
 
-export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, knownMentionHandles, selectable = true }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean }) {
-  const Theme = useTheme();
-  // Under a search (components/search/highlight), every text run marks the
-  // words found; pills and links pass through.
-  const found = useContext(SearchHighlightContext);
-  const inline: typeof renderInlineMarkdown = (...args) => (found ? markInlineNodes(renderInlineMarkdown(...args), found) : renderInlineMarkdown(...args));
-  const lines = text.split('\n');
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-  let elKey = 0;
+// A paragraph of nothing but images, every one from a trusted source
+// (storage-origin `cast image` uploads, pasted transcript images): web draws
+// these inline with the alt as a caption, side by side when adjacent. A mixed
+// or untrusted paragraph keeps text semantics, where an image is a link.
+function trustedImages(p: Paragraph): Image[] | null {
+  const imgs: Image[] = [];
+  for (const c of p.children) {
+    if (c.type === 'image') imgs.push(c);
+    else if (c.type === 'break' || (c.type === 'text' && !c.value.trim())) continue;
+    else return null;
+  }
+  return imgs.length > 0 && imgs.every((img) => isTrustedImageSrc(img.url)) ? imgs : null;
+}
 
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
+// Box-drawing/em-dash rule runs (optionally `code`/**bold**-wrapped) — the
+// residue of insight fences the block parser deliberately doesn't match (e.g.
+// the open-ended titled form). A clean rule beats a wrapping line of ─ glyphs.
+const RULE_RESIDUE_RE = /^[─━═—–]{3,}$/;
+const HEADING_SIZES = [18, 16, 15, 14, 13, 13];
+const BLOCK_GAP = 6;
 
-    if (!trimmed) { i++; continue; }
+function renderBlocks(nodes: readonly Nodes[], ctx: MdCtx, kp: string, gap = BLOCK_GAP): React.ReactNode {
+  const out = nodes.map((n, i) => renderBlock(n, ctx, `${kp}.${i}`, i === 0)).filter((el) => el != null);
+  if (out.length === 1) return out[0];
+  return <RNView style={{ gap }}>{out}</RNView>;
+}
 
-    const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
-    if (headerMatch) {
-      const level = headerMatch[1].length;
+function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.ReactNode {
+  switch (node.type) {
+    case 'paragraph': {
+      const imgs = trustedImages(node);
+      if (imgs) {
+        return imgs.length > 1 ? (
+          <RNView key={k} style={mdStyles.imageRow}>
+            {imgs.map((img, j) => <MarkdownImage key={j} src={img.url} alt={img.alt ?? ''} tiled />)}
+          </RNView>
+        ) : <MarkdownImage key={k} src={imgs[0].url} alt={imgs[0].alt ?? ''} />;
+      }
+      if (RULE_RESIDUE_RE.test(plainText(node).trim())) return <RNView key={k} style={mdStyles.horizontalRule} />;
+      return <RNText key={k} style={ctx.baseStyle} selectable={ctx.selectable}>{renderInline(node.children, ctx, k)}</RNText>;
+    }
+    case 'heading': {
       // A heading never sets smaller than the text around it: a reply set at
       // a reading size (hosted mode's 17px letter) keeps its headings at body
       // size, as the web's hosted replies do.
-      const fontSize = Math.max([18, 16, 15, 14, 13, 13][level - 1], StyleSheet.flatten(baseStyle)?.fontSize ?? 0);
-      elements.push(
-        <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {inline(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, knownMentionHandles)}
+      const fontSize = Math.max(HEADING_SIZES[node.depth - 1], StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? 0);
+      return (
+        <RNText key={k} style={[ctx.baseStyle, { fontSize, fontWeight: '700', marginTop: first ? 0 : 6 }]} selectable={ctx.selectable}>
+          {renderInline(node.children, ctx, k)}
         </RNText>
       );
-      i++;
-      continue;
     }
-
-    const imageLine = parseTrustedImageLine(trimmed);
-    if (imageLine) {
-      // Consume the run: adjacent images-only lines join the same row.
-      const run = [...imageLine];
-      i++;
-      while (i < lines.length) {
-        const next = parseTrustedImageLine(lines[i].trim());
-        if (!next) break;
-        run.push(...next);
-        i++;
+    case 'list':
+      return <MarkdownList key={k} node={node} ctx={ctx} k={k} />;
+    case 'blockquote':
+      return (
+        <RNView key={k} style={ctx.isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
+          {renderBlocks(node.children, { ...ctx, baseStyle: [ctx.baseStyle, mdStyles.blockquoteText] }, k)}
+        </RNView>
+      );
+    case 'code': {
+      const language = node.lang || 'plaintext';
+      // Keep the fence name in sync with web's HtmlSnippet.CANVAS_FENCE
+      // ("cast-canvas") — importing the web module would drag DOM-only code
+      // into the Hermes bundle. Binaries without the WebView native module
+      // fall through to the plain code block.
+      if (language === 'cast-canvas' && canvasAvailable) return <CastCanvas key={k} code={node.value} />;
+      // Words quoted exactly (an approval's draft): plain lines, with no
+      // highlighting, expand or copy, because they are not code.
+      if (ctx.plainTextFences && language === 'text') {
+        return <RNText key={k} selectable={ctx.selectable} style={ctx.baseStyle}>{node.value}</RNText>;
       }
-      elements.push(
-        run.length > 1 ? (
-          <RNView key={`${blockKey}imgrow${elKey++}`} style={mdStyles.imageRow}>
-            {run.map((img, j) => (
-              <MarkdownImage key={j} src={img.src} alt={img.alt} tiled />
-            ))}
+      return <CodeBlockWithCopy key={k} content={node.value} language={language} />;
+    }
+    case 'thematicBreak':
+      return <RNView key={k} style={mdStyles.horizontalRule} />;
+    case 'table':
+      return <MarkdownTable key={k} node={node} ctx={ctx} k={k} />;
+    case 'html':
+      // A literal tag block stays visible: it is usually pasted code or
+      // markup the writer meant to show.
+      return <RNText key={k} style={ctx.baseStyle} selectable={ctx.selectable}>{node.value}</RNText>;
+    case 'definition':
+      return null;
+    default:
+      return 'children' in node ? <RNView key={k}>{renderBlocks(node.children as Nodes[], ctx, k)}</RNView> : null;
+  }
+}
+
+const BULLETS = ['•', '◦', '▪'];
+
+function MarkdownList({ node, ctx, k }: { node: List; ctx: MdCtx; k: string }) {
+  const start = node.start ?? 1;
+  const markers = node.children.map((item, j) =>
+    item.checked != null ? (item.checked ? '☑' : '☐')
+      : node.ordered ? `${start + j}.` : BULLETS[ctx.listDepth % BULLETS.length]);
+  // The marker column is as wide as its widest marker, so "9." and "10."
+  // items start their text at the same place.
+  const fontSize = StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? 14;
+  const markerWidth = Math.max(16, Math.max(...markers.map((m) => m.length)) * fontSize * 0.6 + 6);
+  const gap = node.spread ? BLOCK_GAP : 3;
+  return (
+    <RNView style={[mdStyles.listContainer, { gap }]}>
+      {node.children.map((item, j) => {
+        const itemCtx = {
+          ...ctx,
+          listDepth: ctx.listDepth + 1,
+          baseStyle: item.checked === true ? [ctx.baseStyle, { textDecorationLine: 'line-through', color: Theme.textMuted0 }] : ctx.baseStyle,
+        };
+        return (
+          <RNView key={j} style={mdStyles.listItem}>
+            <RNText style={[ctx.baseStyle, mdStyles.listBullet, { width: markerWidth }]}>{markers[j]}</RNText>
+            <RNView style={{ flex: 1 }}>{renderBlocks(item.children, itemCtx, `${k}.${j}`, gap)}</RNView>
           </RNView>
-        ) : (
-          <MarkdownImage key={`${blockKey}img${elKey++}`} src={run[0].src} alt={run[0].alt} />
-        )
-      );
-      continue;
-    }
+        );
+      })}
+    </RNView>
+  );
+}
 
-    if (trimmed.match(/^[-*]\s/) || trimmed.match(/^\d+[.)]\s/)) {
-      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean; depth: number }[] = [];
-      while (i < lines.length) {
-        const raw = lines[i];
-        const l = raw.trim();
-        // Indentation depth from the UNtrimmed line \u2014 two spaces (or a tab) per
-        // level, capped so a pathological paste can't march off-screen.
-        const leading = raw.match(/^[ \t]*/)![0].replace(/\t/g, '  ').length;
-        const depth = Math.min(Math.floor(leading / 2), 3);
-        const checkMatch = l.match(/^[-*]\s+\[([ xX])\]\s+(.*)/);
-        const ulMatch = l.match(/^[-*]\s+(.*)/);
-        const olMatch = l.match(/^(\d+)[.)]\s+(.*)/);
-        if (checkMatch) {
-          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ', depth });
-          i++;
-        } else if (ulMatch) {
-          listItems.push({ text: ulMatch[1], ordered: false, depth });
-          i++;
-        } else if (olMatch) {
-          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]), depth });
-          i++;
-        } else break;
-      }
-      elements.push(
-        <RNView key={`${blockKey}li${elKey++}`} style={mdStyles.listContainer}>
-          {listItems.map((item, j) => (
-            <RNView key={j} style={[mdStyles.listItem, item.depth > 0 && { paddingLeft: item.depth * 14 }]}>
-              <RNText style={[baseStyle, mdStyles.listBullet]}>
-                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
-              </RNText>
-              <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {inline(item.text, baseStyle, `${blockKey}li${j}`, isUser, knownMentionHandles)}
-              </RNText>
-            </RNView>
-          ))}
-        </RNView>
-      );
-      continue;
-    }
+// Tables are laid out for the width they get (lib/markdown planTable): a grid
+// when it fits or wraps cleanly, a sideways-scrolling grid for short data
+// cells, and one card per row when several columns of prose would otherwise
+// be cut off. Cells are measured in characters, which is exact in the app's
+// monospace face.
+const TABLE_CELL_PAD_X = 8;
+const MONO_ADVANCE = 0.6;
+const CARD_INLINE_LABEL_CHARS = 14;
 
-    // ASCII thematic breaks, plus box-drawing/em-dash rule runs (optionally
-    // `code`/**bold**-wrapped) \u2014 the residue of insight fences the block parser
-    // deliberately doesn't match (e.g. the open-ended titled form). A clean rule
-    // beats a wrapping line of \u2500 glyphs or a bogus inline-code chip.
-    if (trimmed.match(/^[-*_]{3,}$/) || trimmed.match(/^(?:`|\*\*)?[\u2500\u2501\u2550\u2014\u2013]{3,}(?:`|\*\*)?$/)) {
-      elements.push(
-        <RNView key={`${blockKey}hr${elKey++}`} style={mdStyles.horizontalRule} />
-      );
-      i++;
-      continue;
-    }
+function MarkdownTable({ node, ctx, k }: { node: Table; ctx: MdCtx; k: string }) {
+  const Theme = useTheme();
+  const screen = useWindowDimensions();
+  const [measured, setMeasured] = useState<number | null>(null);
+  const base = StyleSheet.flatten(ctx.baseStyle) ?? {};
+  const fontSize = Math.min(15, Math.max(12, Math.round((base.fontSize ?? 14) * 0.9)));
+  const lineHeight = Math.round(fontSize * 1.45);
+  const textStyle = [ctx.baseStyle, { fontSize, lineHeight }];
+  const labelStyle = [ctx.baseStyle, { fontSize: fontSize - 1, lineHeight, color: Theme.textMuted, fontStyle: 'normal' as const, textDecorationLine: 'none' as const }];
+  const rows = node.children;
+  const cols = rows[0]?.children.length ?? 0;
+  const cells = useMemo(() => rows.map((r) => Array.from({ length: cols }, (_, c) => (r.children[c] ? plainText(r.children[c]) : ''))), [rows, cols]);
+  // Until the first layout pass reports the real width, assume the screen
+  // minus a message's usual inset; the hairline border takes the 2 points.
+  const avail = (measured ?? screen.width - 48) - 2;
+  const plan = useMemo(() => planTable(cells, avail, fontSize * MONO_ADVANCE, TABLE_CELL_PAD_X), [cells, avail, fontSize]);
+  const cell = (ri: number, ci: number) => {
+    const c = rows[ri].children[ci];
+    return c ? renderInline(c.children, ctx, `${k}.${ri}.${ci}`) : null;
+  };
 
-    if (trimmed.startsWith('> ')) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i].trim().startsWith('> ')) {
-        quoteLines.push(lines[i].trim().slice(2));
-        i++;
-      }
-      elements.push(
-        <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
-          <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {inline(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, knownMentionHandles)}
-          </RNText>
-        </RNView>
-      );
-      continue;
-    }
-
-    if (trimmed.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/)) {
-      const tableLines: string[] = [];
-      while (i < lines.length && lines[i].trim().includes('|')) {
-        tableLines.push(lines[i].trim());
-        i++;
-      }
-      const headerCells = tableLines[0].split('|').map(c => c.trim()).filter(Boolean);
-      const bodyRows = tableLines.slice(2).map(row => row.split('|').map(c => c.trim()).filter(Boolean));
-      elements.push(
-        <ScrollView
-          key={`${blockKey}tbl${elKey++}`}
-          horizontal
-          showsHorizontalScrollIndicator
-          style={[mdStyles.hScroll, { marginVertical: 6 }]}
-        >
-          <RNView>
-            <RNView style={mdStyles.tableRow}>
-              {headerCells.map((cell, ci) => (
-                <RNView key={ci} style={mdStyles.tableHeaderCell}>
-                  <RNText style={[baseStyle, mdStyles.tableHeaderText]}>{cell}</RNText>
-                </RNView>
-              ))}
-            </RNView>
-            {bodyRows.map((row, ri) => (
-              <RNView key={ri} style={[mdStyles.tableRow, ri % 2 === 1 && mdStyles.tableRowAlt]}>
-                {row.map((cell, ci) => (
-                  <RNView key={ci} style={mdStyles.tableCell}>
-                    <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {inline(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, knownMentionHandles)}
-                    </RNText>
-                  </RNView>
-                ))}
+  let body: React.ReactNode;
+  if (plan.kind === 'grid') {
+    const grid = (
+      <RNView style={mdStyles.tableBox}>
+        {rows.map((row, ri) => (
+          <RNView
+            key={ri}
+            style={[
+              mdStyles.tableRow,
+              ri === 0 ? mdStyles.tableHeaderRow : ri % 2 === 0 && mdStyles.tableRowAlt,
+              ri < rows.length - 1 && mdStyles.tableRowDivider,
+            ]}
+          >
+            {Array.from({ length: cols }, (_, ci) => (
+              <RNView key={ci} style={[mdStyles.tableCell, { width: plan.widths[ci] }, ci < cols - 1 && mdStyles.tableCellDivider]}>
+                <RNText
+                  style={[textStyle, ri === 0 && { fontWeight: '600' }, node.align?.[ci] ? { textAlign: node.align[ci]! } : null]}
+                  selectable={ctx.selectable}
+                >
+                  {cell(ri, ci)}
+                </RNText>
               </RNView>
             ))}
           </RNView>
-        </ScrollView>
-      );
-      continue;
-    }
-
-    const paraLines: string[] = [];
-    while (i < lines.length) {
-      const l = lines[i].trim();
-      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ') || parseTrustedImageLine(l) || (l.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/))) break;
-      paraLines.push(lines[i]);
-      i++;
-    }
-    if (paraLines.length > 0) {
-      elements.push(
-        <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, PARAGRAPH_GAP]} selectable={selectable}>
-          {inline(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, knownMentionHandles)}
-        </RNText>
-      );
-    }
+        ))}
+      </RNView>
+    );
+    body = plan.scroll ? (
+      <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={mdStyles.hScroll}>{grid}</ScrollView>
+    ) : grid;
+  } else {
+    const labels = cells[0] ?? [];
+    // Short headers sit in a column beside their values (a definition list);
+    // a long one goes above its value so the value keeps the full width.
+    const inlineLabels = labels.slice(1).every((l) => l.length <= CARD_INLINE_LABEL_CHARS);
+    const labelWidth = Math.ceil(Math.max(1, ...labels.slice(1).map((l) => l.length)) * (fontSize - 1) * MONO_ADVANCE) + 12;
+    body = (
+      <RNView style={mdStyles.tableBox}>
+        {rows.slice(1).map((_, bi) => {
+          const ri = bi + 1;
+          return (
+            <RNView key={ri} style={[mdStyles.tableCard, bi > 0 && mdStyles.tableCardDivider]}>
+              {cells[ri][0] ? <RNText style={[textStyle, { fontWeight: '700' }]} selectable={ctx.selectable}>{cell(ri, 0)}</RNText> : null}
+              {Array.from({ length: cols - 1 }, (_, i) => i + 1).filter((ci) => cells[ri][ci].trim()).map((ci) => (
+                <RNView key={ci} style={inlineLabels ? mdStyles.tableField : undefined}>
+                  <RNText style={[labelStyle, inlineLabels && { width: labelWidth }]}>{cell(0, ci)}</RNText>
+                  <RNText style={[textStyle, inlineLabels && { flex: 1 }]} selectable={ctx.selectable}>{cell(ri, ci)}</RNText>
+                </RNView>
+              ))}
+            </RNView>
+          );
+        })}
+      </RNView>
+    );
   }
-
-  // Paragraph spacing sits between paragraphs; after the last one the
-  // container's own padding decides, or a bubble ends with a gap under its text.
-  const last = elements[elements.length - 1];
-  if (React.isValidElement<{ style?: unknown }>(last) && Array.isArray(last.props.style) && last.props.style[1] === PARAGRAPH_GAP) {
-    elements[elements.length - 1] = React.cloneElement(last, { style: baseStyle });
-  }
-  return <>{elements}</>;
+  return (
+    <RNView onLayout={(e) => setMeasured(Math.round(e.nativeEvent.layout.width))}>
+      {body}
+    </RNView>
+  );
 }
 
-const PARAGRAPH_GAP = { marginBottom: 6 };
-
-// The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
-// CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
-// wraps this with insight-block extraction; InsightCard bodies reuse it.
-function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
-  // Language may be hyphenated (cast-canvas, objective-c). A fence closes on
-  // a run as long as the one that opened it, so a block that quotes three
-  // backticks inside a four backtick fence stays one block.
-  const codeBlockRegex = /(`{3,})([\w-]+)?\n([\s\S]*?)\1/g;
-  const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const t = text.slice(lastIndex, match.index);
-      if (t.trim()) blocks.push({ type: 'text', content: replaceShortcodes(t) });
-    }
-    blocks.push({ type: 'code', content: match[3].trimEnd(), language: match[2] || 'plaintext' });
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    const t = text.slice(lastIndex);
-    if (t.trim()) blocks.push({ type: 'text', content: replaceShortcodes(t) });
-  }
-
-  if (blocks.length === 0) blocks.push({ type: 'text', content: replaceShortcodes(text) });
-
-  return (
-    <>
-      {blocks.map((block, idx) => {
-        if (block.type === 'code') {
-          // Keep the fence name in sync with web's HtmlSnippet.CANVAS_FENCE
-          // ("cast-canvas") — importing the web module would drag DOM-only code
-          // into the Hermes bundle. Binaries without the WebView native module
-          // fall through to the plain code block.
-          if (block.language === 'cast-canvas' && canvasAvailable) {
-            return <CastCanvas key={idx} code={block.content} />;
-          }
-          // Words quoted exactly (an approval's draft): plain lines, with no
-          // highlighting, expand or copy, because they are not code.
-          if (plainTextFences && block.language === 'text') {
-            return <RNText key={idx} selectable={selectable} style={baseStyle}>{block.content}</RNText>;
-          }
-          return (
-            <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
-          );
-        }
-
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} knownMentionHandles={knownMentionHandles} selectable={selectable} />;
-      })}
-    </>
-  );
+// The parsed body as native blocks. Internal: MarkdownContent wraps this with
+// insight-block extraction; InsightCard bodies reuse it.
+function MarkdownBlocks({ text, baseStyle, isUser, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
+  // Under a search (components/search/highlight), every text run marks the
+  // words found; pills and links pass through.
+  const found = useContext(SearchHighlightContext);
+  const tree = useMemo(() => parseMarkdown(text), [text]);
+  return <>{renderBlocks(tree.children, { baseStyle, isUser, knownMentionHandles, found, selectable, plainTextFences, listDepth: 0 }, 'b')}</>;
 }
 
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
@@ -683,7 +639,7 @@ function InsightCard({ label, content, baseStyle, knownMentionHandles }: { label
         <RNText style={mdStyles.insightLabel}>{label}</RNText>
       </RNView>
       <RNView style={mdStyles.insightBody}>
-        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" knownMentionHandles={knownMentionHandles} />
+        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} knownMentionHandles={knownMentionHandles} />
       </RNView>
     </RNView>
   );
@@ -707,7 +663,7 @@ export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionH
         part.type === 'insight' ? (
           <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} knownMentionHandles={knownMentionHandles} />
         ) : (
-          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} knownMentionHandles={knownMentionHandles} selectable={selectable} plainTextFences={plainTextFences} />
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} knownMentionHandles={knownMentionHandles} selectable={selectable} plainTextFences={plainTextFences} />
         )
       )}
     </RNView>
@@ -790,15 +746,12 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
     overflow: 'hidden',
   },
   listContainer: {
-    marginVertical: 4,
-    paddingLeft: 4,
+    paddingLeft: 2,
   },
   listItem: {
     flexDirection: 'row',
-    marginBottom: 3,
   },
   listBullet: {
-    width: 20,
     textAlign: 'center',
     opacity: 0.6,
   },
@@ -806,14 +759,12 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: Theme.accent,
     paddingLeft: 10,
-    marginVertical: 6,
     opacity: 0.85,
   },
   blockquoteUser: {
     borderLeftWidth: 3,
     borderLeftColor: 'rgba(255,255,255,0.5)',
     paddingLeft: 10,
-    marginVertical: 6,
     opacity: 0.85,
   },
   blockquoteText: {
@@ -822,7 +773,7 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
   horizontalRule: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Theme.borderLight,
-    marginVertical: 12,
+    marginVertical: 6,
   },
   lineNumberGutter: {
     paddingRight: 8,
@@ -844,37 +795,45 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
   hScroll: {
     flexGrow: 0,
   },
+  tableBox: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: Theme.bg,
+  },
   tableRow: {
     flexDirection: 'row',
   },
-  tableRowAlt: {
-    backgroundColor: Theme.bgHighlight,
-  },
-  tableHeaderCell: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderBottomWidth: 1,
-    borderBottomColor: Theme.borderLight,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Theme.borderLight,
-    minWidth: 80,
+  tableHeaderRow: {
     backgroundColor: Theme.bgAlt,
   },
-  tableHeaderText: {
-    fontWeight: '700',
-    fontSize: 11,
+  tableRowAlt: {
+    backgroundColor: Theme.bgAlt,
   },
-  tableCell: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  tableRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
+  },
+  tableCell: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  tableCellDivider: {
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: Theme.borderLight,
-    minWidth: 80,
   },
-  tableCellText: {
-    fontSize: 11,
+  tableCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  tableCardDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
+  tableField: {
+    flexDirection: 'row',
   },
   insightCard: {
     marginVertical: 8,
