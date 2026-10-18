@@ -76,6 +76,7 @@
     "./contracts/orgTemplateRelease": "./contracts/orgTemplateRelease.ts",
     "./contracts/orgTemplateState": "./contracts/orgTemplateState.ts",
     "./contracts/orgTemplateLearning": "./contracts/orgTemplateLearning.ts",
+    "./contracts/orgTemplateLearningOptIn": "./contracts/orgTemplateLearningOptIn.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
     "./contracts/orgWhere": "./contracts/orgWhere.ts",
     "./contracts/redirectWords": "./contracts/redirectWords.ts",
