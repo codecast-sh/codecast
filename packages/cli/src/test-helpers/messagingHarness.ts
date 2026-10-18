@@ -758,6 +758,12 @@ export interface ClientPane {
   /** ms from `tmux new-session` returning to now — the cold-boot clock. */
   ageMs(): number;
   capture(): string;
+  /** Record every byte the pane draws from now on (`tmux pipe-pane`), so a
+   *  frame that lives shorter than a capture interval is still seen. `read`
+   *  returns the stream so far with escape sequences stripped, a
+   *  cursor move along the line (how tmux skips over spaces) read as one
+   *  space. */
+  recordOutput(): { read(): string; stop(): void };
   /** The daemon's own pane classification for this client. */
   liveState(): TmuxLiveState;
   /** Every user message this pane's client recorded, oldest first. */
@@ -814,6 +820,15 @@ export function spawnClientPane(client: MatrixClientId, opts: { endpointUrl: str
     cwd,
     ageMs: () => Date.now() - spawnedAt,
     capture: () => tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-50"]).stdout,
+    recordOutput: () => {
+      const file = path.join(cwd, `pane-output-${randomUUID().slice(0, 8)}.log`);
+      fs.writeFileSync(file, "");
+      tmuxRun(["pipe-pane", "-O", "-t", target, `cat >> ${shellQuote(file)}`]);
+      return {
+        read: () => fs.readFileSync(file, "utf8").replace(/\x1b\[\d*[CG]/g, " ").replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b[\]P^_][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]/g, ""),
+        stop: () => { tmuxRun(["pipe-pane", "-t", target]); },
+      };
+    },
     liveState: () => classifyLivePaneFor(client as AgentClientId, pane.capture()),
     sessionId: () => recipe.sessionId(ctx),
     userMessages: () =>

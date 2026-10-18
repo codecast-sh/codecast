@@ -1635,6 +1635,10 @@ const ConversationViewInner = (
 
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
+    // Rows placed by `top`, not translate3d: a 3D transform makes every row a
+    // compositor layer, and the browser re-layers the whole page on each frame
+    // that moves the caret, so each keystroke paid for every visible row.
+    directDomUpdatesMode: "position",
     onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
@@ -3260,7 +3264,7 @@ const ConversationViewInner = (
   // open here it would cover the band's close strip, so it steps aside.
   const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
   const { browserRowMap, lastBrowserPage, browserSession, chatWakeMap } = useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap });
-  const { sessionGalleryImages } = useSessionImages({ deferredQueriesEnabled, conversation });
+  const { sessionGalleryItems } = useSessionImages({ deferredQueriesEnabled, conversation });
   const { taskSubjectMap, taskRecordMap } = useConversationTaskMaps({ conversation, deferredQueriesEnabled });
 
   const getPreviousNonToolResultMessage = (index: number): Message | null => {
@@ -4211,7 +4215,7 @@ const ConversationViewInner = (
                   </div>
                 )}
 
-                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
+                {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
 
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button
@@ -4846,7 +4850,6 @@ const ConversationViewInner = (
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
-                    top: 0,
                     left: 0,
                     width: "100%",
                     ...(visible ? {} : { height: 0, overflow: "hidden" }),
