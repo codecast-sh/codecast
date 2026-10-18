@@ -1,4 +1,5 @@
 import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, Alert, ScrollView, Platform, ActionSheetIOS } from 'react-native';
+import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -159,6 +160,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   /** The panel's title leaves for the inbox tab. */
   onExit?: () => void;
 } = {}) {
+  if (PERF_PROBE) probeRender('InboxView');
   const Theme = useTheme();
   // Both list memos below bake palette values into React nodes.
   const scheme = useActiveScheme();
@@ -447,6 +449,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     [unreadSig],
   );
 
+  const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
+
   const renderSessionItem = useCallback((s: InboxSession, titleSuffix?: string) => (
     <SwipeableSessionItem
       key={s._id}
@@ -454,15 +458,16 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
       selected={currentId === s._id}
-      onPress={() => openSession(s._id)}
-      onDismiss={() => handleStash(s._id)}
-      onLongPress={() => handleSessionLongPress(s)}
+      onPress={openSession}
+      onDismiss={handleStash}
+      onLongPress={handleSessionLongPress as (session: SessionData) => void}
       awaiting={questionIds.has(s._id)}
       asked={askedByConv.get(String(s._id))}
       roleSessions={roleSessionsByLead.get(s._id)}
-      onOpenRole={s.role?.short_id ? () => router.push(`/org/${s.role!.short_id}`) : undefined}
+      onOpenRole={openRole}
+      clock={coarseNow}
     />
-  ), [router, openSession, currentId, handleStash, handleSessionLongPress, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
+  ), [openSession, currentId, handleStash, handleSessionLongPress, openRole, coarseNow, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
