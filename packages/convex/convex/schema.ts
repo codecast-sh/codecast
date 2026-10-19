@@ -6474,7 +6474,8 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     .index("by_user_path", ["user_id", "source_path"])
     .index("by_task", ["task_id"])
-    .index("by_plan", ["plan_id"]),
+    .index("by_plan", ["plan_id"])
+    .index("by_session_conversation", ["session_conversation_id"]),
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see

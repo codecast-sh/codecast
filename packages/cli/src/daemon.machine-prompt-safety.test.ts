@@ -16,6 +16,7 @@ import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainE
 import { typedPollAnswer } from "./typedPollAnswer";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
+import * as interactivePrompt from "./interactivePrompt";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -146,6 +147,7 @@ function fixture(transport = "tmux", cached = true) {
     addMessage: fail("system row"),
   };
   const deps = {
+    ...interactivePrompt,
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
@@ -213,6 +215,7 @@ function fixture(transport = "tmux", cached = true) {
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
+    restoreSuspendedAgent: async () => false,
     prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
     // The receipt journal the inject path opens when a delivery identity rides
     // along: a private one per fixture, so no test reads the machine's.
@@ -227,7 +230,6 @@ function fixture(transport = "tmux", cached = true) {
   if (!fixtureFactory) {
     const names = [
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
-      "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
@@ -250,8 +252,6 @@ function fixture(transport = "tmux", cached = true) {
       if (!line) throw new Error(`Missing constant ${name}`);
       return line.replace("export ", "");
     });
-    const parserStart = source.indexOf("type InteractivePrompt =");
-    const parserEnd = source.indexOf("\n// Claude Code's spend-limit interstitial", parserStart);
     const resume = functionBlock(source, "autoResumeSessionInner").text;
     const readiness = blockAt(resume, resume.indexOf("    while (Date.now() - startTime < maxPollMs)")).text;
     const warnings = blockAt(resume, resume.indexOf("    if (ready || !content)")).text;
@@ -271,7 +271,6 @@ function fixture(transport = "tmux", cached = true) {
       return source.slice(start, source.indexOf("];", start) + 2);
     };
     const code = [
-      source.slice(parserStart, parserEnd),
       blockAt(source, source.indexOf("class InputBlockedError")).text,
       blockAt(source, source.indexOf("const WEZTERM_KEY_SEQUENCES:")).text.replace(/},?$/, "};"),
       "class UndeliverableMessageError extends Error {}",
