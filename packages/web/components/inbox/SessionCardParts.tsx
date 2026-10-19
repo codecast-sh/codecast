@@ -183,7 +183,7 @@ export function CardStatusSignals({
               <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
             )}
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && !isRowRestarting && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" title="Message pending" />
             )}
             {/* Settled with content gets the gray idle dot. Keyed on !isLive (now
                 staleness-aware) rather than the raw is_idle flag, so a frozen
@@ -433,7 +433,7 @@ export function CardRestoreCluster({
             <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
                 <ActionGlyph d={CLOSE_PATH} />
               </button>
@@ -443,7 +443,7 @@ export function CardRestoreCluster({
             <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs Input now" : "Restore"} side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
                 <ActionGlyph d={RESTORE_PATH} />
               </button>
