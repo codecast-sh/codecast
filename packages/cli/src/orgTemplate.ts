@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
-import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearning";
+import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearningOptIn";
 
 export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps): void {
   const org = program.commands.find((c) => c.name() === "org");

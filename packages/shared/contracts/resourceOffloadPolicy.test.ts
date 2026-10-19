@@ -43,3 +43,12 @@ test("tools missing from the laptop's hook inventory are a note, never a blocker
   expect(check.blockers).toEqual([]);
   expect(check.notes).toEqual(["Hooks call tools this host lacks: afplay, powershell.exe"]);
 });
+
+test("a session working on gigabytes of local files stays with them; small working files do not block", () => {
+  const base = { targetPlatform: "linux", targetOnline: true, targetWakeable: false, now: 1 };
+  const proc = (bytes: number) => ({ pid: 1, ppid: 0, name: "ffmpeg", kind: "tool" as const, cpu: 300, rss: 1, sessionId: "s", localData: { bytes, files: 4, root: "~/Movies/iMovie Library.imovielibrary" } });
+  const heavy = evaluateOffloadRequirements({ ...base, processes: [proc(5 * 1024 ** 3)] });
+  expect(heavy.blockers.some(b => b.includes("of local files in ~/Movies/iMovie Library.imovielibrary"))).toBe(true);
+  const light = evaluateOffloadRequirements({ ...base, processes: [proc(300 * 1024 ** 2)] });
+  expect(light.blockers.some(b => b.includes("local files"))).toBe(false);
+});
