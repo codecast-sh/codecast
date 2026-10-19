@@ -22,7 +22,7 @@ import { agentStatusAt } from "../liveness";
 import { useInboxStore } from "../../store/inboxStore";
 import { characterFor } from "../sessionIdentity";
 import { findSessionRow } from "./findSessionRow";
-import { createScribeEngine, type ConvexHandle, type ScribePacing, type ScribeStatus } from "./scribeEngine";
+import { createScribeEngine, type ConvexHandle, type ScribePacing, type ScribeRoute, type ScribeStatus } from "./scribeEngine";
 
 export { GAP_MS, MAX_HOLD_MS, type ScribeStatus } from "./scribeEngine";
 
@@ -138,7 +138,7 @@ async function startScribeOnce(opts: {
   convex: ConvexHandle;
   room: Room;
   roomKey: string;
-  routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
+  routes?: ScribeRoute[];
   auto?: boolean;
 }): Promise<boolean> {
   if (engine.getStatus().active) return true;

@@ -388,8 +388,9 @@ export interface CreateConversationParams {
 }
 
 export class SyncService {
-  async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<void> {
-    await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot });
+  /** Stores the snapshot; the answer names the sessions a person put at background priority on this machine. */
+  async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<{ background_sessions?: string[] } | undefined> {
+    return await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot }) as any;
   }
 
   private client: ConvexHttpClient;
