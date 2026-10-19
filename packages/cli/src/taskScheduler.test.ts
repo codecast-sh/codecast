@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch, buildRunScript, paneChildren, runPaneFinished, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -549,5 +549,39 @@ describe("runPaneFinished", () => {
     live.mockResolvedValue({ status: null, stdout: "", stderr: "", killed: true } as any);
     expect(await runPaneFinished("ct-claude-x", async () => "")).toBe(false);
     live.mockRestore();
+  });
+
+  it("pgrep's no-match is no children; a timeout, a kill or a failed spawn is unknown", async () => {
+    const fail = (e: object) => async () => { throw Object.assign(new Error("pgrep"), e); };
+    expect(await paneChildren("1", async () => ({ stdout: "4300\n" }))).toBe("4300\n");
+    expect(await paneChildren("1", fail({ code: 1 }))).toBe("");
+    expect(await paneChildren("1", fail({ killed: true, signal: "SIGTERM" }))).toBeNull();
+    expect(await paneChildren("1", fail({ code: 127 }))).toBeNull();
+    expect(await paneChildren("1", fail({ code: "EAGAIN" }))).toBeNull();
+  });
+
+  it("a child probe that cannot answer (pgrep timed out or failed to fork under load) is not a finished run", async () => {
+    const tmux = await import("./tmux.js");
+    const live = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: 0, stdout: "4242\n", stderr: "" });
+    expect(await runPaneFinished("ct-claude-x", async () => null)).toBe(false);
+    live.mockRestore();
+  });
+
+  it("the default probe answers for a real process: its children, none, or an unknown pid", async () => {
+    const tmux = await import("./tmux.js");
+    const { spawn } = await import("node:child_process");
+    const parent = spawn("/bin/sh", ["-c", "sleep 30 & wait"], { stdio: "ignore" });
+    const idle = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const pane = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: 0, stdout: `${parent.pid}\n`, stderr: "" });
+      expect(await runPaneFinished("ct-claude-x")).toBe(false);
+      pane.mockResolvedValue({ status: 0, stdout: `${idle.pid}\n`, stderr: "" });
+      expect(await runPaneFinished("ct-claude-x")).toBe(true);
+      pane.mockRestore();
+    } finally {
+      parent.kill("SIGKILL");
+      idle.kill("SIGKILL");
+    }
   });
 });

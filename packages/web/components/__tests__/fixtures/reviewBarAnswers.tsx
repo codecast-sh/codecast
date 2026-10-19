@@ -62,12 +62,12 @@ test("the tray reads like the send being built", async () => {
     expect(host.querySelector(".cc-review-tray")!.hasAttribute("data-applies")).toBe(true);
     expect(texts(host, ".cc-review-tray-group")).toEqual(["Rank Union's projects by the goals they carry"]);
     // Bare approvals fold into one row named by the first three subjects and a count; each other answer is its own row with its subject and words; the quote comes last.
-    expect(texts(host, ".cc-review-tray-verdict")).toEqual(["Approve", "Reject", "On", "Approve", "On all of it"]);
+    expect(texts(host, ".cc-review-tray-verdict")).toEqual(["Accept", "Reject", "On", "Accept", "On all of it"]);
     expect(texts(host, ".cc-review-tray-item")).toEqual([
-      "Approve Matching Engine & Funnel, Callers & Call Management, Infrastructure and 3 more",
+      "Accept Matching Engine & Funnel, Callers & Call Management, Infrastructure and 3 more",
       "Reject Funnel P1 not P0",
       "On Callers Cameron owns this",
-      "Approve Growth but revisit in a month",
+      "Accept Growth but revisit in a month",
       "On all of it do the same for the plans next",
       "❝ Quoted q1 tighten this",
     ]);
@@ -93,7 +93,7 @@ test("the tray reads like the send being built", async () => {
     const undo = host.querySelector<HTMLButtonElement>('[aria-label="Undo this answer"]')!;
     expect(undo.title).toBe("Undo");
     await act(() => undo.click());
-    expect(texts(host, ".cc-review-tray-verdict")).toEqual(["Reject", "On", "Approve", "On all of it"]);
+    expect(texts(host, ".cc-review-tray-verdict")).toEqual(["Reject", "On", "Accept", "On all of it"]);
     expect(useInboxStore.getState().reviewComments.c1!.filter((c) => c.proposal).map((c) => c.proposal!.verdict)).toEqual(["reject", "note", "approve", "note"]);
     expect(words(host.querySelector(".cc-review-tray-title")!)).toBe("1 change will apply when you send, and 3 answers go with them · 1 quote");
     // With the quote gone, Edit in input goes too; the head drops the quotes.
@@ -113,11 +113,11 @@ test("the tray reads like the send being built", async () => {
       useInboxStore.setState({ reviewComments: {} });
       answerProposalCard("c1", card("project:a", [1], "A."), { verdict: "approve" });
     });
-    expect(texts(host, ".cc-review-tray-item")).toEqual(["Approve A."]);
+    expect(texts(host, ".cc-review-tray-item")).toEqual(["Accept A."]);
     await act(() => answerProposalCard("c1", card("project:b", [2], "B.", "Beta"), { verdict: "approve" }));
-    expect(texts(host, ".cc-review-tray-item")).toEqual(["Approve A. and Beta"]);
+    expect(texts(host, ".cc-review-tray-item")).toEqual(["Accept A. and Beta"]);
     await act(() => answerProposalCard("c1", card("project:c", [3], "C.", "Gamma"), { verdict: "approve" }));
-    expect(texts(host, ".cc-review-tray-item")).toEqual(["Approve A., Beta and Gamma"]);
+    expect(texts(host, ".cc-review-tray-item")).toEqual(["Accept A., Beta and Gamma"]);
   } finally { await act(() => root.unmount()); host.remove(); thread.remove(); }
 }, 60_000);
 
