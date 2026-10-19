@@ -37,7 +37,7 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
         ...(sample ? { sample } : {}),
         ...(report?.hourly_usd !== undefined && now - report.at < 24 * 3600_000 ? { costPerHour: report.hourly_usd } : {}),
       };
-    }), candidates: [], notOffered: [],
+    }), candidates: [], notOffered: [], staying: [],
   };
   for (const session of sessions.filter(s => s.deviceId === source.deviceId)) {
     const migration = candidates.find(c => c._id === session.conversationId);
@@ -83,7 +83,36 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
     });
   }
   plan.candidates.sort((a, b) => Number(a.disruption === "mid_turn") - Number(b.disruption === "mid_turn") || (b.relief.cpu ?? 0) - (a.relief.cpu ?? 0) || (b.relief.rssHigh ?? 0) - (a.relief.rssHigh ?? 0));
+  plan.staying = stayingSessions(plan, source, sessions.filter(s => s.deviceId === source.deviceId));
   return plan;
+}
+
+/** A session using at least this much of one core is doing work worth naming when it cannot move. */
+export const STAYING_BUSY_CPU = 25;
+
+/** The reason a candidate cannot move anywhere: a blocker every destination shares, else the first one. */
+function stayReason(c: OffloadCandidate): string {
+  const lists = Object.values(c.perDestination).map(r => r.blockers);
+  return lists[0]?.find(b => lists.every(l => l.includes(b))) ?? lists.flat()[0] ?? "Blocked";
+}
+
+function stayingSessions(plan: OffloadPlan, source: ResourceMachine, sessions: ResourceSession[]): OffloadPlan["staying"] {
+  const processes = source.snapshot!.processes;
+  const asked = new Set(source.backgroundSessions ?? []);
+  const reasons = new Map<string, string>(plan.notOffered.map(n => [n.sessionId, n.reason]));
+  for (const c of plan.candidates) {
+    if (!Object.values(c.perDestination).some(r => r.readiness === "ready" || r.readiness === "preflight_required")) reasons.set(c.sessionId, stayReason(c));
+  }
+  const out: OffloadPlan["staying"] = [];
+  for (const s of sessions) {
+    const reason = reasons.get(s.sessionId);
+    if (!reason) continue;
+    const own = processes.filter(p => p.sessionId === s.sessionId);
+    const cpu = own.reduce((n, p) => n + p.cpu, 0);
+    if (cpu < STAYING_BUSY_CPU && !asked.has(s.sessionId)) continue;
+    out.push({ sessionId: s.sessionId, reason, cpu, rss: own.reduce((n, p) => n + p.rss, 0), background: asked.has(s.sessionId), lowered: own.filter(p => p.background).length, processCount: own.length });
+  }
+  return out.sort((a, b) => b.cpu - a.cpu);
 }
 
 /** A machine's load as a share of its capacity: CPU across every core, memory in use. */

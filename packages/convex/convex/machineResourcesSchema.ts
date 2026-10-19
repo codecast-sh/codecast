@@ -16,6 +16,8 @@ export const resourceSnapshot = v.object({
     pid: v.number(), ppid: v.number(), startedAt: v.optional(v.number()), name: v.string(), kind,
     cpu: v.number(), rss: v.number(), sessionId: v.optional(v.string()), sharedSessionIds: v.optional(v.array(v.string())), // `true` came from the first daemons to report it, before the route was recorded.
     detached: v.optional(v.union(v.literal("tmux"), v.literal("background"), v.literal(true))),
+    localData: v.optional(v.object({ bytes: v.number(), files: v.number(), root: v.string() })),
+    background: v.optional(v.literal(true)),
   })),
   groups: v.array(v.object({ kind, cpu: v.number(), rss: v.number(), processCount: v.number() })),
   omittedProcessCount: v.number(), collectionDurationMs: v.number(), limitations: v.array(v.string()),
@@ -27,5 +29,8 @@ export const machineResourceTables = {
     // The last overload notification for this machine (machineResources.overloadAlertDue):
     // the incident it announced, so one incident rings once, and when.
     overload_alert: v.optional(v.object({ since: v.number(), level: v.union(v.literal("elevated"), v.literal("critical")), at: v.number() })),
+    // Sessions a person put at background priority on this machine. Handed to
+    // the daemon with every report answer; it lowers each process they own.
+    background_sessions: v.optional(v.array(v.string())),
   }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]),
 };

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   joinListings,
+  listEveryServer,
   ownServerSession,
   paneOwnerEnv,
   paneOwnerId,
@@ -127,5 +128,20 @@ describe("helpers", () => {
     const own = paneOwnerEnv("%3@cast-cc-x", env);
     expect(own.TMUX_PANE).toBe("%3");
     expect(paneOwnerId(own.TMUX_PANE, socketOfTmuxEnv(own.TMUX))).toBe("%3@cast-cc-x");
+  });
+});
+
+describe("listEveryServer", () => {
+  // 2026-10-17: one server that did not answer within 5s under load failed
+  // the warm restart's whole scan, and the daemon recovered no live session.
+  test("keeps every server that answered when one does not", async () => {
+    const exec = async (argv: string[]) => {
+      if (argv.includes("cast-cc-claude-own")) throw Object.assign(new Error("Command failed: tmux -L cast-cc-claude-own list-sessions"), { killed: true, stderr: "" });
+      return { stdout: argv[0] === "-L" ? `${argv[1].replace(/^cast-/, "")}\n` : "cc-claude-legacy\n" };
+    };
+    expect(await listEveryServer(["list-sessions", "-F", "#{session_name}"], exec, env)).toEqual({
+      stdout: "cc-claude-legacy\ncx-resume-two\n",
+      unanswered: ["cast-cc-claude-own"],
+    });
   });
 });
