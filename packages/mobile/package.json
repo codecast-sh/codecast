@@ -60,6 +60,13 @@
     "expo-updates": "~29.0.16",
     "expo-web-browser": "~15.0.10",
     "livekit-client": "^2.21.0",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm-strikethrough": "^2.0.0",
+    "mdast-util-gfm-table": "^2.0.0",
+    "mdast-util-gfm-task-list-item": "^2.0.0",
+    "micromark-extension-gfm-strikethrough": "^2.1.0",
+    "micromark-extension-gfm-table": "^2.1.1",
+    "micromark-extension-gfm-task-list-item": "^2.1.0",
     "posthog-react-native": "^4.37.6",
     "posthog-react-native-session-replay": "^1.6.0",
     "react": "19.1.0",
@@ -77,6 +84,7 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
+    "@types/mdast": "^4.0.4",
     "@livekit/react-native-expo-plugin": "1.0.2",
     "@types/react": "~19.1.10",
     "react-test-renderer": "19.1.0",
