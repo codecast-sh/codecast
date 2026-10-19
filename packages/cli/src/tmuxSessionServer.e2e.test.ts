@@ -12,6 +12,7 @@ const run = Math.random().toString(36).slice(2, 8);
 const own = `cc-claude-e2e${run}`;
 const second = `cx-resume-e2e${run}`;
 const shared = `cast-term-e2e${run}`;
+const orphaned = `wf-e2e${run}`;
 // Generous timeouts: these run beside a busy fleet.
 const on = { env: { CODECAST_TMUX_PER_SESSION: "1" }, timeout: 60_000 };
 const slow = { timeout: 60_000 };
@@ -24,7 +25,7 @@ setDefaultTimeout(180_000);
 
 afterAll(() => {
   // By process: the preload may already have removed the private socket directory.
-  for (const s of [own, second]) spawnSync("pkill", ["-f", `tmux -L cast-${s} `], { stdio: "ignore" });
+  for (const s of [own, second, orphaned]) spawnSync("pkill", ["-f", `tmux -L cast-${s} `], { stdio: "ignore" });
   tmuxRun(["kill-session", "-t", shared]);
 });
 
@@ -117,5 +118,18 @@ describe("one tmux server per agent session", () => {
     expect(fs.existsSync(socketPath(plain))).toBe(false);
     expect(rawTmux(["has-session", "-t", `=${plain}`])).toBe(0);
     tmuxRun(["kill-session", "-t", plain]);
+  });
+
+  // 2026-10-17: runner panes whose servers had lost their socket files. Each
+  // resume started another server beside the orphan, and then every attempt
+  // after failed busy, so four runs could not get a runner back.
+  test("a server whose socket file is gone is reclaimed, not started over", async () => {
+    expect((await tmuxRunAsync(["new-session", "-d", "-s", orphaned, "-x", "80", "-y", "20"], on)).status).toBe(0);
+    const servers = () => (spawnSync("pgrep", ["-f", `tmux -L cast-${orphaned} `], { encoding: "utf-8" }).stdout ?? "").trim().split("\n").filter(Boolean);
+    const [first] = servers();
+    fs.rmSync(socketPath(orphaned));
+    await tmuxRunAsync(["new-session", "-d", "-s", orphaned, "-x", "80", "-y", "20"], on);
+    expect(servers()).toEqual([first]);
+    expect(rawTmux(["-L", `cast-${orphaned}`, "has-session", "-t", `=${orphaned}`])).toBe(0);
   });
 });

@@ -16,6 +16,13 @@ export interface ResourceProcess {
    *  backgrounded (`&`, nohup) that was reparented. Stopped with the session
    *  when the session moves, like the tree. */
   detached?: "tmux" | "background" | true;
+  /** Large files this process has open outside system and tool paths, measured
+   *  for a session's heavy processes only. `root` is the place they share
+   *  (a library bundle, else the directory). Work on them stays on this machine. */
+  localData?: { bytes: number; files: number; root: string };
+  /** Put at background priority by the daemon at a person's request (efficiency
+   *  cores on macOS, nice on Linux). */
+  background?: true;
 }
 
 export interface ResourcePoint {
