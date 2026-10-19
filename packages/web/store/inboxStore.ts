@@ -72,7 +72,7 @@ const TABLE_TO_STORE_KEYS: Record<string, string[]> = {};
 for (const [storeKey, cfg] of Object.entries(DISPATCH_TABLE_MAP)) {
   (TABLE_TO_STORE_KEYS[cfg.table] ??= []).push(storeKey);
 }
-import { createInterner, makeCollectionSig } from "./wakeSig";
+import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
@@ -1588,8 +1588,6 @@ const sessionUnreadMaps = new WeakMap<
   Record<string, InboxSession>,
   WeakMap<Record<string, SessionReadItem>, WeakMap<Record<string, number>, Record<string, boolean>>>
 >();
-const sessionUnreadSignatures = new WeakMap<Record<string, boolean>, string>();
-const internSessionUnreadSignature = createInterner();
 // One row's verdict, kept while the row ref, its winning mark and its local
 // viewed time hold: a heartbeat hands back a new sessions map in which every
 // other row keeps its ref, so the rebuild re-judges only the rows that moved.
@@ -1655,19 +1653,11 @@ export function sessionUnreadWakeSig(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  const unread = sessionUnreadMap(state);
-  let signature = sessionUnreadSignatures.get(unread);
-  if (signature === undefined) {
-    // In the sessions map's own order, which a rebuild keeps: sorting thousands
-    // of ids on every heartbeat cost more than the map. A reorder of the same
-    // set only wakes a subscriber once more.
-    signature = Object.keys(unread).join(",");
-    // Interned, so subscribers compare pointers, not every id (createInterner).
-    signature = internSessionUnreadSignature(signature);
-    sessionUnreadSignatures.set(unread, signature);
-  }
-  return signature;
+  return unreadSetSig(sessionUnreadMap(state));
 }
+// A digest of the lit set (makeCollectionSig over the unread map), so the
+// signature is short whatever the number of unread sessions.
+const unreadSetSig = makeCollectionSig<boolean>(() => "");
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
 // of the server's cascadeClose, so a "close subtasks too" choice renders
@@ -2313,8 +2303,13 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
 // ride their parent; a plan handoff (parent pointer + parent message) is a
 // member like any other — the server stamps it, so the replica must select
 // it too. Nesting under a present parent is presentation only.
+// Per row ref: placement asks this of every cached row several times a pass,
+// and a row's answer can only change with the row.
+const memberCandidateByRow = new WeakMap<InboxSession, boolean>();
 function isMemberCandidate(s: InboxSession): boolean {
-  return isConvexId(s._id) && !isOrphanOrSubagent(s);
+  let v = memberCandidateByRow.get(s);
+  if (v === undefined) memberCandidateByRow.set(s, (v = isConvexId(s._id) && !isOrphanOrSubagent(s)));
+  return v;
 }
 
 // Memoized by (collection signature, minute-quantized activity, epoch): the
@@ -2439,8 +2434,18 @@ export function partitionWorkingSet(
 // A row is "mine" if I authored it and still own it (or nobody does), if it is
 // routed to me to steer, if it is an optimistic stub, or if it is a thin row
 // with no known author.
+// Per row ref and viewer: the scope filter and the asking pass both ask it of
+// every cached row on each placement.
+const foreignByRow = new WeakMap<InboxSession, { meId: string; foreign: boolean }>();
 export function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
   if (!meId) return false; // unknown viewer → don't hide anything
+  const hit = foreignByRow.get(s);
+  if (hit && hit.meId === meId) return hit.foreign;
+  const foreign = isForeignRowUncached(s, meId);
+  foreignByRow.set(s, { meId, foreign });
+  return foreign;
+}
+function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
   if (isAssignedAwayFromViewer(s, meId)) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
@@ -2678,9 +2683,11 @@ const SYNC_ACTIVITY_FIELDS: ReadonlySet<string> = new Set(["sessions", "sessionD
 // Team scope stays server-gated (teamInboxIds): the replica lacks the
 // visibility inputs to select a team working set (C4), so the board renders
 // exactly what the team subscription reported, unpartitioned.
-let _visibleKey: unknown[] | null = null;
 type InboxVisible = { visibleSessions: Record<string, InboxSession>; oldCount: number; membership: InboxMembership | null; scoped: Record<string, InboxSession> };
-let _visibleVal: InboxVisible | null = null;
+// One memo per scope and focused row, like placeInboxRows' slots: the badges
+// ask for "mine" with no focus while the panel asks with the open row, and a
+// single shared slot made each evict the other and rescan every session.
+const _visibleMemo = new Map<string, { key: unknown[]; val: InboxVisible }>();
 export function computeInboxVisible(
   state: {
     sessions: Record<string, InboxSession>;
@@ -2712,8 +2719,10 @@ export function computeInboxVisible(
   // computeInboxMembership.
   const deps = opts?.deps ?? keepOverlayDeps(state.sessions, focusedId, state.pendingSessionCreates);
   const key = [state.sessions, scope, showOld, meId, teamInboxIds, focusedId, epoch, [...deps.pendingCreateIds].sort().join(",")];
-  if (_visibleKey && _visibleVal && key.length === _visibleKey.length && key.every((v, i) => Object.is(v, _visibleKey![i]))) {
-    return _visibleVal;
+  const slot = `${scope}\x1f${focusedId ?? ""}`;
+  const memo = _visibleMemo.get(slot);
+  if (memo && key.length === memo.key.length && key.every((v, i) => Object.is(v, memo.key[i]))) {
+    return memo.val;
   }
   const scoped = filterInboxScope(state.sessions, scope, meId, teamInboxIds, focusedId);
   let result: InboxVisible;
@@ -2723,8 +2732,8 @@ export function computeInboxVisible(
     const membership = computeInboxMembership(scoped, epoch);
     result = { ...partitionWorkingSet(scoped, membership, { showOld, deps }), membership, scoped };
   }
-  _visibleKey = key;
-  _visibleVal = result;
+  _visibleMemo.set(slot, { key, val: result });
+  if (_visibleMemo.size > PLACED_MEMO_CAP) _visibleMemo.delete(_visibleMemo.keys().next().value!);
   return result;
 }
 
@@ -3728,8 +3737,7 @@ export function __resetInboxPlacementCacheForTests(): void {
   _placementDeadlineMemo = null;
   _membershipKey = null;
   _membershipVal = null;
-  _visibleKey = null;
-  _visibleVal = null;
+  _visibleMemo.clear();
 }
 // Dev-only parity throttle (assertPlacementParity below).
 let _lastParityCheckAt = 0;
@@ -15459,12 +15467,12 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
+  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {
   get: windowBindings,
   set(s: ReturnType<typeof windowBindings>): void {
-    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
+    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
   },
 };
