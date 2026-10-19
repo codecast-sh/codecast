@@ -1,14 +1,14 @@
-/* An agent answered in the call's chat while nobody was looking at it.
- * Two cues, both quiet on purpose: people are mid-conversation, so nothing
- * here flashes, loops or moves the layout. The badge wears the agent's violet
- * and lets one soft ring spread from it twice, then sits still. The peek
- * under the thread button says who answered and how it begins, and leaves on
- * its own. Under reduced motion both simply appear. */
+/* An agent answered in the call's chat. People are mid-conversation and
+ * looking at faces, so the answer has to pull the eye without moving the
+ * layout: the badge wears the agent's violet and sends a wide ring out from
+ * itself six times (about eight seconds), then sits still. The peek under the
+ * thread button says who answered and how it begins, and stays long enough
+ * to be noticed. Under reduced motion both simply appear. */
 
 .arrival-ring {
   animation:
     arrival-in 150ms ease-out,
-    arrival-ring 1.4s cubic-bezier(0.22, 1, 0.36, 1) 150ms 2;
+    arrival-ring 1.3s cubic-bezier(0.22, 1, 0.36, 1) 150ms 6;
 }
 @keyframes arrival-in {
   from {
@@ -18,10 +18,10 @@
 }
 @keyframes arrival-ring {
   from {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-violet) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-violet) 70%, transparent);
   }
   to {
-    box-shadow: 0 0 0 7px transparent;
+    box-shadow: 0 0 0 11px transparent;
   }
 }
 

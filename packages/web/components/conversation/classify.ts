@@ -53,6 +53,15 @@ export function canAnchorForkChips(msg: { role?: string; content?: string; messa
   return msg.role === "assistant" || (msg.role === "user" && !!msg.content?.trim());
 }
 
+// The slash command a sticky prompt names, when its message is an invocation
+// (only one followed by its command body is ever sticky: stickyEligibleIds).
+export function stickyCommand(content: string): { cmdName: string; args: string } | null {
+  const t = stripSystemTags(content).trim();
+  if (!isCommandMessage(t) && !isStrippedCommand(t)) return null;
+  const parsed = parseCommandInvocation(content);
+  return parsed.cmdName ? parsed : null;
+}
+
 export function cleanStickyContent(content: string): string {
   const stMatch = content.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)<\/scheduled-task>/);
   if (stMatch) {
