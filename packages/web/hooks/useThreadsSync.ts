@@ -27,7 +27,8 @@ import { isConvexId } from "../lib/entityLinks";
 import { ingestTaskDetail } from "./useSyncTasks";
 import { questionCards } from "../lib/threadCards";
 import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
-import { messagesSig, reactionsSig, useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
+import { useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
+import { messagesSig, reactionsSig } from "../store/chatWakeSigs";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 
 const api = _api as any;

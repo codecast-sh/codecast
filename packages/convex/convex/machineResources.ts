@@ -13,7 +13,7 @@ export function validateResourceSnapshot(snapshot: MachineResourceSnapshot, now:
   if (snapshot.processes.length > RESOURCE_PROCESS_LIMIT || snapshot.groups.length > 6 || snapshot.limitations.length > 12) throw new Error("Resource snapshot exceeds its bounds");
   if (Math.abs(snapshot.sample.at - now) > 300_000) throw new Error("Resource snapshot clock is stale or skewed");
   if (snapshot.deviceId.length > 128 || snapshot.platform.length > 32 || snapshot.limitations.some(s => s.length > 240)) throw new Error("Resource snapshot text exceeds its bounds");
-  if (snapshot.processes.some(p => p.name.length > 120 || (p.sessionId?.length ?? 0) > 128 || (p.sharedSessionIds?.length ?? 0) > 32 || p.sharedSessionIds?.some(s => s.length > 128))) throw new Error("Resource process exceeds its bounds");
+  if (snapshot.processes.some(p => p.name.length > 120 || (p.sessionId?.length ?? 0) > 128 || (p.sharedSessionIds?.length ?? 0) > 32 || p.sharedSessionIds?.some(s => s.length > 128) || (p.localData?.root.length ?? 0) > 240)) throw new Error("Resource process exceeds its bounds");
   const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) && value >= 0 : Array.isArray(value) ? value.every(finite) : value && typeof value === "object" ? Object.values(value).every(finite) : true;
   if (!finite(snapshot)) throw new Error("Invalid resource measurement");
   if (snapshot.sample.memoryAvailable > snapshot.sample.memoryTotal || (snapshot.sample.cpuPercent ?? 0) > 100 || snapshot.sample.logicalCpus < 1) throw new Error("Invalid machine totals");

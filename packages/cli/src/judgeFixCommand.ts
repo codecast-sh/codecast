@@ -473,7 +473,7 @@ async function measure(deps: PublishDeps, scope: Record<string, unknown>, o: { t
   for (const u of new Map(o.units.map((u) => [`${u.moment}|${u.judge}`, u])).values()) {
     for (let rep = 0; rep < o.reps; rep++) for (const side of o.sides) jobs.push({ side, moment: u.moment, judge: u.judge, rep });
   }
-  // The team's rulings on the messages each moment shows, as a published judge reads them (moments.rulingsOn); the same on both sides.
+  // The team's rulings on the messages each moment shows, as a published judge reads them (momentJudging.rulingsOn); the same on both sides.
   const rulingsOf = new Map<string, Promise<JudgeRuling[]>>();
   // Rulings are the workspace's, not a project's: the read takes the workspace scope alone.
   const { project: _project, ...workspaceScope } = scope;
