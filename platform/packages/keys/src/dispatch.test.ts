@@ -170,6 +170,24 @@ describe("createKeydownHandler", () => {
     }
   });
 
+  test("a typed key that matches no shortcut never queries the document", () => {
+    // Each keystroke in a text field runs this handler; asking the whole
+    // document whether a modal is open belongs only to a key that matched.
+    const { fired, handler } = setup();
+    let queries = 0;
+    (globalThis as any).document = { querySelectorAll: () => { queries++; return []; } };
+    try {
+      for (const key of "hello there") handler(makeEvent({ key, code: key === " " ? "Space" : `Key${key.toUpperCase()}`, target: { tagName: "TEXTAREA" } }));
+      expect(fired).toEqual([]);
+      expect(queries).toBe(0);
+      handler(makeEvent({ key: "j", ctrlKey: true }));
+      expect(fired).toEqual(["next"]);
+      expect(queries).toBe(1);
+    } finally {
+      delete (globalThis as any).document;
+    }
+  });
+
   test("a keyboard-owning surface lets only its allowed actions through", () => {
     const { fired, handler } = setup();
     const inTerminal = {
