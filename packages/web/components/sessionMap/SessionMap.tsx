@@ -42,7 +42,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { animatedHideSessions } from "../../store/undoActions";
-import { AgentMenu, HAIRLINE, SelectionBar, ToolButton, ViewMenu, type SelectionActions } from "./MapControls";
+import { AgentMenu, SelectionBar, ToolButton, ViewMenu, type SelectionActions } from "./MapControls";
 import { useTheme } from "../ThemeProvider";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { RoleFace } from "../org/RoleFace";
@@ -69,6 +69,7 @@ import {
   SINCES,
   SORTS,
   dissolvePile,
+  HAIRLINE,
   makeLoose,
   moveToPile,
   personNodeId,

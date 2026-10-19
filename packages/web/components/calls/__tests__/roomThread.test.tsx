@@ -578,7 +578,7 @@ test("the stage keeps the call's events after transcription is switched off", as
   await r.unmount();
 });
 
-test("a page link typed on a line of its own is a pill in the rail and a card on the page", async () => {
+test("a page link on a line of its own is the page itself, in the rail at a height the rail can hold", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const rows = [
     { _id: "m1", user_id: "u-ann", user_name: "Ann Lee", text: "https://codecast.sh/a/abcdefgh12", at: START + 100, mine: false, agent: null },
@@ -586,9 +586,8 @@ test("a page link typed on a line of its own is a pill in the rail and a card on
   const rail = await render(
     <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated />,
   );
-  // The rail is 340px wide: the 420px card would fill it from header to composer.
-  expect(rail.container.querySelector(".rt-line iframe")).toBeNull();
-  expect(rail.container.querySelector<HTMLAnchorElement>(".rt-line a")?.getAttribute("href")).toBe("https://codecast.sh/a/abcdefgh12");
+  expect(rail.container.querySelector(".rt-line iframe")).not.toBeNull();
+  expect(rail.container.querySelector<HTMLElement>(".rt-line .page-embed__stage")?.style.height).toBe("280px");
   await rail.unmount();
   const page = await render(
     <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="page" seated />,

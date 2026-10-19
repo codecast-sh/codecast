@@ -17,11 +17,76 @@ export type SplitKind = "list" | "liveness";
 // Per query: the rows earlier results carried. Transport state, like Convex's
 // own result cache, never read by a surface. A stale or foreign row cannot leak
 // through: every rebuild is checked against the server's hash.
-const caches = new Map<string, SplitCache<any>>();
+type SplitRow = { id: string; hash: string; row: unknown };
+type Held = {
+  cache: SplitCache<any>;
+  /** Settles once the rows saved by an earlier launch are in the cache. */
+  restored: Promise<void>;
+  /** The row object last handed to storage, per id. */
+  saved: Map<string, unknown>;
+  saveTimer: ReturnType<typeof setTimeout> | null;
+};
+
+/** Where held rows outlive the process. The native app sets one (its SQLite
+ *  cache), so a relaunch rebuilds its first split result from disk instead of
+ *  downloading the whole inbox and hashing every row again. */
+export type SplitPersistence = {
+  load(name: string): Promise<SplitRow[]>;
+  save(name: string, upserts: SplitRow[], removes: string[]): void;
+};
+let persistence: SplitPersistence | null = null;
+export function setSplitPersistence(p: SplitPersistence | null): void {
+  persistence = p;
+}
+
+// Hot rows change with every push, so writes are batched.
+const SAVE_EVERY_MS = 30_000;
+
+const held = new Map<string, Held>();
+function heldFor(name: string): Held {
+  let h = held.get(name);
+  if (h) return h;
+  const cache: SplitCache<any> = new Map();
+  const saved = new Map<string, unknown>();
+  const restored = (persistence?.load(name) ?? Promise.resolve([])).then((rows) => {
+    for (const { id, hash, row } of rows) {
+      saved.set(id, row);
+      if (!cache.has(id)) cache.set(id, { row, hash });
+    }
+  }, () => {});
+  held.set(name, (h = { cache, restored, saved, saveTimer: null }));
+  return h;
+}
 function cacheFor(name: string): SplitCache<any> {
-  let c = caches.get(name);
-  if (!c) caches.set(name, (c = new Map()));
-  return c;
+  return heldFor(name).cache;
+}
+
+/** Queue a write of what the cache gained or lost since the last one. */
+function noteHeldChanged(name: string): void {
+  const h = heldFor(name);
+  if (!persistence || h.saveTimer) return;
+  h.saveTimer = setTimeout(() => {
+    h.saveTimer = null;
+    const upserts: SplitRow[] = [];
+    const removes: string[] = [];
+    for (const [id, { row, hash }] of h.cache) {
+      if (h.saved.get(id) === row) continue;
+      upserts.push({ id, hash, row });
+      h.saved.set(id, row);
+    }
+    for (const id of h.saved.keys()) if (!h.cache.has(id)) removes.push(id);
+    for (const id of removes) h.saved.delete(id);
+    if (upserts.length || removes.length) persistence?.save(name, upserts, removes);
+  }, SAVE_EVERY_MS);
+}
+
+/** Rebuild from the cache, and once more after the saved rows are restored. */
+async function rebuildHeld(kind: SplitKind, value: any, name: string): Promise<any | null> {
+  const h = heldFor(name);
+  const rebuilt = rebuildSplitPayload(kind, value, h.cache);
+  if (rebuilt || !value?.split) return rebuilt;
+  await h.restored;
+  return rebuildSplitPayload(kind, value, h.cache);
 }
 
 // A server that predates the split argument rejects it; the feeder then
@@ -63,11 +128,11 @@ export async function querySplitWhole(
   const name = getFunctionName(query);
   const whole = () => queryWithSignal(convex, query, { ...args, _probe: Date.now() } as any, signal);
   if (unsupported.has(name)) return whole();
-  const cache = cacheFor(name);
-  const rebuilt = rebuildSplitPayload(kind, await queryWithSignal(convex, query, { ...args, split: true, _probe: Date.now() } as any, signal), cache);
+  const rebuilt = await rebuildHeld(kind, await queryWithSignal(convex, query, { ...args, split: true, _probe: Date.now() } as any, signal), name);
+  noteHeldChanged(name);
   if (rebuilt) return rebuilt;
   const value = await whole();
-  seedSplitCache(kind, value, cache);
+  seedSplitCache(kind, value, cacheFor(name));
   return value;
 }
 
@@ -98,12 +163,21 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
     const rebuilt = rebuildSplitPayload(kind, value, cache);
     if (rebuilt) {
       setData(rebuilt);
+      noteHeldChanged(name);
       return;
     }
     // The cache cannot vouch for the cold rows (first load, or one changed):
-    // fetch the whole result once. A newer push cancels this one.
+    // try again with the rows saved by the last launch, else fetch the whole
+    // result once. A newer push cancels this one.
     let cancelled = false;
     void (async () => {
+      const restored = await rebuildHeld(kind, value, name);
+      if (cancelled) return;
+      noteHeldChanged(name);
+      if (restored) {
+        setData(restored);
+        return;
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         let whole: any;
         try {
@@ -113,6 +187,7 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
         }
         if (cancelled) return;
         seedSplitCache(kind, whole, cache);
+        noteHeldChanged(name);
         const again = rebuildSplitPayload(kind, value, cache);
         // The fetch read a different moment than the push (a cold row changed
         // in between): try once more, then take the fetch, a whole snapshot.

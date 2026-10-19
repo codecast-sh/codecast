@@ -1,20 +1,19 @@
 import { useRef } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { getRoomThreadSeen, isArrival } from "../lib/calls/roomThreadSeen";
-import { soundChatMessage } from "../lib/sounds";
+import { soundAgentReply, soundChatMessage } from "../lib/sounds";
 import { useRoomThreadUnread } from "./useRoomThreadUnread";
 import { useWatchEffect } from "./useWatchEffect";
 
 /**
- * The knock for a line typed in the call you are in, by a person or by an
- * agent in the room. A call's chat sits behind a closed rail or a collapsed
- * stage most of the time, so without a sound a question asked there goes
- * unanswered. The team chat's knock, not a new cue: it is chat, it obeys the
- * same switch, and the message id collapses the windows that each see it.
+ * The sound for a line in the call you are in. An agent's line always plays
+ * the agent chime, rail open or closed, stage up or collapsed: people are
+ * talking and watching faces, and an answer they asked for must not land
+ * unheard. A person's line plays the team chat's knock (same switch) unless
+ * the thread is open in a focused window, where it is read as it lands.
  *
  * Only lines that arrive while this runs: the backlog of a room you walk into
- * is history. Several lines in one push knock once. Nothing sounds while the
- * thread is open in a focused window, where the line is read as it lands.
+ * is history. Several lines in one push sound once, the agent's cue winning.
  */
 export function useRoomThreadAlerts(): void {
   const roomKey = useInboxStore((st: any) => (st.call.phase === "idle" ? null : st.call.roomKey ?? null));
@@ -32,7 +31,8 @@ export function useRoomThreadAlerts(): void {
     const since = mark.at;
     heard.current = { roomKey, at: Math.max(since, newestAt) };
     const fresh = rows.filter((r) => r.at > since && isArrival(r));
-    if (fresh.length === 0 || getRoomThreadSeen(roomKey).watching) return;
-    soundChatMessage(String(fresh[fresh.length - 1]._id));
+    const agentLine = fresh.findLast((r) => r.agent);
+    if (agentLine) soundAgentReply(String(agentLine._id));
+    else if (fresh.length > 0 && !getRoomThreadSeen(roomKey).watching) soundChatMessage(String(fresh[fresh.length - 1]._id));
   }, [roomKey, rows, newestAt]);
 }

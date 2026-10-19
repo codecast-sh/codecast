@@ -172,9 +172,9 @@ function LiveControls({ card, actions, accessory }: { card: Live; actions: CardA
           )}
         </span>
       )}
-      <button type="button" className="walkie-strip-end" data-card-action="end" onClick={() => actions.end(card)}>
+      <button type="button" className="walkie-strip-end" data-card-action="end" aria-label="End" onClick={() => actions.end(card)}>
         <PhoneOff className="h-3.5 w-3.5" />
-        End
+        <span className="walkie-strip-end-label">End</span>
       </button>
     </div>
   );
