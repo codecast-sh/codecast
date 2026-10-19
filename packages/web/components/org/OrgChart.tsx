@@ -23,7 +23,7 @@ import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
 import { useEventListener } from "../../hooks/useEventListener";
 import { RevealInBandCtx } from "../../lib/revealHost";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
-import { OrgPanel, ORG_CHART_MIN, ORG_PANEL, orgPanelWidth, type OrgPanelTarget } from "./OrgPanel";
+import { OrgPanel, type OrgPanelTarget } from "./OrgPanel";
 import { useEdgeResize } from "../../hooks/useEdgeResize";
 import { OrgHoverContext } from "./proposalContexts";
 import { useProposalChanges } from "./proposalHooks";
@@ -138,6 +138,12 @@ function panelTargetOf(params: URLSearchParams): OrgPanelTarget {
 
 const panelHref = (t: OrgPanelTarget): string =>
   t.kind === "proposal" ? `/org?proposal=${encodeURIComponent(t.ref)}${t.focus ? `&focus=${encodeURIComponent(t.focus)}` : ""}` : t.kind === "session" ? `/org?session=${encodeURIComponent(t.id)}` : "/org";
+
+/** The drawer's width is the reader's, dragged from its left edge and kept per device. The
+ *  default fits a proposal's fields without truncating; the chart always keeps `ORG_CHART_MIN`. */
+const ORG_PANEL = { key: "codecast.org-panel-w", min: 420, fallback: 620 } as const;
+const ORG_CHART_MIN = 280;
+const orgPanelWidth = (containerWidth: number, chosen: number) => Math.max(Math.min(ORG_PANEL.min, containerWidth), Math.min(chosen, containerWidth - ORG_CHART_MIN));
 
 /** The container's size: the drawer takes a share of its width, and the proposal it pins a share of its height. */
 function useSize(): [(el: HTMLDivElement | null) => void, { w: number; h: number }] {

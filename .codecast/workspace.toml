@@ -55,6 +55,14 @@ check = "cast check --changed-since $CAST_SHIP_BASE"   # only the projects this 
 tests = false
 level = true
 
+# The composer typing budget (packages/web/scripts/typing-guard.sh): a change
+# that makes typing slow again stops the ship here, before anything deploys.
+[[ship.deploy]]
+name = "typing-guard"
+when = ["packages/web/**", "packages/shared/**", "platform/**"]
+run = "packages/web/scripts/typing-guard.sh"
+stage = "before_push"
+
 [[ship.deploy]]
 name = "convex"
 when = ["packages/convex/**", "packages/shared/**", "platform/**"]

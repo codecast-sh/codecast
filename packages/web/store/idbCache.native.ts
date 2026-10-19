@@ -432,11 +432,25 @@ function materializeLoadedCache(
   };
   const metaPending = readMeta("pending") as Record<string, any> | undefined;
 
+  // Every collection's row values in one pass over the snapshot. Scanning all
+  // of it once per collection was a hundred passes over tens of thousands of
+  // keys at every boot. A key's collection is the segment after the prefix
+  // (collection names hold no ":"); the bare prefix + name is a legacy blob.
+  const rowValues = new Map<string, string[]>();
+  for (const [storageKey, raw] of byKey) {
+    if (raw == null || !storageKey.startsWith(COLLECTION_PREFIX)) continue;
+    const end = storageKey.indexOf(":", COLLECTION_PREFIX.length);
+    if (end < 0) continue;
+    const key = storageKey.slice(COLLECTION_PREFIX.length, end);
+    let values = rowValues.get(key);
+    if (!values) rowValues.set(key, (values = []));
+    values.push(raw);
+  }
+
   for (const key of collectionKeys) {
       const rows: any[] = [];
       const seen = new Set<string>();
-      for (const [storageKey, raw] of byKey) {
-        if (!isCollectionRowKey(storageKey, key) || raw == null) continue;
+      for (const raw of rowValues.get(key) ?? []) {
         try {
           const row = JSON.parse(raw);
           if (row?._id == null || seen.has(row._id)) continue;
@@ -727,6 +741,48 @@ export async function loadCache(keys?: readonly string[], context: Record<string
 
 export function setHydrating(v: boolean) {
   _hydrating = v;
+}
+
+// The split feeder's held rows (hooks/useSplitQuery), one key per row holding
+// the server's hash for it and the row: "<hash>\n<json>". With them on disk a
+// relaunch rebuilds the first split result instead of downloading the whole
+// inbox and hashing every row of it again. Every rebuild is still checked
+// against the server's hash, so a stale or foreign row only costs that fetch.
+const SPLIT_PREFIX = "split:v1:";
+
+/** The rows held for one split query at the last flush, with their hashes. */
+export async function loadSplitRows(name: string): Promise<Array<{ id: string; hash: string; row: unknown }>> {
+  if (!Storage) return [];
+  const prefix = SPLIT_PREFIX + name + ":";
+  try {
+    const db = await openCacheDb();
+    let entries: Array<[string, string | null]>;
+    if (db) {
+      const { sql, params } = readPlanSql({ prefixes: [prefix], exact: [] });
+      entries = (await db.getAllAsync(sql, params)).map((r: { key: string; value: string | null }) => [r.key, r.value]);
+    } else {
+      entries = await Storage.multiGet((await storageKeys()).filter((k) => k.startsWith(prefix)));
+    }
+    const out: Array<{ id: string; hash: string; row: unknown }> = [];
+    for (const [key, raw] of entries) {
+      const cut = raw?.indexOf("\n") ?? -1;
+      if (!raw || cut < 1) continue;
+      try {
+        out.push({ id: key.slice(prefix.length), hash: raw.slice(0, cut), row: JSON.parse(raw.slice(cut + 1)) });
+      } catch { /* a corrupt row is refetched with the whole result */ }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Write the rows that changed since the last flush and drop the ones that left. */
+export function persistSplitRows(name: string, upserts: Array<{ id: string; hash: string; row: unknown }>, removes: readonly string[]): void {
+  if (!Storage) return;
+  const prefix = SPLIT_PREFIX + name + ":";
+  for (const { id, hash, row } of upserts) scheduleWrite(prefix + id, () => hash + "\n" + JSON.stringify(row));
+  for (const id of removes) scheduleRemove(prefix + id);
 }
 
 // -- Per-conversation message cache --
