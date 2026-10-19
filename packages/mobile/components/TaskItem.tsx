@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
+import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import * as Haptics from 'expo-haptics';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -64,6 +65,7 @@ export function TaskItemRow({
   /** Set on a floated subtask (parent filtered out) so the row names its parent. */
   parentChip?: { short_id: string } | null;
 }) {
+  if (PERF_PROBE) probeRender('TaskItemRow');
   const Theme = useTheme();
   const status = STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
