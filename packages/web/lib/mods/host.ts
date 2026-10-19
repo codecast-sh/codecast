@@ -68,8 +68,13 @@ export function modNavigate(path: string): void {
 }
 
 const RENDER_TIMEOUT = 20000;
-/** A mod whose register() has not returned by now is marked failed rather than left loading forever. */
-const LOAD_TIMEOUT = 20000;
+/**
+ * A mod not ready by `timeout` is marked failed rather than left loading forever. Slowness is
+ * not a verdict on the mod (a loaded machine misses it often), so a frame whose page never
+ * booted is mounted again after a backoff, and one already running the mod's code keeps going
+ * and recovers when register() returns. Mutable for tests.
+ */
+export const modLoadTiming = { timeout: 20000, retryBase: 5000, retryMax: 60000 };
 /** The most one mod may keep in $.state on a device. */
 const STATE_CAP = 200_000;
 const CALL_LIMIT = 500;
@@ -263,6 +268,10 @@ export class ModRuntime {
   /** Clicks and commands of the person's still being answered: a "ui" write during one is theirs. */
   private userActs = 0;
   private loadTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Remounts in a row whose page never booted; resets when the mod comes up. */
+  private retries = 0;
+  private booted = false;
 
   constructor(row: ModRow, private container: HTMLElement) {
     this.id = row._id;
@@ -288,21 +297,42 @@ export class ModRuntime {
     });
     this.container.appendChild(frame);
     this.frame = frame;
-    if (this.loadTimer) clearTimeout(this.loadTimer);
-    this.loadTimer = setTimeout(() => { if (this.status === "loading" && frame === this.frame) this.fail(`did not finish loading within ${LOAD_TIMEOUT / 1000}s (register never returned, or the machine is under heavy load)`); }, LOAD_TIMEOUT);
+    this.booted = false;
+    this.clearTimers();
+    this.loadTimer = setTimeout(() => this.loadTimedOut(frame), modLoadTiming.timeout);
   }
 
-  private fail(error: string): void {
+  private loadTimedOut(frame: HTMLIFrameElement): void {
+    if (this.status !== "loading" || frame !== this.frame) return;
+    const secs = modLoadTiming.timeout / 1000;
+    if (this.booted) {
+      // register() is still running in a live frame: say so, and let a late "ready" bring it up.
+      this.fail(`did not finish loading within ${secs}s (register never returned, or the machine is under heavy load)`, { keepFrame: true });
+      return;
+    }
+    const wait = Math.min(modLoadTiming.retryBase * 2 ** this.retries++, modLoadTiming.retryMax);
+    this.fail(`the mod host page did not load within ${secs}s; trying again in ${Math.round(wait / 1000)}s`);
+    this.retryTimer = setTimeout(() => { if (this.status === "failed") this.reload(this.row); }, wait);
+  }
+
+  private clearTimers(): void {
+    if (this.loadTimer) clearTimeout(this.loadTimer);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.loadTimer = this.retryTimer = null;
+  }
+
+  private fail(error: string, opts: { keepFrame?: boolean } = {}): void {
     this.status = "failed";
     this.error = error;
     this.addLog("error", error);
-    this.teardownFrame(error);
+    if (!opts.keepFrame) this.teardownFrame(error);
     this.readyWaiters.splice(0).forEach((r) => r());
     this.notifyStatus();
   }
 
   /** A new bundle for the same mod: start over in a fresh frame, keep the subscribers. */
   reload(row: ModRow): void {
+    if (row !== this.row) this.retries = 0;
     this.row = row;
     this.teardownFrame("reloaded");
     this.status = "loading";
@@ -313,7 +343,7 @@ export class ModRuntime {
   }
 
   dispose(): void {
-    if (this.loadTimer) clearTimeout(this.loadTimer);
+    this.clearTimers();
     window.removeEventListener("message", this.onMessage);
     this.teardownFrame("the mod was turned off");
     this.flushLogs();
@@ -470,11 +500,14 @@ export class ModRuntime {
     if (!msg || typeof msg.type !== "string") return;
     switch (msg.type) {
       case "booted":
+        this.booted = true;
         this.post({ type: "load", proto: MOD_PROTOCOL, mod: { id: this.id, name: this.row.name, manifest: plain(this.row.manifest), context: this.context() }, code: this.row.code, primary: isPrimaryWindow() });
         return;
       case "ready":
-        if (this.loadTimer) clearTimeout(this.loadTimer);
+        this.clearTimers();
+        this.retries = 0;
         this.status = "ready";
+        this.error = null;
         this.hooks = Array.isArray(msg.hooks) ? msg.hooks.filter((h) => h && typeof h.event === "string").slice(0, 200) : [];
         this.readyWaiters.splice(0).forEach((r) => r());
         this.notifyStatus();
