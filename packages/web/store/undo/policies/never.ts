@@ -245,6 +245,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
   startResourceOffload: MACHINE,
   cancelResourceOffload: MACHINE,
+  setSessionBackground: MACHINE,
   markBlockedReviveRequested: MACHINE,
   clearBlockedReviveRequested: MACHINE,
 
