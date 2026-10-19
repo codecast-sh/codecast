@@ -8,7 +8,8 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
-import { repairedClosedAt, repairedLineStatus, runEndStatus } from "./workflow_runs";
+import { runEndStatus } from "./workflow_runs";
+import { repairedClosedAt, repairedLineStatus } from "./lib/lineCauseRepair";
 
 const api = anyApi as any;
 const internal = anyApi as any;
