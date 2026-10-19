@@ -339,12 +339,15 @@ export function soundAgentReply(rowId: string) {
     "calls",
     `sound:agent-reply:${rowId}`,
     () =>
+      // A rising C-E-G over the room's voices: brighter and louder than the
+      // chat knock, so an agent's answer is heard mid-conversation.
       play([
-        { freq: 1046.5, start: 0, dur: 0.18, gain: 0.32, type: "sine" },
-        { freq: 2093, start: 0, dur: 0.12, gain: 0.06, type: "sine" },
-        { freq: 1567.98, start: 0.11, dur: 0.32, gain: 0.3, type: "sine" },
-        { freq: 3135.96, start: 0.11, dur: 0.18, gain: 0.05, type: "sine" },
-      ], 0.05),
+        { freq: 1046.5, start: 0, dur: 0.16, gain: 0.32, type: "sine" },
+        { freq: 2093, start: 0, dur: 0.1, gain: 0.06, type: "sine" },
+        { freq: 1318.51, start: 0.09, dur: 0.18, gain: 0.3, type: "sine" },
+        { freq: 1567.98, start: 0.18, dur: 0.4, gain: 0.32, type: "sine" },
+        { freq: 3135.96, start: 0.18, dur: 0.22, gain: 0.05, type: "sine" },
+      ], 0.09),
     { ttl: 60_000, preferDesktop: false },
   );
 }
