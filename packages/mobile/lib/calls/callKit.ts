@@ -16,10 +16,9 @@
 // - Decline / system end → declineInvite or leaveCall.
 // - Ring settled elsewhere (answered on web, caller hung up, TTL) → we
 //   reportCallEnded so the lock-screen UI goes away. The signal is the bridge's
-//   own getMyCalls watch dropping the invite, held for as long as the ring is
-//   up and independent of any screen being mounted (JS must be up for that;
-//   the module's own incomingCallTimeout — set to the invite TTL — is the
-//   killed-app backstop).
+//   own calls.ringLive watch on the invite, held for as long as the ring is up,
+//   independent of any screen being mounted and of sign-in (the module's own
+//   incomingCallTimeout, set to the invite TTL, is the backstop).
 // - Mute from the system UI (lock screen / CarPlay) → setMuted. Ours → CallKit
 //   setMuted, so the system UI never lies.
 //
@@ -107,70 +106,52 @@ const ANSWER_AUTH_WAIT_MS = 20_000;
 // CallKit's id ↔ our invite + room. One at a time — a second CallKit call
 // while one is up is the OS's "hold/end & accept" flow, which we map to
 // end-old + accept-new (huddles have no hold).
-type Active = { ckId: string; inviteId: string; roomKey: string; answered: boolean; reportedAt: number };
-// A CallKit ring reported from a VoIP push can precede the getMyCalls
-// subscription reflecting the invite (PushKit → CallKit is faster than Convex
-// propagation). Inside this window, absence from the subscription is not
-// evidence the ring settled, so the verdict waits for the window to close and
-// is then taken on the latest result: an answer on the desktop inside the
-// first seconds is the common case, and the push that carried it never comes
-// again.
-const RING_SETTLE_GRACE_MS = 5_000;
+type Active = { ckId: string; inviteId: string; roomKey: string; answered: boolean };
 let active: Active | null = null;
 let subs: EventSubscription[] = [];
 let unsubCall: (() => void) | null = null;
 let started = false;
 
-// The ring's settle watch: invites live at me per the latest getMyCalls result
-// (null until the first authenticated result lands, which proves nothing).
-let liveInviteIds: Set<string> | null = null;
+// The ring's settle watch, held for as long as the ring is up.
 let stopRingWatch: (() => void) | null = null;
 
 function setActive(next: Active | null): void {
   if (next?.ckId !== active?.ckId) {
     stopRingWatch?.();
     stopRingWatch = null;
-    liveInviteIds = null;
   }
   active = next;
-  if (next) void watchRing(next.ckId);
+  if (next && !next.answered && !stopRingWatch) watchRing(next);
 }
 
-// Watch getMyCalls for as long as this ring is up. Only after auth: signed out,
-// the query answers "no invites", which would end every cold-start ring.
-async function watchRing(ckId: string): Promise<void> {
-  if (!(await waitForAuth(ANSWER_AUTH_WAIT_MS)) || active?.ckId !== ckId || stopRingWatch) return;
-  const watch = convex.watchQuery(api.calls.getMyCalls, {});
+// Watch whether this ring's invite is still ringing, from the moment the ring
+// is up. calls.ringLive needs no sign-in: a VoIP push wakes a killed app on a
+// locked phone, where the keychain holding the session cannot be read, so a
+// watch that waited for auth never started and the phone rang its full TTL
+// after a desktop answer. The invite row is written before its push is sent,
+// so `false` always means the ring settled (answered or declined elsewhere,
+// cancelled, expired) and never "not synced yet".
+function watchRing(ring: Active): void {
+  const watch = convex.watchQuery(api.calls.ringLive, { invite_id: ring.inviteId });
   const read = () => {
-    let res;
+    let live: boolean | undefined;
     try {
-      res = watch.localQueryResult();
+      live = watch.localQueryResult();
     } catch {
       return;
     }
-    if (!res) return;
-    liveInviteIds = new Set(res.incoming.map((r) => String(r._id)));
-    void endCallKitRingIfStale();
+    if (live === false) void endCallKitRingIfStale(ring.ckId);
   };
-  const unsub = watch.onUpdate(read);
-  const graceLeft = active.reportedAt + RING_SETTLE_GRACE_MS - Date.now();
-  const timer = setTimeout(() => void endCallKitRingIfStale(), Math.max(0, graceLeft));
-  stopRingWatch = () => {
-    unsub();
-    clearTimeout(timer);
-  };
+  stopRingWatch = watch.onUpdate(read);
   read();
 }
 
 // ── outbound: our state → CallKit ─────────────────────────────────────────
 
 /** Tell CallKit the ring settled (answered elsewhere / cancelled / expired). */
-async function endCallKitRingIfStale(): Promise<void> {
+async function endCallKitRingIfStale(ckId: string): Promise<void> {
   const k = getCallKit();
-  if (!k || !active || active.answered || !liveInviteIds) return;
-  if (liveInviteIds.has(active.inviteId)) return;
-  if (Date.now() - active.reportedAt < RING_SETTLE_GRACE_MS) return;
-  const { ckId } = active;
+  if (!k || active?.ckId !== ckId || active.answered) return;
   setActive(null);
   if (__DEV__) (global as any).__ckEvents?.push({ name: "bridge:endRingIfStale", e: { ckId } });
   try {
@@ -202,7 +183,9 @@ function onSessionAdded(session: any) {
   const inviteId = meta?.invite_id ?? ev?.serverCallId;
   const roomKey = meta?.room_key;
   if (!inviteId || !roomKey) return;
-  setActive({ ckId: session.id, inviteId, roomKey, answered: false, reportedAt: Date.now() });
+  // The cold-start read and the listener can both report the same session.
+  if (active?.ckId === session.id) return;
+  setActive({ ckId: session.id, inviteId, roomKey, answered: false });
 }
 
 async function onAnswered(ev: { id: string; requestId: string }) {

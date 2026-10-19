@@ -142,7 +142,7 @@ import { CharacterPicker } from "./identity/CharacterPicker";
 import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { SessionIdentityLine } from "./identity/SessionIdentityLine";
 import { buildMentionItems } from "../hooks/useMentionQuery";
-import { isActiveAgentStatus, serverPendingBubbles, type LiveAgentStatus } from "../lib/pendingBanner";
+import { ECHO_SKEW_MS, isActiveAgentStatus, serverPendingBubbles, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
@@ -440,8 +440,10 @@ const ConversationViewInner = (
   // Captured at pagination trigger time (either direction): the topmost visible
   // message element and its exact viewport offset, so we can pin it right back
   // once the page mounts (above for 'older', below for 'newer'). DOM-measured
-  // (not virtualizer estimates) → pixel-perfect.
-  const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer' } | null>(null);
+  // (not virtualizer estimates) → pixel-perfect. Re-captured on every scroll
+  // while the page is in flight, so it holds where the reader is when the page
+  // lands, not where they were when it was asked for.
+  const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer'; until: number } | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
@@ -1025,14 +1027,18 @@ const ConversationViewInner = (
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
     const seen = new Set<string>();
-    const seenContent = new Set<string>();
+    const seenContent = new Map<string, number>();
+    const said = (content: string, at: number) => {
+      const norm = normalizePendingContent(content);
+      seenContent.set(norm, Math.max(seenContent.get(norm) ?? -Infinity, at));
+    };
     let newestServerTs = 0;
     for (const item of base) {
       if (item.type === 'message') {
         const m = item.data as any;
         seen.add(m._id);
         if (m.client_id) seen.add(m.client_id);
-        if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
+        if (m.role === 'user' && m.content) said(m.content, m.timestamp);
         if (!m._isOptimistic && !m._isQueued && !m._isFailed && m.timestamp > newestServerTs) newestServerTs = m.timestamp;
       }
     }
@@ -1043,11 +1049,11 @@ const ConversationViewInner = (
       // content already rendered as a synced message (prevents the command showing twice).
       if (m.role === 'user' && m.content) {
         const norm = normalizePendingContent(m.content);
-        if (norm.startsWith('/') && seenContent.has(norm)) return false;
+        if (norm.startsWith('/') && (seenContent.get(norm) ?? -Infinity) >= m.timestamp - ECHO_SKEW_MS) return false;
       }
       return true;
     });
-    for (const m of toAdd) if (m.content) seenContent.add(normalizePendingContent(m.content));
+    for (const m of toAdd) if (m.content) said(m.content, m.timestamp);
     // Server-side pending rows: every queued message, whichever device or CLI sent it
     // (serverPendingBubbles).
     toAdd.push(...serverPendingBubbles(serverPending, { seen, seenContent, local: toAdd, newestServerTs, atLiveTail: !hasMoreBelow, normalize: normalizePendingContent }));
@@ -1635,6 +1641,10 @@ const ConversationViewInner = (
 
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
+    // Rows placed by `top`, not translate3d: a 3D transform makes every row a
+    // compositor layer, and the browser re-layers the whole page on each frame
+    // that moves the caret, so each keystroke paid for every visible row.
+    directDomUpdatesMode: "position",
     onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
@@ -2314,6 +2324,9 @@ const ConversationViewInner = (
       setIsNearTop(scrollTop < 200);
       setIsNearBottom(distanceFromBottom < 200);
 
+      const inFlight = pageAnchorRef.current;
+      if (inFlight && Date.now() <= inFlight.until) capturePageAnchor(scrollContainer, inFlight.dir, inFlight.until);
+
       const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
@@ -2420,19 +2433,17 @@ const ConversationViewInner = (
   // Pixel-perfect pagination: remember the topmost visible message and its exact
   // viewport offset; the layout effect below pins it right back after the page
   // mounts (above or below), so the text on screen never moves.
-  const capturePageAnchor = (sc: HTMLElement, dir: 'older' | 'newer') => {
+  // `until`: if the page never arrives (empty result), the anchor lapses so it
+  // can't be misapplied to a later streaming append.
+  const capturePageAnchor = (sc: HTMLElement, dir: 'older' | 'newer', until = Date.now() + 3000) => {
     const scTop = sc.getBoundingClientRect().top;
     let anchorEl: Element | null = null;
     for (const m of sc.querySelectorAll('[id^="msg-"]')) {
       if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
     }
     pageAnchorRef.current = anchorEl
-      ? { id: anchorEl.id, relTop: (anchorEl.getBoundingClientRect().top - scTop) / cssZoomOf(sc), scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir }
+      ? { id: anchorEl.id, relTop: (anchorEl.getBoundingClientRect().top - scTop) / cssZoomOf(sc), scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir, until }
       : null;
-    // If the page never arrives (empty result), drop the anchor so it can't be
-    // misapplied to a later streaming append.
-    const captured = pageAnchorRef.current;
-    if (captured) setTimeout(() => { if (pageAnchorRef.current === captured) pageAnchorRef.current = null; }, 3000);
   };
   const maybeLoadOlderRef = useRef<() => void>(() => {});
   maybeLoadOlderRef.current = () => {
@@ -2521,6 +2532,7 @@ const ConversationViewInner = (
     const a = pageAnchorRef.current;
     if (!a) return;
     pageAnchorRef.current = null;
+    if (Date.now() > a.until) return;
     const sc = containerRef.current;
     if (!sc) return;
     paginationCooldownRef.current = Date.now() + 500;
@@ -3260,7 +3272,7 @@ const ConversationViewInner = (
   // open here it would cover the band's close strip, so it steps aside.
   const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
   const { browserRowMap, lastBrowserPage, browserSession, chatWakeMap } = useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap });
-  const { sessionGalleryImages } = useSessionImages({ deferredQueriesEnabled, conversation });
+  const { sessionGalleryItems } = useSessionImages({ deferredQueriesEnabled, conversation });
   const { taskSubjectMap, taskRecordMap } = useConversationTaskMaps({ conversation, deferredQueriesEnabled });
 
   const getPreviousNonToolResultMessage = (index: number): Message | null => {
@@ -4211,7 +4223,7 @@ const ConversationViewInner = (
                   </div>
                 )}
 
-                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
+                {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
 
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button
@@ -4846,7 +4858,6 @@ const ConversationViewInner = (
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
-                    top: 0,
                     left: 0,
                     width: "100%",
                     ...(visible ? {} : { height: 0, overflow: "hidden" }),
