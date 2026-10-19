@@ -63,9 +63,11 @@
         if (hostedLook === '1' || (hostedLook === null && localStorage.getItem('codecast-lane') === 'simple')) {
           document.documentElement.classList.add('minimal-style', 'hosted-mode');
         } else {
-          // A mod's color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts).
+          // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
+          // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
           try {
-            var themeVars = (JSON.parse(localStorage.getItem('codecast-color-theme') || 'null') || {})[theme] || {};
+            var cachedTheme = localStorage.getItem('codecast-color-theme');
+            var themeVars = (cachedTheme ? JSON.parse(cachedTheme) : window.__ccDefaultColorTheme || {})[theme] || {};
             var names = Object.keys(themeVars);
             for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
             if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
@@ -104,7 +106,7 @@
       html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
       html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
       html.hosted-mode.minimal-style #boot-shell#boot-shell { background: var(--pd-bg); color: var(--pd-ink-faint); }
-      #boot-shell[data-hidden="true"] { opacity: 0; pointer-events: none; }
+      #boot-shell[data-hidden="true"] { display: none; }
       #boot-shell .indicator {
         display: flex;
         flex-direction: column;
@@ -148,11 +150,10 @@
       @keyframes boot-loader-reveal {
         to { visibility: visible; opacity: 1; }
       }
-      #root:not(:empty) ~ #boot-shell { opacity: 0; pointer-events: none; }
-      /* Hidden, the shell stays in the page; its bar must stop moving, or the
-         invisible animation runs on the main thread for the life of the app. */
-      #root:not(:empty) ~ #boot-shell .bar::after,
-      #boot-shell[data-hidden="true"] .bar::after { animation: none; }
+      /* Out of the page once the app paints, not just transparent: an
+         invisible full-window layer stays composited for the life of the app
+         and its bar animation keeps running on the main thread. */
+      #root:not(:empty) ~ #boot-shell { display: none; }
 
       /* A hosted boot (<html data-lane> on /welcome, <html data-hosted-boot>
          on an app page for a device last seen in hosted mode, both set in

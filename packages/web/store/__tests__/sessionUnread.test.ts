@@ -226,7 +226,7 @@ describe("session unread", () => {
       sessions: { [CONV]: session(CONV, 5_000), [OTHER]: session(OTHER, 5_000) },
     } as any);
     const before = sessionUnreadWakeSig(useInboxStore.getState());
-    expect(before.split(",").sort()).toEqual([CONV, OTHER].sort());
+    expect(Object.keys(sessionUnreadMap(useInboxStore.getState())).sort()).toEqual([CONV, OTHER].sort());
 
     // A liveness tick hands back a NEW sessions ref with the same updated_at.
     // The signature must be identical, or the sidebar re-renders every second.
@@ -236,7 +236,8 @@ describe("session unread", () => {
     expect(sessionUnreadWakeSig(useInboxStore.getState())).toBe(before);
 
     useInboxStore.getState().ackSessionRead(CONV, 5_000);
-    expect(sessionUnreadWakeSig(useInboxStore.getState())).toBe(OTHER);
+    expect(Object.keys(sessionUnreadMap(useInboxStore.getState()))).toEqual([OTHER]);
+    expect(sessionUnreadWakeSig(useInboxStore.getState())).not.toBe(before);
   });
 
   // ── The turn stamp and the boundary flag (ct-49533) ───────────────────────
@@ -303,8 +304,9 @@ describe("unread snapshot reuse", () => {
     const read = sessionUnreadMap(after);
     enumerations = 0;
 
-    expect(sessionUnreadWakeSig(before)).toBe(CONV);
-    expect(sessionUnreadWakeSig(after)).toBe("");
+    const litSig = sessionUnreadWakeSig(before);
+    expect(sessionUnreadWakeSig(after)).not.toBe(litSig);
+    expect(sessionUnreadWakeSig(before)).toBe(litSig);
     expect(sessionUnreadMap(before)).toBe(unread);
     expect(sessionUnreadMap(after)).toBe(read);
     expect(enumerations).toBe(0);
@@ -317,12 +319,16 @@ describe("unread snapshot reuse", () => {
     const marked = { ...activity, sessionReads: { read: { _id: serverId("read"), conversation_id: CONV, acknowledged_at: 6_000 } } };
     const manual = { ...marked, sessionReads: { read: { ...marked.sessionReads.read, manual_unread: true } } };
 
-    expect(sessionUnreadWakeSig(before)).toBe(CONV);
-    expect(sessionUnreadWakeSig(viewed)).toBe("");
-    expect(sessionUnreadWakeSig(activity)).toBe(CONV);
-    expect(sessionUnreadWakeSig(marked as any)).toBe("");
-    expect(sessionUnreadWakeSig(manual as any)).toBe(CONV);
-    expect(sessionUnreadWakeSig(viewed)).toBe("");
+    // The lit set flips with each input; the signature follows it exactly.
+    const lit = (st: any) => Object.keys(sessionUnreadMap(st)).join(",");
+    expect([before, viewed, activity, marked, manual, viewed].map(lit)).toEqual([CONV, "", CONV, "", CONV, ""]);
+    const litSig = sessionUnreadWakeSig(before);
+    const darkSig = sessionUnreadWakeSig(viewed);
+    expect(darkSig).not.toBe(litSig);
+    expect(sessionUnreadWakeSig(activity)).toBe(litSig);
+    expect(sessionUnreadWakeSig(marked as any)).toBe(darkSig);
+    expect(sessionUnreadWakeSig(manual as any)).toBe(litSig);
+    expect(sessionUnreadWakeSig(viewed)).toBe(darkSig);
   });
 
   it("reuses the read lookup without retaining an obsolete winner", () => {

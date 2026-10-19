@@ -195,3 +195,15 @@ export function fileTypeLabel(name: string, mediaType?: string): string {
   const sub = type.split("/")[1];
   return sub ? sub.toUpperCase() : "FILE";
 }
+
+/** A file an agent sent into the conversation (SendUserFile), as its message carries it. */
+export type SentFileData = {
+  name: string;
+  media_type: string;
+  size?: number;
+  storage_id?: string;
+  tool_use_id?: string;
+  caption?: string;
+  display?: string;
+  error?: string;
+};
