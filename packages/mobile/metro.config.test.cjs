@@ -177,3 +177,12 @@ test('store shots modules resolve empty without EXPO_PUBLIC_STORE_SHOTS', () => 
   }
   expect(config.resolver.resolveRequest(app, './storeShots/flag', 'ios').filePath).toBe(path.join(__dirname, 'lib/storeShots/flag.ts'));
 });
+
+// Boot evaluates a module where it is first used. With this off, every route
+// file's imports (the web store, the conversation screen, LiveKit) ran before
+// the first frame.
+test('Metro inlines requires, keeping Expo transform options', async () => {
+  const options = await config.transformer.getTransformOptions([], { dev: false, hot: false }, async () => []);
+  expect(options.transform.inlineRequires).toBe(true);
+  expect(options.transform.experimentalImportSupport).toBe(true);
+});

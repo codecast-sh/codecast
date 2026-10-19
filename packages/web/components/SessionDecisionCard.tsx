@@ -6,7 +6,7 @@ import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
 import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
-import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
+import { keyScopeHasFocus, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
 import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
@@ -324,7 +324,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
       // An answer, a dismissal or a typed answer is the card's only while it
       // is the thing in focus: a digit typed into anything else in this
       // window (another pane, a tab an agent drives) never answers it.
-      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "pass" || action.kind === "open-free-text") && !rootRef.current?.contains(document.activeElement)) return;
+      if ((action.kind === "answer" || action.kind === "dismiss" || action.kind === "pass" || action.kind === "open-free-text") && !keyScopeHasFocus(rootRef.current)) return;
       e.preventDefault();
       e.stopPropagation();
       switch (action.kind) {
