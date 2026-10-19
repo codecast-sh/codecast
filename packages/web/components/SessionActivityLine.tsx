@@ -5,8 +5,11 @@ import { EXIT_MS } from "../hooks/useLinger";
 /** The green "running" pulse every live surface shares (inbox card chrome,
  *  section headers, the composer's working line). One definition so the
  *  meaning stays one color and one motion. */
-export function LivePulseDot({ className = "w-1 h-1" }: { className?: string }) {
-  return <span className={`shrink-0 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none ${className}`} />;
+/** The green "live" dot. `still` for a row in a list: one pulsing dot per
+ *  running row keeps the browser re-layering the page on every frame, so a
+ *  list holds still and only a single indicator moves. */
+export function LivePulseDot({ className = "w-1 h-1", still = false }: { className?: string; still?: boolean }) {
+  return <span className={`shrink-0 rounded-full bg-sol-green ${still ? "" : "animate-pulse motion-reduce:animate-none"} ${className}`} />;
 }
 
 /**

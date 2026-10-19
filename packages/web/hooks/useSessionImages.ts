@@ -1,4 +1,4 @@
-import { useRef, useMemo } from "react";
+import { useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "./useWatchEffect";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useStorageImageUrls } from "./useStorageImageUrl";
@@ -8,8 +8,11 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { useMutation } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { GalleryImage } from "../components/ImageGallery";
+import { interleaveGalleryPages, type GalleryImage, type GalleryItem, type GalleryPage } from "../lib/galleryItems";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useConvexSync } from "./useConvexSync";
+import { applyCollectionFeed, useFeederError } from "./useSyncCollection";
+import { usePageEmbedFeed } from "./usePageInfo";
 import type { ConversationData } from "../components/conversation/types";
 
 const api = _typedApi as any;
@@ -60,6 +63,32 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionImageEntries, Object.keys(sessionImageUrls).length]);
 
+  // The pages this session published, beside its images. The membership
+  // (slug, first publish) lives in conversationPages, the pages themselves in
+  // pageEmbeds, fed here so the strip's captures and titles paint on open. A
+  // plain query rather than useSyncCollection: a share-link guest reads it too.
+  const conversationId = conversation?._id && isConvexId(conversation._id) ? String(conversation._id) : null;
+  const { data: pagesFeed, error: pagesError } = useQueryNoThrow(
+    api.messages.getConversationPages,
+    deferredQueriesEnabled && conversationId
+      ? { conversation_id: conversationId as Id<"conversations">, ...shareTokenArg(conversationId) }
+      : "skip"
+  );
+  useFeederError("messages.getConversationPages", pagesError);
+  useConvexSync(pagesFeed, useCallback((row: any) => applyCollectionFeed("conversationPages", [row]), []));
+  const pageRows = useInboxStore((s) => (conversationId ? (s as any).conversationPages?.[conversationId]?.pages : undefined)) as
+    | Array<{ slug: string; created_at: number }>
+    | undefined;
+  const sessionPages = useMemo<GalleryPage[]>(
+    () => (pageRows ?? []).map((p) => ({ page: p.slug, timestamp: p.created_at })),
+    [pageRows]
+  );
+  usePageEmbedFeed(useMemo(() => sessionPages.map((p) => ({ slug: p.page })), [sessionPages]));
+  const sessionGalleryItems = useMemo<GalleryItem[]>(
+    () => interleaveGalleryPages(sessionGalleryImages, sessionPages),
+    [sessionGalleryImages, sessionPages]
+  );
+
   // Older sessions predate the image_preview_url denormalization (the inbox
   // row thumbnail): when the loaded transcript visibly has images but the row
   // doesn't know it, ask the server to recompute — server-side, idempotent,
@@ -106,5 +135,5 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
     backfillConversationImages({ conversation_id: cid as Id<"conversations"> }).catch(() => {});
   }, [conversation?._id, conversation?.is_own, serverSessionImages, windowImageEntries, backfillConversationImages]);
 
-  return { sessionGalleryImages };
+  return { sessionGalleryItems };
 }

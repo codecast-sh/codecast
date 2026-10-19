@@ -1,6 +1,8 @@
 import os from "node:os";
 import { resourceProbe } from "./resourceProbe.js";
 import { envSessionLookup, type EnvSession } from "./processEnv.js";
+import { annotateLocalData } from "./localData.js";
+import { applyBackground } from "./backgroundPriority.js";
 import fs from "node:fs/promises";
 import { execFileAsync } from "./proc.js";
 import type { ProcessInfo } from "./resourceMonitor.js";
@@ -235,7 +237,7 @@ export async function collectMachineResources(deviceId: string, snapshot: Map<nu
       load1: os.loadavg()[0], logicalCpus: os.cpus().length, ...(snapshot ? { processCount: snapshot.size } : {}),
       ...(cpu === undefined ? {} : { cpuPercent: cpu }), ...memory, ...rates,
     },
-    ...summarizeProcesses(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions))),
+    ...summarizeProcesses(await applyBackground(await annotateLocalData(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions))))),
     collectionDurationMs: Date.now() - start,
     limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
   };
