@@ -1663,6 +1663,11 @@ export const claimPendingMessageForDelivery = mutation({
 });
 
 const SHOWN_PENDING_STATUSES = new Set<string>(["pending", "injected", "failed", "undeliverable"]);
+// The delivered rows getConversationPendingMessage reports: those that went in
+// within an hour of the newest delivery, at most this many. Measured from the
+// data, not the clock, so the answer changes only when a row does.
+const RECENT_DELIVERY_MS = 60 * 60_000;
+const RECENT_DELIVERY_ROWS = 10;
 
 export const getConversationPendingMessage = query({
   args: {
@@ -1709,7 +1714,7 @@ export const getConversationPendingMessage = query({
       authors.set(key, { name: u?.name || u?.github_username || u?.email?.split("@")[0] || "Someone", image: u?.image || u?.github_avatar_url || undefined });
     }
     const shown = (m: (typeof msgs)[number]) => ({
-      message_id: m._id, client_id: m.client_id, created_at: m.created_at, queue_at: m.queue_at, retry_count: m.retry_count,
+      message_id: m._id, client_id: m.client_id, created_at: m.created_at, delivered_at: m.delivered_at, queue_at: m.queue_at, retry_count: m.retry_count,
       status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason, hold_screen: m.delivery_hold_screen,
       delivery_status: m.delivery_status, queued: m.queued,
       from_user_id: m.from_user_id, from_name: authors.get(m.from_user_id.toString())?.name, from_image: authors.get(m.from_user_id.toString())?.image,
@@ -1724,10 +1729,22 @@ export const getConversationPendingMessage = query({
         .filter((m) => TERMINAL_STATUSES.has(m.status as PendingStatus))
         .sort((a, b) => b.created_at - a.created_at)[0]
       ?? null;
+    // `delivered` lists the rows that went in lately, newest first, whatever
+    // else is in flight. A viewer's tail can lag the server by minutes, and
+    // until a row's echo reaches it the row is the only copy of that message
+    // on screen; two sends delivered together each need theirs.
+    const delivered = (sharedQueue ? msgs : visible)
+      .filter((m) => m.status === "delivered")
+      .sort((a, b) => (b.delivered_at ?? b.created_at) - (a.delivered_at ?? a.created_at));
+    const newestDelivery = delivered[0] ? (delivered[0].delivered_at ?? delivered[0].created_at) : 0;
+    const recent = delivered
+      .filter((m) => (m.delivered_at ?? m.created_at) >= newestDelivery - RECENT_DELIVERY_MS)
+      .slice(0, RECENT_DELIVERY_ROWS)
+      .map(shown);
     // Others' queued messages with none of the viewer's own: the queue alone,
     // with no primary row for the viewer's delivery tracker to act on.
-    if (!msg) return inflight.length ? { inflight: inflight.map(shown) } : null;
-    return { ...shown(msg), inflight: inflight.map(shown) };
+    if (!msg) return inflight.length || recent.length ? { inflight: inflight.map(shown), delivered: recent } : null;
+    return { ...shown(msg), inflight: inflight.map(shown), delivered: recent };
   },
 });
 

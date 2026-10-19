@@ -15,8 +15,14 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { activeTeamIdOf } from '@codecast/web/lib/activeTeam';
 import { useSyncWorkspaceData } from '@/hooks/useSyncWorkspaceData';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
-import { flushPersistence } from '@codecast/web/store/idbCache';
+import { flushPersistence, loadSplitRows, persistSplitRows } from '@codecast/web/store/idbCache';
+import { setSplitPersistence } from '@codecast/web/hooks/useSplitQuery';
 import { bootMark } from '@/lib/bootProfile';
+
+// The split inbox queries keep their rows in the SQLite cache across launches
+// (hooks/useSplitQuery), so a cold start rebuilds the inbox from disk instead
+// of downloading and hashing the whole list again.
+setSplitPersistence({ load: loadSplitRows, save: persistSplitRows });
 
 // Hosts the inbox store's server-sync hooks OUTSIDE any screen. The live
 // listInboxSessions subscription re-renders whichever component holds it on

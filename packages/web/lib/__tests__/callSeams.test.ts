@@ -22,7 +22,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { ConnectionState, RoomEvent } from "livekit-client";
+import { ConnectionState, DisconnectReason, RoomEvent } from "livekit-client";
 import { useInboxStore } from "../../store/inboxStore";
 import { flushSyncPublishes } from "../../store/syncTransaction";
 import { RING_STUB_MS } from "../calls/ringStubs";
@@ -408,14 +408,93 @@ describe("hanging up frees the seat before the scribe's teardown", () => {
     expect(S().call.phase).toBe("idle");
   });
 
-  test("the media server dropping the call frees the seat without a hang-up", async () => {
+  test("a removal frees the seat without a hang-up", async () => {
     await callManager.joinCall(ROOM, { intent: "deliberate" });
     mutations = [];
     // Nobody pressed End: the server gives a recording the time a reload
     // takes to come back, rather than stopping it as a hang-up would.
-    room().emit(RoomEvent.Disconnected);
+    room().emit(RoomEvent.Disconnected, DisconnectReason.PARTICIPANT_REMOVED);
     await settle();
     expect(named("leaveRoom").map((c) => c.args)).toEqual([{ room_key: ROOM }]);
+  });
+});
+
+// ── a dropped connection joins the room again ───────────────────────────────
+
+describe("the media dropping under a person who never pressed End", () => {
+  const waitFor = async (ok: () => boolean) => {
+    for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  test("rejoins the same room with the seat, the phase and the mute intact", async () => {
+    await callManager.joinCall(ROOM, { intent: "deliberate" });
+    await callManager.setMuted(false, { remember: false });
+    const first = room();
+    mutations = [];
+    soundLog.length = 0;
+
+    // The 2026-10-19 drop: LiveKit gave up, and the call used to end there.
+    first.emit(RoomEvent.Disconnected, DisconnectReason.SIGNAL_CLOSE);
+    expect(S().call.phase).toBe("connected");
+    await waitFor(() => room() !== first && !S().call.reconnecting);
+
+    // MUTATION CHECK: put `leaveCall(undefined, { hangup: false })` back in the
+    // Disconnected handler and the seat goes: leaveRoom is sent, no new Room
+    // is made and the phase reads idle.
+    expect(named("leaveRoom")).toHaveLength(0);
+    expect(room()).not.toBe(first);
+    expect(room().state).toBe(ConnectionState.Connected);
+    expect(named("joinRoom").map((c) => c.args.room_key)).toEqual([ROOM]);
+    expect(S().call).toMatchObject({ phase: "connected", roomKey: ROOM, muted: false, reconnecting: false });
+    // A rejoin is not an arrival: no join chime, no leave chime.
+    expect(soundLog).toEqual([]);
+  });
+
+  test("keeps trying while the SFU is unreachable, and End stops it", async () => {
+    await callManager.joinCall(ROOM, { intent: "deliberate" });
+    const first = room();
+    let mints = 0;
+    callManager.bindConvex({
+      ...convex,
+      action: async () => {
+        mints++;
+        throw new Error("network");
+      },
+    } as any);
+    mutations = [];
+
+    first.emit(RoomEvent.Disconnected);
+    await waitFor(() => mints >= 2);
+    expect(S().call).toMatchObject({ phase: "connected", roomKey: ROOM, reconnecting: true });
+    // Each attempt re-takes the seat, so the lease never lapses under it.
+    expect(named("joinRoom").length).toBeGreaterThanOrEqual(1);
+    expect(named("leaveRoom")).toHaveLength(0);
+
+    await callManager.leaveCall();
+    const after = mints;
+    await new Promise((r) => setTimeout(r, 2_500));
+    expect(mints).toBe(after);
+    expect(S().call).toMatchObject({ phase: "idle", roomKey: null, reconnecting: false });
+  });
+
+  test("a handoff to another window of mine is still not a rejoin", async () => {
+    await callManager.joinCall(ROOM, { intent: "deliberate" });
+    const first = room();
+    mutations = [];
+    first.emit(RoomEvent.Disconnected, DisconnectReason.DUPLICATE_IDENTITY);
+    await settle();
+    expect(room()).toBe(first);
+    expect(named("joinRoom")).toHaveLength(0);
+    expect(named("leaveRoom")).toHaveLength(0);
+    expect(S().call.phase).toBe("idle");
+  });
+
+  test("LiveKit's own retries show as reconnecting without leaving the call", async () => {
+    await callManager.joinCall(ROOM, { intent: "deliberate" });
+    room().emit(RoomEvent.ConnectionStateChanged, ConnectionState.Reconnecting);
+    expect(S().call).toMatchObject({ phase: "connected", reconnecting: true });
+    room().emit(RoomEvent.ConnectionStateChanged, ConnectionState.Connected);
+    expect(S().call).toMatchObject({ phase: "connected", reconnecting: false });
   });
 });
 
