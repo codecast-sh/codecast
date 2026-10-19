@@ -38,7 +38,15 @@ export function publicUrl(path: string): string {
  * crashes the page. Single source of truth, re-exported by the inbox store.
  */
 export function isConvexId(id: string): boolean {
-  return /^[a-z0-9]{32}$/.test(id);
+  // /^[a-z0-9]{32}$/ as a loop: the inbox placement asks this of every row on
+  // every pass, and the regex was a measurable share of an idle minute.
+  const s = typeof id === "string" ? id : String(id);
+  if (s.length !== 32) return false;
+  for (let i = 0; i < 32; i++) {
+    const c = s.charCodeAt(i);
+    if (!((c >= 48 && c <= 57) || (c >= 97 && c <= 122))) return false;
+  }
+  return true;
 }
 
 /** In-app Next.js route prefix for each entity type. */

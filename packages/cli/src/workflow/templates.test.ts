@@ -910,6 +910,25 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
+  // The blocker comment reaches the session that owns the task, often the
+  // station's own hand; posted before the run-over report (which stops the
+  // hands), it resumed ct-59998's dead Implement hand after its run ended.
+  test("a failed run is reported over, stopping its hands, before the blocker comment goes out", async () => {
+    const settle = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/inbox")) {
+        calls.push({ route: "/cli/inbox", body: JSON.parse(init.body) });
+        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "working", is_live: true }] }), { status: 200 });
+      }
+      return settle(url, init);
+    }) as typeof fetch;
+    expect(await runWorkflow(offlineLine(tmpDir), opts({ agentTimeout: 30, runId: "run_1" }))).toBe("failed");
+    const runOver = calls.findIndex((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed");
+    const blocker = calls.findIndex((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker");
+    expect(runOver).toBeGreaterThanOrEqual(0);
+    expect(blocker).toBeGreaterThan(runOver);
+  }, 30000);
+
   test("a hand parked on a usage limit is waited out, not read as settled", async () => {
     const settle = globalThis.fetch;
     let parkedPolls = 0;
