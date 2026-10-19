@@ -1,5 +1,6 @@
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { syncOutboxTables } from "./syncOutboxSchema";
+import { pushReceiptTables } from "./pushReceiptsSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
@@ -6474,7 +6475,8 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     .index("by_user_path", ["user_id", "source_path"])
     .index("by_task", ["task_id"])
-    .index("by_plan", ["plan_id"]),
+    .index("by_plan", ["plan_id"])
+    .index("by_session_conversation", ["session_conversation_id"]),
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see
@@ -7176,6 +7178,9 @@ export default defineSchema({
         // participant feeding an agent speaks as themselves); absent on routes
         // the scribe configured before this field existed → started_by.
         added_by: v.optional(v.id("users")),
+        // Session routes: false when the person who added the agent left its
+        // video avatar out (callFace.ts). Absent: the team's default, a face.
+        face: v.optional(v.boolean()),
         // A hold the fed agent asked for (`cast call hold`): live delivery to
         // this session waits until then, except for words that name it. The
         // hold's expiry schedules the catch up delivery.
@@ -7520,6 +7525,8 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     added_by: v.id("users"),
     last_mirrored_message_id: v.optional(v.id("messages")),
+    // The route's choice, copied: false seats no face or voice for this agent.
+    face: v.optional(v.boolean()),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
@@ -8127,6 +8134,7 @@ export default defineSchema({
   // (highest position retired by retention; a client whose cursor is below the
   // floor must resync via full backfill). Heads are never deleted.
   ...syncOutboxTables,
+  ...pushReceiptTables,
   sync_heads: defineTable({
     scope_key: v.string(),
     position: v.number(),

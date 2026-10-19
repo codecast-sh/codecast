@@ -320,7 +320,7 @@ private config dir so no transcript reaches the inbox). The server builds
 each request as before and hands them back with the moment
 (`JudgeHandoff`); the daemon runs them and posts the replies to
 `/cli/moments/judged`, which records them through the same path an API reply
-takes (`moments.settleJudge`), with `backend: "subscription"` on the run.
+takes (`momentJudging.settleJudge`), with `backend: "subscription"` on the run.
 `cast line moments rejudge`, `cast line judges try` and the judge-fix A/B
 (`base`, `ab`) follow the source's setting, or `--on api|subscription`.
 

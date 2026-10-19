@@ -194,8 +194,9 @@ function isParticipantRemovedDisconnect(reason: unknown): boolean {
  * (the panel, or the source of a pop-out). A removal then is the other
  * window joining, not a hang-up.
  *
- * A real kick, a network drop, a room that closed: hang up. Those reasons
- * are not a handoff, and yielding would leave a ghost seat.
+ * A real kick, a network drop, a room that closed: not a handoff, and
+ * yielding would leave a ghost seat. Whether those end the call or rejoin it
+ * is `shouldRejoinAfterDisconnect`'s question.
  */
 export function shouldYieldCallOnDisconnect(
   reason: unknown,
@@ -205,4 +206,23 @@ export function shouldYieldCallOnDisconnect(
   if (opts.elsewhere) return true;
   if (opts.outlivesWindow && isParticipantRemovedDisconnect(reason)) return true;
   return false;
+}
+
+/** livekit-client DisconnectReason.CLIENT_INITIATED */
+const LIVEKIT_CLIENT_INITIATED = 1;
+
+/**
+ * Is a media drop that is not a handoff worth joining the room again?
+ *
+ * Nobody pressed End, so the person still wants the call. Only two reasons say
+ * otherwise: this client disconnected on purpose, or somebody removed them.
+ * Everything else (the signal socket closing, a server draining, a resume the
+ * SFU refused, a room LiveKit closed on its own while people were still in it)
+ * is the network or the server, and the rejoin's fresh token is where the
+ * server gets its say: a person no longer allowed in is refused there.
+ */
+export function shouldRejoinAfterDisconnect(reason: unknown): boolean {
+  if (isParticipantRemovedDisconnect(reason)) return false;
+  if (reasonNumber(reason) === LIVEKIT_CLIENT_INITIATED) return false;
+  return !reasonName(reason).endsWith("CLIENT_INITIATED");
 }
