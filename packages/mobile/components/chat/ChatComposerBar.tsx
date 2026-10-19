@@ -10,7 +10,7 @@ import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
-  pickImages, startUpload, forgetUpload, sendableAttachments,
+  chooseAndPickImages, startUpload, forgetUpload, sendableAttachments,
   type ChatAttachmentArg, type PickedImage,
 } from './chatUpload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
@@ -91,7 +91,7 @@ export function ChatComposerBar({
 
   // ── Attachments ───────────────────────────────────────────────────────────
   const onAttach = useCallback(async () => {
-    const picked = await pickImages();
+    const picked = await chooseAndPickImages();
     if (picked.length === 0) return;
     setImages((prev) => [...prev, ...picked]);
     // Upload immediately; the strip's spinner clears as each one lands.

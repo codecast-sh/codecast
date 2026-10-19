@@ -17,8 +17,7 @@ import { SelectBox } from "../../../components/ui/select-box";
 import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
-import { useModRows } from "../../../lib/mods/useMods";
-import { availableThemes } from "../../../lib/theme/colorTheme";
+import { ThemePicker } from "../../../components/theme/ThemePicker";
 import {
   SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
@@ -173,10 +172,7 @@ function AppearanceSection() {
         <Switch id="dark-mode" checked={theme === "dark"} onCheckedChange={toggleTheme} aria-label="Dark mode" />
       </SettingsRow>
       {!hosted && (
-        <SettingsField
-          label="Interface style"
-          hint="Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."
-        >
+        <SettingsField label="Interface style">
           <SettingsOptionGroup
             value={visualStyle}
             onChange={(value) => setVisualStyle(value as VisualStyle)}
@@ -193,23 +189,11 @@ function AppearanceSection() {
   );
 }
 
-/** A color theme from the viewer's mods (manifest `themes`), over either style. */
+/** The color theme, over either style: codecast's own, then any a mod adds. */
 function ColorThemeField() {
-  const rows = useModRows();
-  const installed = useInboxStore((s) => s.clientState?.ui?.mods_installed);
-  const current = useInboxStore((s) => s.clientState?.ui?.color_theme) ?? "";
-  const updateUI = useInboxStore((s) => s.updateClientUI);
-  const themes = availableThemes(rows, installed ?? []);
   return (
-    <SettingsField
-      label="Color theme"
-      hint={themes.length ? "Recolors every surface, in light and dark. Themes come from your mods." : "Mods can add color themes. Ask an agent to make one, or install a teammate's from Mods."}
-    >
-      <SelectBox id="color-theme" value={current} onChange={(e) => updateUI({ color_theme: e.target.value })} wrapperClassName="w-full" className="h-9 rounded-md bg-sol-bg text-sm" aria-label="Color theme">
-        <option value="">Codecast</option>
-        {current && !themes.some((t) => t.key === current) && <option value={current}>{current} (unavailable)</option>}
-        {themes.map((t) => <option key={t.key} value={t.key}>{t.theme.title} · {t.modTitle}</option>)}
-      </SelectBox>
+    <SettingsField label="Color theme">
+      <ThemePicker />
     </SettingsField>
   );
 }

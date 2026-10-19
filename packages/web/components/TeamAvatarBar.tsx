@@ -207,6 +207,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         <ShortcutTooltip label="Start a huddle with several teammates">
           <TopbarButton
             onClick={() => useInboxStore.getState().openCreateModal("huddle")}
+            data-huddle
             className="ml-1"
             aria-label="Start a huddle with several teammates"
           >

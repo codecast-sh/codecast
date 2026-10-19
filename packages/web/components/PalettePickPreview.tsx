@@ -1,5 +1,38 @@
+import { useState } from "react";
 import { Link, MessageSquareQuote } from "lucide-react";
 import type { PalettePick } from "../lib/palettePick";
+import { Switch } from "./ui/switch";
+
+/** The top of a pick: its title, its one switch when it has one, and what is
+ *  being sent. */
+export function PalettePickHeader({ pick }: { pick: PalettePick }) {
+  return (
+    <>
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="min-w-0 flex-1 truncate font-mono text-xs text-sol-text-dim">{pick.title}</div>
+        {pick.toggle && <PickToggle toggle={pick.toggle} />}
+      </div>
+      <PalettePickPreview preview={pick.preview} />
+    </>
+  );
+}
+
+function PickToggle({ toggle }: { toggle: NonNullable<PalettePick["toggle"]> }) {
+  const [on, setOn] = useState(toggle.value);
+  return (
+    <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-sol-text-muted">
+      {toggle.label}
+      <Switch
+        checked={on}
+        onCheckedChange={(v) => {
+          setOn(v);
+          toggle.onChange(v);
+        }}
+        aria-label={toggle.label}
+      />
+    </label>
+  );
+}
 
 export function PalettePickPreview({ preview }: { preview: PalettePick["preview"] }) {
   if (!preview) return null;
