@@ -6,7 +6,7 @@
 
 import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
 import { isCommandMessage, cleanContent } from "./conversationProcessor";
-import { isStickyEligible, stickyPromptContent } from "./stickyPrompt";
+import { isStickyEligible, stickyPromptContent, stickyEligibleIds, commandExpansionOf } from "./stickyPrompt";
 import {
   parseMachineDeliveredMessage,
   isBareNudge,
@@ -16,7 +16,7 @@ import { NAV_ROW_SNIPPET_CHARS, stripContextTags, filterUserMessages, type Filte
 import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
 
-export { isStickyEligible, stickyPromptContent };
+export { isStickyEligible, stickyPromptContent, stickyEligibleIds };
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
 // bare "continue" nudges the human typed — navigation noise either way.
@@ -121,7 +121,9 @@ export function formatTimeAgo(ts: number, now: number = Date.now()): string {
 // hidden until the chip reveals them. The kind label carries the word, so the
 // body would be pure repetition — it is dropped. A `cast send` wire tag carries
 // only the sender's short id; `resolveSessionTitle` maps it to a title when the
-// platform's store knows the session.
+// platform's store knows the session. A slash command's body (the batch that
+// follows its invocation) is not a prompt of its own: the invocation's row
+// already stands for it.
 export function buildNavigatorRows(
   userMessages: NavigatorSourceMessage[],
   commentCounts?: Map<string, number> | null,
@@ -130,7 +132,9 @@ export function buildNavigatorRows(
 ): NavigatorRow[] {
   let humanOrdinal = 0;
   const rows: NavigatorRow[] = [];
-  for (const m of userMessages) {
+  for (let i = 0; i < userMessages.length; i++) {
+    const m = userMessages[i];
+    if (commandExpansionOf(userMessages[i - 1], m) !== null) continue;
     const content = m.content ?? "";
     const images = m.images ?? loadedImages?.[m._id];
     if (isTurnInterruptionNotice(content)) continue;
@@ -288,18 +292,21 @@ export type StickySourceMessage = {
 // does not hold (scrolled past every loaded prompt, a window that reaches far
 // back through one early row, a gap) has to come from the full prompt list
 // or the header falls back to an older prompt, as far back as the opening one.
+// `eligibleIds` is stickyEligibleIds over the same list; callers that resolve
+// on every scroll pass it memoized.
 export function pickStickyFallback(
   userMessages: StickySourceMessage[] | null | undefined,
   loadedIds: Set<string>,
   beforeTs: number,
   afterTs = -Infinity,
+  eligibleIds: Set<string> = stickyEligibleIds(userMessages ?? []),
 ): { id: string; content: string; fromUserId?: string; timestamp: number } | null {
   if (!userMessages || userMessages.length === 0) return null;
   for (let i = userMessages.length - 1; i >= 0; i--) {
     const msg = userMessages[i];
     if (msg.timestamp <= afterTs) return null;
     if (msg.role !== "user" || msg.timestamp >= beforeTs) continue;
-    if (loadedIds.has(msg._id) || !isStickyEligible(msg.content)) continue;
+    if (loadedIds.has(msg._id) || !eligibleIds.has(msg._id)) continue;
     return { id: msg._id, content: msg.content, fromUserId: msg.from_user_id, timestamp: msg.timestamp };
   }
   return null;
