@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, memo } from "react";
+import { useState, memo, type ReactNode } from "react";
 import { getCommandType, cleanContent, extractSkillInfo, isHiddenSystemNotice, isWarningSystemNotice } from "../../../lib/conversationProcessor";
 import { compactionProgressMessage } from "../../../lib/compactionProgress";
 import { CompactionProgressCard } from "../CompactionProgressCard";
@@ -83,6 +83,23 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
 // disclosure. Replaces the old two-pill rendering (invocation status line + a separate
 // skill-expansion block). Falls back to the lightweight CommandStatusLine for command
 // *output* (local-command-stdout/stderr, caveats), which carries no command name.
+const COMMAND_CHIP_CLASS = "inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5";
+
+function CommandChipInner({ cmdName, children }: { cmdName: string; children?: ReactNode }) {
+  return (
+    <>
+      <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
+      /{cmdName}
+      {children}
+    </>
+  );
+}
+
+// The slash command chip a person's "/name" invocation renders as.
+export function SlashCommandChip({ cmdName, className = "" }: { cmdName: string; className?: string }) {
+  return <span className={`${COMMAND_CHIP_CLASS} ${className}`}><CommandChipInner cmdName={cmdName} /></span>;
+}
+
 export function CommandMessageBlock({
   content, expansion, timestamp, userName, avatarUrl, agentType, messageId,
 }: {
@@ -119,11 +136,9 @@ export function CommandMessageBlock({
 
   // Chip contents: sparkle + /name, plus a disclosure chevron when an instruction body exists.
   const chipInner = (
-    <>
-      <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
-      /{cmdName}
+    <CommandChipInner cmdName={cmdName}>
       {hasSource && <svg className={`w-3 h-3 shrink-0 text-sol-cyan/60 transition-transform ${showSource ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>}
-    </>
+    </CommandChipInner>
   );
 
   return (
@@ -145,15 +160,13 @@ export function CommandMessageBlock({
           {hasSource ? (
             <button
               onClick={() => setShowSource(s => !s)}
-              className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5 hover:bg-sol-cyan/20 hover:border-sol-cyan/40 transition-colors cursor-pointer"
+              className={`${COMMAND_CHIP_CLASS} hover:bg-sol-cyan/20 hover:border-sol-cyan/40 transition-colors cursor-pointer`}
               title={showSource ? "Hide command instructions" : "Show command instructions"}
             >
               {chipInner}
             </button>
           ) : (
-            <span className="inline-flex items-center gap-1 font-mono text-xs text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/25 rounded px-1.5 py-0.5">
-              {chipInner}
-            </span>
+            <span className={COMMAND_CHIP_CLASS}>{chipInner}</span>
           )}
           {builtinDesc && <span className="text-[11px] text-sol-text-dim">{builtinDesc}</span>}
         </div>
