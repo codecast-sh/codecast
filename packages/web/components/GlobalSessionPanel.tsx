@@ -1154,7 +1154,7 @@ function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
 function RunningBadge({ label }: { label: string }) {
   return (
     <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${RUNNING_BADGE_TONE}`}>
-      <LivePulseDot />
+      <LivePulseDot still />
       {label}
     </span>
   );

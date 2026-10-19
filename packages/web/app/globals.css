@@ -4047,6 +4047,22 @@ diffs-container {
   }
 }
 
+/* The top bar sheds by measurement (TopbarRow's useSqueezeToFit), lowest
+   value first, so nothing in it ever lands on top of its neighbour:
+   1. huddle and pop out, reachable from New and the people row's float;
+   2. the call card's words: its dot, faces and controls already say it;
+   3. idle faces and their count, keeping me and whoever I am engaged with;
+   4. the workspace's name, keeping its crest;
+   5. recently viewed, which the palette also lists. */
+[data-cc-topbar-row][data-squeeze~="1"] .people-bar :is([data-huddle], [data-pop-out]),
+[data-cc-topbar-row][data-squeeze~="2"] .people-bar :is(.walkie-stage .engagement-card-words, .walkie-strip-end-label),
+[data-cc-topbar-row][data-squeeze~="3"] .people-bar [data-overflow],
+[data-cc-topbar-row][data-squeeze~="3"] .people-bar .face-seat:has(> [data-face-hit]:not([data-me]):is([data-state="offline"], [data-state="away"], [data-state="idle"], [data-state="online"], [data-state="busy"])),
+[data-cc-topbar-row][data-squeeze~="4"] [data-cc-team-label],
+[data-cc-topbar-row][data-squeeze~="5"] [data-cc-recents] {
+  display: none !important;
+}
+
 /* Text fields show focus with their caret and container, never a ring. */
 .minimal-style :focus-visible:not(textarea, [contenteditable], input:not([type="checkbox"], [type="radio"], [type="range"])) {
   outline: 2px solid color-mix(in srgb, var(--sol-text) 55%, transparent);

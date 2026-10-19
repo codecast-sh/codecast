@@ -4,6 +4,7 @@ import {
   callWindowReport,
   callWindowSizeOnFailedJoin,
   isDuplicateIdentityDisconnect,
+  shouldRejoinAfterDisconnect,
   shouldYieldCallOnDisconnect,
   type CallWindowPhase,
 } from "../calls/callHandoff";
@@ -154,5 +155,19 @@ describe("shouldYieldCallOnDisconnect", () => {
     expect(shouldYieldCallOnDisconnect(3, hang)).toBe(false);
     expect(shouldYieldCallOnDisconnect(9, hang)).toBe(false);
     expect(shouldYieldCallOnDisconnect(undefined, hang)).toBe(false);
+  });
+});
+
+describe("shouldRejoinAfterDisconnect", () => {
+  it("rejoins a drop nobody chose: the network, a server, a refused resume", () => {
+    for (const reason of [undefined, 0, 3, 5, 6, 7, 8, 9, 10, "SIGNAL_CLOSE", "ROOM_CLOSED"]) {
+      expect(shouldRejoinAfterDisconnect(reason)).toBe(true);
+    }
+  });
+
+  it("lets a removal or our own disconnect end the call", () => {
+    for (const reason of [1, 4, "CLIENT_INITIATED", "PARTICIPANT_REMOVED", "participant-removed"]) {
+      expect(shouldRejoinAfterDisconnect(reason)).toBe(false);
+    }
   });
 });
