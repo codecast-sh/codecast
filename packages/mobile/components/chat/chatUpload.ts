@@ -9,7 +9,7 @@
 // which paints the row now and delivers when the upload settles (chatSlice
 // sendChatMessage, the same path the web composer takes).
 
-import { Alert } from 'react-native';
+import { ActionSheetIOS, Alert, Linking, Platform } from 'react-native';
 import type { ConvexReactClient } from 'convex/react';
 import { uploadUriToStorage } from '@/lib/uploadToStorage';
 import { optionalNative } from '@/lib/optionalNative';
@@ -46,19 +46,64 @@ export type ChatAttachmentArg = {
   height?: number;
 };
 
-/** Open the system photo picker. Returns the picked images (multiple allowed)
- *  or [] when cancelled. Quality 0.8 keeps a phone photo near ~1MB. */
-export async function pickImages(): Promise<PickedImage[]> {
+export type ImageSource = 'camera' | 'library';
+
+/** Ask where an attachment comes from: a new photo or the library. iOS gets
+ *  its native action sheet; Android, the system dialog. Null when dismissed. */
+export function chooseImageSource(): Promise<ImageSource | null> {
+  return new Promise((resolve) => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options: ['Take Photo', 'Photo Library', 'Cancel'], cancelButtonIndex: 2 },
+        (i) => resolve(i === 0 ? 'camera' : i === 1 ? 'library' : null),
+      );
+      return;
+    }
+    Alert.alert('Attach image', undefined, [
+      { text: 'Take Photo', onPress: () => resolve('camera') },
+      { text: 'Photo Library', onPress: () => resolve('library') },
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+    ], { cancelable: true, onDismiss: () => resolve(null) });
+  });
+}
+
+/** Take a photo or pick from the library. Returns the images (several from
+ *  the library) or [] when cancelled. Quality 0.8 keeps a phone photo near
+ *  ~1MB. A library photo comes back as JPEG: iPhone photos are HEIC, which
+ *  the picker otherwise hands over untouched (whatever the quality), and
+ *  which a browser and an agent's image reader cannot open. The library is
+ *  the system picker, which needs no permission; the camera asks once. */
+export async function pickImages(source: ImageSource = 'library'): Promise<PickedImage[]> {
   if (!ImagePicker) {
     Alert.alert('Not available', 'Image uploads need a build with expo-image-picker.');
     return [];
   }
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images'],
-    allowsMultipleSelection: true,
-    selectionLimit: 6,
-    quality: 0.8,
-  });
+  let result: Awaited<ReturnType<typeof ImagePicker.launchImageLibraryAsync>>;
+  try {
+    if (source === 'camera') {
+      const { granted } = await ImagePicker.requestCameraPermissionsAsync();
+      if (!granted) {
+        Alert.alert('Camera access is off', 'Turn on camera access for Codecast in Settings to take a photo.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => { void Linking.openSettings(); } },
+        ]);
+        return [];
+      }
+      result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 });
+    } else {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        selectionLimit: 6,
+        quality: 0.8,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
+    }
+  } catch (err) {
+    // The simulator has no camera, and a picker can fail to present.
+    Alert.alert(source === 'camera' ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
+    return [];
+  }
   if (result.canceled) return [];
   return result.assets.map((a) => ({
     uri: a.uri,
@@ -66,6 +111,12 @@ export async function pickImages(): Promise<PickedImage[]> {
     height: a.height,
     mime: a.mimeType ?? 'image/jpeg',
   }));
+}
+
+/** The + button's whole flow: choose a source, then take or pick. */
+export async function chooseAndPickImages(): Promise<PickedImage[]> {
+  const source = await chooseImageSource();
+  return source ? pickImages(source) : [];
 }
 
 /** Upload one picked image; resolves to its storage id (null on failure).

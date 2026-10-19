@@ -432,11 +432,25 @@ function materializeLoadedCache(
   };
   const metaPending = readMeta("pending") as Record<string, any> | undefined;
 
+  // Every collection's row values in one pass over the snapshot. Scanning all
+  // of it once per collection was a hundred passes over tens of thousands of
+  // keys at every boot. A key's collection is the segment after the prefix
+  // (collection names hold no ":"); the bare prefix + name is a legacy blob.
+  const rowValues = new Map<string, string[]>();
+  for (const [storageKey, raw] of byKey) {
+    if (raw == null || !storageKey.startsWith(COLLECTION_PREFIX)) continue;
+    const end = storageKey.indexOf(":", COLLECTION_PREFIX.length);
+    if (end < 0) continue;
+    const key = storageKey.slice(COLLECTION_PREFIX.length, end);
+    let values = rowValues.get(key);
+    if (!values) rowValues.set(key, (values = []));
+    values.push(raw);
+  }
+
   for (const key of collectionKeys) {
       const rows: any[] = [];
       const seen = new Set<string>();
-      for (const [storageKey, raw] of byKey) {
-        if (!isCollectionRowKey(storageKey, key) || raw == null) continue;
+      for (const raw of rowValues.get(key) ?? []) {
         try {
           const row = JSON.parse(raw);
           if (row?._id == null || seen.has(row._id)) continue;
