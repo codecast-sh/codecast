@@ -3061,6 +3061,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
   },
+  setSessionBackground: async (ctx, _userId, [device_id, session_id, background]: [string, string, boolean]) => {
+    return ctx.runMutation!(api.machineResources.setSessionBackground, { device_id, session_id, background });
+  },
   hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
     return await ctx.runMutation!((api as any).sessionCommands.hibernate, {
       request_id: requestId, conversation_id: convId as Id<"conversations">,

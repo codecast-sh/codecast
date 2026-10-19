@@ -10,7 +10,7 @@ import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from '
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -32,7 +32,7 @@ import { ROW_LAYOUT, arriveEntering, sendEntering } from '@/lib/transcriptMotion
 import { messageRowKey, uniqueRowKeys } from '@codecast/web/lib/messageRowKey';
 import Reanimated, { Easing as ReEasing, FadeIn, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
 import { isCodexTurnAbortedMessage, isHiddenSystemNotice, isInterruptNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -80,8 +80,12 @@ import { answerNote, conversationTitle } from '@codecast/web/components/simple/l
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { CastDiff, EditDiff } from '@/components/CastDiff';
 import { openLink } from '@/lib/links';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
+import { useShallowStable } from '@/hooks/useShallowStable';
+import { RelativeTime } from '@/components/RelativeTime';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -296,112 +300,6 @@ type ConversationData = {
   short_id?: string;
   draft_message?: string | null;
 };
-
-// --- Markdown rendering ---
-// The red/green wrapped diff rows, shared between the inline preview and the
-// fullscreen view so both render the edit identically.
-function DiffRows({ oldLines, newLines }: { oldLines: string[]; newLines: string[] }) {
-  const Theme = useTheme();
-  return (
-    <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
-      {oldLines.map((line, i) => (
-        <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-        </RNView>
-      ))}
-      {newLines.map((line, i) => (
-        <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-        </RNView>
-      ))}
-    </RNView>
-  );
-}
-
-// Fullscreen, vertically scrollable view of a whole edit — same wrapped colored
-// rows as inline, so long diffs are readable instead of clipped in the transcript.
-function DiffFullscreen({ oldStr, newStr, filePath, visible, onClose }: { oldStr: string; newStr: string; filePath: string; visible: boolean; onClose: () => void }) {
-  const Theme = useTheme();
-  const [copied, setCopied] = useState(false);
-  if (!visible) return null;
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const handleCopy = () => {
-    Clipboard.setString(newStr);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <RNView style={styles.planFullscreen}>
-        <RNView style={styles.planFullscreenHeader}>
-          <FontAwesome name="pencil" size={14} color={Theme.orange} style={{ marginRight: 8 }} />
-          <RNText style={styles.planFullscreenTitle} numberOfLines={1}>{filePath.split('/').pop() || 'Edit'}</RNText>
-          <TouchableOpacity onPress={handleCopy} style={{ padding: 6 }} activeOpacity={0.7}>
-            {copied ? <FontAwesome name="check" size={16} color={Theme.green} /> : <FontAwesome name="clipboard" size={16} color={Theme.textMuted} />}
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onClose} style={{ padding: 6 }} activeOpacity={0.7}>
-            <FontAwesome name="close" size={18} color={Theme.textMuted} />
-          </TouchableOpacity>
-        </RNView>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, paddingBottom: 60 }}>
-          <DiffRows oldLines={oldLines} newLines={newLines} />
-        </ScrollView>
-      </RNView>
-    </Modal>
-  );
-}
-
-function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
-  const Theme = useTheme();
-  const [fullscreen, setFullscreen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-
-  const handleCopy = () => {
-    Clipboard.setString(newStr);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  const totalDiffLines = oldLines.length + newLines.length;
-  const isTall = totalDiffLines > 15;
-  const displayOldLines = isTall ? oldLines.slice(0, Math.min(oldLines.length, 6)) : oldLines;
-  const displayNewLines = isTall ? newLines.slice(0, Math.min(newLines.length, 6)) : newLines;
-
-  return (
-    <RNView style={{ marginVertical: 2 }}>
-      {/* Diff lines WRAP rather than scroll horizontally: on a phone a horizontal
-          ScrollView clipped long edits at the screen edge (unreadable without a
-          tiny scrub) and — nested in the message list with nestedScrollEnabled —
-          reserved a tall empty vertical band. Wrapping shows the whole edit, fills
-          the row background full width, and removes that phantom gap. */}
-      <DiffRows oldLines={displayOldLines} newLines={displayNewLines} />
-      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 2 }}>
-        {isTall && (
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-            <RNText style={{ fontSize: 9, color: Theme.textDim }}>{totalDiffLines} lines</RNText>
-          </TouchableOpacity>
-        )}
-        {!isTall && (
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
-        </TouchableOpacity>
-      </RNView>
-      <DiffFullscreen oldStr={oldStr} newStr={newStr} filePath={filePath} visible={fullscreen} onClose={() => setFullscreen(false)} />
-    </RNView>
-  );
-}
 
 // --- Message components ---
 
@@ -1112,6 +1010,11 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 }
 
 function GitDiffView({ diff }: { diff: string }) {
+  return <CastDiff raw={diff} fallback={<RawDiffLines diff={diff} />} />;
+}
+
+// A diff with no hunks to parse, shown line by line.
+function RawDiffLines({ diff }: { diff: string }) {
   const Theme = useTheme();
   const lines = diff.split('\n');
   return (
@@ -1132,7 +1035,7 @@ function GitDiffView({ diff }: { diff: string }) {
             color = Theme.textSecondary;
           }
           return (
-            <RNText key={i} style={{ fontFamily: 'SpaceMono', fontSize: 11, color, backgroundColor: bg, lineHeight: 16 }}>
+            <RNText key={i} style={{ fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color, backgroundColor: bg, lineHeight: 16 }}>
               {line}
             </RNText>
           );
@@ -1761,7 +1664,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
-  const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [toolContentOverflowing, setToolContentOverflowing] = useState(false);
   const [toolContentFullExpanded, setToolContentFullExpanded] = useState(false);
 
@@ -1816,15 +1718,15 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && (
         <RNView
-          onLayout={(e) => { if (!toolContentFullExpanded) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT - 1); }}
-          style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
+          onLayout={(e) => { if (!toolContentFullExpanded && !hasDiff) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT - 1); }}
+          style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && !hasDiff && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
 
           {language && !isBash && !(isEdit && parsedInput.old_string && parsedInput.new_string) && (
             <RNView style={styles.languageLabelRow}>
               <RNText style={styles.languageLabel}>{language}</RNText>
               {isPlan && (
                 <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, backgroundColor: Theme.bgHighlight }}>
-                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: 'JetBrainsMono' }}>PLAN</RNText>
+                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: 'JetBrainsMono-Regular' }}>PLAN</RNText>
                 </RNView>
               )}
               {canToggleViewMode && (
@@ -1852,7 +1754,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             </RNView>
           ) : null}
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
-            <DiffBlock oldStr={String(parsedInput.old_string)} newStr={String(parsedInput.new_string)} filePath={filePath} />
+            <EditDiff oldStr={String(parsedInput.old_string)} newStr={String(parsedInput.new_string)} filePath={filePath} />
           ) : isWrite && parsedInput.content ? (
             isMarkdownFile && viewMode === 'rendered' ? (
               <>
@@ -1907,21 +1809,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && toolContentOverflowing && (
         <RNView style={{ flexDirection: 'row', gap: 12, paddingTop: 4, paddingHorizontal: 4 }}>
-          {/* Edits expand into a fullscreen scrollable modal instead of inline:
-              a long diff expanded in place makes the transcript unscannable. */}
-          <TouchableOpacity onPress={() => hasDiff ? setDiffFullscreen(true) : setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
-            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{!hasDiff && toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
+          <TouchableOpacity onPress={() => setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
+            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
           </TouchableOpacity>
         </RNView>
-      )}
-      {hasDiff && (
-        <DiffFullscreen
-          oldStr={String(parsedInput.old_string)}
-          newStr={String(parsedInput.new_string)}
-          filePath={filePath}
-          visible={diffFullscreen}
-          onClose={() => setDiffFullscreen(false)}
-        />
       )}
       {mdFullscreen && (
         <Modal visible={mdFullscreen} animationType="slide" onRequestClose={() => setMdFullscreen(false)}>
@@ -2279,6 +2170,40 @@ function ToolRunRow({ run, expanded, onToggle }: { run: ToolRun; expanded: boole
   );
 }
 
+// A transcript row's message as the list shows it, cached per message so a
+// screen render hands each bubble the same object and the memo below holds.
+const displayCache = new WeakMap<Message, Message>();
+function displayMessage(item: Message): Message {
+  if (!item.content) return item;
+  let out = displayCache.get(item);
+  if (!out) {
+    out = { ...item, content: stripPastedContent(item.content) };
+    displayCache.set(item, out);
+  }
+  return out;
+}
+const directCache = new WeakMap<Message, Message>();
+function directMessage(item: Message, body: string): Message {
+  let out = directCache.get(item);
+  if (!out || out.content !== body) {
+    out = { ...item, content: body };
+    directCache.set(item, out);
+  }
+  return out;
+}
+
+// The conversation screen re-renders on every store write it reads, and each
+// bubble parses and lays out its markdown, so a bubble renders again only when
+// one of its own props changes. toolRun is rebuilt inline per render and is
+// compared by what it carries.
+const MemoMessageBubble = memo(MessageBubble, (a, b) => {
+  for (const k in b) {
+    if (k !== 'toolRun' && (a as any)[k] !== (b as any)[k]) return false;
+  }
+  const x = a.toolRun, y = b.toolRun;
+  return x === y || (!!x && !!y && x.run === y.run && x.expanded === y.expanded && x.justOpened === y.justOpened);
+});
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun }: {
   message: Message;
   /** Someone other than the session's owner who sent this turn, named above the bubble. */
@@ -2301,6 +2226,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
+  if (PERF_PROBE) probeRender('MessageBubble');
   const Theme = useTheme();
   // Hosted voices are the family look's; developer mode draws a hosted
   // conversation as it draws any other.
@@ -2473,7 +2399,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
           <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
-            <RNText style={[styles.bubbleTime, styles.assistantTime]}>{formatRelativeTime(message.timestamp)}</RNText>
+            <RelativeTime timestamp={message.timestamp} style={[styles.bubbleTime, styles.assistantTime]} />
           </Pressable>
           {isBookmarked && (
             <FontAwesome name="bookmark" size={10} color="#d97706" style={{ marginLeft: 2 }} />
@@ -2646,9 +2572,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return (
                 <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
                   <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono-Regular', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
                   <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>enter</RNText>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono-Regular' }}>enter</RNText>
                   </RNView>
                 </RNView>
               );
@@ -2657,9 +2583,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return (
                 <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
                   <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono-Regular', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
                   <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>exit</RNText>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono-Regular' }}>exit</RNText>
                   </RNView>
                 </RNView>
               );
@@ -3140,7 +3066,10 @@ export default function SessionDetailScreen() {
   }
   return (
     <ConversationSlideOut id={id}>
-      <SessionScreen id={id} message={message} focus={focus} />
+      {/* Keyed: a pick in the panel changes the id in place, and the
+          conversation's own state (scroll, sticky prompt, drafts) starts
+          over with it. */}
+      <SessionScreen key={id} id={id} message={message} focus={focus} />
     </ConversationSlideOut>
   );
 }
@@ -3152,6 +3081,7 @@ const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
  *  conversation. `boardHref` adds the header's way to the board of a scope; a
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
+  if (PERF_PROBE) probeRender('SessionScreen');
   const Theme = useTheme();
   // Hosted mode hides a local session's model and branch chips (lib/surfaces,
   // the registry the web's header reads), and speaks in its words.
@@ -3510,7 +3440,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return map;
   }, [conversation?.fork_children]);
 
-  const taskSubjectMap = useMemo(() => {
+  // Off the conversation doc, which is a new object on every heartbeat.
+  const childConversationMap = useShallowStable(conversation?.child_conversation_map);
+  const taskSubjectMap = useShallowStable(useMemo(() => {
     const createInputs: Record<string, string> = {};
     const idMap: Record<string, string> = {};
     for (const msg of allMessages) {
@@ -3534,9 +3466,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return idMap;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalToolResultMap = useMemo(() => {
+  const globalToolResultMap = useShallowStable(useMemo(() => {
     const map: Record<string, ToolResult> = {};
     for (const msg of allMessages) {
       if (msg.role === 'user' && msg.tool_results) {
@@ -3546,9 +3478,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalImageMap = useMemo(() => {
+  const globalImageMap = useShallowStable(useMemo(() => {
     const map: Record<string, ImageData> = {};
     for (const msg of allMessages) {
       if (msg.images) {
@@ -3560,7 +3492,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
   // Every image in the session, in transcript order — attachments, tool
   // screenshots AND trusted markdown images in prose (same scan as the web
@@ -3607,26 +3539,33 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // Read through a ref so every bubble keeps one handler as images arrive.
+  const allSessionImagesRef = useRef(allSessionImages);
+  allSessionImagesRef.current = allSessionImages;
   const openGallery = useCallback((image: ImageData) => {
     const key = imageKeyOf(image);
-    const idx = key ? allSessionImages.findIndex(img => imageKeyOf(img) === key) : -1;
+    const idx = key ? allSessionImagesRef.current.findIndex(img => imageKeyOf(img) === key) : -1;
     setGalleryIndex(Math.max(0, idx));
     setGalleryVisible(true);
-  }, [allSessionImages]);
+  }, []);
 
   // Local-first fork, the same store path as web: the stub opens already
   // holding the parent's messages up to the fork point, and the screen moves
   // to the real id when the server create lands (the stub URL self-heal below).
+  // Read through a ref: the conversation object changes on every heartbeat,
+  // and this handler is a prop of every (memoized) bubble.
+  const forkInputs = useRef({ conversation, hasMoreAbove });
+  forkInputs.current = { conversation, hasMoreAbove };
   const handleForkFromMessage = useCallback((messageUuid: string) => {
     if (!id) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const fork = beginLocalFork(conversation as any, messageUuid, {
+    const fork = beginLocalFork(forkInputs.current.conversation as any, messageUuid, {
       currentUser: useInboxStore.getState().currentUser,
-      hasMoreAbove,
+      hasMoreAbove: forkInputs.current.hasMoreAbove,
       onError: (message) => Alert.alert('Fork failed', message),
     });
     if (fork) router.push(`/session/${fork.forkSessionId}`);
-  }, [id, conversation, hasMoreAbove, router]);
+  }, [id, router]);
 
   const handleCopyAll = useCallback(async () => {
     if (!allMessages.length) return;
@@ -3883,10 +3822,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Indices (original order, LOADED window) of prompts the sticky banner may
   // show.
   const stickyIndices = useMemo(() => {
+    const eligible = stickyEligibleIds(allMessages);
     const indices: number[] = [];
     for (let i = 0; i < allMessages.length; i++) {
-      const m = allMessages[i];
-      if (m.role === 'user' && m.content && isStickyEligible(m.content)) indices.push(i);
+      if (eligible.has(allMessages[i]._id)) indices.push(i);
     }
     return indices;
   }, [allMessages]);
@@ -3897,6 +3836,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // does not hold can still be the one above the reader (pickStickyFallback).
   const navSourceRef = useRef(navSourceMessages);
   navSourceRef.current = navSourceMessages;
+  const navSourceEligible = useMemo(() => stickyEligibleIds(navSourceMessages ?? []), [navSourceMessages]);
+  const navSourceEligibleRef = useRef(navSourceEligible);
+  navSourceEligibleRef.current = navSourceEligible;
   const loadedIds = useMemo(() => new Set(allMessages.map(m => m._id)), [allMessages]);
   const loadedIdsRef = useRef(loadedIds);
   loadedIdsRef.current = loadedIds;
@@ -3934,7 +3876,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // Before the first viewability event, the window's first row stands in
     // for the top visible one.
     const topTs = msgs[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
-    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity);
+    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity, navSourceEligibleRef.current);
     const next = above ? { id: above.id, hidden: false } : resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
     const prev = stickyActiveRef.current;
     if (prev?.id === next?.id && prev?.hidden === next?.hidden) return;
@@ -4451,7 +4393,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   // One transcript row, as the list draws it; null for rows that never show.
   const renderRow = (item: Message, index: number): ReactNode => {
-    if (item.content) item = { ...item, content: stripPastedContent(item.content) };
+    item = displayMessage(item);
     // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
     const originalIndex = invertedMessages.length - 1 - index;
     let prevNonToolResult: Message | null = null;
@@ -4661,8 +4603,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             />
           </Pressable>
         )}
-        <MessageBubble
-          message={directUser ? { ...item, content: directUser.body } : item}
+        <MemoMessageBubble
+          message={directUser ? directMessage(item, directUser.body) : item}
           agentType={conversation.agent_type}
           model={conversation.model}
           showHeader={showHeader}
@@ -4677,7 +4619,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           sender={directUser?.from}
           showToast={showToast}
           collapsed={collapsed}
-          childConversationMap={conversation.child_conversation_map}
+          childConversationMap={childConversationMap}
           bookmarkedSet={bookmarkedSet}
           toolRun={run ? { run, expanded: openRuns.has(run.head) || (!!highlightedMessageId && run.members.includes(highlightedMessageId)), justOpened: Date.now() - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS, onToggle: () => toggleRun(run.head) } : undefined}
       />
@@ -4916,7 +4858,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               </RNView>
             )}
             {diffShown && diffExpanded && (gitDiffData?.git_diff?.trim() || gitDiffData?.git_diff_staged?.trim()) && (
-              <RNView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]}>
+              <ScrollView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]} nestedScrollEnabled>
                 {gitDiffData.git_diff_staged && gitDiffData.git_diff_staged.trim().length > 0 && (
                   <RNView style={{ marginBottom: 8 }}>
                     <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
@@ -4935,7 +4877,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     </RNView>
                   </RNView>
                 )}
-              </RNView>
+              </ScrollView>
             )}
           </RNView>
         </Animated.View>
@@ -4969,9 +4911,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           data={invertedMessages}
           inverted={true}
           removeClippedSubviews={false}
-          windowSize={21}
-          initialNumToRender={50}
-          maxToRenderPerBatch={50}
+          // The first frame holds a screenful of bubbles (each one parses
+          // and lays out markdown); later batches keep five screens ready on
+          // either side, which a fling does not outrun.
+          windowSize={11}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
           updateCellsBatchingPeriod={50}
           onLayout={(e) => {
             flatListLayoutHeightRef.current = e.nativeEvent.layout.height;
@@ -5474,7 +5419,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     flex: 1,
   },
   compactBoundary: {
@@ -5531,7 +5476,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   systemMessageText: {
     fontSize: 12,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     flex: 1,
   },
   systemCommandBlock: {
@@ -5552,7 +5497,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 9,
     color: Theme.textMuted0,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   systemCommandText: {
     fontSize: 11,
@@ -5591,12 +5536,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   commandStatusBadgeText: {
     fontSize: 10,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   commandStatusText: {
     fontSize: 11,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     flex: 1,
   },
   toolCallOnlyBubble: S.toolCallOnlyBubble,
@@ -5608,17 +5553,17 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   toolCallHeader: S.toolCallHeader,
   toolCallName: {
     ...S.toolCallName,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallSummary: {
     ...S.toolCallSummary,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallResultHint: {
     ...S.toolCallResultHint,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallContent: {
     marginTop: 4,
@@ -5645,7 +5590,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   bashPrompt: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textMuted,
   },
   toolResultBox: {
@@ -5657,7 +5602,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   languageLabel: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolInputSection: {
     paddingHorizontal: 8,
@@ -5666,12 +5611,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   toolCallInput: {
     fontSize: 12,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallResult: {
     fontSize: 12,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     lineHeight: 17,
     padding: 8,
   },
@@ -5752,7 +5697,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   wfRunId: {
     fontSize: 10,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
     marginTop: 1,
   },
@@ -5809,7 +5754,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   wfGateChoiceKey: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.magenta,
   },
   wfGateChoiceLabel: {
@@ -5833,7 +5778,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolName: {
     fontSize: 12,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolBadge: {
     paddingHorizontal: 6,
@@ -5844,12 +5789,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolBadgeText: {
     fontSize: 10,
     fontWeight: '500',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolMeta: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolDesc: {
     fontSize: 11,
@@ -5858,7 +5803,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolContent: {
     fontSize: 11,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     lineHeight: 16,
     paddingHorizontal: 10,
     paddingBottom: 8,
@@ -5877,7 +5822,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolResultText: {
     fontSize: 11,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // AskUserQuestion
   askQuestionBlock: {
@@ -5902,7 +5847,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     maxWidth: '100%',
   },
   auqPreviewText: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 10,
     lineHeight: 15,
     color: Theme.textSecondary,
@@ -6012,12 +5957,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.magenta,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoStats: {
     fontSize: 12,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoList: {
     gap: 2,
@@ -6032,7 +5977,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   todoId: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     marginTop: 2,
   },
   todoItemText: {
@@ -6051,7 +5996,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   todoOwnerText: {
     fontSize: 10,
     color: Theme.blue,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoBlockedText: {
     fontSize: 10,
@@ -6074,7 +6019,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.violet,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Task operations (TaskCreate/Update, SendMessage, TeamCreate)
   taskOpBlock: {
@@ -6086,12 +6031,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   taskOpName: {
     fontSize: 11,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpId: {
     fontSize: 10,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpBadge: {
     paddingHorizontal: 6,
@@ -6102,7 +6047,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   taskOpBadgeText: {
     fontSize: 9,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpText: {
     fontSize: 11,
@@ -6261,7 +6206,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   teammateBadgeText: {
     fontSize: 10,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontWeight: '500',
   },
   teammateSummary: {
@@ -6308,7 +6253,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   skillBlockName: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.violet,
     fontWeight: '600',
   },
@@ -6320,7 +6265,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   skillBlockPath: {
     fontSize: 9,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Fork UI
   forkChildrenRow: {
@@ -6353,7 +6298,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   modelBadge: {
     ...S.modelBadge,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Commit cards
   commitCard: {
@@ -6365,7 +6310,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   commitSha: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.green,
     fontWeight: '600',
   },
@@ -6416,7 +6361,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   prNumber: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.violet,
     fontWeight: '600',
   },
@@ -6552,7 +6497,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   treeNodePrefix: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   treeNodeTitle: {
     fontSize: 13,
@@ -6584,12 +6529,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 13,
     color: Theme.text,
     paddingVertical: 4,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   searchCount: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // View mode toggle (Raw/Rendered)
   languageLabelRow: {
@@ -6666,15 +6611,10 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderTopColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt + '30',
     paddingVertical: 8,
-    maxHeight: 300,
+    maxHeight: 360,
   },
   gitDiffContent: {
     marginHorizontal: 12,
-    borderRadius: 6,
-    overflow: 'hidden',
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight + '30',
   },
   loadMoreIndicator: {
     alignItems: 'center',
@@ -6795,7 +6735,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   usageValue: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textMuted,
   },
   usageContextRow: {
@@ -6857,7 +6797,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   sessionMessageBadgeText: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.cyan,
   },
   sessionMessageTitle: {
@@ -6889,7 +6829,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   taskNotificationId: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
   },
   taskNotificationTime: {
@@ -6911,12 +6851,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   apiErrorCode: {
     fontSize: 14,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontWeight: '700',
   },
   apiErrorType: {
     fontSize: 11,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   apiErrorMessage: {
     fontSize: 12,
@@ -6925,7 +6865,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   apiErrorRequestId: {
     fontSize: 9,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
     marginTop: 4,
   },
@@ -6952,7 +6892,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   contextPillId: {
     fontSize: 9,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
   },
 }));
