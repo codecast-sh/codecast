@@ -50,7 +50,7 @@ import { enqueueTargetedResume, findPullableConversation, performMoveSessionToDe
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
-import { listLiveManagedSessions } from "./lib/liveSessions";
+import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions";
 import { DAEMON_COMMAND_TTL_MS, fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
@@ -110,6 +110,8 @@ type PlanConversation = {
   status?: string;
   inbox_killed_at?: number;
   is_subagent?: boolean;
+  /** Why it cannot move on its own (heldReason), set by annotateHeld before planning. */
+  held?: string | null;
   cloud_placement?: string;
   migration?: { batch_id: string } | null;
 };
@@ -155,7 +157,7 @@ export function planMigration(opts: {
     // An ended session can still come home: its files and transcript are on the host.
     if (c.status === "completed" && target.is_remote) { skip("the session has ended"); continue; }
     if (c.inbox_killed_at) { skip("the session was killed"); continue; }
-    if (c.is_subagent) { skip("a subagent moves with its parent"); continue; }
+    if (c.held) { skip(c.held); continue; }
     if (c.migration) { skip(`already migrating (${c.migration.batch_id})`); continue; }
     if (c.cloud_placement === "pending") { skip("still being placed on the cloud host"); continue; }
     if (fromConvexAgentType(c.agent_type) !== "claude") { skip("only Claude Code sessions can be transferred"); continue; }
@@ -283,10 +285,56 @@ export async function reissueWaitingMigrations(ctx: { db: any }, userId: Id<"use
 }
 
 /**
+ * What decides whether a subagent moves on its own. A subagent with a live
+ * agent process of its own (a `cast spawn --subagent` worker, a teammate) is a
+ * session like any other; one without (a Task subagent inside its parent's
+ * process) moves with its parent. A workflow step stays: its runner watches it
+ * through a handle on the machine it started on, and a moved step reads as a
+ * dead station.
+ */
+export type MovabilityFacts = { live: Set<string>; stepRefs: Set<string>; runParents: Set<string> };
+
+export async function movabilityFacts(ctx: { db: any }, userId: Id<"users">): Promise<MovabilityFacts> {
+  const live = new Set(
+    (await listLiveManagedSessions(ctx, userId)).filter((s) => s.conversation_id && isDaemonManagedRow(s)).map((s) => String(s.conversation_id)),
+  );
+  const stepRefs = new Set<string>();
+  const runParents = new Set<string>();
+  for (const status of ["running", "paused"] as const) {
+    const runs = await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect();
+    for (const run of runs) {
+      if (String(run.user_id) !== String(userId)) continue;
+      if (run.primary_conversation_id) runParents.add(String(run.primary_conversation_id));
+      for (const n of run.node_statuses ?? []) if (n.status === "running" && n.session_id) stepRefs.add(n.session_id);
+    }
+  }
+  return { live, stepRefs, runParents };
+}
+
+/** Why a conversation cannot move on its own, or null when it can. */
+export function heldReason(c: { _id: string; session_id?: string; is_subagent?: boolean; parent_conversation_id?: string }, facts: MovabilityFacts): string | null {
+  const id = String(c._id);
+  // A step's session is named by its conversation short id, its session id, or (tmux runtime) only by its parent run.
+  const isStep = (c.session_id && facts.stepRefs.has(c.session_id))
+    || [...facts.stepRefs].some((ref) => ref.length >= 7 && id.startsWith(ref))
+    || (!!c.parent_conversation_id && facts.runParents.has(String(c.parent_conversation_id)));
+  if (isStep) return "a workflow step stays with its run";
+  if (c.is_subagent && !facts.live.has(id)) return "a subagent moves with its parent";
+  return null;
+}
+
+export async function annotateHeld<T extends { _id: string }>(ctx: { db: any }, userId: Id<"users">, convs: T[]): Promise<Array<T & { held: string | null }>> {
+  const facts = await movabilityFacts(ctx, userId);
+  return convs.map((c) => ({ ...c, held: heldReason(c as any, facts) }));
+}
+
+/**
  * The live, movable-in-principle sessions of a user, by owner device: every
- * conversation each device owns (plus the unowned ones) that has not ended,
- * been killed, or is a subagent. Bounded per device so a long history stays
- * one small pass. Shared by the web roster and the CLI selectors.
+ * conversation each device owns (plus the unowned ones) that has not ended or
+ * been killed, and every live session's conversation, subagents included (a
+ * worker with its own process moves on its own; heldReason says which).
+ * Bounded per device so a long history stays one small pass. Shared by the web
+ * roster and the CLI selectors.
  */
 export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"users">, devices: Array<{ device_id: string }>): Promise<any[]> {
   const ownerIds: Array<string | undefined> = [...devices.map((d) => d.device_id), undefined];
@@ -311,7 +359,7 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
     if (!s.conversation_id || seen.has(String(s.conversation_id))) continue;
     seen.add(String(s.conversation_id));
     const c = await ctx.db.get(s.conversation_id);
-    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at || c.is_subagent) continue;
+    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at) continue;
     out.push(c);
   }
   return out;
@@ -414,7 +462,7 @@ export async function performCreateBatch(
     conversations.push(...picked.conversations);
   }
   if (conversations.length > MAX_BATCH_ROWS) throw new Error(`At most ${MAX_BATCH_ROWS} sessions per batch (${conversations.length} matched) — narrow the selection`);
-  const plan = planMigration({ conversations, devices, targetDeviceId: args.to_device_id, now });
+  const plan = planMigration({ conversations: await annotateHeld(ctx, userId, conversations), devices, targetDeviceId: args.to_device_id, now });
   skipped.push(...plan.skipped);
   if (plan.rows.length === 0 || args.dry_run) {
     return {
@@ -1065,8 +1113,9 @@ export const candidates = query({
       .collect();
     const out: any[] = [];
     {
-      for (const c of await collectMigrationCandidates(ctx, userId, devices)) {
+      for (const c of await annotateHeld(ctx, userId, await collectMigrationCandidates(ctx, userId, devices))) {
         out.push({
+          held_reason: c.held,
           _id: c._id,
           short_id: c.short_id ?? null,
           title: c.title ?? null,

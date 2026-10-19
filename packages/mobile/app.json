@@ -6,7 +6,7 @@
       "ios",
       "android"
     ],
-    "version": "1.0.4",
+    "version": "1.0.5",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -38,7 +38,7 @@
         ],
         "NSFaceIDUsageDescription": "Codecast uses Face ID to unlock the app and keep your workspace private. For example, you can require Face ID before the app opens your team's conversations.",
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Codecast uses the camera to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
+        "NSCameraUsageDescription": "Codecast uses the camera to take a photo you attach to a message, and to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for two things you start yourself. In a team huddle (a live voice and video call) it transmits your voice to teammates. When you press record, it captures the meeting in the room so Codecast can write you a transcript and a summary; that recording is yours alone and no teammate can open it. Audio is never captured at any other time.",
         "NSPhotoLibraryUsageDescription": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded.",
         "NSSupportsLiveActivities": true,
@@ -189,8 +189,30 @@
       "expo-sqlite",
       "expo-audio",
       [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/JetBrainsMono-Regular.ttf",
+            "./assets/fonts/JetBrainsMono-Medium.ttf",
+            "./assets/fonts/JetBrainsMono-SemiBold.ttf",
+            "./assets/fonts/JetBrainsMono-Bold.ttf",
+            "./assets/fonts/JetBrainsMono-Italic.ttf",
+            "./assets/fonts/InstrumentSans-Regular.ttf",
+            "./assets/fonts/InstrumentSans-Medium.ttf",
+            "./assets/fonts/InstrumentSans-SemiBold.ttf",
+            "./assets/fonts/InstrumentSans-Bold.ttf",
+            "./assets/fonts/Newsreader-Regular.ttf",
+            "./assets/fonts/Newsreader-Medium.ttf",
+            "./assets/fonts/Newsreader-SemiBold.ttf",
+            "./assets/fonts/Newsreader-Italic.ttf",
+            "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome.ttf"
+          ]
+        }
+      ],
+      [
         "expo-image-picker",
         {
+          "cameraPermission": "Codecast uses the camera to take a photo you attach to a message, and to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
           "photosPermission": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded."
         }
       ],

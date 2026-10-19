@@ -3,9 +3,10 @@
 // Convex typed-send counters, so it must stay free of DOM, React and web-only
 // dependencies, and import by relative path.
 
-import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
+import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage, commandExpansionName } from "./conversationProcessor";
 import { cleanUserMessage, isBareNudge, isSpawnedTaskPrompt } from "../components/sessionMessage";
 import { isTurnInterruptionNotice, parseDecisionAnswer } from "@codecast/shared/contracts";
+import { LRUCache } from "./lruCache";
 
 // A slash command ("/model opus") and `!` bash mode are the human talking to
 // their client, not to the agent. Both are stored as tag soup
@@ -26,17 +27,66 @@ function isClientCommand(raw: string): boolean {
 // (a tap on a card, stored as "Decision: <label>", tagged or legacy). Every sticky
 // source (timeline, cached user list, last-message fallback) must agree, so
 // they all go through here.
+//
+// Both answers are pure functions of the text, and a conversation screen asks
+// them for every prompt on each scroll and window change, so they are cached
+// by content.
+const contentCache = new LRUCache<string, string | null>(4000);
+const eligibleCache = new LRUCache<string, boolean>(4000);
+
 export function stickyPromptContent(raw: string | null | undefined): string | null {
-  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw) || parseDecisionAnswer(raw)) return null;
-  const display = cleanUserMessage(raw);
-  return display && !isBareNudge(display) ? display : null;
+  if (!raw) return null;
+  const hit = contentCache.get(raw);
+  if (hit !== undefined) return hit;
+  let out: string | null = null;
+  if (!(isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw) || parseDecisionAnswer(raw))) {
+    const display = cleanUserMessage(raw);
+    out = display && !isBareNudge(display) ? display : null;
+  }
+  contentCache.set(raw, out);
+  return out;
 }
 
 // A user message the sticky prompt may show: the human's own ask (not machine
 // delivered, not a spawned briefing, not a bare nudge, not a client command),
 // with visible text that is not a system message.
 export function isStickyEligible(content: string): boolean {
-  if (stickyPromptContent(content) === null) return false;
-  const display = cleanContent(content);
-  return display.length > 0 && !isSystemMessage(display);
+  const hit = eligibleCache.get(content);
+  if (hit !== undefined) return hit;
+  let out = false;
+  if (stickyPromptContent(content) !== null) {
+    const display = cleanContent(content);
+    out = display.length > 0 && !isSystemMessage(display);
+  }
+  eligibleCache.set(content, out);
+  return out;
+}
+
+export type StickySequenceMessage = { _id: string; role?: string; content?: string | null; timestamp?: number };
+
+// A custom slash command ("/deploy") lands as two user messages written in one
+// batch: the tagged invocation, then the command file's body with no markers
+// of its own. The body is the command talking, so it never heads the sticky;
+// the invocation it follows does, shown as the command. Only the neighbour
+// tells a body apart from a long typed prompt, so eligibility is judged over
+// the ordered list rather than one message at a time. A command with no body
+// ("/model opus") stays a client command and is never eligible.
+export function commandExpansionOf(prev: StickySequenceMessage | null | undefined, msg: StickySequenceMessage): string | null {
+  if (!prev || (prev.role && prev.role !== "user")) return null;
+  return commandExpansionName(prev, msg);
+}
+
+export function stickyEligibleIds(messages: ReadonlyArray<StickySequenceMessage>): Set<string> {
+  const ids = new Set<string>();
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role && m.role !== "user") continue;
+    const prev = messages[i - 1];
+    if (commandExpansionOf(prev, m) !== null) {
+      ids.add(prev._id);
+      continue;
+    }
+    if (isStickyEligible(m.content ?? "")) ids.add(m._id);
+  }
+  return ids;
 }
