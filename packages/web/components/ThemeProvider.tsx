@@ -6,7 +6,7 @@ import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 import { lockedAtBoot } from "../lib/themeBootLock";
 import { isHostedMode } from "../lib/surfaces";
 import { HOSTED_BOOT_ATTR } from "./simple/laneBoot";
-import { applyThemeVars, availableThemes, cacheThemeVars, themeVarsByMode } from "../lib/theme/colorTheme";
+import { applyThemeVars, availableThemes, cacheThemeVars, DEFAULT_COLOR_THEME, resolveColorThemeKey, themeVarsByMode } from "../lib/theme/colorTheme";
 import type { ModRow } from "../lib/mods/host";
 // The family's faces and token sheet, for hosted mode's look. The faces are
 // fetched only once a rule uses them.
@@ -144,26 +144,28 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.removeAttribute(HOSTED_BOOT_ATTR);
   }, [hosted, styleReady, signedIn, lock]);
 
-  // A mod's color theme (lib/theme): its variables inline on the root for the
-  // mode on screen. Hosted mode keeps the family's look and a lock Classic's,
-  // so both show codecast's own palette. Until the chosen theme's mod is in
-  // the store the root keeps what index.html replayed from the cache, so a
-  // cold load never flashes the default; once mods are known and the theme is
-  // gone, it comes off.
-  const colorThemeKey = useInboxStore((s) => s.clientState.ui?.color_theme);
+  // The color theme (lib/theme): Verdigris unless the person chose another,
+  // its variables inline on the root for the mode on screen. Hosted mode
+  // keeps the family's look and a lock Classic's, so both show codecast's
+  // own palette. Until a mod's theme is in the store the root keeps what
+  // index.html replayed from the cache, so a cold load never flashes the
+  // default; once mods are known and the theme is gone, the default takes over.
+  // A choice whose mod is gone falls back to the default theme.
+  const colorThemeKey = useInboxStore((s) => resolveColorThemeKey(s.clientState.ui?.color_theme));
   const modMap = useInboxStore((s) => (s as any).mods as Record<string, ModRow> | undefined);
   const installed = useInboxStore((s) => s.clientState.ui?.mods_installed);
   const modsKnown = !!modMap && Object.keys(modMap).length > 0;
-  const colorTheme = useMemo(
-    () => (colorThemeKey && modMap ? availableThemes(Object.values(modMap), installed ?? []).find((c) => c.key === colorThemeKey)?.theme : undefined),
-    [colorThemeKey, modMap, installed],
-  );
-  const colorVars = useMemo(() => themeVarsByMode(colorTheme), [colorTheme]);
+  const colorTheme = useMemo(() => {
+    const themes = availableThemes(Object.values(modMap ?? {}), installed ?? []);
+    const chosen = themes.find((c) => c.key === colorThemeKey)?.theme;
+    return chosen ?? (modsKnown ? themes.find((c) => c.key === DEFAULT_COLOR_THEME)?.theme : undefined);
+  }, [colorThemeKey, modMap, installed, modsKnown]);
+  const colorVars = useMemo(() => (colorTheme ? themeVarsByMode(colorTheme) : null), [colorTheme]);
   useWatchEffect(() => {
-    if (!styleReady || (colorThemeKey && !colorTheme && !modsKnown)) return;
-    applyThemeVars(colorVars && !lock && !hosted ? colorVars[shownTheme] : {});
+    if (!styleReady || !colorVars) return;
+    applyThemeVars(!lock && !hosted ? colorVars[shownTheme] : {});
     if (!lock) cacheThemeVars(colorVars);
-  }, [colorVars, shownTheme, lock, hosted, styleReady, colorThemeKey, modsKnown]);
+  }, [colorVars, shownTheme, lock, hosted, styleReady]);
 
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
