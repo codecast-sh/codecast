@@ -111,3 +111,18 @@ describe("sliceForPercent", () => {
     expect(sliceForPercent(few, sample, 100).ids).toEqual(["a", "b"]);
   });
 });
+test("a busy session that cannot move is listed with its load and why, and a backgrounded one stays listed when quiet", () => {
+  const args = input();
+  const ffmpeg = { pid: 2, ppid: 1, sessionId: "s", name: "ffmpeg", kind: "tool" as const, rss: 400, cpu: 700, background: true as const, localData: { bytes: 6 * 1024 ** 3, files: 12, root: "~/Movies/iMovie Library.imovielibrary" } };
+  args.source.snapshot!.processes.push(ffmpeg);
+  args.source.backgroundSessions = ["s"];
+  const plan = buildOffloadPlan(args)!;
+  expect(plan.candidates[0].perDestination.linux.readiness).toBe("blocked");
+  expect(plan.staying).toEqual([{ sessionId: "s", reason: "Works on 6.0 GB of local files in ~/Movies/iMovie Library.imovielibrary", cpu: 710, rss: 500, background: true, lowered: 1, processCount: 2 }]);
+
+  const quiet = input();
+  quiet.candidates[0].held_reason = "a workflow step stays with its run";
+  expect(buildOffloadPlan(quiet)!.staying).toEqual([]);
+  quiet.source.backgroundSessions = ["s"];
+  expect(buildOffloadPlan(quiet)!.staying.map((s) => [s.sessionId, s.reason])).toEqual([["s", "a workflow step stays with its run"]]);
+});
