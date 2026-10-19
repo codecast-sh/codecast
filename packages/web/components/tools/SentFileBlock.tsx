@@ -12,23 +12,14 @@
 // attach" beats a tool block that silently shows nothing.
 
 import { memo, useCallback, useState } from "react";
-import { fileKind, formatFileSize, fileTypeLabel, isPreviewableKind, type FileKind } from "@codecast/shared/files";
+import { fileKind, formatFileSize, fileTypeLabel, isPreviewableKind, type FileKind, type SentFileData } from "@codecast/shared/files";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { CodeBlock } from "../CodeBlock";
 
-export type SentFileData = {
-  name: string;
-  media_type: string;
-  size?: number;
-  storage_id?: string;
-  tool_use_id?: string;
-  caption?: string;
-  display?: string;
-  error?: string;
-};
+export type { SentFileData };
 
 /** Accent per kind, so the badge reads as a type before the name is read. */
 const KIND_ACCENT: Record<FileKind, string> = {

@@ -61,7 +61,7 @@ export function browserPolicy(age, scope = "public", pinned = false) {
 async function fromOrigin(url) {
   // The zone's cache is bypassed: the copy this worker keeps is the only one,
   // so its age is the whole age of what a viewer gets.
-  const upstream = await fetch(url, { redirect: "manual", cf: { cacheTtl: 0 } });
+  const upstream = await fetch(url, { redirect: "manual", cache: "no-store" });
   // Re-wrap so the response is mutable and the Location rewrite can be made.
   const res = new Response(upstream.body, upstream);
   const loc = res.headers.get("Location");
@@ -126,15 +126,19 @@ export default {
     const cache = request.method === "GET" && !gated && !live ? globalThis.caches?.default : undefined;
     if (!cache) return answer(await fromOrigin(originUrl), UNCACHED_POLICY);
 
-    // Keyed by the origin's address, so both path shapes share one entry.
-    const key = new Request(originUrl, { headers: request.headers });
+    // Keyed by the origin's address, so both path shapes share one entry, but
+    // under this host: fetch and the Cache API share one store, and a copy
+    // filed under originUrl itself would answer the refresh's own fetch, so a
+    // page with steady traffic re-stored its first copy forever.
+    const heldUrl = `${reqUrl.origin}/__held${originUrl.slice(ORIGIN.length)}`;
+    const key = new Request(heldUrl, { headers: request.headers });
     const refresh = async () => {
       const res = await fromOrigin(originUrl);
       if (!STORED_STATUSES.has(res.status)) return { res, held: false };
       const copy = new Response(res.clone().body, res);
       copy.headers.set(STORED_AT, String(Date.now()));
       copy.headers.set("Cache-Control", `public, max-age=${FRESH + STALE}`);
-      await cache.put(originUrl, copy).catch(() => {});
+      await cache.put(heldUrl, copy).catch(() => {});
       return { res, held: true };
     };
 

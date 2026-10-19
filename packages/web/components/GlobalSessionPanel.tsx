@@ -1154,7 +1154,7 @@ function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
 function RunningBadge({ label }: { label: string }) {
   return (
     <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${RUNNING_BADGE_TONE}`}>
-      <LivePulseDot />
+      <LivePulseDot still />
       {label}
     </span>
   );
@@ -2874,21 +2874,25 @@ function SessionListPanelImpl({
     [sortedSessions],
   );
 
-  // "By label" view: every active non-pinned top-level session grouped by its
-  // manual label; unlabeled sessions group by PROJECT — projects are a specific
-  // kind of label, auto-derived from the directory. Pinned stays its own top
-  // section — pin is urgency, not theme. The grouping fn is shared with the
-  // store's visualOrder so Ctrl+J/K walks exactly this layout.
+  // Every lens (label, plan, project, goal, reports) groups the same active
+  // set. Pinned rows lead it, so each lands first in its own group and wears
+  // its pin there: a separate Pinned section above the groups would look the
+  // same in every lens, and switching lenses would seem to do nothing. Shared
+  // with the store's visualOrder (lensOrderOf) so Ctrl+J/K walks this layout.
+  // Absorbed-filtered lists: the lens views render the TRIGGERS section too,
+  // so sessions resting behind a schedule row must not double-render in groups.
+  const lensRows = useMemo(
+    () => [...filteredPinned, ...filteredNew, ...lensSettled, ...filteredWorking],
+    [filteredPinned, filteredNew, lensSettled, filteredWorking],
+  );
+
+  // "By label" view: sessions grouped by their manual label; unlabeled
+  // sessions group by PROJECT — projects are a specific kind of label,
+  // auto-derived from the directory.
   const bucketView = useMemo(() => {
     if (viewMode !== "bucket") return null;
-    // Absorbed-filtered lists: the label view renders the TRIGGERS section too,
-    // so sessions resting behind a schedule row must not double-render in groups.
-    return groupSessionsForLabelView(
-      [...filteredNew, ...lensSettled, ...filteredWorking],
-      s.buckets,
-      bucketByConv,
-    );
-  }, [viewMode, filteredNew, lensSettled, filteredWorking, bucketByConv, s.buckets]);
+    return groupSessionsForLabelView(lensRows, s.buckets, bucketByConv);
+  }, [viewMode, lensRows, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
   // back to flat), regrouped by plan instead of label. Every plan shows, even a
@@ -2897,10 +2901,8 @@ function SessionListPanelImpl({
   // its status bucket.
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
-    return groupSessionsByPlan(
-      [...filteredNew, ...lensSettled, ...filteredWorking],
-    );
-  }, [viewMode, filteredNew, lensSettled, filteredWorking]);
+    return groupSessionsByPlan(lensRows);
+  }, [viewMode, lensRows]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2912,8 +2914,8 @@ function SessionListPanelImpl({
   const lensSources = useMemo(() => orgLensSourcesOf(s), [lensSig, s.sessions]);
   const orgLensView = useMemo(() => {
     if (!isOrgLensMode(viewMode)) return null;
-    return { mode: viewMode, ...groupSessionsForOrgLens(viewMode, [...filteredNew, ...lensSettled, ...filteredWorking], lensSources) };
-  }, [viewMode, filteredNew, lensSettled, filteredWorking, lensSources]);
+    return { mode: viewMode, ...groupSessionsForOrgLens(viewMode, lensRows, lensSources) };
+  }, [viewMode, lensRows, lensSources]);
   const orgLenses = useMemo(
     () => ORG_LENS_MODES.filter((m) => orgLensAvailable(m, activeSessions, lensSources)),
     [activeSessions, lensSources],
@@ -3162,19 +3164,16 @@ function SessionListPanelImpl({
       ? [[flatList, "all"]]
       : viewMode === "bucket" && bucketView
         ? [
-            [filteredPinned, "pinned"],
             ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
             ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
           ]
         : viewMode === "plan" && planView
         ? [
-            [filteredPinned, "pinned"],
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
         : orgLensView
         ? [
-            [filteredPinned, "pinned"],
             ...orgLensView.groups.map(({ key, items }) => [items, `${orgLensView.mode}_${key}`] as [InboxSession[], string]),
             ...orgLensView.projectGroups.map(({ name, items }) => [items, `${orgLensView.mode}proj_${name}`] as [InboxSession[], string]),
           ]
@@ -3904,9 +3903,6 @@ function SessionListPanelImpl({
           renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
         ) : viewMode === "bucket" && bucketView ? (
         <>
-        {/* An exclude chip is a near-global view ("everything but X") — the
-            failed/blocked banner must not vanish behind it. */}
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
             {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, onDropSession: (ids) => labelSessions(ids, bucket._id) })}
@@ -3922,9 +3918,6 @@ function SessionListPanelImpl({
         </>
         ) : viewMode === "plan" && planView ? (
         <>
-        {/* An exclude chip is a near-global view ("everything but X") — the
-            failed/blocked banner must not vanish behind it. */}
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {planView.planGroups.map(({ key, label, items }) => (
           <div key={key}>
             {renderSection(label, items, "text-teal-400", undefined, undefined, { key: `plan_${key}`, monoLabel: true })}
@@ -3940,7 +3933,6 @@ function SessionListPanelImpl({
         </>
         ) : orgLensView ? (
         <>
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {orgLensView.groups.map(({ key, label, items, roleId, userId, image }) => {
           const role = roleId ? rolesById.get(roleId) : undefined;
           return (

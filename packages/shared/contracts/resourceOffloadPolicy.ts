@@ -1,5 +1,16 @@
 import type { HostReadiness } from "./cloudHostReport";
-import type { ResourcePoint, ResourceProcess } from "./systemResources";
+import { fmtBytes, type ResourcePoint, type ResourceProcess } from "./systemResources";
+
+/** A session working on this much local data runs where the data is. */
+export const LOCAL_DATA_BLOCK_BYTES = 1024 ** 3;
+
+/** The local files a session's processes are working on, totalled, with the place holding most of them. */
+export function sessionLocalData(processes: ResourceProcess[]): { bytes: number; root: string } | undefined {
+  const held = processes.filter(p => p.localData);
+  if (!held.length) return undefined;
+  const top = held.reduce((a, b) => (b.localData!.bytes > a.localData!.bytes ? b : a));
+  return { bytes: held.reduce((n, p) => n + p.localData!.bytes, 0), root: top.localData!.root };
+}
 
 export interface OffloadRequirements {
   processes: ResourceProcess[];
@@ -16,6 +27,8 @@ export function evaluateOffloadRequirements(input: OffloadRequirements) {
   const blockers: string[] = [], pending: string[] = [], passed: string[] = [], notes: string[] = [];
   const requiresMac = processes.some(p => p.kind === "simulator" || /xcodebuild|simctl|codesign/i.test(p.name));
   if (requiresMac && input.targetPlatform !== "darwin") blockers.push("Observed Apple build or simulator tooling requires a Mac");
+  const data = sessionLocalData(processes);
+  if (data && data.bytes >= LOCAL_DATA_BLOCK_BYTES) blockers.push(`Works on ${fmtBytes(data.bytes)} of local files in ${data.root}`);
   if (!input.targetOnline && !input.targetWakeable) blockers.push("The destination is offline");
   if (processes.some(p => p.kind === "browser" || p.kind === "simulator" || p.kind === "app")) blockers.push("The process tree contains a local browser, app or simulator; its live state cannot be transferred safely");
   if (!readiness || now - readiness.at > 10 * 60_000 || readiness.at > now + 30_000) pending.push("Refresh the destination's tools, setup and login report");

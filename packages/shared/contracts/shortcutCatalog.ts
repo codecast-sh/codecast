@@ -413,7 +413,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
   // The anchor is reachable from anywhere: one chord opens its slide-over
   // (the last anchor you spoke to) without leaving the page you are on.
-  { key: 'ctrl+shift+a', mac: 'meta+shift+a', action: 'anchor.toggle', skipInputCheck: true, description: 'Talk to Anchor' },
+  { key: 'ctrl+shift+a', mac: 'meta+shift+a', action: 'anchor.toggle', skipInputCheck: true, description: "Talk to the workspace's agent" },
   // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
   // vault is connected, so the chord costs nothing in vault-less workspaces.
   { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open a note' },
