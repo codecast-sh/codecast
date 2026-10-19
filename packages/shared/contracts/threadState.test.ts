@@ -197,6 +197,16 @@ describe("threadStateResult", () => {
     expect(threadStateResult('```json\n{ "a": \n```')).toBeNull();
   });
 
+  test("a block no fence closes runs to the end of the text, as in markdown (ct-59565)", () => {
+    // A station's report pinned from a heredoc that ends on the json's closing brace, past the display cap.
+    const report = { outcome: "open", evidence: long, residue: 4 };
+    const text = `Kept open: both findings are real.\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n`;
+    expect(JSON.parse(threadStateResult(text)!)).toEqual(report);
+    // Prose after an unclosed block leaves nothing that parses; an earlier closed block still stands.
+    expect(threadStateResult('```json\n{"a":1}\nthen more words')).toBeNull();
+    expect(threadStateResult('```json\n{"a":1}\n```\nthen\n```json\n{"a":')).toBe('{"a":1}');
+  });
+
   test("a block whose strings hold fences, closed on the json's last line, is read whole (ct-59945)", () => {
     const report = JSON.stringify({ outcome: "proposed", proposal_md: "## Fix\n\n```ts\nconst a = 1;\n```\n" }, null, 1);
     expect(JSON.parse(threadStateResult(`Proposed.\n\n\`\`\`json\n${report}\`\`\``)!)).toMatchObject({ outcome: "proposed" });

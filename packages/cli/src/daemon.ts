@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -22,6 +23,7 @@ export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type Pass
 import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.js";
 import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
 import * as fs from "fs";
+import { heicToJpeg, isHeicImage } from "./heicImage.js";
 import * as path from "path";
 import * as os from "os";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
@@ -51,7 +53,7 @@ import {
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
-import { REVIVABLE_STATUSES, REVIVE_MAX_PER_PASS, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
+import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -286,7 +288,7 @@ import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, trans
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
-import { hasSessionServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
+import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -10491,7 +10493,11 @@ export async function acquireSessionProcessOwnership(sessionId: string, signal?:
     try {
       const rollouts = await codexRolloutsNow(home);
       if (signal?.aborted || home !== (process.env.HOME || "")) return "unknown";
-      return rollouts.has(sessionId) ? "unknown" : "owned";
+      const paths = rollouts.get(sessionId);
+      if (!paths) return "owned";
+      if (paths.length !== 1) return "unknown";
+      const ownership = await observeCodexOwnership(sessionId, paths[0], home);
+      return signal?.aborted ? "unknown" : ownership;
     } catch { return "unknown"; }
   }
   await ensureSessionFileIndex();
@@ -14350,480 +14356,24 @@ async function resolveSessionCommandPane(
   return { tmuxTarget: tmuxTarget && validateTmuxTarget(tmuxTarget) ? tmuxTarget : null, proc };
 }
 
-async function findTmuxPaneForTty(tty: string): Promise<string | null> {
+async function findTmuxPaneForTty(tty: string, candidates: string[] = []): Promise<string | null> {
   if (!hasTmux()) return null;
-  try {
-    const { stdout } = await tmuxExec(["list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"]);
-    const normalizedTty = normalizeTty(tty);
-
-    for (const line of stdout.trim().split("\n")) {
-      const [paneTty, target] = line.split(" ");
-      if (paneTty === normalizedTty && target) {
-        return target;
+  const normalizedTty = normalizeTty(tty);
+  for (const candidate of [...new Set(candidates), undefined]) {
+    try {
+      const selector = candidate ? ["-t", candidate] : ["-a"];
+      const { stdout } = await tmuxExec(["list-panes", ...selector, "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"], candidate ? { timeout: 3000, killSignal: "SIGKILL" } : undefined);
+      for (const line of stdout.trim().split("\n")) {
+        const [paneTty, target] = line.split(" ");
+        if (paneTty === normalizedTty && target) return target;
       }
-    }
-    return null;
-  } catch {
-    return null;
+    } catch {}
   }
+  return null;
 }
 
-// `unnumbered`: the menu's rows carry no digits, so an answer must move the
-// highlight (selectHighlightedOption) rather than press a digit. `detail`: the
-// dialog's own explanatory text between its title and its options.
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number; multiSelect?: boolean; unnumbered?: boolean; detail?: string };
-
-// Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
-// renders as a box to the RIGHT of the options; tmux capture-pane flattens those
-// columns onto the option rows, so naive parsing captures "│ … │" as a description.
-// Such content is never an option's own description — we drop it so a scraped card
-// never carries box-drawing glyphs (the full-fidelity card comes from the JSONL).
-const BOX_DRAWING_CHARS = /[─-╿]/;
-
-// Newer AskUserQuestion menus print a short label "chip" on its own line above the
-// question — e.g. "□ Stale pending policy". The glyph is a box/ballot character
-// (NOT in the Box Drawing block, so BOX_DRAWING_CHARS won't catch it). The web card
-// renders this as `header`; the scrape used to drop it so scraped cards had no chip.
-const HEADER_CHIP = /^[□☐☑☒▢▣◻◼◽◾■]\s*(.+)$/;
-// ▔/▁ are the top/bottom edges of newer dialog frames (Block Elements, outside the
-// Box Drawing range). capture-pane -J can also glue a full-width rule onto the text
-// row that follows it, so RULE_RUN strips leading/trailing runs off heading lines.
-const SEPARATOR_LINE = /^[─━═▔▁\-_]{5,}$/;
-const RULE_RUN_EDGE = /^[─━═▔▁\-_]{3,}\s*|\s*[─━═▔▁\-_]{3,}$/g;
-
-// A multiSelect AskUserQuestion renders a checkbox between the number and the
-// label — "1. [ ] Restart" / "2. [x] Redeploy" (or a unicode ballot box). It's a
-// selection-state glyph, not part of the label, so strip it off the front. Only a
-// 0-or-1-char bracket pair counts, so real bracketed labels like "[Recommended]"
-// survive.
-const CHECKBOX_PREFIX = /^\s*(?:\[[ xX*✓✔·]?\]|[□☐☑☒▢▣◻◼◽◾])\s*/;
-// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu:
-// a free-text "Type something" row and a "Chat about this" escape hatch. They carry
-// no real description — and the free-text row renders a "Submit" button beneath it
-// that must not be scraped as its description.
-const SYNTHETIC_OPTION = /^(?:type something\.?|chat about this)$/i;
-
-// Key-hint rows of a real interactive dialog footer ("Enter to select · ↑/↓ to
-// navigate · Esc to cancel"). A row qualifies only on a STRONG hint or two weaker
-// ones together: these sessions talk ABOUT terminal UIs, so prose like "←/→ to
-// move between chips" or a lone "Esc to cancel" spec line is routine conversation
-// content, and a loose any-hint scan is how numbered prose answers became poll
-// cards (conv jx795ez, then again conv jx730d3).
-const FOOTER_HINT_STRONG = /enter to (confirm|select)|(?:press\s+)?n\s+to\s+add\s+notes|[↑↓]\s*\/\s*[↑↓]\s*to\s+(navigate|select|choose)|arrow keys to (navigate|select|choose)/i;
-const FOOTER_HINT_WEAK = [/↑\s*\/?\s*↓/, /←\s*\/?\s*→/, /esc(ape)?\s+to\s+(exit|cancel)/i, /tab to switch/i, /arrow keys/i];
-function isMenuFooterRow(line: string): boolean {
-  if (FOOTER_HINT_STRONG.test(line)) return true;
-  let weak = 0;
-  for (const atom of FOOTER_HINT_WEAK) if (atom.test(line)) weak++;
-  return weak >= 2;
-}
-// Markers of the composer's hint bar — by the time one of these is on screen
-// below the "options", we're looking at the prompt area, not a blocking dialog.
-const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|accept edits on|plan mode on|esc to interrupt/i;
-// Rows that exist only while the agent UI is LIVE and unblocked: the working
-// spinner ("✢ Actualizing… (3m 6s · …)" — flush-left glyph) and the composer
-// caret ("❯" bare or with a typed draft). A blocking dialog REPLACES the composer
-// and spinner, so any of these BELOW a candidate menu is structural proof the
-// "menu" is scrolled conversation content, not a live dialog. The caret regex
-// exempts "❯ 1." cursor-on-option rows and the cursor parked on a synthetic row.
-// "✻ Waiting for API response · will retry in 2m 40s" carries the same glyph
-// but is painted UNDER a blocking dialog (the safeguards "Session paused"
-// menu, 2026-09-15), so it proves nothing about the composer.
-const SPINNER_ROW = /^[✻✶✢✳✽·]\s+(?!Waiting for API response)\S/;
-const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
-
-function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
-  const caret = /^\s?[❯›](?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
-  const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
-    isMenuFooterRow(line) || /(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)/i.test(line));
-  for (let top = 0; top < lines.length; top++) {
-    if (!SEPARATOR_LINE.test(lines[top].trim())) continue;
-    let prompt = top + 1;
-    while (prompt < lines.length && !lines[prompt].trim()) prompt++;
-    if (!caret.test(lines[prompt] ?? "")) continue;
-    for (let bottom = lines.length - 1; bottom > Math.max(prompt, fromIdx); bottom--) {
-      if (SEPARATOR_LINE.test(lines[bottom].trim()) && !footerAfter(bottom)) return true;
-    }
-  }
-  return lines.slice(fromIdx + 1).some((line, offset) =>
-    (caret.test(line) || SPINNER_ROW.test(line)) && !footerAfter(fromIdx + 1 + offset));
-}
-
-// True when any live-composer row sits below `fromIdx` — the pane is not blocked
-// on a dialog there. Box-art rows are skipped (a dialog's right-hand preview box
-// can contain arbitrary text, including hint-like glyphs).
-function liveComposerBelow(lines: string[], fromIdx: number, structural = false): boolean {
-  if (structural) return structuralComposerBelow(lines, fromIdx);
-  for (let i = fromIdx + 1; i < lines.length; i++) {
-    if (BOX_DRAWING_CHARS.test(lines[i])) continue;
-    if (COMPOSER_BAR.test(lines[i]) || SPINNER_ROW.test(lines[i]) || COMPOSER_CARET_ROW.test(lines[i])) return true;
-  }
-  return false;
-}
-
-// A real menu's footer renders inside the dialog, below the options, separated only
-// by dialog chrome: blank rows, rules, the right-hand preview's box art, indented
-// continuation/description rows, or the synthetic free-text rows. Hunting for hints
-// in the whole tail below the options is how a prose answer with numbered section
-// headings became a poll: its "options" sat mid-pane and the scan picked up
-// hint-like text from the composer/status region dozens of rows further down. Walk
-// down only while rows stay dialog-shaped; anything else (an assistant ⏺ bullet,
-// the ❯ composer, a shell prompt) means we left the dialog without meeting a footer.
-export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number, structural = false): boolean {
-  for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
-    if (!structural && COMPOSER_BAR.test(lines[i])) return false;
-    if (isMenuFooterRow(lines[i])) return true;
-    const trimmed = lines[i].trim();
-    if (!trimmed) continue;
-    const dialogish = SEPARATOR_LINE.test(trimmed) || BOX_DRAWING_CHARS.test(lines[i])
-      || /^\s{2,}/.test(lines[i]) || SYNTHETIC_OPTION.test(trimmed);
-    if (!dialogish) return false;
-  }
-  return false;
-}
-
-// Pull the header chip and the (possibly multi-line) question out of the lines above
-// the first option. The question can wrap across several rows; the menu renderer
-// breaks it mid-sentence, so taking only the last line truncated it. Walk upward from
-// the first option, stitching contiguous text until a blank line, separator, cursor
-// row, or the chip bounds it — anything past those belongs to a prior turn. The chip
-// itself can sit a blank line above the question, so scan for it independently.
-function extractPromptHeading(lines: string[], firstOptionIdx: number): { header?: string; question: string } {
-  const start = Math.max(0, firstOptionIdx - 8);
-  let header: string | undefined;
-  for (let i = firstOptionIdx - 1; i >= start; i--) {
-    const chip = lines[i].trim().match(HEADER_CHIP);
-    if (chip) { header = chip[1].trim(); break; }
-  }
-  const qLines: string[] = [];
-  for (let i = firstOptionIdx - 1; i >= start; i--) {
-    const trimmed = lines[i].trim();
-    if (HEADER_CHIP.test(trimmed)) break;
-    if (!trimmed) { if (qLines.length) break; else continue; }
-    if (/^[❯>]/.test(trimmed) || SEPARATOR_LINE.test(trimmed)) break;
-    // -J join can fuse a full-width dialog rule onto the question's own row
-    // ("▔▔▔… What do you want to do?") — strip edge runs; a row that was ONLY
-    // a short rule is chrome and bounds the question like a separator.
-    const deRuled = trimmed.replace(RULE_RUN_EDGE, "").trim();
-    if (!deRuled) { if (qLines.length) break; else continue; }
-    qLines.unshift(deRuled);
-  }
-  const question = qLines.join(" ") || header || "Select an option";
-  return { header, question };
-}
-
-export function parseInteractivePrompt(text: string, structural = false): InteractivePrompt | null {
-  const lines = text.split("\n");
-  // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
-  // Without it the cursor ROW of a codex menu fails to parse, so a three-option
-  // menu reads as two options with no cursor — enough to miss the menu entirely
-  // and let the readiness poll declare the pane idle while a modal is up.
-  const optionPattern = /^\s*[❯›>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
-  const options: Array<{ label: string; description?: string }> = [];
-  let firstOptionIdx = -1;
-  let lastOptionIdx = -1;
-  let gapCount = 0;
-  let hasCursorIndicator = false;
-  // Any option row carrying a checkbox glyph marks the menu as multiSelect. This
-  // matters because a pending AskUserQuestion never reaches the session JSONL on
-  // Claude Code ≥2.1.201 (the tool_use is only written once answered), so the live
-  // card is always scrape/sidecar-sourced — and the hook sidecar goes stale after
-  // 5 minutes, leaving this glyph as the only multiSelect signal.
-  let hasCheckbox = false;
-  // The AskUserQuestion menu renders each option's description on indented
-  // continuation lines BELOW the numbered label. We scan bottom-up, so those
-  // lines arrive before their option; buffer them and attach on the next match.
-  let pendingDesc: string[] = [];
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(optionPattern);
-    if (m) {
-      if (lastOptionIdx < 0) lastOptionIdx = i;
-      firstOptionIdx = i;
-      if (/^\s*[❯›>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
-      if (CHECKBOX_PREFIX.test(m[2])) hasCheckbox = true;
-      const label = m[2]
-        .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
-        .replace(/\s*[✓✗✔☑]\s*/g, "")        // stray selection glyphs anywhere
-        .trim();
-      if (label.length > 200) { pendingDesc = []; continue; }
-      // A same-line trailing segment is a real description only if it isn't the
-      // right-hand preview box flattened onto this row (see BOX_DRAWING_CHARS).
-      const inlineDesc = m[3]?.trim();
-      const descParts = [
-        inlineDesc && !BOX_DRAWING_CHARS.test(inlineDesc) ? inlineDesc : undefined,
-        ...pendingDesc,
-      ].filter((s): s is string => !!s);
-      // The synthetic "Type something" / "Chat about this" rows never have a real
-      // description; the "Submit" button under the free-text row would otherwise be
-      // mis-scraped as one.
-      const description = SYNTHETIC_OPTION.test(label)
-        ? undefined
-        : descParts.length ? descParts.join(" ") : undefined;
-      if (label) options.unshift({ label, description });
-      pendingDesc = [];
-      gapCount = 0;
-    } else if (options.length > 0) {
-      const trimmed = lines[i].trim();
-      // A continuation/description line is indented past the flush-left question.
-      // multiSelect menus indent descriptions only 2 spaces — the same column as
-      // non-cursor option rows ("  2.") — so the old 4-space floor treated every
-      // such description as prose and broke the bottom-up scan, dropping options.
-      const isIndented = /^\s{2,}/.test(lines[i]);
-      const isSeparator = /^[─━═\-_]{3,}$/.test(trimmed);
-      // A row carrying any box-drawing glyph is the side-panel preview, not a
-      // continuation of the option's description — treat it as a gap, not text.
-      const isBoxArt = BOX_DRAWING_CHARS.test(trimmed);
-      if (trimmed && isIndented && !isSeparator && !isBoxArt && trimmed.length <= 300) {
-        // Indented continuation line = description for the option just above it.
-        pendingDesc.unshift(trimmed);
-      } else if (!trimmed || isIndented || isSeparator || isBoxArt) {
-        gapCount++;
-        if (gapCount > 8) break;
-      } else {
-        break;
-      }
-    }
-  }
-
-  // Structural gate for both paths: a live composer/spinner below the candidate
-  // proves the pane is NOT blocked on a dialog — the "menu"/"hint" is scrolled
-  // conversation content. Content checks alone can't make this call (prose here
-  // routinely contains literal key-hint text).
-  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx, structural)) {
-    const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx, structural);
-    if (hasCursorIndicator || hasFooter) {
-      const { header, question } = extractPromptHeading(lines, firstOptionIdx);
-      return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
-    }
-  }
-
-  // Detect confirmation prompts: "Press Enter to continue..." / "Esc to cancel"
-  const tailLines = lines.slice(-15);
-  const joined = tailLines.join("\n");
-  const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
-  const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
-  if (enterMatch && !(structural ? structuralComposerBelow(lines, -1) : tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l)))) {
-    // Question extraction: real interstitials (the usage-limit dialog, trust
-    // prompts) draw a rule as their top edge with the question right below it.
-    // Search only BELOW the last rule in the tail — the old "topmost non-hint
-    // line of the tail" reached above the dialog and shipped unrelated prose
-    // fragments ("singleton merge implementation:") as the card's question.
-    // Two-column dialog rows are flattened by capture-pane, so keep only the
-    // left column (3+ spaces = column gap), and strip bullet/box glyphs.
-    const ruleIdx = tailLines.reduce((acc, l, i) => (/[─━═▔▁]{5,}/.test(l) ? i : acc), -1);
-    let question = "Continue?";
-    for (const raw of tailLines.slice(ruleIdx + 1)) {
-      if (/press|enter|esc/i.test(raw)) continue;     // key-hint rows
-      if (/^\s*[❯>]\s/.test(raw)) continue;           // selection-cursor option rows
-      const cleaned = raw.replace(/[─-╿▔▁]/g, " ").replace(/^\s*[⏺●]\s*/, "")
-        .trim().split(/\s{3,}/)[0]?.trim() ?? "";
-      if (cleaned.length > 5) { question = cleaned; break; }
-    }
-    const confirmOptions: Array<{ label: string; description?: string }> = [
-      { label: `Continue (${enterMatch[1]})` },
-    ];
-    if (escMatch) {
-      confirmOptions.push({ label: `Cancel (${escMatch[1]})` });
-    }
-    return { question, options: confirmOptions, isConfirmation: true };
-  }
-
-  return parseSelectDialog(lines);
-}
-
-// Claude Code raises some dialogs of its own as a plain select list: no digits
-// on the rows and no key hint footer. The effort recommendation shown after a
-// session moves to Opus 5 (verified on 2.1.270) is one:
-//
-//   ────────────────────────────────────────
-//    We recommend Opus 5 at medium effort
-//
-//      Opus 5 at medium effort is faster and uses fewer tokens …
-//
-//      ❯ Keep high
-//        Switch Opus 5 to medium effort
-//
-// Neither path above matches it, and its ❯ read as a live composer, so every
-// delivery pasted into the dialog, never saw the paste land, and wrote it again
-// (four sessions stuck this way on 2026-09-14). Recognized by structure, not by
-// wording: an indented cursor row and its sibling rows at the label column are
-// the LAST text in the capture (a live composer and its footer always render
-// below scrolled content, so conversation text can never sit there), and a rule
-// caps the dialog above its title. The widget ignores digits (verified on the
-// trust dialog, the same widget), so answers move the highlight instead.
-const SELECT_CURSOR_ROW = /^( {2,})❯ (\S.*)$/;
-const DIALOG_TOP_RULE = /[─━═▔▁]{5,}/;
-
-export function parseSelectDialog(lines: string[]): InteractivePrompt | null {
-  let end = lines.length - 1;
-  while (end >= 0 && !lines[end].trim()) end--;
-  let start = end;
-  while (start > 0 && lines[start - 1].trim()) start--;
-  if (end - start < 1 || end - start > 8) return null;
-
-  const cursorRows = lines.slice(start, end + 1).filter((l) => SELECT_CURSOR_ROW.test(l));
-  if (cursorRows.length !== 1) return null;
-  const labelCol = SELECT_CURSOR_ROW.exec(cursorRows[0])![1].length + 2;
-  const options: Array<{ label: string; description?: string }> = [];
-  for (const raw of lines.slice(start, end + 1)) {
-    const row = raw.replace(/\s+$/, "");
-    const sibling = !row.slice(0, labelCol).trim() && /\S/.test(row[labelCol] ?? "");
-    if (!SELECT_CURSOR_ROW.test(row) && !sibling) return null;
-    const text = row.slice(labelCol);
-    if (/^\d+[.)]\s/.test(text)) return null;
-    // Two column rows ("Wait for limit to reset      Resets 2:50pm") keep the
-    // right column as the option's description.
-    const [label, ...rest] = text.split(/\s{3,}/);
-    options.push({ label: label.trim(), ...(rest.length ? { description: rest.join(" ").trim() } : {}) });
-  }
-
-  // Title and body: the rows between the dialog's top rule and its options.
-  // A capture that starts right below the rule (extractTmuxLiveRegion's live
-  // region) has no rule left in it, so the top of the text bounds it too.
-  const rows: string[] = [];
-  let capped = false;
-  for (let i = start - 1; i >= Math.max(0, start - 16); i--) {
-    const trimmed = lines[i].trim();
-    if (DIALOG_TOP_RULE.test(trimmed)) {
-      const fused = trimmed.replace(RULE_RUN_EDGE, "").trim();
-      if (fused) rows.unshift(fused);
-      capped = true;
-      break;
-    }
-    if (/^[❯›⏺●⎿]/.test(trimmed) || BOX_DRAWING_CHARS.test(trimmed)) return null;
-    rows.unshift(trimmed);
-  }
-  if (!capped && start - rows.length > 0) return null;
-  const paragraphs = rows.join("\n").split(/\n\s*\n/).map((p) => p.split("\n").join(" ").trim()).filter(Boolean);
-  if (paragraphs.length === 0) return null;
-  const [question, ...body] = paragraphs;
-  return { question, options, firstOptionIdx: start, unnumbered: true, ...(body.length ? { detail: body.join("\n\n") } : {}) };
-}
-
-// Claude Code's spend-limit interstitial — "What do you want to do?" over the
-// unnumbered "Adjust monthly spend limit" / "Wait for limit to reset" rows — is
-// TUI-only: unlike the one-line limit banners, it writes NO isApiErrorMessage
-// entry to the JSONL (verified 2026-08-14: a 1:40pm park left the transcript
-// untouched), so the pane scrape is the only place the park is visible. Shipping
-// the generic Continue/Cancel confirmation card for it is worse than nothing:
-// the card's "Continue" sends Enter, and Enter here CONFIRMS the highlighted
-// billing option (the near-miss documented on the 2026-07-13 paywall incident).
-// Instead the daemon emits the canonical limit banner text this function
-// returns — classifyApiErrorBanner reads it as kind "limit", which is the same
-// path a CLI-written banner takes: pending_api_error_kind="limit", the blocked
-// badge, the auto-switch check, and continue-on-reset all follow from it.
-export function spendLimitDialogBanner(paneContent: string): string | null {
-  const tail = paneContent.split("\n").slice(-20).join("\n");
-  if (!/Adjust monthly spend limit/i.test(tail) || !/Wait for limit to reset/i.test(tail)) return null;
-  // A live dialog carries its key-hint footer in the same tail; a scrollback
-  // echo of the dialog text (e.g. quoted in prose) doesn't.
-  if (!/enter to confirm/i.test(tail)) return null;
-  const resets = tail.match(/\b(Resets [^\n]+?)(?:\s{3,}|\s*$)/im)?.[1]?.trim();
-  return `You've hit your monthly spend limit · ${resets ?? "parked at the spend limit dialog"}`;
-}
-
-// The same park, wearing the other costume. The spend dialog above has
-// UNNUMBERED rows so parseInteractivePrompt reads it as a confirmation; the
-// usage-limit variant — "What do you want to do?" over "Stop and wait for
-// limit to reset" / "Switch to usage credits" / "Switch to Team plan" — is a
-// NUMBERED menu, so it slipped past the confirmation-only check above and got
-// minted as an ordinary poll card (uuid `interactive-prompt-…`). That card is
-// the same hazard the spend dialog was fixed for: its options are billing
-// actions, so "answering" it changes the plan.
-//
-// Recognized by the option rows via the shared isUsageLimitDialog, which the
-// web's decision queue uses too, so the daemon and the queue can never
-// disagree about what counts as a billing interstitial.
-export function usageLimitMenuBanner(
-  paneContent: string,
-  optionLabels: readonly string[]
-): string | null {
-  if (!isUsageLimitDialog(optionLabels)) return null;
-  const tail = paneContent.split("\n").slice(-20).join("\n");
-  const resets = tail.match(/\b(Resets [^\n]+?)(?:\s{3,}|\s*$)/im)?.[1]?.trim();
-  return `You've hit your usage limit · ${resets ?? "parked at the usage limit dialog"}`;
-}
-
-// Is the live pane one of the two limit dialogs above? Both are parks, not
-// questions: a message for the session dismisses the dialog (Escape, its own
-// "cancel") and is then typed at the composer. Answering it with an option
-// instead is the hazard: since Claude Code 2.1.289 option 2 reads "Wait here,
-// then continue automatically at <reset>", and a recovery "continue" read as
-// that option armed a day-long wait on 24 sessions and never delivered the
-// continue itself (2026-10-04).
-export function limitDialogOnPane(pane: string): boolean {
-  if (spendLimitDialogBanner(pane)) return true;
-  const prompt = parseInteractivePrompt(pane, true);
-  return !!prompt && usageLimitMenuBanner(pane, prompt.options.map((o) => o.label)) !== null;
-}
-
-// Claude Code renders each assistant message with a leading bullet ("⏺" on current
-// builds, "●" on older ones) and indents its continuation lines two spaces. A turn
-// that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
-// the question is pending the reasoning that motivates it lives ONLY in the rendered
-// pane. Pull that prose block back out so the web question card can show *why* it's
-// being asked — best-effort while pending, replaced byte-exact when the turn flushes.
-const ASSISTANT_BULLET = /^(?:⏺|●)\s+/;
-// Markers that bound this turn from above: a user prompt ("❯ …" / "> …"), the working
-// spinner ("✻ …" / "✶ …"), or a tool bullet ("⏺ Bash(…)") / its result gutter ("⎿ …")
-// / a collapsed-output summary. Crossing one means we've walked into a prior turn or a
-// tool call, not the prose that precedes the question.
-const PROSE_STOP_ABOVE = /^\s*(?:❯|>|✻|✶|✳)\s/;
-const TOOLISH_LINE = /^(?:⏺\s+\w+\(|⎿|\s*(?:Called|Running)\b.*\(ctrl\+o)/;
-
-// Extract the assistant prose immediately above an interactive prompt's menu. Returns
-// "" when there's no preceding prose (e.g. a bare slash menu or a tool call sits right
-// above the dialog). Anchored on parseInteractivePrompt's option index so numbered
-// lists *inside* the prose ("1. Task-tool subagents …") can't be mistaken for the menu.
-export function extractAssistantProseAbovePrompt(paneText: string): string {
-  const parsed = parseInteractivePrompt(paneText);
-  if (!parsed || parsed.isConfirmation || parsed.firstOptionIdx == null) return "";
-  const firstOptionIdx = parsed.firstOptionIdx;
-  const lines = paneText.split("\n");
-
-  // dialogTop: the topmost chrome row that caps the menu. Walk up from the options past
-  // the question/tab/blank rows to the first full-width rule or header chip (bounded to a
-  // short window so a far-away rule from a PRIOR turn — e.g. an "★ Insight ───" block —
-  // can't be mistaken for it)...
-  let chromeBottom = -1;
-  for (let i = firstOptionIdx - 1, floor = Math.max(0, firstOptionIdx - 20); i >= floor; i--) {
-    const t = lines[i].trim();
-    if (SEPARATOR_LINE.test(t) || HEADER_CHIP.test(t)) { chromeBottom = i; break; }
-  }
-  if (chromeBottom < 0) return "";
-  // ...then absorb any contiguous chrome/blank rows above it, so a separator sitting
-  // over a header chip (older menu format) becomes the true top instead of dangling as
-  // a stray "───" line at the end of the recovered prose.
-  let dialogTop = chromeBottom;
-  for (let i = chromeBottom - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (!(SEPARATOR_LINE.test(t) || HEADER_CHIP.test(t))) break; // blank or prose ends the run
-    dialogTop = i;
-  }
-
-  // proseStart: the nearest assistant bullet above dialogTop. Bail if we cross a turn
-  // boundary or a tool bullet first — then no buffered prose precedes this question.
-  let proseStart = -1;
-  for (let i = dialogTop - 1, floor = Math.max(0, dialogTop - 100); i >= floor; i--) {
-    const raw = lines[i];
-    if (!raw.trim()) continue;
-    if (ASSISTANT_BULLET.test(raw)) { proseStart = TOOLISH_LINE.test(raw) ? -1 : i; break; }
-    if (PROSE_STOP_ABOVE.test(raw) || TOOLISH_LINE.test(raw)) break;
-  }
-  if (proseStart < 0) return "";
-
-  // Collect [proseStart, dialogTop): strip the bullet off the first line and the 2-space
-  // gutter off the rest. Keep blank lines and inner "───"/list rows — they're part of the
-  // reasoning, and markdown reflow on the client smooths the TUI's hard wraps.
-  const out: string[] = [];
-  for (let i = proseStart; i < dialogTop; i++) {
-    const s = (i === proseStart ? lines[i].replace(ASSISTANT_BULLET, "") : lines[i].replace(/^ {1,2}/, ""));
-    out.push(s.replace(/\s+$/, ""));
-  }
-  while (out.length && !out[out.length - 1].trim()) out.pop();
-  return out.join("\n").trim().slice(0, 6000);
-}
+import { COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
+export { extractAssistantProseAbovePrompt, limitDialogOnPane, menuFooterBelowOptions, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner } from "./interactivePrompt.js";
 
 // A real AskUserQuestion's full tool_input (every question, header, option label AND
 // description, multiSelect) is handed to us by the PreToolUse/PermissionRequest hook —
@@ -15352,7 +14902,7 @@ export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: str
 function tmuxComposerRegion(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
-  return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
+  return pane.slice(glyphAt + 1).split(/^(?:[─═]{3,}\s*$|\s*[╰└╚][─═]{3,}.*$)/m, 1)[0];
 }
 
 // Both checks read the whole capture: the caller sizes it to the payload. A
@@ -15487,7 +15037,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /[─━]{20,}/.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
@@ -18132,7 +17682,7 @@ export function tmuxComposerText(pane: string): string | null {
   const lines = pane.slice(glyphAt + 1).split("\n");
   const body = [lines[0]];
   for (const line of lines.slice(1)) {
-    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    if (!line.trim() || /^[─═]{3,}\s*$/.test(line)) break;
     body.push(line);
   }
   return body.join("\n");
@@ -18466,6 +18016,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
 }
 
 async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
+  if (await restoreSuspendedAgent(target, tmuxExec)) log(`[RECOVER] Restored suspended agent and terminal input in ${target}`);
   // Does this client's TUI bracket a paste? Decides whether newlines in the
   // payload survive as composer newlines or get flattened to spaces — see
   // prepareInjectedContent. Applies to poll free-text answers too: those are
@@ -24766,7 +24317,8 @@ export async function resolveLiveTmuxTarget(
   const resumedTmux = sessionServerSockets()
     .map(socket => socket.slice(socketPrefix.length))
     .filter(name => name.includes("-resume-") && name.endsWith(`-${resumeShortId(sessionId)}`));
-  for (const candidate of new Set([...resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? ""), ...resumedTmux])) {
+  const candidates = [...new Set([...resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? ""), ...resumedTmux])];
+  for (const candidate of candidates) {
     try {
       await tmuxExec(["has-session", "-t", candidate], { timeout: 3000, killSignal: "SIGKILL" });
       if (candidate === derivedTmux && !await matchesTmuxConversation(candidate, conversationId!, tmuxExec)) continue;
@@ -24797,7 +24349,7 @@ export async function resolveLiveTmuxTarget(
     // Reading it as dead sent a live session (jx77xjt, 2026-10-16, load 500)
     // down the auto-resume path, which starts a second agent beside it.
     if (verdict === null) logDelivery(`ps gave no answer for pid=${proc.pid}; keeping it as session ${sessionId.slice(0, 8)}'s agent`);
-    let pane = await findTmuxPaneForTty(proc.tty);
+    let pane = await findTmuxPaneForTty(proc.tty, [...(cachedTmux ? [cachedTmux] : []), ...candidates]);
     // A process can OUTLIVE the pane that launched it while still holding that
     // pane's tty. Kill the launch wrapper and the agent is reparented to init,
     // but its controlling terminal is unchanged, so the tty→pane map still points
@@ -26461,9 +26013,9 @@ function imageExtForContentType(contentType: string | null): string {
 async function downloadImage(storageId: string, syncService: SyncService): Promise<string | null> {
   const dir = "/tmp/codecast/images";
   // A prior materialization may have used any extension — reuse it if present.
-  for (const ext of ["png", "webp", "jpg", "jpeg", "gif"]) {
+  for (const ext of ["jpg", "png", "webp", "jpeg", "gif", "heic"]) {
     const cached = `${dir}/${storageId}.${ext}`;
-    if (fs.existsSync(cached)) return cached;
+    if (fs.existsSync(cached)) return readableImage(cached, `${dir}/${storageId}`);
   }
 
   const imageUrl = await syncService.getImageUrl(storageId);
@@ -26476,9 +26028,30 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
 
   const resp = await fetch(imageUrl);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const destPath = `${dir}/${storageId}.${imageExtForContentType(resp.headers.get("content-type"))}`;
-  fs.writeFileSync(destPath, Buffer.from(await resp.arrayBuffer()));
-  return destPath;
+  const bytes = Buffer.from(await resp.arrayBuffer());
+  const ext = isHeicImage(bytes) ? "heic" : imageExtForContentType(resp.headers.get("content-type"));
+  const destPath = `${dir}/${storageId}.${ext}`;
+  fs.writeFileSync(destPath, bytes);
+  return readableImage(destPath, `${dir}/${storageId}`);
+}
+
+/** The file an agent can read for a downloaded image. A HEIC one (older phone
+ *  builds uploaded photos as they were, often labelled PNG) is replaced by a
+ *  JPEG beside it; without a converter the original path stands. */
+async function readableImage(file: string, base: string): Promise<string> {
+  if (file.endsWith(".jpg")) return file;
+  const head = Buffer.alloc(12);
+  try {
+    const fd = fs.openSync(file, "r");
+    try { fs.readSync(fd, head, 0, 12, 0); } finally { fs.closeSync(fd); }
+  } catch {
+    return file;
+  }
+  if (!isHeicImage(head)) return file;
+  const jpg = `${base}.jpg`;
+  if (!(await heicToJpeg(file, jpg))) return file;
+  fs.rmSync(file, { force: true });
+  return jpg;
 }
 
 // A delivery that overruns its 180s budget has, until now, left no trace of
@@ -29259,7 +28832,11 @@ async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promis
 //
 // With no process found, the age is the evidence: below the threshold nothing
 // has been established either way (`unverifiable`), past it this device's own
-// process table is the positive absence that `exited` requires.
+// process table is the positive absence that `exited` requires. A status
+// written before this machine booted needs no age: the boot ended its
+// process. Waiting out the threshold after a restart held every hand that
+// died with the machine for 30 minutes before the watchdog even looked
+// (ct-59998's Implement hand, 2026-10-16).
 //
 // `hasLiveAgentProcess` must come from a probe that COMPLETED — a probe that
 // threw answers nothing, and feeding its failure in here as `false` would let a
@@ -29272,8 +28849,11 @@ export function staleSessionLivenessVerdict(args: {
   hasLiveAgentProcess: boolean;
   idleStaleMs?: number;
   activeStaleMs?: number;
+  /** The status was written before this machine last booted. */
+  predatesBoot?: boolean;
 }): LivenessVerdict {
   if (args.hasLiveAgentProcess) return "live";
+  if (args.predatesBoot) return "exited";
   const idleStaleMs = args.idleStaleMs ?? 10 * 60 * 1000;
   const activeStaleMs = args.activeStaleMs ?? 30 * 60 * 1000;
   const threshold =
@@ -29289,6 +28869,7 @@ export function shouldMarkSessionCompleted(args: {
   hasLiveAgentProcess: boolean;
   idleStaleMs?: number;
   activeStaleMs?: number;
+  predatesBoot?: boolean;
 }): boolean {
   return authorizesTeardown(staleSessionLivenessVerdict(args));
 }
@@ -29308,6 +28889,7 @@ export function staleSessionVerdictFromProbe(
     ageMs: number;
     idleStaleMs?: number;
     activeStaleMs?: number;
+    predatesBoot?: boolean;
   },
   probeAgentProcess: () => Promise<unknown>,
 ): Promise<LivenessVerdict> {
@@ -29316,9 +28898,32 @@ export function staleSessionVerdictFromProbe(
   );
 }
 
+// When this machine last booted. A status file older than this outlived its process.
+const MACHINE_BOOTED_AT = Date.now() - os.uptime() * 1000;
+
 const REVIVE_LEDGER_FILE = process.env.NODE_ENV === "test"
   ? path.join(process.env.TMPDIR || "/tmp", "codecast-test-revives.json")
   : path.join(CONFIG_DIR, "revives.json");
+
+// The status files in the order a pass works them: station hands of workflow
+// runs first among those it may revive (midWorkRevive.stationHandsFirst), so
+// the per-pass cap never holds a run's hand behind interactive sessions.
+async function stationHandsFirstForRevive<T extends { sessionId: string; data: HookStatusData | null }>(files: T[], now: number): Promise<T[]> {
+  const stations = new Set<string>();
+  await runBounded(files.filter((f) => REVIVE_CANDIDATE_STATUSES.has(f.data?.status ?? "")), 8, async ({ sessionId }) => {
+    const transcript = findReapTranscript(sessionId, now);
+    if (!transcript) return;
+    const handle = await fs.promises.open(transcript.path, "r");
+    try {
+      const head = Buffer.alloc(65_536);
+      const { bytesRead } = await handle.read(head, 0, head.length, 0);
+      if (isStationHandOpening(head.subarray(0, bytesRead).toString("utf-8"))) stations.add(sessionId);
+    } finally {
+      await handle.close();
+    }
+  });
+  return stationHandsFirst(files, (f) => stations.has(f.sessionId));
+}
 
 // One revive attempt for a session the watchdog found dead mid-work: queue the
 // revive message (delivery resumes the session), or say why not. "deferred"
@@ -29344,6 +28949,8 @@ async function reviveMidWorkSession(
     lifecycle,
     interruptedByUser: !!tail && transcriptTailEndsInterrupted(tail),
     limitParked: !!tail && jsonlTailEndsWithLimitBanner(tail),
+    // The process is gone, so every task its transcript still holds open died with it.
+    wakeDiedWithProcess: status === "dormant" && !!transcript && openBackgroundTasks(transcript.path, sessionId).length > 0,
     priorRevives: prior,
     now,
   });
@@ -29439,21 +29046,22 @@ function startWatchdog(
       const IDLE_STALE_MS = 10 * 60 * 1000;
       const ACTIVE_STALE_MS = 30 * 60 * 1000;
       let revivesThisPass = 0;
-      for (const { sessionId, filePath, data } of await readAgentStatusFiles()) {
+      for (const { sessionId, filePath, data } of await stationHandsFirstForRevive(await readAgentStatusFiles(), now)) {
         try {
           if (!data?.ts) continue;
           const ageMs = now - data.ts * 1000;
           // Cheap time gate first, so we only pay for a process lookup on
           // sessions that are actually stale by time.
           const threshold = (data.status === "idle" || data.status === "stopped") ? IDLE_STALE_MS : ACTIVE_STALE_MS;
-          if (ageMs < threshold) continue;
+          const predatesBoot = data.ts * 1000 < MACHINE_BOOTED_AT;
+          if (ageMs < threshold && !predatesBoot) continue;
           const convId = deps.conversationCache[sessionId];
           if (!convId) { await fs.promises.unlink(filePath).catch(() => {}); continue; }
           // Stale by time — but is the agent actually gone, or just idling for
           // the user? Only reap when the process table ANSWERED and nothing was
           // there; a probe that threw is carried as `unverifiable` (see predicate).
           const verdict = await staleSessionVerdictFromProbe(
-            { status: data.status, ageMs, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS },
+            { status: data.status, ageMs, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS, predatesBoot },
             () => findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch((err) => {
               // Logged where the failure is still legible, then rethrown so the
               // verdict carries it as `unverifiable` rather than as an absence.
@@ -29474,7 +29082,7 @@ function startWatchdog(
           // A process that died mid-work is brought back rather than closed
           // (midWorkRevive.ts). Deferred revives keep the status file, so the
           // next pass finds them again.
-          if (REVIVABLE_STATUSES.has(data.status ?? "")) {
+          if (REVIVE_CANDIDATE_STATUSES.has(data.status ?? "")) {
             const outcome = await reviveMidWorkSession(deps.syncService, sessionId, convId, data.status, ageMs, now, revivesThisPass);
             if (outcome === "revived") revivesThisPass++;
             if (outcome !== "declined") {
@@ -30211,9 +29819,20 @@ async function main(): Promise<void> {
   //   2. Fresh tmuxes tagged with @codecast_conversation_id → restore startedSessionTmux.
   //   3. Untagged legacy tmuxes → register anyway so user sees them in the sessions UI.
   // Every recovered tmux is registered with managed_sessions so the UI lists it.
-  if (hasTmux()) {
+  //
+  // It runs beside the rest of boot, not before it. Under load the probes took
+  // minutes (98s for 8 sessions on 2026-10-17), and delivery subscribed only
+  // after them: every restart was a delivery blackout. Delivery does not need
+  // these caches to be right, only faster: a session it meets uncached is
+  // found by its tmux name and its process, which is how every daemon whose
+  // scan failed delivered that day. So a delivery may reach a session first,
+  // and an entry it wrote is fresher than the scan's: the scan never
+  // overwrites one.
+  if (hasTmux()) void (async () => {
     try {
-      const sessions = (await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 })).stdout.trim().split("\n").filter(Boolean);
+      const listing = await listEveryServer(["list-sessions", "-F", "#{session_name}"], (argv) => _execFileAsync("tmux", argv, { timeout: 5000, killSignal: "SIGKILL", env: TMUX_ENV }));
+      if (listing.unanswered.length) log(`[WARM-RESTART] ${listing.unanswered.length} tmux server(s) did not answer the scan, so their sessions are not recovered here: ${listing.unanswered.join(", ")}`);
+      const sessions = listing.stdout.trim().split("\n").filter(Boolean);
       const ccSessions = sessions.filter(isManagedTmuxName);
       let recovered = 0;
       // Bounded-parallel, not sequential: each session costs a process-tree
@@ -30247,7 +29866,7 @@ async function main(): Promise<void> {
           }
 
           if (sessionId) {
-            resumeSessionCache.set(sessionId, recoveredTmuxSession);
+            if (!resumeSessionCache.has(sessionId)) resumeSessionCache.set(sessionId, recoveredTmuxSession);
             const convId = tmuxConvId || conversationCache[sessionId];
             clearHibernationPark(sessionId, convId || undefined);
             if (syncServiceRef) {
@@ -30262,7 +29881,7 @@ async function main(): Promise<void> {
             const agentType = (tmuxAgentType as StartedSessionInfo["agentType"] | null) || "claude";
             const cachedSessionId = findCachedSessionIdForConversation(conversationCache, tmuxConvId);
             if (cachedSessionId) {
-              resumeSessionCache.set(cachedSessionId, recoveredTmuxSession);
+              if (!resumeSessionCache.has(cachedSessionId)) resumeSessionCache.set(cachedSessionId, recoveredTmuxSession);
               if (syncServiceRef) {
                 registerManagedStartedSession(tmuxConvId, cachedSessionId, recoveredTmuxSession);
                 if (agentType === "codex") {
@@ -30272,12 +29891,16 @@ async function main(): Promise<void> {
               recovered++;
               return;
             }
-            startedSessionTmux.set(tmuxConvId, {
-              tmuxSession: recoveredTmuxSession,
-              projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
-              startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession),
-              agentType,
-            });
+            // The map is persisted: an entry from before this boot is what the
+            // scan corrects, one started since is a delivery's and is fresher.
+            if (!((startedSessionTmux.get(tmuxConvId)?.startedAt ?? 0) >= DAEMON_BOOTED_AT)) {
+              startedSessionTmux.set(tmuxConvId, {
+                tmuxSession: recoveredTmuxSession,
+                projectPath: tmuxProjectPath || process.env.HOME || "/tmp",
+                startedAt: await tmuxSessionCreatedAtMs(recoveredTmuxSession),
+                agentType,
+              });
+            }
             if (syncServiceRef) {
               syncServiceRef.registerManagedSession(recoveredTmuxSession, process.pid, recoveredTmuxSession, tmuxConvId as any).catch(logConvexFailure);
               ensureManagedSessionHeartbeat(recoveredTmuxSession);
@@ -30311,7 +29934,7 @@ async function main(): Promise<void> {
     } catch (err) {
       log(`[WARM-RESTART] tmux scan failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
+  })();
 
   // Sync skills to user profile on startup (global + per-project). Every
   // read here is async: the sweep stats a path per segment of every project

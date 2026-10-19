@@ -215,6 +215,37 @@ export async function runRouted<T>(argvs: string[][], exec: (argv: string[]) => 
   return join(results);
 }
 
+/**
+ * A fleet listing that keeps whatever answered, for a caller that only adds
+ * what it finds. The daemon's warm restart re-registers the live sessions a
+ * listing names, and a session left out costs only that registration, so one
+ * server too busy to answer must not cost it every other server: under load
+ * a single slow server failed the whole scan after nine restarts on
+ * 2026-10-17, and each new daemon started with no live session recovered.
+ * `exec` runs one argv as given (it must not route again).
+ */
+export async function listEveryServer(
+  args: string[],
+  exec: (argv: string[]) => Promise<{ stdout: string }>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ stdout: string; unanswered: string[] }> {
+  const argvs = routeTmuxArgs(args, env, undefined);
+  const outputs: string[] = [];
+  const unanswered: string[] = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(FLEET_CONCURRENCY, argvs.length) }, async () => {
+    while (next < argvs.length) {
+      const argv = argvs[next++];
+      try {
+        outputs.push((await exec(argv)).stdout);
+      } catch {
+        unanswered.push(socketOf(argv) ?? "default");
+      }
+    }
+  }));
+  return { stdout: joinListings(outputs), unanswered };
+}
+
 /** The socket a `$TMUX` value names, by file name; "default" for the shared server or none. */
 export function socketOfTmuxEnv(tmux: string | undefined): string {
   return tmux ? path.basename(tmux.split(",")[0] ?? "") || "default" : "default";
