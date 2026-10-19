@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { isStickyEligible, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows } from "../lib/messageNavigator";
+import { stickyEligibleIds, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows } from "../lib/messageNavigator";
 import { isStickyWorthy } from "../components/conversation/classify";
 import type { Message, TimelineItem, UserMessageKind } from "../components/conversation/types";
 import type { UserMessage } from "../store/inboxStore";
@@ -21,13 +21,7 @@ export function useNavigatorIndex({ cachedUserMessages, messages, timeline, user
     [serverUserMessages, messages],
   );
 
-  const processedServerMsgIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of navigatorSources) {
-      if (isStickyEligible(m.content ?? "")) ids.add(m._id);
-    }
-    return ids;
-  }, [navigatorSources]);
+  const processedServerMsgIds = useMemo(() => stickyEligibleIds(navigatorSources), [navigatorSources]);
 
   const navigatorIdSet = useMemo(() => {
     const ids = new Set<string>();
@@ -76,5 +70,5 @@ export function useNavigatorIndex({ cachedUserMessages, messages, timeline, user
     return ids;
   }, [timelineMessageIds]);
 
-  return { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds };
+  return { serverUserMessages, stickyEligibleServerIds: processedServerMsgIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds };
 }

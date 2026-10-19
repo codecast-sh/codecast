@@ -8,9 +8,18 @@
 //
 // Inside a zone controls sit 2px apart (they are one set); between zones a
 // hairline or the zone gap, never both.
+//
+// The row never overlaps itself. The search zone holds at least its own
+// controls (the search icon and New), so when the row runs out of room it
+// overflows, and useSqueezeToFit sheds the lowest-value pieces until it fits
+// again (levels in globals.css, `[data-cc-topbar-row][data-squeeze]`).
 
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { TopbarDivider } from "./TopbarButton";
+import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
+
+/** How many shedding levels the top bar has; globals.css names each one. */
+const TOPBAR_SQUEEZE_LEVELS = 5;
 
 export function TopbarRow({
   nav,
@@ -27,11 +36,13 @@ export function TopbarRow({
   actions: ReactNode;
   panels: ReactNode;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  useSqueezeToFit(rowRef, TOPBAR_SQUEEZE_LEVELS);
   return (
-    <div data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
+    <div ref={rowRef} data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
       <div className="flex items-center gap-0.5 flex-shrink-0">{nav}</div>
       <div className="hidden sm:flex items-center gap-2 flex-shrink-0 min-w-0">{workspace}</div>
-      <div data-cc-topbar-search className="hidden sm:flex flex-1 items-center justify-center gap-2 min-w-0">{search}</div>
+      <div data-cc-topbar-search className="hidden sm:flex flex-1 items-center justify-center gap-2 min-w-min">{search}</div>
       <div data-cc-topbar-actions className="ml-auto flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
         {status}
         <div data-cc-topbar-group className="flex items-center gap-0.5">{actions}</div>

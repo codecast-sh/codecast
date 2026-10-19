@@ -862,6 +862,31 @@ describe("getConversationPendingMessage", () => {
     expect(result?.inflight[1]).toMatchObject({ client_id: "c_photo", content: "use this photo", status: "pending", created_at: 2 });
   });
 
+  // Two queued messages released at the end of a turn, a third still waiting:
+  // the viewer's tail has neither echo yet, so both delivered rows must reach it.
+  test("lists the recently delivered rows beside the ones in flight, newest first, within an hour of the newest", async () => {
+    const { getConversationPendingMessage } = await import("./pendingMessages");
+    const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
+    const hour = 60 * 60_000;
+    const ctx = {
+      auth,
+      db: makeFakeDb({
+        conversations: [{ _id: "conv_1", user_id: "u_owner" }],
+        pending_messages: [
+          { _id: "pm_ancient", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 1, delivered_at: 2, retry_count: 0, content: "long ago" },
+          { _id: "pm_a", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 2 * hour, delivered_at: 3 * hour, retry_count: 0, content: "first", client_id: "c_a" },
+          { _id: "pm_b", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 2 * hour + 1, delivered_at: 3 * hour + 1, retry_count: 0, content: "second", client_id: "c_b" },
+          { _id: "pm_wait", conversation_id: "conv_1", from_user_id: "u_owner", status: "pending", created_at: 3 * hour + 2, retry_count: 0, content: "third" },
+        ],
+      }),
+    } as any;
+    const result = await (getConversationPendingMessage as any)._handler(ctx, { conversation_id: "conv_1" });
+    expect(result?.message_id).toBe("pm_wait");
+    expect(result?.inflight.map((r: any) => r.message_id)).toEqual(["pm_wait"]);
+    expect(result?.delivered.map((r: any) => r.message_id)).toEqual(["pm_b", "pm_a"]);
+    expect(result?.delivered[1]).toMatchObject({ client_id: "c_a", delivered_at: 3 * hour, status: "delivered" });
+  });
+
   test("keeps showing the oldest queued message while delivery attempts flip its status", async () => {
     const { getConversationPendingMessage } = await import("./pendingMessages");
     const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
