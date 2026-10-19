@@ -36,7 +36,7 @@ export const TeamSwitcherButton = forwardRef<
       ) : (
         <User className="w-4 h-4 text-sol-base1" />
       )}
-      <span className="text-sol-text font-medium max-w-[120px] truncate">{label}</span>
+      <span data-cc-team-label className="text-sol-text font-medium max-w-[120px] truncate">{label}</span>
       <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
     </button>
   );

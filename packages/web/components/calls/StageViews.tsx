@@ -1,7 +1,7 @@
 import { useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Maximize2, MicOff, Minimize2, MonitorUp } from "lucide-react";
 import { callParticipantKind } from "@codecast/shared/contracts";
-import type { ParticipantTile } from "../../lib/calls/callMedia";
+import { isOwnScreen, type ParticipantTile } from "../../lib/calls/callMedia";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useNaturalSize, useScreenCursorSender } from "../../hooks/useScreenCursorSender";
 import { useShareZoom } from "../../hooks/useShareZoom";
@@ -105,7 +105,7 @@ export function AutoStage({
                   }`}
                 >
                   <span className="flex items-center gap-1">
-                    {`${firstName(t.name)}'s screen`}
+                    {t.isLocal ? "your screen" : `${firstName(t.name)}'s screen`}
                     <ParticipantTag identity={t.identity} />
                   </span>
                 </button>
@@ -337,19 +337,41 @@ export function GridStage({
 // One video surface. `contain` letterboxes (screen shares must not crop);
 // cameras cover. The name chip is fixed black-on-white so it reads over any
 // video in any theme (the mini window renders these in the app's theme).
-export function StageVideo({
-  tile,
-  speaking,
-  muted,
-  small,
-  contain,
-}: {
+type StageVideoProps = {
   tile: ParticipantTile;
   speaking: boolean;
   muted?: boolean;
   small?: boolean;
   contain?: boolean;
-}) {
+};
+
+export function StageVideo(props: StageVideoProps) {
+  return isOwnScreen(props.tile) ? <OwnScreenTile tile={props.tile} small={props.small} /> : <TrackVideo {...props} />;
+}
+
+// Your own share, as the others see it named, without its picture: the video
+// of a screen drawn back onto the screen it captures is the stage inside
+// itself, over and over. The tile is what says the share is live.
+function OwnScreenTile({ tile, small }: { tile: ParticipantTile; small?: boolean }) {
+  return (
+    <div
+      data-own-screen
+      className={`relative flex flex-col items-center justify-center gap-2 overflow-hidden border border-sol-green/25 bg-sol-green/[0.06] ${
+        small ? "aspect-video w-full rounded-lg max-sm:w-36 max-sm:shrink-0" : "h-full w-full rounded-xl"
+      }`}
+    >
+      <MonitorUp className={`text-sol-green ${small ? "h-5 w-5" : "h-9 w-9"}`} />
+      {!small && <span className="font-mono text-[13px] text-sol-text">your screen is live</span>}
+      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-px font-mono text-[11px] text-white/90 backdrop-blur">
+        <span className="h-1.5 w-1.5 rounded-full bg-sol-green" />
+        <PersonName identity={tile.identity} name={tile.name} you />
+        <span className="shrink-0">· screen</span>
+      </span>
+    </div>
+  );
+}
+
+function TrackVideo({ tile, speaking, muted, small, contain }: StageVideoProps) {
   const host = useStageHost();
   const ref = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);

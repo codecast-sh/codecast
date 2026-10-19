@@ -87,7 +87,7 @@ import { chatFrecency, selectChatRail, type ChatAttachment } from "../store/chat
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import "./chat/chat.css";
 import "./CommandPalette.css";
-import { PalettePickPreview } from "./PalettePickPreview";
+import { PalettePickHeader } from "./PalettePickPreview";
 import { groupClass, itemClass, paletteClass, paletteInputClass } from "./paletteStyles";
 import { NavIcon, PaletteSearchBar, PaletteSessionRow, PaletteSearchResultRow, PaletteTaskRow } from "./PaletteRows";
 import { formatDateSmart } from "@codecast/shared/time";
@@ -2538,8 +2538,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         className="w-[min(580px,calc(100vw-24px))] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 flex flex-col"
       >
         <div className="px-4 pt-3">
-          <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
-          <PalettePickPreview preview={pick.preview} />
+          <PalettePickHeader pick={pick} />
         </div>
         <button
           type="button"
@@ -2841,8 +2840,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       {drilled && <div className="flex items-center gap-2 px-4 pt-3 text-xs text-sol-text-dim"><button aria-label="Back to search" className="flex items-center gap-1 hover:text-sol-text" onClick={() => { setQuery(drilled.query); setDrilled(null); }}><KeyCap size="xs">←</KeyCap> Search</button><span aria-hidden>›</span><span className="truncate">{contextLabel}</span></div>}
       {pick && (
         <div className="px-4 pt-3 pb-0">
-          <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
-          <PalettePickPreview preview={pick.preview} />
+          <PalettePickHeader pick={pick} />
         </div>
       )}
       <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
