@@ -226,7 +226,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
 
 const styles = StyleSheet.create({
   pill: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     fontWeight: '600',
     paddingHorizontal: 5,

@@ -108,7 +108,7 @@ describe("planMigration", () => {
     const { rows, skipped } = planMigration({
       conversations: [
         { ...base, _id: "killed", owner_device_id: LAPTOP, inbox_killed_at: 1 },
-        { ...base, _id: "sub", owner_device_id: LAPTOP, is_subagent: true },
+        { ...base, _id: "sub", owner_device_id: LAPTOP, is_subagent: true, held: "a subagent moves with its parent" },
         { ...base, _id: "busy", owner_device_id: LAPTOP, migration: { batch_id: "mg-old" } },
         { ...base, _id: "placing", owner_device_id: BOX, cloud_placement: "pending" },
         { ...base, _id: "codex", owner_device_id: LAPTOP, agent_type: "codex" },

@@ -127,10 +127,10 @@ export function recursAfterFix(task: Doc<"tasks">, observedAt: number | undefine
   return isTerminalTaskStatus(task.status) && !!fixed && observedAt !== undefined && observedAt > fixed;
 }
 
-/** Every reason closeRetireReason writes starts so; lineTrial.fateOf and judgeRetire.refound read it. */
+/** Every reason closeRetireReason writes starts so; lib/problemEvidence.fateOf and judgeRetire.refound read it. */
 export const CLOSED_WITH = /^closed with (ct-\d+)(, from before its fix| for coaching|: dropped)?/;
 
-/** How a finding's reason opens when the moment it read came before its line was in force (judgeRetire.settleRun): history, read so by lineTrial.fateOf. */
+/** How a finding's reason opens when the moment it read came before its line was in force (judgeRetire.settleRun): history, read so by lib/problemEvidence.fateOf. */
 export const BEFORE_LINE = "from before its line was in force:";
 
 /**

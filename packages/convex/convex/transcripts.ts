@@ -98,6 +98,7 @@ const ROUTE_VALIDATOR = v.object({
   target: v.string(),
   mode: v.union(v.literal("live"), v.literal("after")),
   sent_seq: v.number(),
+  face: v.optional(v.boolean()),
 });
 
 type Route = {
@@ -106,6 +107,7 @@ type Route = {
   mode: "live" | "after";
   sent_seq: number;
   added_by?: Id<"users">;
+  face?: boolean;
   hold_until?: number;
   briefed_chunks?: number;
   context_at?: number;
@@ -184,7 +186,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
     .query("call_agent_feeds")
     .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
     .collect();
-  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users"> }>();
+  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users">; face: boolean }>();
   if (t.status === "live") {
     for (const r of t.routes) {
       if (r.kind !== "session") continue;
@@ -195,12 +197,20 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       // one makes the session a participant in the room.
       await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, addedBy, { live: true });
       if (r.mode !== "live") continue;
-      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy });
+      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false });
     }
   }
   for (const row of existing) {
-    if (wanted.has(String(row.conversation_id))) {
+    const keep = wanted.get(String(row.conversation_id));
+    if (keep) {
       wanted.delete(String(row.conversation_id));
+      // The avatar switched on or off mid-call: the agent stays, its face
+      // comes or goes.
+      if (keep.face !== (row.face !== false)) {
+        await ctx.db.patch(row._id, { face: keep.face ? undefined : false });
+        if (keep.face) await scheduleFaceJoin(ctx, { ...row, face: undefined });
+        else await scheduleFaceLeave(ctx, row);
+      }
       continue;
     }
     await ctx.db.delete(row._id);
@@ -215,7 +225,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       });
     }
   }
-  for (const { conversationId, addedBy } of wanted.values()) {
+  for (const { conversationId, addedBy, face } of wanted.values()) {
     const newest = await ctx.db
       .query("messages")
       .withIndex("by_conversation_role_timestamp", (q: any) =>
@@ -230,8 +240,9 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       team_id: t.team_id,
       added_by: addedBy,
       last_mirrored_message_id: newest?._id,
+      ...(face ? {} : { face: false }),
     });
-    await scheduleFaceJoin(ctx, feedId, t.team_id);
+    await scheduleFaceJoin(ctx, (await ctx.db.get(feedId))!);
     await postEvent(ctx, {
       room_key: t.room_key,
       team_id: t.team_id,
@@ -506,6 +517,7 @@ export const setRoutes = mutation({
         ...r,
         sent_seq: prior?.sent_seq ?? 0,
         added_by: prior?.added_by ?? userId,
+        ...(r.face === undefined && prior?.face === false ? { face: false } : {}),
         ...(prior?.hold_until ? { hold_until: prior.hold_until } : {}),
         ...(prior?.briefed_chunks !== undefined ? { briefed_chunks: prior.briefed_chunks } : {}),
         ...(prior?.context_at ? { context_at: prior.context_at } : {}),
@@ -525,6 +537,8 @@ export const addRoute = mutation({
     kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
     target: v.string(),
     mode: v.union(v.literal("live"), v.literal("after")),
+    // Session routes: false leaves the agent's video avatar out of the call.
+    face: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -549,7 +563,7 @@ export const addRoute = mutation({
     await ctx.db.patch(t._id, {
       routes: [
         ...t.routes,
-        { kind: args.kind, target: args.target, mode: args.mode, sent_seq: 0, added_by: userId },
+        { kind: args.kind, target: args.target, mode: args.mode, sent_seq: 0, added_by: userId, ...(args.face === false ? { face: false } : {}) },
       ],
     });
     await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
@@ -560,6 +574,28 @@ export const addRoute = mutation({
         reason: "route_added",
       });
     }
+  },
+});
+
+// Anyone in the huddle turns an agent's video avatar on or off; the agent
+// itself stays in the room either way (its replies keep landing in the chat).
+export const setAgentFace = mutation({
+  args: { transcript_id: v.id("transcripts"), target: v.string(), face: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !(await authorizeRoom(ctx, userId, t.room_key, { rec: true })).ok) {
+      throw new Error("Transcript not found");
+    }
+    if (t.status !== "live") throw new Error("Transcript has ended");
+    const i = t.routes.findIndex((r) => r.kind === "session" && r.target === args.target);
+    if (i < 0 || (t.routes[i].face !== false) === args.face) return;
+    const routes = [...t.routes];
+    const { face: _face, ...rest } = routes[i];
+    routes[i] = args.face ? rest : { ...rest, face: false };
+    await ctx.db.patch(t._id, { routes });
+    await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
   },
 });
 
