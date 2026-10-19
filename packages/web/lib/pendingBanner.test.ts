@@ -212,7 +212,7 @@ describe("serverPendingBubbles", () => {
   const row = (id: string, content: string, over: Record<string, unknown> = {}) =>
     ({ message_id: id, client_id: `c_${id}`, created_at: 10, status: "pending", content, ...over });
   const timeline = (over: Partial<Parameters<typeof serverPendingBubbles>[1]> = {}) => ({
-    seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 5, atLiveTail: true,
+    seen: new Set<string>(), seenContent: new Map<string, number>(), local: [], newestServerTs: 5, atLiveTail: true,
     normalize: (s: string) => s.trim(), ...over,
   });
 
@@ -229,8 +229,28 @@ describe("serverPendingBubbles", () => {
     const pending = { ...row("a", "one"), inflight: [row("a", "one"), row("b", "two"), row("c", "three")] };
     const bubbles = serverPendingBubbles(pending, timeline({ seen: new Set(["c_a"]), local: [{ _id: "c_b" }] }));
     expect(bubbles.map((b) => b._id)).toEqual(["serverpending_c"]);
-    expect(serverPendingBubbles(pending, timeline({ seenContent: new Set(["three"]) })).map((b) => b._id))
+    expect(serverPendingBubbles(pending, timeline({ seenContent: new Map([["three", 10]]) })).map((b) => b._id))
       .toEqual(["serverpending_a", "serverpending_b"]);
+  });
+
+  // Saying "continue" again must not hide behind the "continue" said an hour ago.
+  test("only an echo sent around or after the row hides it by its words", () => {
+    const pending = { ...row("a", "continue"), inflight: [row("a", "continue", { created_at: 10 * 60_000 })] };
+    expect(serverPendingBubbles(pending, timeline({ seenContent: new Map([["continue", 1_000]]) })).map((b) => b._id)).toEqual(["serverpending_a"]);
+    expect(serverPendingBubbles(pending, timeline({ seenContent: new Map([["continue", 10 * 60_000 + 3_000]]) }))).toEqual([]);
+  });
+
+  // Two sends delivered together, or one delivered while another waits: each
+  // stays until its own echo lands.
+  test("every delivered row whose echo is not on screen renders, beside rows in flight", () => {
+    const waiting = row("w", "third", { created_at: 30 });
+    const pending = {
+      ...waiting,
+      inflight: [waiting],
+      delivered: [row("d1", "first", { status: "delivered", created_at: 10, delivered_at: 20 }), row("d2", "second", { status: "delivered", created_at: 11, delivered_at: 21 })],
+    };
+    expect(serverPendingBubbles(pending, timeline()).map((b) => b._id)).toEqual(["serverpending_w", "serverpending_d1", "serverpending_d2"]);
+    expect(serverPendingBubbles(pending, timeline({ seen: new Set(["c_d1"]) })).map((b) => b._id)).toEqual(["serverpending_w", "serverpending_d2"]);
   });
 
   test("an older server without the list still renders its one row", () => {

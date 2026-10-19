@@ -65,6 +65,9 @@ describe("the codecast event catalog", () => {
       ],
       ["inbox_drift_persistent", { scope: "mine", platform: "web", heals_in_window: 3, window_ms: 300000 }],
       ["inbox_digest_version_skew", { scope: "mine", platform: "web", payload_v: 4, client_v: 5 }],
+      ["call_media_lost", { reason: "SIGNAL_CLOSE", rejoin: true }],
+      ["call_rejoined", { attempts: 2, ms: 3400 }],
+      ["call_rejoin_failed", { attempts: 9, ms: 90000 }],
     ];
     for (const [name, properties] of calls) {
       const result = validateEvent(CODECAST_EVENTS, name, properties);

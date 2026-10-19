@@ -14,7 +14,7 @@ describe("shared queue", () => {
     expect(heldQueueRowsOf(status).map((r) => r.message_id)).toEqual(["b"]);
     const released = { inflight: status.inflight.map((r) => (r.status === "held" ? { ...r, status: "pending" } : r)) };
     expect(heldQueueRowsOf(released)).toEqual([]);
-    const seen = { seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (c: string) => c };
+    const seen = { seen: new Set<string>(), seenContent: new Map<string, number>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (c: string) => c };
     expect(serverPendingBubbles(released as any, seen).map((b) => b.content)).toEqual(["plain send", "later"]);
   });
 
@@ -47,7 +47,7 @@ describe("shared queue", () => {
 
 
 describe("queued rows and the delivery tracker", () => {
-  const timeline = { seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (s: string) => s.trim() };
+  const timeline = { seen: new Set<string>(), seenContent: new Map<string, number>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (s: string) => s.trim() };
 
   test("a row held for the turn's end is not late and draws no bubble", () => {
     const held = { message_id: "q", created_at: 1, status: "held", queued: true, content: "after this" };
