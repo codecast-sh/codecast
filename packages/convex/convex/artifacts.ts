@@ -1883,7 +1883,7 @@ export const embedInfo = query({
         continue;
       }
       // Nothing beyond the artifact row: an embed subscribes per page, and every row read is a re-run on its writes.
-      rows.push({ slug, gated: false as const, title: artifact.title, version: artifact.version, kind: artifact.kind ?? "html" });
+      rows.push({ slug, gated: false as const, title: artifact.title, version: artifact.version, kind: artifact.kind ?? "html", thumb: !!artifact.thumb_storage_id });
     }
     return rows;
   },

@@ -19,12 +19,24 @@ describe("serverPendingBubbleVisible", () => {
     expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt }, live)).toBe(true);
   });
 
-  it("drops a delivered row once the transcript has passed the send time", () => {
-    expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt }, { newestServerTs: sentAt + 1, atLiveTail: true })).toBe(false);
+  it("drops a delivered row once the transcript has passed its delivery", () => {
+    expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt }, { newestServerTs: sentAt + 10 * 60_000, atLiveTail: true })).toBe(false);
   });
 
   it("never appends a delivered row to a window that is not at the live tail", () => {
     expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt }, { newestServerTs: 0, atLiveTail: false })).toBe(false);
+  });
+
+  // A message queued for the end of the turn is created mid-turn, and the
+  // agent keeps writing after it. When the turn ends and it goes in, the
+  // transcript on screen is already newer than its send time but does not
+  // hold its echo yet. It reached the session at delivery, so that is the
+  // point the transcript has to pass.
+  it("keeps a queued row delivered after the agent wrote past its send time", () => {
+    const deliveredAt = sentAt + 5 * 60_000;
+    const window = { newestServerTs: deliveredAt - 1_000, atLiveTail: true };
+    expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt, delivered_at: deliveredAt }, window)).toBe(true);
+    expect(serverPendingBubbleVisible({ status: "delivered", created_at: sentAt, delivered_at: deliveredAt }, { newestServerTs: deliveredAt + 10 * 60_000, atLiveTail: true })).toBe(false);
   });
 
   it("never shows a cancelled row", () => {

@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Tabs, usePathname } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
 import { InboxDrawer } from '@/components/inbox/InboxDrawer';
 import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { TAB_BAR_HEIGHT, useTheme } from '@/constants/Theme';
+import { TAB_BAR_HEIGHT, useActiveLook, useActiveScheme, useTheme } from '@/constants/Theme';
 import { Mono, Serif, pageTitleFace, useMonoFace } from '@/constants/fonts';
 import { useHostedMode, useModeWords } from '@codecast/web/lib/surfaces';
 import {
@@ -17,6 +17,10 @@ import {
 
 export default function TabLayout() {
   const Theme = useTheme();
+  // The palette is one object repainted in place, so the memo below keys on
+  // the appearance itself.
+  const scheme = useActiveScheme();
+  const look = useActiveLook();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);
   const hosted = useHostedMode();
@@ -26,8 +30,9 @@ export default function TabLayout() {
   const onInbox = usePathname() === '/inbox';
   const drawerOpen = useInboxDrawerOpen();
 
-  return (
-    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={<InboxDrawer />}>
+  // The tabs are memoized on what they read: the pathname changes on every
+  // tab press, and rebuilding the navigator then re-rendered every tab.
+  const tabs = useMemo(() => (
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Theme.text,
@@ -123,6 +128,13 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+  ), [Theme, scheme, look, labelFace, titleFace, hosted, words, unreadCount, chatMentions, anyLive, chatHidden]);
+
+  return (
+    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>
+      {tabs}
     </SlideOutDrawer>
   );
 }
+
+const drawerPanel = <InboxDrawer />;

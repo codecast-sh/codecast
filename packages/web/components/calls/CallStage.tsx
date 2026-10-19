@@ -597,9 +597,15 @@ export function CallStage({
       )}
 
       {/* The stage itself. */}
-      <div className="flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
+      <div className="relative flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
+        {call.reconnecting && (
+          <span className="pointer-events-none absolute left-1/2 top-4 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-sol-yellow/40 bg-sol-base03/90 px-2.5 py-1 font-mono text-[12px] text-sol-yellow">
+            <span className="h-1.5 w-1.5 rounded-full bg-sol-yellow" />
+            reconnecting
+          </span>
+        )}
         <StageHostProvider value={stageHost}>
-        <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col">
+        <div key={view} className={`flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col transition-opacity ${call.reconnecting ? "opacity-50" : ""}`}>
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
           ) : view === "speaker" ? (
