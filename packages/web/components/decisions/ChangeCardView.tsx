@@ -36,7 +36,7 @@ import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import "./changeCard.css";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { ChangeGuideWalkthrough } from "../tasks/ChangeGuideWalkthrough";
-import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+import { keyScopeHasFocus, keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The change card (docs/architecture/the-line-end-to-end.md LE10, LE11) drawn
 // natively, one component for every surface that shows a decision about a
@@ -935,7 +935,7 @@ export function answerKeyAllowed(e: KeyboardEvent, scope?: RefObject<HTMLElement
   const root = scope?.current ?? null;
   if (keysOwnedElsewhere(e.target, root)) return false;
   if (!scope) return true;
-  return !!root && root.contains(document.activeElement);
+  return keyScopeHasFocus(root);
 }
 
 /**
