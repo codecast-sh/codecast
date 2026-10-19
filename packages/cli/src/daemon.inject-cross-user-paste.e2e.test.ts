@@ -125,7 +125,6 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
     const marker = `xuser-${randomUUID().slice(0, 8)}`;
     const body = teammateNotes(marker);
     const chips = new Set<string>();
-    let watching = true;
     try {
       await waitFor(() => pane.capture().includes("shift+tab"), { timeoutMs: loadScaledMs(90_000, 3), label: "claude prompt" });
       if (mode === "busy") {
@@ -146,13 +145,11 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
         getPendingMessageStatus: async (id: string) => (await db.get(id))?.status ?? "missing",
       } as unknown as SyncService);
 
-      // Every chip the composer ever shows while the paste is in flight.
-      const watcher = (async () => {
-        while (watching) {
-          for (const m of pane.capture().matchAll(/\[Pasted text #(\d+)/g)) chips.add(m[1]!);
-          await sleep(150);
-        }
-      })();
+      // Every chip the composer ever draws while the paste is in flight. Read
+      // from the pane's output stream rather than sampled: on a busy classic
+      // pane the chip lives only between the paste and its Enter (~300ms on
+      // 2.1.302), shorter than a capture interval under load.
+      const drawn = pane.recordOutput();
 
       load.on(os.cpus().length);
       const delivery = { messageId: row._id, conversationId: "convAda" };
@@ -181,6 +178,7 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
       for (const [i, turn] of turns.entries()) if (await ackEcho(ctx, turn, `echo-${i}`) === row._id) acks++;
       const receipt = journal.get(row._id);
       const wrappers = (withMarker()[0]?.match(/<pasted_content/g) ?? []).length;
+      for (const m of drawn.read().matchAll(/\[Pasted text #(\d+)/g)) chips.add(m[1]!);
       console.log(`[xuser-paste] mode=${mode} renderer=${renderer} attempts=${errors.length + 1} errors=${JSON.stringify(errors)} chips=${JSON.stringify([...chips])} turns=${turns.length} withMarker=${withMarker().length} wrappers=${wrappers} acks=${acks} receipt=${receipt?.phase}`);
 
       expect(withMarker()).toHaveLength(1);
@@ -201,14 +199,13 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
       await injectViaTmux(pane.target, row.content, "claude", { delivery, journal, receiptSettleMs: 0 });
       expect(await claimPendingMessageForDaemon(ctx, row._id, "uAda" as any, "devAda")).toBeNull();
       await sleep(3_000);
-      watching = false;
-      await watcher;
+      drawn.stop();
+      for (const m of drawn.read().matchAll(/\[Pasted text #(\d+)/g)) chips.add(m[1]!);
       expect(withMarker()).toHaveLength(1);
       // A paste over 2KB always shows a chip; exactly one means it neither
       // split nor went unseen. Typed text never collapses into one.
       expect(chips.size).toBe(mode === "busy" ? 1 : 0);
     } finally {
-      watching = false;
       load.off();
       setSyncServiceForTests(null);
       journal.close();

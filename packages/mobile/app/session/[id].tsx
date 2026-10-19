@@ -10,7 +10,7 @@ import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from '
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -31,11 +31,11 @@ import { FreshRows } from '@/lib/freshRows';
 import { ROW_LAYOUT, arriveEntering, sendEntering } from '@/lib/transcriptMotion';
 import { messageRowKey, uniqueRowKeys } from '@codecast/web/lib/messageRowKey';
 import Reanimated, { Easing as ReEasing, FadeIn, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { parseUserMessage, chatWakePlace, chatWakeAction, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
-import { isCodexTurnAbortedMessage, isHiddenSystemNotice, isInterruptNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
+import { isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
@@ -79,9 +79,24 @@ import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
+import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
+import { AnsiText } from '@/components/CodeText';
+import { stripAnsiCodes } from '@codecast/web/lib/ansi';
+
+const ANSI_RE = /\x1b\[[0-9;]*m/;
+import { ApplyPatchDiff, CastDiff, EditDiff } from '@/components/CastDiff';
+import { getToolPatchInputs } from '@codecast/convex/convex/fileChanges/embeddedPatch';
+import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components/session/UserRows';
+import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
+import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import type { ParsedApiError } from '@codecast/web/components/conversation/types';
+import { compactionProgressMessage, type CompactionProgress } from '@codecast/web/lib/compactionProgress';
+import { CastCommandBlock } from '@/components/session/CastCommandBlock';
 import { openLink } from '@/lib/links';
+import { PERF_PROBE, probeRender } from '@/lib/perfProbe';
+import { useShallowStable } from '@/hooks/useShallowStable';
+import { RelativeTime } from '@/components/RelativeTime';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -101,6 +116,9 @@ import {
   isGrepTool,
   isGlobTool,
   isTodoTool,
+  isAgentTool,
+  isAskTool,
+  isPlanModeTool,
   toolPathFromInput,
   toolIcon,
   toolResultHint,
@@ -191,58 +209,16 @@ type UsageData = {
   contextSize: number;
 };
 
-const COMMAND_PATTERNS = [
-  /^<command-name>([^<]*)<\/command-name>/,
-  /^<command-message>([^<]*)<\/command-message>/,
-  /^<local-command-stdout>/,
-  /^<local-command-stderr>/,
-  /^Caveat:/,
-];
-
-function isCommandMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
-}
-
 // Synthetic truncation notice the CLI injects into imported sessions for the
 // model's context only — never user-facing.
 function isImportNotice(content?: string | null): boolean {
   return !!content && content.trimStart().startsWith('[Codecast import]');
 }
 
-function getCommandType(content: string): string {
-  const trimmed = content.trim();
-  if (/^<command-name>/.test(trimmed)) return 'cmd';
-  if (/^<command-message>/.test(trimmed)) return 'msg';
-  if (/^<local-command-stdout>/.test(trimmed)) return 'output';
-  if (/^<local-command-stderr>/.test(trimmed)) return 'error';
-  if (trimmed.startsWith('Caveat:')) return 'caveat';
-  return 'status';
-}
-
-function cleanCommandContent(content: string): string {
-  return content
-    .replace(/<command-name>[^<]*<\/command-name>\s*/g, '')
-    .replace(/<command-message>[^<]*<\/command-message>\s*/g, '')
-    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
-    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/^\s*Caveat:.*$/gm, '')
-    .trim();
-}
-
+// Web's tag strip, plus a `cast decide` answer's trailer tag (web draws it
+// as a footer; the phone shows the answer alone).
 function stripSystemTags(content: string): string {
-  return stripMentionContext(stripPastedContent(content))
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
-    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
-    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
-    .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
-    // A `cast decide` answer's trailer tag (web renders it as a footer).
-    .replace(DECISION_ANSWER_TAG_RE, '')
-    .replace(/^\s*Caveat:.*$/gm, '')
-    .replace(/\n{3,}/g, '\n\n');
+  return stripTagsShared(content).replace(DECISION_ANSWER_TAG_RE, '');
 }
 
 type ForkChild = {
@@ -296,112 +272,6 @@ type ConversationData = {
   short_id?: string;
   draft_message?: string | null;
 };
-
-// --- Markdown rendering ---
-// The red/green wrapped diff rows, shared between the inline preview and the
-// fullscreen view so both render the edit identically.
-function DiffRows({ oldLines, newLines }: { oldLines: string[]; newLines: string[] }) {
-  const Theme = useTheme();
-  return (
-    <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
-      {oldLines.map((line, i) => (
-        <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-        </RNView>
-      ))}
-      {newLines.map((line, i) => (
-        <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-        </RNView>
-      ))}
-    </RNView>
-  );
-}
-
-// Fullscreen, vertically scrollable view of a whole edit — same wrapped colored
-// rows as inline, so long diffs are readable instead of clipped in the transcript.
-function DiffFullscreen({ oldStr, newStr, filePath, visible, onClose }: { oldStr: string; newStr: string; filePath: string; visible: boolean; onClose: () => void }) {
-  const Theme = useTheme();
-  const [copied, setCopied] = useState(false);
-  if (!visible) return null;
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const handleCopy = () => {
-    Clipboard.setString(newStr);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <RNView style={styles.planFullscreen}>
-        <RNView style={styles.planFullscreenHeader}>
-          <FontAwesome name="pencil" size={14} color={Theme.orange} style={{ marginRight: 8 }} />
-          <RNText style={styles.planFullscreenTitle} numberOfLines={1}>{filePath.split('/').pop() || 'Edit'}</RNText>
-          <TouchableOpacity onPress={handleCopy} style={{ padding: 6 }} activeOpacity={0.7}>
-            {copied ? <FontAwesome name="check" size={16} color={Theme.green} /> : <FontAwesome name="clipboard" size={16} color={Theme.textMuted} />}
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onClose} style={{ padding: 6 }} activeOpacity={0.7}>
-            <FontAwesome name="close" size={18} color={Theme.textMuted} />
-          </TouchableOpacity>
-        </RNView>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, paddingBottom: 60 }}>
-          <DiffRows oldLines={oldLines} newLines={newLines} />
-        </ScrollView>
-      </RNView>
-    </Modal>
-  );
-}
-
-function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
-  const Theme = useTheme();
-  const [fullscreen, setFullscreen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-
-  const handleCopy = () => {
-    Clipboard.setString(newStr);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  const totalDiffLines = oldLines.length + newLines.length;
-  const isTall = totalDiffLines > 15;
-  const displayOldLines = isTall ? oldLines.slice(0, Math.min(oldLines.length, 6)) : oldLines;
-  const displayNewLines = isTall ? newLines.slice(0, Math.min(newLines.length, 6)) : newLines;
-
-  return (
-    <RNView style={{ marginVertical: 2 }}>
-      {/* Diff lines WRAP rather than scroll horizontally: on a phone a horizontal
-          ScrollView clipped long edits at the screen edge (unreadable without a
-          tiny scrub) and — nested in the message list with nestedScrollEnabled —
-          reserved a tall empty vertical band. Wrapping shows the whole edit, fills
-          the row background full width, and removes that phantom gap. */}
-      <DiffRows oldLines={displayOldLines} newLines={displayNewLines} />
-      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 2 }}>
-        {isTall && (
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-            <RNText style={{ fontSize: 9, color: Theme.textDim }}>{totalDiffLines} lines</RNText>
-          </TouchableOpacity>
-        )}
-        {!isTall && (
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
-        </TouchableOpacity>
-      </RNView>
-      <DiffFullscreen oldStr={oldStr} newStr={newStr} filePath={filePath} visible={fullscreen} onClose={() => setFullscreen(false)} />
-    </RNView>
-  );
-}
 
 // --- Message components ---
 
@@ -501,20 +371,6 @@ const PLAN_PREFIXES = [
   /^here(?:'s| is)\s+the\s+plan\s*:\s*/i,
   /^plan\s*:\s*\n/i,
 ];
-
-function extractPlanContent(text: string): string | null {
-  const trimmed = text.trim();
-  for (const prefix of PLAN_PREFIXES) {
-    const match = trimmed.match(prefix);
-    if (match) {
-      const rest = trimmed.slice(match[0].length).trim();
-      if (rest.length > 200 && hasRichMarkdown(rest)) {
-        return rest;
-      }
-    }
-  }
-  return null;
-}
 
 function isPlanFile(filePath: string, content: string): boolean {
   const fileName = filePath.split('/').pop()?.toLowerCase() || '';
@@ -1112,6 +968,11 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 }
 
 function GitDiffView({ diff }: { diff: string }) {
+  return <CastDiff raw={diff} fallback={<RawDiffLines diff={diff} />} />;
+}
+
+// A diff with no hunks to parse, shown line by line.
+function RawDiffLines({ diff }: { diff: string }) {
   const Theme = useTheme();
   const lines = diff.split('\n');
   return (
@@ -1132,7 +993,7 @@ function GitDiffView({ diff }: { diff: string }) {
             color = Theme.textSecondary;
           }
           return (
-            <RNText key={i} style={{ fontFamily: 'SpaceMono', fontSize: 11, color, backgroundColor: bg, lineHeight: 16 }}>
+            <RNText key={i} style={{ fontFamily: 'JetBrainsMono-Regular', fontSize: 11, color, backgroundColor: bg, lineHeight: 16 }}>
               {line}
             </RNText>
           );
@@ -1559,44 +1420,74 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function parseApiErrorContent(content?: string | null): { statusCode: number; message: string; errorType?: string; requestId?: string } | null {
-  if (!content) return null;
-  const trimmed = content.trim();
-  const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!match) return null;
-  const statusCode = Number(match[1]);
-  const payloadText = (match[2] || '').trim();
-  let message = '';
-  let errorType: string | undefined;
-  let requestId: string | undefined;
-  if (payloadText.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(payloadText);
-      if (typeof parsed.request_id === 'string') requestId = parsed.request_id;
-      const parsedError = parsed.error;
-      if (parsedError && typeof parsedError === 'object') {
-        if (typeof parsedError.type === 'string') errorType = parsedError.type;
-        if (typeof parsedError.message === 'string') message = parsedError.message;
-      }
-    } catch {}
-  }
-  if (!requestId) requestId = trimmed.match(/\b(req_[A-Za-z0-9]+)\b/)?.[1];
-  if (!message) message = statusCode === 500 ? 'Internal server error' : 'API request failed';
-  return { statusCode, message, errorType, requestId };
+// One card per way a turn can fail, the kinds web's parser
+// (classify.parseApiErrorContent) tells apart: what stopped it and the one
+// move that gets it going again.
+function apiErrorView(error: ParsedApiError): { heading: string; hint?: string; tone: 'red' | 'orange' | 'yellow' } {
+  if (error.isLimit) return { heading: 'Usage limit', hint: 'The session continues when the limit resets.', tone: 'yellow' };
+  if (error.isSafety) return { heading: 'Safety review required', hint: SAFETY_BLOCK_HINT, tone: 'orange' };
+  if (error.isAuth) return { heading: 'Sign in again', hint: 'Run /login in the session, then retry.', tone: 'orange' };
+  if (error.isThrottle) return { heading: 'Rate limited', hint: 'Codecast retries it in about a minute. Send continue to retry now.', tone: 'yellow' };
+  if (error.isContext) return { heading: 'Context full', tone: 'orange' };
+  if (error.isConnection) return { heading: 'Connection dropped', hint: 'Send continue and it picks up where it stopped.', tone: 'yellow' };
+  const server = (error.statusCode ?? 0) >= 500;
+  return { heading: 'API error', hint: error.isFatal ? 'The agent will not retry this. Send continue to retry.' : server ? 'Provider failure. Retry; quote the request id if it repeats.' : undefined, tone: server ? 'red' : 'orange' };
 }
 
-function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCode: number; message: string; errorType?: string; requestId?: string }) {
+function CompactionProgressRow({ progress }: { progress: CompactionProgress }) {
   const Theme = useTheme();
-  const isServer = statusCode >= 500;
-  const color = isServer ? Theme.red : Theme.orange;
   return (
-    <RNView style={[styles.apiErrorCard, { borderColor: color + '60' }]}>
-      <RNView style={styles.apiErrorHeader}>
-        <RNText style={[styles.apiErrorCode, { color }]}>{statusCode}</RNText>
-        {errorType && <RNText style={[styles.apiErrorType, { color: color + 'cc' }]}>{errorType}</RNText>}
+    <RNView style={{ paddingVertical: 4, gap: 6 }}>
+      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Feather name="layers" size={12} color={Theme.yellow} />
+        <RNText style={{ fontSize: 12, fontWeight: '600', color: Theme.yellow }}>Compacting conversation</RNText>
+        <RNView style={{ flex: 1 }} />
+        {progress.percent != null && <RNText style={{ fontSize: 11, color: Theme.textMuted }}>{progress.percent}%</RNText>}
+        {!!progress.elapsed && <RNText style={{ fontSize: 11, color: Theme.textDim }}>{progress.elapsed}</RNText>}
       </RNView>
-      <RNText style={styles.apiErrorMessage}>{message}</RNText>
-      {requestId && <RNText style={styles.apiErrorRequestId}>{requestId}</RNText>}
+      {progress.percent != null && (
+        <RNView style={{ height: 3, borderRadius: 2, backgroundColor: Theme.bgHighlight, overflow: 'hidden' }}>
+          <RNView style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%`, height: 3, backgroundColor: Theme.yellow }} />
+        </RNView>
+      )}
+      {!!progress.tip && <RNText style={{ fontSize: 11, color: Theme.textDim }}>{progress.tip}</RNText>}
+    </RNView>
+  );
+}
+
+function ApiErrorCard({ error, conversationId }: { error: ParsedApiError; conversationId?: string }) {
+  const Theme = useTheme();
+  const view = apiErrorView(error);
+  const color = Theme[view.tone];
+  // A full context window is cleared by a slash command typed into the
+  // session; the card sends it, the same way the composer would.
+  const send = (command: '/compact' | '/clear') => {
+    if (!conversationId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const store = useInboxStore.getState();
+    store.sendMessage(conversationId, command);
+    store.markBlockedReviveRequested([conversationId]);
+  };
+  return (
+    <RNView style={[styles.apiErrorCard, { borderColor: color + '60', backgroundColor: color + '0d' }]}>
+      <RNView style={styles.apiErrorHeader}>
+        <RNText style={[styles.apiErrorCode, { color }]}>{view.heading}</RNText>
+        {!!error.statusCode && !error.isLimit && !error.isConnection && <RNText style={[styles.apiErrorType, { color: color + 'cc' }]}>{error.statusCode}</RNText>}
+        {!!error.errorType && !error.isAuth && !error.isLimit && <RNText style={[styles.apiErrorType, { color: color + 'cc' }]}>{error.errorType}</RNText>}
+      </RNView>
+      <RNText style={styles.apiErrorMessage}>{error.message}</RNText>
+      {!!error.requestId && !error.isAuth && !error.isLimit && <RNText style={styles.apiErrorRequestId} selectable>{error.requestId}</RNText>}
+      {!!view.hint && <RNText style={[styles.apiErrorRequestId, { marginTop: 4 }]}>{view.hint}</RNText>}
+      {error.isContext && !!conversationId && (
+        <RNView style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          <TouchableOpacity onPress={() => send('/compact')} activeOpacity={0.7} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, backgroundColor: color }}>
+            <RNText style={{ fontSize: 12, fontWeight: '700', color: Theme.bg }}>Compact</RNText>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => send('/clear')} activeOpacity={0.7} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: color + '80' }}>
+            <RNText style={{ fontSize: 12, fontWeight: '700', color }}>Clear</RNText>
+          </TouchableOpacity>
+        </RNView>
+      )}
     </RNView>
   );
 }
@@ -1640,6 +1531,28 @@ function ContextBlockPill({ ctx }: { ctx: ParsedContextBlock }) {
       <FontAwesome name={config.icon} size={9} color={config.color} />
       <RNText style={[styles.contextPillText, { color: config.color }]} numberOfLines={1}>{ctx.title}</RNText>
       {ctx.id && <RNText style={styles.contextPillId}>{ctx.id}</RNText>}
+    </RNView>
+  );
+}
+
+// Every image a tool call produced (a screenshot, several viewports side by
+// side), each opening the gallery.
+function ToolImages({ toolId, images, globalImageMap, openGallery }: {
+  toolId: string;
+  images?: ImageData[];
+  globalImageMap?: Record<string, ImageData>;
+  openGallery?: (image: ImageData) => void;
+}) {
+  let list = images?.filter((img) => img.tool_use_id === toolId) ?? [];
+  if (!list.length && globalImageMap?.[toolId]) list = [globalImageMap[toolId]];
+  if (!list.length) return null;
+  return (
+    <RNView style={[styles.toolImagesSection, list.length > 1 && { flexDirection: 'row', gap: 6 }]}>
+      {list.map((img, i) => (
+        <RNView key={i} style={list.length > 1 ? { flex: 1, minWidth: 0 } : undefined}>
+          <ImageBlock image={img} onPress={() => openGallery?.(img)} />
+        </RNView>
+      ))}
     </RNView>
   );
 }
@@ -1714,7 +1627,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       : (processedResult || undefined);
 
   const isBash = isShellTool(toolCall.name);
-  const isEdit = isEditTool(toolCall.name) || toolCall.name === 'apply_patch';
+  // A Codex apply_patch, or a patch a shell command carried (`apply_patch <<'EOF'`).
+  const patchInputs = useMemo(() => getToolPatchInputs({ name: toolCall.name, input: toolCall.input }), [toolCall.name, toolCall.input]);
+  const isEdit = isEditTool(toolCall.name) || patchInputs.length > 0;
   const isWrite = isWriteTool(toolCall.name);
 
   // How the call came out, the shared hint the web's phone view reads too.
@@ -1723,9 +1638,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(toolCall.input); } catch {}
 
-  const toolImage = images?.find(img => img.tool_use_id === toolCall.id)
-    || globalImageMap?.[toolCall.id];
-  const hasToolImage = !!toolImage;
 
   const filePath = toolPathFromInput(parsedInput);
   const language = filePath ? getFileExtension(filePath) : undefined;
@@ -1761,7 +1673,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
-  const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [toolContentOverflowing, setToolContentOverflowing] = useState(false);
   const [toolContentFullExpanded, setToolContentFullExpanded] = useState(false);
 
@@ -1809,22 +1720,18 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
           <RNText style={[styles.toolCallResultHint, result?.is_error && { color: Theme.red }]}> {resultSummary}</RNText>
         ) : null}
       </RNText>
-      {hasToolImage && toolImage && (
-        <RNView style={styles.toolImagesSection}>
-          <ImageBlock image={toolImage} onPress={() => openGallery?.(toolImage)} />
-        </RNView>
-      )}
+      <ToolImages toolId={toolCall.id} images={images} globalImageMap={globalImageMap} openGallery={openGallery} />
       {expanded && (
         <RNView
-          onLayout={(e) => { if (!toolContentFullExpanded) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT - 1); }}
-          style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
+          onLayout={(e) => { if (!toolContentFullExpanded && !hasDiff) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT - 1); }}
+          style={[styles.toolCallContent, (hasDiff || patchInputs.length > 0) && styles.toolCallContentBare, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && !hasDiff && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
 
           {language && !isBash && !(isEdit && parsedInput.old_string && parsedInput.new_string) && (
             <RNView style={styles.languageLabelRow}>
               <RNText style={styles.languageLabel}>{language}</RNText>
               {isPlan && (
                 <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, backgroundColor: Theme.bgHighlight }}>
-                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: 'JetBrainsMono' }}>PLAN</RNText>
+                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: 'JetBrainsMono-Regular' }}>PLAN</RNText>
                 </RNView>
               )}
               {canToggleViewMode && (
@@ -1852,7 +1759,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             </RNView>
           ) : null}
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
-            <DiffBlock oldStr={String(parsedInput.old_string)} newStr={String(parsedInput.new_string)} filePath={filePath} />
+            <EditDiff oldStr={String(parsedInput.old_string)} newStr={String(parsedInput.new_string)} filePath={filePath} />
           ) : isWrite && parsedInput.content ? (
             isMarkdownFile && viewMode === 'rendered' ? (
               <>
@@ -1879,13 +1786,17 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             ) : (
               <CodeBlockWithCopy content={String(parsedInput.content)} language={language || 'plaintext'} />
             )
-          ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
-            <CodeBlockWithCopy content={String(parsedInput.input || parsedInput.patch)} language="diff" />
+          ) : patchInputs.length > 0 ? (
+            <ApplyPatchDiff inputs={patchInputs} fallback={<CodeBlockWithCopy content={patchInputs.join('\n')} language="diff" />} />
           ) : null}
           {result && resultDisplay && resultDisplay.trim() && !(isEdit && parsedInput.old_string && parsedInput.new_string && !result.is_error) ? (
             <RNView style={styles.toolResultBox}>
               {canToggleViewMode && viewMode === 'rendered' ? (
                 <MarkdownContent text={stripLineNumbers(resultDisplay)} baseStyle={styles.toolCallResult} isUser={false} />
+              ) : isBash && ANSI_RE.test(resultDisplay) ? (
+                // Colored command output (a test run, `ls --color`) keeps
+                // its terminal colors instead of showing escape codes.
+                <AnsiText text={resultDisplay} style={styles.ansiOutput} />
               ) : isCodeResult ? (
                 <CodeBlockWithCopy
                   content={resultDisplay}
@@ -1907,21 +1818,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && toolContentOverflowing && (
         <RNView style={{ flexDirection: 'row', gap: 12, paddingTop: 4, paddingHorizontal: 4 }}>
-          {/* Edits expand into a fullscreen scrollable modal instead of inline:
-              a long diff expanded in place makes the transcript unscannable. */}
-          <TouchableOpacity onPress={() => hasDiff ? setDiffFullscreen(true) : setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
-            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{!hasDiff && toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
+          <TouchableOpacity onPress={() => setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
+            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
           </TouchableOpacity>
         </RNView>
-      )}
-      {hasDiff && (
-        <DiffFullscreen
-          oldStr={String(parsedInput.old_string)}
-          newStr={String(parsedInput.new_string)}
-          filePath={filePath}
-          visible={diffFullscreen}
-          onClose={() => setDiffFullscreen(false)}
-        />
       )}
       {mdFullscreen && (
         <Modal visible={mdFullscreen} animationType="slide" onRequestClose={() => setMdFullscreen(false)}>
@@ -1991,6 +1891,52 @@ function SystemMessage({ message }: { message: Message }) {
     return <CompactionSummaryBlock content={message.content} />;
   }
 
+  // A cloud agent action's result (Create PR, Apply): codecast says it.
+  if (message.subtype === CLOUD_AGENT_ACTION_SUBTYPE && message.content) {
+    return (
+      <RNView style={[styles.systemRail, { borderLeftColor: Theme.violet + '66', backgroundColor: Theme.violet + '0d' }]}>
+        <Feather name="cloud" size={12} color={Theme.violet} style={{ marginTop: 3 }} />
+        <RNView style={{ flex: 1 }}>
+          <MarkdownContent text={message.content} baseStyle={styles.systemRailText} isUser={false} />
+        </RNView>
+        <RNText style={styles.commitTime}>{formatRelativeTime(message.timestamp)}</RNText>
+      </RNView>
+    );
+  }
+
+  if (message.subtype === 'scheduled_task_prompt' && message.content) {
+    return <ScheduledTaskBlock content={message.content} timestamp={message.timestamp} />;
+  }
+
+  // A /loop wakeup firing: the harness-side twin of a trigger run.
+  if (message.subtype === 'scheduled_task_fire' && message.content) {
+    return (
+      <RNView style={[styles.systemRail, { borderLeftColor: Theme.violet + '99', backgroundColor: Theme.violet + '0d', alignItems: 'center' }]}>
+        <Feather name="zap" size={12} color={Theme.violet} />
+        <RNText style={[styles.systemRailKicker, { color: Theme.violet }]}>Wakeup fired</RNText>
+        <RNText style={[styles.systemRailText, { flex: 1 }]} numberOfLines={1}>{stripAnsiCodes(message.content)}</RNText>
+        <RNText style={styles.commitTime}>{formatRelativeTime(message.timestamp)}</RNText>
+      </RNView>
+    );
+  }
+
+  if (message.subtype === 'away_summary' && message.content) {
+    return (
+      <RNView style={styles.awaySummary}>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          <Feather name="moon" size={11} color={Theme.textDim} />
+          <RNText style={styles.systemRailKicker}>While you were away</RNText>
+        </RNView>
+        <MarkdownContent text={stripAnsiCodes(message.content).trim()} baseStyle={styles.systemRailText} isUser={false} />
+      </RNView>
+    );
+  }
+
+  {
+    const compaction = compactionProgressMessage(message.content);
+    if (compaction) return <CompactionProgressRow progress={compaction} />;
+  }
+
   if (message.subtype === 'plan' && message.content) {
     return <PlanBlock content={message.content} timestamp={message.timestamp} />;
   }
@@ -2029,9 +1975,29 @@ function SystemMessage({ message }: { message: Message }) {
     );
   }
 
-  if (message.subtype === 'stop_hook_summary' || message.subtype === 'local_command') {
-    const label = message.subtype === 'stop_hook_summary' ? 'hook' : 'command';
-    const content = message.content?.slice(0, 200) || '';
+  // A workflow's lifecycle anchor posted as a system row.
+  if (message.subtype === 'workflow_event') {
+    const event = parseWorkflowEventContent(message.content);
+    return event ? <WorkflowEventBlock event={event} /> : null;
+  }
+
+  // A local slash command (/cost, /status): its name and what it printed.
+  if (message.subtype === 'local_command' && message.content) {
+    const c = message.content;
+    const cmdName = (c.match(/<command-name>([^<]*)<\/command-name>/)?.[1] || c.match(/<command-message>([^<]*)<\/command-message>/)?.[1])?.replace(/^\//, '');
+    const output = stripAnsiCodes((c.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1] || c.match(/<local-command-stderr>([\s\S]*?)<\/local-command-stderr>/)?.[1] || '').trim());
+    return (
+      <RNView style={[styles.systemRail, { borderLeftColor: Theme.cyan + '4d', alignItems: 'center' }]}>
+        <Feather name="chevron-right" size={12} color={Theme.cyan} />
+        {!!cmdName && <RNText style={[styles.systemRailText, { color: Theme.cyan, fontWeight: '600' }]}>/{cmdName}</RNText>}
+        <RNText style={[styles.systemRailText, { flex: 1 }]} numberOfLines={2}>{output || (cmdName ? '' : stripAnsiCodes(c.replace(/<[^>]+>/g, '')))}</RNText>
+      </RNView>
+    );
+  }
+
+  if (message.subtype === 'stop_hook_summary') {
+    const label = 'hook';
+    const content = stripAnsiCodes(message.content || '').slice(0, 200);
     if (!content) return null;
     return (
       <RNView style={styles.systemCommandBlock}>
@@ -2097,22 +2063,6 @@ function UsageBar({ usage }: { usage: UsageData }) {
 
 const CONTENT_TRUNCATE_LENGTH = 3000;
 const ASSISTANT_CONTENT_MAX_HEIGHT = 400;
-
-function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
-  const Theme = useTheme();
-  const cmdType = getCommandType(content);
-  const displayText = cleanCommandContent(content).slice(0, 100) || content.replace(/<[^>]+>/g, '').slice(0, 100);
-
-  return (
-    <RNView style={styles.commandStatusLine}>
-      <RNText style={styles.commandStatusTime}>{formatRelativeTime(timestamp)}</RNText>
-      <RNView style={styles.commandStatusBadge}>
-        <RNText style={styles.commandStatusBadgeText}>{cmdType}</RNText>
-      </RNView>
-      <RNText style={styles.commandStatusText} numberOfLines={1}>{displayText}</RNText>
-    </RNView>
-  );
-}
 
 // Mobile twin of web's InterruptStatusLine: a stop is a control event, so it
 // reads as a centered rule, not a bubble someone typed.
@@ -2279,6 +2229,40 @@ function ToolRunRow({ run, expanded, onToggle }: { run: ToolRun; expanded: boole
   );
 }
 
+// A transcript row's message as the list shows it, cached per message so a
+// screen render hands each bubble the same object and the memo below holds.
+const displayCache = new WeakMap<Message, Message>();
+function displayMessage(item: Message): Message {
+  if (!item.content) return item;
+  let out = displayCache.get(item);
+  if (!out) {
+    out = { ...item, content: stripPastedContent(item.content) };
+    displayCache.set(item, out);
+  }
+  return out;
+}
+const directCache = new WeakMap<Message, Message>();
+function directMessage(item: Message, body: string): Message {
+  let out = directCache.get(item);
+  if (!out || out.content !== body) {
+    out = { ...item, content: body };
+    directCache.set(item, out);
+  }
+  return out;
+}
+
+// The conversation screen re-renders on every store write it reads, and each
+// bubble parses and lays out its markdown, so a bubble renders again only when
+// one of its own props changes. toolRun is rebuilt inline per render and is
+// compared by what it carries.
+const MemoMessageBubble = memo(MessageBubble, (a, b) => {
+  for (const k in b) {
+    if (k !== 'toolRun' && (a as any)[k] !== (b as any)[k]) return false;
+  }
+  const x = a.toolRun, y = b.toolRun;
+  return x === y || (!!x && !!y && x.run === y.run && x.expanded === y.expanded && x.justOpened === y.justOpened);
+});
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, sender, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet, toolRun }: {
   message: Message;
   /** Someone other than the session's owner who sent this turn, named above the bubble. */
@@ -2301,6 +2285,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
+  if (PERF_PROBE) probeRender('MessageBubble');
   const Theme = useTheme();
   // Hosted voices are the family look's; developer mode draws a hosted
   // conversation as it draws any other.
@@ -2309,7 +2294,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
-      if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'file_edit' || tc.name === 'file_write' || tc.name === 'apply_patch') {
+      if (isEditTool(tc.name) || isWriteTool(tc.name) || tc.name === 'apply_patch') {
         initial.add(tc.id);
       }
     });
@@ -2381,19 +2366,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
   if (hasToolResults && !message.content) {
     return null;
-  }
-
-  if (isUser && message.content && isCommandMessage(message.content)) {
-    return <CommandStatusLine content={message.content} timestamp={message.timestamp} />;
-  }
-
-  // Same rule as web's 'interrupt' kind: a hosted conversation's stop is told
-  // by its own notice, so only an aborted turn earns a line there.
-  if (isUser && isCodexTurnAbortedMessage(message.content)) {
-    return <InterruptStatusLine label={hostedAgent ? 'You stopped this' : 'turn aborted'} tone={hostedAgent ? 'sky' : 'amber'} />;
-  }
-  if (isUser && isInterruptNotice(message.content)) {
-    return hostedAgent ? null : <InterruptStatusLine />;
   }
 
   const rawContentRaw = message.content || '';
@@ -2473,7 +2445,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
           <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
-            <RNText style={[styles.bubbleTime, styles.assistantTime]}>{formatRelativeTime(message.timestamp)}</RNText>
+            <RelativeTime timestamp={message.timestamp} style={[styles.bubbleTime, styles.assistantTime]} />
           </Pressable>
           {isBookmarked && (
             <FontAwesome name="bookmark" size={10} color="#d97706" style={{ marginLeft: 2 }} />
@@ -2509,9 +2481,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             if (typeof content !== 'string') {
               return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
             }
+            // Claude's compaction screen captured as a body: a progress row,
+            // not the spinner and block-bar glyphs.
+            const compaction = compactionProgressMessage(content);
+            if (compaction) return <CompactionProgressRow progress={compaction} />;
             const apiError = parseApiErrorContent(content);
             if (apiError) {
-              return <ApiErrorCard {...apiError} />;
+              return <ApiErrorCard error={apiError} conversationId={conversationId} />;
             }
             const wfEvent = parseWorkflowEventContent(content);
             if (wfEvent) {
@@ -2615,13 +2591,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               } catch {}
             }
             // Specialized rendering for specific tools
-            if (tc.name === 'Task') {
+            if (isAgentTool(tc.name)) {
               return <TaskToolBlock key={tc.id} tool={tc} result={result} childConversationId={message.message_uuid && childConversationMap ? childConversationMap[message.message_uuid] : undefined} />;
             }
-            if (tc.name === 'AskUserQuestion') {
+            if (isAskTool(tc.name)) {
               return <AskUserQuestionBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} />;
             }
-            if (tc.name === 'TodoWrite') {
+            if (isTodoTool(tc.name)) {
               return <TodoWriteBlock key={tc.id} tool={tc} />;
             }
             if (tc.name === 'TaskList' && result) {
@@ -2642,29 +2618,32 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             if (tc.name === 'Skill') {
               return <SkillCard key={tc.id} tool={tc} />;
             }
-            if (tc.name === 'EnterPlanMode') {
+            if (isPlanModeTool(tc.name)) {
               return (
                 <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
                   <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono-Regular', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
                   <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>enter</RNText>
-                  </RNView>
-                </RNView>
-              );
-            }
-            if (tc.name === 'ExitPlanMode') {
-              return (
-                <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
-                  <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
-                  <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>exit</RNText>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono-Regular' }}>{/^exit/i.test(tc.name) ? 'exit' : 'enter'}</RNText>
                   </RNView>
                 </RNView>
               );
             }
 
+            // A `cast …` command reads as what it did (a message sent, a
+            // decision asked, a task made), with the shell line one tap away.
+            const castCmd = !hostedAgent ? parseCastCommand(tc as any) : null;
+            if (castCmd) {
+              return (
+                <CastCommandBlock
+                  key={tc.id}
+                  cast={castCmd}
+                  output={result?.content || ''}
+                  isError={result?.is_error}
+                  image={<ToolImages toolId={tc.id} images={message.images} globalImageMap={globalImageMap} openGallery={openGallery} />}
+                />
+              );
+            }
             // The hosted assistant's steps read as plain lines, in the words
             // the web's receipt uses; the raw call stays a developer's view.
             if (hostedAgent && conversationId) {
@@ -3140,7 +3119,10 @@ export default function SessionDetailScreen() {
   }
   return (
     <ConversationSlideOut id={id}>
-      <SessionScreen id={id} message={message} focus={focus} />
+      {/* Keyed: a pick in the panel changes the id in place, and the
+          conversation's own state (scroll, sticky prompt, drafts) starts
+          over with it. */}
+      <SessionScreen key={id} id={id} message={message} focus={focus} />
     </ConversationSlideOut>
   );
 }
@@ -3152,6 +3134,7 @@ const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
  *  conversation. `boardHref` adds the header's way to the board of a scope; a
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
+  if (PERF_PROBE) probeRender('SessionScreen');
   const Theme = useTheme();
   // Hosted mode hides a local session's model and branch chips (lib/surfaces,
   // the registry the web's header reads), and speaks in its words.
@@ -3429,6 +3412,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [conversation?.messages, commits, pullRequests]);
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
+  const userRowKinds = useMemo(() => {
+    const timeline = allMessages.map((m) => ({ type: 'message' as const, data: m as any, timestamp: m.timestamp }));
+    const kinds = classifyUserRows(timeline, allMessages as any, { agentType: conversation?.agent_type, parentConversationId: conversation?.parent_conversation_id, hasMoreAbove });
+    return { kinds, expansions: pairCommandExpansions(timeline, kinds) };
+  }, [allMessages, conversation?.agent_type, conversation?.parent_conversation_id, hasMoreAbove]);
   // Each run of tool calls folds to one row the person opens by tapping; a
   // hosted conversation already tells its steps in its own words.
   const toolRuns = useMemo(() => hosted ? new Map<string, ToolRun>() : foldToolRuns(allMessages, isToolResultCarrier), [allMessages, hosted]);
@@ -3510,7 +3498,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return map;
   }, [conversation?.fork_children]);
 
-  const taskSubjectMap = useMemo(() => {
+  // Off the conversation doc, which is a new object on every heartbeat.
+  const childConversationMap = useShallowStable(conversation?.child_conversation_map);
+  const taskSubjectMap = useShallowStable(useMemo(() => {
     const createInputs: Record<string, string> = {};
     const idMap: Record<string, string> = {};
     for (const msg of allMessages) {
@@ -3534,9 +3524,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return idMap;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalToolResultMap = useMemo(() => {
+  const globalToolResultMap = useShallowStable(useMemo(() => {
     const map: Record<string, ToolResult> = {};
     for (const msg of allMessages) {
       if (msg.role === 'user' && msg.tool_results) {
@@ -3546,9 +3536,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
-  const globalImageMap = useMemo(() => {
+  const globalImageMap = useShallowStable(useMemo(() => {
     const map: Record<string, ImageData> = {};
     for (const msg of allMessages) {
       if (msg.images) {
@@ -3560,7 +3550,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
     return map;
-  }, [allMessages]);
+  }, [allMessages]));
 
   // Every image in the session, in transcript order — attachments, tool
   // screenshots AND trusted markdown images in prose (same scan as the web
@@ -3607,26 +3597,33 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // Read through a ref so every bubble keeps one handler as images arrive.
+  const allSessionImagesRef = useRef(allSessionImages);
+  allSessionImagesRef.current = allSessionImages;
   const openGallery = useCallback((image: ImageData) => {
     const key = imageKeyOf(image);
-    const idx = key ? allSessionImages.findIndex(img => imageKeyOf(img) === key) : -1;
+    const idx = key ? allSessionImagesRef.current.findIndex(img => imageKeyOf(img) === key) : -1;
     setGalleryIndex(Math.max(0, idx));
     setGalleryVisible(true);
-  }, [allSessionImages]);
+  }, []);
 
   // Local-first fork, the same store path as web: the stub opens already
   // holding the parent's messages up to the fork point, and the screen moves
   // to the real id when the server create lands (the stub URL self-heal below).
+  // Read through a ref: the conversation object changes on every heartbeat,
+  // and this handler is a prop of every (memoized) bubble.
+  const forkInputs = useRef({ conversation, hasMoreAbove });
+  forkInputs.current = { conversation, hasMoreAbove };
   const handleForkFromMessage = useCallback((messageUuid: string) => {
     if (!id) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const fork = beginLocalFork(conversation as any, messageUuid, {
+    const fork = beginLocalFork(forkInputs.current.conversation as any, messageUuid, {
       currentUser: useInboxStore.getState().currentUser,
-      hasMoreAbove,
+      hasMoreAbove: forkInputs.current.hasMoreAbove,
       onError: (message) => Alert.alert('Fork failed', message),
     });
     if (fork) router.push(`/session/${fork.forkSessionId}`);
-  }, [id, conversation, hasMoreAbove, router]);
+  }, [id, router]);
 
   const handleCopyAll = useCallback(async () => {
     if (!allMessages.length) return;
@@ -3883,10 +3880,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Indices (original order, LOADED window) of prompts the sticky banner may
   // show.
   const stickyIndices = useMemo(() => {
+    const eligible = stickyEligibleIds(allMessages);
     const indices: number[] = [];
     for (let i = 0; i < allMessages.length; i++) {
-      const m = allMessages[i];
-      if (m.role === 'user' && m.content && isStickyEligible(m.content)) indices.push(i);
+      if (eligible.has(allMessages[i]._id)) indices.push(i);
     }
     return indices;
   }, [allMessages]);
@@ -3897,6 +3894,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // does not hold can still be the one above the reader (pickStickyFallback).
   const navSourceRef = useRef(navSourceMessages);
   navSourceRef.current = navSourceMessages;
+  const navSourceEligible = useMemo(() => stickyEligibleIds(navSourceMessages ?? []), [navSourceMessages]);
+  const navSourceEligibleRef = useRef(navSourceEligible);
+  navSourceEligibleRef.current = navSourceEligible;
   const loadedIds = useMemo(() => new Set(allMessages.map(m => m._id)), [allMessages]);
   const loadedIdsRef = useRef(loadedIds);
   loadedIdsRef.current = loadedIds;
@@ -3934,7 +3934,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // Before the first viewability event, the window's first row stands in
     // for the top visible one.
     const topTs = msgs[Math.max(topVisibleIndex, 0)]?.timestamp ?? Infinity;
-    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity);
+    const above = pickStickyFallback(navSourceRef.current, loadedIdsRef.current, topTs, resolved ? msgs[resolved.index].timestamp : -Infinity, navSourceEligibleRef.current);
     const next = above ? { id: above.id, hidden: false } : resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
     const prev = stickyActiveRef.current;
     if (prev?.id === next?.id && prev?.hidden === next?.hidden) return;
@@ -4451,7 +4451,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   // One transcript row, as the list draws it; null for rows that never show.
   const renderRow = (item: Message, index: number): ReactNode => {
-    if (item.content) item = { ...item, content: stripPastedContent(item.content) };
+    item = displayMessage(item);
     // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
     const originalIndex = invertedMessages.length - 1 - index;
     let prevNonToolResult: Message | null = null;
@@ -4471,9 +4471,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (isToolResultCarrier(item)) {
       return null;
     }
-    // A poll answer is keys the app pressed on the person's behalf; the
-    // question card above already shows the pick (web's poll_response kind).
-    if (item.role === 'user' && isPollResponsePayload(item.content)) return null;
     if (retryFold?.hidden.has(item._id)) return null;
 
     // A hosted turn's stop notice: one calm block with its move, and
@@ -4509,126 +4506,91 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
     }
 
-    // Detect plan content in user messages (like web)
-    if (item.role === 'user' && item.content) {
-      const planContent = extractPlanContent(item.content);
-      if (planContent) {
-        return <PlanBlock content={planContent} timestamp={item.timestamp} />;
-      }
-      if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
-        return <CompactionSummaryBlock content={item.content} />;
-      }
-    }
-
-    // Machine-delivered turns (cast send, cast trigger) render as
-    // dedicated cards, not user bubbles of raw XML — mirrors web's
-    // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
-    if (item.role === 'user' && item.content) {
-      // A session moving between its role and the person
-      // (org-roles-run-work.md R1, revised): the same inline divider
-      // the web draws, in both threads: the role's face, the move,
-      // the whole line as markdown, the time.
-      if (isSessionEscalationMessage(item.content)) {
-        const esc = parseSessionEscalation(item.content);
-        if (esc) {
-          const inChild = (conversation?.short_id ?? String(id).slice(0, 7)) === esc.session.short_id;
-          const caption = sessionEscalationCaption(esc, { inChild });
-          return (
-            <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
-              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-                <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
-                <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
-                <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-              </RNView>
-              {!!esc.line && (
-                <RNView style={{ marginTop: 8, borderWidth: 1, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
-                  <MarkdownContent text={esc.line} baseStyle={styles.teammateContent} isUser={false} />
-                </RNView>
-              )}
-            </RNView>
-          );
-        }
-      }
-      if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
-        const parsed = parseAgentSwitchNotice(item.content);
-        const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
-        return (
-          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
-            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-            <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
-            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-          </RNView>
-        );
-      }
-      if (isMachineSwitchNotice(item.content) || item.subtype === 'machine_switch') {
-        const parsed = parseMachineSwitchNotice(item.content);
-        const label = parsed?.machineChanged === false
-          ? 'moved to another directory'
-          : parsed ? `now running on ${parsed.toLabel}` : 'machine switched';
-        return (
-          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
-            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-            <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
-            <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-          </RNView>
-        );
-      }
-      const sessionMsg = parseInboundSessionMessage(item.content);
-      if (sessionMsg) {
-        // A huddle digest rides the session-message rail: show the
-        // summary under the call's title, never the wire tag.
-        const huddle = parseHuddleSummaryTag(sessionMsg.body);
-        if (huddle) {
-          return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
-        }
-        return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
-      }
-      if (isSessionMessage(item.content)) {
-        const authored = parseAgentAuthoredMessage(item.content);
-        if (authored) {
-          const huddle = parseHuddleSummaryTag(authored.body);
-          if (huddle) {
-            return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
-          }
-          return <SessionMessageBlock from={authored.from} body={authored.body} timestamp={item.timestamp} />;
-        }
-      }
-      // A subagent reporting back to its parent arrives in the same
-      // shape under its own tag; same rail, chrome that says so.
-      if (isAgentMessage(item.content)) {
-        const report = parseAgentAuthoredMessage(item.content);
-        if (report) {
-          return <SessionMessageBlock variant="agent" from={report.from} body={report.body} timestamp={item.timestamp} />;
-        }
-      }
-      const unwrappedReport = parseUnwrappedSessionReport(item.content);
-      if (unwrappedReport) {
-        return <SessionMessageBlock from={unwrappedReport.from} name={unwrappedReport.name} body={unwrappedReport.body} timestamp={item.timestamp} />;
-      }
-      if (isScheduledTaskMessage(item.content)) {
-        return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
-      }
-      const chatWake = parseChatWakePrompt(item.content);
-      if (chatWake) {
-        return <ChatWakeBlock wake={chatWake} timestamp={item.timestamp} />;
-      }
-    }
-
-    if (item.role === 'user' && item.content && isTaskNotification(item.content)) {
-      const stripped = item.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
-      if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) {
-        return <TaskNotificationLine content={item.content} timestamp={item.timestamp} childConversationMap={conversation.child_conversation_map} />;
-      }
-    }
-
-    if (item.role === 'user' && item.content) {
-      const t = item.content.trim();
-      if (t.includes('Your task is to create a detailed summary') ||
-          t.startsWith('Read the output file to retrieve the result:') ||
-          t.startsWith('Full transcript available at:')) {
+    // What a user-role row is comes from web's classifier, read with its
+    // neighbours (lib/userRowKinds), so both apps sort rows the same way.
+    const kind = item.role === 'user' ? userRowKinds.kinds.get(item._id) : undefined;
+    if (kind && userRowKinds.expansions.consumed.has(item._id)) return null;
+    const divider = (label: string) => (
+      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
+        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+        <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
+        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+      </RNView>
+    );
+    switch (kind?.kind) {
+      case 'tool_results_only':
+      case 'compaction_prompt':
+      case 'noise':
+      case 'empty':
+      case 'poll_response':
+      case 'task_prompt':
         return null;
+      case 'session_handoff':
+        return <SessionHandoffCard handoff={kind.handoff} timestamp={item.timestamp} />;
+      case 'command': {
+        const { cmdName, args } = parseCommandInvocation(item.content || '');
+        const expansion = userRowKinds.expansions.byCommand.get(item._id);
+        return <FoldedPromptRow icon="command" label={cmdName ? `/${cmdName}` : 'command'} detail={args} body={expansion ? cleanCommandExpansion(expansion) : undefined} timestamp={item.timestamp} />;
       }
+      case 'skill_expansion':
+        return <FoldedPromptRow icon="book-open" label={kind.cmdName ? `/${kind.cmdName}` : 'Skill'} detail="prompt" body={cleanCommandExpansion(item.content || '')} timestamp={item.timestamp} />;
+      case 'role_brief': {
+        const brief = stripSystemTags(item.content || '').trim();
+        return <FoldedPromptRow icon="user-check" label="Role brief" detail={brief.split('\n')[0].replace(/\*\*/g, '')} body={brief} timestamp={item.timestamp} />;
+      }
+      case 'bash_input': {
+        const paired = userRowKinds.expansions.bashByInput.get(item._id);
+        return <BashModeBlock command={kind.command} stdout={paired?.stdout} stderr={paired?.stderr} timestamp={item.timestamp} />;
+      }
+      case 'bash_output':
+        return <BashModeBlock stdout={kind.stdout} stderr={kind.stderr} timestamp={item.timestamp} />;
+      case 'interrupt':
+        // A hosted conversation's stop is told by its own notice, so only
+        // an aborted turn earns a line there.
+        if (hosted) return kind.tone === 'amber' ? <InterruptStatusLine label="You stopped this" /> : null;
+        return <InterruptStatusLine label={kind.tone === 'amber' ? 'turn aborted' : undefined} tone={kind.tone} />;
+      case 'background_agent_stopped':
+        return <InterruptStatusLine label={kind.agentName ? `background agent "${kind.agentName}" stopped` : 'background agent stopped'} tone="amber" />;
+      case 'continuation':
+        return <InterruptStatusLine label="session continued" tone="sky" />;
+      case 'agent_switch':
+        return divider(`now using ${kind.toLabel}`);
+      case 'machine_move':
+        return divider(!kind.machineChanged ? 'moved to another directory' : kind.destination ? `now running on ${kind.destination}` : 'machine switched');
+      case 'session_escalation': {
+        const esc = kind.escalation;
+        const inChild = (conversation?.short_id ?? String(id).slice(0, 7)) === esc.session.short_id;
+        const caption = sessionEscalationCaption(esc, { inChild });
+        return (
+          <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
+            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+              <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
+              <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
+              <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+            </RNView>
+            {!!esc.line && (
+              <RNView style={{ marginTop: 8, borderWidth: 1, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
+                <MarkdownContent text={esc.line} baseStyle={styles.teammateContent} isUser={false} />
+              </RNView>
+            )}
+          </RNView>
+        );
+      }
+      case 'session_message':
+        return <SessionMessageBlock variant={kind.variant} from={kind.from} name={kind.name} body={kind.body} timestamp={item.timestamp} />;
+      case 'huddle_summary':
+        return <SessionMessageBlock from="unknown" name={`Huddle — ${kind.huddle.title}`} body={kind.huddle.body} timestamp={item.timestamp} />;
+      case 'chat_wake':
+        return <ChatWakeBlock wake={kind.wake} timestamp={item.timestamp} />;
+      case 'scheduled_task':
+        return <ScheduledTaskBlock content={item.content || ''} timestamp={item.timestamp} />;
+      case 'task_notification':
+        return <TaskNotificationLine content={item.content || ''} timestamp={item.timestamp} childConversationMap={conversation.child_conversation_map} />;
+      case 'compaction_summary':
+        return <CompactionSummaryBlock content={item.content || ''} />;
+      case 'plan':
+        return <PlanBlock content={kind.planContent} timestamp={item.timestamp} />;
     }
 
     const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
@@ -4661,8 +4623,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             />
           </Pressable>
         )}
-        <MessageBubble
-          message={directUser ? { ...item, content: directUser.body } : item}
+        <MemoMessageBubble
+          message={directUser ? directMessage(item, directUser.body) : item}
           agentType={conversation.agent_type}
           model={conversation.model}
           showHeader={showHeader}
@@ -4677,7 +4639,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           sender={directUser?.from}
           showToast={showToast}
           collapsed={collapsed}
-          childConversationMap={conversation.child_conversation_map}
+          childConversationMap={childConversationMap}
           bookmarkedSet={bookmarkedSet}
           toolRun={run ? { run, expanded: openRuns.has(run.head) || (!!highlightedMessageId && run.members.includes(highlightedMessageId)), justOpened: Date.now() - (runOpenedAt.current.get(run.head) ?? 0) < RUN_FADE_WINDOW_MS, onToggle: () => toggleRun(run.head) } : undefined}
       />
@@ -4916,7 +4878,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               </RNView>
             )}
             {diffShown && diffExpanded && (gitDiffData?.git_diff?.trim() || gitDiffData?.git_diff_staged?.trim()) && (
-              <RNView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]}>
+              <ScrollView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]} nestedScrollEnabled>
                 {gitDiffData.git_diff_staged && gitDiffData.git_diff_staged.trim().length > 0 && (
                   <RNView style={{ marginBottom: 8 }}>
                     <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
@@ -4935,7 +4897,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     </RNView>
                   </RNView>
                 )}
-              </RNView>
+              </ScrollView>
             )}
           </RNView>
         </Animated.View>
@@ -4969,9 +4931,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           data={invertedMessages}
           inverted={true}
           removeClippedSubviews={false}
-          windowSize={21}
-          initialNumToRender={50}
-          maxToRenderPerBatch={50}
+          // The first frame holds a screenful of bubbles (each one parses
+          // and lays out markdown); later batches keep five screens ready on
+          // either side, which a fling does not outrun.
+          windowSize={11}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
           updateCellsBatchingPeriod={50}
           onLayout={(e) => {
             flatListLayoutHeightRef.current = e.nativeEvent.layout.height;
@@ -5474,7 +5439,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     flex: 1,
   },
   compactBoundary: {
@@ -5531,7 +5496,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   systemMessageText: {
     fontSize: 12,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     flex: 1,
   },
   systemCommandBlock: {
@@ -5552,7 +5517,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 9,
     color: Theme.textMuted0,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   systemCommandText: {
     fontSize: 11,
@@ -5570,34 +5535,46 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
-  commandStatusLine: {
+  systemRail: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-    marginBottom: 2,
+    alignItems: 'flex-start',
+    gap: 8,
+    marginHorizontal: 14,
+    marginVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderLeftWidth: 2,
+    borderRadius: 4,
   },
-  commandStatusTime: {
+  systemRailKicker: {
     fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
     color: Theme.textDim,
   },
-  commandStatusBadge: {
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 3,
-    backgroundColor: Theme.bgHighlight + '80',
-  },
-  commandStatusBadgeText: {
-    fontSize: 10,
+  systemRailText: {
+    fontSize: 12,
+    lineHeight: 18,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
   },
-  commandStatusText: {
+  awaySummary: {
+    marginHorizontal: 14,
+    marginVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
+  },
+  ansiOutput: {
     fontSize: 11,
-    color: Theme.textDim,
-    fontFamily: 'SpaceMono',
-    flex: 1,
+    lineHeight: 16,
+    color: Theme.textSecondary,
+    padding: 6,
+    borderRadius: 6,
+    backgroundColor: Theme.bgAlt,
   },
   toolCallOnlyBubble: S.toolCallOnlyBubble,
   toolCallsCompact: S.toolCallsCompact,
@@ -5608,17 +5585,17 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   toolCallHeader: S.toolCallHeader,
   toolCallName: {
     ...S.toolCallName,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallSummary: {
     ...S.toolCallSummary,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallResultHint: {
     ...S.toolCallResultHint,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallContent: {
     marginTop: 4,
@@ -5628,6 +5605,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt,
     overflow: 'hidden',
+  },
+  // A diff card draws its own frame.
+  toolCallContentBare: {
+    padding: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
   },
   toolCallContentError: {
     borderColor: Theme.red + '40',
@@ -5645,7 +5628,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   bashPrompt: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textMuted,
   },
   toolResultBox: {
@@ -5657,7 +5640,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   languageLabel: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolInputSection: {
     paddingHorizontal: 8,
@@ -5666,12 +5649,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   toolCallInput: {
     fontSize: 12,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   toolCallResult: {
     fontSize: 12,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     lineHeight: 17,
     padding: 8,
   },
@@ -5752,7 +5735,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   wfRunId: {
     fontSize: 10,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
     marginTop: 1,
   },
@@ -5809,7 +5792,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   wfGateChoiceKey: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.magenta,
   },
   wfGateChoiceLabel: {
@@ -5833,7 +5816,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolName: {
     fontSize: 12,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolBadge: {
     paddingHorizontal: 6,
@@ -5844,12 +5827,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolBadgeText: {
     fontSize: 10,
     fontWeight: '500',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolMeta: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   specialToolDesc: {
     fontSize: 11,
@@ -5858,7 +5841,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolContent: {
     fontSize: 11,
     color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     lineHeight: 16,
     paddingHorizontal: 10,
     paddingBottom: 8,
@@ -5877,7 +5860,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   specialToolResultText: {
     fontSize: 11,
     color: Theme.textMuted,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // AskUserQuestion
   askQuestionBlock: {
@@ -5902,7 +5885,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     maxWidth: '100%',
   },
   auqPreviewText: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 10,
     lineHeight: 15,
     color: Theme.textSecondary,
@@ -6012,12 +5995,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.magenta,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoStats: {
     fontSize: 12,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoList: {
     gap: 2,
@@ -6032,7 +6015,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   todoId: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     marginTop: 2,
   },
   todoItemText: {
@@ -6051,7 +6034,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   todoOwnerText: {
     fontSize: 10,
     color: Theme.blue,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   todoBlockedText: {
     fontSize: 10,
@@ -6074,7 +6057,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.violet,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Task operations (TaskCreate/Update, SendMessage, TeamCreate)
   taskOpBlock: {
@@ -6086,12 +6069,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   taskOpName: {
     fontSize: 11,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpId: {
     fontSize: 10,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpBadge: {
     paddingHorizontal: 6,
@@ -6102,7 +6085,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   taskOpBadgeText: {
     fontSize: 9,
     fontWeight: '600',
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   taskOpText: {
     fontSize: 11,
@@ -6261,7 +6244,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   teammateBadgeText: {
     fontSize: 10,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontWeight: '500',
   },
   teammateSummary: {
@@ -6308,7 +6291,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   skillBlockName: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.violet,
     fontWeight: '600',
   },
@@ -6320,7 +6303,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   skillBlockPath: {
     fontSize: 9,
     color: Theme.textMuted0,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Fork UI
   forkChildrenRow: {
@@ -6353,7 +6336,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   modelBadge: {
     ...S.modelBadge,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // Commit cards
   commitCard: {
@@ -6365,7 +6348,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   commitSha: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.green,
     fontWeight: '600',
   },
@@ -6416,7 +6399,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   prNumber: {
     fontSize: 11,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.violet,
     fontWeight: '600',
   },
@@ -6552,7 +6535,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   treeNodePrefix: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   treeNodeTitle: {
     fontSize: 13,
@@ -6584,12 +6567,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 13,
     color: Theme.text,
     paddingVertical: 4,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   searchCount: {
     fontSize: 10,
     color: Theme.textDim,
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   // View mode toggle (Raw/Rendered)
   languageLabelRow: {
@@ -6666,15 +6649,10 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderTopColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt + '30',
     paddingVertical: 8,
-    maxHeight: 300,
+    maxHeight: 360,
   },
   gitDiffContent: {
     marginHorizontal: 12,
-    borderRadius: 6,
-    overflow: 'hidden',
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight + '30',
   },
   loadMoreIndicator: {
     alignItems: 'center',
@@ -6795,7 +6773,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   usageValue: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textMuted,
   },
   usageContextRow: {
@@ -6857,7 +6835,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   sessionMessageBadgeText: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.cyan,
   },
   sessionMessageTitle: {
@@ -6889,7 +6867,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   taskNotificationId: {
     fontSize: 10,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
   },
   taskNotificationTime: {
@@ -6911,12 +6889,12 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   apiErrorCode: {
     fontSize: 14,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontWeight: '700',
   },
   apiErrorType: {
     fontSize: 11,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
   },
   apiErrorMessage: {
     fontSize: 12,
@@ -6925,7 +6903,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   apiErrorRequestId: {
     fontSize: 9,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
     marginTop: 4,
   },
@@ -6952,7 +6930,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   contextPillId: {
     fontSize: 9,
-    fontFamily: 'JetBrainsMono',
+    fontFamily: 'JetBrainsMono-Regular',
     color: Theme.textDim,
   },
 }));

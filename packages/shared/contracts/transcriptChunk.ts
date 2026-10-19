@@ -100,10 +100,17 @@ export function isHuddlePass(text: string | null | undefined): boolean {
 // What every session fed a live huddle is told about where its words go: the
 // reply it ends its turn with is shown in the huddle's chat, beside the people
 // talking, and told to the room by its voice when it has one, unless it passes.
-// Said in one place so the briefing, the own-room header and the generic feed
-// header cannot drift apart on this.
+// Only that final reply is mirrored (callChat.turnReplies), so a page linked
+// mid-turn never reaches the room. Said in one place so the briefing, the
+// own-room header and the generic feed header cannot drift apart on this.
 export const HUDDLE_REPLY_NOTE =
-  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a voice in the call it tells the room; anything they type in that chat reaches you here. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
+  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a voice in the call it tells the room; anything they type in that chat reaches you here. Only that final reply reaches the room: words and links from earlier in the turn do not. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Anything with more in it than a few spoken sentences (numbers, a comparison, a diagram, a plan, a mockup, findings) belongs on a page: write a self-contained HTML file, \`cast publish\` it, and put the URL alone on its own line in your reply, where the chat shows the page inline. Publish a first version as soon as it says something useful and republish the same file as it improves; the URL stays the same. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
+
+// What a session in a huddle is there to do: contribute work, not only
+// answer when named. Passing on everything unnamed made agents dead weight in
+// the room, and long work done in the foreground left the room waiting.
+export const HUDDLE_WORK_NOTE =
+  "You are a working member of this meeting. When the talk turns to something you could check, measure, find or show (a number, how some code behaves, what a customer said, a draft of what they are describing), go and get it without waiting to be asked, and bring it back as a page. Work that takes more than a minute or two goes to a background worker (your own background subagents, or `cast spawn --subagent`), so you stay free for the room while it runs: say in one line what is coming, end the turn, and post the result when it comes back to you, which starts a turn of its own. Finish what you started unless the room changes direction.";
 
 // How an agent asks the room for time. The words keep flowing into the
 // transcript; they arrive together when the hold ends, and a line that names
@@ -121,12 +128,12 @@ export const HUDDLE_GUEST_NOTE =
 const LANE_NOTE: Record<ChunkLane, string> = {
   ask: "They named you, so answer here as you would answer anything typed to you. Wait for a complete thought before acting on it; speech arrives in pieces.",
   context:
-    "Nobody named you, so no reply is owed: this is what the room is saying, for context. Carry on with what you were doing unless something here is for you or you can add something the room needs. When there is nothing to add, pass.",
+    "Nobody named you, so no reply is owed: this is what the room is saying. Listen for something you can bring: a fact you can check, a number you can pull, a page that would move the discussion. If there is one, start on it. If you are mid-work on something, carry on. Pass only when there is nothing worth adding.",
 };
 
 const LANE_LINE: Record<ChunkLane, string> = {
   ask: "They named you: answer, briefly, once the thought is complete.",
-  context: `Nobody named you: end with ${HUDDLE_PASS} unless the room needs something from you.`,
+  context: `Nobody named you: bring the room something it can use if you can (a page for anything substantial), else end with ${HUDDLE_PASS}.`,
 };
 
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
@@ -142,6 +149,7 @@ export function ownRoomChunkHeader(opts: ChunkHeaderOpts): string {
     `People are talking in this session's huddle, where you are ${opts.name}. Below is what they said, transcribed as they said it — speaker attribution is exact, and more will arrive while the huddle runs.${opts.held ? ` ${HELD_NOTE}` : ""}`,
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
+    HUDDLE_WORK_NOTE,
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -155,6 +163,7 @@ export function liveFeedChunkHeader(opts: ChunkHeaderOpts): string {
     `Huddle transcript (live). You are in the room as ${opts.name}.${opts.held ? ` ${HELD_NOTE}` : ""}`,
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
+    HUDDLE_WORK_NOTE,
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -169,8 +178,9 @@ function shortHeader(lead: string, opts: ChunkHeaderOpts): string {
 export function huddleFeedBriefing(opts: { name: string; label: string }): string {
   return [
     `You're being attached to a live team huddle (${opts.label}). In the room you are ${opts.name}: people say that name when they want you, and it is the name beside your replies in the huddle's chat.`,
-    "Attributed transcript chunks arrive here whenever the room pauses. Follow along and reply with anything genuinely useful — answers to questions raised, relevant context, pushback. The room is mid-conversation.",
+    "Attributed transcript chunks arrive here whenever the room pauses. The room is mid-conversation: answer questions raised, bring context and pushback, and go and get what would help them decide.",
     HUDDLE_GUEST_NOTE,
+    HUDDLE_WORK_NOTE,
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -198,7 +208,7 @@ export function huddleVoiceInstructions(opts: { name: string; title: string; rec
   return [
     `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room. When you answer, you see every shared screen and every camera that is on, taken at that moment and labeled with whose they are; when nobody is sharing or on camera, you are told so, and that is the whole picture.`,
     `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
-    "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat.",
+    "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat, with any page it made shown there: point them to it rather than reading it out.",
     "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. You speak when someone talks to you; several people may be in the room, and most of what they say is to each other.",
     "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. You stay silent until someone says your name again.",
     opts.recent.length
