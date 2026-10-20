@@ -480,8 +480,14 @@ type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
  * new cause stay inside it. The signal carries its cause's project, else the
  * one it was filed into, and names the filed project when the two differ.
  */
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
-  const workspace = db.workspaceKey;
+/**
+ * Where a finding goes (LE4), in order: the problem its issue key or
+ * fingerprint names, the problem already holding its message, the problem the
+ * judge named, else a new problem when its source opens problems, else held.
+ * The one ladder a new finding (commitSignal) and a held one being placed
+ * again (placeHeldKey) both climb.
+ */
+async function attachDecision(ctx: any, workspace: string, signal: SignalInput, judged: Id<"tasks"> | null, projectId: Id<"projects"> | null, now: number, split: { from: string } | null = null): Promise<{ attach: SignalAttach; task: Doc<"tasks"> | null; issueKey: string | null }> {
   const observedAt = signal.observed_at ?? now;
   let attach: SignalAttach;
   let task: Doc<"tasks"> | null;
@@ -507,6 +513,38 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
       attach = (await opensCause(ctx, workspace, signal.source)) ? "new" : "held";
     }
   }
+  return { attach, task, issueKey };
+}
+
+/**
+ * A new problem opened by a finding, with every finding held under its key
+ * (or its issue's keys) joining it, so it carries their history. `extra`
+ * counts findings beyond the held ones (the new finding commitSignal is
+ * about to insert).
+ */
+async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, projectId: Id<"projects"> | null, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
+  const workspace = db.workspaceKey;
+  const observedAt = seed.observed_at ?? o.now;
+  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint);
+  const seen = [observedAt, ...held.map((r) => r.observed_at)];
+  const signalCount = held.length + o.extra;
+  const { taskId, taskShortId } = await openCause(ctx, db, seed, projectId, {
+    signal_count: signalCount,
+    first_seen: Math.min(...seen),
+    last_seen: Math.max(...seen),
+    fingerprints: [seed.fingerprint],
+    ...(o.issueKey ? { issue_key: o.issueKey } : {}),
+    ...(o.split ? { split_from: o.split.from } : {}),
+  }, o.newCause);
+  // The signals held under this key before anything converted it join the
+  // cause it opened, so the cause carries their history.
+  for (const row of held) await ctx.db.patch(row._id, { task_id: taskId, attach: "fingerprint" as SignalAttach });
+  return { taskId, taskShortId, signalCount };
+}
+
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
+  const observedAt = signal.observed_at ?? now;
+  const { attach, task, issueKey } = await attachDecision(ctx, db.workspaceKey, signal, judged, projectId, now, split);
 
   let reopened = false;
   let taskId: Id<"tasks"> | undefined;
@@ -542,20 +580,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
   } else if (attach === "held") {
     signalCount = 0;
   } else {
-    const held = issueKey ? await heldUnderIssue(ctx, workspace, [signal.fingerprint, issueKey]) : await heldSignals(ctx, workspace, signal.fingerprint);
-    const heldFirst = Math.min(observedAt, ...held.map((r) => r.observed_at));
-    signalCount = held.length + 1;
-    ({ taskId, taskShortId } = await openCause(ctx, db, signal, projectId, {
-      signal_count: signalCount,
-      first_seen: heldFirst,
-      last_seen: observedAt,
-      fingerprints: [signal.fingerprint],
-      ...(issueKey ? { issue_key: issueKey } : {}),
-      ...(split ? { split_from: split.from } : {}),
-    }, newCause));
-    // The signals held under this key before anything converted it join the
-    // cause it opened, so the cause carries their history.
-    for (const row of held) await ctx.db.patch(row._id, { task_id: taskId, attach: "fingerprint" as SignalAttach });
+    ({ taskId, taskShortId, signalCount } = await openCauseWithHeld(ctx, db, signal, projectId, { now, issueKey, split, newCause, extra: 1 }));
   }
 
   const shortId = await nextShortId(ctx.db, "sg");

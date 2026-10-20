@@ -101,6 +101,8 @@ export type Pile = {
 export const CARD = { w: 440, h: 340, gap: 16 } as const;
 export const PILE = { pad: 16, head: 52, deckW: 472, deckH: 200, cols: 10 } as const;
 export const PERSON = { w: 320, h: 96 } as const;
+/** The map's quiet border: card edges, control frames, rules. */
+export const HAIRLINE = "color-mix(in srgb, var(--sol-border) 40%, transparent)";
 const LEVEL_GAP = 160;
 const SIBLING_GAP = 96;
 const SHELF_GAP = 140;

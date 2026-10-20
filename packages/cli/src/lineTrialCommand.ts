@@ -332,13 +332,13 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
 
   trial
     .command("sweep [tasks...]")
-    .description("End the runs still waiting at a gate on a closed problem (merged away or dropped), and release the worktrees of closed problems' ended runs on this machine (each branch stays; uncommitted work is committed onto it first). Naming problems releases only theirs")
+    .description("End the runs still waiting at a gate on a closed problem (merged away or dropped), close the cards still waiting on closed problems and withdraw their questions, and release the worktrees of closed problems' ended runs on this machine (each branch stays; uncommitted work is committed onto it first). Naming problems closes and releases only theirs")
     .option("--project <ref>", "The trial project")
     .option("--dry", "Name what it would end and release")
     .option("--json", "Machine-readable output")
     .action(async (only: string[], opts: { project?: string; dry?: boolean; json?: boolean }) => {
-      const r: { project: string; ended: string[]; closed: Array<{ task: string; status: string; run_id: string; run_status: string; workflow_name: string; project_path: string | null; runner_device: string | null }> } =
-        await post("/cli/line/trial/sweep", { project: projectOf(opts), ...(opts.dry ? { dry: true } : {}) });
+      const r: { project: string; ended: string[]; cards_closed?: string[]; closed: Array<{ task: string; status: string; run_id: string; run_status: string; workflow_name: string; project_path: string | null; runner_device: string | null }> } =
+        await post("/cli/line/trial/sweep", { project: projectOf(opts), ...(opts.dry ? { dry: true } : {}), ...(only.length ? { only } : {}) });
       const [{ liveRunnerPid }, { releaseRunWorktree, runHandsVia }, { deviceId }] = await Promise.all([import("./workflow/runResume.js"), import("./lineTrialBranch.js"), import("./remote/device.js")]);
       const released: Array<{ task: string; slug: string; committed: boolean }> = [];
       for (const c of r.closed) {
@@ -355,9 +355,11 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
           .catch((e) => { console.error(`${c.task}: ${e.message}`); return null; });
         if (done) released.push({ task: c.task, ...done });
       }
-      if (jsonOf(opts)) return console.log(JSON.stringify({ project: r.project, ended: r.ended, released }, null, 2));
+      const cards = r.cards_closed ?? [];
+      if (jsonOf(opts)) return console.log(JSON.stringify({ project: r.project, ended: r.ended, cards_closed: cards, released }, null, 2));
       const verb = opts.dry ? "would end" : "ended";
       console.log(r.ended.length ? `${verb} ${r.ended.length} run${r.ended.length === 1 ? "" : "s"} waiting on a closed problem: ${r.ended.join(", ")}` : "No run waits on a closed problem.");
+      if (cards.length) console.log(`${opts.dry ? "would close" : "closed"} ${cards.length} card${cards.length === 1 ? "" : "s"} still waiting on a closed problem: ${cards.join(", ")}`);
       console.log(released.length ? `${opts.dry ? "would release" : "released"} ${released.length} worktree${released.length === 1 ? "" : "s"}: ${released.map((x) => x.slug).join(", ")}` : "No closed problem's worktree is checked out here.");
     });
 

@@ -4,5 +4,7 @@
 // like lib/calls/callManager that touch DOMException at eval time.
 import "./lib/polyfills";
 import { bootMark } from "./lib/bootProfile";
+import { startBootFonts } from "./lib/bootFonts";
 bootMark("after-polyfills");
+startBootFonts();
 require("expo-router/entry");
