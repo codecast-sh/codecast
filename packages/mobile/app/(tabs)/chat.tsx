@@ -10,7 +10,7 @@ import { teamFeatureEnabled } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatHomeList } from '@/components/chat/ChannelList';
-import { useLiveRooms } from '@/components/calls/LiveRooms';
+import { useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
 
@@ -38,12 +38,9 @@ export default function ChatScreen() {
   const switchTeam = useSwitchActiveTeam();
   const teamName = activeTeam?.name || 'Team';
 
-  // Chat and calls are per-team opt-ins (default off). callConfig lists the
-  // caller's teams that have calls, and is false outright when the deployment
-  // has no LiveKit.
+  // Chat and calls are per-team opt-ins (default off).
   const chatOn = teamFeatureEnabled(activeTeam as any, 'chat');
-  const callConfig = useInboxStore((s) => s.callConfig) as { enabled: boolean; teams?: string[] } | null;
-  const callsOn = callConfig?.enabled === true && !!activeTeamId && (callConfig.teams ?? []).includes(String(activeTeamId));
+  const callsOn = useCallsOn();
 
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const members = useMemo(() => (teamMembers ?? []).filter(Boolean), [teamMembers]);

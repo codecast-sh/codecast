@@ -2247,7 +2247,7 @@ export const singleInputs = internalQuery({
     const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).take(2);
     if (rows.length !== 1) return null;
     const signal = heldAsSignal(rows[0]);
-    const candidates = (await nearestCauses(ctx, task.workspace, signal, task.project_id ?? null)).filter((c) => String(c.task_id) !== String(task._id));
+    const candidates = (await nearestCauses(ctx, rows[0].workspace, signal, task.project_id ?? null)).filter((c) => String(c.task_id) !== String(task._id));
     return { signal, candidates, user_id: rows[0].user_id };
   },
 });
