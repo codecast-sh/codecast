@@ -5,13 +5,22 @@
 //
 //   error       a page error or console error, keyed by its normalized first
 //               line. Not by page: an error thrown by a layout or a provider
-//               shows on every page under it, and is one problem.
+//               shows on every page under it, and is one problem. One failure
+//               is often written by several sites at once (an SDK, then the
+//               provider wrapping it): errors within ECHO_MS of each other are
+//               one failure, keyed by the line among them that sorts first, so
+//               the key does not depend on which site wrote first. An error
+//               that names a request which just failed is that request's.
 //   request     a request to the product's own site that failed, keyed by
 //               method, endpoint (ids folded) and status: any 4xx or 5xx, or
 //               a write (not GET or HEAD) that got no answer. A GET with no
 //               answer is left out (a navigation, an unmount or a long poll
 //               cancels those all the time), and so is Cloudflare's own
-//               /cdn-cgi/ traffic.
+//               /cdn-cgi/ traffic. A gateway status (502, 503, 504, 520 to
+//               524) says the service behind the endpoint did not answer, so
+//               it is keyed by that service, not the endpoint: one outage is
+//               one issue however many of its endpoints a page called. A 500
+//               is the endpoint's own handler failing and keeps its endpoint.
 //   rage_click  RAGE_CLICK_COUNT clicks inside RAGE_CLICK_MS on one button
 //               or link, keyed by page and target. Text, fields, radios and
 //               checkboxes are clicked repeatedly on purpose (selecting a
@@ -48,6 +57,14 @@ export interface ReplayIssue {
 export const RAGE_CLICK_MS = 1000;
 export const RAGE_CLICK_COUNT = 3;
 const PRESSABLE_ROLES = new Set(["button", "link", "menuitem", "tab"]);
+/**
+ * Errors this close together are one failure written by several sites. Echoes
+ * on Union's recordings land within 56 ms of each other; distinct failures in
+ * one recording, seconds apart (2026-10-20, 717 recordings).
+ */
+export const ECHO_MS = 100;
+/** Statuses that say the service behind an endpoint did not answer: an outage, not the endpoint's bug. */
+const GATEWAY_STATUSES = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
 /** Issues one recording contributes; past it the earliest are kept. */
 export const REPLAY_ISSUES_MAX = 20;
 
@@ -103,6 +120,47 @@ export function errorLine(message: string): string {
     .trim();
 }
 
+/** The service an endpoint belongs to: `/api/<service>` under an api prefix, else the first segment. */
+export function serviceOf(route: string): string {
+  const segs = route.split("/").filter(Boolean);
+  if (!segs.length) return "/";
+  return segs[0] === "api" && segs[1] && segs[1] !== ":id" ? `/api/${segs[1]}` : `/${segs[0]}`;
+}
+
+type ErrorEvent = Extract<ReplayEvent, { type: "error" | "console" }>;
+const isErrorEvent = (e: ReplayEvent): e is ErrorEvent => e.type === "error" || (e.type === "console" && e.level === "error");
+
+/**
+ * Each error event's failure: errors within ECHO_MS of the one before are one
+ * failure, and every member takes the line that sorts first among them. An
+ * error whose line names a request that failed within ECHO_MS before it is
+ * that request's echo and files nothing of its own (null).
+ */
+function errorFailures(events: readonly ReplayEvent[]): Map<ReplayEvent, string | null> {
+  const out = new Map<ReplayEvent, string | null>();
+  let cluster: ErrorEvent[] = [];
+  const close = () => {
+    const lines = cluster.map((e) => normalizeErrorMessage(errorLine(e.message)).slice(0, 300)).filter(Boolean);
+    const key = lines.length ? [...lines].sort()[0] : null;
+    for (const e of cluster) if (!out.has(e)) out.set(e, key);
+    cluster = [];
+  };
+  let lastFailedRequest: Extract<ReplayEvent, { type: "network" }> | null = null;
+  for (const e of events) {
+    if (e.type === "network" && isFailedRequest(e)) lastFailedRequest = e;
+    if (!isErrorEvent(e)) continue;
+    const path = lastFailedRequest ? parse(lastFailedRequest.url)?.pathname : undefined;
+    if (lastFailedRequest && path && path !== "/" && e.t - lastFailedRequest.t <= ECHO_MS && e.message.includes(path)) {
+      out.set(e, null);
+      continue;
+    }
+    if (cluster.length && e.t - cluster[cluster.length - 1].t > ECHO_MS) close();
+    cluster.push(e);
+  }
+  close();
+  return out;
+}
+
 function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -138,6 +196,7 @@ export function replayIssues(events: readonly ReplayEvent[], startUrl?: string, 
   };
   // Recent clicks per element, for the rage rule.
   const clicks = new Map<string, number[]>();
+  const failures = errorFailures(events);
 
   for (const e of events) {
     switch (e.type) {
@@ -149,9 +208,11 @@ export function replayIssues(events: readonly ReplayEvent[], startUrl?: string, 
       case "console": {
         if (e.type === "console" && e.level !== "error") break;
         const line = errorLine(e.message);
-        if (!line) break;
-        const norm = normalizeErrorMessage(line).slice(0, 300);
-        add("error", norm, clip(line, 120), e.t, e.type === "error" && e.stack ? `${e.message}\n${e.stack}` : e.message);
+        const failure = failures.get(e);
+        if (!line || !failure) break;
+        // The title is the line its failure is keyed by, so every recording names one failure alike.
+        const title = failure === normalizeErrorMessage(line).slice(0, 300) ? line : failure;
+        add("error", failure, clip(title, 120), e.t, e.type === "error" && e.stack ? `${e.message}\n${e.stack}` : e.message);
         break;
       }
       case "network": {
@@ -161,8 +222,15 @@ export function replayIssues(events: readonly ReplayEvent[], startUrl?: string, 
         const req = parse(e.url);
         if (req?.pathname.startsWith("/cdn-cgi/")) break;
         const pageHost = parse(page)?.hostname;
-        const where = `${req && req.hostname !== pageHost ? req.hostname : ""}${routeOf(req?.pathname ?? e.url)}`;
+        const host = req && req.hostname !== pageHost ? req.hostname : "";
+        const route = routeOf(req?.pathname ?? e.url);
+        const where = `${host}${route}`;
         const status = e.status === 0 ? "no response" : String(e.status);
+        if (GATEWAY_STATUSES.has(e.status)) {
+          const service = `${host}${serviceOf(route)}`;
+          add("request", `${service} unavailable`, `${service} does not answer (${status} on ${where})`, e.t, `${method} ${e.url} -> ${status} (${e.ms} ms)`);
+          break;
+        }
         add("request", `${method} ${where} ${status}`, `${method} ${where} answers ${status}`, e.t, `${method} ${e.url} -> ${status} (${e.ms} ms)`);
         break;
       }
