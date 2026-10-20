@@ -241,8 +241,8 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
     ...(agent.claude_md ? ["--claude-md", path.join(dir, "CLAUDE.md")] : []),
   ];
   const home = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // The harness's guard hands reads to the first real `cast` on PATH, and a daemon started by launchd has none there.
-  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, process.env.PATH].filter(Boolean).join(path.delimiter) });
+  // The harness's guard hands reads to the first real `cast` on PATH (a script that runs bun), and a daemon started by launchd has neither there.
+  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, path.dirname(bunPath()), process.env.PATH].filter(Boolean).join(path.delimiter) });
   const out = fs.openSync(path.join(dir, "harness.log"), "w");
   const child = spawn(bunPath(), argv, { cwd: dir, env, stdio: ["ignore", out, out], detached: true });
   fs.writeFileSync(path.join(dir, "pid"), `${child.pid}\n`);
