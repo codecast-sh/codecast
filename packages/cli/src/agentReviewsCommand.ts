@@ -116,6 +116,7 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
       if (options.json) return console.log(JSON.stringify({ ...r, machine: { config: readReviewsConfig(), running_here: heldRuns().length } }, null, 2));
       const c = r.counts;
       const total = c.queued + c.running + c.done + c.failed;
+      if (r.moments) console.log(`Moments: ${r.moments.ready} read, ${r.moments.extracting} being read, ${r.moments.waiting} waiting, ${r.moments.failed} failed`);
       console.log(`${fmt.highlight(`${c.done} of ${total}`)} done · ${c.running} running · ${c.queued} queued · ${c.failed} failed${c.cancelled ? ` · ${c.cancelled} cancelled` : ""}`);
       const a = r.averages;
       if (a.of) {

@@ -440,11 +440,22 @@ export const statusForCli = query({
         if (status === "failed") failed.push(...mine);
       }
     }
+    // A bulk start's moments by state: each is read by the extractor before its review can queue.
+    const moments: Record<string, number> = { waiting: 0, extracting: 0, ready: 0, failed: 0 };
+    if (args.batch) {
+      for (const src of sources) {
+        for (const status of ["waiting", "extracting", "ready", "failed"] as const) {
+          const rows: Doc<"moments">[] = await ctx.db.query("moments").withIndex("by_source_kind_status_due", (q: any) => q.eq("source_id", src._id).eq("kind", "contact-conversation").eq("status", status)).collect();
+          moments[status]! += rows.filter((m) => m.batch === args.batch).length;
+        }
+      }
+    }
     const recent = finished.sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0)).slice(0, 200);
     const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
     const hour = Date.now() - 60 * 60_000;
     return {
       counts,
+      ...(args.batch ? { moments } : {}),
       running: running.map((r) => ({ review: r.short_id, moment: r.moment_short_id, subject: r.subject, device: r.claim_device, account: r.account, started_at: r.started_at, attempts: r.attempts })),
       recent: recent.slice(0, 20).map((r) => ({ review: r.short_id, moment: r.moment_short_id, subject: r.subject, findings: r.findings ?? 0, filed: r.filed ?? 0, took_ms: r.took_ms, turns: r.turns, notional_usd: r.notional_usd, account: r.account, finished_at: r.finished_at })),
       failed: failed.sort((a, b) => b.updated_at - a.updated_at).slice(0, 20).map((r) => ({ review: r.short_id, moment: r.moment_short_id, subject: r.subject, error: r.error, attempts: r.attempts })),
