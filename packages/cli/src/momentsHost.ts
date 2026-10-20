@@ -67,7 +67,8 @@ export type MomentClaim = {
 
 export type ExtractResult = { output?: string; error?: string; version: string };
 
-function bunPath(): string {
+/** The bun that runs a product's scripts (an extractor, a judge's gateway, the dry-run harness). */
+export function bunPath(): string {
   return findOnPath("bun", [TOOL_PATH, path.join(os.homedir(), ".bun", "bin")].join(path.delimiter)) ?? "bun";
 }
 
@@ -170,42 +171,59 @@ export type MomentsTickDeps = {
   run?: (claim: MomentClaim) => Promise<ExtractResult>;
   /** Runs one judge request handed to this machine; the subscription call by default. */
   judgeCall?: (spec: ModelCallSpec) => Promise<ModelCallResult>;
+  /** Moments one claim takes (EXTRACT_PARALLEL by default). */
+  limit?: number;
 };
+
+/** Extractors one pass runs at once, and moments it claims. */
+export const EXTRACT_PARALLEL = 4;
 
 /**
  * One pass: claim what is due on this machine, extract each, keep host
  * bodies here, and hand every result back (the server stores and judges).
- * Returns what happened per moment.
+ * Returns what happened per moment, in claim order.
  */
 export async function tickMoments(deps: MomentsTickDeps): Promise<Array<{ moment: string; status: string; error?: string }>> {
+  const claims: MomentClaim[] = (await deps.post("/cli/moments/claim", { device_id: deps.deviceId, limit: deps.limit ?? EXTRACT_PARALLEL })) ?? [];
+  const out: Array<{ moment: string; status: string; error?: string }> = new Array(claims.length);
+  // Extractors run side by side: each mostly waits on the product's database.
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(EXTRACT_PARALLEL, claims.length) }, async () => {
+    for (let i = next++; i < claims.length; i = next++) out[i] = await handOne(deps, claims[i]!);
+  }));
+  return out;
+}
+
+let judgingTurn: Promise<unknown> = Promise.resolve();
+
+async function handOne(deps: MomentsTickDeps, claim: MomentClaim): Promise<{ moment: string; status: string; error?: string }> {
   const now = deps.now ?? Date.now;
-  const claims: MomentClaim[] = (await deps.post("/cli/moments/claim", { device_id: deps.deviceId })) ?? [];
-  const out: Array<{ moment: string; status: string; error?: string }> = [];
-  for (const claim of claims) {
-    const result = await (deps.run ?? runExtractor)(claim);
-    if (result.output !== undefined && claim.storage === "host") {
-      try {
-        keepOnHost(claim, result.output, result.version, now());
-      } catch (err) {
-        result.error = `could not keep the moment on this machine: ${err instanceof Error ? err.message : String(err)}`;
-        delete result.output;
-      }
-    }
-    const reply = await deps.post("/cli/moments/complete", {
-      device_id: deps.deviceId,
-      moment: claim.moment,
-      extractor_version: result.version,
-      ...(result.output !== undefined ? { output: result.output } : { error: result.error ?? "the extractor printed nothing" }),
-    }).catch((err: unknown) => ({ status: "unreported", error: err instanceof Error ? err.message : String(err) }));
-    out.push({ moment: claim.moment, status: reply?.status ?? "unreported", ...(reply?.error ? { error: reply.error } : {}) });
-    deps.log?.(`[MOMENTS] ${claim.moment} ${claim.input.kind}/${claim.input.subject}: ${reply?.status ?? "unreported"}${reply?.error ? ` (${reply.error})` : ""}`);
-    if (reply?.judge_here) {
-      const judged = await judgeHere(reply.judge_here, deps.post, { device_id: deps.deviceId }, deps.judgeCall)
-        .catch((err: unknown) => [{ judge: "*", status: "unreported", findings: 0, filed: 0, reason: err instanceof Error ? err.message : String(err), cost_usd: 0 }]);
-      deps.log?.(`[MOMENTS] ${claim.moment} judged on this machine: ${judged.map((j) => `${j.judge} ${j.status}${j.status === "ok" ? ` ${j.findings} found` : j.reason ? ` (${j.reason})` : ""}`).join("; ") || "no judges"}`);
+  const result = await (deps.run ?? runExtractor)(claim);
+  if (result.output !== undefined && claim.storage === "host") {
+    try {
+      keepOnHost(claim, result.output, result.version, now());
+    } catch (err) {
+      result.error = `could not keep the moment on this machine: ${err instanceof Error ? err.message : String(err)}`;
+      delete result.output;
     }
   }
-  return out;
+  const reply = await deps.post("/cli/moments/complete", {
+    device_id: deps.deviceId,
+    moment: claim.moment,
+    extractor_version: result.version,
+    ...(result.output !== undefined ? { output: result.output } : { error: result.error ?? "the extractor printed nothing" }),
+  }).catch((err: unknown) => ({ status: "unreported", error: err instanceof Error ? err.message : String(err) }));
+  const outcome = { moment: claim.moment, status: reply?.status ?? "unreported", ...(reply?.error ? { error: reply.error } : {}) };
+  deps.log?.(`[MOMENTS] ${claim.moment} ${claim.input.kind}/${claim.input.subject}: ${reply?.status ?? "unreported"}${reply?.error ? ` (${reply.error})` : ""}`);
+  if (reply?.judge_here) {
+    // Extractions run side by side; subscription judging stays one call at a time on the login (judgeHere).
+    const turn = judgingTurn.then(() => judgeHere(reply.judge_here, deps.post, { device_id: deps.deviceId }, deps.judgeCall));
+    judgingTurn = turn.catch(() => {});
+    const judged = await turn
+      .catch((err: unknown) => [{ judge: "*", status: "unreported", findings: 0, filed: 0, reason: err instanceof Error ? err.message : String(err), cost_usd: 0 }]);
+    deps.log?.(`[MOMENTS] ${claim.moment} judged on this machine: ${judged.map((j) => `${j.judge} ${j.status}${j.status === "ok" ? ` ${j.findings} found` : j.reason ? ` (${j.reason})` : ""}`).join("; ") || "no judges"}`);
+  }
+  return outcome;
 }
 
 /** How often the daemon looks for due moments; only a machine that published extractors asks. */
@@ -234,7 +252,9 @@ export async function daemonMomentsTick(opts: { siteUrl: string | null; token: s
       if (!resp.ok || (data && typeof data === "object" && "error" in data && !("status" in data))) throw new Error((data as any)?.error ?? `${route} answered ${resp.status}`);
       return data;
     };
-    await tickMoments({ post, deviceId: opts.deviceId, log: opts.log });
+    // A full claim means more are due (a bulk start): keep going for the rest of the minute.
+    const until = Date.now() + 50_000;
+    while ((await tickMoments({ post, deviceId: opts.deviceId, log: opts.log })).length >= EXTRACT_PARALLEL && Date.now() < until) { /* next claim */ }
   } finally {
     ticking = false;
   }

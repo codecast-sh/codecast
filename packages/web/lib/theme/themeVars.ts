@@ -3,7 +3,7 @@
 // variables here are ours, so renaming or adding an internal variable means
 // editing this file and nothing a theme author wrote.
 
-import type { ThemeColorToken, ThemeMode, ThemePalette, ThemeToken } from "@codecast/shared/contracts/theme";
+import type { ModTheme, ThemeColorToken, ThemeMode, ThemePalette, ThemeToken } from "@codecast/shared/contracts/theme";
 import { ACCENT_MIX, ACCENT_SCALES, NEUTRAL_INK, NEUTRAL_SCALES, SHADES, scaleVar } from "./scales";
 
 const mix = (a: string, pct: number, b: string) => `color-mix(in srgb, ${a} ${pct}%, ${b})`;
@@ -96,4 +96,9 @@ export function themeVars(palette: ThemePalette | undefined, mode: ThemeMode): R
     }
   }
   return vars;
+}
+
+/** Both modes' variables for a theme; a mode it leaves out sets none. */
+export function themeVarsByMode(theme: ModTheme): Record<ThemeMode, Record<string, string>> {
+  return { light: themeVars(theme.light, "light"), dark: themeVars(theme.dark, "dark") };
 }

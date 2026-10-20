@@ -13,7 +13,7 @@ export function validateResourceSnapshot(snapshot: MachineResourceSnapshot, now:
   if (snapshot.processes.length > RESOURCE_PROCESS_LIMIT || snapshot.groups.length > 6 || snapshot.limitations.length > 12) throw new Error("Resource snapshot exceeds its bounds");
   if (Math.abs(snapshot.sample.at - now) > 300_000) throw new Error("Resource snapshot clock is stale or skewed");
   if (snapshot.deviceId.length > 128 || snapshot.platform.length > 32 || snapshot.limitations.some(s => s.length > 240)) throw new Error("Resource snapshot text exceeds its bounds");
-  if (snapshot.processes.some(p => p.name.length > 120 || (p.sessionId?.length ?? 0) > 128 || (p.sharedSessionIds?.length ?? 0) > 32 || p.sharedSessionIds?.some(s => s.length > 128))) throw new Error("Resource process exceeds its bounds");
+  if (snapshot.processes.some(p => p.name.length > 120 || (p.sessionId?.length ?? 0) > 128 || (p.sharedSessionIds?.length ?? 0) > 32 || p.sharedSessionIds?.some(s => s.length > 128) || (p.localData?.root.length ?? 0) > 240)) throw new Error("Resource process exceeds its bounds");
   const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) && value >= 0 : Array.isArray(value) ? value.every(finite) : value && typeof value === "object" ? Object.values(value).every(finite) : true;
   if (!finite(snapshot)) throw new Error("Invalid resource measurement");
   if (snapshot.sample.memoryAvailable > snapshot.sample.memoryTotal || (snapshot.sample.cpuPercent ?? 0) > 100 || snapshot.sample.logicalCpus < 1) throw new Error("Invalid machine totals");
@@ -26,7 +26,8 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   const device = await ctx.db.query("devices").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", snapshot.deviceId)).unique();
   if (!device) throw new Error("Machine is not registered to this user");
   const existing = await ctx.db.query("machine_resources").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", snapshot.deviceId)).unique();
-  if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < 15_000)) return { accepted: false };
+  const background_sessions = existing?.background_sessions ?? [];
+  if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < 15_000)) return { accepted: false, background_sessions };
   const history = [...(existing?.history ?? []).filter(p => now - p.at <= 2 * 3600_000), snapshot.sample].slice(-RESOURCE_HISTORY_LIMIT);
   const data = { user_id: userId, device_id: snapshot.deviceId, received_at: now, snapshot, history };
   const incident = device.is_remote ? null : sustainedResourcePressure(history, now);
@@ -35,7 +36,7 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp });
   else await ctx.db.insert("machine_resources", { ...data, ...stamp });
   if (alert) await notifyOverload(ctx, userId, device, snapshot, alert, now);
-  return { accepted: true };
+  return { accepted: true, background_sessions };
 }
 
 /** A fresh incident after this long rings again; an escalation to critical always does. */
@@ -122,6 +123,24 @@ export const report = mutation({
     const token = await ctx.db.get(auth.tokenId);
     if (token?.device_id && token.device_id !== args.snapshot.deviceId) throw new Error("The reporting token belongs to another machine");
     return storeResourceSnapshot(ctx, auth.userId, args.snapshot);
+  },
+});
+
+/** Most sessions a machine holds at background priority; the oldest request drops off past it. */
+const MAX_BACKGROUND_SESSIONS = 64;
+
+/** Puts a session's processes on one of your machines at background priority, or back. The daemon applies it on its next report. */
+export const setSessionBackground = mutation({
+  args: { device_id: v.string(), session_id: v.string(), background: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Authentication required");
+    const row = await ctx.db.query("machine_resources").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", args.device_id)).unique();
+    if (!row) throw new Error("That machine has not reported its resources");
+    const rest = (row.background_sessions ?? []).filter(id => id !== args.session_id);
+    const next = args.background ? [...rest, args.session_id].slice(-MAX_BACKGROUND_SESSIONS) : rest;
+    await ctx.db.patch(row._id, { background_sessions: next });
+    return { background_sessions: next };
   },
 });
 

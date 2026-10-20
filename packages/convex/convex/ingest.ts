@@ -27,6 +27,7 @@ import { sha256Hex } from "./lib/hash";
 import { nextShortId } from "./counters";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { recordExternalEventOnce } from "./externalEvents";
+import { recordDeployMarker, type DeployMarker } from "./deploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
 import { linkReplayToGroup, upsertReplayManifest } from "./replays";
@@ -55,6 +56,7 @@ import {
   type Transition,
 } from "@codecast/shared/contracts/ingest";
 import { ciCheckFingerprint, groupFingerprint } from "@codecast/shared/contracts/signalFingerprint";
+import type { ReplayIssue } from "@codecast/shared/replay";
 import {
   SAMPLES_PER_BATCH,
   applyMirror,
@@ -62,6 +64,7 @@ import {
   foldOccurrences,
   openGroupsDelta,
   planItem,
+  planReplayIssue,
   pruneBuckets,
   utcDay,
   type GroupState,
@@ -559,6 +562,13 @@ export const SOURCE_CAPS = {
 /** The fingerprint new groups past the caps fold into, one per kind. */
 export const OVERFLOW_FP = "(overflow)";
 
+/** How many of `wanted` new groups the source may open now (SOURCE_CAPS); the rest fold into overflow. */
+async function grantNewGroups(ctx: any, source: Doc<"event_sources">, wanted: number): Promise<number> {
+  const room = Math.max(0, SOURCE_CAPS.open_groups_max - ((await sourceStats(ctx, source)).groups_open ?? 0));
+  const { granted } = await takeFromWindow(ctx.db, `ingest-new-groups:${source._id}`, SOURCE_CAPS.new_groups_per_hour, HOUR_MS, Math.min(wanted, room));
+  return granted;
+}
+
 function overflowPlan(plan: GroupPlan): GroupPlan {
   return {
     ...plan,
@@ -931,6 +941,58 @@ export async function recordCiRun(ctx: any, run: CiRun): Promise<{ transitions: 
   return { transitions: out.transitions };
 }
 
+// ── Replay issues (X5) ──
+
+/**
+ * The walls one recording shows (shared/replay/issues.ts, computed by the
+ * action that read its stream) folded into replay_issue groups through the
+ * one upsert, and the recording linked to each. A recording counts once per
+ * group: one it already links to is skipped, so assembling it again, a
+ * re-import or a regroup pass adds nothing twice. New groups spend the
+ * source's caps like the door's do.
+ */
+export async function recordReplayIssues(ctx: any, source: Doc<"event_sources">, replay: Doc<"replays">, issues: ReplayIssue[], now: number): Promise<{ groups: number; transitions: number }> {
+  if (source.status === "paused" || !issues.length) return { groups: 0, transitions: 0 };
+  const linked = new Set(replay.group_ids.map(String));
+  const ref = { external_id: replay.external_id, started_at: replay.started_at, ...(replay.user ? { user: replay.user } : {}) };
+  const plans = issues.map((i) => planReplayIssue(i, ref));
+  const stored = new Map<string, Doc<"event_groups"> | null>();
+  for (const p of plans) stored.set(p.fingerprint, await findGroup(ctx, source._id, p.fingerprint));
+  const fresh = plans.filter((p) => !stored.get(p.fingerprint));
+  const granted = fresh.length ? await grantNewGroups(ctx, source, fresh.length) : 0;
+  const folded = new Set(fresh.slice(granted).map((p) => p.fingerprint));
+  let openDelta = 0;
+  let transitions = 0;
+  let groups = 0;
+  for (const raw of plans) {
+    const plan = folded.has(raw.fingerprint) ? overflowPlan(raw) : raw;
+    const found = stored.has(plan.fingerprint) ? stored.get(plan.fingerprint)! : await findGroup(ctx, source._id, plan.fingerprint);
+    if (found && linked.has(String(found._id))) continue;
+    const out = await upsertGroup(ctx, source, [plan], {}, now, found);
+    stored.set(plan.fingerprint, (await ctx.db.get(out.group_id)) ?? null);
+    linked.add(String(out.group_id));
+    await linkReplayToGroup(ctx, source, replay.external_id, out.group_id, now);
+    openDelta += out.open_delta;
+    transitions += out.transitions;
+    groups++;
+  }
+  if (groups) {
+    await patchSourceStats(ctx, source, (s) => ({ groups_open: Math.max(0, (s.groups_open ?? 0) + openDelta) }), now);
+  }
+  return { groups, transitions };
+}
+
+/** A recording's issues from the action that read it (replays.assemble, replays.importExternal, the regroup pass). */
+export const applyReplayIssues = internalMutation({
+  args: { replay_id: v.id("replays"), issues_json: v.string() },
+  handler: async (ctx, args): Promise<{ groups: number; transitions: number }> => {
+    const replay = await ctx.db.get(args.replay_id);
+    const source = replay ? await ctx.db.get(replay.source_id) : null;
+    if (!replay || !source) return { groups: 0, transitions: 0 };
+    return recordReplayIssues(ctx, source, replay, JSON.parse(args.issues_json) as ReplayIssue[], Date.now());
+  },
+});
+
 function deployKey(sourceId: Id<"event_sources">, version: string, environment: string | undefined): string {
   return `ingest:${sourceId}:deploy:${version}:${environment ?? ""}`;
 }
@@ -989,8 +1051,7 @@ export const applyBatch = internalMutation({
     const fresh = [...groups.keys()].filter((fp) => !stored.get(fp) && groups.get(fp)![0].fp !== OVERFLOW_FP);
     let folded = 0;
     if (fresh.length) {
-      const room = Math.max(0, SOURCE_CAPS.open_groups_max - ((await sourceStats(ctx, source)).groups_open ?? 0));
-      const { granted } = await takeFromWindow(ctx.db, `ingest-new-groups:${source._id}`, SOURCE_CAPS.new_groups_per_hour, HOUR_MS, Math.min(fresh.length, room));
+      const granted = await grantNewGroups(ctx, source, fresh.length);
       for (const fp of fresh.slice(granted)) {
         const plans = groups.get(fp)!;
         groups.delete(fp);
@@ -1166,6 +1227,26 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
   }
 }
 
+/** A source's deploy item as a deploy object's marker (deploys.md DP1). */
+function deployMarkerOf(source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>, eventId: Id<"external_events">): DeployMarker {
+  return {
+    workspace: source.workspace,
+    ...(source.team_id ? { team_id: source.team_id } : {}),
+    ...(source.project_id ? { project_id: source.project_id } : {}),
+    target: d.environment ?? "deploy",
+    ...(d.sha ? { sha: d.sha } : {}),
+    version: d.version,
+    source: source.name,
+    source_id: source._id,
+    event_id: eventId,
+    ...(d.url ? { url: d.url } : {}),
+    ...(d.previous_sha ? { previous_sha: d.previous_sha } : {}),
+    ...(d.commits?.length ? { commits: d.commits } : {}),
+    started_by: d.actor ? { kind: "person", name: d.actor } : { kind: "source", name: source.name },
+    at: d.at,
+  };
+}
+
 /**
  * A deploy marker and its triggers, once per version and environment: a
  * retried batch or an SDK that reports its version at every boot records and
@@ -1174,7 +1255,13 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
  */
 async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>): Promise<boolean> {
   const key = deployKey(source._id, d.version, d.environment);
-  if (await eventByDedupeKey(ctx, key)) return false;
+  const seen = await eventByDedupeKey(ctx, key);
+  if (seen) {
+    // A second report of the same version (the deploy path's own, after an
+    // api's boot announced it) adds what it knows: the run, the commit range.
+    if (d.url || d.commits?.length || d.previous_sha) await recordDeployMarker(ctx, deployMarkerOf(source, d, seen._id));
+    return false;
+  }
   const { granted } = await takeFromWindow(ctx.db, `ingest-deploys:${source._id}`, SOURCE_CAPS.deploys_per_hour, HOUR_MS, 1);
   if (!granted) return false;
   const title = `Deployed ${d.version}${d.environment ? ` to ${d.environment}` : ""}`;
@@ -1190,6 +1277,7 @@ async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract
     dedupe_key: key,
     created_at: d.at,
   });
+  await recordDeployMarker(ctx, deployMarkerOf(source, d, eventId));
   await scheduleTriggerMatch(ctx, {
     event_type: "deploy",
     team_id: source.team_id,
