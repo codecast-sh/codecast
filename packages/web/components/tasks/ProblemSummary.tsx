@@ -118,7 +118,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
   const trialCards = useTrialCards();
   const admit = useLineAdmission(task.project_id ?? null);
 
-  // A trial problem's evidence is read live on the server (convex lineTrial.problemEvidence): the one count its card and /trial show too.
+  // A trial problem's evidence is read live on the server (convex lib/problemEvidence): the one count its card and /trial show too.
   const trialCard = trialCards.find((c) => c.task_short_id === task.short_id && c.status === "waiting") ?? null;
   const evidence = (trialCard ?? trialCards.filter((c) => c.task_short_id === task.short_id).sort((a, b) => b.created_at - a.created_at)[0])?.evidence ?? null;
   const count = evidence ? evidence.findings : task.cause?.signal_count ?? signals.length;

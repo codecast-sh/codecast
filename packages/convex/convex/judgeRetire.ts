@@ -126,7 +126,7 @@ async function absence(
 /**
  * The file side of the same rule: this judge version's earlier reads of the
  * moment on the messages this run read, oldest first, each with what it found,
- * and when each line's words last changed. moments.fileFindings weighs a
+ * and when each line's words last changed. momentJudging.fileFindings weighs a
  * finding none of them made against them (newOnResample).
  */
 export const sameReads = internalQuery({

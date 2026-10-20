@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation } from "./functions";
 import { RESOURCE_STALE_MS, evaluateOffloadRequirements } from "@codecast/shared/contracts";
-import { performCreateBatch, planMigration } from "./sessionMigrations";
+import { heldReason, movabilityFacts, performCreateBatch, planMigration } from "./sessionMigrations";
 
 export const start = mutation({
   args: {
@@ -53,6 +53,7 @@ export const start = mutation({
     if (!fresh(source) || !source) return refuse("Refresh the laptop's resource measurements before moving sessions");
     const checks = [];
     const groups = new Map<string, string[]>();
+    const facts = await movabilityFacts(ctx, userId);
     for (const selection of args.selections) {
       const conv = await ctx.db.get(selection.conversation_id);
       if (!conv || conv.user_id !== userId || conv.session_id !== selection.session_id || conv.owner_device_id !== args.source_device_id) return refuse("Session ownership changed; refresh the selection");
@@ -78,7 +79,7 @@ export const start = mutation({
         targetOnline: !!target && now - target.last_seen <= RESOURCE_STALE_MS,
         targetWakeable: !!target?.cloud_host, readiness: target?.host_readiness,
         targetSample: fresh(targetReport) ? targetReport?.snapshot.sample : undefined, now });
-      const plan = planMigration({ conversations: [conv], devices, targetDeviceId: selection.destination_id, now });
+      const plan = planMigration({ conversations: [{ ...conv, held: heldReason(conv, facts) }], devices, targetDeviceId: selection.destination_id, now });
       blockers.push(...policy.blockers, ...plan.skipped.map(s => s.reason));
       const unconfirmed = policy.pending.filter(p => !selection.attested.includes(p));
       checks.push({ session_id: selection.session_id, destination_id: selection.destination_id, blockers, pending: policy.pending, passed: policy.passed, unconfirmed });

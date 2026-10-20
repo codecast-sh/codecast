@@ -232,6 +232,8 @@ describe("$node.json.<path>", () => {
     expect(extractJsonOutput(`Proposed.\n\n\`\`\`json\n${JSON.stringify(quoted, null, 1)}\n\`\`\`\n`)).toEqual(quoted);
     expect(extractJsonOutput("```json\n{\"a\":1}\n```\nlater\n```json\nnot json\n```")).toEqual({ a: 1 });
     expect(extractJsonOutput("42")).toBeUndefined();
+    // a report that ends on the json's closing brace, with no closing fence, routes on its outcome (ct-59565)
+    expect(extractJsonOutput('Kept open.\n\n```json\n{\n  "outcome": "open"\n}\n')).toEqual({ outcome: "open" });
   });
 
   test("recordNodeOutput exposes fields to lookups, conditions, prompts and scripts", () => {
