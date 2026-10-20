@@ -2918,6 +2918,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setCallShareVideo: async (ctx, _userId, [transcriptId, include]: [string, boolean]) => {
     return await ctx.runMutation!(api.callRecordings.setCallShareVideo, { call: transcriptId, include: !!include });
   },
+  // An agent's video avatar in a live call (store setCallAgentFace moves the toggle first).
+  setCallAgentFace: async (ctx, _userId, [transcriptId, target, face]: [string, string, boolean]) => {
+    return await ctx.runMutation!(api.transcripts.setAgentFace, { transcript_id: transcriptId as Id<"transcripts">, target, face: !!face });
+  },
   // A picture of the call taken off its public link (store
   // deleteCallFrameShare drops the row first). Already gone is acknowledged.
   deleteCallFrameShare: async (ctx, _userId, [shareId]: [string]) => {

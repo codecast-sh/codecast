@@ -13,7 +13,6 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   conversations: "the message page's meta twin, fed only by a conversation page the sim does not open",
   capabilityBindings: "fed by useSyncCapabilityState, a bespoke hook the sim does not mount",
   capabilityState: "fed by useSyncCapabilityState, a bespoke hook the sim does not mount",
-  sessionDecisions: "fed by useSyncSessionDecisions; decisions reach the inbox through the liveness stamps INV-sessions-mine compares",
   buckets: "fed by useSyncBuckets, a bespoke hook the sim does not mount",
   bucketAssignments: "fed by useSyncBuckets, a bespoke hook the sim does not mount",
   comments: "fed by the conversation comment and thread hooks, which the sim does not mount",
