@@ -4151,6 +4151,11 @@ cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles
 cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLineMerge.setLineMerge, body));
 cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
 cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
+// The line's deploy stage (deploys.md DP2): what waits to go out, one deploy that sends it, and the deploy path's reports.
+cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys.stage, body));
+cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));
+cliRoute("/cli/line/deploy/report", async (ctx, body) => ctx.runMutation(api.deploys.report, body));
+cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, body));
 // Knowledge handoff (org-staffing.md S32) and the split (S34).
 cliRoute("/cli/role/handoff", async (ctx, body) => ctx.runMutation(api.orgHandoff.write, body));
 cliRoute("/cli/role/handoff/settle", async (ctx, body) => ctx.runMutation(api.orgHandoff.settle, body));
@@ -4434,6 +4439,17 @@ cliRoute("/cli/moments/body", async (ctx, body) => {
 cliRoute("/cli/moments/rulings", async (ctx, body) => {
   return await ctx.runQuery(api.moments.rulingsForCli, body);
 });
+// Agent reviews (agentReviews.ts): a machine running reviews claims queued
+// ones, renews them while their sessions run, and hands each back; a person
+// starts, stops, retries and reads them.
+cliRoute("/cli/reviews/claim", async (ctx, body) => ctx.runAction(api.agentReviews.claimForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/renew", async (ctx, body) => ctx.runMutation(api.agentReviews.renewForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/done", async (ctx, body) => ctx.runAction(api.agentReviews.doneForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/start", async (ctx, body) => ctx.runMutation(api.agentReviews.startForCli, body));
+cliRoute("/cli/reviews/status", async (ctx, body) => ctx.runQuery(api.agentReviews.statusForCli, body));
+cliRoute("/cli/reviews/cancel", async (ctx, body) => ctx.runMutation(api.agentReviews.cancelForCli, body));
+cliRoute("/cli/reviews/retry", async (ctx, body) => ctx.runMutation(api.agentReviews.retryForCli, body));
+cliRoute("/cli/reviews/transcript", async (ctx, body) => ctx.runAction(api.agentReviews.transcriptForCli, body));
 // Trial projects (lineTrial.ts): their cards, their spend, the switch, and a
 // card's answer from a terminal.
 cliRoute("/cli/line/trial/cards", async (ctx, body) => ctx.runQuery(api.lineTrial.cards, body));
@@ -4809,6 +4825,7 @@ cliRoute("/cli/docs/patch", async (ctx, body) => {
 cliRoute("/cli/workflows/upsert", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.upsert, body);
 });
+cliRoute("/cli/workflows/line-version", async (ctx, body) => ctx.runQuery(api.workflows.lineVersionForCli, body));
 cliRoute("/cli/workflows/list", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.list, body);
 });

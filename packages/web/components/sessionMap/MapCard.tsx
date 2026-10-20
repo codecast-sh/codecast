@@ -17,7 +17,7 @@ import { EntityIdPill } from "../EntityIdPill";
 import { SessionInlineThread } from "../conversation/SessionInlineThread";
 import { ORG_STATE_META } from "../org/orgMeta";
 import { formatRelativeTime } from "../../lib/conversationFormat";
-import { CARD, type MapSession } from "./sessionMapModel";
+import { CARD, HAIRLINE, type MapSession } from "./sessionMapModel";
 import "./sessionMap.css";
 
 export type MapLevel = "far" | "mid" | "close";
@@ -31,7 +31,6 @@ export function useMapLevel(): MapLevel {
 
 export type CardData = { s: MapSession; dim: boolean };
 
-const HAIRLINE = "color-mix(in srgb, var(--sol-border) 40%, transparent)";
 /** Text that keeps one size on screen while the card shrinks under it, within the card's room. */
 const screenSize = (px: number, max: number) => `clamp(${px}px, calc(${px}px / var(--mapz, 1)), ${max}px)`;
 

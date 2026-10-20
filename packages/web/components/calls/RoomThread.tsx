@@ -8,6 +8,8 @@ import {
   EyeOff,
   Sparkles,
   UserPlus,
+  Video,
+  VideoOff,
   type LucideIcon,
 } from "lucide-react";
 import { useMutation } from "convex/react";
@@ -17,6 +19,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   callAnchorKey,
   callPathRef,
+  humanizeConvexError,
   isRecRoomKey,
   sessionRoomConversationId,
   type CallAnchor,
@@ -42,6 +45,7 @@ import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
 import { ChatLine, EventLine, PassageBlock, RecapCard, type LocalRow, type RoomThreadSelection } from "./RoomThreadRows";
 import { useAddToCall, useAgentsInRoom, useRemoveLiveFeed } from "./useCallFeed";
+import { teamHasFeature } from "../../lib/teamFeatures";
 import {
   HEARS,
   buildPassages,
@@ -78,7 +82,7 @@ import { CallTasks, itemKey, makeCallTask, useCallTasks } from "./CallTasks";
 
 export type { RoomThreadSelection } from "./RoomThreadRows";
 
-export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string };
+export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string; face?: boolean };
 
 /** What the thread reads of transcripts.webGetCall. */
 export type RoomThreadCall = {
@@ -296,6 +300,8 @@ export function RoomThread({
   // (AddPeople.tsx): teammates, roles and agents.
   const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
+  const setAgentFace = useMutation(api.transcripts.setAgentFace);
+  const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
   // What an agent did is in the past once the call ended or nothing is live
   // (the stage after the switch went off): "was in the room", and none of
   // the present tense promise about what it does here.
@@ -567,6 +573,17 @@ export function RoomThread({
                 />
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />
+                )}
+                {agent && transcribing && facesOn && liveTranscriptId && (
+                  <AgentFaceToggle
+                    on={r.face !== false}
+                    name={agent.name}
+                    onChange={(face) =>
+                      void setAgentFace({ transcript_id: liveTranscriptId as Id<"transcripts">, target: r.target, face }).catch((e) =>
+                        toast.error(humanizeConvexError(e, "Could not change the video avatar")),
+                      )
+                    }
+                  />
                 )}
                 {agent && (
                   <button
@@ -992,5 +1009,22 @@ export function SegmentedRadio<K extends string>({
         </button>
       ))}
     </span>
+  );
+}
+
+/** An agent's video avatar in the call, on or off. Off, the agent stays in
+ *  the room and answers in the chat. */
+function AgentFaceToggle({ on, name, onChange }: { on: boolean; name: string; onChange: (face: boolean) => void }) {
+  const Icon = on ? Video : VideoOff;
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={() => onChange(!on)}
+      className={`rounded p-0.5 transition-colors hover:text-sol-text ${on ? "text-sol-violet" : "text-sol-text-dim"}`}
+      title={on ? `Turn off ${name}'s video avatar` : `Bring ${name} in on video`}
+    >
+      <Icon className="h-3 w-3" />
+    </button>
   );
 }

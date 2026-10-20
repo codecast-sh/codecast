@@ -44,7 +44,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { agentFaceIdentity, agentSpokenNames, huddleVoiceAskHeader, huddleVoiceInstructions } from "@codecast/shared/contracts";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
-import { plainAgentLine } from "@codecast/shared/contracts/plainText";
+import { spokenAgentLine } from "@codecast/shared/contracts/plainText";
 import { signLivekitJwt } from "./lib/livekitJwt";
 import { timingSafeEqualHex } from "./lib/hmac";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
@@ -97,6 +97,11 @@ async function faceMode(ctx: any, teamId: Id<"teams"> | null | undefined): Promi
   return (await teamHasFeature(ctx, teamId, "agent_realtime")) ? "realtime" : "face";
 }
 
+/** One agent's mode: its team's, unless whoever added it left the avatar out. */
+function feedFaceMode(ctx: any, feed: Pick<Doc<"call_agent_feeds">, "team_id" | "face">): Promise<"off" | "face" | "realtime"> {
+  return feed.face === false ? Promise.resolve("off") : faceMode(ctx, feed.team_id);
+}
+
 /** A face follows the agent's character, so it looks and sounds the same in
  *  every call, and agents a room tells apart by character it tells apart by face. */
 export function faceForAvatar(avatar: string): { face: string; voice: string } {
@@ -104,11 +109,11 @@ export function faceForAvatar(avatar: string): { face: string; voice: string } {
   return FACES[i % FACES.length];
 }
 
-/** From a mutation that just inserted a feed row. */
-export async function scheduleFaceJoin(ctx: any, feedId: Id<"call_agent_feeds">, teamId: Id<"teams"> | null | undefined): Promise<void> {
-  const mode = await faceMode(ctx, teamId);
+/** From a mutation that just inserted a feed row, or turned its face on. */
+export async function scheduleFaceJoin(ctx: any, feed: Doc<"call_agent_feeds">): Promise<void> {
+  const mode = await feedFaceMode(ctx, feed);
   if (mode === "off") return;
-  await ctx.scheduler.runAfter(0, internal.callFace.join, { feed_id: feedId, realtime: mode === "realtime" });
+  await ctx.scheduler.runAfter(0, internal.callFace.join, { feed_id: feed._id, realtime: mode === "realtime" });
 }
 
 /** From a mutation deleting a feed row: its voice leaves with it. */
@@ -122,8 +127,8 @@ export async function scheduleFaceLeave(ctx: any, feed: Doc<"call_agent_feeds">)
 
 /** From the mirror, for the replies it just posted to the room's chat. */
 export async function scheduleFaceTell(ctx: any, feed: Doc<"call_agent_feeds">, replies: string[]): Promise<void> {
-  if ((await faceMode(ctx, feed.team_id)) === "off") return;
-  const text = plainAgentLine(replies.join("\n\n")).slice(0, TELL_MAX);
+  if ((await feedFaceMode(ctx, feed)) === "off") return;
+  const text = spokenAgentLine(replies.join("\n\n")).slice(0, TELL_MAX);
   if (!text) return;
   await ctx.scheduler.runAfter(0, internal.callFace.tell, {
     room_key: feed.room_key,
@@ -142,7 +147,7 @@ async function liveFeed(ctx: any, conversationId: string, roomKey: string): Prom
     .query("call_agent_feeds")
     .withIndex("by_conversation", (q: any) => q.eq("conversation_id", id))
     .first();
-  if (!feed || feed.room_key !== roomKey || (await faceMode(ctx, feed.team_id)) !== "realtime") return null;
+  if (!feed || feed.room_key !== roomKey || (await feedFaceMode(ctx, feed)) !== "realtime") return null;
   const t = await ctx.db.get(feed.transcript_id);
   return t?.status === "live" ? feed : null;
 }
@@ -157,7 +162,8 @@ export const feedForFace = internalQuery({
   args: { feed_id: v.id("call_agent_feeds") },
   handler: async (ctx, args) => {
     const feed = await ctx.db.get(args.feed_id);
-    if (!feed) return null;
+    // Its avatar was turned off before the join ran.
+    if (!feed || feed.face === false) return null;
     const who = await characterFor(ctx, feed.conversation_id);
     if (!who) return null;
     return { room_key: feed.room_key, conversation_id: String(feed.conversation_id), name: who.character.name, avatar: who.character.avatar };
@@ -178,7 +184,7 @@ export const brief = internalQuery({
         .order("desc")
         .take(20)
     )
-      .map((m) => plainAgentLine(agentLineText(m)))
+      .map((m) => spokenAgentLine(agentLineText(m)))
       .filter(Boolean)
       .slice(0, BRIEF_REPLIES)
       .reverse();
@@ -355,6 +361,7 @@ export const facesForRoom = internalQuery({
       .collect();
     const out: (FaceFeed & { realtime: boolean })[] = [];
     for (const feed of feeds) {
+      if (feed.face === false) continue;
       const who = await characterFor(ctx, feed.conversation_id);
       if (who) out.push({ room_key: feed.room_key, conversation_id: String(feed.conversation_id), name: who.character.name, avatar: who.character.avatar, realtime: mode === "realtime" });
     }

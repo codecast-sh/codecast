@@ -32,7 +32,7 @@ afterEach(() => {
 function stubOrigin(extra = {}) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
-    calls.push({ url: String(url), cf: init?.cf });
+    calls.push({ url: String(url), cache: init?.cache });
     return new Response(`body ${calls.length}`, {
       status: extra.status ?? 200,
       headers: { "Cache-Control": "max-age=14400", ...(extra.headers ?? {}) },
@@ -54,7 +54,7 @@ describe("artifact edge cache", () => {
     const first = await get("/abcdefghijkl");
     expect(first.headers.get("X-Edge-Cache")).toBe("MISS");
     expect(first.headers.get("Cache-Control")).toBe(PUBLIC);
-    expect(calls[0]).toEqual({ url: "https://convex.codecast.sh/cli/a/abcdefghijkl", cf: { cacheTtl: 0 } });
+    expect(calls[0]).toEqual({ url: "https://convex.codecast.sh/cli/a/abcdefghijkl", cache: "no-store" });
 
     later(30);
     const second = await get("/abcdefghijkl");
@@ -76,6 +76,23 @@ describe("artifact edge cache", () => {
     const next = await get("/abcdefghijkl");
     expect(next.headers.get("X-Edge-Cache")).toBe("HIT");
     expect(await next.text()).toBe("body 2");
+  });
+
+  test("a refresh reaches the origin even though fetch reads the same store the held copy lives in", async () => {
+    // Cloudflare's fetch answers from caches.default when an entry sits under
+    // the fetched URL and the request does not opt out of the cache.
+    const calls = stubOrigin();
+    const origin = globalThis.fetch;
+    globalThis.fetch = async (url, init) =>
+      init?.cache !== "no-store" && store.has(String(url)) ? store.get(String(url)).clone() : origin(url, init);
+    await get("/abcdefghijkl");
+    for (let i = 0; i < 3; i++) {
+      later(61);
+      await get("/abcdefghijkl");
+      await Promise.all(background.splice(0));
+    }
+    expect(calls.length).toBe(4);
+    expect(await (await get("/abcdefghijkl")).text()).toBe("body 4");
   });
 
   test("a version-pinned address (r=vN) is held and kept by the browser for the whole bound, never refreshed", async () => {
@@ -160,7 +177,7 @@ describe("artifact edge cache", () => {
       const one = await get(path);
       const two = await get(path);
       expect(calls.length).toBe(2);
-      expect(calls[0].cf).toEqual({ cacheTtl: 0 });
+      expect(calls[0].cache).toBe("no-store");
       expect(calls[0].url).toBe(`https://convex.codecast.sh/cli/a${path}`);
       expect(store.size).toBe(0);
       for (const res of [one, two]) expect(res.headers.get("Cache-Control")).toBe("private, max-age=60, stale-while-revalidate=300");
@@ -187,7 +204,7 @@ describe("artifact edge cache", () => {
       const one = await get(path);
       const two = await get(path);
       expect(calls.length).toBe(2);
-      expect(calls[0].cf).toEqual({ cacheTtl: 0 });
+      expect(calls[0].cache).toBe("no-store");
       expect(calls[0].url).toBe(`https://convex.codecast.sh/cli/a${path}`);
       expect(store.size).toBe(0);
       for (const res of [one, two]) expect(res.headers.get("Cache-Control")).toBe("private, no-store");

@@ -4,12 +4,14 @@ import { getActiveLook, useActiveLook, type Look } from '@/constants/Theme';
 
 // JetBrains Mono is the app face, same as web (web aliases font-sans to it —
 // the entire product renders in mono), and hosted mode's family look swaps
-// in Instrument Sans and Newsreader (Sans, Serif below). Every face here is loaded in
-// app/_layout.tsx under these exact keys; expo-font registers each key as its
-// own single-face family, so weight selection CANNOT happen through
-// fontWeight — the style resolver below swaps the family per weight instead.
+// in Instrument Sans and Newsreader (Sans, Serif below). Each face is named by
+// its PostScript name: the binary embeds the files (the expo-font plugin in
+// app.json), and app/_layout.tsx loads them under the same names on binaries
+// built before that. A runtime-loaded face is its own single-face family, so
+// weight selection CANNOT rely on fontWeight; the style resolver below swaps
+// the face per weight instead.
 export const Mono = {
-  regular: 'JetBrainsMono',
+  regular: 'JetBrainsMono-Regular',
   medium: 'JetBrainsMono-Medium',
   semiBold: 'JetBrainsMono-SemiBold',
   bold: 'JetBrainsMono-Bold',
@@ -21,15 +23,15 @@ export const Mono = {
 // only once the family look is on (`loadFamilyFaces`). Instrument Sans ships
 // no italic, so its slant stands in with the upright face.
 export const Sans = {
-  regular: 'InstrumentSans',
+  regular: 'InstrumentSans-Regular',
   medium: 'InstrumentSans-Medium',
   semiBold: 'InstrumentSans-SemiBold',
   bold: 'InstrumentSans-Bold',
-  italic: 'InstrumentSans',
+  italic: 'InstrumentSans-Regular',
 } as const;
 
 export const Serif = {
-  regular: 'Newsreader',
+  regular: 'Newsreader-Regular',
   medium: 'Newsreader-Medium',
   semiBold: 'Newsreader-SemiBold',
   bold: 'Newsreader-SemiBold',
@@ -39,7 +41,6 @@ export const Serif = {
 export type FaceGroup = { readonly regular: string; readonly medium: string; readonly semiBold: string; readonly bold: string; readonly italic: string };
 
 const GROUP_OF = new Map<string, FaceGroup>([
-  ['SpaceMono', Mono],
   ...[Mono, Sans, Serif].flatMap((g) => Object.values(g).map((face) => [face, g] as [string, FaceGroup])),
 ]);
 
@@ -144,7 +145,7 @@ function faceFor(group: FaceGroup, weight: TextStyle['fontWeight'], italic: bool
  * A style with no fontFamily takes the group of the Text it is nested in, as
  * CSS inherits a font, else the look's interface face (JetBrains Mono, or
  * Instrument Sans in the family look). A style naming any face of a known
- * group (mono, sans, serif; legacy 'SpaceMono' is mono) keeps that group and
+ * group (mono, sans, serif) keeps that group and
  * picks the face for its weight, so code stays mono in every look. Any other
  * family is respected untouched.
  */

@@ -259,9 +259,13 @@ export function optionPageSlugs(options: ReadonlyArray<Pick<DecisionOption, "pag
 /** Whether a decision row is this viewer's: no people set (a legacy row), or
  *  they are among its people. A row passed to a teammate leaves the passer's
  *  queue on the draft, before the server drops it from their feed. */
-export function askedOfViewer(d: { asked_user_ids?: string[] }, meId: string | undefined): boolean {
-  return !d.asked_user_ids || !meId || d.asked_user_ids.includes(meId);
+export function askedOfViewer(d: { asked_user_ids?: string[]; in_queue?: boolean }, meId: string | undefined): boolean {
+  return inViewerQueue(d) && (!d.asked_user_ids || !meId || d.asked_user_ids.includes(meId));
 }
+
+/** Whether a decision row is in the viewer's own queue. The store also holds the team's open line decisions (For you
+ *  lists them), each saying whether it is the viewer's; a row from before that flag came from the queue. */
+export const inViewerQueue = (d: { in_queue?: boolean }): boolean => d.in_queue !== false;
 
 /** What a PERSON must answer: the queue minus the rows a lead holds. */
 export function waitingOnPerson(items: readonly QueueItem[]): QueueItem[] {
@@ -398,7 +402,7 @@ export function pendingDecisionConvIds(
 ): Set<string> {
   const ids = new Set<string>();
   for (const d of Object.values(decisions)) {
-    if (!isStackedAsk(d)) continue;
+    if (!isStackedAsk(d) || !inViewerQueue(d)) continue;
     if (meId && d.asked_user_ids && !d.asked_user_ids.some((id) => String(id) === String(meId))) continue;
     ids.add(d.conversation_id);
   }
