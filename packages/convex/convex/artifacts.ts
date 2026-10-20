@@ -34,6 +34,7 @@ import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
 import { eTokenFor, gateFailure, isExpired, kTokenFor } from "./lib/artifactGates";
 import { decisionPageSlugs, findDecision, userMayRead } from "./lib/decisionAccess";
 import { bumpWindow } from "./ipRateLimit";
+import { readableConversation } from "./messages";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 
@@ -1938,5 +1939,29 @@ export const getShared = query({
       gated: false,
       user: user ? { name: user.name, image: user.image } : null,
     };
+  },
+});
+
+// The same safety valve as the image gallery's (messages.ts): one query reads the whole list.
+const CONVERSATION_PAGES_LIMIT = 2000;
+
+/** The pages this conversation published (`cast publish` from its session),
+ *  oldest first: the header gallery shows them beside its images. Only the
+ *  membership and when each joined, as one row keyed by the conversation; the
+ *  page itself (title, version, gates, capture) is embedInfo's to say. A republish from another session
+ *  moves the page to that session's gallery, as its provenance moves. */
+export const conversationPages = query({
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ _id: Id<"conversations">; pages: Array<{ slug: string; created_at: number }> }> => {
+    const out = { _id: args.conversation_id, pages: [] as Array<{ slug: string; created_at: number }> };
+    if (!(await readableConversation(ctx, args.conversation_id, args.share_token))) return out;
+    const rows = await ctx.db
+      .query("artifacts")
+      .withIndex("by_session_conversation", (q) => q.eq("session_conversation_id", args.conversation_id))
+      .take(CONVERSATION_PAGES_LIMIT);
+    out.pages = rows
+      .map((r) => ({ slug: r.slug, created_at: r.created_at }))
+      .sort((a, b) => a.created_at - b.created_at);
+    return out;
   },
 });

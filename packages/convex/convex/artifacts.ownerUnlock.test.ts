@@ -69,7 +69,7 @@ const info = (viewer: string | null, pages: Array<{ slug: string; decision?: str
 describe("embedInfo", () => {
   test("one row per page: open, gated with its tokens for the owner, missing", async () => {
     const [open, gated, missing] = await info("owner", [{ slug: "openpage" }, { slug: "trialpage" }, { slug: "nopage" }]);
-    expect(open).toEqual({ slug: "openpage", gated: false, title: "Open", version: 4, kind: "html" });
+    expect(open).toEqual({ slug: "openpage", gated: false, title: "Open", version: 4, kind: "html", thumb: false });
     expect(gated).toMatchObject({ slug: "trialpage", gated: true, title: "The fix", version: 2 });
     expect(gated.k).toBeTruthy();
     expect(missing).toEqual({ slug: "nopage", missing: true });

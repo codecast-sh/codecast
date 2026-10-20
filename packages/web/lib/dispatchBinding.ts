@@ -119,6 +119,7 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "setRoomRecording",
   "deleteCallRecording",
   "setCallShareVideo",
+  "setCallAgentFace",
   "admitGuestKnock",
   "denyGuestKnock",
   "removeCallGuest",

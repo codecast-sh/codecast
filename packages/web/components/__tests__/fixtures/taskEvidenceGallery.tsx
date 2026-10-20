@@ -56,7 +56,7 @@ test("thumbnail clicks open their full task list, navigate, close, and reset on 
     await click('[aria-label="Open evidence image 2 of 3"]');
     expect(current()?.src).toBe("https://images.example/a2.png");
     expect(document.body.textContent).toContain("2 / 3");
-    expect(document.querySelector('[role="dialog"][aria-modal="true"][aria-label="Image gallery"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"][aria-modal="true"][aria-label="Gallery"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="Copy link to image"]')).not.toBeNull();
     await press("ArrowRight");
     expect(current()?.src).toBe("https://images.example/a3.png");

@@ -16,7 +16,8 @@ import { isHostedMode } from "../../lib/surfaces";
 import { composerHasText, ORG_MEET_SETTLE_MS } from "../../lib/orgIntroCard";
 import { settingsPathFor } from "../../lib/settingsSections";
 import { RisingCard } from "../RisingCard";
-import { ThemeDot, useColorThemes } from "./ThemePicker";
+import { useColorThemes } from "../../hooks/useColorThemes";
+import { ThemeDot } from "./ThemePicker";
 
 const TOAST_ID = "theme-intro";
 /** After the org card's settle, so the two never rise together. */
