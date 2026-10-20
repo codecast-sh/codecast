@@ -31,7 +31,7 @@ import { pressRoomRecording, pressedRunOf, useRecordingCooling } from "@codecast
 import { useRoomTranscribeOff, useRoomWordsPublic } from "@codecast/web/hooks/useRoomTranscribeOff";
 import { useCoarseNow } from "@codecast/web/hooks/useCoarseNow";
 import { formatCallTime } from "@codecast/shared/entities";
-import { livekit } from "@/lib/calls/livekitNative";
+import { getLivekit } from "@/lib/calls/livekitNative";
 import {
   guestIdFromIdentity,
   isRecordingFilming,
@@ -42,7 +42,11 @@ import { mobileRouteForUrl } from "@/lib/linkRoutes";
 // VideoTrack from the guarded native module: on a binary without the LiveKit
 // natives it is null and the stage renders avatars only (joinCall refuses to
 // connect there anyway, so no video track can exist).
-const VideoTrack: any = livekit?.VideoTrack ?? (() => null);
+// Resolved at render, so the route module does not load LiveKit at boot.
+function VideoTrack(props: any) {
+  const View = getLivekit()?.VideoTrack as any;
+  return View ? <View {...props} /> : null;
+}
 import { Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Text } from "@/components/Themed";

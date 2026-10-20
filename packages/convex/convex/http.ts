@@ -4434,6 +4434,17 @@ cliRoute("/cli/moments/body", async (ctx, body) => {
 cliRoute("/cli/moments/rulings", async (ctx, body) => {
   return await ctx.runQuery(api.moments.rulingsForCli, body);
 });
+// Agent reviews (agentReviews.ts): a machine running reviews claims queued
+// ones, renews them while their sessions run, and hands each back; a person
+// starts, stops, retries and reads them.
+cliRoute("/cli/reviews/claim", async (ctx, body) => ctx.runAction(api.agentReviews.claimForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/renew", async (ctx, body) => ctx.runMutation(api.agentReviews.renewForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/done", async (ctx, body) => ctx.runAction(api.agentReviews.doneForCli, body), { forwardDeviceId: true });
+cliRoute("/cli/reviews/start", async (ctx, body) => ctx.runMutation(api.agentReviews.startForCli, body));
+cliRoute("/cli/reviews/status", async (ctx, body) => ctx.runQuery(api.agentReviews.statusForCli, body));
+cliRoute("/cli/reviews/cancel", async (ctx, body) => ctx.runMutation(api.agentReviews.cancelForCli, body));
+cliRoute("/cli/reviews/retry", async (ctx, body) => ctx.runMutation(api.agentReviews.retryForCli, body));
+cliRoute("/cli/reviews/transcript", async (ctx, body) => ctx.runAction(api.agentReviews.transcriptForCli, body));
 // Trial projects (lineTrial.ts): their cards, their spend, the switch, and a
 // card's answer from a terminal.
 cliRoute("/cli/line/trial/cards", async (ctx, body) => ctx.runQuery(api.lineTrial.cards, body));

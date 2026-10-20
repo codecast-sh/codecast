@@ -105,4 +105,16 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   return res;
 };
 
+// Every import is evaluated where it is first used, not when the importing
+// module loads. expo-router evaluates every route file before the root layout,
+// and their imports (the whole web store, the conversation screen) took over a
+// second of boot before the first frame. Side-effect imports (`import 'x'`)
+// still run in order. React Native's own template ships this on; Expo's
+// default config turns it off.
+const expoTransformOptions = config.transformer.getTransformOptions;
+config.transformer.getTransformOptions = async (...args) => {
+  const options = await expoTransformOptions(...args);
+  return { ...options, transform: { ...options.transform, inlineRequires: true } };
+};
+
 module.exports = config;

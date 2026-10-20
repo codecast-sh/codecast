@@ -61,15 +61,15 @@ type LegacyView = keyof typeof LEGACY_VIEWS;
 /** A view as a link may name it: its own name, or an earlier one. */
 export type LineViewName = LineView | LegacyView;
 
-export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null };
-export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null }>;
+export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null };
+export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null }>;
 
 type Search = { get(key: string): string | null } | null | undefined;
 
-const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item"] as const;
+const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group"] as const;
 type Key = (typeof KEYS)[number];
 /** Where a key lives in the address: the drawer's tab has its own name, `tab` belongs to the page hosting the app. */
-const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show", stage: "stage", item: "item" };
+const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show", stage: "stage", item: "item", who: "who", kind: "kind", area: "area", order: "order", group: "group" };
 /** The drawer's tabs, which an older link named as `tab`. */
 const DRAWER_TABS = new Set(["prompt", "decisions", "try", "ask"]);
 const legacyTab = (search: Search) => { const t = search?.get("tab"); return t && DRAWER_TABS.has(t) ? t : null; };
@@ -79,11 +79,12 @@ const modeOf = (v: string | null | undefined): LineMode | null => (!v ? null : (
 /** The selection each view reads; moving to a view drops the rest, unless the move names it. */
 // The Problems list's own keys (LJ5): its status chip, its process, the quiet narrowing and a figure's or bar's narrowing
 // (`found`: "more", or a picked bar's start) are places; search, sort and window are not.
-const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item"] as const;
+const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group"] as const;
 const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]>> = {
   // A decision rides into Problems only when the move names it: For you's reader settles one on its need, and a
   // problem's band shows its own without it, so a decision kept from another view would follow every later link.
-  foryou: ["need", "card", "decision"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"],
+  // For you's list keeps how it is filtered, ordered and grouped.
+  foryou: ["need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"],
 };
 /** The view that reads a step of its own (Problems reads one too, as an open run's playhead). */
 const STEP_VIEWS = new Set<LineView>(["line"]);
@@ -130,6 +131,11 @@ export function readLineSelection(search: Search): LineSelection {
     show: search?.get("show") || null,
     stage: stageOf(search?.get("stage")),
     item: search?.get("item") || null,
+    who: search?.get("who") || null,
+    kind: search?.get("kind") || null,
+    area: search?.get("area") || null,
+    order: search?.get("order") || null,
+    group: search?.get("group") || null,
   };
 }
 
