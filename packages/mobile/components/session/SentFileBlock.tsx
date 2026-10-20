@@ -10,20 +10,11 @@ import { View as RNView, TouchableOpacity, Image } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import Feather from '@expo/vector-icons/Feather';
-import { fileKind, formatFileSize, fileTypeLabel, type FileKind } from '@codecast/shared/files';
+import { fileKind, formatFileSize, fileTypeLabel, type FileKind, type SentFileData } from '@codecast/shared/files';
 import { Theme } from '@/constants/Theme';
 import { openLink } from '@/lib/links';
 
-export type SentFileData = {
-  name: string;
-  media_type: string;
-  size?: number;
-  storage_id?: string;
-  tool_use_id?: string;
-  caption?: string;
-  display?: string;
-  error?: string;
-};
+export type { SentFileData };
 
 const KIND_COLOR: Record<FileKind, string> = {
   image: Theme.magenta,

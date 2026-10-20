@@ -190,6 +190,22 @@ describe("orgRoles.staff", () => {
     expect((await workspaceAnchorFor(ctx, { team_id: TEAM }))?._id).toBe("anchor-t");
   });
 
+  test("a role's bot handle names the role: @marketgrowthlead reaches @growth, not the bot", async () => {
+    const BOT = "u".repeat(31) + "g";
+    const { ctx } = world({
+      users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: BOT, name: "Market Growth lead", is_bot: true, bot_kind: "role" }],
+      team_memberships: [
+        { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
+        { _id: "m2", user_id: BOT, team_id: TEAM, role: "member", joined_at: 1, visibility: "full" },
+      ],
+      org_roles: [{ _id: "role-growth", team_id: TEAM, name: "Market Growth lead", handle: "growth", short_id: "or-36", status: "active", anchor_id: "anchor-g" }],
+      anchors: [{ _id: "anchor-g", scope_type: "team", team_id: TEAM, bot_user_id: BOT, host_user_id: ME, name: "Market Growth lead", org_role_id: "role-growth", status: "active", conversation_id: "growth-conv", created_at: 1, updated_at: 1 }],
+    });
+    const m = await resolveChatMentions(ctx, TEAM, "@marketgrowthlead see this guy", ME as any);
+    expect(m.users).toEqual([]);
+    expect(m.refs).toEqual([{ kind: "role", role_id: "role-growth", short_id: "or-36", handle: "growth" }]);
+  });
+
   test("seat fresh: a new session is started and the old standing agent is retired in the same act, its thread kept and linked from the role", async () => {
     const BOT = "u".repeat(31) + "b";
     const { ctx, tables } = world({

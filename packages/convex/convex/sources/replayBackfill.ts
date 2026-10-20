@@ -358,6 +358,68 @@ export const savePage = internalMutation({
   },
 });
 
+/** A stopped or dead run picked up from its cursor, as a new run. */
+function resumedState(current: ReplayBackfill, now: number): ReplayBackfill {
+  const state: ReplayBackfill = { ...current, status: "running", failures_in_row: 0, started_at: now, updated_at: now };
+  delete state.last_error;
+  delete state.rate_limited_since;
+  delete state.finished_at;
+  return state;
+}
+
+/** A run's state on the source and its first page scheduled. */
+async function launch(ctx: any, source: Doc<"event_sources">, state: ReplayBackfill): Promise<void> {
+  await ctx.db.patch(source._id, { replay_backfill: state });
+  await ctx.scheduler.runAfter(0, internal.sources.replayBackfill.runPage, { source_id: source._id, run: state.started_at });
+}
+
+/**
+ * Once a source's recordings are imported, new ones keep coming over: a run
+ * that finished this long ago is followed by one over what arrived since (its
+ * `until`, less an overlap for recordings the vendor lists late). Imported
+ * recordings are skipped by id, so the overlap costs a list call.
+ */
+export const REPLAY_FOLLOW = { after_ms: 30 * 60_000, overlap_ms: 2 * 3600_000 } as const;
+
+/**
+ * What the tend cron does with one source's import: continue a run whose page
+ * chain died (an action killed mid page leaves it "running" with nothing
+ * scheduled), follow a finished one with the recordings since, or nothing. A
+ * pause or an error is a person's or the vendor's word and stays.
+ */
+export function tendImport(state: ReplayBackfill | undefined, now: number): ReplayBackfill | null {
+  if (!state) return null;
+  if (replayBackfillStalled(state, now)) return resumedState(state, now);
+  if (state.status !== "done" || now - (state.finished_at ?? state.updated_at) < REPLAY_FOLLOW.after_ms) return null;
+  const next: ReplayBackfill = { ...state, status: "running", since: state.until - REPLAY_FOLLOW.overlap_ms, until: now, started_at: now, updated_at: now };
+  delete next.cursor;
+  delete next.page_seen;
+  delete next.finished_at;
+  delete next.last_error;
+  delete next.failures_in_row;
+  delete next.rate_limited_since;
+  return next;
+}
+
+/** The tend cron (crons.ts): every active vendor source that has an import. */
+export const tend = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let tended = 0;
+    for (const provider of VENDORS) {
+      const sources = await ctx.db.query("event_sources").withIndex("by_provider_status", (q) => q.eq("provider", provider).eq("status", "active")).take(500);
+      for (const source of sources) {
+        const next = tendImport(source.replay_backfill, now);
+        if (!next) continue;
+        await launch(ctx, source, next);
+        tended++;
+      }
+    }
+    return { tended };
+  },
+});
+
 /** A vendor source the caller may change, or a refusal that says what to do instead. */
 async function vendorSource(ctx: any, args: ScopeArgs & { source: string }): Promise<Doc<"event_sources">> {
   const { userId, workspaceKey } = await scopeOf(ctx, args);
@@ -388,13 +450,9 @@ export const start = mutation({
     const resume = !args.restart && replayBackfillResumes(current, now) && window === current!.window;
     const since = replayBackfillSince(window, now);
     const state: ReplayBackfill = resume
-      ? { ...current!, status: "running", failures_in_row: 0, rate_limited_since: undefined, last_error: undefined, started_at: now, updated_at: now }
+      ? resumedState(current!, now)
       : { status: "running", window, ...(since !== undefined ? { since } : {}), until: now, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: now, updated_at: now };
-    delete state.last_error;
-    delete state.rate_limited_since;
-    delete state.finished_at;
-    await ctx.db.patch(source._id, { replay_backfill: state });
-    await ctx.scheduler.runAfter(0, internal.sources.replayBackfill.runPage, { source_id: source._id, run: now });
+    await launch(ctx, source, state);
     return { source: await sourceViewOf(ctx, (await ctx.db.get(source._id))!), started: true, resumed: resume };
   },
 });

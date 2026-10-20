@@ -245,6 +245,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
   startResourceOffload: MACHINE,
   cancelResourceOffload: MACHINE,
+  setSessionBackground: MACHINE,
   markBlockedReviveRequested: MACHINE,
   clearBlockedReviveRequested: MACHINE,
 
@@ -272,6 +273,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   mergeProblem: never("machine control: the server moves the twin's findings and drops it; reopening the twin is the way back"),
   trialClose: never("send: the problem leaves Stopped for everyone watching the trial; reopening its task is the way back"),
   passDecision: never("send: the decision reaches the person or role it was passed to, who is told at once"),
+  unassignDecision: never("send: the decision leaves the assignee's queue and is routed again; assigning it is the way back"),
   setModLocalDevice: SETTINGS,
   setTeamBudget: SETTINGS,
 

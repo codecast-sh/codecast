@@ -9,7 +9,7 @@ import { encryptConnectionSecret } from "../tokenConnectors";
 import * as tokenConnectorsModule from "../tokenConnectors";
 import * as ingestModule from "../ingest";
 import * as sentry from "./sentry";
-import { fromRrweb } from "@codecast/shared/replay";
+import { fromRrweb, replayIssues } from "@codecast/shared/replay";
 import {
   SENTRY_POLL,
   SENTRY_REPLAY,
@@ -409,6 +409,12 @@ describe("replays", () => {
     expect(events.map((e) => e.type)).toEqual(["nav", "click", "console", "network"]);
     expect(events.find((e) => e.type === "console")).toMatchObject({ level: "error", message: "Payment failed" });
     expect(events.find((e) => e.type === "network")).toMatchObject({ status: 500, method: "POST" });
+
+    // What the import groups (replays.importExternal, shared/replay/issues.ts): the failed write and the error, timed from the recording's start.
+    expect(replayIssues(events).map((i) => [i.kind, i.title, i.route, i.t])).toEqual([
+      ["error", "Payment failed", "/checkout", 2_100],
+      ["request", "POST api.example.com/pay answers 500", "/checkout", 2_200],
+    ]);
   });
 
   test("a segment list past the byte budget keeps what was read and says so; a refusal fails the import", async () => {

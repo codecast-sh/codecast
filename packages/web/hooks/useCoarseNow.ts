@@ -1,6 +1,7 @@
 import { useRef, useState, useSyncExternalStore } from "react";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { whenInputQuiet } from "../lib/inputQuiet";
 // Shared coarse clocks. One interval timer per distinct intervalMs, fanned out to
 // every subscriber — so a list of N cards all calling useCoarseNow(30000) costs a
 // SINGLE 30s timer, not N. Returns a millisecond timestamp that advances every
@@ -15,13 +16,20 @@ import { useWatchEffect } from "./useWatchEffect";
 // data freshness then scale independently: the list wakes only on structural
 // change, the clock ticks every interval regardless.
 
-type Clock = { now: number; listeners: Set<() => void>; timer: ReturnType<typeof setInterval> | null };
+type Clock = { now: number; listeners: Set<() => void>; timer: ReturnType<typeof setInterval> | null; deferred: (() => void) | null };
+
+// A clock this coarse re-places whole lists on its tick (the inbox's TTLs, the
+// digest compare), so while the person is typing its tick waits for a pause,
+// never more than TICK_MAX_DEFER_MS. Finer clocks drive countdowns on screen and
+// keep their beat.
+const DEFER_MIN_INTERVAL_MS = 10_000;
+const TICK_MAX_DEFER_MS = 3_000;
 const _clocks = new Map<number, Clock>();
 
 function clockFor(intervalMs: number): Clock {
   let c = _clocks.get(intervalMs);
   if (!c) {
-    c = { now: Date.now(), listeners: new Set(), timer: null };
+    c = { now: Date.now(), listeners: new Set(), timer: null, deferred: null };
     _clocks.set(intervalMs, c);
   }
   return c;
@@ -35,9 +43,18 @@ export function subscribeCoarseTick(intervalMs: number, listener: () => void): (
   const c = clockFor(intervalMs);
   c.listeners.add(listener);
   if (c.timer === null) {
-    c.timer = setInterval(() => {
+    const tick = () => {
+      c.deferred = null;
       c.now = Date.now();
       c.listeners.forEach((l) => l());
+    };
+    c.timer = setInterval(() => {
+      if (intervalMs < DEFER_MIN_INTERVAL_MS) tick();
+      else if (!c.deferred) {
+        let ran = false;
+        const cancel = whenInputQuiet(() => { ran = true; tick(); }, TICK_MAX_DEFER_MS);
+        if (!ran) c.deferred = cancel;
+      }
     }, intervalMs);
   }
   return () => {
@@ -45,6 +62,8 @@ export function subscribeCoarseTick(intervalMs: number, listener: () => void): (
     if (c.listeners.size === 0 && c.timer !== null) {
       clearInterval(c.timer);
       c.timer = null;
+      c.deferred?.();
+      c.deferred = null;
     }
   };
 }
