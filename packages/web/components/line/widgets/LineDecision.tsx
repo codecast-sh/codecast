@@ -80,6 +80,8 @@ export type LineDecisionProps = {
   onAnswered?: (decisionId: string, answer: string | null) => void;
   /** False when the host carries what to do after a settled decision (the problem page's new run): its banner then says only the state and when. */
   act?: boolean;
+  /** The host already says what kind of decision it is (the team's decision inbox): the answers carry no trial chip or note. */
+  quiet?: boolean;
   className?: string;
 };
 
@@ -123,7 +125,7 @@ export function LineDecision({ id, ...rest }: LineDecisionProps) {
 }
 
 /** The decision drawn from its row and detail; exported for a test that mounts it on a fixture. */
-export function LineDecisionBody({ decision, detail, answerable, source, onProblem, onRun, onClose, head = true, inline = false, onAnswered, act = true, className = "" }: Omit<LineDecisionProps, "id"> & { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
+export function LineDecisionBody({ decision, detail, answerable, source, onProblem, onRun, onClose, head = true, inline = false, onAnswered, act = true, quiet = false, className = "" }: Omit<LineDecisionProps, "id"> & { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
   const scope = useRef<HTMLElement>(null);
   const cardTask = decision.card?.cause.task ?? null;
   useSyncTaskEvidence(cardTask);
@@ -220,9 +222,9 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
           {/* Asking the session before answering sits with the answers, so it is in view at every scroll. */}
           <div className="ld-answers-row">
             <h2 className="ld-answers-h" data-line-decision-trial-note={trial ? "" : undefined}>
-              {trial && <Link className="ld-trial" href={trialHref} title="A trial run: your answer records what you would have done, and nothing ships. Open the trial">Trial</Link>}
+              {trial && !quiet && <Link className="ld-trial" href={trialHref} title="A trial run: your answer records what you would have done, and nothing ships. Open the trial">Trial</Link>}
               {trial ? "What would you do?" : "Your answer"}
-              {trial && <span className="ld-answers-sub">recorded, nothing ships</span>}
+              {trial && !quiet && <span className="ld-answers-sub">recorded, nothing ships</span>}
             </h2>
             {askAct}
           </div>

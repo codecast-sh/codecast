@@ -9,10 +9,11 @@ import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
-import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
+import { repairedClosedAt, repairedLineStatus, statusHistory } from "./lib/lineCauseRepair";
 import { moveTaskStatus } from "./tasks";
 import { noticeCardWaiting, noticeChangeShipped } from "./lineNotices";
 import { createDataContext } from "./data";
@@ -21,6 +22,7 @@ import { alignGateChoices } from "./lib/gateChoices";
 import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
+import { isLineRunSlug, lineVersionFor } from "./workflows";
 
 type Ctx = { db: any };
 
@@ -721,6 +723,12 @@ export const createFromCli = mutation({
 
     // Resolve workflow_id — either passed directly or look up by name
     let workflowDocId: any = args.workflow_id ? (args.workflow_id as any) : undefined;
+    let workflowName = args.workflow_name;
+    // A line run the daemon executes takes the problem's line version
+    // (workflows.lineVersionFor); a run in the calling process runs the graph
+    // that process already chose (cast workflow run asks for the version first).
+    const version = args.detach && isLineRunSlug(args.workflow_name) ? await lineVersionFor(ctx, userId, taskRow) : null;
+    if (version) { workflowDocId = version._id; workflowName = version.name; }
     if (!workflowDocId) {
       const wf = await ctx.db.query("workflows")
         .withIndex("by_user_id", q => q.eq("user_id", userId))
@@ -730,7 +738,7 @@ export const createFromCli = mutation({
     }
 
     const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
-      workflow_name: args.workflow_name,
+      workflow_name: workflowName,
       workflow_goal: args.workflow_goal,
       workflow_id: workflowDocId || undefined,
       task: taskRow,
@@ -741,7 +749,7 @@ export const createFromCli = mutation({
       force: args.force,
       now,
     });
-    if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, now });
+    if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
     // The session the run speaks as, resolved here when the caller had none,
     // so a runner in the foreground asks its failure decisions through it.
     return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null };
@@ -1718,48 +1726,6 @@ export const backfillWorkspace = internalMutation({
 });
 
 // ── LE16 repair: causes the old run end left in review ───────────────────────
-
-/**
- * The status a cause should hold, given the completed line run bound to it,
- * when the old run end overwrote it with in_review (no history row, so the
- * overwrite is silent): shipped and dissolved are done, dropped is dropped,
- * parked and a review reject are open. Null leaves the row alone. A status
- * moved through the history after the run ended was a person's, and stands.
- */
-export function repairedLineStatus(
-  task: { status: string; review_verdict?: { verdict: string } | null },
-  run: { status: string; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
-): "done" | "dropped" | "open" | null {
-  if (run.status !== "completed" || task.status !== "in_review") return null;
-  const end = lineRunOutcome(run.node_statuses)?.kind;
-  if (end === "shipped" || end === "dissolved") return "done";
-  if (end === "dropped") return "dropped";
-  if (end === "parked") return "open";
-  if (!end && isLineRun(run.node_statuses) && task.review_verdict?.verdict === "reject") return "open";
-  return null;
-}
-
-const statusHistory = async (ctx: any, taskId: any) =>
-  (await ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", taskId)).collect()).filter((h: any) => h.field === "status");
-
-/**
- * The close time a cause this repair already closed should carry: the time
- * its run reached the end. A first pass of the repair stamped its own time;
- * that write is the newest status row, a system's, after the run ended, at
- * exactly the closed_at it left. A person's later close stands. Null leaves it.
- */
-export function repairedClosedAt(
-  task: { status: string; closed_at?: number | null },
-  run: { status: string; updated_at: number; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
-  history: ReadonlyArray<{ created_at: number; new_value?: string; actor_type?: string }>,
-): number | null {
-  if (run.status !== "completed" || (task.status !== "done" && task.status !== "dropped") || !task.closed_at) return null;
-  const end = lineRunOutcome(run.node_statuses);
-  if (!end || end.kind === "parked" || Math.abs(task.closed_at - end.at) < 60_000) return null;
-  const last = [...history].sort((a, b) => b.created_at - a.created_at)[0];
-  const byRepair = !!last && last.created_at > run.updated_at && last.created_at === task.closed_at && last.new_value === task.status && (last.actor_type ?? "system") === "system";
-  return byRepair ? end.at : null;
-}
 
 /**
  * One time repair (LE16): walk completed runs, and move each line cause the

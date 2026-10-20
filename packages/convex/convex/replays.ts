@@ -38,7 +38,7 @@ import {
 } from "./lib/r2";
 import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, needsVendorImport, type ReplayEvent, type ReplayProvider } from "@codecast/shared/contracts/replay";
 import { INGEST_SHORT_ID_PREFIX, type IngestItem, type SourceProvider } from "@codecast/shared/contracts/ingest";
-import { parseReplayEvents, renderTimeline, replayCounts, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
+import { parseReplayEvents, renderTimeline, replayCounts, replayIssues, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
 import {
   REPLAY_DOM_LIMITS,
   REPLAY_FRAME_PATH,
@@ -318,8 +318,13 @@ export function gunzipCapped(bytes: Uint8Array, max: number): Uint8Array | null 
  * or does not hash to the sha its key names is skipped and counted: the
  * presigned PUT cannot enforce any of that, so this is where the limits and
  * content addressing are held to.
+ *
+ * `serverWritten` is for a recording this backend stored itself (a vendor
+ * import): chunks put before putChunk stopped marking them gzip come back
+ * inflated by fetch, so their bytes cannot hash to the key, and plain JSON is
+ * taken as is. An uploader's chunk is always held to its hash.
  */
-export async function readReplayChunks(bucket: R2Bucket, keys: readonly string[]): Promise<{ events: ReplayEvent[]; skipped: number }> {
+export async function readReplayChunks(bucket: R2Bucket, keys: readonly string[], opts: { serverWritten?: boolean } = {}): Promise<{ events: ReplayEvent[]; skipped: number }> {
   const events: ReplayEvent[] = [];
   let skipped = 0;
   for (const key of keys) {
@@ -327,7 +332,8 @@ export async function readReplayChunks(bucket: R2Bucket, keys: readonly string[]
     const bytes = res.ok ? await readBodyCapped(res, REPLAY_LIMITS.chunk_max_bytes) : null;
     if (!res.ok) await res.body?.cancel().catch(() => {});
     const want = parseReplayChunkKey(key)?.sha256;
-    if (!bytes || (want && (await sha256Hex(bytes)) !== want)) {
+    const inflatedByFetch = !!bytes && opts.serverWritten === true && !isGzip(bytes);
+    if (!bytes || (want && !inflatedByFetch && (await sha256Hex(bytes)) !== want)) {
       skipped++;
       continue;
     }
@@ -358,6 +364,18 @@ function summarize(events: ReplayEvent[], shortId: string) {
   };
 }
 
+/**
+ * The walls a stream shows (shared/replay/issues.ts) folded into the source's
+ * replay_issue groups (ingest.recordReplayIssues). Run after the stream is
+ * saved, by every action that reads one: assembly, a vendor import, a regroup.
+ */
+export async function applyIssues(ctx: { runMutation: any }, replayId: Id<"replays">, provider: ReplayProvider, events: ReplayEvent[], startUrl: string | undefined) {
+  // Our recorder's t counts from started_at; a vendor stream's from its first event (as dom_t0 reads it).
+  const issues = replayIssues(events, startUrl, provider === "sdk" ? 0 : events[0]?.t ?? 0);
+  if (!issues.length) return { groups: 0, transitions: 0 };
+  return await ctx.runMutation(internal.ingest.applyReplayIssues, { replay_id: replayId, issues_json: JSON.stringify(issues) });
+}
+
 /** The one write of a replay's cached timeline, in its own table so list reads never carry it. */
 export async function writeReplayTimeline(ctx: Db, replayId: Id<"replays">, timelineMd: string, now: number): Promise<void> {
   const existing = await ctx.db.query("replay_timelines").withIndex("by_replay", (q: any) => q.eq("replay_id", replayId)).first();
@@ -374,7 +392,7 @@ export const assemblyInputs = internalQuery({
   args: { replay_id: v.id("replays") },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.replay_id);
-    return row ? { short_id: row.short_id, chunk_keys: row.chunk_keys } : null;
+    return row ? { short_id: row.short_id, chunk_keys: row.chunk_keys, url: row.url, provider: row.provider } : null;
   },
 });
 
@@ -431,7 +449,9 @@ export const assemble = internalAction({
     const input = await ctx.runQuery(internal.replays.assemblyInputs, { replay_id: args.replay_id });
     if (!bucket || !input || !input.chunk_keys.length) return null;
     const { events, skipped } = await readReplayChunks(bucket, input.chunk_keys);
-    await ctx.runMutation(internal.replays.saveSummary, { replay_id: args.replay_id, chunk_keys: input.chunk_keys, skipped, ...summarize(events, input.short_id) });
+    const summary = summarize(events, input.short_id);
+    await ctx.runMutation(internal.replays.saveSummary, { replay_id: args.replay_id, chunk_keys: input.chunk_keys, skipped, ...summary });
+    await applyIssues(ctx, args.replay_id, input.provider, events, input.url ?? summary.url);
     return { events: events.length, skipped };
   },
 });
@@ -462,7 +482,11 @@ export async function putChunk(bucket: R2Bucket, key: string, body: Uint8Array):
   const res = await fetch(await r2Presign(bucket, "PUT", key, REPLAY_LIMITS.signed_url_ttl_s), {
     method: "PUT",
     body: body as unknown as BodyInit,
-    headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+    // No Content-Encoding, as the SDK uploads (platform analytics replay.ts):
+    // the object is these exact bytes and its key names their sha256. Marked
+    // gzip, every fetch hands it back inflated and the hash no longer matches.
+    // Every reader unzips gzip bytes itself.
+    headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) throw new Error(`R2 put of ${key} answered ${res.status}`);
 }
@@ -637,6 +661,7 @@ export const importExternal = internalAction({
       ...(args.dom_chunk_keys ? { dom_chunk_keys: args.dom_chunk_keys, dom_bytes: args.dom_bytes, dom_t0: args.dom_t0 } : {}),
       ...summarize(events, opened.short_id),
     });
+    await applyIssues(ctx, opened.replay_id, args.provider, events, events.find((e) => e.type === "nav")?.url);
     return { ...opened, chunks: keys.length };
   },
 });

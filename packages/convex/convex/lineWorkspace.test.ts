@@ -8,6 +8,7 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { stationSaid } from "./lineWorkspace";
+import { markerOfEvent, recordDeployMarker } from "./deploys";
 
 const api = anyApi as any;
 // convex-test loads the schema and modules on first use, slow on a busy machine.
@@ -18,6 +19,7 @@ const modules = {
   "./syncOutbox.ts": () => import("./syncOutbox"),
   "./dispatch.ts": () => import("./dispatch"),
   "./lineWorkspace.ts": () => import("./lineWorkspace"),
+  "./sessionDecisions.ts": () => import("./sessionDecisions"),
 };
 
 async function seed() {
@@ -161,6 +163,12 @@ describe("a cause's history", () => {
         team_id: s.team, workspace: `team:${s.team}`, source: "sdk", kind: "deploy", title: "Deployed 1.2.0 to prod", sha: "abc1234", source_id: source,
         data: { transition: "deploy", source_name: "union", provider: "sdk", release: "1.2.0", environment: "prod" }, dedupe_key: "ingest-deploy", created_at: now - 5 * DAY,
       } as any);
+      // Each marker is a deploy object, the way its write path records one (deploys.md DP1).
+      for (const e of await ctx.db.query("external_events").collect()) {
+        if (e.kind !== "deploy") continue;
+        const m = await markerOfEvent(ctx, e);
+        if (m) await recordDeployMarker(ctx, m);
+      }
       return { task: task._id };
     });
     return { ...s, ...extra };
@@ -305,5 +313,92 @@ describe("a project's line cards", () => {
     expect(rows[0].card).toEqual({ headline: "Pin the sender", change: "Pin it per thread", wrong: "It re-rolled", recommend: { verdict: "ship", why: "Holds" }, diff: { files: 2, added: 9, removed: 1 } });
     expect(rows[0].options).toEqual([{ label: "[S] Ship" }, { label: "[R] Revise" }]);
     expect(await as(String(eve)).query(api.lineWorkspace.cards, { project_id: project })).toEqual([]);
+  });
+
+  test("an open card is not history: its home is the team's open decisions", async () => {
+    const { t, ana, bo, project, run, as } = await seed();
+    await t.run(async (ctx) => {
+      const task = (await ctx.db.query("tasks").first())!;
+      await ctx.db.patch(task._id, { cause: { signal_count: 1, first_seen: 1, last_seen: 2, fingerprints: [] } } as any);
+      await ctx.db.insert("session_decisions", { user_id: ana, task_id: task._id, workflow_run_id: run, short_id: "sd-9", gate_node_id: "decide", status: "pending", question: "Ship it?", options: [], created_at: 4 } as any);
+    });
+    expect(await as(String(bo)).query(api.lineWorkspace.cards, { project_id: project })).toEqual([]);
+  });
+});
+
+// The Line page's decision inbox: every open decision a line asks in a team's workspace, read by index, the same rows
+// for every member, each saying whether it sits in the reader's own queue and how bad its problem's worst finding is.
+describe("the team's open line decisions", () => {
+  async function withDecision() {
+    const s = await seed();
+    const decision = await s.t.run(async (ctx) => {
+      const task = (await ctx.db.query("tasks").first())!;
+      await ctx.db.patch(task._id, { status: "in_review", cause: { signal_count: 2, first_seen: 1, last_seen: 2, fingerprints: [] } } as any);
+      // The run waits at its decide gate, so its decision stands.
+      await ctx.db.patch(s.run, { status: "paused", gate_node_id: "decide" } as any);
+      for (const severity of [5, 8]) await ctx.db.insert("signals", { task_id: task._id, severity, source: "judge", kind: "bug", title: "A finding", observed_at: 1, created_at: 1, workspace: `team:${s.team}` } as any);
+      const id = await ctx.db.insert("session_decisions", {
+        conversation_id: s.conv, user_id: s.ana, task_id: task._id, workflow_run_id: s.run, short_id: "sd-9", gate_node_id: "decide", status: "pending", question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }],
+        asked_user_ids: [s.ana], created_at: 4,
+      } as any);
+      await ctx.db.insert("decision_inbox", { decision_id: id, user_id: s.ana, status: "pending", created_at: 4 } as any);
+      // An answered one and a decision with no run are not open line decisions.
+      await ctx.db.insert("session_decisions", { conversation_id: s.conv, user_id: s.ana, task_id: task._id, workflow_run_id: s.run, short_id: "sd-8", status: "answered", question: "Old?", options: [], created_at: 3 } as any);
+      await ctx.db.insert("session_decisions", { conversation_id: s.conv, user_id: s.ana, task_id: task._id, short_id: "sd-7", status: "pending", question: "Lunch?", options: [], created_at: 3 } as any);
+      return id;
+    });
+    return { ...s, decision };
+  }
+
+  test("every member reads the same open decisions; each row says whose queue it is in and its worst severity", async () => {
+    const { team, ana, bo, eve, as } = await withDecision();
+    const workspace = `team:${team}`;
+    const forBo = await as(String(bo)).query(api.sessionDecisions.listOpenForLines, { workspaces: [workspace] });
+    expect(forBo.map((r: any) => r.short_id)).toEqual(["sd-9"]);
+    expect(forBo[0]).toMatchObject({ in_queue: false, problem_severity: 8, passed_to: null, line_workspace: workspace, session_title: "Dissolve" });
+    const forAna = await as(String(ana)).query(api.sessionDecisions.listOpenForLines, { workspaces: [workspace] });
+    expect(forAna[0]).toMatchObject({ in_queue: true, problem_severity: 8 });
+    expect(await as(String(eve)).query(api.sessionDecisions.listOpenForLines, { workspaces: [workspace] })).toEqual([]);
+    // The queue's own feed sends the same row the same way.
+    const queue = await as(String(ana)).query(api.sessionDecisions.listForUser, {});
+    expect(queue.find((r: any) => r.short_id === "sd-9")).toMatchObject({ in_queue: true, problem_severity: 8, passed_to: null });
+  });
+
+  test("a teammate assigns it to themself and takes it back: theirs, then back with the people it was asked of", async () => {
+    const { team, ana, bo, decision, as, dispatch, t } = await withDecision();
+    const workspace = `team:${team}`;
+    await dispatch(String(bo), "passDecision", [String(decision), { kind: "user", id: String(bo) }]);
+    const given = await as(String(bo)).query(api.sessionDecisions.listOpenForLines, { workspaces: [workspace] });
+    expect(given[0]).toMatchObject({ passed_to: { kind: "user", id: String(bo) }, asked_user_ids: [String(bo)], in_queue: true });
+    await dispatch(String(bo), "unassignDecision", [String(decision)]);
+    const back = await as(String(bo)).query(api.sessionDecisions.listOpenForLines, { workspaces: [workspace] });
+    expect(back[0]).toMatchObject({ passed_to: null, in_queue: false });
+    const row = await t.run((ctx) => ctx.db.get(decision));
+    expect(row?.passed_to).toBeUndefined();
+    expect(row?.asked_user_ids?.map(String)).toEqual([String(ana)]);
+    const inbox = await t.run((ctx) => ctx.db.query("decision_inbox").collect());
+    expect(inbox.map((i: any) => String(i.user_id))).toEqual([String(ana)]);
+  });
+});
+
+describe("a trial's open decisions", () => {
+  test("are read through its waiting cards, and a problem private to its owner stays out", async () => {
+    const s = await seed();
+    const { decision, privateDecision } = await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.project, { line_trial: { by: s.ana, since: 1 } } as any);
+      const task = (await ctx.db.query("tasks").first())!;
+      await ctx.db.patch(task._id, { status: "in_review", cause: { signal_count: 1, first_seen: 1, last_seen: 2, fingerprints: [] } } as any);
+      await ctx.db.patch(s.run, { status: "paused", gate_node_id: "decide" } as any);
+      const own = await ctx.db.insert("tasks", { title: "Private", short_id: "ct-2", user_id: s.ana, team_id: s.team, workspace: `user:${s.ana}`, project_id: s.project, status: "in_review", cause: { signal_count: 1, first_seen: 1, last_seen: 2, fingerprints: [] }, created_at: 1, updated_at: 1 } as any);
+      const mk = async (task_id: any, short_id: string) => {
+        const id = await ctx.db.insert("session_decisions", { conversation_id: s.conv, user_id: s.ana, task_id, workflow_run_id: s.run, short_id, gate_node_id: "decide", status: "pending", trial: true, question: "Q?", options: [], asked_user_ids: [s.ana], created_at: 4 } as any);
+        await ctx.db.insert("trial_cards", { workspace: `team:${s.team}`, team_id: s.team, project_id: s.project, task_id, run_id: s.run, short_id: `tc-${short_id}`, node_id: "decide", kind: "card", decision_id: id, status: "waiting", created_at: 4, updated_at: 4 } as any);
+        return id;
+      };
+      return { decision: await mk(task._id, "sd-20"), privateDecision: await mk(own, "sd-21") };
+    });
+    const rows = await s.as(String(s.bo)).query(api.sessionDecisions.listOpenForLines, { workspaces: [`team:${s.team}`] });
+    expect(rows.map((r: any) => String(r._id))).toEqual([String(decision)]);
+    expect(rows.map((r: any) => String(r._id))).not.toContain(String(privateDecision));
   });
 });

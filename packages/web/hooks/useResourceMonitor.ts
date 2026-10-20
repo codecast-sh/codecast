@@ -18,9 +18,9 @@ import type { MachineRole, OffloadPlan, OffloadRun, ResourceMachine, ResourceSes
 
 const api = _api as any;
 
-type MachineResourceRow = { _id: string; device_id: string; received_at: number; snapshot: MachineResourceSnapshot; history: ResourcePoint[] };
+type MachineResourceRow = { _id: string; device_id: string; received_at: number; snapshot: MachineResourceSnapshot; history: ResourcePoint[]; background_sessions?: string[] };
 
-const rowSig = (r: MachineResourceRow) => `${r.device_id}|${r.received_at}`;
+const rowSig = (r: MachineResourceRow) => `${r.device_id}|${r.received_at}|${(r.background_sessions ?? []).join(",")}`;
 
 /** Feeder: the caller's machine reports. Global (the top bar gauge reads it), so only the sync host subscribes; followers get the rows by replication. */
 export function useSyncMachineResources(enabled = true) {
@@ -52,6 +52,7 @@ export function joinMachines(devices: Device[], rows: MachineResourceRow[]): Res
       receivedAt: r?.received_at,
       snapshot: r?.snapshot,
       history: r?.history ?? [],
+      backgroundSessions: r?.background_sessions ?? [],
     };
   }).sort((a, b) => Number(b.role === "local") - Number(a.role === "local") || Number(!!b.snapshot) - Number(!!a.snapshot) || a.name.localeCompare(b.name));
 }

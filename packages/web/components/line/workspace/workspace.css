@@ -492,8 +492,11 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .lw-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lw-nav-count { font-variant-numeric: tabular-nums; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .lw-nav-count[data-tone="ask"] { color: var(--lw-person); font-weight: 650; }
-.lw-nav-key { opacity: 0; transition: opacity var(--lw-fast); }
+/* The go chord shows over the count on hover, so the label keeps the row's width. */
+.lw-nav-item { position: relative; }
+.lw-nav-key { position: absolute; right: 8px; opacity: 0; transition: opacity var(--lw-fast); }
 .lw-nav-item:hover .lw-nav-key, .lw-nav-item:focus-visible .lw-nav-key { opacity: .7; }
+.lw-nav-item:hover .lw-nav-count, .lw-nav-item:focus-visible .lw-nav-count { opacity: 0; }
 .lw-app .lw-body { flex: 1; min-width: 0; }
 
 .lw-filter { max-width: 240px; }

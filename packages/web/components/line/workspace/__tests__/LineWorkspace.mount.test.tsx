@@ -48,6 +48,9 @@ mock.module("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
 }));
 mock.module("../../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: null }) }));
+// An open decision paints from its row at once, and its parts (the change's code, its page) ask the server for more.
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => undefined, useAction: () => async () => ({ ok: false }), useConvex: () => ({ query: async () => null, mutation: async () => null, action: async () => null }) }));
 
 const { useInboxStore } = await import("../../../../store/inboxStore");
 const { LineWorkspace } = await import("../LineWorkspace");
@@ -89,11 +92,12 @@ beforeEach(() => { moves.length = 0; pushed.length = 0; seed(); });
 
 const key = (k: string) => act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
 
-test("the app: three pages, For you the home and the only count; G then a letter switches page, a digit never does", async () => {
+test("the app: its pages, Decisions the home and the only count; G then a letter switches page, a digit never does", async () => {
   search = "";
-  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000 } } } as any);
+  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["foryou", "problems", "line"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["foryou", "problems", "line", "deploys"]);
+  expect(host.querySelector("[data-line-view-tab='foryou'] .lw-nav-label")?.textContent).toBe("Decisions");
   expect(host.querySelector("[data-line-view-tab='foryou']")?.getAttribute("aria-current")).toBe("page");
   // One number, on the For you entry; no header chip, no auto-start switch, no picker or filter over every process.
   expect([...host.querySelectorAll("[data-line-waits]")].map((e) => e.getAttribute("data-line-waits"))).toEqual(["1"]);
@@ -112,9 +116,9 @@ test("the app: three pages, For you the home and the only count; G then a letter
 
 test("keys pressed inside an open decision are the decision's: G then P moves nothing", async () => {
   search = "need=sd-9";
-  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000 } } } as any);
+  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  const inside = host.querySelector<HTMLElement>("[data-line-decision-session='sd-9']")!;
+  const inside = host.querySelector<HTMLElement>("[data-line-foryou-reader] [data-line-decision]")!;
   expect(inside).not.toBeNull();
   const press = (k: string) => act(async () => { inside.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
   await press("g"); await press("p"); await press("j"); await press("k");
@@ -139,23 +143,23 @@ test("Problems carries the process picker and the project filter, with no for-yo
   await act(async () => { one.root.unmount(); });
 }, 30_000);
 
-test("For you lists the fix decision by what it asks, opens it in the reader on arrival, and a row click is a history entry", async () => {
+test("Decisions lists the fix decision by what it asks in a table, opens nothing by itself, and a row click is a history entry", async () => {
   search = "";
-  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship the resume fix?" } } } as any);
+  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship the resume fix?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  const row = host.querySelector<HTMLElement>("[data-line-need-row='decision']");
-  expect(row?.dataset.lineNeedRef).toBe("sd-9");
-  // No chips, buttons or ids on a row: what is asked, then where and how long.
-  expect(row?.querySelector("button, [data-line-inbox-decide]")).toBeNull();
-  expect(row?.getAttribute("aria-current")).toBe("true");
-  expect(host.querySelector("[data-line-foryou-reader]")?.getAttribute("data-line-foryou-reader")).toBe("decision");
-  // The reader is the asking session with its decision open.
-  expect(host.querySelector("[data-line-decision-session='sd-9']")).not.toBeNull();
-  // The address names what is drawn, in place: Back is not spent on it, and a click on the open row moves nothing.
-  expect(moves).toEqual(["/line?need=sd-9"]);
+  const row = host.querySelector<HTMLElement>(".fy-tr[data-line-need-ref='sd-9']");
+  expect(row?.querySelector(".fy-ask")?.textContent).toBe("Ship the resume fix?");
+  expect(host.querySelector("[data-line-foryou-reader]")).toBeNull();
+  expect(moves).toEqual([]);
+  await act(async () => { row!.click(); });
+  expect(pushed).toEqual(["/line?need=sd-9"]);
   await act(async () => { root.unmount(); });
+  pushed.length = 0;
   search = "need=sd-9";
   const named = await mount(React.createElement(LineWorkspace));
+  // Opened, the list sits beside the reader, and the reader is the decision itself.
+  expect(named.host.querySelector("[data-line-need-row='decision']")?.getAttribute("aria-current")).toBe("true");
+  expect(named.host.querySelector("[data-line-foryou-reader] [data-line-decision]")).not.toBeNull();
   await act(async () => { named.host.querySelector<HTMLElement>("[data-line-need-row='decision']")!.click(); });
   expect(pushed).toEqual([]);
   await act(async () => { named.root.unmount(); });

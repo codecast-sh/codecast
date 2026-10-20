@@ -5,6 +5,7 @@
 // three cannot drift. Pure types and one comparison; no runtime deps.
 import { canonicalJson } from "./appConnector";
 import type { SignalKind } from "./signalFingerprint";
+import { LINE_DEPLOY_DEFAULTS, type LineDeployProfile } from "./deploys";
 
 export type LineValueSource = "file" | "default";
 
@@ -39,6 +40,12 @@ export interface LineProfile {
    * published by a CLI older than the key: read it as the default.
    */
   merge?: { auto: boolean; method: "squash" | "merge" | "rebase" };
+  /**
+   * The line's deploy stage (`[line.deploy]`, deploys.md DP3): the team's
+   * deploy path and the target its markers name. Absent on a profile
+   * published by a CLI older than the key: the stage is off.
+   */
+  deploy?: LineDeployProfile;
   finders: LineFinder[];
 }
 
@@ -104,6 +111,7 @@ export const LINE_PROFILE_DEFAULTS: LineProfile = {
   commands: { check: "cast ws check", prove: null, eval: null, ship: null },
   caps: { cards: 5 },
   merge: { auto: false, method: "squash" },
+  deploy: LINE_DEPLOY_DEFAULTS,
   finders: [],
 };
 
@@ -275,7 +283,7 @@ export type PublishedRepoLine = {
   files: Record<string, { prompt?: string; script?: string }>;
 };
 
-const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "sources", "notes", "warnings", "line"] as const;
+const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "deploy", "sources", "notes", "warnings", "line"] as const;
 
 /** The content changed_at tracks: every fact but where it lives and who published it. */
 export function lineProfileContentKey(p: Omit<PublishedLineProfile, "changed_at"> | null | undefined): string {
