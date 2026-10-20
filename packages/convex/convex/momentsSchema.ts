@@ -15,8 +15,22 @@ import { v } from "convex/values";
 /** The embedding grouping compares by (lib/embeddings.ts): OpenAI text-embedding-3-small. */
 export const FINDING_VECTOR_DIMENSIONS = 1536;
 
-/** What a judge run read, as hashes: the messages (what was said) and the facts and text the extractor computed (moments.judgeInputsOf). */
+/** What a judge run read, as hashes: the messages (what was said) and the facts and text the extractor computed (lib/momentJudging.judgeInputsOf). */
 export const judgeInputs = v.object({ messages: v.string(), facts: v.string() });
+
+/** An agent judge's session (contracts/agentJudges AgentJudgeSpec), with the files its header names read in at publish. */
+export const agentJudgeFields = v.object({
+  tools: v.array(v.string()),
+  cwd: v.string(),
+  max_turns: v.number(),
+  timeout_ms: v.number(),
+  /** The text installed as the session's user-level CLAUDE.md. */
+  claude_md: v.optional(v.string()),
+  /** The gateway script, relative to the repo root, the reviewing machine starts. */
+  gateway: v.optional(v.string()),
+});
+
+export const agentReviewStatus = v.union(v.literal("queued"), v.literal("running"), v.literal("done"), v.literal("failed"), v.literal("cancelled"));
 
 const momentStatus = v.union(v.literal("waiting"), v.literal("extracting"), v.literal("ready"), v.literal("failed"));
 const budgetPurposes = v.object({ judge: v.number(), grouping: v.number(), call: v.number() });
@@ -60,6 +74,8 @@ export const momentsTables = {
     blocks: v.optional(v.number()),
     error: v.optional(v.string()),
     judged_at: v.optional(v.number()),
+    /** The bulk start that opened it (`cast line reviews start --batch`), carried to its agent reviews. */
+    batch: v.optional(v.string()),
     /** Lines a pending re-read was scoped to (`retry --again --lines`): the next judging grades all, files and lets go only these. */
     rejudge_lines: v.optional(v.array(v.string())),
     created_at: v.number(),
@@ -111,6 +127,8 @@ export const momentsTables = {
     parts: v.optional(v.array(v.string())),
     mode: v.union(v.literal("shadow"), v.literal("live")),
     prompt: v.string(),
+    /** Set for an agent judge: its reviews queue (agent_reviews) and run as sessions on machines. */
+    agent: v.optional(agentJudgeFields),
     publisher_user_id: v.id("users"),
     published_at: v.number(),
     /** Set when a publish no longer carries the file; a removed judge runs no more. */
@@ -145,7 +163,7 @@ export const momentsTables = {
     held_ids: v.optional(v.array(v.id("signals"))),
     /** Evidence keys it found and did not file, being one resample (judgeRetire.newOnResample): a read that found a key counts as a find when a later read weighs its misses. */
     waiting: v.optional(v.array(v.string())),
-    /** Hashes of what it read (moments.judgeInputsOf): a later miss lets a finding go at once only when these or the judge changed (judgeRetire.settleRun). */
+    /** Hashes of what it read (lib/momentJudging.judgeInputsOf): a later miss lets a finding go at once only when these or the judge changed (judgeRetire.settleRun). */
     inputs: v.optional(judgeInputs),
     /** Lines it filed and let go under, when scoped (`--lines`); absent for a run over every line. */
     lines: v.optional(v.array(v.string())),
@@ -158,6 +176,52 @@ export const momentsTables = {
     .index("by_moment", ["moment_id"])
     .index("by_judge_at", ["judge_id", "at"])
     .index("by_workspace_at", ["workspace", "at"]),
+
+  // LL8. One agent judge's review of one moment, from queued to settled. A
+  // machine running reviews claims queued ones (agentReviews.claim), runs each
+  // as a Claude Code session on a subscription login, and hands the result
+  // back; the settled review's judge_runs row is `run_id`, and the session's
+  // transcript is kept in R2 under `transcript_key` for a person to open.
+  agent_reviews: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    source_id: v.id("event_sources"),
+    judge_id: v.id("judges"),
+    judge: v.string(),
+    judge_version: v.string(),
+    moment_id: v.id("moments"),
+    moment_short_id: v.string(),
+    subject: v.string(),
+    short_id: v.string(), // "rv-N"
+    status: agentReviewStatus,
+    /** Who asked: the moment's judging, or a person's bulk start (its batch label). */
+    batch: v.optional(v.string()),
+    attempts: v.number(),
+    /** running: the machine and the saved profile it runs on, and when its lease ends. */
+    claim_device: v.optional(v.string()),
+    account: v.optional(v.string()),
+    lease_until: v.optional(v.number()),
+    started_at: v.optional(v.number()),
+    finished_at: v.optional(v.number()),
+    /** What the session took: wall time, turns, tokens, and what claude reports it would cost on the API (subscription quota, not money). */
+    took_ms: v.optional(v.number()),
+    turns: v.optional(v.number()),
+    usage: v.optional(v.object({ input: v.number(), output: v.number(), cache_read: v.number(), cache_write: v.number() })),
+    notional_usd: v.optional(v.number()),
+    findings: v.optional(v.number()),
+    filed: v.optional(v.number()),
+    run_id: v.optional(v.id("judge_runs")),
+    transcript_key: v.optional(v.string()),
+    transcript_bytes: v.optional(v.number()),
+    error: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_status_created", ["status", "created_at"])
+    .index("by_source_status", ["source_id", "status"])
+    .index("by_moment", ["moment_id"])
+    .index("by_judge_created", ["judge_id", "created_at"])
+    .index("by_short_id", ["short_id"]),
 
   // LL9. What a finding said happened, embedded, so a new finding can be
   // grouped with the problem whose findings read the same. Kept off the

@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { LINE_DEPLOY_KEYS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, type LineDeployTrigger } from "@codecast/shared/contracts/deploys";
 import {
   CAPS_KEYS,
   CODECAST_PRINCIPLES,
@@ -60,14 +61,15 @@ export class LineProfileError extends Error {
 }
 
 /** The values a profile file sets; anything absent takes the default. */
-export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K] }, "commands" | "caps" | "merge"> & {
+export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K] }, "commands" | "caps" | "merge" | "deploy"> & {
   commands?: { [K in keyof LineProfile["commands"]]?: string };
   caps?: { cards?: number };
   merge?: Partial<NonNullable<LineProfile["merge"]>>;
+  deploy?: Partial<NonNullable<LineProfile["deploy"]>>;
 };
 
-export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "finders"] as const;
-export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project"] as const;
+export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "deploy", "finders"] as const;
+export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project", "line"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 
@@ -164,6 +166,18 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
         values.merge.method = method as (typeof MERGE_METHODS)[number];
       }
     }
+    if (line.deploy !== undefined) {
+      if (!isTable(line.deploy)) throw new LineProfileError("[line.deploy] must be a table");
+      refuseUnknown(line.deploy, LINE_DEPLOY_KEYS, "[line.deploy]");
+      values.deploy = {};
+      if (line.deploy.command !== undefined) values.deploy.command = text(line.deploy.command, "[line.deploy] command");
+      if (line.deploy.target !== undefined) values.deploy.target = normalizeDeployTarget(text(line.deploy.target, "[line.deploy] target"));
+      if (line.deploy.trigger !== undefined) {
+        const trigger = text(line.deploy.trigger, "[line.deploy] trigger");
+        if (!(LINE_DEPLOY_TRIGGERS as readonly string[]).includes(trigger)) throw new LineProfileError(`[line.deploy] trigger must be one of ${LINE_DEPLOY_TRIGGERS.join(", ")}`);
+        values.deploy.trigger = trigger as LineDeployTrigger;
+      }
+    }
     if (line.finders !== undefined) {
       if (!Array.isArray(line.finders)) throw new LineProfileError("[[line.finders]] must be an array of tables");
       const seen = new Set<string>();
@@ -187,6 +201,7 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
           if (f.opens_causes) finder.opens_causes = true;
         }
         if (f.project !== undefined) finder.project = text(f.project, `${at} project`);
+        if (f.line !== undefined) finder.line = text(f.line, `${at} line`);
         return finder;
       });
     }
@@ -222,6 +237,11 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
     merge: {
       auto: pick("merge.auto", values.merge?.auto, d.merge!.auto),
       method: pick("merge.method", values.merge?.method, d.merge!.method),
+    },
+    deploy: {
+      command: pick("deploy.command", values.deploy?.command, d.deploy!.command),
+      target: pick("deploy.target", values.deploy?.target, d.deploy!.target),
+      trigger: pick("deploy.trigger", values.deploy?.trigger, d.deploy!.trigger),
     },
     finders: pick("finders", values.finders, d.finders),
   };
@@ -307,6 +327,9 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
     ["caps.cards", String(p.caps.cards)],
     ["merge.auto", String(p.merge?.auto ?? false)],
     ["merge.method", p.merge?.method ?? "squash"],
+    ["deploy.command", p.deploy?.command ?? "(none: the line stops at Ship)"],
+    ["deploy.target", p.deploy?.target ?? "(none)"],
+    ["deploy.trigger", p.deploy?.trigger ?? "person"],
   ];
   const width = Math.max(...rows.map(([k]) => k.length));
   const out = [r.file ? `profile ${r.file}` : `no ${LINE_PROFILE_REL_PATH}${r.root ? ` in ${r.root}` : ""}: every value is a default`, ""];
@@ -314,7 +337,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   out.push("", `finders (${p.finders.length}, ${r.sources.finders})`);
   for (const f of p.finders) {
     const kinds = f.kind === "any" ? "any" : f.kind.join(", ");
-    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens problems" : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
+    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens problems" : ""}${f.line ? `\n    line: ${f.line}` : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
   }
   if (r.notes.length) out.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.warnings.length) out.push("", ...r.warnings.map((w) => `warning: ${w}`));
@@ -354,6 +377,11 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `[line.merge]                       # what Ship does once a pull request is green`,
     `auto = ${d.merge!.auto}                       # true: Ship on a task or session merges too; false: only Ship on the PR page merges`,
     `method = ${q(d.merge!.method)}`,
+    ``,
+    `# [line.deploy]                    # the deploy stage: sends the shipped fixes waiting to go out, together`,
+    `# command = "..."                  # the team's deploy path, run from the repository root; $sha, $deploy, $actor expand`,
+    `# target = "production"           # the surface or environment its deploy markers name`,
+    `# trigger = "person"              # who starts it: person (today's only one), role, schedule, count`,
     ``,
     `# [[line.finders]]                 # what this project listens to; one table per finder`,
     `# id = "lessons"`,

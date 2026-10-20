@@ -15,7 +15,7 @@ import { cn } from "../../lib/utils";
 import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPlan";
 import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
-import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession } from "./types";
+import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession, StayingSession } from "./types";
 import { SPREAD_CEILING, assignDestinations, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
 
@@ -174,6 +174,33 @@ function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCan
   );
 }
 
+/** A session doing real work that cannot move: what it costs here, why it stays, and background priority to make it give way. */
+function StayingRow({ s, title, disabled, onBackground }: { s: StayingSession; title: string; disabled?: string; onBackground?: (on: boolean) => void }) {
+  const applied = s.background && s.lowered > 0;
+  return (
+    <div className="flex items-center gap-3 px-3.5 py-2.5" data-staying={s.sessionId}>
+      <span className="min-w-[6rem] flex-1">
+        <span className="block truncate text-[13px] text-sol-text">{title}</span>
+        <span className="block truncate text-[10px] text-sol-text-dim" title={s.reason}>{s.reason}</span>
+      </span>
+      <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">{fmtCpu(s.cpu)} · {fmtBytes(s.rss)}</span>
+      <button
+        type="button"
+        aria-pressed={s.background}
+        disabled={!onBackground}
+        title={disabled ?? (s.background ? (applied ? `${s.lowered} of ${s.processCount} processes at background priority` : "Waiting for the machine to apply it") : "Run at background priority: it gives way to everything else")}
+        onClick={() => onBackground?.(!s.background)}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+          s.background ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 text-sol-text-muted hover:text-sol-text",
+        )}
+      >
+        {applied && <Check className="h-3 w-3 text-sol-cyan" />}Background
+      </button>
+    </div>
+  );
+}
+
 function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
   c: OffloadCandidate; session?: ResourceSession; plan: OffloadPlan; destinationId?: string; onDestination: (id: string) => void;
 }) {
@@ -294,11 +321,13 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const setAll = (checked: boolean) => handEdit((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }])));
   const titleOf = (id: string) => byId.get(id)?.title ?? id;
   // Grouped by reason, largest first: a count per reason reads at a glance where a line per session does not.
+  // Busy ones are listed above with their load and controls; the rest group by reason.
+  const busy = new Set(plan.staying.map((st) => st.sessionId));
   const stayGroups = groupBy([
     ...blocked.map((c) => ({ id: c.sessionId, reason: Object.values(c.perDestination).flatMap((r) => r.blockers)[0] ?? "Blocked" })),
     ...plan.notOffered.map((n) => ({ id: n.sessionId, reason: n.reason })),
     ...unevaluated.map((id) => ({ id, reason: "Not checked yet" })),
-  ]);
+  ].filter((r) => !busy.has(r.id)));
   const stayCount = stayGroups.reduce((n, [, ids]) => n + ids.length, 0);
 
   const stopping = going.flatMap((c) => c.stops);
@@ -388,6 +417,26 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
               </div>
             </div>
 
+            {plan.staying.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline px-1 text-[11px] text-sol-text-dim">
+                  <span>{plural(plan.staying.length, "busy session")} staying here</span>
+                  <span className="ml-auto tabular-nums">{fmtCpu(plan.staying.reduce((n, s) => n + s.cpu, 0))}</span>
+                </div>
+                <div className="divide-y divide-sol-border/15 overflow-hidden rounded-xl bg-sol-bg-alt">
+                  {plan.staying.map((st) => (
+                    <StayingRow
+                      key={st.sessionId}
+                      s={st}
+                      title={titleOf(st.sessionId)}
+                      disabled={actionsDisabledReason}
+                      onBackground={actions?.onSetBackground && !actionsDisabledReason ? (on) => actions.onSetBackground!(plan.deviceId, st.sessionId, on) : undefined}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {canMove.length > 0 && (
               <div>
                 <div className="mb-1.5 flex items-baseline px-1 text-[11px] text-sol-text-dim">
@@ -417,7 +466,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
 
             <div className="space-y-2 px-1">
               {stayCount > 0 && (
-                <Disclosure label={`${stayCount} stay${stayCount === 1 ? "s" : ""} here`}>
+                <Disclosure label={`${stayCount}${busy.size ? " more" : ""} stay${stayCount === 1 && !busy.size ? "s" : ""} here`}>
                   {stayGroups.map(([reason, ids]) => <StayGroup key={reason} reason={reason} titles={ids.map(titleOf)} />)}
                 </Disclosure>
               )}

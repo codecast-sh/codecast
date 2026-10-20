@@ -20,6 +20,7 @@ import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
+import { recordDeployMarker } from "./deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
 const SHA = /^[0-9a-f]{7,40}$/;
@@ -119,6 +120,21 @@ export const markDeploy = mutation({
       dedupe_key: `deploy:${teamId}:${repository}:${surface}:${sha}:${now}`,
       created_at: now,
     });
-    return { ok: true as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null };
+    // The marker is a deploy object too (deploys.md DP1): it finishes the
+    // line's deploy on this surface, or records one of its own.
+    const user = await ctx.db.get(userId);
+    const deploy = await recordDeployMarker(ctx, {
+      workspace: `team:${teamId}`,
+      team_id: teamId,
+      target: surface,
+      sha,
+      ...(version ? { version } : {}),
+      repository,
+      source: "cast ship mark",
+      event_id: eventId,
+      started_by: { kind: "person", name: user?.name ?? user?.github_username ?? "someone", user_id: userId },
+      at: now,
+    });
+    return { ok: true as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
   },
 });
