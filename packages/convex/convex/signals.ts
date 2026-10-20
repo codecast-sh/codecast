@@ -2243,7 +2243,7 @@ export const singleInputs = internalQuery({
   args: { task: v.string() },
   handler: async (ctx, { task: ref }) => {
     const task: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-    if (!task?.cause || !isOpenCause(task)) return null;
+    if (!task?.cause || !task.workspace || !isOpenCause(task)) return null;
     const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).take(2);
     if (rows.length !== 1) return null;
     const signal = heldAsSignal(rows[0]);
