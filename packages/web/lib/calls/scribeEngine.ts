@@ -93,6 +93,10 @@ export function settleFailedAppends<S>(
  *  caption strip or a recording pill, never the transcript itself. */
 const TAIL = 6;
 
+/** Where a run's words go from its first line. `face: false` seats a fed
+ *  agent without its video avatar (convex/callFace.ts). */
+export type ScribeRoute = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean };
+
 export type ScribeStatus = {
   active: boolean;
   transcriptId: string | null;
@@ -125,7 +129,7 @@ export type ScribeEngine = {
   start(opts: {
     convex: ConvexHandle;
     roomKey: string;
-    routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
+    routes?: ScribeRoute[];
     auto?: boolean;
     pacing?: ScribePacing;
   }): Promise<string | null>;
