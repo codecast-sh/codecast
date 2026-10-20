@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { messagesSig, railMessagesSig } from "../useChatSync";
+import { messagesSig, railMessagesSig } from "../../store/chatWakeSigs";
 import type { ChatMessageRow } from "../../store/inboxStore";
 
 // The chat transcript re-renders only when this signature moves, so anything the

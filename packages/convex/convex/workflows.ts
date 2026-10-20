@@ -66,6 +66,9 @@ const upsertArgs = {
   stack: v.optional(v.string()),
   // Only a push from a file in a checkout carries it (cli lineGraphEdit.graphOrigin).
   origin: v.optional(graphOriginV),
+  // The finding sources whose problems this line version runs (the graph's
+  // `serves`): lineVersionFor routes a line run on a problem by them.
+  serves: v.optional(v.array(v.string())),
 };
 
 // One body for the CLI push and the web's edit: a row per (user, slug).
@@ -86,7 +89,8 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
   return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now });
 }
 
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any }) {
+// `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -101,6 +105,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
       model_stylesheet: args.model_stylesheet,
       // A push that does not say where the graph lives leaves what an earlier one said.
       ...(args.origin ? { origin: args.origin } : {}),
+      ...(serves !== undefined ? { serves: serves ?? undefined } : {}),
       updated_at: now,
     });
     if (args.origin) await recordGraphVersion(ctx, existing._id, userId, args.origin, now);
@@ -120,6 +125,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
     edges: args.edges,
     model_stylesheet: args.model_stylesheet,
     ...(args.origin ? { origin: args.origin } : {}),
+    ...(serves ? { serves } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -134,7 +140,8 @@ export const upsert = mutation({
     if (!result) return { error: "Unauthorized" };
     const user = await ctx.db.get(result.userId);
     if (!user) return { error: "User not found" };
-    return await upsertWorkflowFor(ctx, result.userId, args);
+    // A push says what its file serves: none named, none served.
+    return await upsertWorkflowFor(ctx, result.userId, { ...args, serves: args.serves?.length ? args.serves : null });
   },
 });
 
@@ -143,7 +150,8 @@ export const upsert = mutation({
 export const webUpsert = mutation({
   args: { ...upsertArgs, create_only: v.optional(v.boolean()) },
   // Only a machine's push says where a graph lives; the web never does.
-  handler: async (ctx, { stack: _stack, origin: _origin, ...args }) => {
+  // Which sources a version serves is the graph file's to say, so the web's edit leaves it.
+  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, ...args }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");

@@ -38,7 +38,7 @@ import {
 } from "./lib/r2";
 import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, needsVendorImport, type ReplayEvent, type ReplayProvider } from "@codecast/shared/contracts/replay";
 import { INGEST_SHORT_ID_PREFIX, type IngestItem, type SourceProvider } from "@codecast/shared/contracts/ingest";
-import { parseReplayEvents, renderTimeline, replayCounts, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
+import { parseReplayEvents, renderTimeline, replayCounts, replayIssues, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
 import {
   REPLAY_DOM_LIMITS,
   REPLAY_FRAME_PATH,
@@ -358,6 +358,17 @@ function summarize(events: ReplayEvent[], shortId: string) {
   };
 }
 
+/**
+ * The walls a stream shows (shared/replay/issues.ts) folded into the source's
+ * replay_issue groups (ingest.recordReplayIssues). Run after the stream is
+ * saved, by every action that reads one: assembly, a vendor import, a regroup.
+ */
+export async function applyIssues(ctx: { runMutation: any }, replayId: Id<"replays">, events: ReplayEvent[], startUrl: string | undefined) {
+  const issues = replayIssues(events, startUrl);
+  if (!issues.length) return { groups: 0, transitions: 0 };
+  return await ctx.runMutation(internal.ingest.applyReplayIssues, { replay_id: replayId, issues_json: JSON.stringify(issues) });
+}
+
 /** The one write of a replay's cached timeline, in its own table so list reads never carry it. */
 export async function writeReplayTimeline(ctx: Db, replayId: Id<"replays">, timelineMd: string, now: number): Promise<void> {
   const existing = await ctx.db.query("replay_timelines").withIndex("by_replay", (q: any) => q.eq("replay_id", replayId)).first();
@@ -374,7 +385,7 @@ export const assemblyInputs = internalQuery({
   args: { replay_id: v.id("replays") },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.replay_id);
-    return row ? { short_id: row.short_id, chunk_keys: row.chunk_keys } : null;
+    return row ? { short_id: row.short_id, chunk_keys: row.chunk_keys, url: row.url } : null;
   },
 });
 
@@ -431,7 +442,9 @@ export const assemble = internalAction({
     const input = await ctx.runQuery(internal.replays.assemblyInputs, { replay_id: args.replay_id });
     if (!bucket || !input || !input.chunk_keys.length) return null;
     const { events, skipped } = await readReplayChunks(bucket, input.chunk_keys);
-    await ctx.runMutation(internal.replays.saveSummary, { replay_id: args.replay_id, chunk_keys: input.chunk_keys, skipped, ...summarize(events, input.short_id) });
+    const summary = summarize(events, input.short_id);
+    await ctx.runMutation(internal.replays.saveSummary, { replay_id: args.replay_id, chunk_keys: input.chunk_keys, skipped, ...summary });
+    await applyIssues(ctx, args.replay_id, events, input.url ?? summary.url);
     return { events: events.length, skipped };
   },
 });
@@ -637,6 +650,7 @@ export const importExternal = internalAction({
       ...(args.dom_chunk_keys ? { dom_chunk_keys: args.dom_chunk_keys, dom_bytes: args.dom_bytes, dom_t0: args.dom_t0 } : {}),
       ...summarize(events, opened.short_id),
     });
+    await applyIssues(ctx, opened.replay_id, events, events.find((e) => e.type === "nav")?.url);
     return { ...opened, chunks: keys.length };
   },
 });

@@ -18,7 +18,7 @@ import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { SearchField } from "@/components/search/SearchField";
 import { TeamSwitcherButton } from "@/components/TeamSwitcher";
 import { TopbarButton } from "@/components/TopbarButton";
-import { InboxViewMenu } from "@/components/InboxViewMenu";
+import { InboxViewTabs } from "@/components/InboxViewTabs";
 import { SectionHeader } from "@/components/inbox/SectionHeader";
 import { SessionCardView, type SessionCardChrome } from "@/components/inbox/SessionCardView";
 import { InboxNavRow, NeedsInputCount } from "@/components/sidebar/navPrimitives";
@@ -214,11 +214,8 @@ function InboxListAt({ now }: PartProps) {
 
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden border-x border-sol-border/30">
-      <div className="cc-panel__head min-w-0">
-        <div className="flex items-center flex-shrink-0 ml-auto gap-0.5 rounded-md border border-sol-border/40 p-px">
-          <InboxViewMenu value="grouped" onChange={noop} hasLabels={false} hasPlans={false} hasTriggers={false} />
-        </div>
-      </div>
+      <div className="cc-panel__head min-w-0" />
+      <InboxViewTabs value="grouped" onChange={noop} hasLabels hasPlans={false} hasTriggers={false} />
       <div data-hero-live className="flex flex-col">
         {INBOX_SECTIONS.map((sec) => {
           const working = sec.key === "working";
