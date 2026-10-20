@@ -226,6 +226,7 @@ import type * as lib_hash from "../lib/hash.js";
 import type * as lib_hmac from "../lib/hmac.js";
 import type * as lib_httpRateLimit from "../lib/httpRateLimit.js";
 import type * as lib_ingestGroups from "../lib/ingestGroups.js";
+import type * as lib_ingestPayloads from "../lib/ingestPayloads.js";
 import type * as lib_ingestScope from "../lib/ingestScope.js";
 import type * as lib_ingestScopeArgs from "../lib/ingestScopeArgs.js";
 import type * as lib_initiativeRef from "../lib/initiativeRef.js";
@@ -733,6 +734,7 @@ declare const fullApi: ApiFromModules<{
   "lib/hmac": typeof lib_hmac;
   "lib/httpRateLimit": typeof lib_httpRateLimit;
   "lib/ingestGroups": typeof lib_ingestGroups;
+  "lib/ingestPayloads": typeof lib_ingestPayloads;
   "lib/ingestScope": typeof lib_ingestScope;
   "lib/ingestScopeArgs": typeof lib_ingestScopeArgs;
   "lib/initiativeRef": typeof lib_initiativeRef;

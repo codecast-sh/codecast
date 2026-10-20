@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ReplayEvent } from "../contracts/replay";
-import { errorLine, replayIssues, routeOf, sameSite } from "./issues";
+import { ECHO_MS, errorLine, replayIssues, routeOf, sameSite, serviceOf } from "./issues";
 
 const page = "https://app.example.com/orders/8f3a9c21?tab=items";
 
@@ -112,5 +112,51 @@ describe("replayIssues", () => {
   test("the start url places events before the first navigation", () => {
     const [i] = replayIssues([{ type: "error", t: 1, message: "boom" }], "https://app.example.com/start");
     expect(i.route).toBe("/start");
+  });
+});
+
+describe("one failure, one key", () => {
+  const at = (t: number, message: string): ReplayEvent => ({ type: "console", t, level: "error", message });
+  const get = (t: number, path: string, status: number): ReplayEvent => ({ type: "network", t, method: "GET", url: `https://app.example.com${path}`, status, ms: 40 });
+
+  test("errors written by several sites at once are one failure, whichever wrote first", () => {
+    const sdkFirst = replayIssues([{ type: "nav", t: 0, url: page }, at(10, "[Voice][Device] Received error: TransportError"), at(12, "VoiceProvider error: TransportError")]);
+    const providerFirst = replayIssues([{ type: "nav", t: 0, url: page }, at(10, "VoiceProvider error: TransportError"), at(13, "[Voice][Device] Received error: TransportError")]);
+    expect(sdkFirst.map((i) => i.fp)).toHaveLength(1);
+    expect(sdkFirst.map((i) => i.fp)).toEqual(providerFirst.map((i) => i.fp));
+  });
+
+  test("errors seconds apart stay apart", () => {
+    const issues = replayIssues([{ type: "nav", t: 0, url: page }, at(10, "VoiceProvider error: TransportError"), at(10 + ECHO_MS + 2400, "VoiceProvider error: AccessTokenInvalid")]);
+    expect(issues.map((i) => i.title)).toEqual(["VoiceProvider error: TransportError", "VoiceProvider error: AccessTokenInvalid"]);
+  });
+
+  test("an error that names the request that just failed is that request's; one that does not stays its own", () => {
+    const named = replayIssues([{ type: "nav", t: 0, url: page }, get(10, "/api/sync/teams", 403), at(14, "[sync] stopped (403) https://app.example.com/api/sync/teams")]);
+    expect(named.map((i) => i.kind)).toEqual(["request"]);
+    const unrelated = replayIssues([{ type: "nav", t: 0, url: page }, get(10, "/api/sync/teams", 403), at(14, "TypeError: total is undefined")]);
+    expect(unrelated.map((i) => i.kind)).toEqual(["request", "error"]);
+  });
+
+  test("a gateway status is the service's outage across its endpoints; a 500 keeps its endpoint", () => {
+    const issues = replayIssues([
+      { type: "nav", t: 0, url: page },
+      get(10, "/api/sync/shape/calls", 502),
+      get(20, "/api/sync/shape/needs", 503),
+      get(30, "/api/sync/shape/contacts", 524),
+      get(40, "/api/hitl/my-tasks", 502),
+      get(50, "/api/calls/heartbeat", 500),
+      get(60, "/api/calls/token", 500),
+    ]);
+    expect(issues.map((i) => i.title)).toEqual([
+      "/api/sync does not answer (502 on /api/sync/shape/calls)",
+      "/api/hitl does not answer (502 on /api/hitl/my-tasks)",
+      "GET /api/calls/heartbeat answers 500",
+      "GET /api/calls/token answers 500",
+    ]);
+  });
+
+  test("a service is the api's first segment, else the path's", () => {
+    expect([serviceOf("/api/sync/shape/calls"), serviceOf("/book"), serviceOf("/api/:id/x"), serviceOf("/")]).toEqual(["/api/sync", "/book", "/api", "/"]);
   });
 });
