@@ -426,6 +426,14 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["pass", "room", "last"] },
     feeds: ["lineStages.dispatch"],
   },
+  // An agent judge's reviews (lineStages.reviews): the queue by status, what
+  // runs where, the newest finished. Fed only while the judge's page is open.
+  lineReviews: {
+    persistence: { kind: "collection", key: "lineReviews" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["counts", "running", "recent", "failed", "averages"] },
+    feeds: ["lineStages.reviews"],
+  },
   // Saved views: the sidebar rail and its pinned rows. A pin lives in client
   // UI state and renders offline, but its click resolves the view row from
   // this collection — unpersisted, that lookup found nothing after an offline
@@ -847,19 +855,25 @@ export const CLIENT_SYNC_REGISTRY = {
   // Every line card on a project's causes, answered by anyone (the card's
   // words and answer, never its body): what each attempt proposed. The
   // viewer's own queue (sessionDecisions) is a card's live home; these fill
-  // in the cards it does not hold. Per project, so delta.
+  // in the cards it does not hold. Per project, so delta. The team's decision
+  // inbox reads its open cards, and assigning one there (passDecision) writes
+  // its passed_to and asked_user_ids here: localFirst keeps them until echoed.
   lineCards: {
     persistence: { kind: "collection", key: "lineCards" },
+    localFirst: true,
     hydration: { phase: "deferred" },
     indexes: "_id, project_id",
     sync: { isDelta: true, deepFields: ["card", "options"] },
     feeds: ["lineWorkspace.cards"],
   },
+  // Deploy objects (deploys.md): one row per project a deploy belongs to.
+  // Deploy on the Deploys view paints a stub keyed by client_key, which the
+  // server row supersedes.
   lineDeploys: {
     persistence: { kind: "collection", key: "lineDeploys" },
     hydration: { phase: "deferred" },
     indexes: "_id, project_id",
-    sync: { isDelta: true },
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
   },
   // The viewer's chat with a project's line (convex lineChat.thread): who
@@ -1002,6 +1016,16 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "pageEmbeds" },
     sync: { isDelta: true },
     feeds: ["artifacts.embedInfo"],
+  },
+  // The pages a conversation published (messages.getConversationPages), one
+  // row per conversation viewed, keyed by its Convex id: `pages` is the slugs
+  // and when each joined. The pages themselves live in pageEmbeds. Delta:
+  // each open conversation feeds its own row.
+  conversationPages: {
+    persistence: { kind: "collection", key: "conversationPages" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["pages"] },
+    feeds: ["messages.getConversationPages"],
   },
   // The anchor space, one row per scope key ("user" | "team:<id>"), keyed by
   // it. Delta so the scopes coexist; each push replaces its own row.
@@ -1287,10 +1311,11 @@ export const CLIENT_SYNC_REGISTRY = {
   // (getConversationPendingMessage). One row keyed by conversation id;
   // transient — never persisted (a reload re-derives it).
   pendingMessageStatus: {
-    // inflight (every waiting row, the shared queue) changes while the
-    // primary row's scalars stay put: a new queued message, a reorder, a
-    // merge. The engine skips nested arrays unless asked to compare them.
-    sync: { isDelta: true, deepFields: ["inflight"] },
+    // inflight (every waiting row, the shared queue) and delivered (rows
+    // whose echo may still be on its way) change while the primary row's
+    // scalars stay put: a new queued message, a reorder, a merge, a delivery.
+    // The engine skips nested arrays unless asked to compare them.
+    sync: { isDelta: true, deepFields: ["inflight", "delivered"] },
     feeds: ["pendingMessages.getConversationPendingMessage"],
   },
   // The message feed (getMessageFeed): the viewer's and teammates' user
@@ -1847,6 +1872,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   trialSpend: "shared",
   lineStages: "shared",
   lineDispatch: "shared",
+  lineReviews: "shared",
   shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
@@ -1902,6 +1928,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   opsAppCalls: "shared",
   artifacts: "shared",
   pageEmbeds: "shared",
+  conversationPages: "shared",
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",

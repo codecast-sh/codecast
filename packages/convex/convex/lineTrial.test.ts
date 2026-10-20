@@ -9,7 +9,8 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, rerunFromMainCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, problemEvidence, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, rerunFromMainCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, sweepClosed, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
+import { problemEvidence } from "./lib/problemEvidence";
 
 const HOST = "users_host" as any;
 const TEAM = "teams_acme" as any;
@@ -737,6 +738,29 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(r.ended).toEqual(["ct-merged"]);
     expect(merged.run()).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was merged into another while the run waited" });
     expect((await dispatchPass(w.ctx, (await w.ctx.db.get(TRIAL))!, NOW, true)).ended).toEqual([]);
+  });
+
+  test("the sweep closes every card still waiting on a closed problem, however its run ended, and leaves an open problem's card (retiring the old AgentWatch, 2026-10-20)", async () => {
+    const w = world(1000);
+    const paused = carded(w, "paused", 0, { read: [], covers: [] });
+    paused.task().status = "dropped";
+    const gone = carded(w, "gone", 0, { read: [], covers: [] });
+    gone.task().status = "dropped";
+    // Its run ended past a proposal whose question still stands (proposalHolds): the question goes with the card.
+    Object.assign(gone.run(), { status: "completed", gate_node_id: undefined });
+    w.tables.session_decisions.push({ _id: "session_decisions_gone", user_id: HOST, status: "pending", question: "Build it?", options: [], trial: true, workflow_run_id: "workflow_runs_gone", created_at: NOW - 60 });
+    gone.card().decision_id = "session_decisions_gone";
+    const open = carded(w, "open", 2, { read: ids("open", 0, 1), covers: ids("open", 0, 1) });
+    const project = (await w.ctx.db.get(TRIAL))!;
+    expect((await sweepClosed(w.ctx, project, NOW, true)).cards_closed.sort()).toEqual(["tc-gone", "tc-paused"]);
+    // Naming problems closes only theirs.
+    expect((await sweepClosed(w.ctx, project, NOW, true, ["ct-gone"])).cards_closed).toEqual(["tc-gone"]);
+    expect(paused.card().status).toBe("waiting");
+    const r = await sweepClosed(w.ctx, project, NOW, false);
+    expect(r.ended).toEqual(["ct-paused"]);
+    expect(paused.run()).toMatchObject({ status: "failed", fail_reason: "Stopped: the problem was dropped while the run waited" });
+    expect([paused.card().status, gone.card().status, open.card().status]).toEqual(["closed", "closed", "waiting"]);
+    expect(w.tables.session_decisions.find((d: any) => d._id === "session_decisions_gone").status).toBe("withdrawn");
   });
 
   test("the same outside spend twice within the hour is a repeat (card fix round 6, $40.67 twice)", () => {

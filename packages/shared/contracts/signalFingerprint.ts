@@ -141,6 +141,15 @@ export function ciCheckFingerprint(repository: string, workflow: string): string
   return checkFingerprint(`ci:${repository.trim().toLowerCase()}:${workflow}`);
 }
 
+/**
+ * A wall a recording shows (shared/replay/issues.ts): its kind, the route it
+ * happened on and the failure, so the same failure on the same page in many
+ * recordings is one replay_issue group.
+ */
+export function replayIssueFingerprint(kind: string, route: string, failure: string): string {
+  return `${kind}-${hex8(`${route}|${failure}`)}`;
+}
+
 /** A job's failures group by job name, whatever the case or spacing it was logged with. */
 export function jobFingerprint(job: string): string {
   return job.trim().toLowerCase().replace(/\s+/g, "_");

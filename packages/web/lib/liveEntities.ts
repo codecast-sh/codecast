@@ -590,6 +590,9 @@ export function findEntityInStore(
       // The workspace's recordings, as the Ops page last fed them. A moment
       // (`rp-12@1:23`) names the replay's row.
       return lookup(state.opsReplays, parseReplayRef(rawId)?.replay ?? rawId);
+    case "deploy":
+      // The line's deploys (lineDeploys), by `dp-N`.
+      return Object.values(state.lineDeploys ?? {}).find((d: any) => d?.short_id === rawId.toLowerCase()) as StoreEntitySeed | undefined;
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

@@ -1,4 +1,5 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { requestDeployCore } from "./deploys";
 import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
@@ -1798,6 +1799,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(runId)) throw new ConvexError("The run is still being created");
     return await landAgainCore(ctx, userId, runId as Id<"workflow_runs">);
   },
+  // "Deploy" on the Line page's Deploys view (deploys.md DP2): one deploy sending the project's waiting fixes, run on the machine that publishes its line.
+  deployLine: async (ctx, userId, [clientKey, projectId]: [string, string]) => {
+    if (!isServerId(projectId)) throw new ConvexError("The project is still being created");
+    return await requestDeployCore(ctx, userId as Id<"users">, projectId, { clientKey });
+  },
   // "Stop the run" on a run far past its usual time: it ends as a person's cancel, and its task says so.
   stopLineRun: async (ctx, userId, [runId]: [string]) => {
     if (!isServerId(runId)) throw new ConvexError("The run is still being created");
@@ -3060,6 +3066,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
+  },
+  setSessionBackground: async (ctx, _userId, [device_id, session_id, background]: [string, string, boolean]) => {
+    return ctx.runMutation!(api.machineResources.setSessionBackground, { device_id, session_id, background });
   },
   hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
     return await ctx.runMutation!((api as any).sessionCommands.hibernate, {

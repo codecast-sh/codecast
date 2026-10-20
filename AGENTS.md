@@ -100,6 +100,14 @@ Most people use codecast through the app (web, desktop, phone), not the CLI. Use
 
 **Build simulator binaries with signing allowed.** A simulator build carries its entitlements in a `__TEXT,__entitlements` section of the binary. A build made with `CODE_SIGNING_ALLOWED=NO` has none, every keychain call fails ("A required entitlement isn't present"), and nobody can sign in on it. Check with `otool -s __TEXT __entitlements <App>.app/<App>`.
 
+## Render gallery (every transcript rendering in one conversation)
+
+`packages/web/lib/renderGallery.ts` is one conversation that holds a row of every kind a transcript draws: each user-row kind the classifier returns, markdown blocks and all four phone table layouts, every fence, references alone on a line, each tool family, every `cast` command card, failure banners, compaction progress, workflow events and system subtypes. Both apps draw it, so a renderer change is checked against everything at once, and web against mobile side by side.
+
+- **Look at it.** Open any conversation, then `bun packages/web/scripts/render-gallery.ts --web` (your cast browser tab) or `--mobile [metro port]` (the app on a simulator). The rows go into the local store only and never reach the server; `--clear` removes them. On a simulator, the store shots build (`packages/mobile/store-shots/relaunch.sh`) gives a fixture conversation to load it into.
+- **Keep it complete.** When a renderer learns something new (a row kind, fence, tool card, `cast` card, banner, system subtype), add its row to the gallery in the same change. `packages/web/lib/__tests__/renderGallery.test.ts` fails when the classifier, `renderFence`, the tool families, the `cast` card categories, the system subtypes either app checks, or the failure-banner kinds name something the gallery lacks; `packages/mobile/lib/markdown.test.ts` fails when its tables stop covering every phone layout. Fix the gallery, never the test.
+- **Build rows with the real producers.** Use a wire format's builder (`formatSessionMessage`, `formatDecisionAnswer`, the banner prefixes, …) when one exists, so the gallery follows the format when it changes.
+
 ## Store (inboxStore)
 
 ### Local-first is the law
@@ -191,6 +199,22 @@ __navLog()                                  // audit trail of every view change 
 ```
 
 Raw `setState` writes to `currentSessionId`/`pendingNavigateId` are reverted by the view-motion guard (`store/viewNav.ts`): every change of the visible conversation must declare a source, and machine-initiated sources can't move the view mid-session. If a "random session jump" is ever reported, read `__navLog()` first — it names the writer.
+
+## Typing budget
+
+Typing in the composer stays as cheap as typing in a bare text field, with the
+cache a busy account holds (thousands of sessions). `packages/web/scripts/typing-guard.sh`
+holds the budget and runs before every ship that touches web, shared or platform
+code (`.codecast/workspace.toml`) and in CI: a keystroke into a box with text
+commits React once, writes nothing to the store and changes no DOM outside the
+textarea; no store subscription compares a long string (a wake signature is a
+digest: `makeCollectionSig`, never the rows spelled out); a write nothing reads
+re-renders nothing; list rows run no infinite animation (one pulsing dot per
+running agent re-layers the page every frame); transcript rows are not
+compositor layers; a typed key that matches no shortcut never queries the DOM.
+Background bulk work (a coalesced inbox apply, a coarse clock tick) waits for a
+pause in typing through `lib/inputQuiet.ts`. When the guard fails, fix the cost
+it names; never loosen the budget to get past it.
 
 ## Prompt evals (`evals`)
 
