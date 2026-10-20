@@ -242,6 +242,17 @@ export const ingestTables = {
     last_transition_at: v.optional(v.number()),
     external: v.optional(v.object({ provider: v.string(), id: v.string(), url: v.optional(v.string()) })),
     signal_task_id: v.optional(v.id("tasks")),
+    /**
+     * A promotion the source's hourly cap refused (SOURCE_CAPS.promotions_per_hour):
+     * kept, not lost, and filed by ingest.promoteDue once the window has room.
+     * One per group; a newer refusal replaces it.
+     */
+    promotion_due: v.optional(v.object({
+      transition: transitionValidator,
+      fingerprint: v.string(),
+      external_event_id: v.optional(v.id("external_events")),
+      at: v.number(),
+    })),
     /** How many event_samples rows the group holds, so the trim deletes only the overflow. Absent on older rows. */
     sample_count: v.optional(v.number()),
     meta: v.optional(v.object({
@@ -263,7 +274,8 @@ export const ingestTables = {
     .index("by_source_status_last_seen", ["source_id", "status", "last_seen"])
     // The daily bucket prune reads only groups whose buckets can still change.
     .index("by_last_seen", ["last_seen"])
-    .index("by_short_id", ["short_id"]),
+    .index("by_short_id", ["short_id"])
+    .index("by_promotion_due", ["promotion_due.at"]),
 
   // X3. Recent occurrences of a group, at most GROUP_RULES.samples_per_group,
   // pruned by a cron. Bodies never ride list queries.

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { gzipSync, strToU8 } from "fflate";
 import schema from "./schema";
@@ -21,6 +21,7 @@ import {
   listGroups,
   listSources,
   linkSignal,
+  promoteDue,
   promotionInputs,
   promotionSignal,
   rotateKey,
@@ -432,12 +433,25 @@ describe("what one source can cost (review fixes)", () => {
     expect(w.db._tables.event_groups).toHaveLength(SOURCE_CAPS.new_groups_per_hour + 1);
   });
 
-  test("promotions past the hourly cap stay on the timeline without filing a signal", async () => {
+  test("promotions past the hourly cap wait on their group and file once the window has room", async () => {
     const w = await armedWorld();
     const { source } = await teamSource(w);
     for (let i = 0; i < SOURCE_CAPS.promotions_per_hour + 3; i++) await batch(w, source._id, [err(`E${i}`, { fingerprint: `p${i}` })]);
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour);
     expect(names(w).filter((n) => n === "agentTasks:matchTaskTriggers")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
+    const due = () => w.db._tables.event_groups.filter((g: any) => g.promotion_due);
+    expect(due()).toHaveLength(3);
+    // Still the same hour: the window has no room, so nothing more files.
+    expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: 3, filed: 0 });
+    // An hour on, the held-back three file and leave nothing due.
+    setSystemTime(new Date(Date.now() + 3_600_000 + 1_000));
+    try {
+      expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: 3, filed: 3 });
+    } finally {
+      setSystemTime();
+    }
+    expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
+    expect(due()).toHaveLength(0);
   });
 
   test("a deploy's sha joins the release's errors to the commit and the session that wrote it", async () => {
