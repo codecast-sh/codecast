@@ -178,6 +178,23 @@ export async function resolveChatMentions(
   // The team's role, then the sender's personal one; never a retired seat.
   const roleByHandle = async (handle: string): Promise<Doc<"org_roles"> | null> =>
     (await liveRoleByHandle(ctx, { team_id: teamId }, handle)) ?? (await liveRoleByHandle(ctx, { scope_user_id: senderId }, handle));
+  // A role's standing agent is a bot named after the role ("Market Growth
+  // lead" answers to @marketgrowthlead), so its own handle is a second name
+  // for the seat: the mention reaches the role, not the bot. Same boundary as
+  // roleByHandle.
+  const roleOfBot = async (botId: Id<"users">): Promise<Doc<"org_roles"> | null> => {
+    const anchor = await ctx.db
+      .query("anchors")
+      .withIndex("by_bot_user", (q: any) => q.eq("bot_user_id", botId))
+      .first();
+    if (!anchor?.org_role_id) return null;
+    const role = await ctx.db.get(anchor.org_role_id);
+    if (!role) return null;
+    const inBoundary = role.team_id
+      ? role.team_id.toString() === teamId.toString()
+      : role.scope_user_id?.toString() === senderId.toString();
+    return inBoundary ? role : null;
+  };
   const workspaceAgentRole = async (): Promise<Doc<"org_roles"> | null> => {
     for (const boundary of [{ team_id: teamId }, { scope_user_id: senderId }]) {
       for (const h of [EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE]) {
@@ -208,7 +225,7 @@ export async function resolveChatMentions(
       }
       continue;
     }
-    const role = await roleByHandle(handle);
+    const role = (await roleByHandle(handle)) ?? (person ? await roleOfBot(person._id) : null);
     if (role && role.status !== "retired") {
       // The role wins over its own bot: one handle names one party.
       if (person) users = users.filter((id) => id.toString() !== person._id.toString());

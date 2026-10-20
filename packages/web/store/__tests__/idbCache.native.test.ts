@@ -68,6 +68,8 @@ const {
   _resetPersistedShadow,
   flushPersistence,
   persistPendingMessageChanges,
+  loadSplitRows,
+  persistSplitRows,
 } = await import("../idbCache.native");
 
 const { noteSnapshotSync, _resetSnapshotLedger } = await import("../idbCollectionDiff");
@@ -432,5 +434,21 @@ describe("idbCache.native", () => {
 
     const outbox = await loadOutbox();
     expect(outbox.map((e) => e.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("keeps the split feeder's rows with their hashes, and drops the ones that left", async () => {
+    persistSplitRows("conversations:listInboxSessions", [
+      { id: "a", hash: "h1", row: { _id: "a", title: "one\ntwo" } },
+      { id: "b", hash: "h2", row: { _id: "b" } },
+    ], []);
+    await flushPersistence();
+    expect(await loadSplitRows("conversations:listInboxSessions")).toEqual([
+      { id: "a", hash: "h1", row: { _id: "a", title: "one\ntwo" } },
+      { id: "b", hash: "h2", row: { _id: "b" } },
+    ]);
+    expect(await loadSplitRows("conversations:sessionsLiveness")).toEqual([]);
+    persistSplitRows("conversations:listInboxSessions", [], ["a"]);
+    await flushPersistence();
+    expect((await loadSplitRows("conversations:listInboxSessions")).map((r) => r.id)).toEqual(["b"]);
   });
 });

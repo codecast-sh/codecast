@@ -111,6 +111,8 @@ export type OpsEvent = {
     value?: number;
     threshold?: number;
   };
+  /** A deploy marker names the deploy object it recorded or finished (dp-N, deploys.md). */
+  meta?: { deploy?: string };
   created_at: number;
 };
 

@@ -18,7 +18,7 @@ type FilterExpr =
   | { kind: "op"; op: string; args: FilterExpr[] };
 
 function evalFilter(expr: FilterExpr, row: any): any {
-  if (expr.kind === "field") return row[expr.name];
+  if (expr.kind === "field") return fieldValue(row, expr.name);
   if (expr.kind === "literal") return expr.value;
   const a = expr.args.map((arg) => evalFilter(arg, row));
   switch (expr.op) {

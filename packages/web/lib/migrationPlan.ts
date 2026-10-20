@@ -21,6 +21,8 @@ export type MigrationCandidate = {
   cloud_placement: string | null;
   inbox_stashed_at: number | null;
   inbox_dismissed_at: number | null;
+  /** Why the server will not move it on its own (a workflow step, an in-process subagent). */
+  held_reason?: string | null;
 };
 
 export type MigrationDevice = {
@@ -42,6 +44,7 @@ export function eligibilityFor(
   devices: MigrationDevice[],
 ): Eligibility {
   if (!target) return { ok: false, reason: "pick a destination" };
+  if (c.held_reason) return { ok: false, reason: c.held_reason };
   if (c.migration) return { ok: false, reason: `already migrating (${c.migration.batch_id})` };
   if (c.cloud_placement === "pending") return { ok: false, reason: "still being placed on the cloud host" };
   if (!CLAUDE_TYPES.has((c.agent_type ?? "").toLowerCase())) return { ok: false, reason: "only Claude Code sessions can be transferred" };

@@ -20,6 +20,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { deliveryBadge, isoToWords } from "../../../lib/line/momentWords";
 import { momentViewRef } from "../../../lib/productViewRefs";
 import { ProductView } from "./ProductView";
+import { ReviewSession } from "../workspace/stages/AgentReviews";
 import "./momentView.css";
 
 type MomentRow = NonNullable<FunctionReturnType<typeof api.lineMoments.momentForWeb>>;
@@ -290,6 +291,8 @@ export const MomentView = memo(function MomentView({ moment, cited, foldAt = 300
   const { body, loading } = useMomentBody(moment, kept);
   const [open, setOpen] = useState(false);
   const [saw, setSaw] = useState(false);
+  // An agent judge's review session opened in place: its transcript, both turns.
+  const [session, setSession] = useState<string | null>(null);
   // The cited finding's own quote leads, so the block opened on is the one this finding is about.
   const flags = useMemo(() => {
     const all = (m?.runs ?? []).flatMap((r) => r.findings.map((f) => ({ ...f, judge: r.judge })));
@@ -387,6 +390,18 @@ export const MomentView = memo(function MomentView({ moment, cited, foldAt = 300
               {context.map((b, i) => <Block key={i} b={b} quotes={quotes} />)}
             </div>
           )}
+          {m.reviews.length > 0 && (session ? <ReviewSession review={session} back="Moment" onBack={() => setSession(null)} /> : (
+            <div className="mv-runs" data-line-moment-reviews={m.reviews.length}>
+              {m.reviews.map((r) => (
+                <div key={r.review} className="mv-run mv-run-h">
+                  <span className="mv-ref"><i>review</i>{r.review}</span>
+                  <span>{r.judge}</span>
+                  <span className="mv-dim">{r.status === "done" ? `${r.findings ?? 0} found${r.took_ms ? ` · ${(r.took_ms / 60_000).toFixed(1)} min` : ""}` : r.status}</span>
+                  {r.transcript && <button type="button" className="lw-chip" onClick={() => setSession(r.review)} data-line-moment-review-open={r.review}>Open session</button>}
+                </div>
+              ))}
+            </div>
+          ))}
           {m.runs.length > 0 && (
             <div className="mv-runs" data-line-moment-runs={m.runs.length}>
               {m.runs.map((r, i) => <RunLine key={i} r={r} cited={cited} above={flagged >= 0 ? verdict : null} />)}

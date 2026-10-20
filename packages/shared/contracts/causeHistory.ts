@@ -180,6 +180,8 @@ export type OccurrenceRow = {
 /** A deploy codecast knows of for the project (lineWorkspace.deploys). */
 export type DeployRow = {
   _id: string;
+  /** The deploy object's short id (dp-N, deploys.md); absent on a row read before deploys were objects. */
+  short_id?: string;
   project_id: string;
   at: number;
   sha: string | null;
@@ -303,6 +305,8 @@ export type CarriedHow = "same commit" | "deployed after the merge";
 
 export type HistoryDeploy = {
   id: string;
+  /** The deploy's short id (dp-N), which opens it; null when the row has none. */
+  ref: string | null;
   at: number;
   sha: string | null;
   /** The surface or environment it went to ("backend", "prod"); null when the record names neither. */
@@ -475,7 +479,7 @@ export function carryingDeploys(merge: AttemptMerge, deploys: ReadonlyArray<Depl
     const key = deployTarget(d) ?? d.source;
     if (byTarget.has(key)) continue;
     byTarget.set(key, {
-      id: d._id, at: d.at, sha: d.sha, target: deployTarget(d), version: d.version, source: d.source, title: d.title, url: d.url,
+      id: d._id, ref: d.short_id || null, at: d.at, sha: d.sha, target: deployTarget(d), version: d.version, source: d.source, title: d.title, url: d.url,
       runId, how: exact ? "same commit" : "deployed after the merge",
     });
   }

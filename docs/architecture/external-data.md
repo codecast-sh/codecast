@@ -414,10 +414,60 @@ than the longest wait plus the longest action, so a live import never reads as
 stalled) continues from the cursor on the next start; `--restart` or another
 window starts over.
 `started_at` names the run, so a page left scheduled by an earlier run does
-nothing. Imported recordings link to no groups: a Sentry replay is linked
-through its issue as before, and matching a PostHog recording's errors to
-groups is left out. Chunks still expire with the bucket's 30-day lifecycle
-rule, so "all" brings older recordings over only for a month.
+nothing. An imported recording links to the replay issue groups its stream
+shows (below), and a Sentry replay is also linked through its issue as before.
+Chunks still expire with the bucket's 30-day lifecycle rule, so "all" brings
+older recordings over only for a month.
+
+Once a source has an import, the "tend replay imports" cron
+(`replayBackfill.tend`, every 15 minutes) keeps it going. A run still marked
+running whose pages stopped (an action killed mid page leaves nothing
+scheduled, which stalled Union's import for 13 days in October 2026) continues
+from its cursor. A run that finished more than 30 minutes ago is followed by
+one over the recordings since its `until`, less a two-hour overlap for
+recordings the vendor lists late; the overlap costs list calls only, since
+imported recordings are skipped by id. A pause or a stop on an error stays
+until a person starts it again.
+
+**Replay issues.** A recording that shows a person hitting a wall feeds
+`replay_issue` groups, so replays reach the line the way errors do.
+`replayIssues(events)` (`shared/replay/issues.ts`) reads the stream once and
+names each wall by what failed, one per fingerprint per recording:
+
+- `error`: a page error or console error, keyed by its first line with the
+  inline stack (V8 or Safari frames) cut and ids and numbers normalized. Not
+  keyed by page: an error a layout or provider throws shows on every page
+  under it and is one problem.
+- `request`: a request to the product's own site (its host or a sibling on
+  the same registrable domain, so a vendor's ingest refusing is not counted)
+  that answered 4xx or 5xx, or a write that got no answer, keyed by method,
+  endpoint with ids folded (`/api/users/:id`) and status. A GET with no answer
+  is left out (navigations, unmounts and long polls cancel those all the
+  time), and so is Cloudflare's `/cdn-cgi/`.
+- `rage_click`: three clicks within a second on one button or link, keyed by
+  page and target. Text, fields, radios and checkboxes are clicked repeatedly
+  on purpose and never count.
+
+The route first seen rides along as the group's culprit and on each sample,
+with the recording's id. Every action that reads a stream (assembly, a vendor
+import, the regroup pass `replayIssues.regroupSource`, which also has a
+`dry_run` that answers the groups without writing) hands the issues to
+`ingest.applyReplayIssues`, which plans each through `planReplayIssue`
+(lib/ingestGroups.ts) into the one upsert, spends the source's group caps and
+links the recording to the group. A recording already linked to a group adds
+nothing to it, so a re-read never counts twice. The groups open, regress and
+promote by the error rules: a new one files a `bug` signal with source
+`<provider>:<name>` and fingerprint `<prefix>:replay:<kind>-<hash>`, and a
+line finder on that source with `opens_causes` makes it a problem. A vendor
+stream's clock starts at its first event, so occurrence times count from
+there; ours counts from `started_at`.
+
+Chunks this backend writes (`putChunk`: vendor imports, moment bodies, review
+transcripts) are stored as their exact gzip bytes with no Content-Encoding,
+as the SDK uploads them, so a server read hashes to the key. Chunks put
+before that were marked gzip and come back inflated; `readReplayChunks` takes
+those as plain JSON only for a recording the backend wrote itself
+(`serverWritten`), and holds an uploader's chunk to its hash.
 
 The import is paced, not cheap on the scheduler. Each recording costs up to
 three actions (the page, `importOne`, and `replays.importExternal` inside
