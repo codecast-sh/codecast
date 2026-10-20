@@ -9,12 +9,14 @@
 //   useLineSelection()                     { selection, select } in the URL
 //   useStationInput(sessionId, runId)      a station's brief, fed when opened
 //   store action labelDecision(runId, nodeId, verdict, note)
+import type { DeployAfter, DeployView } from "@codecast/shared/contracts/deploys";
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { parsePrRef } from "@codecast/shared/contracts";
 import { LINE_SIGNAL_CAP, LINE_SIGNAL_WINDOW_MS } from "@codecast/shared/contracts/lineProfile";
 import type { SessionDecisionItem } from "../store/inboxStore";
+import { useSyncTeamLineDecisions } from "./useSyncSessionDecisions";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
@@ -24,7 +26,6 @@ import { useSyncRuns } from "./useSyncRuns";
 import { useSyncTaskSignals } from "./useSyncSignals";
 import { useSyncTrial, useTrialCards, useTrialProjects, useTrialRuns } from "./useSyncTrial";
 import { useLineSpaceKeys } from "./useLineSpace";
-import { trialCardIsFor } from "../lib/line/trialAudience";
 import { useTeamRosterIdentity } from "./useTeamRoster";
 import { autoStartWord, isCause, trialStartWord, scopeLine, type LineAdmission, type LineProject, type RollupRow } from "../lib/lineFlow";
 import type { HandMerge } from "../lib/line/causeHistory";
@@ -54,8 +55,11 @@ export { LINE_VIEWS, DEFAULT_LINE_VIEW } from "../lib/line/lineWorkspaceUrl";
 
 const labelSig = (l: LineLabelRow) => `${l.key}|${l.verdict}|${l.note ?? ""}|${l.at}`;
 const occurrenceSig = (o: OccurrenceRow) => `${o.task_id}|${o.observed.length}|${o.observed[o.observed.length - 1] ?? 0}|${o.reopened.length}|${o.capped ? 1 : 0}`;
-const deploySig = (d: DeployRow) => `${d.at}|${d.sha ?? ""}|${d.surface ?? d.environment ?? ""}`;
-const cardSig = (d: MapDecision) => `${(d as { asked_user_ids?: string[] }).asked_user_ids?.join(",") ?? ""}|${d.status}|${d.answer_index ?? ""}|${d.answer_text ?? ""}|${d.resolved_at ?? 0}|${d.card?.headline ?? ""}|${d.card?.change ?? ""}`;
+const deploySig = (d: DeployRow) => {
+  const o = d as LineDeploy;
+  return `${d.at}|${d.sha ?? ""}|${d.surface ?? d.environment ?? ""}|${o.short_id ?? ""}|${o.status ?? ""}|${o.url ?? ""}|${o.carries?.length ?? 0}|${o.after ? `${o.after.to}:${o.after.regressions}:${o.after.reopened}:${o.after.errors.length}` : ""}|${o.commits?.length ?? 0}`;
+};
+const cardSig = (d: MapDecision) => `${(d as { asked_user_ids?: string[] }).asked_user_ids?.join(",") ?? ""}|${(d as { passed_to?: { id: string } | null }).passed_to?.id ?? ""}|${d.status}|${d.answer_index ?? ""}|${d.answer_text ?? ""}|${d.resolved_at ?? 0}|${d.card?.headline ?? ""}|${d.card?.change ?? ""}`;
 
 // ── feeders ──────────────────────────────────────────────────────────────────
 
@@ -85,10 +89,11 @@ export function useSyncLineHistory(projectId: string | null, repositories: strin
 const repositoriesOf = (runs: ReadonlyArray<{ merge?: { pr_url?: string } | null }>) =>
   [...new Set(runs.map((r) => parsePrRef(r.merge?.pr_url)?.repository).filter((r): r is string => !!r))].sort().join(",");
 
-/** Cards from the viewer's own queue win over the line's copy: the queue is a card's live home. */
+/** An open card's one home is the decision collection (the viewer's queue and the team's open line decisions); the
+ *  line's copies are settled history, and a copy cached while it was open says nothing about it now. */
 function mergeCards(home: ReadonlyArray<MapDecision>, line: ReadonlyArray<MapDecision>): MapDecision[] {
   const byId = new Map<string, MapDecision>();
-  for (const d of line) byId.set(d._id, d);
+  for (const d of line) if (d.status !== "pending") byId.set(d._id, d);
   // The line's copy keeps what the queue row lacks (who it was asked of).
   for (const d of home) { const l = byId.get(d._id); byId.set(d._id, l ? { ...l, ...d } : d); }
   return [...byId.values()];
@@ -97,8 +102,13 @@ function mergeCards(home: ReadonlyArray<MapDecision>, line: ReadonlyArray<MapDec
 /** The rows in view, as the floor holds them: every project's, or one project's. */
 export type LineScopedRows = ReturnType<typeof useLineFloor>["lineRows"];
 
+/** A deploy as the line reads it (convex deploys projectDeployViews): the history's row and the object. */
+export type LineDeploy = DeployRow & Omit<DeployView, "project_id"> & { project_id: string; deploy_id?: string; after: DeployAfter | null };
+
 export type LineWorkspace = {
   model: LineModel | null;
+  /** The deploys in view (deploys.md), one per deploy, newest first. */
+  deploys: LineDeploy[];
   /** The project the line is filtered to; null when it shows every project. */
   project: LineProject | null;
   /** The project a write from the line goes to (a chat, a try, a request to an agent): the filtered
@@ -186,6 +196,9 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // The line's own page lists trials from every workspace it holds (For you); a fence or link reads the active one.
   const allSpaces = useLineSpaceKeys();
   const spaceKeys = everySpace ? allSpaces : undefined;
+  // The team's open line decisions, every one the viewer can read, into the one decision collection (For you lists them).
+  const activeSpace = useActiveWorkspaceKey();
+  useSyncTeamLineDecisions(useMemo(() => (spaceKeys ?? [activeSpace]).filter((k): k is string => !!k), [spaceKeys, activeSpace]));
   const projectRow = useInboxStore((s) => (projectId ? ((s.projects as Record<string, LineProject>)?.[projectId] ?? null) : null));
   const workspace = useProjectWorkspace(projectRow as { workspace?: string | null; team_id?: string | null } | null);
   const { now, lineRows, projects, rollup: rollupRows, admissions, ready } = useLineFloor(projectId, workspace);
@@ -240,7 +253,19 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // whatever the filter; a row is narrowed to the filter at read time.
   const anyProject = useCallback((r: { project_id?: string }) => !!r.project_id, []);
   const allOccurrences = useCollectionRows<OccurrenceRow & { project_id?: string }>("lineOccurrences", { where: anyProject, sig: occurrenceSig });
-  const allDeploys = useCollectionRows<DeployRow & { project_id?: string }>("lineDeploys", { where: anyProject, sig: deploySig });
+  // A deploy object (deploys.md) has a status; a row the marker-only feed left in the cache before it does not.
+  const deployRow = useCallback((r: { project_id?: string; status?: string }) => !!r.project_id && !!r.status, []);
+  const allDeploys = useCollectionRows<LineDeploy>("lineDeploys", { where: deployRow, sig: deploySig });
+  // The deploys in view, one per deploy (a deploy several projects share is a row per project), newest first.
+  const deploys = useMemo(() => {
+    const one = new Map<string, LineDeploy>();
+    for (const d of allDeploys) {
+      if (projectId && d.project_id !== projectId) continue;
+      const key = d.deploy_id ?? d._id;
+      if (!one.has(key)) one.set(key, d);
+    }
+    return [...one.values()].sort((a, b) => b.at - a.at);
+  }, [allDeploys, projectId]);
   const allLineCards = useCollectionRows<MapDecision & { project_id?: string }>("lineCards", { where: anyProject, sig: cardSig });
   const ownCardWhere = useMemo(() => (d: SessionDecisionItem) => !!d.task_id && everyTaskProject.has(d.task_id) && !!d.workflow_run_id, [everyTaskProject]);
   const ownCards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: ownCardWhere, sig: cardSig as unknown as (d: SessionDecisionItem) => string });
@@ -283,8 +308,6 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // For you lists every workspace's, so they are read from each workspace the line holds (LineWorkspace feeds them).
   useSyncTrial();
   const allTrialCards = useTrialCards({ workspaces: spaceKeys });
-  // A card a role owns (a judge fix, asked of the person its line ends at) waits only on the people it is asked of.
-  const trialCards = useMemo(() => allTrialCards.filter((c) => trialCardIsFor(c, viewerId)), [allTrialCards, viewerId]);
   // A run's decision about a task that is not a line problem (a task filed by hand, a judge fix) names that task, read from the store.
   const otherIds = useMemo(() => {
     const causes = new Set(everyRow.tasks.filter(isCause).map((t) => t._id));
@@ -298,7 +321,10 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     const [id, ref, project, title] = x.split("\u0001");
     return [id, { title, short_id: ref || null, project_id: project || null }] as const;
   }) : []), [otherSig]);
-  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, otherTasks, now]);
+  // The decisions a line asks are the team's: every open one on a problem the viewer can read, whoever it was asked of
+  // or assigned to (the line's cards, with the viewer's own queue rows winning), and every waiting trial card. Who
+  // holds one is the row's assignee (lib/line/decisionFacts), never a reason to hide it.
+  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, decisions: allDecisions as unknown as typeof everyRow.decisions, projects, rollups: rollupRows, admissions, trialCards: allTrialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, allDecisions, projects, rollupRows, admissions, allTrialCards, trialProjects, viewerId, otherTasks, now]);
   const projectInbox = useMemo(() => (projectId ? allInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => r.projectId === projectId) })).filter((g) => g.rows.length > 0) : allInbox), [allInbox, projectId]);
   const forYouByCase = useMemo(() => inboxKindByCase(projectInbox), [projectInbox]);
 
@@ -312,7 +338,8 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const handMerges = useMemo(() => new Map<string, HandMerge>(JSON.parse(handMergesSig)), [handMergesSig]);
   const modelOf = useCallback((rows: { runs: unknown[]; tasks: LineModelRows["tasks"]; signals: unknown[] }, project: string | null, forYou: Map<string, string>, deploysRead: boolean, key: string = lg.graphKey) => {
     const mine = (r: { project_id?: string }) => !project || r.project_id === project;
-    const deploys = allDeploys.filter(mine);
+    // Only a deploy that went live carried anything.
+    const deploys = allDeploys.filter((d) => mine(d) && d.status === "live");
     return buildLineModel({
       runs: rows.runs as MapRun[],
       tasks: rows.tasks,
@@ -445,8 +472,8 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   }, [scoped]);
   // One object while nothing in it moved: the views are memoized on it, so a
   // feeder's push that changes no field here re-renders none of them.
-  return useMemo(() => ({ model, project, home, projects, graphKey: model?.graphKey ?? null, unread: lg.unread, now, rollup, rollups, allRollups: rollupRows, admissions, trialProjects, trialHeld, trialRuns, rows: scoped, everySignals: lineRows.signals, historyFeeds, product, inbox, allInbox: projectInbox, problems, needs, forYou, open, forYouByGraph, processes, byProject, process, sources, names, decisions: allDecisions, overlaps, ready, heldFrom: held, refs }),
-    [ready, model, project, home, projects, lg.unread, now, rollup, rollups, rollupRows, admissions, trialProjects, trialHeld, trialRuns, scoped, lineRows.signals, historyFeeds, product, inbox, projectInbox, problems, needs, forYou, open, forYouByGraph, processes, byProject, process, sources, names, allDecisions, overlaps, held, refs]);
+  return useMemo(() => ({ model, project, home, projects, graphKey: model?.graphKey ?? null, unread: lg.unread, now, rollup, rollups, allRollups: rollupRows, admissions, trialProjects, trialHeld, trialRuns, rows: scoped, everySignals: lineRows.signals, historyFeeds, product, inbox, allInbox: projectInbox, problems, needs, forYou, open, forYouByGraph, processes, byProject, process, sources, names, decisions: allDecisions, overlaps, ready, heldFrom: held, refs, deploys }),
+    [ready, model, project, home, projects, lg.unread, now, rollup, rollups, rollupRows, admissions, trialProjects, trialHeld, trialRuns, scoped, lineRows.signals, historyFeeds, product, inbox, projectInbox, problems, needs, forYou, open, forYouByGraph, processes, byProject, process, sources, names, allDecisions, overlaps, held, refs, deploys]);
 }
 
 /**

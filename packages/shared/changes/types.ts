@@ -54,6 +54,8 @@ export type ShipEvent = {
   at: number;
   /** `release` for bumps and tags, `deploy` for `cast ship mark`. */
   kind: "release" | "deploy";
+  /** The deploy object a deploy marker recorded (dp-N, deploys.md), which the live strip opens. */
+  deploy?: string;
 };
 
 export type RiskCode = "skew" | "schema" | "revert" | "bulk" | "blocked";

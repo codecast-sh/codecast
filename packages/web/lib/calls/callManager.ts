@@ -27,7 +27,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
-import { startScribe, stopScribe } from "./transcription";
+import { getScribeStatus, startScribe, stopScribe } from "./transcription";
+import type { ScribeRoute } from "./scribeEngine";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { switchRecorderMic } from "./recorder";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
@@ -41,7 +42,8 @@ import {
   showCallPanel,
   voiceHostElsewhere,
 } from "../desktop";
-import { shouldYieldCallOnDisconnect } from "./callHandoff";
+import { shouldRejoinAfterDisconnect, shouldYieldCallOnDisconnect } from "./callHandoff";
+import { track as trackEvent } from "../analytics";
 import { bindCallCursors } from "./callCursors";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { readMeterLevel } from "./walkieMeter";
@@ -377,6 +379,10 @@ export type JoinOpts = {
    *  call_members.walkie_joined_at). It is what upgrades both sides' surfaces
    *  from the walkie strip to the call. */
   walkieJoin?: boolean;
+  /** Internal: the same room again, after the media dropped (rejoinDroppedCall).
+   *  The seat, its stamps, the phase and the mute all carry through, and a
+   *  failure is handed back to the retry loop instead of ending the call. */
+  rejoin?: boolean;
 };
 
 /**
@@ -500,10 +506,13 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     }
     return;
   }
-  deliberateRoomKey = opts?.intent === "deliberate" ? roomKey : null;
-  // A fresh seat starts unstamped; `controlJoin` records the stamp if this
-  // join carries one.
-  walkieJoinedSeat = null;
+  const rejoin = !!opts?.rejoin;
+  if (!rejoin) {
+    deliberateRoomKey = opts?.intent === "deliberate" ? roomKey : null;
+    // A fresh seat starts unstamped; `controlJoin` records the stamp if this
+    // join carries one.
+    walkieJoinedSeat = null;
+  }
   // A deliberate join starts the way the person's last call ended: mic on
   // unless they muted once and never unmuted (lib/calls/joinPrefs).
   if (opts?.intent === "deliberate") setCall({ muted: !readJoinPrefs().micOn });
@@ -517,8 +526,10 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     if (r && r !== room) void r.disconnect();
     return true;
   };
+  // A rejoin is still the call: the phase stays "connected" and the
+  // `reconnecting` flag is what the surfaces show meanwhile.
   setCall({
-    phase: "connecting",
+    ...(rejoin ? {} : { phase: "connecting" as const }),
     roomKey,
     error: null, errorFix: null,
     micDenied: false,
@@ -651,10 +662,15 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
         void yieldRoomToOtherWindow();
         return;
       }
-      // SFU-side disconnect (kicked, server restart, network gave up after
-      // livekit-client's own retries): reflect reality and free the row.
-      // Not a hang-up: nobody pressed End, and they may well be back.
-      void leaveCall(undefined, { hangup: false });
+      // The media gave up under a person who never pressed End: a network
+      // drop past livekit-client's own retries, a server draining, a resume
+      // the SFU refused. They still want the call, so the call joins the room
+      // again with the seat held. Only a removal or our own disconnect ends it
+      // here, and those are not a hang-up either: nobody pressed End.
+      const rejoin = shouldRejoinAfterDisconnect(reason);
+      trackEvent("call_media_lost", { reason: disconnectReasonName(reason), rejoin });
+      if (rejoin) void rejoinDroppedCall(roomKey);
+      else void leaveCall(undefined, { hangup: false });
     });
     // A RECONNECT IS STILL THE CALL. livekit-client's `Reconnecting` is the
     // media plane repairing itself under a seat that never moved: the row is
@@ -667,8 +683,10 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const call = useInboxStore.getState().call;
       if (call.roomKey !== roomKey) return;
-      if (state === ConnectionState.Connected && call.phase !== "connected") {
-        setCall({ phase: "connected" });
+      const repairing = state === ConnectionState.Reconnecting || state === ConnectionState.SignalReconnecting;
+      if (repairing && !call.reconnecting) setCall({ reconnecting: true });
+      if (state === ConnectionState.Connected && (call.phase !== "connected" || call.reconnecting)) {
+        setCall({ phase: "connected", reconnecting: false });
       }
     });
 
@@ -736,8 +754,8 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     if (seatError) throw seatError;
     if (superseded(r)) return;
     startLevelMeter();
-    setCall({ phase: "connected" });
-    soundCallJoin();
+    setCall({ phase: "connected", reconnecting: false });
+    if (!rejoin) soundCallJoin();
     startHeartbeat(roomKey);
     rebuildTiles();
     // The camera can only be applied after connecting: it publishes a track.
@@ -751,6 +769,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       return;
     }
     teardownMedia();
+    if (rejoin) throw err;
     const message =
       isMediaDenial(err)
         ? "Microphone permission denied"
@@ -759,6 +778,62 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // Free the control-plane row so occupancy doesn't show a ghost.
     convex?.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {});
   }
+}
+
+// ── joining again after the media dropped ─────────────────────────────────
+//
+// livekit-client spends ~45s on its own retries before it reports a
+// `Disconnected`, and some reasons (a resume the SFU refused, the signal socket
+// closing) arrive at once. Either way the person is still in the call: the
+// seat is held (each attempt's `joinRoom` refreshes it, so the lease never
+// lapses), the mute, camera and scribe come back as they were, and the far side
+// sees a face that went quiet rather than one that left. The attempts stop when
+// the call is over by other means (End, a handoff, another room) or the window
+// runs out, and only then does the seat go.
+const REJOIN_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000, 15_000, 15_000];
+
+function disconnectReasonName(reason: unknown): string {
+  if (typeof reason === "number") return DisconnectReason[reason] ?? String(reason);
+  return reason == null ? "NONE" : String(reason).slice(0, 32);
+}
+
+let rejoinRun = 0;
+
+async function rejoinDroppedCall(roomKey: string): Promise<void> {
+  const run = ++rejoinRun;
+  const startedAt = Date.now();
+  const { camera } = useInboxStore.getState().call;
+  const scribe = getScribeStatus().active;
+  await stopScribe({ keepLive: true });
+  teardownMedia();
+  setCall({ reconnecting: true, speaking: [] });
+  // Still ours: the room is this one, the call is not over, no newer run took over.
+  const stillOurs = () => {
+    const call = useInboxStore.getState().call;
+    return run === rejoinRun && call.roomKey === roomKey && call.phase === "connected";
+  };
+  let attempts = 0;
+  for (const delay of REJOIN_DELAYS_MS) {
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    if (!stillOurs()) return;
+    attempts++;
+    try {
+      await joinCallHere(roomKey, { rejoin: true });
+    } catch {
+      continue;
+    }
+    if (!stillOurs() || !room) return;
+    trackEvent("call_rejoined", { attempts, ms: Date.now() - startedAt });
+    if (camera) await setCamera(true, { remember: false });
+    if (scribe && convex && room) {
+      await startScribe({ convex, room, roomKey, routes: [] }).catch(() => {});
+    }
+    return;
+  }
+  if (!stillOurs()) return;
+  trackEvent("call_rejoin_failed", { attempts, ms: Date.now() - startedAt });
+  await leaveCall(undefined, { hangup: false });
+  setCall({ phase: "error", error: "Lost the connection to the call" });
 }
 
 // ── handing the call to another window of my own ──────────────────────────
@@ -813,6 +888,7 @@ async function yieldRoomToOtherWindow(): Promise<void> {
     sharing: false,
     error: null, errorFix: null,
     muted: true,
+    reconnecting: false,
   });
 }
 
@@ -872,6 +948,7 @@ async function leaveCallHere(shown?: string, hangup = true): Promise<void> {
     error: null, errorFix: null,
     muted: true,
     micDenied: false,
+    reconnecting: false,
   });
   soundCallLeave();
   await stopScribe({ keepLive: true });
@@ -1346,7 +1423,7 @@ export function autoScribe(roomKey: string): void {
  *  was off waits on it; the switch has already painted from the store. */
 export async function startTranscribing(
   roomKey: string,
-  routes: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }> = [],
+  routes: ScribeRoute[] = [],
 ): Promise<boolean> {
   if (!convex || !room) return false;
   const store = useInboxStore.getState();

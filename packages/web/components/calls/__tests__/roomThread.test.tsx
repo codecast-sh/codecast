@@ -24,11 +24,12 @@ mock.module("../../../lib/calls/callManager", () => ({
   ringInto: async (room: string, ids: string[]) => void rung.push([room, ids]),
 }));
 const realConvexReact = { ...(await import("convex/react")) };
+const mutated: unknown[] = [];
 mock.module("convex/react", () => ({
   ...realConvexReact,
   useQueries: () => ({}),
   useQuery: () => undefined,
-  useMutation: () => async () => {},
+  useMutation: () => async (args: unknown) => void mutated.push(args),
   useConvex: () => ({ mutation: async () => {} }),
 }));
 const { useInboxStore } = await import("../../../store/inboxStore");
@@ -578,7 +579,7 @@ test("the stage keeps the call's events after transcription is switched off", as
   await r.unmount();
 });
 
-test("a page link typed on a line of its own is a pill in the rail and a card on the page", async () => {
+test("a page link on a line of its own is the page itself, in the rail at a height the rail can hold", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const rows = [
     { _id: "m1", user_id: "u-ann", user_name: "Ann Lee", text: "https://codecast.sh/a/abcdefgh12", at: START + 100, mine: false, agent: null },
@@ -586,9 +587,8 @@ test("a page link typed on a line of its own is a pill in the rail and a card on
   const rail = await render(
     <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated />,
   );
-  // The rail is 340px wide: the 420px card would fill it from header to composer.
-  expect(rail.container.querySelector(".rt-line iframe")).toBeNull();
-  expect(rail.container.querySelector<HTMLAnchorElement>(".rt-line a")?.getAttribute("href")).toBe("https://codecast.sh/a/abcdefgh12");
+  expect(rail.container.querySelector(".rt-line iframe")).not.toBeNull();
+  expect(rail.container.querySelector<HTMLElement>(".rt-line .page-embed__stage")?.style.height).toBe("280px");
   await rail.unmount();
   const page = await render(
     <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="page" seated />,
@@ -647,4 +647,30 @@ test("the recap's closed line is the first sentence, decimals included", async (
   );
   expect(bare.container.querySelector(".rt-head")).toBeNull();
   await bare.unmount();
+});
+
+test("an agent's chip carries its video avatar switch where the team has faces, and flipping it asks the server", async () => {
+  useInboxStore.setState({
+    currentUser: { _id: "u-me" },
+    liveRooms: [],
+    sessions: {},
+    teams: [{ _id: "team1", name: "Team", features: { agent_faces: true } }],
+  } as any);
+  const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me", face: false }];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ routes, team_id: "team1" })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const toggle = r.container.querySelector<HTMLButtonElement>(".rt-chip button[aria-pressed]");
+  expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+  mutated.length = 0;
+  await act(async () => toggle!.click());
+  expect(mutated).toEqual([{ transcript_id: "t1", target: "conv_other", face: true }]);
+  await r.unmount();
+
+  useInboxStore.setState({ teams: [{ _id: "team1", name: "Team", features: {} }] } as any);
+  const off = await render(
+    <RoomThread roomKey={ROOM} call={call({ routes, team_id: "team1" })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  expect(off.container.querySelector(".rt-chip button[aria-pressed]")).toBeNull();
+  await off.unmount();
 });

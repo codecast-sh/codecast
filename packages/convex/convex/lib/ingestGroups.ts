@@ -25,6 +25,7 @@ import {
   sdkErrorFingerprint,
   topInAppFrame,
 } from "@codecast/shared/contracts/signalFingerprint";
+import type { ReplayIssue } from "@codecast/shared/replay";
 
 export const HOUR_MS = 3600_000;
 const TRAILING_HOURS = 24;
@@ -475,7 +476,7 @@ export type ItemPlan =
       /** Fields the group's meta takes from this occurrence beyond the rules' own (a metric's value and line). */
       meta?: MetricMeta;
     }
-  | { type: "deploy"; version: string; sha?: string; environment?: string; at: number }
+  | { type: "deploy"; version: string; sha?: string; environment?: string; at: number; url?: string; actor?: string; previous_sha?: string; commits?: Array<{ sha: string; subject: string; author?: string }> }
   /** Accepted and counted, never grouped: analytics events, logs below warn, replay manifests (X5 owns those). */
   | { type: "count" };
 
@@ -541,13 +542,39 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
         sample: { ...sampleBase, message: item.detail ?? (item.ok ? "ok" : "failed") },
       });
     case "deploy":
-      return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at };
+      return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at, url: item.url, actor: item.actor, previous_sha: item.previous_sha, commits: item.commits };
     case "event":
     case "replay":
     // A moment event is kept as a moment (moments.ts recordMomentEvents, learning-loop.md LL7), not grouped.
     case "moment":
       return { type: "count" };
   }
+}
+
+// ── Replay issues (X5) ──
+
+/** A recording, as much of it as its issues' samples carry. */
+export interface ReplayRef {
+  external_id: string;
+  started_at: number;
+  user?: IngestUser;
+}
+
+/**
+ * One wall a recording shows (shared/replay/issues.ts) as an occurrence of its
+ * replay_issue group. Its fingerprint is route plus failure, so every
+ * recording of the same failure on the same page counts on one group, which
+ * opens, regresses and promotes by the same rules an error does.
+ */
+export function planReplayIssue(issue: ReplayIssue, replay: ReplayRef): Extract<ItemPlan, { type: "group" }> {
+  const at = replay.started_at + Math.max(0, issue.t);
+  return group("replay_issue", issue.fp, {
+    title: issue.title.slice(0, INGEST_LIMITS.title_chars),
+    culprit: issue.route,
+    level: issue.kind,
+    occurrence: { kind: "replay_issue", at },
+    sample: { at, message: issue.message, url: issue.url, user: replay.user, replay_external_id: replay.external_id },
+  }) as Extract<ItemPlan, { type: "group" }>;
 }
 
 // ── Watched metrics (X7) ──

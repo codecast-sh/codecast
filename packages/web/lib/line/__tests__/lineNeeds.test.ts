@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildLineInbox, inboxCount, type InboxGroup, type InboxRow } from "../lineInbox";
-import { foldDuplicateNeeds, goOnProof, lineNeeds, needCount, oneCaseClaim, proseAdvice, type LineNeed, needCounted, needForRef, needGroups, needKind, needOfCase, needOrder, stopAnswered, stoppedAsk, waitNote, yesNote, needsOfLine } from "../lineNeeds";
+import { foldDuplicateNeeds, isPractice, goOnProof, lineNeeds, needCount, oneCaseClaim, proseAdvice, type LineNeed, needCounted, needForRef, needKind, needOfCase, stopAnswered, stoppedAsk, waitNote, yesNote, needsOfLine } from "../lineNeeds";
 import { waitsForFindings } from "../lineInbox";
 import { failCause } from "../runReport";
 import type { LineAdmission, RollupRow } from "../../lineFlow";
@@ -45,12 +45,10 @@ describe("what waits on the viewer (lineNeeds)", () => {
     expect(needs.some((n) => ["ct-7", "ct-8", "ct-9"].includes(n.ref))).toBe(false);
   });
 
-  test("For you lists the decisions only, oldest first, under what the person is asked; the rest is never listed", () => {
-    const g = needGroups(needs);
-    expect(g.map((x) => [x.label, x.needs.map((n) => n.ref)])).toEqual([["Ship these fixes?", ["sd-2", "sd-1"]]]);
-    expect(needOrder(g).map((n) => n.ref)).toEqual(["sd-2", "sd-1"]);
-    // The list and the count are one set.
-    expect(needOrder(g).length).toBe(needCount(needs));
+  test("For you lists the decisions only; the rest is never listed, and the list and the count are one set", () => {
+    const listed = needs.filter((n) => n.counted);
+    expect(listed.map((n) => n.ref)).toEqual(["sd-1", "sd-2"]);
+    expect(listed.length).toBe(needCount(needs));
   });
 
   test("a need carries what its reader shows: the question whole, its process, the stopped step's words", () => {
@@ -195,7 +193,7 @@ describe("a twin is asked once (foldDuplicateNeeds)", () => {
     const needs = foldDuplicateNeeds(twins(null), twinOf);
     const dup = needs.find((n) => n.caseId === "59757")!;
     expect([dup.kind, dup.counted, dup.ask, dup.dupOf]).toEqual(["duplicate", false, "Same as ct-57470", { caseId: "57470", ref: "ct-57470" }]);
-    expect(needOrder(needGroups(needs)).map((n) => n.kind)).toEqual(["decision"]);
+    expect(needs.filter((n) => n.counted).map((n) => n.kind)).toEqual(["decision"]);
   });
 
   test("a decision on a twin is about its own run: it stays its own", () => {
@@ -211,7 +209,7 @@ describe("a build no session presented is its run's to present, never a failure 
     expect(needCounted("review")).toBe(false);
     const [n] = lineNeeds([{ kind: "failed", rows: [{ key: "k", kind: "failed", fail, title: "Nudges dead-letter", ref: "ct-58682", caseId: "t1", projectId: null, runId: "r1", at: 1 }] }] as never);
     expect(n).toMatchObject({ kind: "review", counted: false, ask: "Needs a reviewer to confirm the outage guard.", line: "Nudges dead-letter" });
-    expect(needGroups([n])).toEqual([]);
+    expect(needCount([n])).toBe(0);
   });
 });
 
@@ -247,22 +245,14 @@ describe("proseAdvice", () => {
 });
 
 describe("practice answers", () => {
-  test("a trial's decisions list last, apart, and out of the count", () => {
-    const need = (ref: string, trial: boolean) => ({ key: ref, ref, kind: "decision", counted: true, trial, since: now } as unknown as LineNeed);
-    const real = need("sd-1", false);
-    const practice = need("sd-2", true);
-    const g = needGroups([practice, real]);
-    expect(g.map((x) => x.label)).toEqual(["Ship these fixes?", "Trial: what would you do?"]);
-    expect(needCount([practice, real])).toBe(1);
-  });
-
-  test("a trial card that changes the judging (an expectation, a judge fix) is live: its own group, counted", () => {
+  test("a trial's decision is in the team's count like any other; a judge fix is never practice", () => {
     const need = (ref: string, trial: boolean, publishes?: boolean) => ({ key: ref, ref, kind: "decision", counted: true, trial, publishes, since: now } as unknown as LineNeed);
-    const all = [need("sd-3", true), need("sd-2", true, true), need("sd-1", false)];
-    expect(needGroups(all).map((x) => [x.label, x.needs.map((n) => n.ref)])).toEqual([["Ship these fixes?", ["sd-1"]], ["Change how we judge?", ["sd-2"]], ["Trial: what would you do?", ["sd-3"]]]);
-    expect(needCount(all)).toBe(2);
+    expect(needCount([need("sd-1", false), need("sd-2", true)])).toBe(2);
+    expect(isPractice(need("sd-2", true))).toBe(true);
+    expect(isPractice(need("sd-3", true, true))).toBe(false);
   });
 });
+
 
 describe("needsOfLine", () => {
   test("a line's needs, in its project when one is picked; no line keeps every need", () => {

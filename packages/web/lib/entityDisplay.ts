@@ -4,6 +4,7 @@ import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { entityRoute, personRefOf, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from "./entityLinks";
 import { replayTitle } from "../components/ops/opsModel";
+import { deployTitle } from "./line/deployWords";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, entityTypeInStore, resolveAssigneeInfo } from "./liveEntities";
 import { useInboxStore } from "../store/inboxStore";
@@ -57,6 +58,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   call: "Call",
   source: "Source",
   replay: "Replay",
+  deploy: "Deploy",
   role: "Role",
   person: "Person",
 };
@@ -265,6 +267,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // Ops replays in the store, kept live by the query.
   const replayRef = type === "replay" ? parseReplayRef(rawId) : null;
   const { data: replay } = useQueryNoThrow(api.replays.webGetReplay, live && type === "replay" ? { ref: replayRef?.replay ?? rawId } : "skip");
+  // A deploy (`dp-N`) seeds from the line's deploys in the store; the query covers one the viewer's line never fed.
+  const { data: deploy } = useQueryNoThrow(api.deploys.get, live && type === "deploy" ? { ref: rawId } : "skip");
   // A role (`or-N`) seeds from the org tree in the store, which every
   // workspace screen feeds. The role card answers only for a role the tree
   // does not hold (another workspace's, or a page that never fed the tree):
@@ -274,7 +278,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     [live, type, rawId],
   );
   const { data: roleCard } = useQueryNoThrow(api.org.roleCard, live && type === "role" && !roleInTree ? { role_id: rawId } : "skip");
-  const served = fixtures ? fixture?.entity ?? null : type === "role" ? roleCard : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : undefined;
+  const served = fixtures ? fixture?.entity ?? null : type === "role" ? roleCard : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : type === "deploy" ? deploy : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -300,7 +304,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // prefers its display_title — the generated short name, not the whole
   // prompt's first line.
   const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || callName || (type === "replay" ? replayTitle(entity) : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
+    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || callName || (type === "replay" ? replayTitle(entity) : undefined) || (type === "deploy" && entity ? deployTitle(entity) : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
   const labelArgs = {
     title: resolvedTitle,
     shortId: entity?.short_id,
@@ -336,7 +340,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // of a proposal keeps its number, so the page opens with it in focus.
   // A project and a role open by their `pj-…` and `or-N` too, and a person
   // by handle (personRefOf), so one object never opens as two tabs.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : type === "person" ? (entity?._id ? personRefOf(entity) : rawId) : ((type === "initiative" || type === "project" || type === "role" || type === "proposal" || type === "decision" || type === "source" || type === "replay") && entity?.short_id) || (entity?._id ?? rawId);
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : type === "person" ? (entity?._id ? personRefOf(entity) : rawId) : ((type === "initiative" || type === "project" || type === "role" || type === "proposal" || type === "decision" || type === "source" || type === "replay" || type === "deploy") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };

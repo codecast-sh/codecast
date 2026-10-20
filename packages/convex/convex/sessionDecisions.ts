@@ -364,21 +364,42 @@ export async function reroutePendingDecisionsForConversation(
   for (const row of openRows) {
     // A person handed this one to somebody; ownership moves do not take it back.
     if (row.passed_to) continue;
-    const task = row.task_id ? await ctx.db.get(row.task_id) : null;
-    // A proposal's decision asked by another session keeps routing as the station that proposed it.
-    const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
-    const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversationId) ? await ctx.db.get(proposal.conversation_id) : undefined;
-    const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
-    // A row asked with no ladder takes the one it now climbs, and its first
-    // role hears; a row that has one keeps it and the recommendations on it.
-    const climbs = !row.hops?.length && ladder.hops.length > 0;
-    await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
-    const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
-    await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
-    const updated = await ctx.db.get(row._id);
-    if (updated) await refreshHolder(ctx, updated, now);
+    await rerouteRow(ctx, conversation, row, now);
   }
   return { moved: openRows.length };
+}
+
+/** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
+async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+  const task = row.task_id ? await ctx.db.get(row.task_id) : null;
+  // A proposal's decision asked by another session keeps routing as the station that proposed it.
+  const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
+  const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversation._id) ? await ctx.db.get(proposal.conversation_id) : undefined;
+  const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
+  // A row asked with no ladder takes the one it now climbs, and its first
+  // role hears; a row that has one keeps it and the recommendations on it.
+  const climbs = !row.hops?.length && ladder.hops.length > 0;
+  await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
+  const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
+  await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
+  const updated = await ctx.db.get(row._id);
+  if (updated) await refreshHolder(ctx, updated, now);
+}
+
+// A person takes back a pass (passCore): the decision is nobody's in
+// particular again, routed as its asking session would route it now.
+export async function unassignCore(ctx: Ctx, userId: Id<"users">, decisionId: string): Promise<{ unassigned: true } | { error: string }> {
+  const row = await findDecision(ctx, decisionId);
+  if (!row) return { error: "Decision not found" };
+  if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
+  if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
+  if (!row.passed_to) return { unassigned: true };
+  const conversation = await ctx.db.get(row.conversation_id);
+  if (!conversation) return { error: "The session that asked is gone" };
+  await ctx.db.patch(row._id, { passed_to: undefined, updated_at: Date.now() });
+  const fresh = await ctx.db.get(row._id);
+  if (fresh) await rerouteRow(ctx, conversation, fresh, Date.now());
+  return { unassigned: true };
 }
 
 // Repair for questions asked before routing knew an agent account is nobody's
@@ -1110,6 +1131,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
   if (existing) {
+    // A question a person gave to a teammate (passCore) stays theirs when it is asked again.
+    const given = existing.passed_to?.kind === "user" ? [existing.passed_to.id as Id<"users">] : null;
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
     // category or the stack's delegate may have changed who may answer.
@@ -1125,7 +1148,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       category,
       category_proposed: args.category,
       form: args.form,
-      asked_user_ids: people,
+      asked_user_ids: given ?? people,
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : {}),
       ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
@@ -1136,7 +1159,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       session_title: conversation.title,
       project_path: conversation.project_path,
     });
-    await syncDecisionInbox(ctx, existing._id, people, now, !hears && routed.trial !== "owner");
+    await syncDecisionInbox(ctx, existing._id, given ?? people, now, !!given || (!hears && routed.trial !== "owner"));
     const updated = await ctx.db.get(existing._id);
     if (updated) await refreshHolder(ctx, updated, now);
     return {
@@ -1418,8 +1441,8 @@ export const withdraw = mutation({
 // The one withdraw for every path (`cast decide cancel`, workflow_runs.cancel
 // taking back its open gate). A gate decision (the-line.md L4) fails its run
 // with "gate withdrawn" unless the run is already past it.
-export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">) {
-  await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now });
+export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">, reason?: string) {
+  await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now, ...(reason ? { withdrawn_reason: reason.slice(0, 2000) } : {}) });
   if (row.workflow_run_id) {
     const run = await ctx.db.get(row.workflow_run_id);
     if (run && run.status === "paused" && String(run.gate_decision_id ?? "") === String(row._id)) {
@@ -1434,6 +1457,44 @@ export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?
   await settleResolution(ctx, row, { status: "withdrawn" }, { kind: "user", id: String(row.user_id), user_id: row.user_id, ...(via ? { via } : {}) }, now);
   return { id: row._id, short_id: row.short_id, status: "withdrawn" };
 }
+
+/**
+ * A problem that closes (done, dropped, merged) asks nothing more: each of its
+ * questions still pending is withdrawn with the close's reason, and each trial
+ * card still waiting on one closes. Called from tasks.afterStatusMove on every
+ * close, whoever closes it.
+ */
+export async function withdrawClosedProblemAsks(ctx: Ctx, task: { _id: Id<"tasks"> }, reason: string, now: number): Promise<string[]> {
+  const pending: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
+  for (const row of pending) await withdrawWithCard(ctx, row, reason, now);
+  return pending.map((r) => r.short_id ?? String(r._id));
+}
+
+/** Withdraw one question with its reason, and close the trial card still waiting on it. */
+async function withdrawWithCard(ctx: Ctx, row: DecisionRow, reason: string, now: number): Promise<void> {
+  await withdrawCore(ctx, row, now, undefined, reason);
+  const cards = await ctx.db.query("trial_cards").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
+  for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
+}
+
+/**
+ * Repair (run with packages/convex/run.sh): withdraw named pending questions
+ * with a reason a person gave, as nobody's session can (`cast decide cancel`
+ * takes back only the caller's own). `dry` reports only.
+ */
+export const withdrawNamed = internalMutation({
+  args: { decisions: v.array(v.string()), reason: v.string(), dry: v.boolean() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out: Array<{ decision: string; was: string }> = [];
+    for (const ref of args.decisions) {
+      const row: DecisionRow | null = await ctx.db.query("session_decisions").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+      out.push({ decision: ref, was: row?.status ?? "missing" });
+      if (!args.dry && row?.status === "pending") await withdrawWithCard(ctx, row, args.reason, now);
+    }
+    return out;
+  },
+});
 
 // The CLI's row shape for `cast decide ls` and the ladder listings.
 function cliRowShape(r: DecisionRow, conversation?: any) {
@@ -1817,13 +1878,16 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
   if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
-  if (row.trial) return { error: "A trial run's question stays with its trial" };
+  // A trial's question may be given to a teammate (the team's decision inbox assigns it); it never climbs a role's line.
+  if (row.trial && to.kind === "role") return { error: "A trial run's question stays with its trial" };
   const conversation = await ctx.db.get(row.conversation_id);
   if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
   if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
     return { error: "It is already theirs" };
   }
-  const teamId = conversation?.team_id;
+  // A line decision's team is its problem's when the session that asked is nobody's team's (a station run on a host).
+  const task = !conversation?.team_id && row.task_id ? await ctx.db.get(row.task_id) : null;
+  const teamId = conversation?.team_id ?? task?.team_id;
   const now = Date.now();
   const passed_to = { ...to, by: userId, at: now };
   if (to.kind === "user") {
@@ -2265,7 +2329,87 @@ export const listForUser = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return listForUserCore(ctx, userId, Date.now());
+    return decisionRowsForViewer(ctx, await listForUserCore(ctx, userId, Date.now()), () => true);
+  },
+});
+
+// ── The team's line decisions (the Line page's decision inbox) ────────────────
+
+/** Findings one problem's severity read covers: the worst among the newest. */
+const SEVERITY_SIGNALS_CAP = 200;
+/** Open problems one project's read covers, per status. */
+const OPEN_PROBLEMS_CAP = 2000;
+const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as const;
+
+/**
+ * Decision rows as the web's one decision collection holds them, whichever
+ * feed sends them (the viewer's queue, listForUser, or the team's line
+ * decisions, listOpenForLines), so a row two feeds send reads the same from
+ * either: the live session's title, `in_queue` (in the viewer's own queue,
+ * which the queue surfaces read), `passed_to` as who it was given to (null
+ * when nobody), and a line decision's `problem_severity`, the worst finding's
+ * on its problem (1 to 10, null when no judge scored one).
+ */
+async function decisionRowsForViewer(ctx: Ctx, rows: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
+  const severity = new Map<string, number | null>();
+  const out = [];
+  for (const r of await withLiveSession(ctx, await currentDecisions(ctx, rows))) {
+    let worst: number | null = null;
+    if (r.workflow_run_id && r.task_id) {
+      const key = String(r.task_id);
+      if (!severity.has(key)) {
+        const signals = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", r.task_id)).order("desc").take(SEVERITY_SIGNALS_CAP);
+        const scored = signals.map((x: any) => x.severity).filter((n: unknown): n is number => typeof n === "number");
+        severity.set(key, scored.length ? Math.max(...scored) : null);
+      }
+      worst = severity.get(key) ?? null;
+    }
+    out.push({ ...r, ...extra, passed_to: r.passed_to ? { kind: r.passed_to.kind, id: r.passed_to.id } : null, in_queue: await inQueue(r), problem_severity: worst });
+  }
+  return out;
+}
+
+/** Whether a decision sits in the viewer's own queue: an inbox row of theirs, or (an older row) they asked it. */
+async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): Promise<boolean> {
+  if (row.asked_user_ids === undefined) return String(row.user_id) === String(userId);
+  if (!row.asked_user_ids.some((id) => String(id) === String(userId))) return false;
+  const inbox = await ctx.db.query("decision_inbox").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
+  return inbox.some((i: any) => String(i.user_id) === String(userId) && i.status === "pending");
+}
+
+/**
+ * Every open decision a line asks about a problem in one workspace (a team's,
+ * or the viewer's own), whoever it was asked of or given to: the Line page's
+ * decision inbox, the same for every member of the team. Read by index, open
+ * problems by project and status, then each problem's pending decisions, so
+ * nothing falls out of a window however many problems a run opens.
+ * `line_workspace` names the workspace each row came from: the web's feed
+ * prunes by it. The workspaces are the ones the Line page reads at once.
+ */
+export const listOpenForLines = query({
+  args: { workspaces: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const out = [];
+    for (const workspace of [...new Set(args.workspaces)].slice(0, 20)) {
+      const [kind, id] = workspace.split(":");
+      if (kind === "user" ? id !== String(userId) : kind !== "team" || !(await isTeamMember(ctx, userId, id as Id<"teams">))) continue;
+      const projects = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
+      const rows: DecisionRow[] = [];
+      for (const project of projects) {
+        for (const status of OPEN_PROBLEM_STATUSES) {
+          const tasks = await ctx.db.query("tasks").withIndex("by_project_status", (q: any) => q.eq("project_id", project._id).eq("status", status)).take(OPEN_PROBLEMS_CAP);
+          for (const task of tasks) {
+            if (!task.cause || task.workspace !== workspace) continue;
+            const open: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
+            for (const d of open) if (d.workflow_run_id) rows.push(d);
+          }
+        }
+      }
+      out.push(...(await decisionRowsForViewer(ctx, rows, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
+    }
+    return out;
   },
 });
 

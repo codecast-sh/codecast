@@ -14,7 +14,7 @@ describe("trialHref", () => {
     expect(trialAddress(new URLSearchParams(href.split("?")[1])).from).toBe("/line?need=sd-600");
     expect(trialHref({ from: "https://evil.example/line" })).toBe("/trial");
     expect(trialHref({ from: "/tasks/ct-1" })).toBe("/trial");
-    expect(lineFromName("/line?need=sd-600")).toBe("For you");
+    expect(lineFromName("/line?need=sd-600")).toBe("Decisions");
     expect(lineFromName("/line?view=problems&case=ct-1")).toBe("Problems");
     expect(lineFromName("/line?view=line&step=prove")).toBe("Line");
   });

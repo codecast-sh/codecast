@@ -41,6 +41,12 @@ export function plainAgentLine(text: string): string {
   return stripMarkdown(stripMachineText(text)).replace(/\s+/g, " ").trim();
 }
 
+/** An agent's words as its voice says them: a link is something to look at
+ *  in the chat, never something to read out. */
+export function spokenAgentLine(text: string): string {
+  return plainAgentLine(text.replace(/<?https?:\/\/[^\s>)]+>?/g, "")).replace(/\s+([,.;:!?])/g, "$1");
+}
+
 export function cleanNotificationBody(text: string, maxLen = 180): string {
   const cleaned = plainAgentLine(text);
   if (cleaned.length <= maxLen) return cleaned;
