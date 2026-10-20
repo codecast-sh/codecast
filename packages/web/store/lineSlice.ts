@@ -35,6 +35,9 @@ export type LineSliceActions = {
   /** "Rebase and land": an approved fix its landing step refused for being behind picks up at the line's Rebase station
    *  on its machine (convex workflow_runs landAgainCore). */
   landLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
+  /** Deploy on the Deploys view (deploys.md DP2): one deploy sending the project's waiting fixes, painted at once as
+   *  requested; the server row supersedes the stub by its client key (convex deploys requestDeployCore). */
+  deployLine: (clientKey: string, projectId: string, stub: DeployStub) => Promise<{ _id: string; short_id: string; carries: number } | null | undefined>;
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
   stopLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
@@ -51,6 +54,9 @@ export type LineSliceActions = {
   /** Ask an agent to change a step (LW4): the line cause filed with the labeled cases, and its run started. */
   askLineAgent: (clientKey: string, projectId: string, fields: LineCauseFields) => Promise<{ task_id: string; task_short_id: string; started: boolean; run_id?: string; reason?: string } | null | undefined>;
 };
+
+/** What the Deploys view knows of a deploy it asks for: its target, who pressed, the fixes waiting. */
+export type DeployStub = { target: string; started_by: { kind: "person"; name: string; user_id?: string }; carries: Array<{ task_id: string; run_id?: string; how: "sent"; merge_sha?: string; merged_at?: number }> };
 
 export type LineGraphEditInput = { node: string; field?: "prompt" | "script"; text: string; base_hash?: string | null; base_text?: string | null };
 /** `project_id` paints the cases into the project's feed; the server reads it off each case's run. */
@@ -135,6 +141,16 @@ export function createLineSlice(): LineSliceActions {
       const run = this.workflowRuns[runId];
       if (run) { const now = Date.now(); run.status = "running"; run.current_node_id = "rebase"; run.fail_reason = undefined; run.resume_requested_at = now; run.updated_at = now; }
     }) as LineSliceActions["landLineRun"],
+
+    deployLine: asyncAction(function (this: { lineDeploys: Record<string, any> }, clientKey: string, projectId: string, stub: DeployStub) {
+      const now = Date.now();
+      this.lineDeploys[clientKey] = {
+        _id: clientKey, client_key: clientKey, deploy_id: clientKey, short_id: "", project_id: projectId, status: "requested", trigger: "person",
+        target: stub.target, started_by: stub.started_by, source: "line", carries: stub.carries, commits: [], sha: null, previous_sha: null, version: null,
+        repository: null, url: null, note: null, created_at: now, live_at: null, finished_at: null, at: now, surface: stub.target, environment: null,
+        via: "source", title: `Deploy to ${stub.target}`, after: null,
+      };
+    }) as LineSliceActions["deployLine"],
 
     // "Stop the run": the run reads ended on the draft, as the server's cancel leaves it.
     stopLineRun: asyncAction(function (this: { workflowRuns: Record<string, any> }, runId: string) {

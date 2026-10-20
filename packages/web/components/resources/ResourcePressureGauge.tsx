@@ -43,16 +43,19 @@ export function loadColor(load: number): string {
 export const needleAngle = (load: number) => (Math.min(100, Math.max(0, load)) / 100) * 240;
 
 /** A gauge glyph drawn to the load: the arc fills to it and the needle points at it. */
-function LoadGauge({ load }: { load: number }) {
+function LoadGauge({ load }: { load: number | null }) {
   const ease = "motion-safe:transition-[transform,stroke-dasharray,color] motion-safe:duration-700 motion-safe:ease-out";
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" aria-hidden style={{ color: loadColor(load) }} className={ease}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" aria-hidden style={{ color: load === null ? "var(--sol-text-dim)" : loadColor(load) }} className={ease}>
       <path d="M3.34 19a10 10 0 1 1 17.32 0" opacity={0.3} />
-      <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={100} style={{ strokeDasharray: `${Math.max(0.1, load)} 100` }} className={ease} />
-      {/* Drawn at 0% (down-left, toward the arc's start) and turned about the hub. */}
-      <g className={ease} style={{ transform: `rotate(${needleAngle(load)}deg)`, transformOrigin: "12px 14px" }}>
-        <path d="M12 14 6.8 17" />
-      </g>
+      {load !== null && (
+        <>
+          <path d="M3.34 19a10 10 0 1 1 17.32 0" pathLength={100} style={{ strokeDasharray: `${Math.max(0.1, load)} 100` }} className={ease} />
+          <g className={ease} style={{ transform: `rotate(${needleAngle(load)}deg)`, transformOrigin: "12px 14px" }}>
+            <path d="M12 14 6.8 17" />
+          </g>
+        </>
+      )}
       <circle cx="12" cy="14" r="1.2" fill="currentColor" stroke="none" />
     </svg>
   );
@@ -85,7 +88,7 @@ export function ResourcePressureGauge() {
   const now = useCoarseNow(30_000);
   const router = useRouter();
   const watched = useWatchedMachine(now);
-  if (!watched) return null;
+  if (!watched) return <ResourcePressureFallback />;
   const { machine, incident, level, load } = watched;
   const label = `${machine.name}: ${Math.round(load)}% load${level === "calm" ? "" : `, ${incident!.reason.toLowerCase()}`}`;
   return (
@@ -97,6 +100,15 @@ export function ResourcePressureGauge() {
         )}
       </TopbarButton>
     </HoverCard>
+  );
+}
+
+export function ResourcePressureFallback() {
+  const router = useRouter();
+  return (
+    <TopbarButton onClick={() => router.push("/resources")} aria-label="Resources — live readings unavailable" title="Resources — live readings unavailable">
+      <LoadGauge load={null} />
+    </TopbarButton>
   );
 }
 

@@ -1,7 +1,7 @@
 import { useContext, useMemo, useState, memo } from "react";
 import type { ReactNode } from "react";
-import { parsePatch, getFileStatus } from "../lib/patchParser";
-import type { PatchHunk } from "../lib/patchParser";
+import { getFileStatus } from "../lib/patchParser";
+import { DIFF_FENCE, parseCastDiff, type DiffFileSection } from "../lib/castDiff";
 import { DiffView } from "./DiffView";
 import { CodeBlock } from "./CodeBlock";
 import { MessageIdentity } from "../lib/conversationBlockContexts";
@@ -13,13 +13,13 @@ import { MessageIdentity } from "../lib/conversationBlockContexts";
 // renders collapsed to changed hunks and "expanding" is pure progressive
 // disclosure, no server round-trip. The message IS the artifact: nothing is
 // synced, so the diff is a frozen snapshot of the review moment by design.
-export const DIFF_FENCE = "cast-diff";
 
 // Inside a conversation (MessageIdentity), diff lines get DiffView's per-line
 // comment affordance (comments join the shared review batch and ride out on
 // the user's next reply). On surfaces with no conversation — share pages,
 // docs — the context is absent and the diff renders inert.
 export { MessageIdentity };
+export { DIFF_FENCE, parseCastDiff };
 
 export function MessageIdentityProvider({
   conversationId,
@@ -38,79 +38,6 @@ export function MessageIdentityProvider({
 export function tryRenderCastDiff(language: string | undefined, code: string): ReactNode {
   if (language === DIFF_FENCE && code) return <InlineDiff raw={code} />;
   return null;
-}
-
-interface DiffFileSection {
-  path: string;
-  status: "added" | "deleted" | "modified";
-  hunks: PatchHunk[];
-  oldContent: string;
-  newContent: string;
-  additions: number;
-  deletions: number;
-  // True when the patch carries the whole file in one hunk (git diff -U<huge>).
-  // Only then can DiffView's oldStr/newStr mode collapse the unchanged lines
-  // and open them again; a plain -U3 patch renders its hunks as-is.
-  fullContext: boolean;
-}
-
-// Split a (possibly multi-file) `git diff` into per-file sections before
-// parsing: parsePatch handles ONE file's patch, and a second file's
-// `--- a/...`/`+++ b/...` header lines would otherwise leak into the previous
-// file's last hunk as phantom deletion/addition lines.
-export function parseCastDiff(raw: string): DiffFileSection[] {
-  const segments: string[] = [];
-  const headerRe = /^diff --git /;
-  let current: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (headerRe.test(line) && current.length) {
-      segments.push(current.join("\n"));
-      current = [];
-    }
-    current.push(line);
-  }
-  if (current.length) segments.push(current.join("\n"));
-
-  const files: DiffFileSection[] = [];
-  for (const segment of segments) {
-    if (!/^@@\s*-\d/m.test(segment)) continue;
-    const oldHeader = segment.match(/^--- (?:a\/)?(.+)$/m)?.[1]?.trim();
-    const newHeader = segment.match(/^\+\+\+ (?:b\/)?(.+)$/m)?.[1]?.trim();
-    const gitHeader = segment.match(/^diff --git a\/.+ b\/(.+)$/m)?.[1]?.trim();
-    const status =
-      oldHeader === "/dev/null" || /^new file mode /m.test(segment)
-        ? "added"
-        : newHeader === "/dev/null" || /^deleted file mode /m.test(segment)
-          ? "deleted"
-          : "modified";
-    const path =
-      (status === "deleted" ? oldHeader : newHeader && newHeader !== "/dev/null" ? newHeader : oldHeader) ??
-      gitHeader;
-    if (!path || path === "/dev/null") continue;
-
-    const parsed = parsePatch(segment);
-    if (!parsed.hunks.length) continue;
-    let additions = 0;
-    let deletions = 0;
-    for (const hunk of parsed.hunks) {
-      for (const line of hunk.lines) {
-        if (line.type === "addition") additions++;
-        else if (line.type === "deletion") deletions++;
-      }
-    }
-    files.push({
-      path,
-      status,
-      hunks: parsed.hunks,
-      oldContent: parsed.oldContent,
-      newContent: parsed.newContent,
-      additions,
-      deletions,
-      fullContext:
-        status === "modified" && parsed.hunks.length === 1 && parsed.hunks[0].oldStart <= 1 && parsed.hunks[0].newStart <= 1,
-    });
-  }
-  return files;
 }
 
 const EXT_TO_LANGUAGE: Record<string, string> = {

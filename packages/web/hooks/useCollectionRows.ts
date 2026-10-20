@@ -9,7 +9,7 @@
 // which applies the access boundary; this hook is for everything else.
 import { useMemo } from "react";
 import { useTrackedStore } from "../store/inboxStore";
-import { createInterner } from "../store/wakeSig";
+import { makeCollectionSig } from "../store/wakeSig";
 
 export type CollectionRowsOpts<T> = {
   /** Which rows. Default: all. */
@@ -21,54 +21,25 @@ export type CollectionRowsOpts<T> = {
   sort?: (a: T, b: T) => number;
 };
 
-// Cache the signature per (collection ref, where, sig) so the N components
-// reading the same slice don't each rescan on every store notification.
-const sigCache = new WeakMap<object, Map<unknown, Map<unknown, string>>>();
-// And each row's line per (where, sig), by row ref: a write to one row hands
-// back a new collection in which every other row keeps its ref, so the rescan
-// calls where and sig only for the rows that changed.
-// `intern` hands an equal rebuild back as the same string, so a subscriber's
-// Object.is is a pointer check rather than a compare of the whole slice
-// (createInterner).
-type SliceLines = { rows: WeakMap<object, { id: string; line: string }>; intern: (signature: string) => string };
-const rowLineCache = new Map<unknown, Map<unknown, SliceLines>>();
-function rowLines(where: unknown, sig: unknown): SliceLines {
-  let bySig = rowLineCache.get(where);
-  if (!bySig) { bySig = new Map(); rowLineCache.set(where, bySig); }
-  let lines = bySig.get(sig);
-  if (!lines) { lines = { rows: new WeakMap(), intern: createInterner() }; bySig.set(sig, lines); }
-  return lines;
-}
-
+// The wake signature over the matching rows: a digest per (where, sig) pair,
+// memoized by the collection ref and per row (makeCollectionSig), so the N
+// components reading the same slice share one pass, a write to one row
+// re-reads that row only, and subscribers compare a short string.
+const sliceSigs = new Map<unknown, Map<unknown, (collection: Record<string, unknown>) => string>>();
 function sliceSig<T>(
   collection: Record<string, T> | undefined,
   where: ((row: T) => boolean) | undefined,
   sig: ((row: T) => string) | undefined,
 ): string {
   if (!collection) return "";
-  let byWhere = sigCache.get(collection);
-  if (!byWhere) { byWhere = new Map(); sigCache.set(collection, byWhere); }
-  let bySig = byWhere.get(where);
-  if (!bySig) { bySig = new Map(); byWhere.set(where, bySig); }
-  const hit = bySig.get(sig);
-  if (hit !== undefined) return hit;
-  const lines = rowLines(where, sig);
-  let out = "";
-  for (const id in collection) {
-    const row = collection[id];
-    if (!row) continue;
-    const cacheable = typeof row === "object";
-    const hit = cacheable ? lines.rows.get(row as object) : undefined;
-    let line = hit?.id === id ? hit.line : undefined;
-    if (line === undefined) {
-      line = where && !where(row) ? "" : sig ? `${id}|${sig(row)}\n` : `${id}\n`;
-      if (cacheable) lines.rows.set(row as object, { id, line });
-    }
-    out += line;
+  let bySig = sliceSigs.get(where);
+  if (!bySig) { bySig = new Map(); sliceSigs.set(where, bySig); }
+  let fn = bySig.get(sig);
+  if (!fn) {
+    fn = makeCollectionSig<any>((row) => (!row || (where && !where(row)) ? null : sig ? sig(row) : ""));
+    bySig.set(sig, fn);
   }
-  out = lines.intern(out);
-  bySig.set(sig, out);
-  return out;
+  return fn(collection as Record<string, unknown>);
 }
 
 export function useCollectionRows<T = any>(key: string, opts: CollectionRowsOpts<T> = {}): T[] {

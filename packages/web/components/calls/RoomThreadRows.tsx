@@ -9,8 +9,7 @@ import { callShareHref, describeClockSpans, recordingFailureWords, recordingLost
 import { ChatAttachments } from "../chat/ChatMessage";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { EntityAwareLink } from "../EntityIdPill";
-import { PublishedPagePill } from "../PublishedPageEmbed";
-import { pageShareUrl } from "../../lib/publishedPageUrls";
+import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { fmtClock as fmtWallClock, fmtDuration } from "../triggerCadence";
 import { CrossfadeText } from "../SessionActivityLine";
 import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
@@ -587,14 +586,16 @@ function GuestEventLine({ row, actor, fresh, dayOf }: { row: EventRow; actor: st
 
 // ── Typed lines and agent answers ──────────────────────────────────────────
 
-/** The stage rail is 340px wide, so a page link typed on a line of its own
- *  is the titled pill there, not the 420px card that would fill the rail
- *  from header to composer. The card's text is how remarkEntityIds hands
- *  the link over: "embed:artifact:<slug>|<caption>" (see EntityAwareLink). */
+/** The stage rail is 340px wide, so a page link on a line of its own is the
+ *  page itself at a height the rail can hold beside the call, with the
+ *  embed's own expand for reading it full size. The card's text is how
+ *  remarkEntityIds hands the link over: "embed:artifact:<slug>|<caption>"
+ *  (see EntityAwareLink). */
+const STAGE_PAGE_HEIGHT = 280;
 function StageLink({ children, ...props }: any) {
   const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
   const m = /^embed:artifact:([^|]+)(?:\|([\s\S]*))?$/.exec(text);
-  if (m) return <PublishedPagePill slug={m[1]} href={pageShareUrl(m[1])} label={m[2] || undefined} />;
+  if (m) return <PublishedPageEmbed slug={m[1]} caption={m[2] || undefined} height={STAGE_PAGE_HEIGHT} />;
   return <EntityAwareLink {...props}>{children}</EntityAwareLink>;
 }
 const STAGE_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, a: StageLink };
@@ -612,7 +613,7 @@ export function ChatLine({
   /** Landed after the thread mounted: it rises in. */
   fresh: boolean;
   dayOf: number | undefined;
-  /** In the rail: a page link is a pill, not a card. */
+  /** In the rail: a page embeds at the rail's height. */
   stage: boolean;
   onOpen: (id: string) => void;
 }) {

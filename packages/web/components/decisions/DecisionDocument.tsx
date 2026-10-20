@@ -16,6 +16,7 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
+import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OptionPages } from "./OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
@@ -105,6 +106,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             {decision.resolved_at && !outcome && !banner && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
+            {/* A line card answered Ship: the deploy that put its fix live (deploys.md). */}
+            {decision.workflow_run_id && decision.status === "answered" && <DeployedIn taskId={decision.task_id} />}
             {/* The id is for citing, so it trails the line. */}
             <span className="font-mono opacity-70">{decision.short_id ?? "decision"}</span>
             <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />

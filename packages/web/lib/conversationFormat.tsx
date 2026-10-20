@@ -5,6 +5,7 @@ import { openForwardToChat } from "./forwardToChat";
 import { formatMessageHash } from "./messageHash";
 import type { ToolCall, ToolResult } from "../components/conversation/types";
 import { cacheLocalDateFormat } from "./localDateCache";
+import { ansiSpans } from "./ansi";
 
 export function messageLink(conversationId: string | undefined, messageId: string, block?: number) {
   return `${shareOrigin()}/conversation/${conversationId}${formatMessageHash(messageId, block)}`;
@@ -74,54 +75,14 @@ export function formatDuration(startTs: number, endTs = Date.now()): string {
   return `${days}d ${hours % 24}h`;
 }
 
-export function stripAnsiCodes(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
-}
-
-const ANSI_COLORS: Record<number, string> = {
-  30: '#073642', 31: '#dc322f', 32: '#859900', 33: '#b58900',
-  34: '#268bd2', 35: '#d33682', 36: '#2aa198', 37: '#eee8d5',
-  90: '#586e75', 91: '#cb4b16', 92: '#859900', 93: '#b58900',
-  94: '#268bd2', 95: '#6c71c4', 96: '#2aa198', 97: '#fdf6e3',
-};
+export { stripAnsiCodes } from "./ansi";
 
 export function renderAnsi(text: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  const regex = /\x1b\[([0-9;]*)m/g;
-  let lastIndex = 0;
-  let currentColor: string | null = null;
-  let bold = false;
-
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const segment = text.slice(lastIndex, match.index);
-      if (currentColor || bold) {
-        parts.push(<span key={parts.length} style={{ color: currentColor || undefined, fontWeight: bold ? 700 : undefined }}>{segment}</span>);
-      } else {
-        parts.push(segment);
-      }
-    }
-    lastIndex = regex.lastIndex;
-
-    const codes = match[1].split(';').map(Number);
-    for (const code of codes) {
-      if (code === 0) { currentColor = null; bold = false; }
-      else if (code === 1) { bold = true; }
-      else if (ANSI_COLORS[code]) { currentColor = ANSI_COLORS[code]; }
-    }
-  }
-
-  if (lastIndex < text.length) {
-    const segment = text.slice(lastIndex);
-    if (currentColor || bold) {
-      parts.push(<span key={parts.length} style={{ color: currentColor || undefined, fontWeight: bold ? 700 : undefined }}>{segment}</span>);
-    } else {
-      parts.push(segment);
-    }
-  }
-
-  return parts.length > 0 ? parts : text;
+  const spans = ansiSpans(text);
+  if (spans.length === 0) return text;
+  return spans.map((sp, i) => sp.color || sp.bold
+    ? <span key={i} style={{ color: sp.color, fontWeight: sp.bold ? 700 : undefined }}>{sp.text}</span>
+    : sp.text);
 }
 
 /**

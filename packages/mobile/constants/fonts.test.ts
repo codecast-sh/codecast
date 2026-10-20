@@ -25,7 +25,7 @@ test("the family look sets unnamed text in Instrument Sans and keeps code mono",
   expect(monoStyle({ fontWeight: "600" }, true, "family").fontFamily).toBe(Sans.semiBold);
   expect(monoStyle({}, true, "classic").fontFamily).toBe(Mono.regular);
   // A style that names a face keeps its group in every look.
-  expect(monoStyle({ fontFamily: "SpaceMono", fontWeight: "700" }, true, "family").fontFamily).toBe(Mono.bold);
+  expect(monoStyle({ fontFamily: Mono.regular, fontWeight: "700" }, true, "family").fontFamily).toBe(Mono.bold);
   expect(monoStyle({ fontFamily: Serif.regular, fontWeight: "700" }, true, "family").fontFamily).toBe(Serif.bold);
   // Nested text inherits its parent's group: a bold run in a reply set in
   // the reading face stays in it.

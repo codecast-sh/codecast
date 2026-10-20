@@ -362,6 +362,41 @@
 }
 
 /* At the menu-bar size the word would cover the face: the dot alone. */
+/* The media dropped and is coming back: the faces fade to what they were a
+   moment ago, and the pill says why the room went quiet. */
+.faces-row[data-reconnecting] .face {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+  transition: opacity 200ms ease, filter 200ms ease;
+}
+.faces-reconnecting {
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 999px;
+  background: #101418;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+  color: var(--sol-yellow);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  pointer-events: none;
+}
+.faces-reconnecting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sol-yellow);
+}
+[data-face-tier="mini"] .faces-reconnecting {
+  padding: 3px;
+  font-size: 0;
+  gap: 0;
+}
 [data-face-tier="mini"] .faces-rec {
   padding: 3px;
 }
