@@ -726,3 +726,27 @@ export const liveFindings = internalQuery({
     (await ctx.db.query("signals").withIndex("by_workspace_subject", (q: any) => q.eq("workspace", args.workspace).eq("subject", args.judge)).collect())
       .filter((r: Doc<"signals">) => r.source === `judge:${args.judge}` && !r.retired && !r.merged_into),
 });
+
+/**
+ * Costs handed back before the machine read a resumed turn's cost as the
+ * session's total so far (it reports the first turn's cost again): such a
+ * review's notional_usd counted the first turn twice. With the findings
+ * turn's figure (then that cumulative total) the session's cost is exactly
+ * it; without, half the sum, short by half the findings turn (about 5 cents).
+ * One page per call (run with packages/convex/run.sh).
+ */
+export const correctDoubledCosts = internalMutation({
+  args: { before: v.number(), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("agent_reviews").withIndex("by_status_created", (q: any) => q.eq("status", "done")).paginate({ cursor: args.cursor ?? null, numItems: 300 });
+    let fixed = 0;
+    for (const r of page.page as Doc<"agent_reviews">[]) {
+      if (r.notional_usd == null || (r.finished_at ?? 0) >= args.before || r.cost_corrected) continue;
+      const total = r.findings_turn_usd != null ? r.findings_turn_usd : r.notional_usd / 2;
+      const turn = r.findings_turn_usd != null ? Math.max(0, 2 * r.findings_turn_usd - r.notional_usd) : undefined;
+      await ctx.db.patch(r._id, { notional_usd: Math.round(total * 10_000) / 10_000, ...(turn !== undefined ? { findings_turn_usd: Math.round(turn * 10_000) / 10_000 } : {}), cost_corrected: true });
+      fixed++;
+    }
+    return { fixed, cursor: page.isDone ? null : page.continueCursor };
+  },
+});

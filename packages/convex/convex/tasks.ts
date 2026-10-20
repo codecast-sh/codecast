@@ -658,14 +658,14 @@ async function handoffTaskThread(
 // hands work to a role wants to hear how it went.
 async function announceAssignment(
   ctx: any,
-  o: { task: { _id: Id<"tasks">; short_id: string; title: string; team_id?: Id<"teams"> }; assignee: string | undefined; actorUserId: Id<"users">; actorName?: string; via: SubscriptionVia; fromConversationId?: Id<"conversations"> },
+  o: { task: { _id: Id<"tasks">; short_id: string; title: string; team_id?: Id<"teams"> }; assignee: string | undefined; actorUserId: Id<"users">; actorName?: string; via: SubscriptionVia; fromConversationId?: Id<"conversations">; note?: string },
 ): Promise<void> {
   if (!o.assignee) return;
   const role = await roleAssigneeOf(ctx, o.assignee);
   if (role) {
     const by = o.actorName || (await ctx.db.get(o.actorUserId))?.name || "Someone";
     await tellRole(ctx, role._id, {
-      content: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"`,
+      content: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"${o.note?.trim() ? `. ${o.note.trim()}` : ""}`,
       client_id: `assigned:${o.task._id}:${role._id}`,
       from_user_id: o.actorUserId,
       from_conversation_id: o.fromConversationId,
@@ -1278,6 +1278,11 @@ export const create = mutation({
     }))),
     acceptance_criteria: v.optional(v.array(v.string())),
     estimated_minutes: v.optional(v.number()),
+    // A line the assignee's notice carries after the task (`cast route` says
+    // how to answer), and the session the notice comes from when that is not
+    // the task's origin, so the one notice is the whole hand-off.
+    assignment_note: v.optional(v.string()),
+    assignment_from: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1449,7 +1454,8 @@ export const create = mutation({
     // A defaulted owner filed the task itself: nobody assigned it to them.
     if (resolvedAssignee && args.assignee) {
       const createdTask = await ctx.db.get(id) as any;
-      await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args), fromConversationId: created_from_conversation });
+      const from = args.assignment_from ? (await resolveSessionConversation(ctx, auth.userId, args.assignment_from))?._id : created_from_conversation;
+      await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args), fromConversationId: from, note: args.assignment_note });
     }
 
     await schedulePushNewTask(ctx, project_id, id);
