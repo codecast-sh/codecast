@@ -662,9 +662,11 @@ test("an agent's chip carries its video avatar switch where the team has faces, 
   );
   const toggle = r.container.querySelector<HTMLButtonElement>(".rt-chip button[aria-pressed]");
   expect(toggle?.getAttribute("aria-pressed")).toBe("false");
-  mutated.length = 0;
+  // The switch is a store action: its dispatch carries the flip to the server.
+  const dispatched: unknown[] = [];
+  (useInboxStore.getState() as any)._setDispatch(async (action: string, args: unknown[]) => void dispatched.push([action, args]));
   await act(async () => toggle!.click());
-  expect(mutated).toEqual([{ transcript_id: "t1", target: "conv_other", face: true }]);
+  expect(dispatched).toEqual([["setCallAgentFace", ["t1", "conv_other", true]]]);
   await r.unmount();
 
   useInboxStore.setState({ teams: [{ _id: "team1", name: "Team", features: {} }] } as any);
