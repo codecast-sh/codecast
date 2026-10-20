@@ -28,7 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { spawn, spawnSync } from "./proc.js";
+import { TOOL_PATH, findOnPath, spawn, spawnSync } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { bunPath } from "./momentsHost.js";
 import { accountTokenFilePath } from "./ccAccounts.js";
@@ -187,6 +187,27 @@ export async function gatewayFor(root: string, rel: string, log: (l: string) => 
 
 // ── One run ──
 
+/** The directory of the real `cast` this machine runs, searched past a launchd PATH; null when there is none. */
+export function realCastDir(): string | null {
+  const found = findOnPath("cast", [TOOL_PATH, path.join(os.homedir(), ".codecast", "bin")].join(path.delimiter));
+  return found ? path.dirname(found) : null;
+}
+
+/**
+ * One runner per machine: the daemon's pass and a `cast line reviews pass`
+ * share the run directories and the slots, so two at once hand back each
+ * other's runs and run twice the slots. The first takes the lock for as long
+ * as its process lives; another stands by.
+ */
+export function holdRunnerLock(pid = process.pid): number | null {
+  const file = path.join(reviewsDir(), "runner.pid");
+  fs.mkdirSync(reviewsDir(), { recursive: true });
+  const holder = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : 0);
+  if (holder && holder !== pid && pidAlive(holder)) return holder;
+  fs.writeFileSync(file, `${pid}\n`);
+  return null;
+}
+
 /** The dry-run harness beside this source tree; reviews need it, so a build without it runs none. */
 export function harnessScript(): string | null {
   const p = path.resolve(import.meta.dir, "../scripts/prompt-dry-run.ts");
@@ -202,7 +223,7 @@ function readJson(file: string): any {
 }
 
 /** Start one review's session in its run directory; resolves once the harness is running. */
-export function startRun(claim: ReviewClaim, account: string, o: { checkout: string; gatewayEnv: Record<string, string>; harness: string }): RunFiles {
+export function startRun(claim: ReviewClaim, account: string, o: { checkout: string; gatewayEnv: Record<string, string>; harness: string; castDir: string }): RunFiles {
   const dir = path.join(runsDir(), claim.review);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -220,7 +241,8 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
     ...(agent.claude_md ? ["--claude-md", path.join(dir, "CLAUDE.md")] : []),
   ];
   const home = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env` });
+  // The harness's guard hands reads to the first real `cast` on PATH, and a daemon started by launchd has none there.
+  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, process.env.PATH].filter(Boolean).join(path.delimiter) });
   const out = fs.openSync(path.join(dir, "harness.log"), "w");
   const child = spawn(bunPath(), argv, { cwd: dir, env, stdio: ["ignore", out, out], detached: true });
   fs.writeFileSync(path.join(dir, "pid"), `${child.pid}\n`);
@@ -267,6 +289,7 @@ export function handBack(files: RunFiles, now = Date.now()): Record<string, unkn
     turns: (Number(out1?.num_turns) || 0) + (Number(out2?.num_turns) || 0),
     usage,
     notional_usd: Math.round(notional * 10_000) / 10_000,
+    ...(out2 ? { findings_turn_usd: Math.round((Number(out2.total_cost_usd) || 0) * 10_000) / 10_000 } : {}),
   };
 }
 
@@ -310,6 +333,8 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
   const cfg = readReviewsConfig();
   let held = heldRuns();
   if (!cfg.slots && !held.length) return { handed: 0, started: 0, running: 0 };
+  const other = holdRunnerLock();
+  if (other) { deps.log(`[REVIEWS] process ${other} runs reviews on this machine; this pass stands by`); return { handed: 0, started: 0, running: held.length }; }
   let handed = 0;
   for (const r of held) {
     const late = r.alive && now() > r.claim.deadline;
@@ -343,7 +368,9 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
   }
   const free = Math.max(0, cfg.slots - held.length);
   const harness = harnessScript();
+  const castDir = realCastDir();
   if (!free || !harness) return { handed, started: 0, running: held.length };
+  if (!castDir) { deps.log("[REVIEWS] no cast on this machine for the harness's guard to hand reads to; starting none"); return { handed, started: 0, running: held.length }; }
   const busy = new Map<string, number>();
   for (const r of held) busy.set(r.account, (busy.get(r.account) ?? 0) + 1);
   const room = (() => {
@@ -365,7 +392,7 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
       const checkout = checkoutFor(root, inUse, now());
       inUse.add(checkout);
       const gatewayEnv = claim.judge.agent.gateway ? await gatewayFor(root, claim.judge.agent.gateway, deps.log) : {};
-      startRun(claim, account, { checkout, gatewayEnv, harness });
+      startRun(claim, account, { checkout, gatewayEnv, harness, castDir });
       busy.set(account, (busy.get(account) ?? 0) + 1);
       started++;
       deps.log(`[REVIEWS] ${claim.review} ${claim.moment} ${claim.subject} started on ${account}`);

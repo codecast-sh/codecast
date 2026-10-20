@@ -1,7 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text, TextInput } from '@/components/Themed';
@@ -11,7 +10,8 @@ import { labelHexColor } from '@/lib/labelColors';
 import { showActionSheet } from '@/lib/actionSheet';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
-import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
+import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
+import { Places } from '@/components/nav/Places';
 import { useSurface } from '@codecast/web/lib/surfaces';
 import {
   useInboxStore, sortLabels, resolveInboxViewMode, type InboxViewMode,
@@ -34,13 +34,11 @@ export function inboxViewOptions(hasLabels: boolean, hasPlans: boolean): Array<{
 const FIND_AT = 10;
 
 /** The inbox's slide-out panel: every way to narrow the inbox (all, a label,
- *  a project) as a list with counts, the view lens, and the places that are
- *  not tabs. Picking a filter applies it and slides the inbox back. */
+ *  a project) as a list with counts, the places that are not tabs, and the
+ *  view lens. Picking a filter applies it and slides the inbox back. */
 export function InboxDrawer() {
   const Theme = useTheme();
-  const router = useRouter();
   const gitChips = useSurface('gitChips');
-  const orgOn = useWorkspaceFeatureState('org');
   const { placed, labels, bucketCounts, projectCounts } = useInboxFilterCounts();
   const buckets = useInboxStore((s) => s.buckets);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
@@ -63,10 +61,6 @@ export function InboxDrawer() {
     setInboxDrawerOpen(false);
   };
   const store = () => useInboxStore.getState();
-  const go = (pathname: string) => {
-    setInboxDrawerOpen(false);
-    router.push({ pathname } as never);
-  };
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left']}>
@@ -96,13 +90,14 @@ export function InboxDrawer() {
             onPress={() => pick(() => { store().setActiveBucketFilter(null); store().setActiveProjectFilter(null); })}
           />
         )}
+        {!q && <Places onLeave={() => setInboxDrawerOpen(false)} />}
         {shownLabels.length > 0 && <Heading>Labels</Heading>}
         {shownLabels.map((b) => {
           const selected = activeBucketFilter === b._id;
           return (
             <Row
               key={b._id}
-              icon={<View style={[styles.labelDot, { backgroundColor: labelHexColor(b.name) }]} />}
+              icon={<Feather name="tag" size={16} color={labelHexColor(b.name)} />}
               name={b.name}
               count={bucketCounts[b._id] || 0}
               selected={selected}
@@ -144,40 +139,8 @@ export function InboxDrawer() {
             onPress: () => pick(() => store().setInboxViewMode(o.key)),
           })))}
         />
-        {orgOn === true && (
-          <Row icon={<Feather name="users" size={16} color={Theme.textMuted} />} name="Org" onPress={() => go('/org')} />
-        )}
-        <Row icon={<Feather name="mic" size={16} color={Theme.textMuted} />} name="Record a meeting" onPress={() => go('/record')} />
       </View>
     </SafeAreaView>
-  );
-}
-
-function Heading({ children }: { children: string }) {
-  return <Text style={styles.heading} accessibilityRole="header">{children}</Text>;
-}
-
-function Row({ icon, name, count, detail, selected, onPress }: {
-  icon: ReactNode;
-  name: string;
-  count?: number;
-  detail?: string;
-  selected?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.row, selected && styles.rowSelected]}
-      onPress={onPress}
-      activeOpacity={0.6}
-      accessibilityRole="button"
-      accessibilityState={{ selected: !!selected }}
-    >
-      <View style={styles.rowIcon}>{icon}</View>
-      <Text style={[styles.rowName, selected && styles.rowNameSelected]} numberOfLines={1}>{name}</Text>
-      {detail ? <Text style={styles.rowDetail}>{detail}</Text> : null}
-      {count !== undefined ? <Text style={styles.rowCount}>{count}</Text> : null}
-    </TouchableOpacity>
   );
 }
 
@@ -209,53 +172,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.lg,
-  },
-  heading: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Theme.textMuted0,
-    paddingHorizontal: 12,
-    paddingTop: 18,
-    paddingBottom: 6,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    minHeight: 44,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-  },
-  rowSelected: {
-    backgroundColor: Theme.bgHighlight,
-  },
-  rowIcon: {
-    width: 24,
-    alignItems: 'center',
-  },
-  rowName: {
-    flex: 1,
-    fontSize: 16,
-    color: Theme.text,
-  },
-  rowNameSelected: {
-    fontWeight: '600',
-  },
-  rowDetail: {
-    fontSize: 14,
-    color: Theme.textMuted,
-  },
-  rowCount: {
-    fontSize: 14,
-    color: Theme.textMuted0,
-    fontVariant: ['tabular-nums'],
-    minWidth: 24,
-    textAlign: 'right',
-  },
-  labelDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
   projectMark: {
     width: 24,
