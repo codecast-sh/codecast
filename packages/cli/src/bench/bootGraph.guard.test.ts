@@ -330,7 +330,13 @@ describe("command groups stay off the boot graph", () => {
     // when rolePlaybook.ts, reached through the barrel, stopped importing it.
     // 484 on 2026-10-16: contracts/snippetsWorkflow.ts, split out of
     // snippets.ts for its line pin (see the index.ts count).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(484);
+    // 493 on 2026-10-20, again after days no run reached this case: the
+    // daemon's own modules (interactivePrompt.ts split out of daemon.ts,
+    // heicImage, tmuxSuspendedAgent, pendingDeliveryBatches, threadQos,
+    // backgroundPriority, systemdDaemonUnit, localData) and contracts/lineDeploy.ts,
+    // the profile leaf split out of deploys.ts so the line profile no longer
+    // brings the deploy history (causeHistory.ts, changeCard.ts) along.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(493);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

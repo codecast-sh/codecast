@@ -189,7 +189,7 @@ export async function gatewayFor(root: string, rel: string, log: (l: string) => 
 
 /** The directory of the real `cast` this machine runs, searched past a launchd PATH; null when there is none. */
 export function realCastDir(): string | null {
-  const found = findOnPath("cast", [TOOL_PATH, path.join(os.homedir(), ".codecast", "bin")].join(path.delimiter));
+  const found = findOnPath("cast", [TOOL_PATH, codecastPath("bin")].join(path.delimiter));
   return found ? path.dirname(found) : null;
 }
 
@@ -241,8 +241,8 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
     ...(agent.claude_md ? ["--claude-md", path.join(dir, "CLAUDE.md")] : []),
   ];
   const home = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // The harness's guard hands reads to the first real `cast` on PATH, and a daemon started by launchd has none there.
-  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, process.env.PATH].filter(Boolean).join(path.delimiter) });
+  // The harness's guard hands reads to the first real `cast` on PATH (a script that runs bun), and a daemon started by launchd has neither there.
+  const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, path.dirname(bunPath()), process.env.PATH].filter(Boolean).join(path.delimiter) });
   const out = fs.openSync(path.join(dir, "harness.log"), "w");
   const child = spawn(bunPath(), argv, { cwd: dir, env, stdio: ["ignore", out, out], detached: true });
   fs.writeFileSync(path.join(dir, "pid"), `${child.pid}\n`);
@@ -271,7 +271,9 @@ export function handBack(files: RunFiles, now = Date.now()): Record<string, unkn
   const u1 = usageOf(out1);
   const u2 = usageOf(out2);
   const usage = { input: u1.input + u2.input, output: u1.output + u2.output, cache_read: u1.cache_read + u2.cache_read, cache_write: u1.cache_write + u2.cache_write };
-  const notional = (Number(out1?.total_cost_usd) || 0) + (Number(out2?.total_cost_usd) || 0);
+  // A resumed turn reports the session's cost so far, the first turn's included: the session's cost is the last turn's.
+  const first = Number(out1?.total_cost_usd) || 0;
+  const notional = out2 ? Math.max(first, Number(out2.total_cost_usd) || 0) : first;
   const ok = !!out1 && !out1.is_error && !!out2 && !out2.is_error && typeof out2.result === "string";
   const said = [out1?.result, out2?.result, read("err.txt"), read("../harness.log").slice(-2000)].filter((x) => typeof x === "string").join("\n");
   const error = ok ? undefined
@@ -289,7 +291,7 @@ export function handBack(files: RunFiles, now = Date.now()): Record<string, unkn
     turns: (Number(out1?.num_turns) || 0) + (Number(out2?.num_turns) || 0),
     usage,
     notional_usd: Math.round(notional * 10_000) / 10_000,
-    ...(out2 ? { findings_turn_usd: Math.round((Number(out2.total_cost_usd) || 0) * 10_000) / 10_000 } : {}),
+    ...(out2 ? { findings_turn_usd: Math.round((notional - first) * 10_000) / 10_000 } : {}),
   };
 }
 
@@ -341,7 +343,7 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
     if (late) stopRun(r.dir);
     if (r.alive && !late) continue;
     const body = handBack(r, now());
-    const turn2 = Number(readJson(path.join(r.dir, "run", "out2.json"))?.total_cost_usd) || 0;
+    const turn2 = Number(body.findings_turn_usd) || 0;
     if (late && !body.ok) body.error = `the review ran past its ${Math.round(r.claim.judge.agent.timeout_ms / 60_000)} minutes and was stopped`;
     if (body.retry) cooling.set(r.account, now() + 30 * 60_000);
     try {

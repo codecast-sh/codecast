@@ -69,12 +69,12 @@ export function useSessionImages({ deferredQueriesEnabled, conversation }: {
   // plain query rather than useSyncCollection: a share-link guest reads it too.
   const conversationId = conversation?._id && isConvexId(conversation._id) ? String(conversation._id) : null;
   const { data: pagesFeed, error: pagesError } = useQueryNoThrow(
-    api.messages.getConversationPages,
+    api.conversationPages.list,
     deferredQueriesEnabled && conversationId
       ? { conversation_id: conversationId as Id<"conversations">, ...shareTokenArg(conversationId) }
       : "skip"
   );
-  useFeederError("messages.getConversationPages", pagesError);
+  useFeederError("conversationPages.list", pagesError);
   useConvexSync(pagesFeed, useCallback((row: any) => applyCollectionFeed("conversationPages", [row]), []));
   const pageRows = useInboxStore((s) => (conversationId ? (s as any).conversationPages?.[conversationId]?.pages : undefined)) as
     | Array<{ slug: string; created_at: number }>

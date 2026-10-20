@@ -5,7 +5,7 @@
 // three cannot drift. Pure types and one comparison; no runtime deps.
 import { canonicalJson } from "./appConnector";
 import type { SignalKind } from "./signalFingerprint";
-import { LINE_DEPLOY_DEFAULTS, type LineDeployProfile } from "./deploys";
+import { LINE_DEPLOY_DEFAULTS, type LineDeployProfile } from "./lineDeploy";
 
 export type LineValueSource = "file" | "default";
 

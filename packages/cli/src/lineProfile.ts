@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
-import { LINE_DEPLOY_KEYS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, type LineDeployTrigger } from "@codecast/shared/contracts/deploys";
+import { LINE_DEPLOY_KEYS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, type LineDeployTrigger } from "@codecast/shared/contracts/lineDeploy";
 import {
   CAPS_KEYS,
   CODECAST_PRINCIPLES,

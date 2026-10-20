@@ -1020,7 +1020,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["artifacts.embedInfo"],
   },
-  // The pages a conversation published (messages.getConversationPages), one
+  // The pages a conversation published (conversationPages.list), one
   // row per conversation viewed, keyed by its Convex id: `pages` is the slugs
   // and when each joined. The pages themselves live in pageEmbeds. Delta:
   // each open conversation feeds its own row.
@@ -1028,7 +1028,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "conversationPages" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true, deepFields: ["pages"] },
-    feeds: ["messages.getConversationPages"],
+    feeds: ["conversationPages.list"],
   },
   // The anchor space, one row per scope key ("user" | "team:<id>"), keyed by
   // it. Delta so the scopes coexist; each push replaces its own row.
