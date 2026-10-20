@@ -29,8 +29,10 @@ export const MOMENT_LIMITS = {
   value_chars: 2_000,
   text_chars: 20_000,
   refs: 20,
-  /** The serialized moment; larger is refused so a judge prompt stays bounded. */
-  json_bytes: 256 * 1024,
+  /** The serialized moment; larger is refused. A one-call judge reads only the blocks, which the caps above bound; the review page can be long. */
+  json_bytes: 2 * 1024 * 1024,
+  /** The page an extractor renders for an agent judge (ExtractorOutput.review). */
+  review_chars: 1_200_000,
   /** A source on 30-day retention keeps a body this long (the replays bucket's lifecycle rule on its prefix). */
   retention_ms: 30 * 24 * 60 * 60 * 1000,
 } as const;
@@ -87,6 +89,9 @@ export interface ExtractorOutput {
   /** Who the moment is about, as a person names it in a list ("Marilyn Priest, called by Logan"). Absent: codecast
    *  reads it off the first facts block's Name or Contact (momentWho). */
   who?: string;
+  /** The moment rendered whole for an agent judge's review (agentJudges.agentJudgePrompt): everything the review reads, with long pieces folded to the
+   *  command that opens them, ending in what stands now. Absent: the review reads the blocks. */
+  review?: string;
 }
 
 /** A moment as codecast keeps it: the extractor's output plus where and when it came from. */
@@ -228,7 +233,10 @@ export function parseExtractorOutput(raw: unknown): ExtractorOutput | { error: s
   }
   const at = time(value.at);
   const who = text(value.who, MOMENT_LIMITS.label_chars);
-  return { blocks, refs, ...(at ? { at } : {}), ...(who ? { who } : {}) };
+  if (value.review !== undefined && typeof value.review !== "string") return { error: "review is the page an agent judge reads, a string" };
+  if (typeof value.review === "string" && value.review.length > MOMENT_LIMITS.review_chars) return { error: `the review page is ${value.review.length} characters, at most ${MOMENT_LIMITS.review_chars}` };
+  const review = typeof value.review === "string" && value.review.trim() ? value.review : undefined;
+  return { blocks, refs, ...(at ? { at } : {}), ...(who ? { who } : {}), ...(review ? { review } : {}) };
 }
 
 /** Labels of a facts block that name the person a moment is about. */

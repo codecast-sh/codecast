@@ -2,7 +2,7 @@
 // module sessionDecisions.ts itself imports (artifacts.ts) can ask the same
 // question without an import cycle.
 import type { Doc, Id } from "../_generated/dataModel";
-import { canAccessConversation } from "./access";
+import { canAccessConversation, canAccessTask } from "./access";
 import { roleGrants } from "./orgAccess";
 
 type DecisionRow = Doc<"session_decisions">;
@@ -27,6 +27,9 @@ export async function findDecision(ctx: Ctx, ref: string): Promise<DecisionRow |
 // reading what their seat was asked. Not the role's whole team: a private
 // conversation reporting to a team role must not open its decisions to every
 // member; team visible conversations are covered by the conversation clause.
+// A line decision (a run asks it about a problem) is the problem's: whoever can
+// read the problem reads it, answers it and assigns it, so a team's line
+// decisions are the whole team's, whichever session asked.
 export async function userMayRead(ctx: Ctx, userId: Id<"users">, row: DecisionRow): Promise<boolean> {
   const people = (row.asked_user_ids ?? [row.user_id]).map(String);
   if (people.includes(String(userId))) return true;
@@ -35,6 +38,10 @@ export async function userMayRead(ctx: Ctx, userId: Id<"users">, row: DecisionRo
   for (const hop of row.hops ?? []) {
     const role = await ctx.db.get(hop.role_id);
     if (role && (await roleGrants(ctx as any, userId, role, () => false))) return true;
+  }
+  if (row.workflow_run_id && row.task_id) {
+    const task = await ctx.db.get(row.task_id);
+    if (task && (await canAccessTask(ctx as any, userId, task))) return true;
   }
   return false;
 }

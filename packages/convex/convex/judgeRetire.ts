@@ -126,7 +126,7 @@ async function absence(
 /**
  * The file side of the same rule: this judge version's earlier reads of the
  * moment on the messages this run read, oldest first, each with what it found,
- * and when each line's words last changed. moments.fileFindings weighs a
+ * and when each line's words last changed. momentJudging.fileFindings weighs a
  * finding none of them made against them (newOnResample).
  */
 export const sameReads = internalQuery({
@@ -406,7 +406,7 @@ export async function retireSignals(ctx: any, rows: Doc<"signals">[], o: { reaso
     const what = gone.length === 1 ? "1 finding" : `${gone.length} findings`;
     if (left.length === 0 && !WORKED.has(task.status)) {
       await moveTaskStatus(ctx, (await ctx.db.get(task._id))!, "dropped", { actorUserId: o.actor, actorType: "system", now });
-      await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Closed: its ${what} were judged again and none held (${o.reason}).` });
+      await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Closed: none of its ${what} stands any more (${o.reason}).` });
       closed.push(task.short_id);
     }
   }
@@ -552,6 +552,45 @@ export const retireStale = internalMutation({
       closed.push(...(await retireSignals(ctx, [row], { reason: r.reason, actor: args.actor })).closed);
     }
     return { closed };
+  },
+});
+
+/**
+ * Repair (run with packages/convex/run.sh): retire a finder's work from before
+ * a cutoff when the finder itself is turned off (the old AgentWatch judges and
+ * clusters, 2026-10-20). On each named problem filed before `before`, the
+ * findings filed before it (from `sources` only, when given) retire with
+ * `reason`; a problem left holding none closes as dropped with the reason as
+ * its note, whatever its run was doing: the run's gate is then the trial
+ * sweep's to end. A finding filed after the cutoff stays, and so does its
+ * problem. Each retired finding keeps its problem in `retired.task_id`, which
+ * is what undoing it reads. `dry` reports only.
+ */
+export const retireBefore = internalMutation({
+  args: { tasks: v.array(v.string()), before: v.number(), reason: v.string(), sources: v.optional(v.array(v.string())), actor: v.id("users"), dry: v.boolean() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const out: Array<{ task: string; was: string; retired: string[]; kept: string[]; closed: boolean; skipped?: string }> = [];
+    for (const ref of args.tasks) {
+      const task: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+      if (!task || isTerminalTaskStatus(task.status) || task.created_at >= args.before) {
+        out.push({ task: ref, was: task?.status ?? "missing", retired: [], kept: [], closed: false, skipped: !task ? "not found" : task.created_at >= args.before ? "filed after the cutoff" : "already closed" });
+        continue;
+      }
+      const held: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
+      const pick = held.filter((s) => s.created_at < args.before && (!args.sources || args.sources.includes(s.source)));
+      const kept = held.filter((s) => !pick.includes(s));
+      const closes = kept.length === 0;
+      out.push({ task: ref, was: task.status, retired: pick.map((s) => s.short_id), kept: kept.map((s) => s.short_id), closed: closes });
+      if (args.dry) continue;
+      if (pick.length) await retireSignals(ctx, pick, { reason: args.reason, actor: args.actor });
+      const fresh: Doc<"tasks"> = (await ctx.db.get(task._id))!;
+      if (!closes || isTerminalTaskStatus(fresh.status)) continue;
+      const note = `Closed: ${args.reason}.`;
+      await moveTaskStatus(ctx, fresh, "dropped", { actorUserId: args.actor, actorType: "system", now, closedAt: now, ...(fresh.cause ? { extra: { cause: { ...fresh.cause, dissolved: { at: now, note } } } } : {}) });
+      await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: note });
+    }
+    return out;
   },
 });
 

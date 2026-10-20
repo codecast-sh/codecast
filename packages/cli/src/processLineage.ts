@@ -29,7 +29,7 @@
 // start time, so an entry that went stale while the daemon was down is no
 // one's.
 import * as fs from "node:fs";
-import { AGENT_START_JITTER_MS, noTerminal, type ProcessInfo } from "./resourceMonitor.js";
+import { noTerminal, sameStartedAt, type ProcessInfo } from "./resourceMonitor.js";
 import type { ProcRow } from "./processTable.js";
 
 type Ancestors = Map<number, number>;
@@ -42,7 +42,7 @@ export function detachedFrom(child: ProcessInfo, parent: ProcessInfo): boolean {
   return child.pgid === child.pid && child.pgid !== parent.pgid && noTerminal(child.tty);
 }
 
-const sameStart = (a: number, b: number) => Math.abs(a - b) <= AGENT_START_JITTER_MS;
+const sameStart = (a: number, b: number) => sameStartedAt(a, b);
 
 const touchesTree = (ancestors: Ancestors, tree: ReadonlyMap<number, ProcRow>): boolean => {
   for (const [pid, ancestorStart] of ancestors) {

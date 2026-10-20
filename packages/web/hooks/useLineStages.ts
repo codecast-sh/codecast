@@ -52,3 +52,19 @@ export function useLineDispatch(projectId: string | null): LineDispatchRow | nul
   const s = useTrackedStore([(st) => (projectId ? (st as any).lineDispatch?.[projectId]?.at : null)]);
   return projectId ? ((s as any).lineDispatch?.[projectId] ?? null) : null;
 }
+
+export type LineReviewsRow = NonNullable<FunctionReturnType<typeof api.lineStages.reviews>>;
+export type LineReview = LineReviewsRow["recent"][number];
+
+/** Feeder: an agent judge's reviews. Mounted only while the judge's page is open: it reads every review of the judge. */
+export function useSyncLineReviews(projectId: string | null, judge: string | null) {
+  const args = useMemo(() => (projectId && judge ? { project: projectId, judge } : "skip" as const), [projectId, judge]);
+  return useSyncCollection("lineReviews", api.lineStages.reviews, args, ONE as never);
+}
+
+/** Reader: an agent judge's reviews, or null until they arrive. */
+export function useLineReviews(projectId: string | null, judge: string | null): LineReviewsRow | null {
+  const key = projectId && judge ? `${projectId}|${judge}` : null;
+  const s = useTrackedStore([(st) => (key ? (st as any).lineReviews?.[key] : null)]);
+  return key ? ((s as any).lineReviews?.[key] ?? null) : null;
+}

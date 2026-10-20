@@ -167,19 +167,21 @@ export function useSharedDraft(opts: {
     return () => clearTimeout(t);
   }, [editors]);
 
-  // Where my caret is, for the others' boxes to draw.
+  // Where my caret is, for the others' boxes to draw: read after each commit
+  // of the text and on selection moves. Never from the box's own `input`
+  // event: the browser flushes React's sync render between that listener and
+  // React's onChange, and a render there still holds the old text, so React
+  // writes it back over the keystroke.
   useWatchEffect(() => {
     const el = inputRef.current;
-    if (!el || !joined) { setCaret(null); return; }
-    const read = () => setCaret(el.selectionEnd ?? null);
-    read();
-    const onSel = () => { if (document.activeElement === el) read(); };
+    setCaret(el && joined ? el.selectionEnd ?? null : null);
+  }, [text, joined, inputRef]);
+  useWatchEffect(() => {
+    const el = inputRef.current;
+    if (!el || !joined) return;
+    const onSel = () => { if (document.activeElement === el) setCaret(el.selectionEnd ?? null); };
     document.addEventListener("selectionchange", onSel);
-    el.addEventListener("input", read);
-    return () => {
-      document.removeEventListener("selectionchange", onSel);
-      el.removeEventListener("input", read);
-    };
+    return () => document.removeEventListener("selectionchange", onSel);
   }, [joined, inputRef]);
 
   useWatchEffect(() => {

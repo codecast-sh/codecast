@@ -3,7 +3,8 @@
 // actions, riding sonner (bottom right) so the rise, the stack and the swipe
 // to dismiss are the toast's own. While it is up it lifts above whatever
 // composer sits under the corner. Its look is in globals.css under
-// "rise-card"; `accent` tints the border and the primary button.
+// "rise-card"; `accent` tints the border and the primary button, and
+// `children` sits between the lines and the actions.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OrgButton } from "./org/OrgButton";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -41,6 +42,7 @@ export function RisingCard({
   laterLabel,
   onLater,
   accent = "var(--sol-violet)",
+  children,
   ...data
 }: {
   face: ReactNode;
@@ -51,6 +53,7 @@ export function RisingCard({
   laterLabel: string;
   onLater: () => void;
   accent?: string;
+  children?: ReactNode;
 } & Record<`data-${string}`, string | boolean | undefined>) {
   const ref = useRef<HTMLDivElement | null>(null);
   const lift = useComposerLift(ref);
@@ -67,6 +70,7 @@ export function RisingCard({
       <div className="rise-card-body">
         <div className="rise-card-title">{title}</div>
         {lines.map((line) => <p key={line} className="rise-card-copy">{line}</p>)}
+        {children}
         <div className="rise-card-actions">
           <OrgButton primary size="sm" onClick={onPrimary} style={{ background: accent }} data-rise-primary>{primaryLabel}</OrgButton>
           <button type="button" className="rise-card-later" onClick={onLater} data-rise-later>{laterLabel}</button>
