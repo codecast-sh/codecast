@@ -17,7 +17,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { applyIssues, readReplayChunks } from "./replays";
 import { replaysBucketFromEnv } from "./lib/r2";
-import { replayIssues, type ReplayIssue } from "@codecast/shared/replay";
+import { isFailedRequest, replayIssues, type ReplayIssue } from "@codecast/shared/replay";
 import type { ReplayProvider } from "@codecast/shared/contracts/replay";
 
 /** Recordings one call reads at most; a longer window continues from the returned cursor. */
@@ -47,6 +47,12 @@ export const regroupSource = internalAction({
     /** started_at of the last recording a previous call finished: this call reads newer ones. */
     after: v.optional(v.number()),
     max_transitions: v.optional(v.number()),
+    /**
+     * With dry_run: each recording's grouping-relevant events (navigations,
+     * errors, failed requests, clicks) come back, so a change to the rules can
+     * be compared on real recordings before it ships. Never kept anywhere.
+     */
+    export_events: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const bucket = replaysBucketFromEnv();
@@ -71,6 +77,7 @@ export const regroupSource = internalAction({
       }
     };
 
+    const exported: Array<{ replay: string; provider: string; start?: string; events: unknown[] }> = [];
     const tally = new Map<string, Tally>();
     let done = 0, eventsRead = 0, chunksSkipped = 0, withIssues = 0, groups = 0, transitions = 0, failed = 0;
     let cursor: number | null = null;
@@ -83,6 +90,10 @@ export const regroupSource = internalAction({
         eventsRead += got.events.length;
         chunksSkipped += got.skipped;
         if (got.issues.length) withIssues++;
+        if (args.dry_run && args.export_events) {
+          const kept = got.events.filter((e) => e.type === "nav" || e.type === "error" || e.type === "click" || (e.type === "console" && e.level === "error") || (e.type === "network" && isFailedRequest(e)));
+          exported.push({ replay: row.short_id, provider: row.provider, start: got.start, events: kept });
+        }
         for (const i of got.issues as ReplayIssue[]) {
           const at = row.started_at + i.t;
           const t = tally.get(i.fp) ?? { kind: i.kind, title: i.title, count: 0, replays: [], first: at, last: at };
@@ -112,6 +123,7 @@ export const regroupSource = internalAction({
       ...(args.dry_run ? {} : { groups_written: groups, transitions }),
       next_after: more ? cursor : null,
       groups: [...tally.entries()].sort((a, b) => b[1].count - a[1].count).map(([fp, t]) => ({ fp, ...t })),
+      ...(exported.length ? { exported } : {}),
     };
   },
 });
