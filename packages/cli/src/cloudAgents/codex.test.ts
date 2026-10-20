@@ -629,6 +629,8 @@ describe("Codex Cloud attempts as branches", () => {
     expect(turnReads()).toBe(2);
     expect(fs.readFileSync(watcher.transcriptPath(A1.id), "utf8")).toContain("follow-up b2");
     expect(fs.readFileSync(watcher.transcriptPath(BEST_TASK.id), "utf8")).not.toContain("follow-up b2");
+    // The branch's mirror runs off the pass: let it land before its directory goes.
+    await watcher.stop();
   });
 });
 
