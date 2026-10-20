@@ -267,7 +267,6 @@ export function handBack(files: RunFiles, now = Date.now()): Record<string, unkn
     turns: (Number(out1?.num_turns) || 0) + (Number(out2?.num_turns) || 0),
     usage,
     notional_usd: Math.round(notional * 10_000) / 10_000,
-    ...(out2 ? { findings_turn_usd: Math.round((Number(out2.total_cost_usd) || 0) * 10_000) / 10_000 } : {}),
   };
 }
 
@@ -317,11 +316,12 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
     if (late) stopRun(r.dir);
     if (r.alive && !late) continue;
     const body = handBack(r, now());
+    const turn2 = Number(readJson(path.join(r.dir, "run", "out2.json"))?.total_cost_usd) || 0;
     if (late && !body.ok) body.error = `the review ran past its ${Math.round(r.claim.judge.agent.timeout_ms / 60_000)} minutes and was stopped`;
     if (body.retry) cooling.set(r.account, now() + 30 * 60_000);
     try {
       const reply = await deps.post("/cli/reviews/done", { device_id: deps.deviceId, ...body });
-      deps.log(`[REVIEWS] ${r.claim.review} ${r.claim.moment} ${reply?.status ?? "?"}${reply?.findings !== undefined ? `, ${reply.findings} found, ${reply.filed} filed` : ""}${reply?.error ? ` (${reply.error})` : ""} in ${Math.round(Number(body.took_ms) / 1000)}s on ${r.account}`);
+      deps.log(`[REVIEWS] ${r.claim.review} ${r.claim.moment} ${reply?.status ?? "?"}${reply?.findings !== undefined ? `, ${reply.findings} found` : ""}${reply?.error ? ` (${reply.error})` : ""} in ${Math.round(Number(body.took_ms) / 1000)}s on ${r.account}, $${Number(body.notional_usd).toFixed(2)} list of which the findings turn $${turn2.toFixed(2)}`);
       fs.rmSync(r.dir, { recursive: true, force: true });
       handed++;
     } catch (err) {

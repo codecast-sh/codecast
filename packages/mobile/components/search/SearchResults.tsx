@@ -37,6 +37,8 @@ import { MessageSnippet } from './MessageSnippet';
 type Tab = 'all' | 'sessions' | 'chat' | ObjectKind;
 /** Rows each kind shows under All before its link to the rest. */
 const ALL_CAP = 3;
+/** Conversations, first under All, show a few more before theirs. */
+const SESSION_ALL_CAP = 5;
 
 type Item =
   | { t: 'object'; key: string; hit: ObjectHitRow }
@@ -139,6 +141,18 @@ export function SearchResults({ query, onOpenSession }: {
   const sections = useMemo(() => {
     const all = tab === 'all';
     const out: Section[] = [];
+    // Conversations lead: they are what a search here is most often for.
+    if ((all || tab === 'sessions') && sessionRows.length > 0) {
+      // The recent tier bounds message matches to a trailing window; titles
+      // cover all time. Worth saying only where the range asked reaches past it.
+      const windowDays = searchData?.contentWindowDays ?? 30;
+      const pastWindow = filters.range === 'all' || filters.range === '90d' || (filters.range === '30d' && windowDays < 30);
+      out.push({
+        key: 'sessions', label: words.conversations, count: totalSessions, more: all && (sessionRows.length > SESSION_ALL_CAP || remaining > 0),
+        note: internals && searchData?.contentTier === 'recent' && pastWindow ? `Messages from the last ${windowDays} days. Older ones match by title.` : undefined,
+        data: (all ? sessionRows.slice(0, SESSION_ALL_CAP) : sessionRows).map((row) => ({ t: 'session' as const, key: `session:${row.conversationId}`, row })),
+      });
+    }
     for (const g of objectGroups) {
       if (!all && tab !== g.kind) continue;
       out.push({
@@ -152,19 +166,8 @@ export function SearchResults({ query, onOpenSession }: {
         data: (all ? chatHits.slice(0, ALL_CAP) : chatHits).map((hit) => ({ t: 'chat' as const, key: `chat:${hit._id}`, hit })),
       });
     }
-    if ((all || tab === 'sessions') && sessionRows.length > 0) {
-      // The recent tier bounds message matches to a trailing window; titles
-      // cover all time. Worth saying only where the range asked reaches past it.
-      const windowDays = searchData?.contentWindowDays ?? 30;
-      const pastWindow = filters.range === 'all' || filters.range === '90d' || (filters.range === '30d' && windowDays < 30);
-      out.push({
-        key: 'sessions', label: words.conversations, count: totalSessions, more: false,
-        note: internals && searchData?.contentTier === 'recent' && pastWindow ? `Messages from the last ${windowDays} days. Older ones match by title.` : undefined,
-        data: sessionRows.map((row) => ({ t: 'session' as const, key: `session:${row.conversationId}`, row })),
-      });
-    }
     return out;
-  }, [tab, objectGroups, chatHits, sessionRows, totalSessions, words.conversations, searchData, filters.range, internals]);
+  }, [tab, objectGroups, chatHits, sessionRows, totalSessions, remaining, words.conversations, searchData, filters.range, internals]);
 
   const memberById = useMemo(() => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
@@ -285,7 +288,7 @@ export function SearchResults({ query, onOpenSession }: {
             )}
           </RNView>
         )}
-        ListFooterComponent={showsSessions && !empty && remaining > 0 ? (
+        ListFooterComponent={tab === 'sessions' && !empty && remaining > 0 ? (
           <Pressable onPress={() => { tap(); setLimit((l) => l + SEARCH_PAGE_SIZE); }} style={({ pressed }) => [styles.moreBtn, pressed && styles.moreBtnPressed]}>
             {search.isLoading ? <ActivityIndicator size="small" color={Theme.textMuted0} /> : <RNText style={styles.moreBtnText}>Show more ({remaining} remaining)</RNText>}
           </Pressable>

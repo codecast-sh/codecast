@@ -8,7 +8,7 @@
 .lst-table th { text-align: left; padding: 6px 10px; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); border-bottom: 1px solid var(--lw-rule-2); white-space: nowrap; }
 .lst-table td { padding: 9px 10px; border-bottom: 1px solid color-mix(in srgb, var(--lw-rule-2) 60%, transparent); vertical-align: middle; color: var(--lw-ink-2); }
 .lst-table [data-num] { text-align: right; }
-.lst-who { min-width: 16rem; }
+.lst-table th:first-child, .lst-who { width: 15rem; }
 .lst-who > .lst-dim { display: block; margin-top: 2px; }
 .lst-who b { display: block; color: var(--lw-ink); font-weight: 600; white-space: nowrap; }
 .lst-paused { margin-left: 6px; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-warn); }
@@ -30,7 +30,7 @@
 @media (prefers-reduced-motion: reduce) { .lst-knob, .lst-knob::after { transition: none; } }
 @media (max-width: 760px) {
   .lst { padding: var(--lw-s3) var(--lw-s2); }
-  .lst-who { min-width: 7rem; }
+  .lst-table th:first-child, .lst-who { width: 7rem; }
   .lst-who b { white-space: normal; overflow-wrap: anywhere; }
   .lst-who > .lst-dim, .lst-table [data-col="waiting"] { display: none; }
   .lst-num { width: 5.75rem; }
