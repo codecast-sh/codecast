@@ -817,7 +817,16 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     <InboxRowEnvProvider>
     <SafeAreaView style={styles.container} edges={panel ? ['top', 'bottom', 'left'] : ['top']}>
       <RNView style={styles.header}>
-        {!panel && <TouchableOpacity
+        {panel ? <TouchableOpacity
+          style={styles.menuBtn}
+          onPress={() => { void Haptics.selectionAsync(); onExit?.(); }}
+          activeOpacity={0.6}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel="Open the full inbox"
+        >
+          <Feather name="maximize-2" size={19} color={Theme.text} />
+        </TouchableOpacity> : <TouchableOpacity
           style={styles.menuBtn}
           onPress={() => { void Haptics.selectionAsync(); setInboxDrawerOpen(true); }}
           activeOpacity={0.6}
@@ -842,8 +851,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
             {shownCount > 0 && !isSearching && <RNText style={styles.headerCount}>{shownCount}</RNText>}
           </>
         )}
-        {/* Title-side badges (counts that link elsewhere) sit here. */}
-        {!isSearching && <DecisionsBadge />}
+        {/* Title-side badges (counts that link elsewhere) sit here; the
+            panel's narrow header moves them down beside the order. */}
+        {!isSearching && !panel && <DecisionsBadge />}
         <RNView style={{ flex: 1 }} />
         {/* Hosted mode has one way into search, the field over the list (as
             the web rail has one under the wordmark). */}
@@ -861,7 +871,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         <ComposeButton />
       </RNView>
 
-      {!isSearching && <InboxLensBar />}
+      {!isSearching && (panel ? <InboxLensBar stacked accessory={<DecisionsBadge />} /> : <InboxLensBar />)}
 
       {(searchOpen || searchQuery.length > 0) && (
         <RNView style={styles.searchContainer}>

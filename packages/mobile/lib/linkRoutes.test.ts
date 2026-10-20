@@ -54,10 +54,15 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/routines')).toBe('/(tabs)/tasks?segment=routines');
   });
 
-  test('invites, chat and calls land on the chat tab', () => {
+  test('invites and chat land on the chat tab', () => {
     expect(mobileRouteForUrl('https://codecast.sh/join/abc')).toBe('/(tabs)/chat');
     expect(mobileRouteForUrl('https://codecast.sh/chat')).toBe('/(tabs)/chat');
-    expect(mobileRouteForUrl('https://codecast.sh/calls')).toBe('/(tabs)/chat');
+  });
+
+  test('calls, plans and docs open their own screens', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/calls')).toBe('/calls');
+    expect(mobileRouteForUrl('https://codecast.sh/plans')).toBe('/(tabs)/tasks?segment=plans');
+    expect(mobileRouteForUrl('/docs')).toBe('/(tabs)/tasks?segment=docs');
   });
 
   test('the org, a role and the root open their screens; a tab link opens the board', () => {
