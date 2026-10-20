@@ -417,6 +417,21 @@ describe("a person assigning a task to a role tells it", () => {
     expect(rows.map((r: any) => r.content)).toEqual(['<session-message from="convers">\nAshot assigned you ct-7 "Fix the pricing copy"\n</session-message>']);
   });
 
+  // `cast route` files the task for the role and says how to answer in the
+  // same notice: a second wake beside it cost the role a turn per request.
+  test("a routed task is one line, from the session that routed it, with the routing note", async () => {
+    const { ctx, tables } = await makeCtx([]);
+    await (create as any)._handler(ctx, {
+      api_token: TOKEN, title: "Fix the pricing copy", source: "route", assignee: ADS, workspace: "team", team_id: TEAM,
+      assignment_note: "It was routed to you (line 1: named @ads). Read it.", assignment_from: "free",
+    });
+    const rows = tables.pending_messages.filter((r: any) => r.conversation_id === "conversations_standing_ads");
+    expect(rows.map((r: any) => r.content)).toEqual([
+      `<session-message from="convers">\nAshot assigned you ${tables.tasks[0].short_id} "Fix the pricing copy". It was routed to you (line 1: named @ads). Read it.\n</session-message>`,
+    ]);
+    expect(tables.tasks[0].created_from_conversation).toBeUndefined();
+  });
+
   test("the board's assign tells it the same way", async () => {
     const { ctx, tables } = await makeCtx([task(7)]);
     await (webUpdate as any)._handler(ctx, { short_id: "ct-7", assignee: ADS });
