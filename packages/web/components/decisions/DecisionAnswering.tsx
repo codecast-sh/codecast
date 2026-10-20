@@ -3,7 +3,7 @@
 // (DecisionDocument) and the line's fix decision (LineDecision) both read the
 // same state from useDecisionAnswering and draw the same answer section, so an
 // answer, a reopen, a grant or a closed banner reads one way on both.
-import { useCallback, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useMemo, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -54,14 +54,22 @@ const causeByShortId = (tasks: Record<string, CauseRow> | undefined, ref: string
 export function useDecisionPage(id: string | undefined) {
   const { ready, missing, error } = useSyncDecisionDetail(id);
   const detail = useDecisionDetail(id);
-  const liveRow = useInboxStore((s) => (detail ? s.sessionDecisions[detail._id] : undefined));
+  // The store holds the row before the page's context arrives (the queue, or the team's line decisions): the decision
+  // paints from it at once, and the context (its doc, task, ladder) fills in when getWithDoc answers.
+  const liveRow = useInboxStore((s) => s.sessionDecisions[detail?._id ?? id ?? ""] as SessionDecisionItem | undefined);
   const meId = useInboxStore((s) => String(s.currentUser?._id ?? ""));
-  // The store row is the queue's; the detail's copy is the server's read.
+  // The store row is the queue's or the team's; the detail's copy is the server's read.
   // Any signed-in reader answers either way: a role on the ladder that heard
   // it first, or a decision asked of somebody else, keeps it out of their
   // queue, not out of their hands (onAnswer adopts the detail's copy first).
   const decision: SessionDecisionItem | null = liveRow ?? detail?.decision ?? null;
-  return { ready, missing, error: error ?? null, detail: detail ?? null, decision, answerable: !!liveRow || (!!detail && mayAnswerFromDocument(detail, meId)) };
+  const shown = useMemo(() => detail ?? (liveRow ? rowOnlyDetail(liveRow) : null), [detail, liveRow]);
+  return { ready, missing, error: error ?? null, detail: shown, decision, answerable: !!liveRow || (!!detail && mayAnswerFromDocument(detail, meId)) };
+}
+
+/** A decision's page before its context arrives: the row alone, nothing yet known around it. */
+function rowOnlyDetail(row: SessionDecisionItem): DecisionDetailItem {
+  return { _id: row._id, decision: row, doc: null, task: null, stack: null, ladder: [], asked_users: [], holder_role: null, grant_offer: null, grant: null };
 }
 
 export type DecisionAnswering = ReturnType<typeof useDecisionAnswering>;

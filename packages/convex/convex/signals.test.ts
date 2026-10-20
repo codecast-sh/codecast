@@ -118,6 +118,55 @@ describe("signals.ingest", () => {
     expect(rows.map((r) => r.task_id)).toEqual([c.task_id, c.task_id, c.task_id]);
   });
 
+  test("placing held findings again: a finder that starts opening problems converts its held keys, moving the rows, judged like new ones", async () => {
+    const { add, t, userId } = await setup();
+    const workspace = `user:${userId}`;
+    const open = await add({ fingerprint: "err-9", title: "Invoice export times out", observed_at: T0 });
+    const a1 = await add({ source: "union.desk", kind: "prompt_miss", fingerprint: "desk:call.summary", title: "An expert edited a call summary", observed_at: T0 + 1 });
+    const a2 = await add({ source: "union.desk", kind: "prompt_miss", fingerprint: "desk:call.summary", title: "An expert edited a call summary", observed_at: T0 + 2 });
+    const b = await add({ source: "union.desk", kind: "prompt_miss", fingerprint: "desk:call.brief", title: "An expert edited a call brief", observed_at: T0 + 3 });
+    const other = await add({ source: "union.eval", kind: "regression", fingerprint: "eval:x", title: "Eval newly red", observed_at: T0 + 4 });
+    expect([a1.attach, a2.attach, b.attach, other.attach]).toEqual(["held", "held", "held", "held"]);
+    await t.run(async (ctx) => {
+      const p = await ctx.db.query("projects").withIndex("by_workspace", (q) => q.eq("workspace", workspace)).first();
+      await ctx.db.patch(p!._id, { line_profile: { ...p!.line_profile!, finders: [...p!.line_profile!.finders, { id: "desk", source: "union.desk", kind: ["prompt_miss"], fingerprint: "desk:<step>", opens_causes: true }] } });
+    });
+    const dry = await t.action(internal.signals.placeHeld, { workspace, sources: ["union.desk"], since_days: 100_000, dry_run: true });
+    expect(dry).toMatchObject({ keys: 2, tally: { new: 2 } });
+    expect((await t.run(async (ctx) => await ctx.db.query("tasks").collect())).length).toBe(1);
+    // The judge finds neither correction the open problem's: each opens its own.
+    stub.state.reply = '{"answer":"none"}';
+    const real = await t.action(internal.signals.placeHeld, { workspace, sources: ["union.desk"], since_days: 100_000, dry_run: false });
+    expect(real.tally).toEqual({ new: 2 });
+    const rows = await t.run(async (ctx) => await ctx.db.query("signals").collect());
+    const byId = new Map(rows.map((r) => [String(r._id), r]));
+    expect(byId.get(String(a1.signal_id))!.task_id).toBe(byId.get(String(a2.signal_id))!.task_id!);
+    expect(byId.get(String(a1.signal_id))!.task_id).not.toBe(open.task_id);
+    expect(byId.get(String(b.signal_id))!.task_id).toBeDefined();
+    expect(byId.get(String(other.signal_id))!.task_id).toBeUndefined();
+    expect(rows).toHaveLength(5);
+    const summary = await t.run(async (ctx) => await ctx.db.get(byId.get(String(a1.signal_id))!.task_id!));
+    expect(summary!.cause).toMatchObject({ signal_count: 2, first_seen: T0 + 1, last_seen: T0 + 2, fingerprints: ["desk:call.summary"] });
+    // Placed once: a second pass finds nothing held.
+    expect((await t.action(internal.signals.placeHeld, { workspace, sources: ["union.desk"], since_days: 100_000, dry_run: false })).keys).toBe(0);
+  });
+
+  test("placing held findings again: a held key the judge names joins that problem", async () => {
+    const { add, t, userId } = await setup();
+    const workspace = `user:${userId}`;
+    const open = await add({ fingerprint: "err-9", title: "Call summary misses the next step", subject: "call-summary", observed_at: T0 });
+    const held = await add({ source: "union.desk", kind: "prompt_miss", fingerprint: "desk:call.summary", title: "Call summary misses the next step", subject: "call-summary", observed_at: T0 + 1 });
+    expect(held.attach).toBe("held");
+    const openTask = await t.run(async (ctx) => await ctx.db.get(open.task_id as any)) as any;
+    stub.state.reply = `{"answer": "${openTask.short_id}"}`;
+    const out = await t.action(internal.signals.placeHeld, { workspace, sources: ["union.desk"], since_days: 100_000, dry_run: false });
+    expect(out.tally).toEqual({ judge: 1 });
+    const row = await t.run(async (ctx) => await ctx.db.get(held.signal_id));
+    expect(row!.task_id).toBe(open.task_id);
+    const cause = await t.run(async (ctx) => await ctx.db.get(open.task_id as any)) as any;
+    expect(cause.cause.signal_count).toBe(2);
+  });
+
   test("fingerprint: the same fingerprint attaches to the open cause without asking the judge", async () => {
     const { add, task } = await setup();
     const first = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", observed_at: T0 });

@@ -184,6 +184,8 @@ export const flow = query({
           mode: j.mode,
           parts: j.parts ?? null,
           prompt: j.prompt,
+          // An agent judge's session (agentReviews.ts): its reviews are read by `reviews` below while its page is open.
+          agent: j.agent ? { tools: j.agent.tools, cwd: j.agent.cwd, max_turns: j.agent.max_turns, timeout_ms: j.agent.timeout_ms, claude_md: !!j.agent.claude_md, gateway: j.agent.gateway ?? null } : null,
           published_at: j.published_at,
           removed_at: j.removed_at ?? null,
           capped: runs.length === RUNS_PER_JUDGE,
@@ -214,6 +216,52 @@ export const flow = query({
       days: DAYS,
       grouping: { ...GROUPING, embedding_model: EMBEDDING_MODEL, attach_model: CHEAP_MODEL },
       at: now,
+    };
+  },
+});
+
+/**
+ * An agent judge's reviews, for its page: the queue by status, what runs now
+ * and where, and the newest finished, each with what it took and whether its
+ * transcript is kept. Read only while the judge's page is open: it reads every
+ * review of the judge, and each one that settles re-runs it.
+ */
+export const reviews = query({
+  args: { project: v.string(), judge: v.string() },
+  handler: async (ctx, args) => {
+    const project = await readableProject(ctx, args.project);
+    if (!project) return null;
+    const sources = await sourcesOf(ctx, project);
+    let judge: Doc<"judges"> | null = null;
+    for (const s of sources) {
+      const row: Doc<"judges"> | null = await ctx.db.query("judges").withIndex("by_source_name", (q: any) => q.eq("source_id", s._id).eq("name", args.judge)).first();
+      if (row?.agent && row.project_ids.some((p) => String(p) === String(project._id))) judge = row;
+    }
+    if (!judge) return null;
+    const rows: Doc<"agent_reviews">[] = await ctx.db.query("agent_reviews").withIndex("by_judge_created", (q: any) => q.eq("judge_id", judge._id)).order("desc").collect();
+    const counts = { queued: 0, running: 0, done: 0, failed: 0, cancelled: 0 };
+    for (const r of rows) counts[r.status]++;
+    const view = (r: Doc<"agent_reviews">) => ({
+      review: r.short_id, moment: r.moment_short_id, subject: r.subject, status: r.status, batch: r.batch ?? null, attempts: r.attempts,
+      device: r.claim_device ?? null, account: r.account ?? null, started_at: r.started_at ?? null, finished_at: r.finished_at ?? null,
+      took_ms: r.took_ms ?? null, turns: r.turns ?? null, notional_usd: r.notional_usd ?? null, findings: r.findings ?? null, filed: r.filed ?? null,
+      transcript: !!r.transcript_key, error: r.error ?? null,
+    });
+    const done = rows.filter((r) => r.status === "done").sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0));
+    const sample = done.slice(0, 200);
+    const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    return {
+      _id: `${project._id}|${judge.name}`,
+      counts,
+      running: rows.filter((r) => r.status === "running").map(view),
+      recent: done.slice(0, RECENT).map(view),
+      failed: rows.filter((r) => r.status === "failed").slice(0, RECENT).map(view),
+      averages: {
+        of: sample.length,
+        took_ms: mean(sample.flatMap((r) => (r.took_ms ? [r.took_ms] : []))),
+        notional_usd: mean(sample.flatMap((r) => (r.notional_usd != null ? [r.notional_usd] : []))),
+        findings: mean(sample.map((r) => r.findings ?? 0)),
+      },
     };
   },
 });

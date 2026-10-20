@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useServerIdentityLost } from "./useServerAuthSettled";
+import { whenInputQuiet } from "../lib/inputQuiet";
+
+// A coalesced flush never waits more than this past its window for a pause
+// in typing.
+const TYPING_MAX_DEFER_MS = 1500;
 
 /**
  * Apply a Convex live-query result to local state whenever it changes.
@@ -16,7 +21,8 @@ import { useServerIdentityLost } from "./useServerAuthSettled";
  *
  * Trailing-batch semantics: the first push schedules a flush `coalesceMs` later;
  * further pushes within that window update the pending value but don't reschedule,
- * so the window collapses into one apply with the newest data.
+ * so the window collapses into one apply with the newest data. While the person
+ * is typing, the flush waits for a pause in the keys (at most 1.5s more).
  *
  * Nothing is applied while the server has lost an identity it had confirmed
  * (useServerIdentityLost): the push was computed for an anonymous caller, so
@@ -33,7 +39,7 @@ export function useConvexSync<T>(
   const syncRef = useRef(sync);
   syncRef.current = sync;
   const latestRef = useRef<T | undefined>(undefined);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
   // An answer that arrived while the identity was lost stays refused after
   // the flip back: it is still in hand for a render or more before the real
   // one lands, and any dep change in that gap would otherwise apply it. Both
@@ -52,16 +58,21 @@ export function useConvexSync<T>(
       sync(data);
       return;
     }
-    // Coalescing path: collapse a burst into one trailing apply.
+    // Coalescing path: collapse a burst into one trailing apply. A coalesced
+    // feed is background bulk (the inbox), so while the person is typing the
+    // flush waits for a pause in the keys, never longer than TYPING_MAX_DEFER_MS.
     latestRef.current = data;
-    if (timerRef.current) return; // flush already scheduled; it will use latestRef
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
+    if (cancelRef.current) return; // flush already scheduled; it will use latestRef
+    const flush = () => {
+      cancelRef.current = null;
       const latest = latestRef.current;
       if (latest !== undefined && !refused(latest)) syncRef.current(latest);
-    }, coalesceMs);
+    };
+    let cancelQuiet: (() => void) | null = null;
+    const timer = setTimeout(() => { cancelQuiet = whenInputQuiet(flush, TYPING_MAX_DEFER_MS); }, coalesceMs);
+    cancelRef.current = () => { clearTimeout(timer); cancelQuiet?.(); };
   }, [data, sync, coalesceMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // eslint-disable-next-line no-restricted-syntax
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  useEffect(() => () => { cancelRef.current?.(); }, []);
 }

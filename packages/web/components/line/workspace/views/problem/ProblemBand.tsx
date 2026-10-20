@@ -5,6 +5,8 @@
 // and at most one act. Where nothing is owed it says so with facts alone.
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
+import { entityRoute } from "../../../../../lib/entityLinks";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import type { LineNeed } from "../../../../../lib/line/lineNeeds";
 import type { LineAdmission } from "../../../../../lib/lineFlow";
@@ -236,7 +238,7 @@ export function ProblemBand(p: ProblemBandProps) {
     case "production":
       facts = <>
         {b.mergedAt != null && <Fact k="Merged">{dayTimeWords(b.mergedAt)}{b.link ? <Out href={b.link}>{mergeLinkWords(b.link)}</Out> : b.sha ? <code className="pb-sha">{b.sha.slice(0, 7)}</code> : null}</Fact>}
-        <Fact k="In production" tone="ok">{deployWhen(b.liveAt)}{b.target ? ` · ${b.target}` : ""}{b.deployUrl && <Out href={b.deployUrl}>the deploy</Out>}</Fact>
+        <Fact k="In production" tone="ok">{deployWhen(b.liveAt)}{b.target ? ` · ${b.target}` : ""}{b.deployRef ? <Link href={entityRoute("deploy", b.deployRef) ?? "#"} className="pb-deploy" data-line-band-deploy={b.deployRef}> · {b.deployRef}</Link> : b.deployUrl && <Out href={b.deployUrl}>the deploy</Out>}</Fact>
         {b.watch === "watching" && b.watchEnd != null && <Fact k="Watch ends">{dayWords(b.watchEnd)}</Fact>}
         {/* What the headline counts: findings and the line's own failures on the fault. */}
         <Fact k="Since" tone={b.since > 0 || b.faults.length ? "bad" : "ok"}>{[

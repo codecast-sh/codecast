@@ -3,7 +3,7 @@ import "./arrival.css";
 /** The count of thread lines that arrived unread, on the control that opens
  *  them. Keyed by the count so each new number arrives with the same 150ms
  *  scale in; past 99+ the key stops changing. Nothing at zero. When the newest
- *  line is an agent's answer the badge turns violet and rings twice
+ *  line is an agent's answer the badge turns violet and rings for a few seconds
  *  (arrival.css), the one cue a call gives for "the agent replied". */
 export function UnreadCount({ count, agent = false, className = "" }: { count: number; agent?: boolean; className?: string }) {
   if (count <= 0) return null;
