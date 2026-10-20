@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
-    <title>Codecast: the workspace for teams and their AI coding agents</title>
+    <title>Codecast: all your coding agents in one workspace</title>
     <!-- Safari on iOS draws its native "Open in the App Store" strip from this; the id matches SITE_LINKS.appStore. -->
     <meta name="apple-itunes-app" content="app-id=6757820850" />
-    <meta name="description" content="Chat, calls, tasks, docs, pull requests and decisions, with Claude Code, Codex, Cursor and Gemini working as teammates in every one, and everything linked back to the session that did it." />
-    <meta property="og:title" content="Codecast: the workspace for teams and their AI coding agents" />
-    <meta property="og:description" content="Run your team and its agents in one workspace. Raise your AI army and stay in command." />
+    <meta name="description" content="Every session you run with Claude Code, Codex, Cursor, OpenCode and pi, on any machine, in one place: searchable, steerable from your phone, and linked to the code it wrote. Bring your team in when you want, with chat, calls, tasks and docs your agents work in too." />
+    <meta property="og:title" content="Codecast: all your coding agents in one workspace" />
+    <meta property="og:description" content="Run all your coding agents in one workspace, on your own or with your team." />
     <meta property="og:site_name" content="codecast" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://codecast.sh" />
     <meta property="og:image" content="https://codecast.sh/logo-final.png" />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Codecast: the workspace for teams and their AI coding agents" />
-    <meta name="twitter:description" content="Run your team and its agents in one workspace. Raise your AI army and stay in command." />
+    <meta name="twitter:title" content="Codecast: all your coding agents in one workspace" />
+    <meta name="twitter:description" content="Run all your coding agents in one workspace, on your own or with your team." />
     <meta name="twitter:image" content="https://codecast.sh/logo-final.png" />
     <link rel="alternate" type="application/rss+xml" title="Codecast blog" href="/blog/rss.xml" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -63,9 +63,11 @@
         if (hostedLook === '1' || (hostedLook === null && localStorage.getItem('codecast-lane') === 'simple')) {
           document.documentElement.classList.add('minimal-style', 'hosted-mode');
         } else {
-          // A mod's color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts).
+          // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
+          // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
           try {
-            var themeVars = (JSON.parse(localStorage.getItem('codecast-color-theme') || 'null') || {})[theme] || {};
+            var cachedTheme = localStorage.getItem('codecast-color-theme');
+            var themeVars = (cachedTheme ? JSON.parse(cachedTheme) : window.__ccDefaultColorTheme || {})[theme] || {};
             var names = Object.keys(themeVars);
             for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
             if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
@@ -104,7 +106,7 @@
       html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
       html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
       html.hosted-mode.minimal-style #boot-shell#boot-shell { background: var(--pd-bg); color: var(--pd-ink-faint); }
-      #boot-shell[data-hidden="true"] { opacity: 0; pointer-events: none; }
+      #boot-shell[data-hidden="true"] { display: none; }
       #boot-shell .indicator {
         display: flex;
         flex-direction: column;
@@ -148,11 +150,10 @@
       @keyframes boot-loader-reveal {
         to { visibility: visible; opacity: 1; }
       }
-      #root:not(:empty) ~ #boot-shell { opacity: 0; pointer-events: none; }
-      /* Hidden, the shell stays in the page; its bar must stop moving, or the
-         invisible animation runs on the main thread for the life of the app. */
-      #root:not(:empty) ~ #boot-shell .bar::after,
-      #boot-shell[data-hidden="true"] .bar::after { animation: none; }
+      /* Out of the page once the app paints, not just transparent: an
+         invisible full-window layer stays composited for the life of the app
+         and its bar animation keeps running on the main thread. */
+      #root:not(:empty) ~ #boot-shell { display: none; }
 
       /* A hosted boot (<html data-lane> on /welcome, <html data-hosted-boot>
          on an app page for a device last seen in hosted mode, both set in
