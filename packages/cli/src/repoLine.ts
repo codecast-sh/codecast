@@ -70,13 +70,29 @@ export function repoLineFor(cwd: string): ResolvedWorkflowSource | null {
 }
 
 /**
- * What `cast workflow run` runs (LX5: the repo's line when it exists, else
- * the role's line, else the shipped one). A file named on the command line
- * always wins; the repo's line is taken only for a run bound to a task.
+ * The line version a problem runs (workflows.lineVersionFor, picked by the
+ * graph that serves its oldest finding's source), as its file on this
+ * machine: null when no version serves it or its file lives elsewhere, and
+ * then the run in this process takes the repo's or role's line.
  */
-export function chooseLineSource(opts: { file?: string | null; taskBound: boolean; cwd: string; roleSlug?: string | null }):
-  { kind: "file"; name: string } | { kind: "repo"; resolved: ResolvedWorkflowSource } | { kind: "role" | "shipped"; name: string } {
+export function lineVersionFile(version: { origin?: { device_id: string; root: string; file: string } | null } | null | undefined, device: string): ResolvedWorkflowSource | null {
+  const o = version?.origin;
+  if (!o || o.device_id !== device) return null;
+  const file = path.join(o.root, o.file);
+  return fs.existsSync(file) ? resolveWorkflowSource(file) : null;
+}
+
+/**
+ * What `cast workflow run` runs (LX5): a file named on the command line;
+ * else, for a run bound to a problem, its line version (lineVersionFile);
+ * else the repo's line when it exists, the role's line, the shipped one. The
+ * repo's line is taken only for a run bound to a task.
+ */
+export function chooseLineSource(opts: { file?: string | null; taskBound: boolean; cwd: string; roleSlug?: string | null; causeLine?: ResolvedWorkflowSource | null }):
+  { kind: "file"; name: string } | { kind: "repo" | "version"; resolved: ResolvedWorkflowSource } | { kind: "role" | "shipped"; name: string } {
   if (opts.file) return { kind: "file", name: opts.file };
+  // A version keeps its own row (slug from its graph's name), never the repo line's.
+  if (opts.taskBound && opts.causeLine) return { kind: "version", resolved: opts.causeLine };
   const repo = opts.taskBound ? repoLineFor(opts.cwd) : null;
   if (repo) return { kind: "repo", resolved: repo };
   if (opts.roleSlug) return { kind: "role", name: opts.roleSlug };
