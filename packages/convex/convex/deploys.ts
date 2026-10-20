@@ -68,7 +68,7 @@ const sameSha = (a?: string | null, b?: string | null) =>
 export function deployRowOf(d: Doc<"deploys">): DeployRow {
   return {
     _id: String(d._id),
-    project_id: d.project_id ? String(d.project_id) : "",
+    project_id: d.project_id ? String(d.project_id) : null,
     at: d.live_at ?? d.created_at,
     sha: d.sha ?? null,
     repository: d.repository ?? null,
@@ -638,10 +638,9 @@ export async function projectDeployViews(ctx: any, project: Doc<"projects">, rep
   const out = [];
   for (const d of mine) {
     const view = await shapeView(ctx, d);
-    // The store keys rows by _id and every project feeds its own: a deploy that belongs to several projects (a
-    // workspace-wide source's, a shared repository's) is one row per project, so no project's feed takes it from another.
-    const rowId = d.project_id ? String(d._id) : `${String(d._id)}:${String(project._id)}`;
-    out.push({ ...deployRowOf(d), ...view, _id: rowId, deploy_id: String(d._id), project_id: String(project._id), after: after.get(String(d._id)) ?? null });
+    // One row per deploy, whichever project's feed brought it: its own project when the line sent it, none when it
+    // ships the whole workspace's code. The store scopes rows by `workspace` (lineDeploys workspaceScoped).
+    out.push({ ...deployRowOf(d), ...view, workspace: d.workspace, after: after.get(String(d._id)) ?? null });
   }
   return out;
 }

@@ -180,9 +180,10 @@ export type OccurrenceRow = {
 /** A deploy codecast knows of for the project (lineWorkspace.deploys). */
 export type DeployRow = {
   _id: string;
+  /** The project the deploy was sent for; null when it ships the whole workspace's code (deploys.md DP1). */
   /** The deploy object's short id (dp-N, deploys.md); absent on a row read before deploys were objects. */
   short_id?: string;
-  project_id: string;
+  project_id: string | null;
   at: number;
   sha: string | null;
   repository: string | null;

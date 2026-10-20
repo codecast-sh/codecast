@@ -56,15 +56,17 @@ export function useProblemCiRun(taskId: string | null | undefined): string | nul
   });
 }
 
-type LiveDeploy = { _id: string; at: number; sha: string | null; environment?: string | null };
-const liveDeploySig = (d: LiveDeploy) => `${d.at}|${d.sha ?? ""}|${d.environment ?? ""}`;
+type LiveDeploy = { _id: string; at: number; sha: string | null; environment?: string | null; status?: string };
+const liveDeploySig = (d: LiveDeploy) => `${d.at}|${d.sha ?? ""}|${d.environment ?? ""}|${d.status ?? ""}`;
+/** A deploy that put code live: one the line asked for that never went out (requested, failed) did not (deploys.md DP1). */
+export const wentLive = (d: { status?: string }) => !d.status || d.status === "live";
 const liveRead = new Map<string, CommitLive>();
 
 /** Whether a commit a problem names is in production, and since which recorded deploy (convex lineFixChecks.commitLive:
  *  ancestry against the live deploys the store holds). Null until the answer arrives, and when the read fails. */
 export function useCommitLive(projectId: string | null, sha: string | null): CommitLive | null {
   const rows = useCollectionRows<LiveDeploy>("lineDeploys", { sig: liveDeploySig });
-  const deploys = useMemo(() => rows.filter((d) => d.sha && deployIsLive({ environment: d.environment ?? null })).map((d) => ({ sha: d.sha!, at: d.at })), [rows]);
+  const deploys = useMemo(() => rows.filter((d) => d.sha && wentLive(d) && deployIsLive({ environment: d.environment ?? null })).map((d) => ({ sha: d.sha!, at: d.at })), [rows]);
   const newest = deploys.reduce((m, d) => Math.max(m, d.at), 0);
   const key = projectId && sha && deploys.length ? `${projectId}:${sha}:${newest}` : null;
   const read = useAction(api.lineFixChecks.commitLive);

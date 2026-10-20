@@ -54,7 +54,7 @@ import { MergeFixAct } from "../workspace/views/problem/MergeFixAct";
 import { LandAgain } from "../workspace/views/problem/LandAgain";
 import { CloseAsFixed } from "../workspace/views/problem/CloseProblem";
 import { useRepoCompare } from "../../../hooks/useRepoBrowse";
-import { useCommitLive, useFixBranch, useFixCommitChecks, useProblemCiRun } from "../../../hooks/useFixCommitChecks";
+import { useCommitLive, useFixBranch, useFixCommitChecks, useProblemCiRun, wentLive } from "../../../hooks/useFixCommitChecks";
 import { branchStanding } from "../../../lib/line/mergeFixLedger";
 import { fixHolder, reviewGates, reviewMove, sendBackNote } from "../../../lib/line/fixReview";
 import { ReaskNotice } from "./ReaskRun";
@@ -579,7 +579,8 @@ function Fixed({ need, onProblem, onRun, evidence }: { need: LineNeed; onProblem
   );
 }
 
-const deploySig = (d: DeployFact & { _id: string }) => `${d.at}|${d.sha ?? ""}`;
+const deploySig = (d: DeployFact & { _id: string; status?: string }) => `${d.at}|${d.sha ?? ""}|${d.status ?? ""}`;
+const liveOnly = (d: { status?: string }) => wentLive(d);
 
 /** What a person checks before closing a problem as fixed on main: the commit, how its CI went (read live from GitHub,
  *  lineFixChecks, the same read as the problem's band), and whether a recorded deploy carried it. */
@@ -587,7 +588,7 @@ function FixedFacts({ need, sha }: { need: LineNeed; sha: string }) {
   const ci = useFixCommitChecks(need.projectId ?? null, sha || null, useProblemCiRun(need.caseId));
   const repository = ci?.repository ?? null;
   // Deploys a workspace source reported name their commit; the fix's own deploy is found by its sha.
-  const deploys = useCollectionRows<DeployFact & { _id: string }>("lineDeploys", { sig: deploySig });
+  const deploys = useCollectionRows<DeployFact & { _id: string; status?: string }>("lineDeploys", { where: liveOnly, sig: deploySig });
   const own = useMemo(() => (sha ? deployOfCommit(sha, deploys) : null), [sha, deploys]);
   const newest = useMemo(() => (own ? null : newestDeploy(deploys)), [own, deploys]);
   // No deploy named the commit: whether the newest deploy carries it is a question of ancestry, asked of the repository.

@@ -874,6 +874,7 @@ export const CLIENT_SYNC_REGISTRY = {
   lineDeploys: {
     persistence: { kind: "collection", key: "lineDeploys" },
     hydration: { phase: "deferred" },
+    workspaceScoped: true,
     indexes: "_id, project_id",
     sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
