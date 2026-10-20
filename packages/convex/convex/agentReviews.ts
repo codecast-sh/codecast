@@ -688,11 +688,10 @@ export const groupingProbe = internalAction({
     const out: Record<string, unknown> = { findings: items.length };
     for (const [name, text] of Object.entries(variants)) {
       const vecs = new Map<string, number[]>();
-      for (let i = 0; i < items.length; i += 10) {
-        await Promise.all(items.slice(i, i + 10).map(async (it) => {
-          const e = await embedFinding(ctx, scope, text(it.f));
-          if (e) vecs.set(it.id, e.vector);
-        }));
+      // One at a time: each settles the team's budget row, and side by side they conflict on it.
+      for (const it of items) {
+        const e = await embedFinding(ctx, scope, text(it.f));
+        if (e) vecs.set(it.id, e.vector);
       }
       const cos = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i]!, 0) / Math.sqrt(a.reduce((s, x) => s + x * x, 0) * b.reduce((s, x) => s + x * x, 0));
       const pairs = args.pairs.flatMap(([a, b]) => {
