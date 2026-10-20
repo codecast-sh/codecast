@@ -79,7 +79,7 @@ def place(rc, sc, convs):
     return "peer"
 
 
-def fill_long_lived(convs, short, msgs):
+def fill_long_lived(convs, short, msgs, user):
     """The export holds the newest sessions, so a long-lived one (a role's
     standing session above all) falls out of it while still sending every
     day. Look those up by id; such a session runs at the top of its line, so
@@ -93,7 +93,8 @@ def fill_long_lived(convs, short, msgs):
         except Exception: continue
         for r in rows:
             row = {"_id": r["id"], "short_id": r["id"][:7], "title": r.get("title"), "parent_conversation_id": None,
-                   "standing_role_id": (r.get("role") or {}).get("handle"), "session_id": r.get("session_id")}
+                   "standing_role_id": (r.get("role") or {}).get("handle"), "session_id": r.get("session_id"),
+                   "user_id": user if r.get("owned_by_me") else None}
             convs.setdefault(r["id"], row)
             if row not in short[row["short_id"]]: short[row["short_id"]].append(convs[r["id"]])
     return len(want)
@@ -162,7 +163,7 @@ def main():
         m = re.match(r'<session-message from="([^"]+)"', r["content"])
         r["sender"] = m.group(1) if m else "unknown"
         msgs.append(r)
-    looked_up = fill_long_lived(convs, short, msgs)
+    looked_up = fill_long_lived(convs, short, msgs, a.user)
     for r in msgs: r["rel"] = relation(r, convs, short)
     notices = sum(1 for m in msgs if m["rel"] == "system")
     msgs = [m for m in msgs if m["rel"] != "system"]
@@ -171,12 +172,16 @@ def main():
     # Shape: counts that need no model.
     rel = collections.Counter(m["rel"] for m in msgs)
     huddle = [m for m in msgs if m["rel"] == "huddle-feed"]
-    named = sum(1 for m in huddle if "They named you" in m["content"][:500])
+    # Only the context lane is unnamed talk, and its header always says so. The
+    # rest (a named line, a voice handoff, a chat line, the attach briefing) is
+    # asked-for or one-off, and never gapped.
+    unnamed_of = lambda m: "Nobody named you" in m["content"][:1500]
+    named = sum(1 for m in huddle if not unnamed_of(m))
     # AC3's direct check: how often an unnamed chunk reached a session less than
     # the context gap after the one before it, inside one call (pairs under an hour).
     arrivals = collections.defaultdict(list)
     for m in huddle:
-        if "They named you" not in m["content"][:500]: arrivals[m["conversation_id"]].append(m["_creationTime"])
+        if unnamed_of(m): arrivals[m["conversation_id"]].append(m["_creationTime"])
     gaps = [b - t for v in arrivals.values() for t, b in zip(sorted(v), sorted(v)[1:]) if b - t < 3600_000]
     inside_gap = round(100 * sum(1 for g in gaps if g < 170_000) / len(gaps), 1) if gaps else None
     per_recipient = collections.Counter(m["conversation_id"] for m in msgs if m["rel"] != "huddle-feed")
@@ -185,11 +190,23 @@ def main():
         if m["rel"] != "huddle-feed": senders_of[m["conversation_id"]].add(m["sender"])
     agent_total = sum(per_recipient.values()) or 1
     hubs = [k for k, s in senders_of.items() if len(s) >= 5]
-    created = sum(1 for c in convs.values() if c.get("user_id") == a.user and c["_creationTime"] >= since)
+    # A parent hearing from many of its own workers is the line working, not an
+    # informal hub: the same reading with reports from a recipient's descendants left out.
+    own = ("worker->parent", "descendant")
+    per_outside, senders_outside = collections.Counter(), collections.defaultdict(set)
+    for m in msgs:
+        if m["rel"] not in own and m["rel"] != "huddle-feed":
+            per_outside[m["conversation_id"]] += 1
+            senders_outside[m["conversation_id"]].add(m["sender"])
+    hubs_outside = [k for k, s in senders_outside.items() if len(s) >= 5]
+    created = sum(1 for c in convs.values() if c.get("user_id") == a.user and c.get("_creationTime", 0) >= since)
     dup = collections.Counter((m["conversation_id"], m["content"]) for m in msgs)
 
     # Sample and read.
-    pool = [m for m in msgs if m.get("echo_message_id") and m["status"] == "delivered"]
+    # Only the person's own sessions are opened: a message they sent into a
+    # teammate's session is counted above and never read.
+    pool = [m for m in msgs if m.get("echo_message_id") and m["status"] == "delivered"
+            and (convs.get(m["conversation_id"]) or {}).get("user_id") == a.user]
     sample = random.Random(today).sample(pool, min(a.sample, len(pool)))
     ctx_dir = os.path.join(run, "ctx")
     os.makedirs(ctx_dir, exist_ok=True)
@@ -234,7 +251,10 @@ def main():
         "by_relation": dict(rel.most_common()),
         "huddle": {"chunks": len(huddle), "named": named, "unnamed": len(huddle) - named, "inside_gap_pct": inside_gap, "noise_pct": pct(hd, lambda x: x.get("noise"))},
         "hubs": {"recipients_with_5plus_senders": len(hubs), "their_share_pct": round(100 * sum(per_recipient[k] for k in hubs) / agent_total, 1),
-                 "top": [{"title": (convs.get(k) or {}).get("title"), "messages": per_recipient[k], "senders": len(senders_of[k])} for k, _ in per_recipient.most_common(5)]},
+                 "top": [{"title": (convs.get(k) or {}).get("title"), "messages": per_recipient[k], "senders": len(senders_of[k])} for k, _ in per_recipient.most_common(5)],
+                 "outside_own_workers": {"recipients_with_5plus_senders": len(hubs_outside), "their_share_pct": round(100 * sum(per_outside[k] for k in hubs_outside) / agent_total, 1),
+                                         "top": [{"id": k, "title": (convs.get(k) or {}).get("title"), "role": (convs.get(k) or {}).get("standing_role_id"), "messages": per_outside[k], "senders": len(senders_outside[k])}
+                                                 for k, _ in per_outside.most_common(5)]}},
         "exact_duplicates": sum(v - 1 for v in dup.values() if v > 1),
         "labelled": {"agent_to_agent": len(ag), "huddle": len(hd)},
         "agent_to_agent": {
@@ -279,7 +299,8 @@ def main():
             ("same, asked-for results left out %", lambda r: r["agent_to_agent"]["readable_idle_unasked_pct"]),
             ("peer share %", lambda r: round(100 * r["by_relation"].get("peer", 0) / max(1, r["messages"] - r["huddle"]["chunks"]), 1)),
             ("outside-line direction followed %", lambda r: r["agent_to_agent"]["outside_line_followed_pct"]),
-            ("hub share %", lambda r: r["hubs"]["their_share_pct"])]
+            ("hub share %", lambda r: r["hubs"]["their_share_pct"]),
+            ("same, own workers' reports left out %", lambda r: r["hubs"]["outside_own_workers"]["their_share_pct"])]
     lines = [f"# Agent communication, {today} (last {a.days} days)", "", "| metric | " + " | ".join(r["date"] for r in reports) + " |", "|---" * (len(reports) + 1) + "|"]
     for name, f in rows:
         vals = []
