@@ -82,7 +82,6 @@ import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
 import { AgentReplyPeek } from "./AgentReplyPeek";
-import { soundAgentReply } from "../../lib/sounds";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -279,17 +278,6 @@ export function CallStage({
   // the rail was closed (lib/calls/roomThreadSeen: the same count the door to
   // the call in the app header wears when this stage is collapsed).
   const { rows, unread, latest } = useRoomThreadUnread(call.roomKey, threadOpen);
-  // Every agent reply that lands while this person is in the room chimes,
-  // rail open or not: someone talking hears that the agent answered.
-  const stageOpenedAt = useRef(Date.now());
-  const chimed = useRef(new Set<string>());
-  useWatchEffect(() => {
-    for (const r of rows ?? []) {
-      if (!r.agent || r.event || r.at <= stageOpenedAt.current || chimed.current.has(r._id)) continue;
-      chimed.current.add(r._id);
-      soundAgentReply(r._id);
-    }
-  }, [rows]);
   const toggleThread = () => {
     if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
     setThreadOpen((o) => !o);
@@ -597,9 +585,15 @@ export function CallStage({
       )}
 
       {/* The stage itself. */}
-      <div className="flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
+      <div className="relative flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
+        {call.reconnecting && (
+          <span className="pointer-events-none absolute left-1/2 top-4 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-sol-yellow/40 bg-sol-base03/90 px-2.5 py-1 font-mono text-[12px] text-sol-yellow">
+            <span className="h-1.5 w-1.5 rounded-full bg-sol-yellow" />
+            reconnecting
+          </span>
+        )}
         <StageHostProvider value={stageHost}>
-        <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col">
+        <div key={view} className={`flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col transition-opacity ${call.reconnecting ? "opacity-50" : ""}`}>
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
           ) : view === "speaker" ? (

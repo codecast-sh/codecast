@@ -21,7 +21,7 @@ export type ProblemStatus = "waiting" | "running" | "open" | "watching" | "close
 export const PROBLEM_STATUSES: ReadonlyArray<ProblemStatus> = ["waiting", "running", "open", "watching", "closed"];
 
 export const PROBLEM_STATUS_WORDS: Record<ProblemStatus, string> = {
-  waiting: "For you",
+  waiting: "To decide",
   running: "Running",
   open: "Open",
   watching: "Watching",

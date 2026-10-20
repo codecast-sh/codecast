@@ -5,6 +5,9 @@ const crons = cronJobs();
 
 crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
 
+// Read Expo push receipts, where a revoked APNs key shows (pushReceipts.ts).
+crons.interval("check push receipts", { minutes: 30 }, (internal as any).pushReceipts.sweep, {});
+
 // The session lifecycle trail keeps 60 days (conversationEvents.ts).
 crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});
 
@@ -496,6 +499,15 @@ crons.interval(
   "poll sentry sources",
   { minutes: 2 },
   internal.sources.sentry.schedulePolls,
+  {}
+);
+
+crons.interval(
+  // A vendor source's recording import (X5): a run whose page chain died
+  // continues, and a finished one follows the recordings that arrived since.
+  "tend replay imports",
+  { minutes: 15 },
+  internal.sources.replayBackfill.tend,
   {}
 );
 

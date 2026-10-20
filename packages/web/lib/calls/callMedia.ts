@@ -52,14 +52,21 @@ export function participantTiles(room: Room): ParticipantTile[] {
 }
 
 /** The tiles a call stage draws, split by kind. Your own screen share is
- *  left out: you are already looking at it, and drawing it back on a screen
- *  it captures shows the stage inside itself, over and over. The share
- *  button's lit state is what says you are sharing. */
+ *  kept, last, so the stage shows that it is live, but it never draws its
+ *  video (StageVideo draws a placeholder for it): drawing it back on a screen
+ *  it captures shows the stage inside itself, over and over. Last, because
+ *  someone else's share is the one worth the big tile. */
 export function stageTiles(tiles: ParticipantTile[]): { screens: ParticipantTile[]; cameras: ParticipantTile[] } {
+  const screens = tiles.filter((t) => t.kind === "screen");
   return {
-    screens: tiles.filter((t) => t.kind === "screen" && !t.isLocal),
+    screens: [...screens.filter((t) => !t.isLocal), ...screens.filter((t) => t.isLocal)],
     cameras: tiles.filter((t) => t.kind === "camera"),
   };
+}
+
+/** Your own screen share: shown as a placeholder, never as its video. */
+export function isOwnScreen(t: ParticipantTile): boolean {
+  return t.isLocal && t.kind === "screen";
 }
 
 export { isMediaDenial };

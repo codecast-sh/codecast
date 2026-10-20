@@ -17,6 +17,8 @@ import {
   type Domain, type MarkTone,
 } from "../../../../../lib/line/timeline";
 import { useDerivedSize } from "../../../../../hooks/useDerivedSize";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { lineSelectionSearch, lineWorkspaceHref } from "../../../../../lib/line/lineWorkspaceUrl";
 
 /** What a click on the chart picks: a bucket of occurrences, what came back after a close (a fix or a close without one), an attempt. */
 export type TimelinePick =
@@ -134,9 +136,20 @@ export type TimelineChartProps = {
   offTopic?: ReadonlySet<number>;
 };
 
+/** The project's live deploys that carried none of this problem's fixes (coverage.live less h.deploys). */
+function otherDeploys(h: CauseHistory) {
+  const carried = new Set(h.deploys.map((d) => d.id));
+  return (h.coverage.live ?? []).filter((d) => !carried.has(d._id));
+}
+
 export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, domain, now, selectedRun, pick, onPick, onZoom, onReset, offTopic }: TimelineChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  // A deploy flag opens its deploy on the line's Deploys view (deploys.md DP7), keeping the line's filter when inside it.
+  const router = useRouter();
+  const params = useSearchParams();
+  const inLine = usePathname()?.startsWith("/line") ?? false;
+  const openDeploy = useCallback((ref: string) => router.push(inLine ? `/line${lineSelectionSearch(params, { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref })), [router, params, inLine]);
   const width = useDerivedSize(boxRef, (w) => Math.max(480, Math.round(w)), () => 960);
   const [d0, d1] = domain;
   const plotW = width - GUTTER - PAD_R;
@@ -258,14 +271,19 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
     for (const dpl of h.deploys) {
       const a = h.attempts.find((p) => p.runId === dpl.runId);
       tips.set(`d:${dpl.id}`, {
-        title: `Deploy that carried run #${a?.n ?? "?"}'s fix`,
+        title: `${dpl.ref ? `${dpl.ref}: deploy` : "Deploy"} that carried run #${a?.n ?? "?"}'s fix`,
         lines: [
           dpl.title,
           `Matched by ${dpl.how}`,
           `${momentWords(dpl.at)}${dpl.target ? `, ${dpl.target}` : ""}${dpl.source ? `, recorded by ${dpl.source}` : ""}`,
         ],
         tone: "ok",
+        ...(dpl.ref ? { hint: "Click to open the deploy" } : {}),
       });
+    }
+    // Every other live deploy of the project: a faint marker, so a finding that starts after one reads against it.
+    for (const o of otherDeploys(h)) {
+      tips.set(`o:${o._id}`, { title: `${o.short_id ? `${o.short_id}: ` : ""}${o.title}`, lines: [momentWords(o.at), "Did not carry this problem's fix"], ...(o.short_id ? { hint: "Click to open the deploy" } : {}) });
     }
     for (const w of shownWatches(h)) {
       const a = h.attempts.find((p) => p.runId === w.runId);
@@ -631,6 +649,20 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
             ))}
           </g>
 
+          {/* the project's other deploys: a faint rule through the findings, opening the deploy */}
+          <g className="lwt-other-deploys">
+            {otherDeploys(h).map((o) => {
+              if (o.at < d0 || o.at > d1) return null;
+              const dx = x(o.at);
+              return (
+                <g key={o._id} className="lwt-other-deploy" data-tip={`o:${o._id}`} onClick={() => o.short_id && openDeploy(o.short_id)} data-deploy-ref={o.short_id ?? undefined}>
+                  <line x1={dx} x2={dx} y1={HIST_TOP} y2={HIST_TOP + HIST_H} />
+                  <rect className="lwt-hitbox" x={dx - 4} y={HIST_TOP} width={8} height={HIST_H} />
+                </g>
+              );
+            })}
+          </g>
+
           {/* deploys that carried a fix: a flag and a line through every lane */}
           <g className="lwt-deploys">
             {h.deploys.map((dpl) => {
@@ -640,7 +672,7 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
               const fw = label.length * 6.2 + 14;
               const fx = flagInside(dx, fw, width);
               return (
-                <g key={dpl.id} className="lwt-deploy" data-tip={`d:${dpl.id}`} onClick={() => onPick({ kind: "attempt", runId: dpl.runId })}>
+                <g key={dpl.id} className="lwt-deploy" data-tip={`d:${dpl.id}`} onClick={() => (dpl.ref ? openDeploy(dpl.ref) : onPick({ kind: "attempt", runId: dpl.runId }))} data-deploy-ref={dpl.ref ?? undefined}>
                   <line x1={dx} x2={dx} y1={FLAG_H - 4} y2={laneEnd} />
                   <rect className="lwt-hitbox" x={fx - 4} y={0} width={fw + 6} height={FLAG_H} />
                   <rect className="lwt-hitbox" x={dx - 4} y={FLAG_H} width={8} height={laneEnd - FLAG_H} />

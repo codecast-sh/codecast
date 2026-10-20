@@ -1005,6 +1005,132 @@ export const COMPARISONS: Comparison[] = [
       "They compose, and many people use both: Remote Control is a live connection to one Claude Code session, and codecast records that same session like any other. Use Anthropic's for the phone, codecast for the team record and the memory.",
   },
   {
+    slug: "codecast-vs-entire",
+    competitor: "Entire",
+    competitorUrl: "https://entire.io",
+    title: "Codecast vs Entire",
+    dek: "Both trace code back to the agent session that wrote it. Entire stores sessions as checkpoints inside your git repository, linked to the commits they produced. Codecast records every agent session you run, wherever you run it, and traces each line to the conversation and the message that wrote it.",
+    verifiedOn: "2026-10-19",
+    codecastIs:
+      "Codecast is a workspace for your coding agents. A daemon reads the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live from every machine you use, in any directory, committed or not. You read, search, message and steer those sessions from web, desktop or phone, and cast blame names the session behind each line of code. It works for one person; a team layer is there when you share a project.",
+    competitorIs:
+      "Entire is a developer platform built around git. Its open source, MIT licensed CLI is enabled per repository and uses git hooks and agent hooks to capture each agent session; when you commit, it saves the prompts, transcript and tool calls as a checkpoint stored in your own repository and adds an Entire-Checkpoint trailer to the commit. entire.io shows those sessions in the browser, and Entire also hosts and mirrors git repositories in regions close to your agents.",
+    bottomLine:
+      "If you want the record of agent work to live in git itself, readable by anyone with a clone and tied to each commit, Entire is built for that, and it adds git hosting, mirrors, search and multi agent review on top. If you want every session you run on every machine recorded whether or not it ever reaches a commit, line level attribution down to the message that made an edit, and the ability to steer live sessions from your phone, that is Codecast, and it is free for one person.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor:
+          "Captures sessions in each repository where you run entire enable and saves them as checkpoints linked to your commits",
+      },
+      {
+        dimension: "What gets recorded",
+        codecast:
+          "Every session on a supported agent, in any directory, whether or not it ever commits; history already on disk is read the first time the daemon runs",
+        competitor:
+          "Sessions in Entire enabled repositories, saved as a checkpoint when you commit; entire import brings in earlier local sessions as read only checkpoints not linked to a commit",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor:
+          "Built in: Claude Code (the default), Codex, Cursor, Copilot CLI, Factory Droid, OpenCode, Pi and Antigravity CLI; others through an agent integration protocol, with plugins for Goose, Kilo Code, Amp and Grok Build announced on its blog",
+      },
+      {
+        dimension: "Where the record lives",
+        codecast:
+          "Codecast's backend (hosted, or one you host yourself); access follows the session's privacy and team sharing",
+        competitor:
+          "Your own git repository, under refs/entire/checkpoints/ by default or in a separate checkpoint repository; anyone with read access to the repository reads the checkpoints",
+      },
+      {
+        ...SHARED_ROWS.blame,
+        competitor:
+          "entire blame tags each line AI, MX (mixed), HU or uncommitted, and entire why returns the commit, checkpoint, prompt and session behind a line; its FAQ says both answer at the level of the commit, not the line, and both are labs commands",
+      },
+      {
+        dimension: "Link in the commit",
+        codecast: "A Codecast-Session line in commits from sessions shared with your team",
+        competitor: "An Entire-Checkpoint trailer with the checkpoint ID on every linked commit",
+      },
+      {
+        ...SHARED_ROWS.memory,
+        competitor:
+          "Hybrid semantic and keyword search over checkpoints, commits and sessions, plus code search, from the CLI, entire.io or your agent",
+      },
+      {
+        ...SHARED_ROWS.remote,
+        competitor: "Not documented: entire.io shows captured sessions, and entire session resume continues past work, including in another agent",
+      },
+      {
+        dimension: "Beyond sessions",
+        codecast:
+          "Triggers, workflows, forks and workers, cloud hosts, and a team layer of feed, chat, tasks, plans and docs",
+        competitor:
+          "Git hosting and regional GitHub mirrors, multi agent review and investigate commands, Dispatch summaries of recent work, and entire-graph code navigation for agents",
+      },
+      { dimension: "Pricing", codecast: "Free for one person, per seat for teams", competitor: "Not published on its site" },
+      { ...SHARED_ROWS.oss, competitor: "The CLI is MIT licensed; the source of the entire.io service is not stated" },
+    ],
+    strengths: {
+      codecast: {
+        pros: [
+          "Records every session without per repository setup, including sessions that never commit and those run outside any repository.",
+          "cast blame resolves each line to the session whose edit wrote it, and opens the conversation at that message.",
+          "Steer live terminal sessions from web, desktop or phone, including answering permission prompts.",
+          "One record across all your machines and agents that you and your agents can search and ask questions of.",
+        ],
+        cons: [
+          "The record lives in Codecast, not in your repository, so reading it needs Codecast access rather than a clone.",
+          "The Codecast-Session commit line is added only for sessions shared with a team, and only for commits Claude Code makes directly.",
+          "No git hosting, mirrors or built in multi agent review command.",
+          "The desktop app is macOS only and the phone app is iOS only.",
+        ],
+      },
+      competitor: {
+        pros: [
+          "The record travels with the code: checkpoints are git objects in your repository, so anyone with access can read them, with no separate service holding transcripts.",
+          "A stable checkpoint ID in each commit message that survives rebases, amends and hosted merges.",
+          "Redaction runs before checkpoint data is written, with user defined rules on top.",
+          "The CLI runs on macOS, Linux and Windows and is MIT licensed.",
+          "Git hosting and mirrors in regions near your agents, and review, investigate and dispatch commands for agent work.",
+        ],
+        cons: [
+          "Captures only in repositories where it is enabled, and a session becomes a checkpoint when you commit.",
+          "Attribution is commit level: a line hand edited inside an agent commit still reads as AI, by Entire's own FAQ.",
+          "Steering a live session from another device is not documented.",
+          "Checkpoints are readable by everyone who can read the repository; Entire advises a private repository for sensitive material.",
+        ],
+      },
+    },
+    deepDives: [
+      {
+        heading: "How each one answers \"which session wrote this line?\"",
+        paragraphs: [
+          "Entire starts from git. entire blame runs git blame, then looks at the commit that introduced each line: if that commit carries an Entire-Checkpoint trailer, the checkpoint holds the session, prompt and transcript behind it. entire why takes a file and line and returns that commit, checkpoint, prompt and session. Entire's FAQ is explicit that the answer describes the whole commit, so a line a person edited inside an agent commit still reads as AI, and a rebase or squash moves the line to whichever commit git now credits.",
+          "Codecast also starts from git blame, then resolves each line two ways: the session that committed it, from the Codecast-Session line or its own record of the session's commits, and the session whose edit wrote that exact line, by matching the line against the edits sessions made. The authoring session wins when both are known, and the result links to the message where the edit happened. In the web repository view, setting Blame to Sessions shows the same thing in the gutter, with a strip that sums how much of the file each session wrote.",
+        ],
+      },
+      {
+        heading: "Where the record lives",
+        paragraphs: [
+          "This is the choice that decides it for most people. Entire writes redacted checkpoints into your repository, so the record of agent work is versioned with the code, pushed with it, and readable by anyone who can read the repository, with no Entire account. That is a real advantage when the history must stay with the code, and a real risk in a public repository, which Entire's security page points out.",
+          "Codecast keeps sessions in its own backend, which you can host yourself. Nothing is written into your repository except the commit line for sessions shared with a team, and each session keeps its own privacy: private to you, or shared with a team. It also means Codecast holds sessions that never touched a repository at all: the research session, the one that only read code, the one in a scratch directory.",
+        ],
+      },
+    ],
+    whenCompetitor: [
+      "You want the agent's reasoning stored in git next to the code, readable by anyone with access to the repository and with no separate service in the loop.",
+      "Your team reviews work commit by commit and wants each commit to carry a checkpoint ID through rebases and hosted merges.",
+      "You also want git hosting or regional mirrors for agents that clone and push a lot, or you work on Linux or Windows and want a native CLI there.",
+    ],
+    whenCodecast: [
+      "You want every session recorded, in every directory and on every machine, including the ones that never commit.",
+      "You need to know which session wrote a specific line, not only which commit it arrived in, and to open the conversation at that edit.",
+      "You want to read and steer running sessions from your phone or another computer, answer their permission prompts, and search everything they have done.",
+      "You work alone today and want a team layer ready for the day you share a project.",
+    ],
+  },
+  {
     slug: "codecast-vs-resumecontext",
     competitor: "ResumeContext",
     competitorUrl: "https://resumecontext.com",

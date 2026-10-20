@@ -269,7 +269,7 @@ export function shipOf(e: Pick<Doc<"external_events">, "kind" | "sha" | "created
   if (e.kind !== "release" && e.kind !== "deploy") return null;
   const surface = e.meta?.surface ?? (e.kind === "release" ? "release" : null);
   if (!surface || !e.sha) return null;
-  return { surface, ...(e.meta?.version ? { version: e.meta.version } : {}), sha: e.sha, at: e.created_at, kind: e.kind };
+  return { surface, ...(e.meta?.version ? { version: e.meta.version } : {}), sha: e.sha, at: e.created_at, kind: e.kind, ...(e.meta?.deploy ? { deploy: e.meta.deploy } : {}) };
 }
 
 /** One page of the repository's ship events and merged pull requests in [from, to). */

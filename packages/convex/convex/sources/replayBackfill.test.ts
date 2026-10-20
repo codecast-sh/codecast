@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import schema from "../schema";
 import { makeFakeDb, schemaIndexes } from "../testDb";
-import { REPLAY_BACKFILL_PAGE, listPostHogPage, runBackfillPage, savePage, type BackfillVendor } from "./replayBackfill";
+import { REPLAY_BACKFILL_PAGE, REPLAY_FOLLOW, listPostHogPage, runBackfillPage, savePage, tend, tendImport, type BackfillVendor } from "./replayBackfill";
 import { VendorCallError } from "./vendorReplay";
 import { REPLAY_BACKFILL_LIMITS, replayBackfillLine, replayBackfillResumes, replayBackfillStalled, type ReplayBackfill } from "@codecast/shared/contracts/replay";
 
@@ -220,4 +220,58 @@ test("the summary line names the window, the counts and why it stopped", () => {
   expect(replayBackfillLine(fresh({ listed: 40, imported: 30, skipped: 10 }), 200)).toBe("importing the last 30d: 40 listed, 30 imported, 10 already here");
   expect(replayBackfillLine(fresh({ status: "paused", window: "all", last_error: "Stopped" }), 200)).toBe("paused all retained recordings: 0 listed, 0 imported: Stopped");
   expect(replayBackfillLine(fresh({ updated_at: 0 }), 60 * 60_000)).toMatch(/^stalled/);
+});
+
+describe("tend", () => {
+  const T = 10 * 3600_000;
+
+  test("a run whose page chain died continues from its cursor", () => {
+    const dead = fresh({ cursor: "410", imported: 398, rate_limited_since: 50, last_error: "waiting", updated_at: T - REPLAY_BACKFILL_LIMITS.stalled_ms - 1 });
+    const next = tendImport(dead, T)!;
+    expect(next).toMatchObject({ status: "running", cursor: "410", imported: 398, started_at: T, updated_at: T });
+    expect(next.rate_limited_since).toBeUndefined();
+    expect(next.last_error).toBeUndefined();
+  });
+
+  test("a live run, a pause and an error are left alone", () => {
+    expect(tendImport(fresh({ updated_at: T - 60_000 }), T)).toBeNull();
+    expect(tendImport(fresh({ status: "paused", updated_at: 0 }), T)).toBeNull();
+    expect(tendImport(fresh({ status: "error", updated_at: 0 }), T)).toBeNull();
+    expect(tendImport(undefined, T)).toBeNull();
+  });
+
+  test("a stop on the vendor's rate limit is tried again after a cooling period", () => {
+    const limited = fresh({ status: "error", rate_limited_since: 0, cursor: "530", updated_at: T - REPLAY_FOLLOW.rate_limit_retry_ms });
+    expect(tendImport(limited, T)).toMatchObject({ status: "running", cursor: "530" });
+    expect(tendImport({ ...limited, updated_at: T - 60_000 }, T)).toBeNull();
+  });
+
+  test("a finished run is followed by one over what arrived since, with an overlap", () => {
+    const done = fresh({ status: "done", until: T - 3600_000, finished_at: T - REPLAY_FOLLOW.after_ms, imported: 7, listed: 9 });
+    const next = tendImport(done, T)!;
+    expect(next).toMatchObject({ status: "running", since: T - 3600_000 - REPLAY_FOLLOW.overlap_ms, until: T, imported: 7, listed: 9, started_at: T });
+    expect(next.finished_at).toBeUndefined();
+    expect(next.cursor).toBeUndefined();
+    expect(tendImport({ ...done, finished_at: T - 60_000 }, T)).toBeNull();
+  });
+
+  test("the cron launches the tended runs of active vendor sources only", async () => {
+    const dead = fresh({ updated_at: 0 });
+    const db = makeFakeDb(
+      {
+        event_sources: [
+          { _id: "s1", workspace: "team:t", owner_user_id: "u1", short_id: "src-1", provider: "posthog", name: "a", promote: [], status: "active", replay_backfill: dead, created_at: 1, updated_at: 1 },
+          { _id: "s2", workspace: "team:t", owner_user_id: "u1", short_id: "src-2", provider: "posthog", name: "b", promote: [], status: "paused", replay_backfill: dead, created_at: 1, updated_at: 1 },
+          { _id: "s3", workspace: "team:t", owner_user_id: "u1", short_id: "src-3", provider: "sdk", name: "c", promote: [], status: "active", replay_backfill: dead, created_at: 1, updated_at: 1 },
+        ],
+      },
+      { indexes: schemaIndexes(schema as any) },
+    );
+    const scheduled: any[] = [];
+    const out = await h(tend)({ db, scheduler: { runAfter: async (_ms: number, _fn: any, args: any) => void scheduled.push(args) } }, {});
+    expect(out).toEqual({ tended: 1 });
+    const row = (await db.get("s1" as any))!;
+    expect(row.replay_backfill.status).toBe("running");
+    expect(scheduled).toEqual([{ source_id: "s1", run: row.replay_backfill.started_at }]);
+  });
 });

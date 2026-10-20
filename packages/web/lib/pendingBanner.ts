@@ -75,17 +75,24 @@ export function pendingRetryClientId(messageId: string): string | undefined {
 }
 
 // hold_screen: the terminal rows the daemon read when it held the message for a dialog.
-export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string; hold_screen?: string; queued?: boolean; from_user_id?: string };
+export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; delivered_at?: number; status: string; content: string; hold_reason?: string; hold_screen?: string; queued?: boolean; from_user_id?: string };
 // getConversationPendingMessage: the primary row (oldest in flight, else the
-// newest settled) plus `inflight`, every undelivered row. Older servers send
-// no `inflight`.
-export type ServerPendingStatus = ServerPendingRow & { inflight?: ServerPendingRow[] };
+// newest settled) plus `inflight`, every undelivered row, and `delivered`, the
+// recently delivered rows. Older servers send neither list.
+export type ServerPendingStatus = ServerPendingRow & { inflight?: ServerPendingRow[]; delivered?: ServerPendingRow[] };
 
-// Every server row that may need a bubble: all undelivered rows, or the
-// settled primary when nothing is in flight.
+// Every undelivered server row, or the settled primary when nothing is in flight.
 export function serverPendingRows(pending?: ServerPendingStatus | null): ServerPendingRow[] {
   if (!pending) return [];
   return pending.inflight?.length ? pending.inflight : [pending];
+}
+
+// Every server row that may need a bubble: the undelivered ones, then each
+// recently delivered one, whose echo may not have reached this window yet.
+function serverBubbleRows(pending?: ServerPendingStatus | null): ServerPendingRow[] {
+  const rows = serverPendingRows(pending);
+  const ids = new Set(rows.map((r) => r.message_id));
+  return [...rows, ...(pending?.delivered ?? []).filter((r) => !ids.has(r.message_id))];
 }
 
 /** The messages a session holds that have not reached it, from its server pending rows (whichever window sent them), oldest first. */
@@ -123,18 +130,24 @@ export function pendingCancelRef(
   return { clientId: messageId };
 }
 
+// How far apart a send and its echo can be stamped: the transcript carries the
+// agent machine's clock, the pending row the server's.
+export const ECHO_SKEW_MS = 120_000;
+
 // Whether the conversation's server pending row still needs its own bubble
 // (the caller has already ruled out text that is on screen). In flight:
-// always. Delivered: only while this window's transcript has not reached the
-// row's send time, and only at the live tail; past that point its echo is
-// either rendering already or never coming. Cancelled: never.
+// always. Delivered: only at the live tail, while this window's transcript has
+// not passed the moment the row reached the session. The echo is written
+// then, so a transcript past it holds the echo or never will. The send time
+// is not that moment: a message queued for the end of a turn is sent mid-turn
+// and goes in when the turn ends. Cancelled: never.
 export function serverPendingBubbleVisible(
-  pending: { status: string; created_at: number },
+  pending: { status: string; created_at: number; delivered_at?: number },
   window: { newestServerTs: number; atLiveTail: boolean },
 ): boolean {
   if (pending.status === "cancelled") return false;
   if (pending.status !== "delivered") return true;
-  return window.atLiveTail && window.newestServerTs < pending.created_at;
+  return window.atLiveTail && window.newestServerTs < (pending.delivered_at ?? pending.created_at) + ECHO_SKEW_MS;
 }
 
 // The bubbles the timeline adds for server pending rows: every queued message,
@@ -148,7 +161,8 @@ export function serverPendingBubbles(
   pending: ServerPendingStatus | null | undefined,
   timeline: {
     seen: Set<string>;
-    seenContent: Set<string>;
+    /** Each user text on screen, normalized, with the newest time it was said. */
+    seenContent: Map<string, number>;
     local: Array<{ _id: string; _clientId?: string }>;
     newestServerTs: number;
     atLiveTail: boolean;
@@ -156,7 +170,7 @@ export function serverPendingBubbles(
   },
 ) {
   const bubbles = [];
-  for (const row of serverPendingRows(pending)) {
+  for (const row of serverBubbleRows(pending)) {
     // Queued for the end of the turn: it shows in the shared queue above the
     // composer, and becomes a bubble when the turn ends and it goes in.
     if (row.status === "held") continue;
@@ -164,7 +178,10 @@ export function serverPendingBubbles(
     const id = row.client_id;
     if (id && (timeline.seen.has(id) || timeline.local.some((m) => m._id === id || m._clientId === id))) continue;
     const norm = timeline.normalize(row.content);
-    if (!norm || timeline.seenContent.has(norm)) continue;
+    if (!norm) continue;
+    // The same words said earlier are another message, not this one's echo.
+    const saidAt = timeline.seenContent.get(norm);
+    if (saidAt !== undefined && saidAt >= row.created_at - ECHO_SKEW_MS) continue;
     bubbles.push({
       _id: `serverpending_${row.message_id}`,
       role: "user" as const,

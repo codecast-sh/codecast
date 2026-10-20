@@ -47,7 +47,7 @@ import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfil
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { ownDevice } from "./devices";
 import { regroundWhenRegrouped } from "./lineGround";
-import { GROUPING, absorbsFinding, askCandidates, nearCauses, judgedByCurrentVersion, keepSimilarity, recursAfterFix, retireOnClose, sampleFindings, similarCandidates, standsAsEvidence, type ProbeInputs, type ScoredCandidate } from "./findingGroups";
+import { GROUPING, absorbsFinding, askCandidates, closeRetireReason, nearCauses, judgedByCurrentVersion, keepSimilarity, recursAfterFix, retireOnClose, sampleFindings, similarCandidates, standsAsEvidence, type ProbeInputs, type ScoredCandidate } from "./findingGroups";
 import { runModelCall } from "./modelCalls";
 import { redirectDependents } from "./taskLinks";
 import { byUser } from "./lib/taskHistory";
@@ -480,8 +480,14 @@ type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
  * new cause stay inside it. The signal carries its cause's project, else the
  * one it was filed into, and names the filed project when the two differ.
  */
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
-  const workspace = db.workspaceKey;
+/**
+ * Where a finding goes (LE4), in order: the problem its issue key or
+ * fingerprint names, the problem already holding its message, the problem the
+ * judge named, else a new problem when its source opens problems, else held.
+ * The one ladder a new finding (commitSignal) and a held one being placed
+ * again (placeHeldKey) both climb.
+ */
+async function attachDecision(ctx: any, workspace: string, signal: SignalInput, judged: Id<"tasks"> | null, projectId: Id<"projects"> | null, now: number, split: { from: string } | null = null): Promise<{ attach: SignalAttach; task: Doc<"tasks"> | null; issueKey: string | null }> {
   const observedAt = signal.observed_at ?? now;
   let attach: SignalAttach;
   let task: Doc<"tasks"> | null;
@@ -507,6 +513,38 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
       attach = (await opensCause(ctx, workspace, signal.source)) ? "new" : "held";
     }
   }
+  return { attach, task, issueKey };
+}
+
+/**
+ * A new problem opened by a finding, with every finding held under its key
+ * (or its issue's keys) joining it, so it carries their history. `extra`
+ * counts findings beyond the held ones (the new finding commitSignal is
+ * about to insert).
+ */
+async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, projectId: Id<"projects"> | null, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
+  const workspace = db.workspaceKey;
+  const observedAt = seed.observed_at ?? o.now;
+  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint);
+  const seen = [observedAt, ...held.map((r) => r.observed_at)];
+  const signalCount = held.length + o.extra;
+  const { taskId, taskShortId } = await openCause(ctx, db, seed, projectId, {
+    signal_count: signalCount,
+    first_seen: Math.min(...seen),
+    last_seen: Math.max(...seen),
+    fingerprints: [seed.fingerprint],
+    ...(o.issueKey ? { issue_key: o.issueKey } : {}),
+    ...(o.split ? { split_from: o.split.from } : {}),
+  }, o.newCause);
+  // The signals held under this key before anything converted it join the
+  // cause it opened, so the cause carries their history.
+  for (const row of held) await ctx.db.patch(row._id, { task_id: taskId, attach: "fingerprint" as SignalAttach });
+  return { taskId, taskShortId, signalCount };
+}
+
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
+  const observedAt = signal.observed_at ?? now;
+  const { attach, task, issueKey } = await attachDecision(ctx, db.workspaceKey, signal, judged, projectId, now, split);
 
   let reopened = false;
   let taskId: Id<"tasks"> | undefined;
@@ -542,20 +580,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
   } else if (attach === "held") {
     signalCount = 0;
   } else {
-    const held = issueKey ? await heldUnderIssue(ctx, workspace, [signal.fingerprint, issueKey]) : await heldSignals(ctx, workspace, signal.fingerprint);
-    const heldFirst = Math.min(observedAt, ...held.map((r) => r.observed_at));
-    signalCount = held.length + 1;
-    ({ taskId, taskShortId } = await openCause(ctx, db, signal, projectId, {
-      signal_count: signalCount,
-      first_seen: heldFirst,
-      last_seen: observedAt,
-      fingerprints: [signal.fingerprint],
-      ...(issueKey ? { issue_key: issueKey } : {}),
-      ...(split ? { split_from: split.from } : {}),
-    }, newCause));
-    // The signals held under this key before anything converted it join the
-    // cause it opened, so the cause carries their history.
-    for (const row of held) await ctx.db.patch(row._id, { task_id: taskId, attach: "fingerprint" as SignalAttach });
+    ({ taskId, taskShortId, signalCount } = await openCauseWithHeld(ctx, db, signal, projectId, { now, issueKey, split, newCause, extra: 1 }));
   }
 
   const shortId = await nextShortId(ctx.db, "sg");
@@ -1733,7 +1758,8 @@ export const retireClosedFindings = internalMutation({
       if (isOpenCause(task)) continue;
       const held = (await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect()).length;
       if (!held) continue;
-      out.push({ task: task.short_id, status: task.status, retired: args.dry ? held : await retireOnClose(ctx, task, now) });
+      // A dry run counts what a real one retires: a close with no reason (a shipped fix) keeps its findings as evidence.
+      out.push({ task: task.short_id, status: task.status, retired: args.dry ? (closeRetireReason(task) ? held : 0) : await retireOnClose(ctx, task, now) });
     }
     return out;
   },
@@ -2073,3 +2099,114 @@ async function roleIdByHandle(ctx: { db: any }, handle: string | undefined): Pro
   const roles: any[] = await ctx.db.query("org_roles").collect();
   return roles.find((r) => (r.handle ?? "").toLowerCase() === want)?._id;
 }
+
+// ── Placing held findings again (LE4) ──
+//
+// A finder that starts opening problems (`opens_causes`) changes where its
+// next findings go, not where its held ones sit. This pass takes each key held
+// in a window and climbs the same ladder a new finding does (fingerprint,
+// message, the attach judge, a new problem), moving the held rows themselves:
+// nothing is filed twice.
+
+/** A held finding as the attach ladder reads it. */
+function heldAsSignal(row: Doc<"signals">): SignalInput {
+  return normalizeSignal({
+    source: row.source, kind: row.kind, fingerprint: row.fingerprint, title: row.title,
+    detail_md: row.detail_md, evidence_url: row.evidence_url, subject: row.subject, observed_at: row.observed_at,
+    judge: row.judge, judge_version: row.judge_version, severity: row.severity, moment: row.moment,
+  } as SignalInput);
+}
+
+/** One page of a workspace's held findings since a time, from the given sources: the newest row per key. */
+export const heldKeysPage = internalQuery({
+  args: { workspace: v.string(), sources: v.array(v.string()), since: v.number(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("signals")
+      .withIndex("by_workspace_live_created", (q: any) => q.eq("workspace", args.workspace).eq("retired", undefined).gte("created_at", args.since))
+      .order("desc")
+      .paginate({ cursor: args.cursor, numItems: 400 });
+    const want = new Set(args.sources.map((s) => s.toLowerCase()));
+    const rows = page.page
+      .filter((r: Doc<"signals">) => !r.task_id && !r.merged_into && !r.case_of && want.has(r.source))
+      .map((r: Doc<"signals">) => ({ _id: r._id, user_id: r.user_id, fingerprint: r.fingerprint, source: r.source, project_id: r.project_id ?? null, created_at: r.created_at }));
+    return { rows, cursor: page.continueCursor, done: page.isDone };
+  },
+});
+
+/** The attach judge's candidates for a held finding, read as attachInputs reads a new one. */
+export const heldInputs = internalQuery({
+  args: { row_id: v.id("signals") },
+  handler: async (ctx, { row_id }) => {
+    const row: Doc<"signals"> | null = await ctx.db.get(row_id);
+    if (!row || row.task_id) return null;
+    const signal = heldAsSignal(row);
+    const now = Date.now();
+    if (await fingerprintCause(ctx, row.workspace, signal.fingerprint, now)) return { signal, candidates: [] as CauseCandidate[] };
+    if (await messageCause(ctx, row.workspace, signal, row.project_id ?? null, now)) return { signal, candidates: [] as CauseCandidate[] };
+    return { signal, candidates: await nearestCauses(ctx, row.workspace, signal, row.project_id ?? null) };
+  },
+});
+
+/** Place every finding held under one key: the problem the ladder names, a new one, or held still. `dry_run` writes nothing. */
+export const placeHeldKey = internalMutation({
+  args: { row_id: v.id("signals"), judged_task_id: v.optional(v.id("tasks")), dry_run: v.boolean() },
+  handler: async (ctx, args) => {
+    const row: Doc<"signals"> | null = await ctx.db.get(args.row_id);
+    if (!row || row.task_id) return { decision: "already placed" as const };
+    const ws = parseWorkspaceKey(row.workspace);
+    if (!ws) return { decision: "no workspace" as const };
+    const now = Date.now();
+    const signal = heldAsSignal(row);
+    const projectId = row.project_id ?? null;
+    const { attach, task } = await attachDecision(ctx, row.workspace, signal, args.judged_task_id ?? null, projectId, now);
+    const rows = await heldSignals(ctx, row.workspace, row.fingerprint);
+    if (args.dry_run) return { decision: attach, task_short_id: task?.short_id ?? null, findings: rows.length };
+    if (task) {
+      await moveSignalRows(ctx, rows, null, task, { now, userId: row.user_id, attach, released: [] });
+      await regroundWhenRegrouped(ctx, task._id, now);
+      return { decision: attach, task_short_id: task.short_id, findings: rows.length };
+    }
+    if (attach !== "new") return { decision: attach, task_short_id: null, findings: rows.length };
+    const { db } = await createWorkContext(ctx, ws.type === "team" ? { userId: row.user_id, workspace: "team", team_id: ws.teamId } : { userId: row.user_id, workspace: "personal" });
+    const opened = await openCauseWithHeld(ctx, db, signal, projectId, { now, issueKey: null, split: null, newCause: {}, extra: 0 });
+    return { decision: attach, task_short_id: opened.taskShortId, findings: opened.signalCount };
+  },
+});
+
+/**
+ * The pass: every key held since `since_days` ago from these sources, oldest
+ * key first so a problem opens from its first finding, each judged and placed.
+ * Run it with `dry_run` first and read the decisions.
+ */
+export const placeHeld = internalAction({
+  // workspace: the key the findings live under (`team:<id>`, `user:<id>`).
+  args: { workspace: v.string(), sources: v.array(v.string()), since_days: v.number(), dry_run: v.boolean(), max_keys: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const workspace = args.workspace;
+    const since = Date.now() - args.since_days * 86_400_000;
+    const newest = new Map<string, { _id: Id<"signals">; created_at: number }>();
+    for (let cursor: string | null = null; ;) {
+      const page: { rows: Array<{ _id: Id<"signals">; fingerprint: string; created_at: number }>; cursor: string; done: boolean } = await ctx.runQuery(internal.signals.heldKeysPage, { workspace, sources: args.sources, since, cursor });
+      for (const r of page.rows) if (!newest.has(r.fingerprint)) newest.set(r.fingerprint, r);
+      if (page.done) break;
+      cursor = page.cursor;
+    }
+    const keys = [...newest.values()].sort((a, b) => a.created_at - b.created_at).slice(0, args.max_keys ?? Infinity);
+    const out: Array<{ fingerprint: string; decision: string; task_short_id?: string | null; findings?: number }> = [];
+    for (const k of keys) {
+      const inputs: { signal: SignalInput; candidates: CauseCandidate[] } | null = await ctx.runQuery(internal.signals.heldInputs, { row_id: k._id });
+      if (!inputs) continue;
+      let judged: Id<"tasks"> | null = null;
+      if (inputs.candidates.length) {
+        const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000 });
+        judged = parseAttachJudgeReply(reply?.text, inputs.candidates);
+      }
+      const placed = await ctx.runMutation(internal.signals.placeHeldKey, { row_id: k._id, judged_task_id: judged ?? undefined, dry_run: args.dry_run });
+      out.push({ fingerprint: inputs.signal.fingerprint, ...placed });
+    }
+    const tally: Record<string, number> = {};
+    for (const o of out) tally[o.decision] = (tally[o.decision] ?? 0) + 1;
+    return { keys: keys.length, tally, placed: out };
+  },
+});
