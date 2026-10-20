@@ -438,13 +438,22 @@ names each wall by what failed, one per fingerprint per recording:
 - `error`: a page error or console error, keyed by its first line with the
   inline stack (V8 or Safari frames) cut and ids and numbers normalized. Not
   keyed by page: an error a layout or provider throws shows on every page
-  under it and is one problem.
+  under it and is one problem. One failure written by several sites at once
+  (an SDK, then the provider wrapping it) is one: errors within `ECHO_MS`
+  (100 ms) of each other take the line among them that sorts first, so the
+  key does not depend on which site wrote first. An error whose text names a
+  request that failed just before it is that request's and files nothing.
 - `request`: a request to the product's own site (its host or a sibling on
   the same registrable domain, so a vendor's ingest refusing is not counted)
   that answered 4xx or 5xx, or a write that got no answer, keyed by method,
   endpoint with ids folded (`/api/users/:id`) and status. A GET with no answer
   is left out (navigations, unmounts and long polls cancel those all the
-  time), and so is Cloudflare's `/cdn-cgi/`.
+  time), and so is Cloudflare's `/cdn-cgi/`. A gateway status (502, 503, 504,
+  520 to 524) says the service behind the endpoint did not answer, so it is
+  keyed by the service (`/api/<service>`), one outage however many endpoints
+  a page called; a 500 is the endpoint's own handler and keeps its endpoint.
+  On Union's 717 recordings (2026-10-20) these two rules took 106 keys to 77,
+  every merge one failure or one outage.
 - `rage_click`: three clicks within a second on one button or link, keyed by
   page and target. Text, fields, radios and checkboxes are clicked repeatedly
   on purpose and never count.
