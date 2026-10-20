@@ -142,7 +142,7 @@ import { CharacterPicker } from "./identity/CharacterPicker";
 import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { SessionIdentityLine } from "./identity/SessionIdentityLine";
 import { buildMentionItems } from "../hooks/useMentionQuery";
-import { isActiveAgentStatus, serverPendingBubbles, type LiveAgentStatus } from "../lib/pendingBanner";
+import { ECHO_SKEW_MS, isActiveAgentStatus, serverPendingBubbles, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
@@ -153,11 +153,11 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext, HostedAskingContext, HostedCardShownContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
-import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
+import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
@@ -440,8 +440,10 @@ const ConversationViewInner = (
   // Captured at pagination trigger time (either direction): the topmost visible
   // message element and its exact viewport offset, so we can pin it right back
   // once the page mounts (above for 'older', below for 'newer'). DOM-measured
-  // (not virtualizer estimates) → pixel-perfect.
-  const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer' } | null>(null);
+  // (not virtualizer estimates) → pixel-perfect. Re-captured on every scroll
+  // while the page is in flight, so it holds where the reader is when the page
+  // lands, not where they were when it was asked for.
+  const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer'; until: number; loading?: boolean } | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
@@ -1025,14 +1027,18 @@ const ConversationViewInner = (
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
     const seen = new Set<string>();
-    const seenContent = new Set<string>();
+    const seenContent = new Map<string, number>();
+    const said = (content: string, at: number) => {
+      const norm = normalizePendingContent(content);
+      seenContent.set(norm, Math.max(seenContent.get(norm) ?? -Infinity, at));
+    };
     let newestServerTs = 0;
     for (const item of base) {
       if (item.type === 'message') {
         const m = item.data as any;
         seen.add(m._id);
         if (m.client_id) seen.add(m.client_id);
-        if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
+        if (m.role === 'user' && m.content) said(m.content, m.timestamp);
         if (!m._isOptimistic && !m._isQueued && !m._isFailed && m.timestamp > newestServerTs) newestServerTs = m.timestamp;
       }
     }
@@ -1043,11 +1049,11 @@ const ConversationViewInner = (
       // content already rendered as a synced message (prevents the command showing twice).
       if (m.role === 'user' && m.content) {
         const norm = normalizePendingContent(m.content);
-        if (norm.startsWith('/') && seenContent.has(norm)) return false;
+        if (norm.startsWith('/') && (seenContent.get(norm) ?? -Infinity) >= m.timestamp - ECHO_SKEW_MS) return false;
       }
       return true;
     });
-    for (const m of toAdd) if (m.content) seenContent.add(normalizePendingContent(m.content));
+    for (const m of toAdd) if (m.content) said(m.content, m.timestamp);
     // Server-side pending rows: every queued message, whichever device or CLI sent it
     // (serverPendingBubbles).
     toAdd.push(...serverPendingBubbles(serverPending, { seen, seenContent, local: toAdd, newestServerTs, atLiveTail: !hasMoreBelow, normalize: normalizePendingContent }));
@@ -1170,7 +1176,7 @@ const ConversationViewInner = (
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
   const { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ currentUser, conversation, managedSession });
-  const { serverUserMessages, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
+  const { serverUserMessages, stickyEligibleServerIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const [navigatorCurrentId, setNavigatorCurrentId] = useState<string | null>(null);
@@ -1635,6 +1641,10 @@ const ConversationViewInner = (
 
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
+    // Rows placed by `top`, not translate3d: a 3D transform makes every row a
+    // compositor layer, and the browser re-layers the whole page on each frame
+    // that moves the caret, so each keystroke paid for every visible row.
+    directDomUpdatesMode: "position",
     onChange: updateScrollProgress,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
@@ -2144,6 +2154,7 @@ const ConversationViewInner = (
       const laterUnloaded = (resolvedIndex: number | undefined) => pickStickyFallback(
         serverUserMessages, loadedMessageIds, topTs,
         resolvedIndex === undefined ? -Infinity : timeline[resolvedIndex]?.timestamp ?? -Infinity,
+        stickyEligibleServerIds,
       );
       const navAbove = laterUnloaded(resolveStickyPrompt(navigatorTimelineIndices, topVisibleIndex, new Set())?.index);
       const navId = navAbove?.id ?? resolveNavigatorCurrentId(
@@ -2238,7 +2249,7 @@ const ConversationViewInner = (
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, loadedMessageIds, headerHeight, stickyDisabled]);
+  }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, stickyEligibleServerIds, loadedMessageIds, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
     // A folded working turn opens first, then the density's own group: walk
@@ -2313,6 +2324,9 @@ const ConversationViewInner = (
       // 200px edge bands hiding the jump buttons; wider than the 100px pin band.
       setIsNearTop(scrollTop < 200);
       setIsNearBottom(distanceFromBottom < 200);
+
+      const inFlight = pageAnchorRef.current;
+      if (inFlight && Date.now() <= inFlight.until) capturePageAnchor(scrollContainer, inFlight.dir, inFlight.until);
 
       const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
@@ -2420,20 +2434,28 @@ const ConversationViewInner = (
   // Pixel-perfect pagination: remember the topmost visible message and its exact
   // viewport offset; the layout effect below pins it right back after the page
   // mounts (above or below), so the text on screen never moves.
-  const capturePageAnchor = (sc: HTMLElement, dir: 'older' | 'newer') => {
+  // The anchor lives until its load ends (below); `until` only covers a load
+  // that never starts, so it can't be misapplied to a later streaming append.
+  // A page on a long session can take several seconds to arrive.
+  const capturePageAnchor = (sc: HTMLElement, dir: 'older' | 'newer', until = Date.now() + 15_000) => {
     const scTop = sc.getBoundingClientRect().top;
     let anchorEl: Element | null = null;
     for (const m of sc.querySelectorAll('[id^="msg-"]')) {
       if (m.getBoundingClientRect().bottom > scTop + 1) { anchorEl = m; break; }
     }
     pageAnchorRef.current = anchorEl
-      ? { id: anchorEl.id, relTop: (anchorEl.getBoundingClientRect().top - scTop) / cssZoomOf(sc), scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir }
+      ? { id: anchorEl.id, relTop: (anchorEl.getBoundingClientRect().top - scTop) / cssZoomOf(sc), scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, dir, until, loading: pageAnchorRef.current?.loading }
       : null;
-    // If the page never arrives (empty result), drop the anchor so it can't be
-    // misapplied to a later streaming append.
-    const captured = pageAnchorRef.current;
-    if (captured) setTimeout(() => { if (pageAnchorRef.current === captured) pageAnchorRef.current = null; }, 3000);
   };
+  // A load that ended without rows (an empty page, a failure) drops its anchor.
+  // Rows are merged into the store before the flag clears, so a page that did
+  // land was already pinned by the layout effect below.
+  useWatchEffect(() => {
+    const a = pageAnchorRef.current;
+    if (!a) return;
+    if (isLoadingOlder || isLoadingNewer) a.loading = true;
+    else if (a.loading) pageAnchorRef.current = null;
+  }, [isLoadingOlder, isLoadingNewer]);
   const maybeLoadOlderRef = useRef<() => void>(() => {});
   maybeLoadOlderRef.current = () => {
     const sc = containerRef.current;
@@ -2521,6 +2543,7 @@ const ConversationViewInner = (
     const a = pageAnchorRef.current;
     if (!a) return;
     pageAnchorRef.current = null;
+    if (Date.now() > a.until) return;
     const sc = containerRef.current;
     if (!sc) return;
     paginationCooldownRef.current = Date.now() + 500;
@@ -3259,8 +3282,9 @@ const ConversationViewInner = (
   // The pinned prompt floats over the top of the transcript; while a band is
   // open here it would cover the band's close strip, so it steps aside.
   const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
+  const stickyCmd = activeStickyMsg ? stickyCommand(activeStickyMsg.content) : null;
   const { browserRowMap, lastBrowserPage, browserSession, chatWakeMap } = useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap });
-  const { sessionGalleryImages } = useSessionImages({ deferredQueriesEnabled, conversation });
+  const { sessionGalleryItems } = useSessionImages({ deferredQueriesEnabled, conversation });
   const { taskSubjectMap, taskRecordMap } = useConversationTaskMaps({ conversation, deferredQueriesEnabled });
 
   const getPreviousNonToolResultMessage = (index: number): Message | null => {
@@ -4211,7 +4235,7 @@ const ConversationViewInner = (
                   </div>
                 )}
 
-                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
+                {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
 
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button
@@ -4655,8 +4679,9 @@ const ConversationViewInner = (
                 })()}
               </div>
               <div data-sv-sticky-body className="pl-8 pr-4">
-                <MessagePromptPreview
-                  content={cleanStickyContent(activeStickyMsg.content)}
+                {stickyCmd && <SlashCommandChip cmdName={stickyCmd.cmdName} className={stickyCmd.args ? "mb-1.5" : ""} />}
+                {(!stickyCmd || stickyCmd.args) && <MessagePromptPreview
+                  content={stickyCmd ? stickyCmd.args : cleanStickyContent(activeStickyMsg.content)}
                   images={stickyImages}
                   messageId={activeStickyMsg.id && activeStickyMsg.id !== '__fallback__' ? activeStickyMsg.id : undefined}
                   variant="sticky"
@@ -4664,7 +4689,7 @@ const ConversationViewInner = (
                   textRef={stickyTextRef}
                   textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
                   onTextClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
-                />
+                />}
               </div>
             </div>
           </div>
@@ -4846,7 +4871,6 @@ const ConversationViewInner = (
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
-                    top: 0,
                     left: 0,
                     width: "100%",
                     ...(visible ? {} : { height: 0, overflow: "hidden" }),

@@ -2,16 +2,20 @@
    reader beside it. Two columns from the first paint; the list never changes
    width, and each side scrolls on its own. */
 .lw-stage-in:has(> .fy) { height: 100%; }
-.fy { display: grid; grid-template-columns: 420px minmax(0, 1fr); height: 100%; min-height: 0; }
+.fy { display: grid; grid-template-columns: 460px minmax(0, 1fr); height: 100%; min-height: 0; }
 
-/* One item: no list beside it, the reader takes the width. */
-.fy[data-single] { grid-template-columns: minmax(0, 1fr); }
-.fy[data-single] > .fy-list { display: none; }
-.fy-list { min-height: 0; overflow: auto; padding: var(--lw-s3) var(--lw-s2) var(--lw-s5); border-right: 1px solid var(--lw-rule); }
+/* Nothing open: the list is a table across the whole page. */
+.fy[data-mode="table"] { grid-template-columns: minmax(0, 1fr); }
+.fy-wide { border-right: 0; padding: 0 var(--lw-s4) var(--lw-s5); }
+.fy-list { min-height: 0; overflow: auto; padding: 0 var(--lw-s2) var(--lw-s5); border-right: 1px solid var(--lw-rule); }
 .fy-list[data-settling] .fy-group-h .lw-num { opacity: .5; }
-.fy-group + .fy-group { margin-top: var(--lw-s4); }
+.fy-group + .fy-group { margin-top: var(--lw-s2); }
 /* What no answer can reach yet sits below a rule, quieter: listed, never counted. */
-.fy-group-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; padding: 0 10px; font-size: var(--lw-fs-xs); font-weight: 650; letter-spacing: .01em; color: var(--lw-ink-2); }
+.fy-group-h {
+  position: sticky; top: 44px; z-index: 2; display: flex; align-items: center; gap: 8px; margin: 0 0 2px; padding: 6px 10px 4px;
+  background: var(--lw-paper); font-size: var(--lw-fs-xs); font-weight: 650; letter-spacing: .01em; color: var(--lw-ink-2);
+}
+.fy-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fy-group-h .lw-num { color: var(--lw-person); font-weight: 700; }
 .fy-rows { list-style: none; margin: 0; padding: 0; }
 
@@ -25,18 +29,115 @@
 .fy-row[aria-current="true"] { background: var(--lw-person-soft); box-shadow: inset 2px 0 0 var(--lw-person); }
 .fy-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: -2px; }
 .fy-ask {
-  font-size: var(--lw-fs-base); line-height: 1.4; font-weight: 550; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere;
+  font-size: var(--lw-fs-sm); line-height: 1.4; font-weight: 550; color: var(--lw-ink); text-wrap: pretty; overflow-wrap: anywhere;
   /* A row names what is asked; the reader beside it holds the question whole. */
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-.fy-meta { display: flex; flex-wrap: wrap; column-gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.fy-meta > span + span::before { content: "·"; margin-right: 6px; color: var(--lw-ink-3); opacity: .7; }
+/* The facts under a row's question, each a glance: severity, kind, people reached, findings, the run's word, area, age. */
+.fy-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding-right: 30px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fy-row[aria-current="true"] .fy-facts { color: var(--lw-ink-2); }
+.fy-sev { min-width: 18px; height: 16px; padding: 0 4px; border-radius: 4px; display: inline-grid; place-items: center; font-weight: 700; font-size: var(--lw-fs-2xs); }
+.fy-sev[data-sev="high"] { background: var(--lw-bad-soft); color: var(--lw-bad); }
+.fy-sev[data-sev="mid"] { background: var(--lw-warn-soft); color: var(--lw-warn); }
+.fy-sev[data-sev="low"] { background: var(--lw-paper-2); color: var(--lw-ink-3); }
+.fy-kind { font-weight: 600; }
+.fy-kind[data-kind="fix"] { color: var(--lw-person); }
+.fy-kind[data-kind="judge"] { color: var(--lw-plum); }
+.fy-kind[data-kind="expectation"] { color: var(--lw-script); }
+.fy-n { display: inline-flex; align-items: center; gap: 3px; }
+.fy-n svg { width: 12px; height: 12px; opacity: .75; }
+.fy-rec { font-weight: 600; }
+.fy-rec[data-rec="go"] { color: var(--lw-ok); }
+.fy-rec[data-rec="change"] { color: var(--lw-warn); }
+.fy-rec[data-rec="stop"] { color: var(--lw-ink-3); }
+.fy-area { min-width: 0; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fy-wait { margin-left: auto; }
+
+/* The list's controls: sticky over the rows, the count first, the filters, then the order and the grouping. */
+.fy-bar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px; padding: 8px 6px; background: var(--lw-paper); border-bottom: 1px solid var(--lw-rule-2); margin-bottom: 6px; }
+.fy-shown { min-width: 22px; padding: 0 4px; font-size: var(--lw-fs-sm); font-weight: 700; color: var(--lw-ink); }
+.fy-bar-gap { flex: 1 0 0; }
+.fy-bar[data-picking] { background: color-mix(in srgb, var(--lw-person-soft) 55%, var(--lw-paper)); }
+.fy-bar-word { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); margin-right: 6px; }
+.fy-bar-btn { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 6px; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-2); cursor: pointer; }
+.fy-bar-btn:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
+
+/* The table: one decision a row, one fact a column, read down a column. */
+.fy-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--lw-fs-sm); }
+.fy-table thead th { position: sticky; top: 44px; z-index: 2; background: var(--lw-paper); border-bottom: 1px solid var(--lw-rule-2); padding: 6px 8px; text-align: left; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); white-space: nowrap; }
+.fy-table th[data-num], .fy-table td[data-num] { text-align: right; }
+.fy-th { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; }
+.fy-th:hover { color: var(--lw-ink); }
+.fy-th[data-on] { color: var(--lw-ink); }
+.fy-th svg { width: 12px; height: 12px; }
+.fy-th:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; }
+.fy-tgroup th { position: sticky; top: 76px; z-index: 1; background: var(--lw-paper); padding: 14px 8px 4px; text-align: left; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+.fy-tgroup th > * { vertical-align: middle; }
+.fy-tgroup th > span + span { margin-left: 8px; color: var(--lw-person); font-weight: 700; }
+.fy-tgroup .fy-face { margin-right: 6px; }
+.fy-tr { cursor: pointer; }
+.fy-tr td { padding: 7px 8px; border-bottom: 1px solid color-mix(in srgb, var(--lw-rule-2) 60%, transparent); vertical-align: middle; color: var(--lw-ink-2); }
+.fy-tr:hover td { background: var(--lw-paper-2); }
+.fy-tr[data-picked] td { background: color-mix(in srgb, var(--lw-person-soft) 60%, transparent); }
+.fy-tr[aria-current="true"] td, .fy-tr:focus-visible td { background: var(--lw-person-soft); }
+.fy-tr:focus-visible { outline: none; }
+.fy-tr[aria-current="true"] td:first-child, .fy-tr:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--lw-person); }
+.fy-tpick { width: 28px; padding-left: 8px !important; padding-right: 0 !important; }
+.fy-tr .fy-tpick .fy-pick { opacity: 0; }
+.fy-tr:hover .fy-pick, .fy-tr:focus-visible .fy-pick, .fy-pick[data-picked], .fy-table:has(.fy-tr .fy-pick[data-picked]) .fy-pick { opacity: 1; }
+.fy-t-ask { width: 100%; min-width: 22rem; }
+.fy-t-ask .fy-ask { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--lw-ink); }
+.fy-t-ask .fy-rec { display: inline-block; margin-top: 2px; font-size: var(--lw-fs-xs); }
+.fy-t-sev, .fy-t-people, .fy-t-findings, .fy-t-age { white-space: nowrap; }
+.fy-t-kind, .fy-t-area, .fy-t-who { white-space: nowrap; }
+.fy-t-area .fy-area { display: inline-block; max-width: 13rem; vertical-align: middle; }
+@media (max-width: 1100px) { .fy-t-area { display: none; } }
+@media (max-width: 760px) {
+  .fy-t-findings, .fy-t-kind, .fy-table thead th.fy-t-findings, .fy-table thead th.fy-t-kind { display: none; }
+  .fy-t-ask { min-width: 12rem; }
+  .fy-wide { padding: 0 var(--lw-s2) var(--lw-s5); }
+}
+
+/* A row's box, for assigning several at once: shown on hover, on focus, and while anything is picked. */
+.fy-pick {
+  all: unset; box-sizing: border-box; width: 16px; height: 16px; flex: none; border-radius: 4px; border: 1.5px solid var(--lw-rule); display: inline-grid; place-items: center;
+  cursor: pointer; color: var(--lw-on-accent); transition: background-color var(--lw-fast), border-color var(--lw-fast);
+}
+.fy-pick:hover { border-color: var(--lw-ink-3); }
+.fy-pick[data-picked] { background: var(--lw-person); border-color: var(--lw-person); }
+.fy-pick svg { width: 11px; height: 11px; stroke-width: 3; }
+.fy-pick:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 1px; }
+.fy-li > .fy-pick { position: absolute; left: 4px; top: 12px; opacity: 0; }
+.fy-li:hover > .fy-pick, .fy-li > .fy-pick:focus-visible, .fy-li > .fy-pick[data-picked], .fy-list:has(.fy-pick[data-picked]) .fy-li > .fy-pick { opacity: 1; }
+.fy-li > .fy-row { padding-left: 26px; }
+.fy-li[data-picked] > .fy-row { background: color-mix(in srgb, var(--lw-person-soft) 60%, transparent); }
+
+/* Who holds it: a face at a row's corner, a face and a name in the reader's head and the table, a button over a selection. */
+.fy-li { position: relative; }
+.fy-assign { position: relative; flex: none; }
+.fy-li > .fy-assign { position: absolute; right: 8px; bottom: 7px; }
+.fy-assign-btn { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border-radius: 999px; cursor: pointer; color: var(--lw-ink-2); font-size: var(--lw-fs-xs); font-weight: 600; transition: background-color var(--lw-fast); }
+.fy-assign[data-variant="face"] .fy-assign-btn { width: 24px; padding: 0; justify-content: center; }
+.fy-assign[data-variant="named"] .fy-assign-btn { max-width: 14rem; }
+.fy-assign-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fy-reader-h .fy-assign .fy-assign-btn, .fy-assign[data-variant="button"] .fy-assign-btn { border: 1px solid var(--lw-rule); }
+.fy-table .fy-assign[data-variant="named"] .fy-assign-btn:not(:hover) .lucide-chevron-down { opacity: 0; }
+.fy-assign-btn:hover { background: var(--lw-paper-2); }
+.fy-assign-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 1px; }
+.fy-assign-none { width: 15px; height: 15px; color: var(--lw-ink-3); opacity: .7; }
+.fy-assign-btn:hover .fy-assign-none { opacity: 1; color: var(--lw-ink-2); }
+.fy-face { display: inline-flex; flex: none; }
+.fy-assign-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 250; min-width: 12rem; max-height: 18rem; overflow-y: auto; padding: 4px 0; border-radius: 8px; background: var(--lw-card); border: 1px solid var(--lw-rule); box-shadow: var(--lw-shadow-pop); }
+.fy-li > .fy-assign .fy-assign-menu { top: auto; bottom: calc(100% + 4px); }
 .fy-due { color: var(--lw-ink-2); font-weight: 600; }
 .fy-due[data-late] { color: var(--lw-bad); }
 
 /* Where the rest went: one quiet line per Problems chip, outside the list's count and its J/K walk. */
 .fy-none { margin: 6px 12px; font-size: var(--lw-fs-base); font-weight: 550; color: var(--lw-ink); }
-.fy-keys { display: flex; gap: 4px; margin: var(--lw-s4) 12px 0; opacity: .55; }
+/* The keys the list takes, drawn as keys. */
+.fy-keys { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: var(--lw-s4) 10px 0; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fy-key { display: inline-flex; align-items: center; gap: 3px; }
+.fy-key > span:last-child { margin-left: 3px; }
 
 .fy-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .fy-reader-h { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 40px; padding: 7px 12px 7px 20px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
@@ -56,7 +157,8 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 .fy-problem:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 55%, transparent); outline-offset: 2px; border-radius: 3px; }
 .fy-trial { flex-shrink: 0; white-space: nowrap; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--lw-rule); font-weight: 600; color: var(--lw-ink-2); text-decoration: none; transition: border-color var(--lw-fast), color var(--lw-fast); }
 .fy-trial:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
-.fy-pos { flex: none; margin-left: auto; }
+.fy-pager { flex: none; display: inline-flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; }
+.fy-pos { flex: none; margin-right: 2px; }
 .fy-reader-h .lw-iconbtn:disabled { opacity: .3; pointer-events: none; }
 /* The reader's body is the one box its content fills: a decision scrolls inside it and docks its answers at its foot. */
 .fy-reader-b { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -69,12 +171,13 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 .fy-figure:hover { background: var(--lw-paper-2); }
 .fy-figure b { font-size: var(--lw-fs-2xl); font-weight: 650; color: var(--lw-ink); line-height: 1.1; }
 
-@media (max-width: 1100px) { .fy { grid-template-columns: 320px minmax(0, 1fr); } }
+@media (max-width: 1100px) { .fy { grid-template-columns: 380px minmax(0, 1fr); } }
 @media (max-width: 760px) {
-  .fy { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 34%) minmax(0, 1fr); }
+  .fy { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(200px, 45%) minmax(0, 1fr); }
+  .fy[data-mode="table"] { grid-template-rows: minmax(0, 1fr); }
   .fy-list { border-right: 0; border-bottom: 1px solid var(--lw-rule); }
 }
-@media (prefers-reduced-motion: reduce) { .fy-row, .fy-trial, .fy-figure, .fy-title { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .fy-row, .fy-trial, .fy-figure, .fy-title, .fy-assign-btn, .fy-pick { transition: none; } }
 
 /* A problem that waits on the viewer no more (LeftItem): its head, three facts, then the acts. */
 .fy-left { display: flex; flex-direction: column; min-height: 0; flex: 1; }
