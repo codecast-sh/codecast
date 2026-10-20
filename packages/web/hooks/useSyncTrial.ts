@@ -46,9 +46,9 @@ export type TrialCardRow = {
   decision?: {
     _id: string; short_id: string | null; status: string; report_slug: string | null; session: { _id: string; short_id: string | null; title: string | null } | null;
   } | null;
-  /** The role the card belongs to and the people it waits on, when it is not the trial owner's (lib/line/trialAudience): a judge fix goes to its route's decider. */
+  /** The role the card belongs to and the people it waits on, when it is not the trial owner's: a judge fix goes to its route's decider, who holds it in the team's decision inbox. */
   audience?: { asked: string[]; role: { _id: string; short_id: string | null; name: string; handle: string | null } } | null;
-  /** The problem's evidence now (convex lineTrial.problemEvidence); a card on a problem left with no findings reads stale. */
+  /** The problem's evidence now (convex lib/problemEvidence); a card on a problem left with no findings reads stale. */
   evidence?: TrialEvidence | null;
   /** Set when the fix is codecast's own review machinery (a judge or an extractor), not the product: its card is not the executive's. */
   tooling?: "judge" | "extractor" | null;
@@ -84,7 +84,7 @@ export type TrialCardRow = {
 /** The decision a trial card is, when its station posted one. */
 export type TrialDecision = NonNullable<TrialCardRow["decision"]>;
 
-/** A finding that left an emptied problem and how (convex lineTrial.WithdrawnFinding): `to` is the open problem holding it now. */
+/** A finding that left an emptied problem and how (convex lib/problemEvidence.WithdrawnFinding): `to` is the open problem holding it now. */
 export type TrialWithdrawn = { short_id: string; title: string; quote?: string; at: number; fate: "rejudged" | "duplicate" | "found_wrong" | "moved" | "history" | "coaching" | "closed" | "other"; to?: string };
 
 /** A finding a card cites, as it stands now: on the card's problem, on another, or withdrawn. */

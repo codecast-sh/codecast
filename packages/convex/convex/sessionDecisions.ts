@@ -1110,6 +1110,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
   if (existing) {
+    // A question a person gave to a teammate (passCore) stays theirs when it is asked again.
+    const given = existing.passed_to?.kind === "user" ? [existing.passed_to.id as Id<"users">] : null;
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
     // category or the stack's delegate may have changed who may answer.
@@ -1125,7 +1127,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       category,
       category_proposed: args.category,
       form: args.form,
-      asked_user_ids: people,
+      asked_user_ids: given ?? people,
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : {}),
       ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
@@ -1136,7 +1138,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       session_title: conversation.title,
       project_path: conversation.project_path,
     });
-    await syncDecisionInbox(ctx, existing._id, people, now, !hears && routed.trial !== "owner");
+    await syncDecisionInbox(ctx, existing._id, given ?? people, now, !!given || (!hears && routed.trial !== "owner"));
     const updated = await ctx.db.get(existing._id);
     if (updated) await refreshHolder(ctx, updated, now);
     return {
@@ -1817,13 +1819,16 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
   if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
-  if (row.trial) return { error: "A trial run's question stays with its trial" };
+  // A trial's question may be given to a teammate (the team's decision inbox assigns it); it never climbs a role's line.
+  if (row.trial && to.kind === "role") return { error: "A trial run's question stays with its trial" };
   const conversation = await ctx.db.get(row.conversation_id);
   if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
   if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
     return { error: "It is already theirs" };
   }
-  const teamId = conversation?.team_id;
+  // A line decision's team is its problem's when the session that asked is nobody's team's (a station run on a host).
+  const task = !conversation?.team_id && row.task_id ? await ctx.db.get(row.task_id) : null;
+  const teamId = conversation?.team_id ?? task?.team_id;
   const now = Date.now();
   const passed_to = { ...to, by: userId, at: now };
   if (to.kind === "user") {

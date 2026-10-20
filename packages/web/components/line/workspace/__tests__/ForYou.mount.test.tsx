@@ -39,7 +39,7 @@ const now = Date.UTC(2026, 9, 12, 12);
 const H = 3_600_000;
 const row = (kind: string, key: string, over: Record<string, unknown> = {}) => ({ key: `${kind}:${key}`, kind, at: now - H, projectId: "p1", title: `Problem ${key}`, ref: `ct-${key}`, detail: null, caseId: key, runId: null, cardId: null, cardRef: null, ...over });
 const groups = [
-  { kind: "decide", label: "", rows: [row("decide", "3", { title: "Quinn or Riley", at: now - 9 * H, cardId: "d3", cardRef: "sd-3" }), row("decide", "5", { title: "Card names come out cut", cardId: "d5", cardRef: "sd-5" })] },
+  { kind: "decide", label: "", rows: [row("decide", "3", { title: "Quinn or Riley", at: now - 9 * H, cardId: "d3", cardRef: "sd-3", decisionId: "d3", change: "fix", assignee: "u2", reach: 4, findings: 6, severity: 8 }), row("decide", "5", { title: "Card names come out cut", cardId: "d5", cardRef: "sd-5", decisionId: "d5", change: "judge", assignee: null })] },
   // A problem assigned to the viewer is the line's to carry (Problems' Not started), never For you's.
   { kind: "mine", label: "", rows: [row("mine", "40", { title: "Held by hand" })] },
   // What a station asked before a fix was presented is on Problems, never in this list.
@@ -77,10 +77,17 @@ async function render(search: string, ws: any = workspace) {
   await act(async () => { root.render(React.createElement(ForYouView, { model: { steps: {}, runs: [] } as any, workspace: ws, selection: readLineSelection(new URLSearchParams(search)), select: (p: any, _c: any, o: any) => selects.push([p, o]), href: (p: any) => `/line?view=${p.view ?? ""}` })); });
 }
 
-test("only the end decision is listed, under what the person is asked; the reader's N of M is the list; a row is the problem's title and carries no button", async () => {
+test("only the end decision is listed, grouped by its area; the reader's N of M is the list; a row is the problem's title and its facts", async () => {
   await render("");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-row").length}`)).toEqual(["decision:2"]);
-  expect(q(".fy-group-h")?.textContent).toBe("Ship these fixes?2");
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-row").length}`)).toEqual(["p1:2"]);
+  expect(q(".fy-group-h")?.textContent).toBe("Callers2");
+  // The facts a person picks by: severity, kind, people reached, findings, age; and who holds it.
+  const facts = q("[data-line-need-ref='sd-3'] .fy-facts")!;
+  expect(facts.querySelector(".fy-sev")?.textContent).toBe("8");
+  expect(facts.querySelector(".fy-sev")?.getAttribute("data-sev")).toBe("high");
+  expect(facts.querySelector(".fy-kind")?.textContent).toBe("Fix");
+  expect([...facts.querySelectorAll(".fy-n")].map((x) => x.textContent)).toEqual(["4", "6"]);
+  expect(q("[data-line-need-ref='sd-5'] .fy-kind")?.textContent).toBe("Judge");
   expect(q("[data-line-foryou]")?.dataset.lineForyou).toBe("2");
   expect(q(".fy-pos")?.textContent).toBe("1 of 2");
   // What is asked is the reader's; the list says what each item is about.
@@ -89,6 +96,8 @@ test("only the end decision is listed, under what the person is asked; the reade
   // A question, a new problem to confirm, a step that finished mid-run and a problem assigned by hand wait on nobody here.
   for (const ref of ["ct-30", "ct-31", "ct-6", "ct-40"]) expect(q(`[data-line-need-ref='${ref}']`)).toBeNull();
   expect(host.querySelectorAll(".fy-row button").length).toBe(0);
+  // Each row's one control beside it is who holds it: a teammate's face, or the empty "Assign".
+  expect([...host.querySelectorAll<HTMLElement>(".fy-li > [data-line-foryou-assign]")].map((x) => x.dataset.lineForyouAssign)).toEqual(["u2", ""]);
   // Nothing points elsewhere: the line's queue is on the line's own page.
   expect(host.querySelectorAll("[data-line-pointer]").length).toBe(0);
   // Arriving names the first need in the address, in place.
@@ -372,4 +381,28 @@ test("a trial card no session presented is the same one line, never a panel of i
   expect(q("[data-line-need-session]")?.getAttribute("data-line-need-session")).toBe("s-words");
   expect(q("[data-line-trial-panel]")).toBeNull();
   await act(async () => { useInboxStore.setState({ workflowRuns: before } as any); });
+});
+
+test("the list narrows to who holds it and to a kind, and a teammate's pick assigns the open decision at once", async () => {
+  useInboxStore.setState({ teamMembers: [{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }] } as any);
+  await render("who=u2");
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-3"]);
+  await render("who=none");
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-5"]);
+  await render("kind=judge&group=none");
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-5"]);
+  await render("who=me");
+  expect(q("[data-line-foryou-filtered]")).not.toBeNull();
+  // The reader's head names who holds it; picking a teammate passes the decision to them.
+  const passed: any[] = [];
+  const passDecision = useInboxStore.getState().passDecision;
+  useInboxStore.setState({ passDecision: (id: string, to: any) => passed.push([id, to]) } as any);
+  await render("need=sd-5");
+  const head = q("[data-line-foryou-head] > [data-line-foryou-assign]")!;
+  expect(head.textContent).toContain("Assign");
+  await act(async () => { (head.querySelector("button") as HTMLButtonElement).click(); });
+  const jo = [...head.querySelectorAll<HTMLButtonElement>("[role=listbox] button")].find((b) => b.textContent?.includes("Jo"))!;
+  await act(async () => { jo.click(); });
+  expect(passed).toEqual([["d5", { kind: "user", id: "u3" }]]);
+  useInboxStore.setState({ passDecision } as any);
 });

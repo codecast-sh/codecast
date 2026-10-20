@@ -13,23 +13,21 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { usePanZoom } from "../hooks/usePanZoom";
+import { usePageInfoRow } from "../hooks/usePageInfo";
+import { galleryItemKey, isGalleryPage, type GalleryImage, type GalleryItem } from "../lib/galleryItems";
+import { pageThumbUrl } from "../lib/publishedPageUrls";
+import { PageFavicon, PublishedPageEmbed } from "./PublishedPageEmbed";
 
-// One image the lightbox can show. `src` is whatever paints (may be a blob: or
-// data: URL from the byte cache); `href` is the shareable address of the same
-// bytes (the storage URL or the remote markdown URL) — absent when there is
-// none, e.g. an inline base64 image. `messageId` is the transcript message the
-// image came from, when the registrar knows it. `storageId` names the stored
-// bytes (so a quote can attach the picture itself) and `timestamp` when it
-// landed, both when known.
-export type GalleryImage = { src: string; href?: string; messageId?: string; storageId?: string; timestamp?: number };
+export type { GalleryImage, GalleryItem } from "../lib/galleryItems";
 
 type ImageGalleryContextType = {
   register: (image: GalleryImage) => void;
   open: (src: string) => void;
-  // Open over an explicit list (the header's full-session gallery). register()
-  // only sees images that have MOUNTED — the virtualized feed never mounts most
-  // of them — so a whole-session open must carry its own list. Cleared on close.
-  openList: (images: GalleryImage[], index: number) => void;
+  // Open over an explicit list (the header's full-session gallery, images and
+  // published pages). register() only sees images that have MOUNTED — the
+  // virtualized feed never mounts most of them — so a whole-session open must
+  // carry its own list. Cleared on close.
+  openList: (items: GalleryItem[], index: number) => void;
   // The conversation whose quote batch notes pinned in this transcript join,
   // when the viewer can reply here. Framed pages read it to take notes too.
   quoteTo?: string;
@@ -132,7 +130,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   children: React.ReactNode;
 }) {
   const [images, setImages] = useState<GalleryImage[]>([]);
-  const [overrideList, setOverrideList] = useState<GalleryImage[] | null>(null);
+  const [overrideList, setOverrideList] = useState<GalleryItem[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const isOpen = currentIndex >= 0;
   const registry = useRef<Registry>(emptyRegistry(conversationId));
@@ -146,7 +144,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   // the mount-registered order. Registered images from another conversation
   // (state not yet refreshed after a switch) are never shown.
   const registered = registry.current.conversationId === conversationId ? images : [];
-  const list = overrideList ?? registered;
+  const list: GalleryItem[] = overrideList ?? registered;
   const listRef = useRef(list);
   listRef.current = list;
 
@@ -175,7 +173,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     if (idx >= 0) setCurrentIndex(idx);
   }, []);
 
-  const openList = useCallback((list: GalleryImage[], index: number) => {
+  const openList = useCallback((list: GalleryItem[], index: number) => {
     if (list.length === 0) return;
     setOverrideList(list);
     setCurrentIndex(Math.max(0, Math.min(index, list.length - 1)));
@@ -224,7 +222,8 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   const pinCount = useMemo(() => [...pinsBySrc.values()].reduce((n, l) => n + l.length, 0), [pinsBySrc]);
   const editingId = useInboxStore((s) => s.reviewEditingId);
   const { user: author } = useCurrentUser();
-  const zoom = usePanZoom(isOpen ? listRef.current[currentIndex]?.src : null);
+  const shown = isOpen ? listRef.current[currentIndex] : undefined;
+  const zoom = usePanZoom(shown && !isGalleryPage(shown) ? shown.src : null);
 
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
@@ -246,7 +245,11 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     if (isOpen) activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [isOpen, currentIndex]);
 
-  const current = isOpen ? list[currentIndex] : null;
+  const currentItem = isOpen ? list[currentIndex] ?? null : null;
+  // A page is shown live, with its own verbs and notes; zoom, pins and the
+  // image actions below belong to pictures.
+  const currentPage = currentItem && isGalleryPage(currentItem) ? currentItem.page : null;
+  const current = currentItem && !isGalleryPage(currentItem) ? currentItem : null;
   const currentPins = current ? pinsBySrc.get(current.src) ?? [] : [];
   const currentSrc = current?.src ?? null;
   const hasPrev = currentIndex > 0;
@@ -285,12 +288,12 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   return (
     <ImageGalleryContext.Provider value={ctx}>
       {children}
-      {isOpen && currentSrc && createPortal(
+      {isOpen && currentItem && createPortal(
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Image gallery"
-          ref={zoom.surfaceRef}
+          aria-label="Gallery"
+          ref={currentSrc ? zoom.surfaceRef : undefined}
           className="fixed inset-0 z-[10001] flex items-center justify-center overflow-hidden"
           style={{ backgroundColor: "rgba(0,0,0,0.92)" }}
           onClick={close}
@@ -362,10 +365,16 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
             </button>
           )}
 
+          {currentPage && (
+            <div className="w-[min(1200px,90vw)]" onClick={e => e.stopPropagation()}>
+              <PublishedPageEmbed key={currentPage} slug={currentPage} height={pageHeight(count > 1)} />
+            </div>
+          )}
+
           {/* Clicking a point of the picture pins a note there. The zoom
               transform sits on the box around the picture so the pins ride
               along with it; each pin undoes the scale to keep its size. */}
-          <div className="relative flex flex-col items-center" onClick={e => e.stopPropagation()}>
+          {currentSrc && <div className="relative flex flex-col items-center" onClick={e => e.stopPropagation()}>
             <div className="relative" {...zoom.imageProps}>
               <img
                 src={currentSrc}
@@ -393,7 +402,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                 click anywhere on the image to pin a note for the agent
               </div>
             )}
-          </div>
+          </div>}
 
           <ZoomBadge scale={zoom.scale} />
 
@@ -403,22 +412,30 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center gap-1.5 px-1.5 py-1.5">
-                {list.map(({ src }, i) => (
+                {list.map((item, i) => isGalleryPage(item) ? (
+                  <PageThumb
+                    key={galleryItemKey(item)}
+                    slug={item.page}
+                    active={i === currentIndex}
+                    buttonRef={i === currentIndex ? activeThumbRef : undefined}
+                    onClick={() => setCurrentIndex(i)}
+                  />
+                ) : (
                   <button
-                    key={src}
+                    key={item.src}
                     ref={i === currentIndex ? activeThumbRef : undefined}
                     onClick={() => setCurrentIndex(i)}
                     className={`relative shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
                       i === currentIndex
                         ? "ring-1 ring-white/80 opacity-100"
-                        : pinsBySrc.has(src) ? "ring-1 ring-sol-yellow/70 opacity-80 hover:opacity-100" : "opacity-40 hover:opacity-75"
+                        : pinsBySrc.has(item.src) ? "ring-1 ring-sol-yellow/70 opacity-80 hover:opacity-100" : "opacity-40 hover:opacity-75"
                     }`}
-                    title={pinsBySrc.has(src) ? `Image ${i + 1} (${pinsBySrc.get(src)!.length} notes)` : `Image ${i + 1}`}
+                    title={pinsBySrc.has(item.src) ? `Image ${i + 1} (${pinsBySrc.get(item.src)!.length} notes)` : `Image ${i + 1}`}
                   >
-                    <img src={src} alt="" className="h-9 w-9 object-cover" draggable={false} />
-                    {pinsBySrc.has(src) && (
+                    <img src={item.src} alt="" className="h-9 w-9 object-cover" draggable={false} />
+                    {pinsBySrc.has(item.src) && (
                       <span className="absolute bottom-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-tl bg-sol-yellow px-0.5 text-[9px] font-bold leading-none text-black">
-                        {pinsBySrc.get(src)!.length}
+                        {pinsBySrc.get(item.src)!.length}
                       </span>
                     )}
                   </button>
@@ -430,6 +447,43 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
         document.body
       )}
     </ImageGalleryContext.Provider>
+  );
+}
+
+// A page's window in the lightbox: as tall as an image may be, less the page's
+// toolbar. Read at mount, like the image's viewport-relative cap.
+function pageHeight(withStrip: boolean): number {
+  return Math.round(window.innerHeight * (withStrip ? 0.76 : 0.84));
+}
+
+// A page in the thumbnail strip: the capture `cast publish` took, else the
+// page mark alone, with the mark in the corner so a page reads as a page
+// beside the screenshots.
+function PageThumb({ slug, active, buttonRef, onClick }: {
+  slug: string;
+  active: boolean;
+  buttonRef?: React.Ref<HTMLButtonElement>;
+  onClick: () => void;
+}) {
+  const info = usePageInfoRow(slug);
+  const title = info?.title || "Published page";
+  return (
+    <button
+      ref={buttonRef}
+      onClick={onClick}
+      className={`relative shrink-0 rounded-md overflow-hidden transition-all duration-150 ${
+        active ? "ring-1 ring-white/80 opacity-100" : "opacity-40 hover:opacity-75"
+      }`}
+      title={title}
+      aria-label={`Page: ${title}`}
+    >
+      {info?.thumb && info.version ? (
+        <img src={pageThumbUrl(slug, info.version)} alt="" className="h-9 w-14 object-cover object-top bg-white" draggable={false} />
+      ) : (
+        <span className="flex h-9 w-14 items-center justify-center bg-white/10"><PageFavicon className="h-4 w-4" /></span>
+      )}
+      <span className="absolute bottom-0.5 right-0.5 rounded-full ring-1 ring-black/50"><PageFavicon className="h-2.5 w-2.5" /></span>
+    </button>
   );
 }
 

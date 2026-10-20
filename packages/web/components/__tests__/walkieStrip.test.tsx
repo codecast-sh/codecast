@@ -183,7 +183,7 @@ describe("on the line, hands free", () => {
   test("the badge says so, and End and Mute are both there, beside it", () => {
     expect(html).toContain("walkie-stage-locked");
     expect(html).toContain(">Live<");
-    expect(html).toContain("End</button>");
+    expect(html).toContain("End</span></button>");
     expect(html).toContain('aria-label="Mute"');
     // A plate, not a box: a soft fill in the ink and no drawn border.
     const quiet = rule(".engagement-card .walkie-strip-mute,\n.engagement-card .walkie-strip-snooze,\n.engagement-card .ring-card-decline,\n.engagement-card .walkie-strip-end", rowCss);
@@ -211,7 +211,7 @@ describe("in a huddle", () => {
     expect(html).toContain("#design");
     expect(html).toContain("Riley hears you");
     expect(html.indexOf("engagement-card-title")).toBeLessThan(html.indexOf("Riley hears you"));
-    expect(html).toContain("End</button>");
+    expect(html).toContain("End</span></button>");
     expect(html).toContain('aria-label="Mute"');
     // No walkie word on an ordinary huddle: the room's name is the line.
     expect(html).not.toContain("walkie-stage-badge");
@@ -225,7 +225,7 @@ describe("somebody stepped in", () => {
     expect(html).toContain("Riley Chen joined, it is a call now");
     expect(html).toContain("walkie-strip-headline-lead");
     expect(html).toContain("walkie-strip-joined");
-    expect(html).toContain("End</button>");
+    expect(html).toContain("End</span></button>");
   });
 
   test("and it is violet, the call's colour, which the line held open after it shares", () => {

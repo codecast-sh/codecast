@@ -27,6 +27,7 @@ import { sha256Hex } from "./lib/hash";
 import { nextShortId } from "./counters";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { recordExternalEventOnce } from "./externalEvents";
+import { recordDeployMarker, type DeployMarker } from "./deploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
 import { linkReplayToGroup, upsertReplayManifest } from "./replays";
@@ -1166,6 +1167,26 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
   }
 }
 
+/** A source's deploy item as a deploy object's marker (deploys.md DP1). */
+function deployMarkerOf(source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>, eventId: Id<"external_events">): DeployMarker {
+  return {
+    workspace: source.workspace,
+    ...(source.team_id ? { team_id: source.team_id } : {}),
+    ...(source.project_id ? { project_id: source.project_id } : {}),
+    target: d.environment ?? "deploy",
+    ...(d.sha ? { sha: d.sha } : {}),
+    version: d.version,
+    source: source.name,
+    source_id: source._id,
+    event_id: eventId,
+    ...(d.url ? { url: d.url } : {}),
+    ...(d.previous_sha ? { previous_sha: d.previous_sha } : {}),
+    ...(d.commits?.length ? { commits: d.commits } : {}),
+    started_by: d.actor ? { kind: "person", name: d.actor } : { kind: "source", name: source.name },
+    at: d.at,
+  };
+}
+
 /**
  * A deploy marker and its triggers, once per version and environment: a
  * retried batch or an SDK that reports its version at every boot records and
@@ -1174,7 +1195,13 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
  */
 async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>): Promise<boolean> {
   const key = deployKey(source._id, d.version, d.environment);
-  if (await eventByDedupeKey(ctx, key)) return false;
+  const seen = await eventByDedupeKey(ctx, key);
+  if (seen) {
+    // A second report of the same version (the deploy path's own, after an
+    // api's boot announced it) adds what it knows: the run, the commit range.
+    if (d.url || d.commits?.length || d.previous_sha) await recordDeployMarker(ctx, deployMarkerOf(source, d, seen._id));
+    return false;
+  }
   const { granted } = await takeFromWindow(ctx.db, `ingest-deploys:${source._id}`, SOURCE_CAPS.deploys_per_hour, HOUR_MS, 1);
   if (!granted) return false;
   const title = `Deployed ${d.version}${d.environment ? ` to ${d.environment}` : ""}`;
@@ -1190,6 +1217,7 @@ async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract
     dedupe_key: key,
     created_at: d.at,
   });
+  await recordDeployMarker(ctx, deployMarkerOf(source, d, eventId));
   await scheduleTriggerMatch(ctx, {
     event_type: "deploy",
     team_id: source.team_id,

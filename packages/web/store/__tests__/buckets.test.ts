@@ -653,7 +653,7 @@ describe("visualOrder follows the active view mode", () => {
     useInboxStore.setState({ sessions: {}, buckets: {}, bucketAssignments: {}, clientState: {} });
   });
 
-  it("bucket mode walks pinned, then label groups, then project groups", () => {
+  it("bucket mode walks label groups, then project groups, each pinned row leading its own group", () => {
     useInboxStore.setState({
       sessions: {
         pin: session("pin", { is_pinned: true, updated_at: 1, git_root: "/x/web" }),
@@ -668,7 +668,7 @@ describe("visualOrder follows the active view mode", () => {
       clientState: { ui: { inbox_view_mode: "bucket" } },
     });
     const order = useInboxStore.getState().visualOrder().map((s) => s._id);
-    expect(order).toEqual(["pin", "lab", "web1", "web2"]);
+    expect(order).toEqual(["lab", "pin", "web1", "web2"]);
   });
 
   it("time mode sorts newest-created first regardless of status grouping", () => {

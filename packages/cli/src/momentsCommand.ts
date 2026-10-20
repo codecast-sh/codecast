@@ -16,6 +16,8 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { JUDGES_DIR, MOMENTS_DIR, fileVersion, judgeHere, noteHostRoot, shadowDir, tickMoments } from "./momentsHost.js";
 import { MOMENT_KIND, durationWords, parseExtractorHeader } from "@codecast/shared/contracts/moments";
 import { parseJudgeSpec } from "@codecast/shared/contracts/judges";
+import { AGENT_LIMITS, type AgentJudgeSpec } from "@codecast/shared/contracts/agentJudges";
+import { createHash } from "node:crypto";
 import { budgetWords, type BudgetSummary } from "@codecast/shared/contracts/modelCall";
 import { execFileAsync } from "./proc.js";
 
@@ -35,9 +37,40 @@ async function repoRoot(cwd: string): Promise<string> {
 
 export type PublishSet = {
   extractors: Array<{ kind: string; path: string; version: string; quiet_ms: number; timeout_ms: number }>;
-  judges: Array<{ name: string; path: string; version: string; moment: string; model: string; max_tokens: number; projects: string[]; parts?: string[]; mode: "shadow" | "live"; prompt: string }>;
+  judges: Array<{ name: string; path: string; version: string; moment: string; model: string; max_tokens: number; projects: string[]; parts?: string[]; mode: "shadow" | "live"; prompt: string; agent?: PublishedAgent }>;
   problems: string[];
 };
+
+/** An agent judge's session as published: its header's spec, with the CLAUDE.md read in and the gateway as a path from the repo root. */
+export type PublishedAgent = { tools: string[]; cwd: string; max_turns: number; timeout_ms: number; claude_md?: string; gateway?: string };
+
+/**
+ * An agent judge's files beside it (agentJudges.ts): the CLAUDE.md read in,
+ * the gateway checked. Its version covers them all, so changing either is a
+ * new version of the judge.
+ */
+async function agentPart(root: string, rel: string, spec: AgentJudgeSpec, problems: string[]): Promise<{ agent: PublishedAgent; versions: string[] }> {
+  const beside = (f: string) => path.join(root, JUDGES_DIR, f);
+  const agent: PublishedAgent = { tools: spec.tools, cwd: spec.cwd, max_turns: spec.max_turns, timeout_ms: spec.timeout_ms };
+  const versions: string[] = [];
+  if (!fs.existsSync(path.join(root, spec.cwd))) problems.push(`${rel}: cwd ${spec.cwd} is not a directory of the repo`);
+  if (spec.claude_md) {
+    if (!fs.existsSync(beside(spec.claude_md))) problems.push(`${rel}: claude_md ${spec.claude_md} is not in ${JUDGES_DIR}`);
+    else {
+      agent.claude_md = fs.readFileSync(beside(spec.claude_md), "utf8");
+      if (agent.claude_md.length > AGENT_LIMITS.claude_md_chars) problems.push(`${rel}: claude_md is over ${AGENT_LIMITS.claude_md_chars} characters`);
+      versions.push(await fileVersion(beside(spec.claude_md)));
+    }
+  }
+  if (spec.gateway) {
+    if (!fs.existsSync(beside(spec.gateway))) problems.push(`${rel}: gateway ${spec.gateway} is not in ${JUDGES_DIR}`);
+    else {
+      agent.gateway = spec.gateway;
+      versions.push(await fileVersion(beside(spec.gateway)));
+    }
+  }
+  return { agent, versions };
+}
 
 /** What a checkout holds: every extractor with its header, every judge parsed, each at its file's version. */
 export async function readPublishSet(root: string): Promise<PublishSet> {
@@ -56,7 +89,10 @@ export async function readPublishSet(root: string): Promise<PublishSet> {
     const rel = `${JUDGES_DIR}/${file}`;
     const spec = parseJudgeSpec(file.slice(0, -3), fs.readFileSync(path.join(root, rel), "utf8"));
     if ("error" in spec) { set.problems.push(`${rel}: ${spec.error}`); continue; }
-    set.judges.push({ name: spec.name, path: rel, version: await fileVersion(path.join(root, rel)), moment: spec.moment, model: spec.model, max_tokens: spec.max_tokens, projects: spec.projects, ...(spec.parts ? { parts: spec.parts } : {}), mode: spec.mode, prompt: spec.prompt });
+    const own = await fileVersion(path.join(root, rel));
+    const extra = spec.agent ? await agentPart(root, rel, spec.agent, set.problems) : null;
+    const version = extra?.versions.length ? createHash("sha1").update([own, ...extra.versions].join(" ")).digest("hex") : own;
+    set.judges.push({ name: spec.name, path: rel, version, moment: spec.moment, model: spec.model, max_tokens: spec.max_tokens, projects: spec.projects, ...(spec.parts ? { parts: spec.parts } : {}), mode: spec.mode, prompt: spec.prompt, ...(extra ? { agent: extra.agent } : {}) });
   }
   return set;
 }
@@ -85,7 +121,7 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
         if (options.json) console.log(JSON.stringify({ root, ...set }, null, 2));
         else {
           for (const e of set.extractors) console.log(`extractor ${e.kind}  ${e.version.slice(0, 10)}  quiet ${durationWords(e.quiet_ms)}`);
-          for (const j of set.judges) console.log(`judge ${j.name}  ${j.version.slice(0, 10)}  reads ${j.moment}, ${j.mode}, ${j.model}, against ${j.projects.join(", ")}`);
+          for (const j of set.judges) console.log(`judge ${j.name}  ${j.version.slice(0, 10)}  reads ${j.moment}, ${j.mode}, ${j.model}, ${j.agent ? `an agent session (${j.agent.tools.join(", ")} in ${j.agent.cwd}), files into` : "against"} ${j.projects.join(", ")}`);
           for (const p of set.problems) console.log(fmt.warning(p));
         }
         return;

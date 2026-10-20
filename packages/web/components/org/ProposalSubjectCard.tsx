@@ -19,9 +19,6 @@ import { passageDiff, type ChangeField, type PassagePart } from "@codecast/share
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, type OrgChangeReply, type OrgChangeStatus, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { EntityIdPill } from "../EntityIdPill";
-import { TASK_STATUS, type TaskStatus } from "../TaskStatusBadge";
-import { PLAN_STATUS_CONFIG } from "../../lib/planStatus";
-import { PROJECT_STATUS, type ProjectStatus } from "../../lib/projectStatus";
 import { useOverflows } from "../../hooks/useOverflows";
 import { cn } from "../../lib/utils";
 import { PRIORITY_META } from "../charter/charterMeta";
@@ -38,6 +35,8 @@ import { lightChanges, useChangeLit } from "./lines/changeLight";
 import { changeReply, fieldText, subjectStatusWords, type SubjectCard, type SubjectStatus } from "./proposalSubjects";
 import type { ProposalTreeFace } from "./proposalTree";
 import { StagedBand, stagedWash } from "./StagedBand";
+import { Added, StatusMove } from "./ChangeChips";
+import { EASE, LABEL, MUTED, QUIET, RED, SENTENCE, SOFT, statusLook, STRUCK, TEXT, VALUE, type RecordKind } from "./ledgerLook";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 // ---------------------------------------------------------------- the face
@@ -95,18 +94,6 @@ export const LEDGER_LINK = "cursor-pointer underline decoration-1 underline-offs
 export const LEDGER_WORD = "inline-flex h-7 shrink-0 items-center rounded-md px-2 text-[12.5px] font-normal leading-none no-underline text-[color:var(--sol-text-muted)] transition-colors [transition-duration:120ms] motion-reduce:transition-none hover:bg-[color-mix(in_srgb,var(--sol-border)_16%,transparent)] hover:text-[color:var(--sol-text)] disabled:cursor-not-allowed disabled:opacity-45";
 /** The word button pressed: Reject, in its colour on a soft fill. */
 export const WORD_PRESSED = "bg-[color-mix(in_srgb,var(--sol-red)_10%,transparent)] text-[color:var(--ink-red)] hover:bg-[color-mix(in_srgb,var(--sol-red)_16%,transparent)] hover:text-[color:var(--ink-red)]";
-
-const TEXT = "text-[color:var(--sol-text)]";
-const SOFT = "text-[color:var(--sol-text-secondary)]";
-const MUTED = "text-[color:var(--sol-text-muted)]";
-const QUIET = "text-[color:var(--ink-quiet)]";
-const RED = "text-[color:var(--ink-red)]";
-const STRUCK = "line-through decoration-1";
-const EASE = "transition-colors duration-200 motion-reduce:transition-none";
-/** The three sizes of this area: sentences and titles, values, labels. */
-const SENTENCE = "text-[13.5px] leading-[20px]";
-const VALUE = "text-[12.5px] leading-[20px]";
-const LABEL = "text-[11px] leading-[20px]";
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 /** A control's press, key or pointer never reaches the frame around it (a card that opens on a click). */
@@ -400,70 +387,6 @@ function Value({ field, side, face, struck = false, clamp = true }: { field: Cha
       ? <Clamp tail={v.tail} struck={struck}>{v.text}</Clamp>
       : <span className={struck ? STRUCK : undefined}>{v.text}{v.tail && <span className={QUIET}>{v.tail}</span>}</span>;
   }
-}
-
-/** The kind of record a status field moves, which picks its vocabulary. */
-export type RecordKind = "task" | "plan" | "project";
-
-/** A record's status as the record's own pages draw it: glyph, word, colour. Null for a word none of them knows. */
-function statusLook(record: RecordKind | undefined, words: string) {
-  const key = words.trim().replace(/ /g, "_");
-  const look = record === "plan" ? PLAN_STATUS_CONFIG[key] : record === "project" ? PROJECT_STATUS[key as ProjectStatus] : TASK_STATUS[key as TaskStatus];
-  return look ? { Icon: look.icon, label: look.label, color: look.color } : null;
-}
-
-const CHIP = "inline-flex items-center gap-1.5 rounded-md px-2 py-[2px] no-underline";
-
-/** What a status becomes, on a green wash with the record's own glyph. Null for a word no vocabulary knows. */
-export function StatusTo({ record, status, className }: { record?: RecordKind; status: string; className?: string }) {
-  const now = statusLook(record, status);
-  if (!now) return null;
-  return (
-    <ins className={cn(CHIP, "bg-[color-mix(in_srgb,var(--sol-green)_16%,transparent)] font-semibold text-[color:var(--ink-green)]", className)} data-diff="added">
-      <now.Icon className={cn("h-3.5 w-3.5 shrink-0", now.color)} />
-      {now.label}
-    </ins>
-  );
-}
-
-/** A status that moves, the thing a person approves: what it leaves struck
- *  on a red wash, what it becomes on a green one, each with the record's own
- *  status glyph, at the size of the sentence. */
-function StatusMove({ field, record }: { field: ChangeField; record?: RecordKind }) {
-  const was = field.before && !field.before.none ? statusLook(record, field.before.text) : null;
-  const now = field.after && !field.after.none ? statusLook(record, field.after.text) : null;
-  if (!now) return null;
-  const chip = cn(CHIP, "text-[13.5px] leading-[22px]");
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1" data-status-move>
-      {was && (
-        <>
-          <del className={cn(chip, "bg-[color-mix(in_srgb,var(--sol-red)_12%,transparent)]", RED)} data-diff="removed">
-            <was.Icon className={cn("h-3.5 w-3.5 shrink-0 opacity-70", was.color)} />
-            <span className={STRUCK}>{was.label}</span>
-          </del>
-        </>
-      )}
-      {/* The arrow wraps with what it points at, never left at a line's end. */}
-      <span className="inline-flex items-center gap-x-2 whitespace-nowrap">
-        {was && <><span aria-hidden className={cn("font-medium", MUTED)}>→</span><span className="sr-only">becomes</span></>}
-        <StatusTo record={record} status={field.after!.text} className="text-[13.5px] leading-[22px]" />
-      </span>
-    </span>
-  );
-}
-
-/** A list that gains entries: the kept names, then the new ones behind a quiet plus. */
-function Added({ field }: { field: ChangeField }) {
-  const before = new Set((field.before?.items ?? []).map((x) => x.toLowerCase()));
-  const kept = (field.after?.items ?? []).filter((x) => before.has(x.toLowerCase()));
-  const added = (field.after?.items ?? []).filter((x) => !before.has(x.toLowerCase()));
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
-      {kept.length > 0 && <span className={SOFT}>{kept.join(", ")}</span>}
-      {added.map((x) => <ins key={x} className={cn(CHIP, "bg-[color-mix(in_srgb,var(--sol-green)_14%,transparent)] px-1.5 py-0 font-medium text-[color:var(--ink-green)]")} data-diff="added"><span aria-hidden>+</span>{x}</ins>)}
-    </span>
-  );
 }
 
 /** One field: its label, then the value, or what was there, an arrow, and

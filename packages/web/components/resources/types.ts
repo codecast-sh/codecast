@@ -26,6 +26,8 @@ export type ResourceMachine = {
   receivedAt?: number;
   snapshot?: MachineResourceSnapshot;
   history: ResourcePoint[];
+  /** Sessions a person put at background priority here (the daemon lowers their processes). */
+  backgroundSessions?: string[];
 };
 
 export type ResourceSessionState = "working" | "needs_input" | "idle" | "hibernated" | "dead";
@@ -102,6 +104,21 @@ export type OffloadPlan = {
   destinations: OffloadDestination[];
   candidates: OffloadCandidate[];
   notOffered: Array<{ sessionId: string; reason: string }>;
+  /** Sessions that stay on this machine while doing real work, heaviest first:
+   *  what moving cannot relieve, with the background priority that can. */
+  staying: StayingSession[];
+};
+
+export type StayingSession = {
+  sessionId: string;
+  reason: string;
+  cpu: number;
+  rss: number;
+  /** A person asked for background priority. */
+  background: boolean;
+  /** How many of its processes the daemon reports lowered. */
+  lowered: number;
+  processCount: number;
 };
 
 export type OffloadRunRow = {
@@ -145,6 +162,8 @@ export type ResourceActions = {
   onStartOffload?: (selections: OffloadSelection[], opts: { waitForTurnMs: number }) => void;
   onRetry?: (batchId: string, sessionId: string) => void;
   onCancel?: (batchId: string) => void;
+  /** Background priority for a session's processes on one machine, or back. */
+  onSetBackground?: (deviceId: string, sessionId: string, background: boolean) => void;
 };
 
 export type ResourceMonitorProps = {

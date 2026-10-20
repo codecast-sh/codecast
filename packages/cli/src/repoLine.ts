@@ -24,7 +24,7 @@ import lineCast from "./workflow/templates/line.cast" with { type: "text" };
 import { LINE_TEMPLATE_FILES, resolveWorkflowSource, type ResolvedWorkflowSource } from "./workflow/templates.js";
 import { graphHash, parseWorkflowSource, validateWorkflow } from "./workflow/parser.js";
 import { graphToPushPayload } from "./workflow/runner.js";
-import { findLineProfile, LineProfileError } from "./lineProfile.js";
+import { findLineProfile, LineProfileError, loadLineProfile } from "./lineProfile.js";
 import {
   REPO_LINE_FILE_RE,
   REPO_LINE_REL_DIR,
@@ -70,13 +70,41 @@ export function repoLineFor(cwd: string): ResolvedWorkflowSource | null {
 }
 
 /**
- * What `cast workflow run` runs (LX5: the repo's line when it exists, else
- * the role's line, else the shipped one). A file named on the command line
- * always wins; the repo's line is taken only for a run bound to a task.
+ * The line version a problem runs on: the graph the profile's finder for the
+ * source that filed its first finding names (`line` on [[line.finders]]),
+ * read from the profile's root. Null when no finder for that source names a
+ * line, so the problem runs the repo's line or the role's. A named file that
+ * is missing is an error: the profile promised a version this checkout lacks.
  */
-export function chooseLineSource(opts: { file?: string | null; taskBound: boolean; cwd: string; roleSlug?: string | null }):
+export function causeLineFor(cwd: string, openingSource: string | null | undefined): ResolvedWorkflowSource | null {
+  const source = openingSource?.trim().toLowerCase();
+  if (!source) return null;
+  const profile = loadLineProfile(cwd);
+  const finder = profile.profile.finders.find((f) => f.line && f.source.toLowerCase() === source);
+  if (!finder?.line || !profile.root) return null;
+  const file = path.resolve(profile.root, finder.line);
+  if (!fs.existsSync(file)) throw new LineProfileError(`[[line.finders]] "${finder.id}" line: no graph at ${finder.line}`);
+  return resolveWorkflowSource(file);
+}
+
+/** The source of a problem's first finding (signals.listForCli, newest first), or null when it holds none. */
+export async function openingSourceOf(taskShortId: string, post: (route: string, body: Record<string, unknown>) => Promise<any>): Promise<string | null> {
+  const res = await post("/cli/signal/ls", { task: taskShortId, limit: 500 });
+  const rows: { source?: string; created_at?: number }[] = res?.signals ?? [];
+  const first = rows.reduce<(typeof rows)[number] | null>((a, r) => (!a || (r.created_at ?? 0) < (a.created_at ?? 0) ? r : a), null);
+  return first?.source ?? null;
+}
+
+/**
+ * What `cast workflow run` runs (LX5): a file named on the command line;
+ * else, for a run bound to a problem, its finder's line version
+ * (causeLineFor); else the repo's line when it exists, the role's line, the
+ * shipped one. The repo's line is taken only for a run bound to a task.
+ */
+export function chooseLineSource(opts: { file?: string | null; taskBound: boolean; cwd: string; roleSlug?: string | null; causeLine?: ResolvedWorkflowSource | null }):
   { kind: "file"; name: string } | { kind: "repo"; resolved: ResolvedWorkflowSource } | { kind: "role" | "shipped"; name: string } {
   if (opts.file) return { kind: "file", name: opts.file };
+  if (opts.taskBound && opts.causeLine) return { kind: "repo", resolved: opts.causeLine };
   const repo = opts.taskBound ? repoLineFor(opts.cwd) : null;
   if (repo) return { kind: "repo", resolved: repo };
   if (opts.roleSlug) return { kind: "role", name: opts.roleSlug };
@@ -89,11 +117,11 @@ export function chooseLineSource(opts: { file?: string | null; taskBound: boolea
  * a role's line slug: `line`, `line-<x>`) is redirected; any other workflow
  * runs as named.
  */
-export function repoLineForRun(run: { task_short_id?: string | null; workflow_name?: string | null }, wf: { slug?: string | null } | null | undefined, cwd: string): ResolvedWorkflowSource | null {
+export function repoLineForRun(run: { task_short_id?: string | null; workflow_name?: string | null }, wf: { slug?: string | null } | null | undefined, cwd: string, openingSource?: string | null): ResolvedWorkflowSource | null {
   if (!run.task_short_id) return null;
   const name = wf?.slug || run.workflow_name || "";
   if (!isLineSlug(name)) return null;
-  return repoLineFor(cwd);
+  return causeLineFor(cwd, openingSource) ?? repoLineFor(cwd);
 }
 
 const isLineSlug = (s: string) => LINE_SLUG_RE.test(s) && (s === DEFAULT_LINE_SLUG || s.startsWith(`${DEFAULT_LINE_SLUG}-`));

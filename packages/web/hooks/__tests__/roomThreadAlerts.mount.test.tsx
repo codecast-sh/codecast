@@ -1,8 +1,7 @@
-// The knock for a line typed in the call you are in. It sounds for a line
-// from someone else, a person or an agent in the room, that arrives while you
-// are in the call: once per push, never for the backlog of a room you walk
-// into, never for your own line or an event row, and never while the thread
-// is open in a focused window where the line is read as it lands.
+// The sound for a line in the call you are in. A person's line knocks, once
+// per push, never for the backlog, your own line or an event row, and never
+// while the thread is open in a focused window. An agent's line plays the
+// agent chime instead, every time, thread open or not.
 
 import type { Root } from "react-dom/client";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -18,7 +17,12 @@ mock.module("../useQueryNoThrow", () => ({ ...realNoThrow, useQueryNoThrow: () =
 
 const knocks: string[] = [];
 const realSounds = await import("../../lib/sounds");
-mock.module("../../lib/sounds", () => ({ ...realSounds, soundChatMessage: (id?: string) => knocks.push(id ?? "") }));
+const chimes: string[] = [];
+mock.module("../../lib/sounds", () => ({
+  ...realSounds,
+  soundChatMessage: (id?: string) => knocks.push(id ?? ""),
+  soundAgentReply: (id: string) => chimes.push(id),
+}));
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
 const restoreGlobals = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, localStorage: dom.window.localStorage });
@@ -65,6 +69,7 @@ async function land(next: ThreadRow[]) {
 describe("the call chat knock", () => {
   beforeEach(() => {
     knocks.length = 0;
+    chimes.length = 0;
   });
 
   test("the backlog is silent; a new line from a person knocks once", async () => {
@@ -77,11 +82,22 @@ describe("the call chat knock", () => {
     await act(async () => root.unmount());
   });
 
-  test("an agent's answer knocks; several lines in one push knock once, for the newest", async () => {
+  test("an agent's answer chimes instead of knocking, once per push, for the newest agent line", async () => {
     await enter([row(1)]);
     const a = row(2), b = row(3, { agent });
     await land([row(1), a, b]);
-    expect(knocks).toEqual([b._id]);
+    expect(chimes).toEqual([b._id]);
+    expect(knocks).toEqual([]);
+    await act(async () => root.unmount());
+  });
+
+  test("an agent's answer chimes even while the thread is open and watched", async () => {
+    const roomKey = await enter([row(1)]);
+    setRoomThreadWatching(roomKey, true);
+    const b = row(2, { agent });
+    await land([row(1), b]);
+    expect(chimes).toEqual([b._id]);
+    setRoomThreadWatching(roomKey, false);
     await act(async () => root.unmount());
   });
 
@@ -89,6 +105,7 @@ describe("the call chat knock", () => {
     await enter([row(1)]);
     await land([row(1), row(2, { mine: true }), row(3, { event: "agent_joined" as any, agent })]);
     expect(knocks).toEqual([]);
+    expect(chimes).toEqual([]);
     await act(async () => root.unmount());
   });
 
