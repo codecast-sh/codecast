@@ -222,6 +222,19 @@ test("the summary line names the window, the counts and why it stopped", () => {
   expect(replayBackfillLine(fresh({ updated_at: 0 }), 60 * 60_000)).toMatch(/^stalled/);
 });
 
+describe("an import that dies", () => {
+  test("counts one failed recording and finishes the page", async () => {
+    const { v } = vendor({ "0": { ids: ["a", "big", "c"], next: null } });
+    const ok = v.importOne;
+    v.importOne = async (id) => {
+      if (id === "big") throw new Error("JavaScript execution ran out of memory");
+      return ok(id);
+    };
+    const out = await runBackfillPage(v, fresh(), clock());
+    expect(out.state).toMatchObject({ status: "done", imported: 2, failed: 1, listed: 3 });
+  });
+});
+
 describe("tend", () => {
   const T = 10 * 3600_000;
 
