@@ -293,6 +293,8 @@ export const MomentView = memo(function MomentView({ moment, cited, foldAt = 300
   const [saw, setSaw] = useState(false);
   // An agent judge's review session opened in place: its transcript, both turns.
   const [session, setSession] = useState<string | null>(null);
+  // A backend from before agent reviews answers without the list.
+  const reviews = m?.reviews ?? [];
   // The cited finding's own quote leads, so the block opened on is the one this finding is about.
   const flags = useMemo(() => {
     const all = (m?.runs ?? []).flatMap((r) => r.findings.map((f) => ({ ...f, judge: r.judge })));
@@ -390,9 +392,9 @@ export const MomentView = memo(function MomentView({ moment, cited, foldAt = 300
               {context.map((b, i) => <Block key={i} b={b} quotes={quotes} />)}
             </div>
           )}
-          {m.reviews.length > 0 && (session ? <ReviewSession review={session} back="Moment" onBack={() => setSession(null)} /> : (
-            <div className="mv-runs" data-line-moment-reviews={m.reviews.length}>
-              {m.reviews.map((r) => (
+          {reviews.length > 0 && (session ? <ReviewSession review={session} back="Moment" onBack={() => setSession(null)} /> : (
+            <div className="mv-runs" data-line-moment-reviews={reviews.length}>
+              {reviews.map((r) => (
                 <div key={r.review} className="mv-run mv-run-h">
                   <span className="mv-ref"><i>review</i>{r.review}</span>
                   <span>{r.judge}</span>

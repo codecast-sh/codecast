@@ -275,6 +275,7 @@ import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as lib_reviewAnswered from "../lib/reviewAnswered.js";
 import type * as lib_roleInitiatives from "../lib/roleInitiatives.js";
 import type * as lib_rowByRef from "../lib/rowByRef.js";
+import type * as lib_runnerDevice from "../lib/runnerDevice.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
 import type * as lib_seatKill from "../lib/seatKill.js";
 import type * as lib_seatPlace from "../lib/seatPlace.js";
@@ -779,6 +780,7 @@ declare const fullApi: ApiFromModules<{
   "lib/reviewAnswered": typeof lib_reviewAnswered;
   "lib/roleInitiatives": typeof lib_roleInitiatives;
   "lib/rowByRef": typeof lib_rowByRef;
+  "lib/runnerDevice": typeof lib_runnerDevice;
   "lib/sanitize": typeof lib_sanitize;
   "lib/seatKill": typeof lib_seatKill;
   "lib/seatPlace": typeof lib_seatPlace;

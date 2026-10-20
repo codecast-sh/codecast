@@ -17,7 +17,7 @@ import {
   type Domain, type MarkTone,
 } from "../../../../../lib/line/timeline";
 import { useDerivedSize } from "../../../../../hooks/useDerivedSize";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { navigateHere } from "../../../../../lib/openIntent";
 import { lineSelectionSearch, lineWorkspaceHref } from "../../../../../lib/line/lineWorkspaceUrl";
 
 /** What a click on the chart picks: a bucket of occurrences, what came back after a close (a fix or a close without one), an attempt. */
@@ -136,6 +136,13 @@ export type TimelineChartProps = {
   offTopic?: ReadonlySet<number>;
 };
 
+/** A deploy flag opens its deploy on the line's Deploys view (deploys.md DP7), keeping the line's filter when inside it.
+ *  The address is read at the click, so drawing the chart needs no router. */
+function openDeploy(ref: string): void {
+  const { pathname, search } = window.location;
+  navigateHere(pathname.startsWith("/line") ? `/line${lineSelectionSearch(new URLSearchParams(search), { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref }));
+}
+
 /** The project's live deploys that carried none of this problem's fixes (coverage.live less h.deploys). */
 function otherDeploys(h: CauseHistory) {
   const carried = new Set(h.deploys.map((d) => d.id));
@@ -145,11 +152,6 @@ function otherDeploys(h: CauseHistory) {
 export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, domain, now, selectedRun, pick, onPick, onZoom, onReset, offTopic }: TimelineChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  // A deploy flag opens its deploy on the line's Deploys view (deploys.md DP7), keeping the line's filter when inside it.
-  const router = useRouter();
-  const params = useSearchParams();
-  const inLine = usePathname()?.startsWith("/line") ?? false;
-  const openDeploy = useCallback((ref: string) => router.push(inLine ? `/line${lineSelectionSearch(params, { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref })), [router, params, inLine]);
   const width = useDerivedSize(boxRef, (w) => Math.max(480, Math.round(w)), () => 960);
   const [d0, d1] = domain;
   const plotW = width - GUTTER - PAD_R;
