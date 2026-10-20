@@ -16,6 +16,7 @@ import {
   linkReplayToGroup,
   list,
   readBodyCapped,
+  putChunk,
   readReplayChunks,
   recordReplayChunk,
   REPLAY_CHUNK_MAX_INFLATED_BYTES,
@@ -319,6 +320,28 @@ describe("chunks", () => {
     const { events, skipped } = await readReplayChunks(bucket, keys);
     expect(events.map((e) => e.type)).toEqual(["click", "click", "error"]);
     expect(skipped).toBe(2);
+  });
+});
+
+describe("chunks this backend stored", () => {
+  test("putChunk stores the gzip bytes as they are, unmarked, so a read hashes to the key", async () => {
+    const sent: Array<{ method: string; headers: Record<string, string> }> = [];
+    globalThis.fetch = (async (_url: string, init: any = {}) => {
+      sent.push({ method: init.method ?? "GET", headers: init.headers ?? {} });
+      return init.method === "HEAD" ? new Response(null, { status: 404 }) : new Response("ok");
+    }) as any;
+    await putChunk(bucket, "replays/s/r/0000-x.json.gz", gzipSync(strToU8("[]")));
+    const put = sent.find((r) => r.method === "PUT")!;
+    expect(put.headers["Content-Encoding"]).toBeUndefined();
+  });
+
+  test("a vendor chunk stored marked gzip comes back inflated and is still read; an uploader's is held to its hash", async () => {
+    const gz = gzipSync(strToU8(JSON.stringify(ev(3))));
+    const key = `replays/s/r/0000-${await sha256Hex(gz)}.json.gz`;
+    // What fetch hands back for an object stored with Content-Encoding gzip.
+    globalThis.fetch = (async () => new Response(strToU8(JSON.stringify(ev(3))), { headers: { "content-encoding": "gzip" } })) as any;
+    expect((await readReplayChunks(bucket, [key], { serverWritten: true })).events).toHaveLength(3);
+    expect(await readReplayChunks(bucket, [key])).toEqual({ events: [], skipped: 1 });
   });
 });
 

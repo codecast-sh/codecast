@@ -31,7 +31,12 @@ export const momentForWeb = query({
     const source = await ctx.db.get(m.source_id);
     const runs: Doc<"judge_runs">[] = await ctx.db.query("judge_runs").withIndex("by_moment", (q: any) => q.eq("moment_id", m._id)).collect();
     // `kept` is the stored key only: the client reads body_expires_at against its own clock (a cached query's would go stale).
-    return { ...momentView(m), _id: m.short_id, source: source?.name ?? null, refs: momentRefs(m), runs: runs.sort((a, b) => a.at - b.at).map(judgeRunRow) };
+    // An agent judge's reviews of it, each with whether its session's transcript is kept (agentReviews.webTranscript opens it).
+    const reviews: Doc<"agent_reviews">[] = await ctx.db.query("agent_reviews").withIndex("by_moment", (q: any) => q.eq("moment_id", m._id)).collect();
+    return {
+      ...momentView(m), _id: m.short_id, source: source?.name ?? null, refs: momentRefs(m), runs: runs.sort((a, b) => a.at - b.at).map(judgeRunRow),
+      reviews: reviews.sort((a, b) => a.created_at - b.created_at).map((r) => ({ review: r.short_id, judge: r.judge, status: r.status, findings: r.findings ?? null, took_ms: r.took_ms ?? null, transcript: !!r.transcript_key })),
+    };
   },
 });
 

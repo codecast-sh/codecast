@@ -2,8 +2,20 @@
 // SwitchLedger): read from the same admission every line surface reads. Its own
 // file with no component in it, so the numbers are tested without a browser.
 import type { LineAdmission } from "../../lib/lineFlow";
-import { startsAtOnce, type NotReady } from "../line/map/LineStartSwitch";
 import type { SwitchLedger } from "./ConsequentialSwitch";
+
+/** How many problems turning the line on starts at once: the waiting ones,
+ *  bounded by the free places and today's sessions left. Null while the
+ *  queue is unknown. */
+export function startsAtOnce(a: LineAdmission): number | null {
+  if (a.queued == null) return null;
+  const free = Math.max(0, a.slots - (a.busy ?? 0));
+  const handsLeft = a.hands != null && a.handsCap != null ? Math.max(0, a.handsCap - a.hands) : Infinity;
+  return Math.min(a.queued, free, handsLeft);
+}
+
+/** Why the waiting problems that are not ready are held (lineFlow notReadyReasons). */
+export type NotReady = ReadonlyArray<{ count: number; words: string }>;
 
 /** What a run costs, from runs whose card recorded a price: this project's own, else every line's in the workspace.
  *  `billedUsd`: money a run bills (call nodes, sessions on API keys). `listUsd`: its subscription sessions at API

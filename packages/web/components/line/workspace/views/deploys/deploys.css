@@ -1,0 +1,113 @@
+/* The Deploys view (DeploysView, deploys.md DP7): the list of what waits and
+   what went beside the reader, which leads with findings per day under the
+   deploy markers. Same two-column frame as For you. */
+.lw-stage-in:has(> .dpv) { height: 100%; }
+.dpv { display: grid; grid-template-columns: 460px minmax(0, 1fr); height: 100%; min-height: 0; }
+.dpv-list { min-height: 0; overflow: auto; padding: 0 var(--lw-s2) var(--lw-s5); border-right: 1px solid var(--lw-rule); }
+.dpv-reader { min-height: 0; overflow: auto; padding: var(--lw-s3) var(--lw-s5) var(--lw-s6); }
+
+.dpv-h { display: flex; align-items: center; gap: 8px; margin: var(--lw-s3) 0 2px; padding: 6px 10px 4px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+.dpv-h .lw-num { color: var(--lw-ink-3); font-weight: 700; }
+.dpv-h .lw-num[data-tone="warn"] { color: var(--lw-warn); }
+.dpv-proj { margin-left: auto; font-weight: 500; color: var(--lw-ink-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dpv-none { margin: 4px 10px; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+.dpv-dim { color: var(--lw-ink-3); }
+
+/* What waits: the fixes, then the one press. */
+.dpv-wait { padding-bottom: var(--lw-s2); border-bottom: 1px solid var(--lw-rule-2); }
+.dpv-fixes { list-style: none; margin: 0; padding: 0; }
+.dpv-fix { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: baseline; gap: 10px; padding: 5px 10px 5px 12px; font-size: var(--lw-fs-sm); }
+.dpv-fix-ref { color: var(--lw-ink-3); text-decoration: none; font-size: var(--lw-fs-xs); }
+.dpv-fix-ref:hover { color: var(--lw-person); }
+.dpv-fix-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lw-ink); }
+.dpv-sha { font-family: var(--lw-mono); font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.dpv-go-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px 4px 12px; }
+.dpv-go {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: var(--lw-r);
+  background: var(--lw-ok); color: var(--lw-on-accent); font: inherit; font-size: var(--lw-fs-sm); font-weight: 650; cursor: pointer;
+  transition: filter var(--lw-fast) var(--lw-ease), transform var(--lw-fast) var(--lw-ease);
+}
+.dpv-go:hover:not(:disabled) { filter: brightness(1.08); }
+.dpv-go:active:not(:disabled) { transform: translateY(1px); }
+.dpv-go:disabled { background: var(--lw-paper-2); color: var(--lw-ink-3); cursor: not-allowed; }
+.dpv-nopath { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.dpv-error { margin: 6px 12px 0; font-size: var(--lw-fs-xs); color: var(--lw-bad); }
+
+/* A deploy row: dot, id, target and sha, state, fixes, age. */
+.dpv-rows { list-style: none; margin: 0; padding: 0; }
+.dpv-row {
+  display: grid; grid-template-columns: 8px 3.6rem minmax(0, 1fr) auto 4.6rem 2.4rem; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px 8px 12px; border: 0; border-radius: var(--lw-r); background: none; font: inherit; font-size: var(--lw-fs-sm);
+  text-align: left; color: inherit; cursor: pointer; box-shadow: inset 2px 0 0 transparent; transition: background-color var(--lw-fast) var(--lw-ease);
+}
+.dpv-row:hover { background: var(--lw-paper-2); }
+.dpv-row[aria-current="true"] { background: var(--lw-ok-soft); box-shadow: inset 2px 0 0 var(--lw-ok); }
+.dpv-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-ok) 55%, transparent); outline-offset: -2px; }
+.dpv-going { margin-bottom: 2px; background: var(--lw-live-soft); }
+.dpv-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--lw-ink-3); }
+.dpv-dot[data-tone="good"] { background: var(--lw-ok); }
+.dpv-dot[data-tone="bad"] { background: var(--lw-bad); }
+.dpv-dot[data-tone="live"] { background: var(--lw-live); }
+.dpv-dot[data-tone="dim"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--lw-ink-3); }
+.dpv-id { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-weight: 600; }
+.dpv-target[data-mono] { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); }
+.dpv-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lw-ink); font-weight: 550; }
+.dpv-state { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); white-space: nowrap; }
+.dpv-state[data-tone="good"] { color: var(--lw-ok); }
+.dpv-state[data-tone="bad"] { color: var(--lw-bad); }
+.dpv-state[data-tone="live"] { color: var(--lw-live); }
+.dpv-carried { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); text-align: right; white-space: nowrap; }
+.dpv-age { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); text-align: right; }
+
+/* Findings a day under the deploy markers. */
+.dpv-plot { margin: 0 0 var(--lw-s4); padding: var(--lw-s2) var(--lw-s3) var(--lw-s1); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg, 10px); background: var(--lw-paper); }
+.dpv-plot-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.dpv-plot-h > span:first-child { font-weight: 650; color: var(--lw-ink-2); margin-right: auto; }
+.dpv-key { display: inline-flex; align-items: center; gap: 5px; }
+.dpv-key i { width: 9px; height: 9px; border-radius: 2px; background: color-mix(in srgb, var(--lw-ink-3) 45%, transparent); }
+.dpv-key i[data-k="carried"] { background: var(--lw-bad); }
+.dpv-key i[data-k="deploy"] { width: 2px; height: 11px; border-radius: 0; background: var(--lw-ok); }
+.dpv-plot svg { display: block; width: 100%; height: auto; max-height: 220px; }
+.dpv-axis { stroke: var(--lw-rule); }
+.dpv-tick { font-size: 9.5px; fill: var(--lw-ink-3); font-variant-numeric: tabular-nums; }
+.dpv-bar { fill: color-mix(in srgb, var(--lw-ink-3) 38%, transparent); }
+.dpv-bar[data-k="carried"] { fill: var(--lw-bad); }
+.dpv-mark { cursor: pointer; }
+.dpv-mark line { stroke: color-mix(in srgb, var(--lw-ok) 55%, transparent); stroke-width: 1.5; }
+.dpv-mark[data-tone="bad"] line { stroke: color-mix(in srgb, var(--lw-bad) 60%, transparent); }
+.dpv-mark[data-tone="dim"] line { stroke: var(--lw-edge-faint); stroke-dasharray: 3 3; }
+.dpv-mark[data-picked] line { stroke: var(--lw-ok); stroke-width: 2.5; }
+.dpv-mark[data-picked][data-tone="bad"] line { stroke: var(--lw-bad); }
+.dpv-mark:hover line { stroke-width: 2.5; }
+.dpv-mark-hit { fill: transparent; }
+.dpv-mark-label { font-size: 10px; font-weight: 700; fill: var(--lw-ink); }
+
+/* One deploy whole. */
+.dpv-detail-h { display: flex; align-items: center; gap: 10px; margin-bottom: var(--lw-s2); }
+.dpv-detail-id { font-size: var(--lw-fs-sm); font-weight: 700; color: var(--lw-ink-3); }
+.dpv-detail-title { font-size: var(--lw-fs-lg); font-weight: 650; color: var(--lw-ink); }
+.dpv-out { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); text-decoration: none; }
+.dpv-out:hover { color: var(--lw-person); }
+.dpv-facts { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0 0 var(--lw-s4); }
+.dpv-facts dt { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.dpv-facts dd { margin: 2px 0 0; font-size: var(--lw-fs-sm); color: var(--lw-ink); }
+.dpv-note { margin: 0 0 var(--lw-s4); padding: var(--lw-s2); max-height: 10rem; overflow: auto; border-radius: var(--lw-r); background: var(--lw-bad-soft); font-family: var(--lw-mono); font-size: var(--lw-fs-2xs); white-space: pre-wrap; }
+.dpv-sec { margin-top: var(--lw-s4); }
+.dpv-sec-h { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+.dpv-sec-h .lw-num { color: var(--lw-ink-3); }
+.dpv-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-sm); }
+.dpv-table th { padding: 4px 8px; text-align: left; font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--lw-ink-3); border-bottom: 1px solid var(--lw-rule); }
+.dpv-table td { padding: 6px 8px; border-bottom: 1px solid var(--lw-rule-2); vertical-align: baseline; }
+.dpv-n { text-align: right; width: 6rem; }
+.dpv-table td[data-tone="bad"] { color: var(--lw-bad); font-weight: 650; }
+.dpv-table td[data-tone="good"] { color: var(--lw-ok); }
+.dpv-link { color: var(--lw-ink); text-decoration: none; }
+.dpv-link:hover { color: var(--lw-person); }
+.dpv-ref { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.dpv-errors, .dpv-commits { list-style: none; margin: 0; padding: 0; }
+.dpv-errors li, .dpv-commits li { display: flex; align-items: baseline; gap: 10px; padding: 4px 0; font-size: var(--lw-fs-sm); border-bottom: 1px solid var(--lw-rule-2); }
+.dpv-errors .dpv-link { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dpv-err-kind { width: 2.6rem; font-size: var(--lw-fs-2xs); font-weight: 700; color: var(--lw-bad); }
+.dpv-errors li[data-kind="regressed"] .dpv-err-kind { color: var(--lw-warn); }
+.dpv-commits li > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dpv-since { margin-top: var(--lw-s3); font-size: var(--lw-fs-xs); }

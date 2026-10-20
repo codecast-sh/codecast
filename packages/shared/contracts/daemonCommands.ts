@@ -202,6 +202,12 @@ export const DAEMON_COMMANDS = [
   // present a new decision. Result: that command's JSON. Old daemons:
   // "Unknown command".
   "line_trial_reask",
+  // Deploy on the line (deploys.md DP2): the Line page's Deploy, targeted at
+  // the device that publishes the project's line profile. args: { deploy
+  // (dp-N), root }. Runs `cast line deploy run <dp-N>` in the root, detached,
+  // and answers at once; the run reports to the deploy row. Old daemons:
+  // "Unknown command" (the deploy stays requested until someone runs it).
+  "line_deploy",
   // The setup card under a `cast browser`/`cast computer` command that failed
   // for want of the Chrome extension or the macOS grants (agentToolSetup.ts).
   // Targeted at the session's device. args: AgentToolSetupArgs — check answers

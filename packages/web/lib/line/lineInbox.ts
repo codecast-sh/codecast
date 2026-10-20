@@ -19,6 +19,8 @@ import { isCountedActive } from "./problemTable";
 import { failCause, stoppedOnPurpose, type FailCause } from "./runReport";
 import { needCounted, needKind, stopAnswered } from "./lineNeeds";
 import { restsOnNothing } from "./findingEvidence";
+import { contactsOf, decisionAssignee, mostOf, type DecisionChange } from "./decisionFacts";
+import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { runEnd } from "@codecast/shared/contracts/causeHistory";
 
 export type InboxKind = "decide" | "unapproved" | "confirm" | "question" | "failed" | "stalled" | "fixed" | "mine" | "watching" | "proposal" | "stuck";
@@ -68,6 +70,16 @@ export type InboxRow = {
   recommend?: string | null;
   /** For a problem a run parked because main already carries its fix: that commit. */
   sha?: string | null;
+  /** For a fix to decide: the decision's row id, which assigning it names. */
+  decisionId?: string | null;
+  /** For a fix to decide: what answering it changes (lib/line/decisionFacts). */
+  change?: DecisionChange;
+  /** For a fix to decide: the teammate it is assigned to (decisionAssignee), else null. */
+  assignee?: string | null;
+  /** For a fix to decide: the people its problem reached (contacts its evidence names, or conversations its card read). */
+  reach?: number | null;
+  /** For a fix to decide: the worst finding's severity on its problem, 1 to 10, when a judge scored one. */
+  severity?: number | null;
 };
 
 /** The commit a park note says main already carries the fix in ("Already fixed on main by fc0d85ba65"). */
@@ -101,12 +113,15 @@ export type LineInboxInput = {
   signals: ReadonlyArray<LineSignal>;
   tasks: ReadonlyArray<LineCauseTask>;
   runs: ReadonlyArray<LineFlowRun>;
-  /** The viewer's cards (the floor reads only theirs). */
+  /** The decisions in view: the viewer's queue and the team's open line decisions, each open one with its live status. */
   decisions: ReadonlyArray<LineDecision & { short_id?: string; created_at?: number; gate_node_id?: string; question?: string }>;
   projects: ReadonlyArray<LineProject>;
   /** The roll-up rows in view (one project's, or every project's). */
   rollups: ReadonlyArray<RollupRow>;
   admissions: ReadonlyMap<string, LineAdmission>;
+  /** `decisions` holds every open, current line decision the viewer can read (the team's feed is in), so a trial card
+   *  whose decision is not among them was replaced and is not listed. */
+  decisionsComplete?: boolean;
   /** The workspace's trial cards (useSyncTrial useTrialCards): the waiting ones are rows. */
   trialCards?: ReadonlyArray<TrialInboxCard>;
   /** Trial projects: their runs start on their own, so they never wait on a start switch. */
@@ -345,6 +360,15 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
   // Fix decisions to make, oldest first: a line card, or any open decision a run asked about one of these problems
   // (lib/line/fixDecision). Each names its problem and asks the decision's own question; a trial run's decision is
   // its trial card's, listed below in the same group.
+  // What every fix to decide shows at a glance: who holds it, how many it reaches, how bad its worst finding is (the
+  // decision row carries its problem's, convex decisionRowsForViewer).
+  type FactRow = Parameters<typeof decisionAssignee>[0] & { problem_severity?: number | null };
+  const facts = (t: LineCauseTask | undefined, d: FactRow, more?: { findings?: number | null; reach?: number | null }) => ({
+    assignee: decisionAssignee(d),
+    findings: mostOf(t?.cause?.signal_count, more?.findings) ?? undefined,
+    reach: mostOf(contactsOf(t?.cause?.fingerprints), more?.reach),
+    severity: d?.problem_severity ?? null,
+  });
   const isFix = (x: (typeof input.decisions)[number]) => isLineCard(x) || (x.status === "pending" && !!x.workflow_run_id && !!x.task_id && byId.has(x.task_id));
   for (const d of input.decisions.filter((x) => isFix(x) && !x.trial).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))) {
     const t = d.task_id ? byId.get(d.task_id) : undefined;
@@ -352,8 +376,11 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
     const other = !t && d.task_id ? input.otherTasks?.get(d.task_id) : undefined;
     const own = t ? null : other ? { title: other.title, ref: other.short_id, projectId: other.project_id } : { title: oneLine(d.question) ?? "A card", ref: d.short_id ?? null };
     const card = (d as { card?: { headline?: string; recommend?: { verdict?: string } | null } | null }).card;
-    // A card names its fix in its headline; a plain decision asks its own question.
-    rows.push({ ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: t || other ? oneLine(card?.headline) ?? decisionAsk(d.question) : null, runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null });
+    // A row says what the person decides: the decision's own question, never its problem's title or a card's headline.
+    rows.push({
+      ...base(t, "decide", d._id), ...own, at: d.created_at ?? null, ask: decisionAsk(d.question) ?? oneLine(card?.headline), runId: d.workflow_run_id ?? null, cardId: d._id, cardRef: d.short_id ?? null, recommend: card?.recommend?.verdict ?? null,
+      decisionId: d._id, change: d.gate_node_id === CARD_GATE_NODE_ID || card ? "fix" : "other", ...facts(t, d as FactRow),
+    });
   }
 
   // Trial cards, oldest first: each is a trial run paused at its gate, waiting on the answer (trialCardWaits). One its
@@ -362,16 +389,25 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
   // step left the line: trialCardAnswerable) is a run to ask again, listed quietly with that one act and never
   // counted as waiting on you.
   const live = new Map(input.decisions.map((d) => [d._id, d.status]));
+  const decisionRow = new Map(input.decisions.map((d) => [d._id, d]));
   for (const c of [...(input.trialCards ?? [])].filter((x) => trialCardWaits(x, x.decision ? live.get(x.decision._id) : null)).sort((a, b) => a.created_at - b.created_at)) {
     const t = byId.get(c.task_id);
     const card = cardAsRead(c as Parameters<typeof cardAsRead>[0]) as TrialInboxCard["card"];
     const answerable = trialCardAnswerable(c, c.decision ? live.get(c.decision._id) : null);
+    // A card its station asked as a decision is listed while that decision stands: the decisions given here are every
+    // open, current one the viewer can read (a decision its run has moved past is replaced, and is not among them).
+    if (answerable && c.decision && input.decisionsComplete && !live.has(c.decision._id)) continue;
     rows.push({
       ...base(t, answerable ? "decide" : "proposal", c._id), projectId: c.project_id, title: t?.title ?? oneLine(c.task_title) ?? "A problem", name: causeName(t) ?? c.task_name ?? null, ref: t?.short_id ?? c.task_short_id ?? null, caseId: c.task_id,
-      at: c.created_at, ask: trialAsk(c), runId: c.run_id, cardId: c._id, cardRef: c.short_id, decisionRef: c.decision?.short_id ?? c.decision?._id ?? null, trial: true,
+      at: c.created_at, ask: answerable ? decisionAsk((c.decision ? decisionRow.get(c.decision._id)?.question : null) ?? c.question) ?? trialAsk(c) : trialAsk(c), runId: c.run_id, cardId: c._id, cardRef: c.short_id, decisionRef: c.decision?.short_id ?? c.decision?._id ?? null, trial: true,
       ...(answerable ? (() => { const h = trialHoldChip(c as unknown as TrialCardRow); return { hold: h?.words ?? null, holdLabel: h?.label ?? null }; })() : { hold: c.stale_gate ? "The step this run waits at was removed from the line, so an answer has nowhere to go" : "No session asked this card, so there is nobody to answer", holdLabel: reaskWhy(c) }), failing: card?.checks?.filter((k) => !k.ok).length ?? 0,
       // A judge fix carries its measured verdict ("better"), not a recommendation of its own.
       recommend: card?.recommend?.verdict ?? c.judge_fix?.ab?.verdict ?? null, publishes: !!c.judge_fix || !!c.expectations,
+      decisionId: c.decision?._id ?? null, change: c.judge_fix ? "judge" : c.expectations ? "expectation" : c.kind === "card" ? "fix" : "other",
+      ...facts(t, (c.decision ? decisionRow.get(c.decision._id) : null) as FactRow, {
+        findings: mostOf(c.evidence?.findings, (card as { cause?: { signals?: number } } | null)?.cause?.signals),
+        reach: mostOf(c.evidence?.conversations, (card as { reach?: { conversations?: number } } | null)?.reach?.conversations),
+      }),
     });
   }
 

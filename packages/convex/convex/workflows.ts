@@ -66,6 +66,9 @@ const upsertArgs = {
   stack: v.optional(v.string()),
   // Only a push from a file in a checkout carries it (cli lineGraphEdit.graphOrigin).
   origin: v.optional(graphOriginV),
+  // The finding sources whose problems this line version runs (the graph's
+  // `serves`): lineVersionFor routes a line run on a problem by them.
+  serves: v.optional(v.array(v.string())),
 };
 
 // One body for the CLI push and the web's edit: a row per (user, slug).
@@ -86,7 +89,8 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
   return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now });
 }
 
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any }) {
+// `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -101,6 +105,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
       model_stylesheet: args.model_stylesheet,
       // A push that does not say where the graph lives leaves what an earlier one said.
       ...(args.origin ? { origin: args.origin } : {}),
+      ...(serves !== undefined ? { serves: serves ?? undefined } : {}),
       updated_at: now,
     });
     if (args.origin) await recordGraphVersion(ctx, existing._id, userId, args.origin, now);
@@ -120,6 +125,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, .
     edges: args.edges,
     model_stylesheet: args.model_stylesheet,
     ...(args.origin ? { origin: args.origin } : {}),
+    ...(serves ? { serves } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -134,7 +140,8 @@ export const upsert = mutation({
     if (!result) return { error: "Unauthorized" };
     const user = await ctx.db.get(result.userId);
     if (!user) return { error: "User not found" };
-    return await upsertWorkflowFor(ctx, result.userId, args);
+    // A push says what its file serves: none named, none served.
+    return await upsertWorkflowFor(ctx, result.userId, { ...args, serves: args.serves?.length ? args.serves : null });
   },
 });
 
@@ -143,7 +150,8 @@ export const upsert = mutation({
 export const webUpsert = mutation({
   args: { ...upsertArgs, create_only: v.optional(v.boolean()) },
   // Only a machine's push says where a graph lives; the web never does.
-  handler: async (ctx, { stack: _stack, origin: _origin, ...args }) => {
+  // Which sources a version serves is the graph file's to say, so the web's edit leaves it.
+  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, ...args }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
@@ -212,5 +220,37 @@ export const webGet = query({
     const w = await ctx.db.get(args.id);
     if (!w || w.user_id !== userId) return null;
     return w;
+  },
+});
+
+/** A run of the line (the shipped `line` or a role's `line-<x>`), as opposed to any other workflow. */
+export const isLineRunSlug = (slug: string | null | undefined) => !!slug && (slug === "line" || slug.startsWith("line-"));
+
+/**
+ * The line version a run on this problem takes (the-line-model.md LM1: one
+ * spine, a version per scenario): the runner's pushed graph that serves the
+ * source of the problem's oldest finding, the newest push when two do. Null
+ * for a task that is not a problem, a problem with no findings, or a source
+ * no version serves; the run then takes the line it was started with.
+ */
+export async function lineVersionFor(ctx: any, userId: Id<"users">, task: { _id: Id<"tasks">; source?: string } | null | undefined) {
+  if (!task || task.source !== "signal") return null;
+  const first = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).order("asc").first();
+  const source = first?.source?.trim().toLowerCase();
+  if (!source) return null;
+  const rows = await ctx.db.query("workflows").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const serving = rows.filter((w: any) => (w.serves ?? []).includes(source));
+  return serving.sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0] ?? null;
+}
+
+/** `cast workflow run --task` asks which version the problem runs, to run it from its file on this machine. */
+export const lineVersionForCli = query({
+  args: { api_token: v.string(), task: v.string() },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) return { error: "Unauthorized" };
+    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", args.task)).first();
+    const row = await lineVersionFor(ctx, result.userId, task);
+    return { version: row ? { slug: row.slug, name: row.name, origin: row.origin ? { device_id: row.origin.device_id, root: row.origin.root, file: row.origin.file } : null } : null };
   },
 });
