@@ -7,7 +7,8 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLInputE
   Object.defineProperty(globalThis, key, { configurable: true, value: (dom.window as any)[key] });
 }
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-mock.module("convex/react", () => ({ useAction: () => () => {} }));
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({ ...convexReact, useAction: () => () => {} }));
 mock.module("next/link", () => ({ default: ({ children, ...props }: any) => <a {...props}>{children}</a> }));
 mock.module("../../repo/RepoWindowControl", () => ({ RepoWindowControl: () => null }));
 mock.module("../../comments/CommentAvatar", () => ({ CommentAvatar: () => null }));

@@ -29,7 +29,7 @@ Live huddle transcripts reach fed sessions through `transcripts.deliverRoutes`. 
 `packages/evals/org-comms/monitor.py` reruns the measurement:
 1. Exports from prod.
 2. Places each sender against its recipient. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line.
-3. Reads a random sample inside the recipients' transcripts.
+3. Reads a random sample inside the recipients' transcripts, drawn only from sessions the person owns: a message they sent into a teammate's session is counted and never opened. A huddle chunk is unnamed talk only when its header says nobody named the agent; a voice handoff, a chat line and the attach briefing are asks or one-offs.
 4. Labels the sample through `prompt-dry-run.ts`.
 5. Writes `report.json` and `report.md` under `$CODECAST_EVALS_HOME/org-comms/runs/<date>/`, set against `baseline.json` (the founding study) and every earlier run.
 
@@ -50,6 +50,7 @@ Every run uses a saved account profile (`--account`), so a machine login switch 
 | Could have been read, not urgent, changed nothing | 22% | it rises: the "write it down" half is not holding |
 | Out-of-line direction followed | 64% | it rises without coordination as the kind: peers are steering each other. Read who received it first: a lead directing a lead it manages and an ask to the owner of a file are both counted here and are the policy working |
 | Hub share | 52% | a new hub appears outside any role |
+| Hub share, own workers' reports left out | 29% (2026-10-20) | it rises: a session is hearing from many it did not spawn. An orchestrator's workers reporting back fill the plain row and are the line working |
 
 ## AC5. Open proposals
 
@@ -81,3 +82,16 @@ First week under the policy and the huddle gap (700 messages, 109 agent to agent
 - **The Line pair persists as a hub outside any role**: 21 messages between jx7d8av and jx7e4fy in three days, and jx7d8av heard from 11 sessions. jx7d8av is now dormant with its build done; propose an integration owner only if a third week shows it.
 - **Monitor corrected.** Long-lived sessions (role standing sessions above all) fell outside the newest-70,000 session export and left 25% of messages unplaced; they are now looked up by id with `cast sessions` (1 of 624 unplaced).
 - **Next week is the first real read of the wording.** The monitor now splits each sample by whether the sender's start showed it the guidance (`by_guidance` in report.json; read from the transcript head on this machine). Compare `saw` with `did not see` on peer share, out-of-line direction and idle messages once `saw` has 50 or more cases.
+
+### 2026-10-20
+
+2,247 messages (700 on Oct 13), 120 agent to agent cases read, no huddle cases.
+
+- **Volume tripled, on the line.** 0.47 messages per new session (0.25 on Oct 16, baseline 0.60). Parent to worker and worker to parent are 62% of it, led by one orchestrator (jx716vh) running waves of workers: 325 messages in, 234 of them its own workers' reports. Peer share held at 10.5%; agent noise 3.3%, idle 18.3%, below baseline.
+- **Hub share 57% (baseline 52%) is that orchestrator, not a new hub.** With a recipient's own workers' reports left out it is 29%, now a row of its own. The busiest remaining hubs are two of jx716vh's workers hearing from their parent (54 and 39 messages) plus a sibling pair between them (27), and the Growth and Match Funnel leads. The Line pair from Oct 13 and 16 is gone: jx7e4fy no longer appears, and 119 of jx7d8av's 144 messages are with its own 276 workers. No integration owner proposal.
+- **Routed requests reached the role twice. Fixed.** `cast route` filed the task for the role, which tells the role's session (`announceAssignment`), and then woke it again with its own message; 4 of 5 routes this week sent both in the same second, and both noise cases from role leads were the second copy. The route's note ("routed to you, start it or say it needs starting") now rides on the one assignment notice, sent from the routing session (`tasks.create` `assignment_note` / `assignment_from`), with a test in `tasks.roleAssignee.test.ts`.
+- **Out-of-line direction followed 75% (15 of 20).** The cases are a lead answering a worker's ask, sibling contract requests folded into a file being written, collisions on a shared file, and a lead the monitor does not yet place. No session pulled off its work by a peer. No wording change.
+- **First guidance split with 78 senders that saw it** (38 did not): noise 1.3% vs 7.9%, idle 6.4% vs 10.5%, out-of-line direction 14% vs 18%, peer share 13% vs 5%. Every gap favors the guidance except peer share, none is separated at this size (noise 1 of 78 vs 3 of 38), and the groups differ in age as well as in the guidance. Keep pooling weeks.
+- **Huddle: nothing to read.** One fed call (Oct 19). Its only unnamed chunk was the backlog of a route added mid call; the monitor's "inside the gap" 100% came from filing the attach briefing and a voice handoff as unnamed talk. Fixed in the monitor.
+- **The monitor read teammates' sessions. Fixed.** It filtered on who sent a message, not who owns the recipient, so a message from Ashot's session into a teammate's session (a role standing session above all) was opened: at least 17 cases on Oct 13, 1 on Oct 16 and 2 this week (two role leads' sessions, which this run also read by hand while tracing the route duplicate). The sample now draws only recipients the person owns; the 40 such transcripts and their label batches are deleted from every run directory. Earlier columns include those cases and are not restated; this week's are after the fix.
+

@@ -6706,6 +6706,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (callRecordings.setCallShareVideo). Rejects with the server's reason,
    *  and the switch falls back with it. */
   setCallShareVideo: (transcriptId: string, include: boolean) => Promise<unknown>;
+  /** Whether an agent in a live call shows as a video avatar
+   *  (transcripts.setAgentFace). Rejects with the server's reason, and the
+   *  toggle falls back with it. */
+  setCallAgentFace: (transcriptId: string, target: string, face: boolean) => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -14620,6 +14624,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = ((this as any).callRecordingCalls as Record<string, { video_shared?: boolean }>)[transcriptId];
     if (row) row.video_shared = include;
     return { transcriptId, include };
+  }),
+  // The avatar toggle moves on the press: the call's route for the agent
+  // gains or drops `face: false` on the draft, as the server writes it.
+  setCallAgentFace: asyncAction(function (this: Draft, transcriptId: string, target: string, face: boolean) {
+    const call = ((this as any).callDetails as Record<string, { routes?: Array<{ kind: string; target: string; face?: boolean }> }>)[transcriptId];
+    const route = call?.routes?.find((r) => r.kind === "session" && r.target === target);
+    if (route) {
+      if (face) delete route.face;
+      else route.face = false;
+    }
+    return { transcriptId, target, face };
   }),
 
   // =====================

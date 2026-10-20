@@ -57,6 +57,7 @@
     "./contracts/proposalCard": "./contracts/proposalCard.ts",
     "./contracts/causeHistory": "./contracts/causeHistory.ts",
     "./contracts/deploys": "./contracts/deploys.ts",
+    "./contracts/lineDeploy": "./contracts/lineDeploy.ts",
     "./contracts/linePhases": "./contracts/linePhases.ts",
     "./contracts/linePriority": "./contracts/linePriority.ts",
     "./contracts/jointMessage": "./contracts/jointMessage.ts",

@@ -28,8 +28,12 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   HTMLElement: dom.window.HTMLElement,
   Node: dom.window.Node,
+  // jsdom lays nothing out: the view tabs measure their strip, and a new
+  // grouping scrolls the list to its top.
+  ResizeObserver: class { observe() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+dom.window.HTMLElement.prototype.scrollTo = () => {};
 afterAll(() => {
   dom.window.close();
   restoreGlobals();
