@@ -210,6 +210,8 @@ export const momentsTables = {
     notional_usd: v.optional(v.number()),
     /** Of notional_usd, what the second turn (listing the findings) cost. */
     findings_turn_usd: v.optional(v.number()),
+    /** Set once correctDoubledCosts fixed a cost that counted the first turn twice. */
+    cost_corrected: v.optional(v.boolean()),
     findings: v.optional(v.number()),
     filed: v.optional(v.number()),
     run_id: v.optional(v.id("judge_runs")),
