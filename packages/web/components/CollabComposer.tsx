@@ -28,7 +28,8 @@ import type { ConversationData } from "./conversation/types";
 import type { ReactNode } from "react";
 import { useSharedDraft, useSharedDraftStatus, inSharedDraft, typingEditors } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
-import { ConversationChat, useConversationChatPeople } from "./conversation/ConversationChat";
+import { ConversationChat } from "./conversation/ConversationChat";
+import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
