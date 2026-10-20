@@ -54,6 +54,7 @@ const metaValidator = v.object({
   surface: v.optional(v.string()),
   version: v.optional(v.string()),
   tag: v.optional(v.string()),
+  deploy: v.optional(v.string()),
 });
 
 export const recordArgs = {

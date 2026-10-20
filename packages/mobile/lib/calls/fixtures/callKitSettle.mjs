@@ -60,36 +60,36 @@ mock.module("../callManager", () => ({
   subscribeCall: () => () => {},
 }));
 
-// getMyCalls as the server would push it: one watch, results set by the test.
-let result;
-let onUpdate = null;
+// calls.ringLive as the server would push it: one watch per ring, keyed by the
+// invite id, with the live value set by the test.
+const live = new Map();
+const watching = new Map();
 let watches = 0;
 mock.module("../../convex", () => ({
   convex: {
     mutation: async () => {},
-    watchQuery: () => {
+    watchQuery: (_fn, args) => {
       watches++;
       return {
-        localQueryResult: () => result,
+        localQueryResult: () => live.get(args.invite_id),
         onUpdate: (fn) => {
-          onUpdate = fn;
-          return () => {
-            onUpdate = null;
-          };
+          watching.set(args.invite_id, fn);
+          return () => watching.delete(args.invite_id);
         },
       };
     },
   },
 }));
-const push = async (inviteIds) => {
-  result = { incoming: inviteIds.map((id) => ({ _id: id })), outgoing: [], membership: null };
-  onUpdate?.();
+const push = async (inviteId, value) => {
+  live.set(inviteId, value);
+  watching.get(inviteId)?.();
   await flush();
 };
 
-const { startCallKitBridge, notifyCallKitAuth } = await import("../callKit");
+// Never signed in: a VoIP push woke the app on a locked phone, where the
+// keychain holding the session cannot be read.
+const { startCallKitBridge } = await import("../callKit");
 startCallKitBridge();
-notifyCallKitAuth(true);
 
 const ring = async (ckId, inviteId) => {
   listeners.sessionAdded({
@@ -102,37 +102,38 @@ const ring = async (ckId, inviteId) => {
   await flush();
 };
 
-// 1. Answered on the desktop two seconds into the ring: the only update that
-// says so lands inside the grace window, and the ring still ends when it closes.
+// 1. Answered on the desktop while the phone is signed out: the ring ends on
+// the update that says so, and its watch stops.
 await ring("ck1", "inv1");
-await push(["inv1"]);
-await advance(2_000);
-await push([]);
-assert.deepEqual(ended, [], "inside the grace window absence proves nothing yet");
-await advance(3_000);
-assert.deepEqual(ended, [{ id: "ck1", reason: "remoteEnded" }]);
-assert.equal(onUpdate, null, "the watch stops with the ring");
-
-// 2. A ring still live past the grace keeps ringing, and ends on the update
-// that drops it.
-ended.length = 0;
-await ring("ck2", "inv2");
-await push(["inv2"]);
-await advance(6_000);
+await push("inv1", true);
 assert.deepEqual(ended, []);
-await push([]);
+await push("inv1", false);
+assert.deepEqual(ended, [{ id: "ck1", reason: "remoteEnded" }]);
+assert.equal(watching.size, 0, "the watch stops with the ring");
+
+// 2. Already settled by the time the phone looks: ends on the first read.
+ended.length = 0;
+live.set("inv2", false);
+await ring("ck2", "inv2");
 assert.deepEqual(ended, [{ id: "ck2", reason: "remoteEnded" }]);
 
-// 3. No result yet (the watch has not answered): the grace closing alone
-// never ends a ring.
+// 3. No answer from the server yet: nothing ends the ring, however long.
 ended.length = 0;
-result = undefined;
 await ring("ck3", "inv3");
-await advance(10_000);
+await advance(60_000);
 assert.deepEqual(ended, []);
-await push(["inv3"]);
+
+// 4. Answered on the phone: a later settle (the invite is now "accepted")
+// must not end the call the person is on.
+listeners.answered({ id: "ck3", requestId: "r3" });
+await flush();
+await push("inv3", false);
 assert.deepEqual(ended, []);
-assert.equal(watches, 3, "one watch per ring");
+
+// 5. The same session reported twice (cold start read + listener) watches once.
+await ring("ck4", "inv4");
+await ring("ck4", "inv4");
+assert.equal(watches, 4, "one watch per ring");
 
 process.exitCode = 0;
 console.log("callKit settle: ok");

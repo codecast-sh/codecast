@@ -112,6 +112,42 @@ describe("the flags", () => {
   });
 });
 
+describe("an agent added without its video avatar", () => {
+  const noFace = () => transcript({ routes: [{ kind: "session", target: "conv1", mode: "live", sent_seq: 0, added_by: "ua", face: false }] });
+
+  test("joins the room as a session only: no face, no voice, no worker requests", async () => {
+    const ctx = ctxWith({ transcripts: [noFace()], conversations: [conversation], call_agent_feeds: [], messages: [] });
+    await syncAgentFeeds(ctx, noFace() as any);
+    expect(ctx.db._tables.call_agent_feeds).toHaveLength(1);
+    expect(ctx.db._tables.call_agent_feeds[0].face).toBe(false);
+    expect(faceCalls(ctx)).toEqual([]);
+    expect(await call(brief, ctx, { conversation_id: "conv1", room_key: "session:conv1" })).toBeNull();
+  });
+
+  test("its replies stay in the chat and are never told", async () => {
+    const ctx = ctxWith({
+      call_agent_feeds: [feed({ face: false })],
+      transcripts: [noFace()],
+      messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "Found it.", timestamp: 2 }],
+      call_chat_messages: [],
+    });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+    expect(faceCalls(ctx)).toEqual([]);
+  });
+
+  test("turning the avatar off mid-call takes the face out and keeps the agent; on again seats it", async () => {
+    const ctx = ctxWith({ transcripts: [noFace()], conversations: [conversation], call_agent_feeds: [feed()], messages: [] });
+    await syncAgentFeeds(ctx, noFace() as any);
+    expect(ctx.db._tables.call_agent_feeds).toHaveLength(1);
+    expect(faceCalls(ctx)).toEqual([{ name: "callFace:leave", args: { room_key: "session:conv1", conversation_id: "conv1" } }]);
+    ctx._scheduled.length = 0;
+    await syncAgentFeeds(ctx, transcript() as any);
+    expect(ctx.db._tables.call_agent_feeds[0].face).toBeUndefined();
+    expect(faceCalls(ctx)).toEqual([{ name: "callFace:join", args: { feed_id: "f1", realtime: true } }]);
+  });
+});
+
 describe("a voice's lifetime is its feed row", () => {
   test("a feed removed or ended takes the voice out of the room", async () => {
     const ctx = ctxWith({ transcripts: [], conversations: [conversation], call_agent_feeds: [feed()], messages: [] });
@@ -142,6 +178,18 @@ describe("a voice's lifetime is its feed row", () => {
     await call(mirrorAgentTurn, passed, { conversation_id: "conv1", attempt: 0 });
     expect(faceCalls(passed)).toEqual([]);
   });
+});
+
+test("a page link is shown in the chat and never read aloud", async () => {
+  const ctx = ctxWith({
+    call_agent_feeds: [feed()],
+    transcripts: [transcript()],
+    messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "Here is the funnel by week:\n\nhttps://codecast.sh/a/funnel-weekly\n\nSignups dipped in week 3.", timestamp: 2 }],
+    call_chat_messages: [],
+  });
+  await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+  expect(ctx.db._tables.call_chat_messages[0].text).toContain("https://codecast.sh/a/funnel-weekly");
+  expect(faceCalls(ctx)[0].args.text).toBe("Here is the funnel by week: Signups dipped in week 3.");
 });
 
 describe("what the worker reads and writes", () => {

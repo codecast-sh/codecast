@@ -31,6 +31,7 @@ import { PHASE_ORDER, guessPhase } from "@codecast/shared/contracts/linePhases";
 import { stepLabel, type FailCause, type StepAdvice } from "./runReport";
 import { STAGE_WORDS } from "./stageTrack";
 import { askLine, type InboxGroup, type InboxKind, type InboxRow } from "./lineInbox";
+import type { DecisionChange } from "./decisionFacts";
 
 export type NeedKind = "decision" | "question" | "confirm" | "lapsed" | "stopped" | "review" | "unlanded" | "fixed" | "assigned" | "reask" | "duplicate";
 
@@ -88,6 +89,15 @@ export type LineNeed = {
   dups?: NeedDup[];
   /** For a duplicate: the older problem it is the same as, which it merges into. */
   dupOf?: { ref: string | null; caseId: string } | null;
+  /** For a decision: its row id (assigning names it), what answering it changes, who holds it, the people its
+   *  problem reached and the worst finding's severity (lib/line/decisionFacts). */
+  decisionId?: string | null;
+  change?: DecisionChange;
+  assignee?: string | null;
+  reach?: number | null;
+  severity?: number | null;
+  /** For a decision: what its run recommends (ship, revise, drop, ...), when its card says. */
+  recommend?: string | null;
 };
 
 /** A run whose step finished its work and had no next step (runReport finishedAtDeadEnd, the cause's `deadend:` key):
@@ -200,6 +210,7 @@ export function lineNeeds(groups: ReadonlyArray<InboxGroup>, of?: ProcessOf): Li
       title: r.title, name: r.name ?? null, problemRef: r.ref, caseId: r.caseId, projectId: r.projectId, process: of?.row(r) ?? null, since: r.at, runId: r.runId,
       decisionRef, cardRef, trial: !!r.trial, ...(r.publishes ? { publishes: true } : {}), note: r.note ?? null, fail: kind === "stopped" || kind === "review" ? r.fail ?? null : null, why: kind === "reask" ? r.hold ?? null : null, findings: r.findings ?? null, sha: kind === "fixed" ? r.sha ?? null : null,
       aliases: [r.cardId, r.cardRef, r.decisionRef].filter((x): x is string => !!x && x !== ref),
+      ...(kind === "decision" ? { decisionId: r.decisionId ?? null, change: r.change ?? "other", assignee: r.assignee ?? null, reach: r.reach ?? null, severity: r.severity ?? null, recommend: r.recommend ?? null } : {}),
     });
   }
   return out;

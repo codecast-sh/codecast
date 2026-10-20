@@ -24,7 +24,6 @@ import { useSyncRuns } from "./useSyncRuns";
 import { useSyncTaskSignals } from "./useSyncSignals";
 import { useSyncTrial, useTrialCards, useTrialProjects, useTrialRuns } from "./useSyncTrial";
 import { useLineSpaceKeys } from "./useLineSpace";
-import { trialCardIsFor } from "../lib/line/trialAudience";
 import { useTeamRosterIdentity } from "./useTeamRoster";
 import { autoStartWord, isCause, trialStartWord, scopeLine, type LineAdmission, type LineProject, type RollupRow } from "../lib/lineFlow";
 import type { HandMerge } from "../lib/line/causeHistory";
@@ -55,7 +54,7 @@ export { LINE_VIEWS, DEFAULT_LINE_VIEW } from "../lib/line/lineWorkspaceUrl";
 const labelSig = (l: LineLabelRow) => `${l.key}|${l.verdict}|${l.note ?? ""}|${l.at}`;
 const occurrenceSig = (o: OccurrenceRow) => `${o.task_id}|${o.observed.length}|${o.observed[o.observed.length - 1] ?? 0}|${o.reopened.length}|${o.capped ? 1 : 0}`;
 const deploySig = (d: DeployRow) => `${d.at}|${d.sha ?? ""}|${d.surface ?? d.environment ?? ""}`;
-const cardSig = (d: MapDecision) => `${(d as { asked_user_ids?: string[] }).asked_user_ids?.join(",") ?? ""}|${d.status}|${d.answer_index ?? ""}|${d.answer_text ?? ""}|${d.resolved_at ?? 0}|${d.card?.headline ?? ""}|${d.card?.change ?? ""}`;
+const cardSig = (d: MapDecision) => `${(d as { asked_user_ids?: string[] }).asked_user_ids?.join(",") ?? ""}|${(d as { passed_to?: { id: string } | null }).passed_to?.id ?? ""}|${d.status}|${d.answer_index ?? ""}|${d.answer_text ?? ""}|${d.resolved_at ?? 0}|${d.card?.headline ?? ""}|${d.card?.change ?? ""}`;
 
 // ── feeders ──────────────────────────────────────────────────────────────────
 
@@ -283,8 +282,6 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // For you lists every workspace's, so they are read from each workspace the line holds (LineWorkspace feeds them).
   useSyncTrial();
   const allTrialCards = useTrialCards({ workspaces: spaceKeys });
-  // A card a role owns (a judge fix, asked of the person its line ends at) waits only on the people it is asked of.
-  const trialCards = useMemo(() => allTrialCards.filter((c) => trialCardIsFor(c, viewerId)), [allTrialCards, viewerId]);
   // A run's decision about a task that is not a line problem (a task filed by hand, a judge fix) names that task, read from the store.
   const otherIds = useMemo(() => {
     const causes = new Set(everyRow.tasks.filter(isCause).map((t) => t._id));
@@ -298,7 +295,10 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     const [id, ref, project, title] = x.split("\u0001");
     return [id, { title, short_id: ref || null, project_id: project || null }] as const;
   }) : []), [otherSig]);
-  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, projects, rollups: rollupRows, admissions, trialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, projects, rollupRows, admissions, trialCards, trialProjects, viewerId, otherTasks, now]);
+  // The decisions a line asks are the team's: every open one on a problem the viewer can read, whoever it was asked of
+  // or assigned to (the line's cards, with the viewer's own queue rows winning), and every waiting trial card. Who
+  // holds one is the row's assignee (lib/line/decisionFacts), never a reason to hide it.
+  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, decisions: allDecisions as unknown as typeof everyRow.decisions, projects, rollups: rollupRows, admissions, trialCards: allTrialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, allDecisions, projects, rollupRows, admissions, allTrialCards, trialProjects, viewerId, otherTasks, now]);
   const projectInbox = useMemo(() => (projectId ? allInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => r.projectId === projectId) })).filter((g) => g.rows.length > 0) : allInbox), [allInbox, projectId]);
   const forYouByCase = useMemo(() => inboxKindByCase(projectInbox), [projectInbox]);
 

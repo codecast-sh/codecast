@@ -475,7 +475,7 @@ export type ItemPlan =
       /** Fields the group's meta takes from this occurrence beyond the rules' own (a metric's value and line). */
       meta?: MetricMeta;
     }
-  | { type: "deploy"; version: string; sha?: string; environment?: string; at: number }
+  | { type: "deploy"; version: string; sha?: string; environment?: string; at: number; url?: string; actor?: string; previous_sha?: string; commits?: Array<{ sha: string; subject: string; author?: string }> }
   /** Accepted and counted, never grouped: analytics events, logs below warn, replay manifests (X5 owns those). */
   | { type: "count" };
 
@@ -541,7 +541,7 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
         sample: { ...sampleBase, message: item.detail ?? (item.ok ? "ok" : "failed") },
       });
     case "deploy":
-      return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at };
+      return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at, url: item.url, actor: item.actor, previous_sha: item.previous_sha, commits: item.commits };
     case "event":
     case "replay":
     // A moment event is kept as a moment (moments.ts recordMomentEvents, learning-loop.md LL7), not grouped.
