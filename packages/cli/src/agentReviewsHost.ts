@@ -267,7 +267,6 @@ export function handBack(files: RunFiles, now = Date.now()): Record<string, unkn
     turns: (Number(out1?.num_turns) || 0) + (Number(out2?.num_turns) || 0),
     usage,
     notional_usd: Math.round(notional * 10_000) / 10_000,
-    ...(out2 ? { findings_turn_usd: Math.round((Number(out2.total_cost_usd) || 0) * 10_000) / 10_000 } : {}),
   };
 }
 
