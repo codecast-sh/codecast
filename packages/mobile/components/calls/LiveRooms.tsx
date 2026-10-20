@@ -12,6 +12,7 @@ import { Text } from "@/components/Themed";
 import { SolarizedLight, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { ChatAvatar } from "@/components/chat/MessageRow";
 import { getCallSnapshot, joinCall, subscribeCall } from "@/lib/calls/callManager";
+import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
 
 // Live now, phone-shaped: the huddles running anywhere in your teams, listed
 // where you would walk past them. A room is a door — one tap walks into a
@@ -23,6 +24,15 @@ import { getCallSnapshot, joinCall, subscribeCall } from "@/lib/calls/callManage
 // a huddle never reads differently on the phone than in the dock.
 
 export type { LiveRoomRow };
+
+/** Whether the active team has huddles. Calls are a per-team opt-in:
+ *  callConfig lists the caller's teams that have them, and is false outright
+ *  when the deployment has no LiveKit. */
+export function useCallsOn(): boolean {
+  const { teamId } = useActiveTeam();
+  const callConfig = useInboxStore((s) => s.callConfig) as { enabled: boolean; teams?: string[] } | null;
+  return callConfig?.enabled === true && !!teamId && (callConfig.teams ?? []).includes(String(teamId));
+}
 
 /** The live huddles off the store (the sync bridge feeds calls.getLiveRooms),
  *  through web's own derivation, with "mine" meaning my call plane's room. */
