@@ -36,9 +36,10 @@ import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
+import { ThemeIntroAnywhere } from "./theme/ThemeIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
-import { ResourcePressureGauge } from "./resources/ResourcePressureGauge";
+import { ResourcePressureGauge, ResourcePressureFallback } from "./resources/ResourcePressureGauge";
 import { useSyncMachineResources } from "../hooks/useResourceMonitor";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
@@ -1379,11 +1380,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="HeaderPins" level="inline">
               <HeaderPins />
             </ErrorBoundary>
-            <Surface name="machineChips">
-              <ErrorBoundary name="ResourcePressureGauge" level="inline">
-                <ResourcePressureGauge />
-              </ErrorBoundary>
-            </Surface>
+            <ErrorBoundary name="ResourcePressureGauge" level="inline" fallback={<ResourcePressureFallback />}>
+              <ResourcePressureGauge />
+            </ErrorBoundary>
             <ErrorBoundary name="NotificationBell" level="inline">
               <NotificationBell />
             </ErrorBoundary>
@@ -1452,6 +1451,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <TeamDomainBanner />
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
+        <ThemeIntroAnywhere />
         <Surface name="banner.cliOffline"><CliOfflineBanner /></Surface>
         <Surface name="banner.tmuxMissing"><TmuxMissingBanner /></Surface>
         <NotificationNudgeBanner />

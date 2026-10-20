@@ -1,5 +1,6 @@
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { syncOutboxTables } from "./syncOutboxSchema";
+import { pushReceiptTables } from "./pushReceiptsSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
@@ -3689,6 +3690,8 @@ export default defineSchema({
       surface: v.optional(v.string()),
       version: v.optional(v.string()),
       tag: v.optional(v.string()),
+      // The deploy object a deploy marker recorded or finished (deploys.short_id).
+      deploy: v.optional(v.string()),
     })),
     // Ingestion rows (external-data.md X3): a group transition or a deploy a
     // source reported. `workspace` is their access key (equality, like
@@ -3712,6 +3715,65 @@ export default defineSchema({
     .index("by_task_created", ["task_id", "created_at"])
     .index("by_issue_key", ["issue.key", "created_at"])
     .index("by_dedupe_key", ["dedupe_key"]),
+
+  // A deploy as an object (docs/architecture/deploys.md): one version going
+  // live on one target, with what it carried and who started it. The line's
+  // deploy stage asks for one (status requested); the team's deploy path
+  // finishes it when its marker arrives (changesDeploy.markDeploy, an ingest
+  // deploy item), and a marker nobody asked for records one of its own. The
+  // marker stays an external_events row (the team stream, triggers); its
+  // meta.deploy names this row's short id.
+  deploys: defineTable({
+    short_id: v.string(), // "dp-N"
+    // The store's stub of a deploy asked for from the web, which this row supersedes.
+    client_key: v.optional(v.string()),
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    project_id: v.optional(v.id("projects")),
+    // The surface or environment it went to: "backend", "production".
+    target: v.string(),
+    status: v.union(v.literal("requested"), v.literal("running"), v.literal("live"), v.literal("failed"), v.literal("cancelled")),
+    trigger: v.union(v.literal("person"), v.literal("role"), v.literal("schedule"), v.literal("count"), v.literal("outside")),
+    started_by: v.optional(v.object({
+      kind: v.union(v.literal("person"), v.literal("role"), v.literal("line"), v.literal("source"), v.literal("cli")),
+      name: v.string(),
+      user_id: v.optional(v.id("users")),
+      role_id: v.optional(v.id("org_roles")),
+    })),
+    // Who reported it: "cast ship mark", or the source's name.
+    source: v.string(),
+    source_id: v.optional(v.id("event_sources")),
+    event_ids: v.array(v.id("external_events")),
+    repository: v.optional(v.string()),
+    sha: v.optional(v.string()),
+    previous_sha: v.optional(v.string()),
+    version: v.optional(v.string()),
+    // The CI run or the page that shows the deploy.
+    url: v.optional(v.string()),
+    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()) }))),
+    // The fixes it carried (contracts/deploys DeployCarry).
+    carries: v.array(v.object({
+      task_id: v.id("tasks"),
+      run_id: v.optional(v.id("workflow_runs")),
+      decision_id: v.optional(v.id("session_decisions")),
+      merge_sha: v.optional(v.string()),
+      merged_at: v.optional(v.number()),
+      pr_url: v.optional(v.string()),
+      how: v.union(v.literal("sent"), v.literal("same commit"), v.literal("deployed after the merge")),
+    })),
+    // Why it failed, or the deploy command's last words.
+    note: v.optional(v.string()),
+    created_at: v.number(),
+    live_at: v.optional(v.number()),
+    finished_at: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_short_id", ["short_id"])
+    .index("by_workspace_created", ["workspace", "created_at"])
+    .index("by_project_created", ["project_id", "created_at"])
+    .index("by_source_created", ["source_id", "created_at"])
+    .index("by_repository_created", ["repository", "created_at"])
+    .index("by_project_status", ["project_id", "status"]),
 
   // Read-through cache of repository content fetched with the GitHub App
   // token for the source browser and history pages: branch lists, trees,
@@ -6474,7 +6536,8 @@ export default defineSchema({
     .index("by_user", ["user_id"])
     .index("by_user_path", ["user_id", "source_path"])
     .index("by_task", ["task_id"])
-    .index("by_plan", ["plan_id"]),
+    .index("by_plan", ["plan_id"])
+    .index("by_session_conversation", ["session_conversation_id"]),
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see
@@ -7176,6 +7239,9 @@ export default defineSchema({
         // participant feeding an agent speaks as themselves); absent on routes
         // the scribe configured before this field existed → started_by.
         added_by: v.optional(v.id("users")),
+        // Session routes: false when the person who added the agent left its
+        // video avatar out (callFace.ts). Absent: the team's default, a face.
+        face: v.optional(v.boolean()),
         // A hold the fed agent asked for (`cast call hold`): live delivery to
         // this session waits until then, except for words that name it. The
         // hold's expiry schedules the catch up delivery.
@@ -7520,6 +7586,8 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     added_by: v.id("users"),
     last_mirrored_message_id: v.optional(v.id("messages")),
+    // The route's choice, copied: false seats no face or voice for this agent.
+    face: v.optional(v.boolean()),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
@@ -7600,6 +7668,10 @@ export default defineSchema({
       graph_hash: v.string(),
       nodes: v.array(v.object({ id: v.string(), h: v.string() })),
     })),
+    // A line version's scenario (the graph's `serves`): the finding sources
+    // whose problems it runs. workflows.lineVersionFor picks by them when a
+    // line run starts on a problem; written only by a push from a file.
+    serves: v.optional(v.array(v.string())),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -8127,6 +8199,7 @@ export default defineSchema({
   // (highest position retired by retention; a client whose cursor is below the
   // floor must resync via full backfill). Heads are never deleted.
   ...syncOutboxTables,
+  ...pushReceiptTables,
   sync_heads: defineTable({
     scope_key: v.string(),
     position: v.number(),
